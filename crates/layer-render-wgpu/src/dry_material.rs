@@ -2,20 +2,27 @@
 //! evaluator together instead of opening a render pass for every page.
 use super::*;
 
-pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32);
+pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32, bool);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Target { Exact, InPlace, Display }
+pub(super) enum Target { Exact, InPlace, Tracked, Display, DisplayTracked }
 
 fn shader_destination(target: Target) -> String {
-    if target == Target::Display { return include_str!("dry_preview.wgsl").into(); }
-    let in_place = target == Target::InPlace;
+    if matches!(target,Target::Display|Target::DisplayTracked) {
+        let access=if target==Target::DisplayTracked {"read_write"} else {"write"};
+        let compare=if target==Target::DisplayTracked {
+            "if any(bitcast<vec4<u32>>(textureLoad(material_color_output,vec2<i32>(pixel)))!=bitcast<vec4<u32>>(color)) {mark_changed_cell(pixel*style.operation.z);}"
+        } else {""};
+        return format!("@group(0) @binding(1) var material_color_output:texture_storage_2d<rgba32float,{access}>;\n{}\nfn store_display_color(pixel:vec2<u32>,color:vec4<f32>) {{ {compare} textureStore(material_color_output,vec2<i32>(pixel),color); }}",include_str!("dry_preview.wgsl"));
+    }
+    let in_place = matches!(target, Target::InPlace | Target::Tracked);
     let access = if in_place { "read_write" } else { "write" };
     let original = if in_place { "material_color_output, p" } else { "source_11, p, 0" };
     format!("
         @group(0) @binding(1) var material_color_output: texture_storage_2d<rgba32float, {access}>;
         fn dry_original(p: vec2<i32>) -> vec4<f32> {{ return textureLoad({original}); }}
-        fn dry_coverage(p: vec2<i32>) -> f32 {{ return textureLoad(stroke_coverage_texture, p, 0).r; }}")
+        fn dry_coverage(p: vec2<i32>) -> f32 {{ return textureLoad(stroke_coverage_texture, p, 0).r; }}
+        fn store_display_color(pixel:vec2<u32>,color:vec4<f32>) {{textureStore(material_color_output,vec2<i32>(pixel),color);}}")
 }
 
 pub(super) fn shader(device: &PipelineDevice, target: Target) -> Deferred<wgpu::ShaderModule> {
@@ -29,10 +36,13 @@ pub(super) fn shader(device: &PipelineDevice, target: Target) -> Deferred<wgpu::
 }
 
 pub(super) fn shader_source(device: &PipelineDevice, target: Target, material: &str) -> Cow<'static, str> {
+    let tracking = if matches!(target,Target::Tracked|Target::DisplayTracked) {
+        concat!(include_str!("changed_cells.wgsl"), "\n@group(0) @binding(3) var<storage,read_write> changed_cells:ChangedCells;")
+    } else { "fn mark_changed_cell(pixel:vec2<u32>) {}" };
     compose_wgsl(&[
         &working_color::shader(device), include_str!("blend_modes.wgsl"), &shader_destination(target), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), include_str!("retouch_sample.wgsl"), material,
         include_str!("brush_footprint.wgsl"),
-        include_str!("brush_geometry.wgsl"), include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
+        tracking, include_str!("brush_geometry.wgsl"), include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
         include_str!("contact.wgsl"), include_str!("bristle.wgsl"), include_str!("selection_clip.wgsl"),
     ])
 }
@@ -88,6 +98,7 @@ type Kernels = [Deferred<wgpu::ComputePipeline>; 2 * OPERATIONS.len()];
 
 pub(super) struct Pipelines {
     in_place: bool,
+    tracked: bool,
     layouts: [wgpu::BindGroupLayout; 2],
     pub kernels: Kernels,
     variants: std::collections::BTreeMap<u32, Kernels>,
@@ -114,7 +125,9 @@ impl Pipelines {
         shader: &Deferred<wgpu::ShaderModule>,
         target: Target,
     ) -> Self {
-        let in_place = target == Target::InPlace;
+        let in_place = matches!(target, Target::InPlace | Target::Tracked);
+        let tracked = matches!(target,Target::Tracked|Target::DisplayTracked);
+        let writable = in_place || target==Target::DisplayTracked;
         let layouts = std::array::from_fn(|coverage| {
             let mut entries = vec![crate::bindings::buffer(
                 0,
@@ -128,8 +141,12 @@ impl Pipelines {
                     binding,
                     wgpu::ShaderStages::COMPUTE,
                     if binding == 1 { wgpu::TextureFormat::Rgba32Float } else { wgpu::TextureFormat::R32Float },
-                    if in_place && binding == 1 { wgpu::StorageTextureAccess::ReadWrite } else { wgpu::StorageTextureAccess::WriteOnly },
+                    if writable && binding == 1 { wgpu::StorageTextureAccess::ReadWrite } else { wgpu::StorageTextureAccess::WriteOnly },
                 ));
+            }
+            if tracked {
+                entries.push(crate::bindings::buffer(3, wgpu::ShaderStages::COMPUTE,
+                    wgpu::BufferBindingType::Storage { read_only: false }, false, NonZeroU64::new(20)));
             }
             crate::bindings::layout(device, "dry material outputs", &entries)
         });
@@ -153,7 +170,7 @@ impl Pipelines {
                             label: Some("dry material pages"),
                             layout: Some(&layout),
                             module: &shader,
-                            entry_point: Some(if target == Target::Display {
+                            entry_point: Some(if matches!(target,Target::Display|Target::DisplayTracked) {
                                 "compute_display_color"
                             } else if index % 2 == 0 {
                                 "compute_color"
@@ -165,6 +182,7 @@ impl Pipelines {
                                     ("MATERIAL_OPERATION", OPERATIONS[index / 2] as u32 as f64),
                                     ("CONTACT_FLAGS", f64::from(flags)),
                                     ("MATERIAL_IN_PLACE", f64::from(in_place)),
+                                    ("MATERIAL_PREVIEW_CONTRIBUTION",f64::from(matches!(target,Target::Display|Target::DisplayTracked) && flags!=u32::MAX && flags&1024!=0)),
                                 ],
                                 ..Default::default()
                             },
@@ -187,9 +205,11 @@ impl Pipelines {
             .collect::<std::collections::BTreeSet<_>>();
         flags.insert(0);
         flags.extend(flags.clone().into_iter().map(|flags| flags | 128));
+        if matches!(target,Target::Display|Target::DisplayTracked) {flags.extend([0,1,128,129].map(|flags|flags|1024));}
         let variants = flags.into_iter().map(|f| (f, make_kernels(f))).collect();
         Self {
             in_place,
+            tracked,
             layouts,
             kernels,
             variants,
@@ -204,10 +224,16 @@ impl Pipelines {
         operation: MaterialOperation,
         coverage: bool,
     ) -> &Deferred<wgpu::ComputePipeline> {
+        self.selected_kernel(style,operation,coverage,0)
+    }
+    pub fn contribution_kernel(&self,style:&layer_render::DabStyle,operation:MaterialOperation)->&Deferred<wgpu::ComputePipeline> {
+        self.selected_kernel(style,operation,false,1024)
+    }
+    fn selected_kernel(&self,style:&layer_render::DabStyle,operation:MaterialOperation,coverage:bool,extra:u32)->&Deferred<wgpu::ComputePipeline> {
         // Flow integration and maximum-film deposition have different kernels.
         // Resolve that uniform branch at compilation, including its register
         // requirements, rather than carrying both models through every pixel.
-        let flags = contact_flags(style.contact)
+        let flags = extra | contact_flags(style.contact)
             | if style.rendering.accumulation == BrushAccumulation::Uniform { 128 } else { 0 };
         let kernels = self.variants.get(&flags).unwrap_or(&self.kernels);
         let slot = OPERATIONS.iter().position(|o| *o == operation).expect("a pointwise operation");
@@ -219,8 +245,13 @@ impl Pipelines {
         r: &WgpuRasterizer,
         color: &PageSurface,
         coverage: Option<&PageSurface>,
+        target: SourceTarget, coordinate: [u32;2],
     ) -> wgpu::BindGroup {
-        let entries = [
+        let changed = self.tracked.then(|| {
+            let cells = r.changed_cells.as_ref().unwrap();
+            cells.buffer(target, coordinate).unwrap_or(&cells.disabled)
+        });
+        let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -238,18 +269,20 @@ impl Pipelines {
                 resource: wgpu::BindingResource::TextureView(&coverage.unwrap_or(color).view),
             },
         ];
+        if coverage.is_none() { entries.pop(); }
+        if let Some(changed) = changed {entries.push(wgpu::BindGroupEntry {binding:3, resource:changed.as_entire_binding()});}
         coverage.unwrap_or(color).material_output.get(
             (
                 r.style_buffer.clone(),
                 color.view.clone(),
                 coverage.map(|p| p.view.clone()),
-                self.in_place,
+                self.in_place, changed.cloned(),
             ),
             || {
                 r.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("dry material page output"),
                     layout: &self.layouts[usize::from(coverage.is_some())],
-                    entries: &entries[..2 + usize::from(coverage.is_some())],
+                    entries: &entries,
                 })
             },
         )
@@ -262,13 +295,18 @@ impl WgpuRasterizer {
             return &self.pipelines.dry_display;
         }
         match &self.pipelines.dry_in_place {
-            Some(in_place) if self.in_place_dry_material(batch) => in_place,
+            Some(in_place) if self.in_place_dry_material(batch) => {
+                if self.changed_cells.as_ref().is_some_and(|cells|cells.has_source(batch.target)) {
+                    self.pipelines.dry_tracked.as_ref().unwrap()
+                } else {in_place}
+            },
             _ => &self.pipelines.dry_material,
         }
     }
 
     pub(super) fn in_place_dry_material(&self, batch: &DabBatch) -> bool {
         batch.kind == DabBatchKind::Persistent && self.compute_dry_material(batch)
+            && BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
             && self.pipelines.dry_in_place.is_some()
     }
 
@@ -280,8 +318,13 @@ impl WgpuRasterizer {
 
     pub(super) fn dry_material_block(&self, batch: &DabBatch) -> u32 {
         if batch.kind == DabBatchKind::Preview {
-            if self.preview_level > 0 { 1 << self.preview_level } else { self.preview_block }
+            if self.preview_level > 0 { 1 << self.preview_level } else { 1 }
         } else { 1 }
+    }
+
+    pub(super) fn compact_preview_contribution(&self, batch: &DabBatch) -> bool {
+        batch.kind == DabBatchKind::Preview && self.preview_level > 0 && self.preview_contribution
+            && batch.style.mode == DabMode::Paint && display_preview_eligible(&batch.style)
     }
 
     pub(super) fn encode_dry_material_jobs(
@@ -309,10 +352,13 @@ impl WgpuRasterizer {
         });
         pass.set_bind_group(3, &textures.bind_group, &[]);
         let mut active_coverage = None;
-        for (output, source, coordinate, coverage, record_offset) in jobs {
-            if active_coverage != Some(*coverage) {
-                pass.set_pipeline(pipelines.kernel(&batch.style, operation, *coverage));
-                active_coverage = Some(*coverage);
+        for (output, source, coordinate, coverage, record_offset, tracked_display) in jobs {
+            let pipelines=if *tracked_display {self.pipelines.dry_display_tracked.as_ref().unwrap()} else {pipelines};
+            if active_coverage != Some((*coverage,*tracked_display)) {
+                pass.set_pipeline(if self.compact_preview_contribution(batch) {
+                    pipelines.contribution_kernel(&batch.style,operation)
+                } else {pipelines.kernel(&batch.style, operation, *coverage)});
+                active_coverage = Some((*coverage,*tracked_display));
             }
             pass.set_bind_group(0, output, &[batch_index as u32 * self.style_stride as u32]);
             pass.set_bind_group(

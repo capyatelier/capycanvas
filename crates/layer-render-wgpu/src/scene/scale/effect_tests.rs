@@ -58,6 +58,358 @@ fn assert_spatial_storage_reserved(r: &WgpuRasterizer, frame: FramePacket<'_>) {
 }
 
 #[test]
+fn native_pointwise_alpha_runs_before_reduction_and_settles_exact_stacks() {
+    let extent = [517, 259];
+    for name in ["threshold", "brightness_to_opacity"] {
+        for space in layer_core::BlendSpace::ALL {
+            let mut doc = document_at(extent);
+            paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y| {
+                if x>=384 && y>=127 {return [184,53,137,111];}
+                let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 };
+                [gray, gray, gray, if (x / 13 + y / 7) % 2 == 0 { 37 } else { 193 }]
+            }))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+            let owner = doc.scene().order()[0];
+            let filter = effect(&mut doc, name);
+            doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
+            insert_occurrence(&mut doc, filter, 0);
+            let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            exact.test.reference = true;
+            for state in 0..3 {
+                if state == 1 && name == "threshold" {
+                    set_effect_value(&mut doc, filter, "transparency", EffectValue::Choice(1));
+                    set_effect_value(&mut doc, filter, "colors", EffectValue::Choice(2));
+                }
+                if state == 2 {
+                    coverage_mask(&mut doc, filter, layer_core::Point { x: 11., y: -7. },
+                        Some(layer_core::Selection::polygon(vec![
+                            layer_core::Point { x: 109., y: 37. }, layer_core::Point { x: 501., y: 91. },
+                            layer_core::Point { x: 411., y: 257. }, layer_core::Point { x: 7., y: 199. },
+                        ]).unwrap()));
+                    doc.artwork.occurrences.get_mut(filter).unwrap().opacity = 0.61;
+                    doc.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.73;
+                    let behind = paint_occurrence(&mut doc, "backdrop", Some(rgba8_source(extent, |_, _| [70, 120, 210, 255])));
+                    insert_occurrence(&mut doc, behind, 2);
+                    doc.artwork.occurrences.get_mut(owner).unwrap().blend = layer_core::LayerBlend::Multiply;
+                }
+                for level in [0, 1, 3] {
+                    for offset in [0., -310.] {
+                        let scale = 1. / (1 << level) as f32;
+                        let mut frame = packet(doc.scene(), extent);
+                        frame.blend_space = space;
+                        frame.view.width_px = 51; frame.view.height_px = 31;
+                        frame.view.document_to_surface = [scale, 0., 0., scale, offset * scale, -70. * scale];
+                        r.submit(frame).unwrap(); exact.submit(frame).unwrap();
+                        assert!(r.scale_display.as_ref().unwrap().evaluation == Evaluation::Display);
+                        let reference = pixels(&exact, crate::test_support::document_texture(&exact));
+                        if state < 2 {
+                            let error = quality(&display_pixels(&r), &reference, r.scale_display.as_ref().unwrap().plan);
+                            assert!(error[2] < 2e-5, "{name} {space:?} state={state} level={level} offset={offset} must convert before reduction: {error:?}");
+                        }
+                        assert_settled(&mut r, frame, &reference);
+                        assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn native_level_pointwise_writes_branch_without_materialization_and_initializes_partial_pages() {
+    fn effect_node(node: &graph::Node) -> graph::Node {
+        match node.as_ref() {
+            graph::Expression::Effect { .. } => node.clone(),
+            graph::Expression::Opacity { input, .. } => effect_node(input),
+            graph::Expression::Combine { front, .. } => effect_node(front),
+            _ => panic!("fixture needs an effect node"),
+        }
+    }
+    let extent = [517, 259];
+    for name in ["threshold", "brightness_to_opacity"] { for blend in layer_core::BlendSpace::ALL {
+        let mut doc = document_at(extent);
+        paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y|
+            [(x * 17) as u8, (y * 23) as u8, 129, 37 + (x % 193) as u8]))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+        let filter = effect(&mut doc, name);
+        doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
+        insert_occurrence(&mut doc, filter, 0);
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut frame = packet(doc.scene(), extent); frame.blend_space = blend;
+        r.submit(frame).unwrap(); r.wait_idle().unwrap();
+        let mut scene = r.scene.take().unwrap(); let mut cache = r.scale_display.take().unwrap();
+        assert_eq!(cache.plan.level, 0); assert!(cache.evaluation == Evaluation::Display);
+        let node = effect_node(cache.graph.root.as_ref().unwrap());
+        let graph::Expression::Effect { input, chain, masks, .. } = node.as_ref() else { unreachable!() };
+        let plan = input_plan(cache.plan, frame.scene,Some(cache.graph.objects()));
+        let destination = Image::new(&r, plan, "native branch direct write oracle");
+        let reference = Image::new(&r, plan, "native branch full reference");
+        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+        scene.capture_region(&mut r, frame, &reference.texture, plan.bounds, scene::Output::EffectComposite(filter), &mut encoder).unwrap();
+        r.uploads.finish(&encoder); encoder.submit(&r.queue);
+        let expected = pixels(&r, &reference.texture);
+        for region in [PixelRect::new(11, 17, 29, 37), PixelRect::new(13, 19, 517, 258)] {
+            let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+            let mut commands = Commands::new(&r); let mut source_plans = Default::default(); let mut root_compositions = Vec::new();
+            scene.used.fill(false);
+            let mut evaluator = Evaluator { cache: &mut cache, commands: &mut commands, scene: &mut scene, packet: frame,
+                r: &mut r, encoder: &mut encoder, region: region.into(), input: plan, tiled: true, source_plans: &mut source_plans,
+                root_compositions: &mut root_compositions, defer_root: false };
+            let output = evaluator.effect(input, chain, masks, Some(Target { view: destination.view.clone(), slot: None, plan })).unwrap();
+            assert_eq!(output.view(), Some(&destination.view));
+            assert!(commands.jobs.is_empty(), "native branch must not enqueue input/output materialization");
+            assert_eq!(encoder.pass_count(), 1, "one native pointwise pass must write the branch directly");
+            r.uploads.finish(&encoder); encoder.submit(&r.queue);
+            let actual = pixels(&r, &destination.texture);
+            let initialized = paint_transform::aligned(region, PAGE_SIZE, extent).intersect(plan.bounds);
+            for y in initialized.min_y()..initialized.max_y() { for x in initialized.min_x()..initialized.max_x() {
+                let i = ((y - plan.bounds.min_y()) * plan.size[0] + x - plan.bounds.min_x()) as usize;
+                assert_eq!(actual[i].map(f32::to_bits), expected[i].map(f32::to_bits),
+                    "{name} {blend:?} region={region:?} at [{x},{y}]: native page must initialize completely");
+            }}
+            let cells = r.changed_cells.as_ref().unwrap(); assert_eq!(cells.storage_bytes(), cells.disabled.size());
+        }
+        r.scene = Some(scene); r.scale_display = Some(cache);
+    }}
+}
+
+#[test]
+fn native_level_pointwise_chains_and_fusion_boundaries_match_full_native_windows() {
+    let extent = [1027, 515];
+    for blend in layer_core::BlendSpace::ALL {
+        let mut doc = document_at(extent);
+        paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y|
+            [(x * 17) as u8, (y * 23) as u8, 129, 37 + (x % 193) as u8]))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+        let owner = doc.scene().order()[0]; let target = doc.scene().source_target(owner).unwrap();
+        let first = effect(&mut doc, "brightness_to_opacity");
+        doc.artwork.occurrences.get_mut(first).unwrap().attachment = Attachment::Effect;
+        insert_occurrence(&mut doc, first, 0);
+        let last = effect(&mut doc, "threshold");
+        doc.artwork.occurrences.get_mut(last).unwrap().attachment = Attachment::Effect;
+        insert_occurrence(&mut doc, last, 0);
+        let photo = paint_occurrence(&mut doc, "photo", Some(rgba8_source(extent, |x, y| [(x * 29) as u8, (y * 31) as u8, 173, 255])));
+        insert_occurrence(&mut doc, photo, 3);
+        let mut incremental = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap(); exact.test.reference = true;
+        for state in 0..3 {
+            if state == 1 {
+                coverage_mask(&mut doc, last, layer_core::Point { x: 17., y: -9. }, Some(layer_core::Selection::polygon(vec![
+                    layer_core::Point { x: 269., y: 77. }, layer_core::Point { x: 991., y: 101. },
+                    layer_core::Point { x: 511., y: 501. },
+                ]).unwrap()));
+                doc.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.73;
+            }
+            if state == 2 { effect_program_mut(&mut doc, last).id = "custom_native_threshold".into(); }
+            let mut frame = packet(doc.scene(), extent); frame.blend_space = blend; frame.composite_all = false;
+            frame.view.width_px = 63; frame.view.height_px = 57;
+            frame.view.document_to_surface = [1., 0., 0., 1., -769.25, -313.75];
+            incremental.submit(frame).unwrap(); exact.submit(frame).unwrap();
+            let plan = incremental.scale_display.as_ref().unwrap().plan;
+            assert_eq!(plan.level, 0); assert!(plan.bounds.min_x() > 0);
+            let reference = pixels(&exact, crate::test_support::document_texture(&exact));
+            assert!(quality(&display_pixels(&incremental), &reference, plan)[2] < 2e-5, "{blend:?} state={state}");
+            let mut dab = crate::tests::test_dab([771.5, 317.5], [0.2, 0.1, 0.3, 0.25], 1.); dab.radii = [13.25, 11.75];
+            let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+            let edited = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
+            let work = incremental.metrics.composited_pixels;
+            incremental.submit(edited).unwrap(); exact.submit(edited).unwrap();
+            let reference = pixels(&exact, crate::test_support::document_texture(&exact));
+            assert!(quality(&display_pixels(&incremental), &reference, plan)[2] < 2e-5, "{blend:?} state={state} partial update");
+            assert!(incremental.metrics.composited_pixels - work < plan.bounds.area(), "partial update stays bounded");
+            assert_presentation_mip(&incremental);
+        }
+    }
+}
+
+
+#[test]
+fn native_pointwise_captures_reuse_source_bindings_across_strips() {
+    let extent = [1291, 769];
+    let mut doc = document_at(extent);
+    paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y| [x as u8, y as u8, 70, 193]))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+    let filter = effect(&mut doc, "threshold");
+    insert_occurrence(&mut doc, filter, 0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), extent);
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    r.submit(frame).unwrap();
+    let bindings = r.scene.as_ref().unwrap().source_bindings.entries.clone();
+    assert!(bindings.len() > 4);
+    let expected = display_pixels(&r);
+    r.scale_display.as_mut().unwrap().valid.clear();
+    r.submit(frame).unwrap();
+    let current = &r.scene.as_ref().unwrap().source_bindings.entries;
+    for (key, (_, binding)) in bindings {
+        assert_eq!(&current[&key].1, &binding);
+    }
+    assert_eq!(display_pixels(&r), expected);
+}
+
+#[test]
+fn attached_pointwise_alpha_filters_update_only_changed_contact_regions() {
+    let extent = [2048; 2];
+    for name in ["threshold", "brightness_to_opacity"] {
+        let mut doc = document_at(extent);
+        let paint = source_at(&doc, 0);
+        let filter = effect(&mut doc, name);
+        if name == "threshold" {
+            set_effect_value(&mut doc, filter, "colors", EffectValue::Choice(1));
+            set_effect_value(&mut doc, filter, "transparency", EffectValue::Choice(1));
+        }
+        doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
+        insert_occurrence(&mut doc, filter, 0);
+        let dabs = [[128., 128.], [1664., 1664.]].map(|position| crate::tests::test_dab(position, [0.1, 0.1, 0.1, 0.6], 0.8));
+        let mut batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dabs[0].bounds().union(dabs[1].bounds()));
+        batch.dab_count = dabs.len() as u32;
+        for level in [0, 2] {
+            let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            let scale = 1. / (1 << level) as f32;
+            let mut frame = packet(doc.scene(), extent);
+            frame.composite_all = false;
+            frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+            r.submit(frame).unwrap();
+            let plan = r.scale_display.as_ref().unwrap().plan;
+            assert_eq!(r.metrics.composited_pixels, plan.size.into_iter().map(u64::from).product::<u64>(), "cold output must initialize every pixel");
+            assert_eq!(r.scale_display.as_ref().unwrap().preview_level(frame, paint,false), 0);
+            if level > 0 { assert!(r.scene.as_ref().unwrap().scale_sources.entries[&paint].levels.is_empty()); }
+            let work = r.metrics.composited_pixels;
+            r.submit(FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+            let work = r.metrics.composited_pixels - work;
+            assert!(work > 0 && work < 2 * u64::from(PAGE_SIZE >> level).pow(2) / 4, "{name} level {level}: warm contacts require partial-page work, got {work}");
+            let mut pages = r.metrics.frame_composited_pages.clone(); pages.sort_unstable(); pages.dedup();
+            assert_eq!(pages, vec![(level, [0, 0]), (level, [6, 6])], "separated contacts must preserve untouched page islands");
+            assert_eq!(r.scene.as_ref().unwrap().images.storage_bytes(), 0, "{name} must not allocate full-image stages");
+            let incremental = display_pixels(&r);
+            r.scale_display = None;
+            r.submit(FramePacket { composite_all: true, ..frame }).unwrap();
+            assert_eq!(display_pixels(&r), incremental, "{name} incremental alpha matches a complete rebuild");
+        }
+    }
+}
+
+#[test]
+fn native_pointwise_warm_prediction_replacement_and_removal_match_full_rebuilds() {
+    let extent = [517, 259];
+    for name in ["threshold", "brightness_to_opacity"] { for blend in layer_core::BlendSpace::ALL { for level in [0, 2] {
+        let mut doc = document_at(extent);
+        paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y| {
+            let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 };
+            [gray, gray, gray, if (x / 13 + y / 7) % 2 == 0 { 37 } else { 193 }]
+        }))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+        let paint = source_at(&doc, 0);
+        let filter = effect(&mut doc, name);
+        if name == "threshold" {
+            set_effect_value(&mut doc, filter, "colors", EffectValue::Choice(1));
+            set_effect_value(&mut doc, filter, "transparency", EffectValue::Choice(1));
+            set_effect_value(&mut doc, filter, "alpha_threshold", EffectValue::Number(37.));
+        }
+        doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
+        insert_occurrence(&mut doc, filter, 0);
+        let mut incremental = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut rebuilt = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut frame = packet(doc.scene(), extent);
+        frame.composite_all = false; frame.blend_space = blend;
+        let scale = 1. / (1 << level) as f32;
+        frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+        incremental.submit(frame).unwrap(); rebuilt.submit(frame).unwrap();
+        let original = display_pixels(&incremental);
+        for position in [[125.5, 126.5], [389.5, 126.5], [513.5, 255.5]] {
+            let mut dab = crate::tests::test_dab(position, [0.2, 0.1, 0.3, 0.25], 1.);
+            dab.radii = [13.25, 11.75];
+            let mut preview = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+            preview.style.blend_space = blend; preview.kind = DabBatchKind::Preview; preview.stroke_end = false;
+            let prediction = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&preview), ..frame };
+            let work = incremental.metrics.composited_pixels;
+            let old_contacts=incremental.preview_contact_tiles.clone().unwrap_or_default();
+            incremental.submit(prediction).unwrap();
+            rebuilt.submit(FramePacket { composite_all: true, ..prediction }).unwrap();
+            let work = incremental.metrics.composited_pixels - work;
+            let actual = display_pixels(&incremental); let expected = display_pixels(&rebuilt);
+            let difference = actual.iter().zip(&expected).enumerate().max_by(|(_, (a, b)), (_, (c, d))| {
+                let error = |a: &[f32; 4], b: &[f32; 4]| a.iter().zip(b).map(|(a, b)| (a - b).abs()).fold(0., f32::max);
+                error(a, b).total_cmp(&error(c, d))
+            });
+            assert!(crate::test_support::max_error(&actual, &expected) < 2e-5,
+                "{name} {blend:?} replacement at {position:?} must restore the previous prediction: {difference:?}, plans {:?}/{:?}, preview levels {}/{}, damage {:?}, work {work}", incremental.scale_display.as_ref().unwrap().plan, rebuilt.scale_display.as_ref().unwrap().plan, incremental.preview_level, rebuilt.preview_level, incremental.scene.as_ref().unwrap().scale_sources.entries[&paint].damage.regions);
+            assert!(work > 0 && work < u64::from(PAGE_SIZE >> level).pow(2) / 2, "{name} {blend:?} at {position:?}: warm prediction work={work}");
+            let current_contacts=incremental.preview_contact_tiles.as_ref().unwrap();
+            for &coordinate in old_contacts.symmetric_difference(current_contacts) {
+                assert!(incremental.changed_cells.as_ref().unwrap().reusable(paint,coordinate).is_none(),
+                    "{name} {blend:?}: cold/removed prediction page {coordinate:?} must force full native-effect evaluation");
+            }
+            assert_presentation_mip(&incremental);
+        }
+        let work = incremental.metrics.composited_pixels;
+        let old_contacts=incremental.preview_contact_tiles.clone().unwrap();
+        incremental.submit(frame).unwrap();
+        assert!(incremental.metrics.composited_pixels - work < u64::from(PAGE_SIZE >> level).pow(2) / 2);
+        let removed = display_pixels(&incremental);
+        let differing = removed.iter().zip(&original).filter(|(a, b)| a != b).count();
+        let first = removed.iter().zip(&original).position(|(a, b)| a != b).map(|i| {
+            let width = incremental.scale_display.as_ref().unwrap().plan.size[0] as usize;
+            [i % width, i / width]
+        });
+        assert_eq!(differing, 0, "{name} {blend:?}: removing prediction restores native pixels immediately, first difference={first:?}");
+        for coordinate in old_contacts {
+            assert!(incremental.changed_cells.as_ref().unwrap().reusable(paint,coordinate).is_none(),
+                "{name} {blend:?}: removed prediction page {coordinate:?} must force full native-effect evaluation");
+        }
+        assert_presentation_mip(&incremental);
+    }}}
+}
+
+#[test]
+fn native_pointwise_prediction_keeps_native_source_detail_and_retires_without_authored_changes() {
+    let extent=[517,259];
+    for name in ["threshold","brightness_to_opacity"] {for blend in layer_core::BlendSpace::ALL {
+        let mut doc=document_at(extent);
+        paint_mut(&mut doc,0).base = (Some(rgba8_source(extent,|x,y| {
+            let gray=if (x/3+y/2)%2==0 {126} else {130};
+            [gray,gray,gray,if (x/13+y/7)%2==0 {37} else {193}]
+        }))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+        let paint=source_at(&doc,0);
+        let filter=effect(&mut doc,name);
+        if name=="threshold" {set_effect_value(&mut doc,filter,"transparency",EffectValue::Choice(1));set_effect_value(&mut doc,filter,"alpha_threshold",EffectValue::Number(37.));}
+        doc.artwork.occurrences.get_mut(filter).unwrap().attachment=Attachment::Effect;
+        insert_occurrence(&mut doc,filter,0);
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();exact.test.reference=true;
+        let mut frame=packet(doc.scene(),extent);frame.blend_space=blend;
+        frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+        r.submit(frame).unwrap();exact.submit(frame).unwrap();
+        let initial=pixels(&exact,crate::test_support::document_texture(&exact));
+        let gray=layer_core::color::RgbSpace::Srgb.decode(0.5) as f32;
+        let mut dab=crate::tests::test_dab([193.,127.],[gray,gray,gray,0.25],1.);dab.radii=[90.;2];
+        let mut preview=dab_batch(paint,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
+        preview.style.blend_space=blend;
+        preview.kind=DabBatchKind::Preview;preview.stroke_end=false;
+        r.submit(FramePacket {composite_all:false,dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&preview),..frame}).unwrap();
+        assert!(r.preview_contribution && r.preview_level>0);
+        let committed=dab_batch(paint,preview.style.clone(),preview.damage);
+        exact.submit(FramePacket {composite_all:false,dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&committed),..frame}).unwrap();
+        let expected=pixels(&exact,crate::test_support::document_texture(&exact));
+        let plan=r.scale_display.as_ref().unwrap().plan;
+        let actual=display_pixels(&r);
+        let error=quality(&actual,&expected,plan);
+        assert!(error[0]<0.005 && error[1]<0.03,"{name} {blend:?}: {error:?}");
+        let side=1<<plan.level;
+        for y in 23..40 {for x in 40..55 {
+            let mut average=[0.;4];
+            for yy in y*side..(y+1)*side {for xx in x*side..(x+1)*side {
+                for c in 0..4 {average[c]+=expected[(yy*extent[0]+xx) as usize][c]/(side*side) as f32;}
+            }}
+            let a=actual[(y*plan.size[0]+x) as usize];
+            assert!(a.into_iter().zip(average).all(|(a,b)|(a-b).abs()<2e-5),"{name} {blend:?} body at {x},{y}: {a:?} vs {average:?}");
+        }}
+        let captured=r.readback_srgb_rgba8().unwrap();
+        let expected=exact.readback_srgb_rgba8().unwrap();
+        let difference=captured.iter().zip(&expected).enumerate().find(|(_, (a,b))|a!=b);
+        assert!(difference.is_none(),"{name} {blend:?}: exact prediction query differs at {difference:?}");
+        r.submit(FramePacket {composite_all:false,..frame}).unwrap();
+        assert_settled(&mut r,frame,&initial);
+    }}
+}
+
+#[test]
 fn attached_finite_support_preserves_two_distant_contact_pages() {
     let extent = [2048; 2];
     let mut doc = document_at(extent);
@@ -86,8 +438,9 @@ fn attached_finite_support_preserves_two_distant_contact_pages() {
         r.submit(frame).unwrap();
         let work = r.metrics.composited_pixels;
         r.submit(FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
-        assert_eq!(r.metrics.composited_pixels - work, 2 * u64::from(PAGE_SIZE >> level).pow(2),
-            "support expands each contact independently at level {level}");
+        let changed = r.metrics.composited_pixels - work;
+        assert!(changed > 0 && changed <= 2 * u64::from(PAGE_SIZE >> level).pow(2),
+            "support stays within two separated contact pages at level {level}: {changed}");
         let mut pages = r.metrics.frame_composited_pages.clone();pages.sort_unstable();
         assert_eq!(pages, vec![(level, [0, 0]), (level, [6, 6])]);
         let incremental = display_pixels(&r);

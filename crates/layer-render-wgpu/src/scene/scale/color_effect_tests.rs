@@ -249,6 +249,7 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
     ])).into()));
     let effect = effect_occurrence(&mut doc, EffectInstance::new(crate::tests::fixture("threshold").program()), "Resident native Threshold");
     let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    cached.test.exact_display = true;
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap(); exact.test.reference = true;
     cached.native_edit.as_mut().unwrap().display_complete_bytes = if admitted { u64::MAX } else { 0 };
     if preload {

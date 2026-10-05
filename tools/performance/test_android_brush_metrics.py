@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from android_brush_metrics import completion_window, contact_latencies, input_completions, object_completions, validate_setup
+from android_brush_metrics import completion_window, contact_latencies, input_completions, object_completions, input_feedback, validate_setup
 
 
 class ReportTests(unittest.TestCase):
@@ -39,6 +39,30 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(row["cpu_callback_p50_ms"], "")
             self.assertEqual(row["update_start_gap_p99_ms"], "")
             self.assertEqual(row["fresh_object_gap_p99_ms"], "")
+
+
+
+class FeedbackTests(unittest.TestCase):
+    def test_stale_refinements_and_prior_contacts_do_not_reset_age(self):
+        ms = 1_000_000
+        report = dict(input_fields=["event_ns", "arrival_ns", "phase"],
+                      inputs=[[0, 0, 1], [5*ms, 5*ms, 2], [10*ms, 10*ms, 3], [15*ms, 15*ms, 1]],
+                      motion=dict(begin_ns=0, end_ns=20*ms),
+                      renderer_before=dict(rows=[dict(label="Frames", value=0)]),
+                      completions=[[1, ms, 2*ms, 1, 0], [2, 6*ms, 7*ms, 2, 0],
+                                   [3, 15*ms, 16*ms, 3, 5*ms]])
+        feedback = input_feedback(report)
+        self.assertEqual(feedback["age_ms"], [0, 1, 0, 0, 0, 5, 5, 5, 5, 5, 0, 1, 2, 3, 4])
+        self.assertEqual(feedback["input_to_gpu_ms"], [2, 11])
+
+    def test_completion_covers_new_input_and_zero_raster_work_does_not(self):
+        ms = 1_000_000
+        report = dict(input_fields=["event_ns", "arrival_ns", "phase"], inputs=[[0, 0, 1], [ms, ms, 2]],
+                      motion=dict(begin_ns=0, end_ns=5*ms), renderer_before=dict(rows=[dict(label="Frames", value=1)]),
+                      completions=[[1, ms, 2*ms, 1, ms], [2, 2*ms, 3*ms, 2, ms]])
+        feedback = input_feedback(report)
+        self.assertEqual(feedback["age_ms"], [0, 1, 2, 0, 0])
+        self.assertEqual(feedback["input_to_gpu_ms"], [3, 2])
 
 
 class SetupTests(unittest.TestCase):
@@ -100,6 +124,20 @@ class SetupTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "layer_color_mode"):
                     validate_setup(self.info, self.requested)
 
+    def test_live_filter_requires_changing_owner_parameters_and_enabled_state(self):
+        self.requested.update(photo_layers=1, paint_layer_index=0, live_filter="threshold", live_filter_disabled=False,
+                              live_filter_values={"colors":{"kind":"choice","value":1}})
+        self.info.update(live_filter_fixture=dict(paint=3,effect=4,effect_id="threshold",disabled=False,
+                         values={"colors":{"kind":"choice","value":1}}))
+        self.info["state"].update(layer_properties={"layer":3},layers=[dict(id=4,relationship=dict(kind="effect",target=3),visible=True),
+                                dict(id=3,selected=True),dict(id=2),dict(id=1)])
+        validate_setup(self.info,self.requested)
+        for change,field in [(lambda d:d["live_filter_fixture"].update(paint=2),"changing_filter_input"),
+                             (lambda d:d["live_filter_fixture"].update(values={}),"live_filter_values"),
+                             (lambda d:d["state"]["layers"][0].update(visible=False),"live_filter_attachment")]:
+            info=copy.deepcopy(self.info);change(info)
+            with self.assertRaisesRegex(ValueError,field):validate_setup(info,self.requested)
+
     def test_attachment_workloads_require_the_authored_order_and_parameters(self):
         self.requested.update(photo_layers=1, paint_layer_index=0, effect_radius=8)
         for workload in ("clipped", "blurred-base"):
@@ -107,12 +145,12 @@ class SetupTests(unittest.TestCase):
             self.requested["workload"] = workload
             self.info.update(workload=workload, attachment_fixture=dict(paint=3, base=2, effect=4 if effect else None,
                              effect_id="gaussian_blur" if effect else None, sigma=8 if effect else None))
-            self.info["state"]["layers"] = [dict(id=3, clipped=True, selected=True)] + (
-                [dict(id=4, clipped=True)] if effect else []) + [dict(id=2, clipped=False), dict(id=1, clipped=False)]
+            self.info["state"]["layers"] = [dict(id=3, relationship=dict(kind="clip",target=2), selected=True)] + (
+                [dict(id=4, relationship=dict(kind="effect",target=2))] if effect else []) + [dict(id=2), dict(id=1)]
             validate_setup(self.info, self.requested)
             for change, field in [(lambda d: d.pop("workload"), "workload"),
                                   (lambda d: d.pop("attachment_fixture"), "attachment_handles"),
-                                  (lambda d: d["state"]["layers"][0].update(clipped=False), "attached_rows"),
+                                  (lambda d: d["state"]["layers"][0].update(relationship=None), "attached_rows"),
                                   (lambda d: d["state"]["layers"].reverse(), "attachment_order")]:
                 with self.subTest(workload=workload, field=field):
                     info = copy.deepcopy(self.info)

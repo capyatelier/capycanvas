@@ -30,6 +30,18 @@ mod color_effects;
 #[path = "refinement_tests.rs"]
 mod refinement;
 
+#[path = "native_alpha_reuse_tests.rs"]
+mod native_alpha_reuse;
+
+#[path = "native_composite_tests.rs"]
+mod native_composite;
+
+#[path = "native_signed_tests.rs"]
+mod native_signed;
+
+#[path = "root_fragment_tests.rs"]
+mod root_fragment;
+
 fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
     let revision = r.artwork_revision;
     let pages = page_coordinates(PixelRect::full(frame.document_extent)).count();
@@ -40,7 +52,15 @@ fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[
         r.wait_idle().unwrap();
         let work = r.metrics.composited_pixels;
         r.submit(idle).unwrap();
-        assert!(r.metrics.composited_pixels - work <= 4 * u64::from(PAGE_SIZE).pow(2));
+        let bounded = frame.scene.order().iter().any(|h|frame.scene.visible(*h)
+            && frame.scene.effect(*h).is_some_and(|effect|effect.program.image_boundary()));
+        let limit = if bounded {4 * u64::from(PAGE_SIZE).pow(2)} else {
+            r.scale_display.as_ref().and_then(|cache|cache.exact_tile.as_ref()).map_or(
+                SOURCE_SLOTS as u64 * u64::from(PAGE_SIZE).pow(2), |image|
+                    (u64::from(image.texture.width()) * u64::from(image.texture.height()))
+                        .min(SOURCE_SLOTS as u64 * u64::from(PAGE_SIZE).pow(2)))
+        };
+        assert!(r.metrics.composited_pixels - work <= limit);
         assert_eq!(r.artwork_revision, revision, "idle refinement does not edit artwork");
     }
     let cache = r.scale_display.as_ref().unwrap();
@@ -82,7 +102,7 @@ fn occurrence_at(doc: &Document, index: usize) -> &Occurrence { doc.artwork.occu
 fn occurrence_mut(doc: &mut Document, index: usize) -> &mut Occurrence { let handle = doc.scene().order()[index]; doc.artwork.occurrences.get_mut(handle).unwrap() }
 fn source_at(doc: &Document, index: usize) -> SourceTarget { match occurrence_at(doc, index).content { OccurrenceContent::Paint(paint) => SourceTarget::Paint(paint), _ => unreachable!() } }
 fn paint_at(doc: &Document, index: usize) -> &PaintSource { let SourceTarget::Paint(paint) = source_at(doc,index) else { unreachable!() }; doc.artwork.paint.get(paint).unwrap() }
-fn paint_mut(doc: &mut Document, index: usize) -> &mut PaintSource { let SourceTarget::Paint(paint) = source_at(doc,index) else { unreachable!() }; doc.artwork.paint.get_mut(paint).unwrap() }
+pub(super) fn paint_mut(doc: &mut Document, index: usize) -> &mut PaintSource { let SourceTarget::Paint(paint) = source_at(doc,index) else { unreachable!() }; doc.artwork.paint.get_mut(paint).unwrap() }
 fn copy_paint(doc: &mut Document, index: usize) -> OccurrenceHandle {
     let mut occurrence = occurrence_at(doc,index).clone();
     let source=paint_at(doc,index).clone();
@@ -94,7 +114,7 @@ fn copy_paint(doc: &mut Document, index: usize) -> OccurrenceHandle {
     occurrence.content = OccurrenceContent::Paint(paint);
     doc.artwork.occurrences.insert(PortableId::random(), occurrence).unwrap()
 }
-fn paint_occurrence(doc: &mut Document, name: &str, original: Option<Arc<SourceImage>>) -> OccurrenceHandle {
+pub(super) fn paint_occurrence(doc: &mut Document, name: &str, original: Option<Arc<SourceImage>>) -> OccurrenceHandle {
     let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), base: original.map(|source| layer_core::authored::PaintBase::new(source.into())), operations: Arc::default() }).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(paint), name)).unwrap()
 }
@@ -113,7 +133,7 @@ fn reindex(doc: &mut Document) {
     let edit = layer_core::Edit::Stack(RecordChange { handle, id: doc.artwork.stacks.id(handle).unwrap(), value: doc.artwork.stacks.get(handle).cloned() });
     doc.apply(edit).unwrap();
 }
-fn insert_occurrence(doc: &mut Document, handle: OccurrenceHandle, position: usize) {
+pub(super) fn insert_occurrence(doc: &mut Document, handle: OccurrenceHandle, position: usize) {
     let stack = doc.composition().result;
     doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(position, handle);
     reindex(doc);
@@ -121,10 +141,10 @@ fn insert_occurrence(doc: &mut Document, handle: OccurrenceHandle, position: usi
 fn remove_occurrence(doc: &mut Document, handle: OccurrenceHandle) {
     let stack = doc.composition().result;
     doc.artwork.stacks.get_mut(stack).unwrap().entries.retain(|entry| *entry != handle);
-    doc.artwork.occurrences.remove(handle).unwrap();
+    doc.artwork.occurrences.get_mut(handle).unwrap().attachment = Attachment::None;
     reindex(doc);
 }
-fn effect_occurrence(doc: &mut Document, effect: layer_core::EffectInstance, name: &str) -> OccurrenceHandle {
+pub(super) fn effect_occurrence(doc: &mut Document, effect: layer_core::EffectInstance, name: &str) -> OccurrenceHandle {
     let size=doc.composition().size;
     let application=doc.artwork.effects.insert(PortableId::random(),EffectApplication::new(effect.program,effect.values,size)).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), name)).unwrap()
@@ -189,7 +209,7 @@ fn native_material_reduction_preserves_small_hdr_corrections() {
 #[test]
 fn idle_display_converges_to_exact_composition_after_edits() {
     for space in layer_core::BlendSpace::ALL {
-        let mut doc = document();
+        let mut doc = document_at([1537, 1025]);
         let extent = doc.composition().size;
         paint_mut(&mut doc,0).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent, |x, y|
             [if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }, 128, 70, 255])).into()));
@@ -1101,6 +1121,7 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
     let behind=paint_occurrence(&mut doc,"solid",Some(rgba8_source(extent,|_,_|[170,210,70,230])));
     doc.artwork.occurrences.get_mut(behind).unwrap().opacity=0.79;
     set_root_entries(&mut doc,vec![outer,behind,paper]);
+    set_attachment(doc.artwork.occurrences.get_mut(clipped).unwrap(), true); reindex(&mut doc);
     let mut reduced = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
@@ -1242,7 +1263,24 @@ fn layer_edits_reuse_balanced_branches_across_the_stack() {
 }
 
 #[test]
-fn identity_edits_recompose_only_damaged_pages() {
+fn output_damage_initializes_cold_pages_and_aligns_separated_warm_cells() {
+    let plan = display_mips::Plan::at([513, 259], 2);
+    let initialized = page_coordinates(plan.bounds).filter(|c| *c != [1, 0]).collect();
+    let damage = Damage::from_regions([
+        PixelRect::new(5, 5, 6, 6), PixelRect::new(249, 249, 250, 250),
+        PixelRect::new(512, 258, 513, 259),
+    ]);
+    let regions = damage.update_regions(plan, &initialized);
+    assert_eq!(regions.len(), 4);
+    for expected in [PixelRect::new(256, 0, 512, 256), PixelRect::new(4, 4, 8, 8),
+        PixelRect::new(248, 248, 252, 252), PixelRect::new(512, 256, 513, 259)] {
+        assert!(regions.contains(&expected), "missing required update {expected:?}: {regions:?}");
+    }
+    assert_eq!(regions.iter().map(|r| r.area()).sum::<u64>(), u64::from(PAGE_SIZE).pow(2) + 35);
+}
+
+#[test]
+fn identity_edits_recompose_only_damaged_regions() {
     let doc = document_at([1024, 768]);
     let dabs: Vec<_> = [[125., 125.], [893., 125.], [893., 637.], [125., 637.]].into_iter().map(|p| {
         let mut dab = crate::tests::test_dab(p, [1., 0., 0., 1.], 1.);
@@ -1265,7 +1303,8 @@ fn identity_edits_recompose_only_damaged_pages() {
         frame.dab_batches = std::slice::from_ref(&batch);
         let work = r.metrics.composited_pixels;
         r.submit(frame).unwrap();
-        assert_eq!(r.metrics.composited_pixels - work, 4 * u64::from(PAGE_SIZE >> level).pow(2));
+        let work = r.metrics.composited_pixels - work;
+        assert!(work > 0 && work < 4 * u64::from(PAGE_SIZE >> level).pow(2) / 4, "warm identity contacts must leave the rest of each page unchanged: {work}");
         let incremental = display_pixels(&r);
         r.scale_display = None;
         r.submit(FramePacket { dabs: &[], dab_batches: &[], composite_all: true, ..frame }).unwrap();
@@ -1549,7 +1588,10 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
         );
         let a = r.readback_srgb_rgba8().unwrap();
         let b = exact.readback_srgb_rgba8().unwrap();
-        assert_eq!(a, b, "display resolution must not change exact output");
+        assert_eq!(a.len(), b.len());
+        for (index, (actual, expected)) in a.chunks_exact(4).zip(b.chunks_exact(4)).enumerate() {
+            assert_eq!(actual, expected, "{kind:?} native output pixel {:?}", [index % extent[0] as usize, index / extent[0] as usize]);
+        }
     }
     r.submit(FramePacket {
         composite_all: false,

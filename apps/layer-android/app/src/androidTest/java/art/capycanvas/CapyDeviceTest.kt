@@ -99,7 +99,7 @@ fun launchCapy(timeout: Long = 60_000, compose: ComposeTestRule? = null): Activi
     ActivityScenario.launch(MainActivity::class.java).also { it.activity().host.awaitReady(timeout, compose) }
 
 fun CanvasHost.awaitReady(timeout: Long = 60_000, compose: ComposeTestRule? = null) =
-    awaitMain("brush and workspace ready", timeout, { "$workspaceManager" }, compose) {
+    awaitMain("brush and workspace ready", timeout, { "brush=${snapshot?.optBoolean("brush_ready")}, recovery=${recovery.ready}, workspace=$workspaceManager" }, compose) {
         snapshot?.optBoolean("brush_ready") == true && recovery.ready && workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true
     }
 
@@ -327,7 +327,7 @@ fun findTag(tag: String, first: ViewRootForTest? = null) = findNode(hasTag(tag),
 
 internal fun createEnglishHostForTest(profiling: Boolean = false): Long = Native.create("", arrayOf("en"), profiling)
 
-internal fun CanvasHost.writeDrawingCopy(file: File) = runBlocking {
+internal fun CanvasHost.writeDrawingCopy(file: File, compose: ComposeTestRule? = null) = runBlocking {
     val previous = DocumentController.nativeFileJobsForTest
     DocumentController.nativeFileJobsForTest = true
     var task = 0L; var request = 0
@@ -343,9 +343,11 @@ internal fun CanvasHost.writeDrawingCopy(file: File) = runBlocking {
             Native.projectWork(task,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0)
         }
     } finally {
-        if(request != 0)withNative {Native.documentComplete(it,request,false,"null")}
-        kotlinx.coroutines.withContext(Dispatchers.IO) {if(task != 0L)Native.projectFree(task)}
-        DocumentController.nativeFileJobsForTest = previous
-        documentChanged()
+        try {
+            if(request != 0)withNative {Native.documentComplete(it,request,false,"null")}
+            kotlinx.coroutines.withContext(Dispatchers.IO) {if(task != 0L)Native.projectFree(task)}
+            documentChanged(); drain()
+            compose?.waitForIdle() ?: instrumentation.waitForIdleSync()
+        } finally { DocumentController.nativeFileJobsForTest = previous }
     }
 }

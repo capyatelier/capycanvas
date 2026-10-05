@@ -32,7 +32,7 @@ impl<K: PartialEq> CachedBinding<K> {
 /// neighborhood slots and the stroke coverage it binds.
 pub(super) type MaterialInput = CachedBinding<([wgpu::Buffer; 2], [wgpu::TextureView; 10])>;
 pub(super) type MaterialOutput =
-    CachedBinding<(wgpu::Buffer, wgpu::TextureView, Option<wgpu::TextureView>, bool)>;
+    CachedBinding<(wgpu::Buffer, wgpu::TextureView, Option<wgpu::TextureView>, bool, Option<wgpu::Buffer>)>;
 
 pub(super) fn texture(binding: u32, visibility: wgpu::ShaderStages, filterable: bool) -> wgpu::BindGroupLayoutEntry {
     texture_of(binding, visibility, wgpu::TextureSampleType::Float { filterable }, wgpu::TextureViewDimension::D2)

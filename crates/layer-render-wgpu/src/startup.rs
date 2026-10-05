@@ -131,8 +131,10 @@ impl Requirements {
             if preview { self.compute.push(kernels.kernel(style, plan.material, false).clone()); }
             if preview && dry_material::display_preview_eligible(style) {
                 self.compute.push(r.pipelines.dry_display.kernel(style, plan.material, false).clone());
+                self.compute.push(r.pipelines.dry_display.contribution_kernel(style,plan.material).clone());
+                if let Some(tracked)=&r.pipelines.dry_display_tracked {self.compute.push(tracked.contribution_kernel(style,plan.material).clone());}
             }
-            if let Some(in_place) = &r.pipelines.dry_in_place {
+            for in_place in r.pipelines.dry_in_place.iter().chain(&r.pipelines.dry_tracked) {
                 self.compute.push(in_place.kernel(style, plan.material, plan.state.coverage).clone());
             }
         }

@@ -3,6 +3,37 @@ use super::*;
 const SAVED: &[u8] = include_bytes!("fixtures/authored-filters.capy");
 
 #[test]
+fn saved_illustration_conversions_keep_complete_authored_values() {
+    let artwork=editable(include_bytes!("fixtures/illustration-conversions.capy").to_vec());
+    let assert_values=|artwork:&Artwork| {
+        let view=|id:&str|artwork.effects.iter().find_map(|(_,_,e)| {
+            (e.program.id.as_ref()==id).then(||crate::EffectView::new(&e.program,&e.values))
+        }).unwrap();
+        assert!(view("brightness_to_opacity").values.is_empty());
+        let threshold=view("threshold");
+        assert_eq!(threshold.values.len(),4);
+        assert_eq!(threshold.value("threshold"),Some(&EffectValue::Number(0.375)));
+        assert_eq!(threshold.choice("colors"),Some("black"));
+        assert_eq!(threshold.choice("transparency"),Some("threshold"));
+        assert_eq!(threshold.value("alpha_threshold"),Some(&EffectValue::Number(37.)));
+    };
+    assert_values(&artwork);
+    let reopened=editable(serialize(&prepare(&artwork,false)));
+    assert_values(&reopened);
+    let mut edited=reopened;
+    let application=edited.effects.iter().find(|(_,_,e)|e.program.id.as_ref()=="threshold").unwrap().0;
+    let effect=edited.effects.get_mut(application).unwrap();
+    let mut draft=EffectInstance {program:effect.program.clone(),values:effect.values.clone()};
+    draft.set("transparency",EffectValue::Choice(0)).unwrap();effect.values=draft.values;
+    let edited=editable(serialize(&prepare(&edited,false)));
+    let effect=edited.effects.get(application).unwrap();
+    let view=crate::EffectView::new(&effect.program,&effect.values);
+    assert_eq!(view.choice("transparency"),Some("keep"));
+    assert_eq!(view.choice("colors"),Some("black"));
+    assert_eq!(view.value("alpha_threshold"),Some(&EffectValue::Number(37.)));
+}
+
+#[test]
 fn saved_lookup_admission_preserves_original_bytes_without_latching_corruption() {
     for (field, value) in [("domain", json!(([[1e-40;3],[2e-40;3]]))),
         ("domain", json!(([[-1e38;3],[1e38;3]]))), ("size", json!(66))] {
@@ -49,7 +80,7 @@ fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls(
         assert!(Arc::ptr_eq(&application.program,&builtin.program()));
         let record=manifest["objects"].as_array().unwrap().iter().find(|r|r["id"]==json!(id)).unwrap();
         assert_eq!(record["data"]["builtin"],builtin.id());
-        assert_eq!(record["data"]["version"],if matches!(builtin.id(),"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"){2}else{1});
+        assert_eq!(record["data"]["version"],if matches!(builtin.id(),"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"|"threshold"){2}else{1});
     }
     assert_eq!(builtin_ids.len(),52);
     let objects=manifest["objects"].as_array().unwrap();

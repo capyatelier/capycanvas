@@ -532,3 +532,11 @@ resources-layer-color-mode = Farbmodus
 resources-layer-color-full = Vollfarbe
 resources-layer-color-gray = Graustufen
 resources-layer-color-two-tone = Zwei Tonwerte (Schwarz und Weiß)
+
+resources-filter-brightness-to-opacity = Helligkeit zu Deckkraft
+resources-illustration-colors = Farben
+resources-illustration-black = Schwarz
+resources-illustration-white = Weiß
+resources-illustration-transparency = Transparenz
+resources-illustration-keep = Beibehalten
+resources-illustration-alpha-threshold = Alpha-Schwellenwert

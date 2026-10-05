@@ -1,7 +1,6 @@
 // Prediction evaluates the existing contact/coverage model at display texel
 // centres. Its starting paint and stroke coverage average the same footprint.
 // This is a presentation approximation; exact queries replay the retained tail.
-@group(0) @binding(1) var material_color_output: texture_storage_2d<rgba32float, write>;
 
 fn preview_origin(p: vec2<i32>) -> vec2<i32> {
     let side = i32(style.operation.z);
@@ -27,6 +26,7 @@ fn preview_average(source: texture_2d<f32>, p: vec2<i32>) -> vec4<f32> {
     return sum / f32(max(size.x * size.y, 1));
 }
 fn dry_original(p: vec2<i32>) -> vec4<f32> {
+    if MATERIAL_PREVIEW_CONTRIBUTION {return vec4(0.);}
     return preview_average(source_11, p);
 }
 fn dry_coverage(p: vec2<i32>) -> f32 {

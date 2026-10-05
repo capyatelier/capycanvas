@@ -204,7 +204,7 @@ fn scene_value(v: Vertex) -> vec4<f32> {
         }
         return src + dst * (1. - src.a);
     }
-    if op == 1u || op == 7u || op == 13u || op == 14u || op == 17u { return scene_pointwise(raw,v); }
+    if op == 1u || op == 7u || op == 13u || op == 14u || op == 17u || op == 19u { return scene_pointwise(raw,v); }
     // Store pooled mask coverage in alpha to avoid an sRGB encode/decode
     // round trip quantizing feather coverage through a color channel.
     if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m); }
@@ -221,6 +221,18 @@ fn scene_pointwise(raw: vec4<f32>, v: Vertex) -> vec4<f32> {
     let op = u32(settings.options.x);
     if op == 1u { return scene_space(raw)*settings.options.y; }
     if op == 14u { return scene_space(raw + scene_read(back,v) * (1. - raw.a)) * settings.options.y; }
+    if op == 19u {
+        let size=vec2<f32>(textureDimensions(front));
+        let p=(v.position.xy-settings.rect.xy)*size/settings.rect.zw;
+        let preview=textureLoad(front,clamp(vec2<i32>(floor(p)),vec2(0),vec2<i32>(size)-1),0);
+        let base=scene_read(back,v);
+        if settings.options.z>.5 {
+            let result=working_encode(preview)+working_encode(base)*(1.-preview.a);
+            if settings.operation_offset.w==1. {return result*settings.options.y;}
+            return scene_space(working_decode(result))*settings.options.y;
+        }
+        return scene_space(preview+base*(1.-preview.a))*settings.options.y;
+    }
     if op == 17u {
         let original=working_unassociate(raw);
         let low=working_unassociate(working_encode(scene_read(back,v)));

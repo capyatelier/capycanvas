@@ -649,3 +649,11 @@ resources-layer-color-mode = 색상 모드
 resources-layer-color-full = 전체 색상
 resources-layer-color-gray = 회색조
 resources-layer-color-two-tone = 2계조(흑백)
+
+resources-filter-brightness-to-opacity = 밝기를 불투명도로
+resources-illustration-colors = 색상
+resources-illustration-black = 검정
+resources-illustration-white = 흰색
+resources-illustration-transparency = 투명도
+resources-illustration-keep = 유지
+resources-illustration-alpha-threshold = 알파 임계값

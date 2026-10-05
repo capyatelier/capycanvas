@@ -532,3 +532,11 @@ resources-layer-color-mode = Renk modu
 resources-layer-color-full = Tam renk
 resources-layer-color-gray = Gri tonlama
 resources-layer-color-two-tone = İki ton (siyah ve beyaz)
+
+resources-filter-brightness-to-opacity = Parlaklığı opaklığa dönüştür
+resources-illustration-colors = Renkler
+resources-illustration-black = Siyah
+resources-illustration-white = Beyaz
+resources-illustration-transparency = Saydamlık
+resources-illustration-keep = Koru
+resources-illustration-alpha-threshold = Alfa eşiği

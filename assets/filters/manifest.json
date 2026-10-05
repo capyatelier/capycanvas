@@ -10,6 +10,7 @@
     {"id":"fill","label": {"message":"resources-category-fill"}}
   ],
   "filters": [
+    {"category":"artistic","icon":"brightness-to-opacity","program":{"abi":5,"entry":"capy_brightness_to_opacity","id":"brightness_to_opacity","space":"blending","alpha":"filter","kind":"adjustment","label":{"message":"resources-filter-brightness-to-opacity"},"parameters":[],"wgsl":["color.wgsl","effects.wgsl"]}},
     {"category":"tone","icon":"shadows-highlights","preview":{"shadows":{"kind":"number","value":50}},"program":{"abi":5,"entry":"capy_shadows_highlights","id":"shadows_highlights","resolution":"native","kind":"adjustment","label":{"message":"resources-filter-shadows-highlights"},"auxiliary":{"kind":"analysis","analysis":"local_illumination"},"parameters":[{"default":{"kind":"number","value":0},"key":"shadows","kind":{"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},"label":{"message":"resources-local-shadows"}},{"default":{"kind":"number","value":0},"key":"highlights","kind":{"decimals":0,"kind":"number","max":100,"min":0,"step":1,"unit":"%"},"label":{"message":"resources-local-highlights"}}],"wgsl":["local-adjustments.wgsl"]}},
     {"category":"detail","icon":"clarity","preview":{"amount":{"kind":"number","value":50}},"program":{"abi":5,"entry":"capy_clarity","id":"clarity","resolution":"native","kind":"adjustment","label":{"message":"resources-filter-clarity"},"auxiliary":{"kind":"analysis","analysis":"local_illumination"},"parameters":[{"default":{"kind":"number","value":0},"key":"amount","kind":{"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},"label":{"message":"resources-local-amount"}}],"wgsl":["local-adjustments.wgsl"]}},
     {"category":"detail","icon":"dehaze","preview":{"amount":{"kind":"number","value":50}},"program":{"abi":5,"entry":"capy_dehaze","id":"dehaze","resolution":"native","kind":"adjustment","label":{"message":"resources-filter-dehaze"},"auxiliary":{"kind":"analysis","analysis":"dehaze"},"parameters":[{"default":{"kind":"number","value":0},"key":"amount","kind":{"decimals":0,"kind":"number","max":100,"min":-100,"step":1,"unit":"%"},"label":{"message":"resources-local-amount"}}],"wgsl":["local-adjustments.wgsl","dehaze-math.wgsl","dehaze.wgsl"]}},
@@ -222,10 +223,15 @@
         "abi": 5,
         "entry": "capy_threshold",
         "id": "threshold",
+        "space": "blending",
+        "alpha": "filter",
         "kind": "adjustment",
         "label": {"message":"resources-filter-threshold"},
         "parameters": [
-          {"key":"threshold","label":{"message":"resources-parameter-threshold-threshold"},"kind":{"kind":"number","min":-65504,"max":65504,"step":0.01,"decimals":3,"unit":""},"default":{"kind":"number","value":0.5},"soft_bounds":[0,1]}
+          {"key":"threshold","label":{"message":"resources-parameter-threshold-threshold"},"kind":{"kind":"number","min":-65504,"max":65504,"step":0.01,"decimals":3,"unit":""},"default":{"kind":"number","value":0.5},"soft_bounds":[0,1]},
+          {"key":"colors","label":{"message":"resources-illustration-colors"},"kind":{"kind":"choice","options":[{"value":"black_white","label":{"message":"resources-filter-black-white"}},{"value":"black","label":{"message":"resources-illustration-black"}},{"value":"white","label":{"message":"resources-illustration-white"}}]},"default":{"kind":"choice","value":0}},
+          {"key":"transparency","label":{"message":"resources-illustration-transparency"},"kind":{"kind":"choice","options":[{"value":"keep","label":{"message":"resources-illustration-keep"}},{"value":"threshold","label":{"message":"resources-filter-threshold"}}]},"default":{"kind":"choice","value":0}},
+          {"key":"alpha_threshold","label":{"message":"resources-illustration-alpha-threshold"},"kind":{"kind":"number","min":0,"max":100,"step":1,"decimals":1,"unit":"%"},"default":{"kind":"number","value":50},"visible_when":{"key":"transparency","value":{"kind":"choice","value":1}}}
         ],
         "wgsl": ["color.wgsl","effects.wgsl"]
       }

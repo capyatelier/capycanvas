@@ -533,3 +533,11 @@ resources-layer-color-mode = Modalità colore
 resources-layer-color-full = Colore pieno
 resources-layer-color-gray = Scala di grigi
 resources-layer-color-two-tone = Due toni (bianco e nero)
+
+resources-filter-brightness-to-opacity = Luminosità in opacità
+resources-illustration-colors = Colori
+resources-illustration-black = Nero
+resources-illustration-white = Bianco
+resources-illustration-transparency = Trasparenza
+resources-illustration-keep = Mantieni
+resources-illustration-alpha-threshold = Soglia alfa

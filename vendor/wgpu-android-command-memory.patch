@@ -1,18 +1,15 @@
 --- a/wgpu-hal/src/vulkan/command.rs
 +++ b/wgpu-hal/src/vulkan/command.rs
-@@ -4,7 +4,10 @@
+@@ -4,7 +4,7 @@
  use core::{mem, ops::Range};
  use hashbrown::hash_map::Entry;
-
+ 
 -const ALLOCATION_GRANULARITY: u32 = 16;
-+// Android's reset policy releases completed buffers instead of retaining the
-+// free list. Allocate on demand there: the other fifteen buffers in the usual
-+// batch would otherwise be allocated and freed without ever recording work.
 +const ALLOCATION_GRANULARITY: u32 = if cfg!(target_os = "android") { 1 } else { 16 };
  const DST_IMAGE_LAYOUT: vk::ImageLayout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
-
+ 
  impl super::Texture {
-@@ -57,7 +60,10 @@
+@@ -57,7 +57,10 @@
          key: super::FramebufferKey,
      ) -> Result<vk::Framebuffer, crate::DeviceError> {
          Ok(match self.framebuffers.entry(key) {
@@ -24,9 +21,9 @@
              Entry::Vacant(e) => {
                  let super::FramebufferKey {
                      raw_pass,
-@@ -74,7 +80,8 @@
+@@ -74,7 +77,8 @@
                      .attachments(attachment_views);
-
+ 
                  let raw = unsafe { self.device.raw.create_framebuffer(&vk_info, None).unwrap() };
 -                *e.insert(raw)
 +                e.insert(super::CachedFramebuffer { raw, used: true });
@@ -34,9 +31,9 @@
              }
          })
      }
-@@ -120,6 +127,13 @@
+@@ -120,6 +124,13 @@
      type A = super::Api;
-
+ 
      unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
 +        if self.raw == vk::CommandPool::null() {
 +            let vk_info = vk::CommandPoolCreateInfo::default()
@@ -48,7 +45,11 @@
          if self.free.is_empty() {
              let vk_info = vk::CommandBufferAllocateInfo::default()
                  .command_pool(self.raw)
-@@ -181,15 +195,36 @@
+@@ -178,18 +189,44 @@
+         I: Iterator<Item = super::CommandBuffer>,
+     {
+         self.temp.clear();
++        let available = self.free.len();
          self.free
              .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
          self.free.append(&mut self.discarded);
@@ -61,6 +62,12 @@
 -                .raw
 -                .reset_command_pool(self.raw, vk::CommandPoolResetFlags::default())
 -        };
++        let reclaim_storage = if cfg!(target_os = "android") && self.free.len() > available {
++            self.completed_resets += 1;
++            let reclaim = self.completed_resets >= 16 || self.free.len() > 128;
++            if reclaim { self.completed_resets = 0; }
++            reclaim
++        } else { false };
 +        // Adreno framebuffer creation/destruction is expensive even when the
 +        // attachment textures are reused. Keep a bounded working set across
 +        // completed submissions; retire entries after one unused cycle. Large
@@ -80,26 +87,34 @@
 +            }
 +            keep
 +        });
-+        if cfg!(target_os = "android") {
-+            if !self.free.is_empty() {
-+                unsafe { self.device.raw.destroy_command_pool(self.raw, None) };
-+                self.raw = vk::CommandPool::null();
-+                self.free.clear();
-+            }
-+        } else {
++        if reclaim_storage {
++            unsafe { self.device.raw.destroy_command_pool(self.raw, None) };
++            self.raw = vk::CommandPool::null();
++            self.free.clear();
++        } else if self.raw != vk::CommandPool::null() {
 +            let _ = unsafe {
 +                self.device.raw.reset_command_pool(self.raw, vk::CommandPoolResetFlags::empty())
 +            };
 +        }
      }
-
+ 
      unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)
+--- a/wgpu-hal/src/vulkan/device.rs
++++ b/wgpu-hal/src/vulkan/device.rs
+@@ -1399,6 +1399,7 @@
+             discarded: Vec::new(),
+             rpass_debug_marker_active: false,
+             end_of_pass_timer_query: None,
++            completed_resets: 0,
+             framebuffers: Default::default(),
+             temp_texture_views: Default::default(),
+             counters: Arc::clone(&self.counters),
 --- a/wgpu-hal/src/vulkan/mod.rs
 +++ b/wgpu-hal/src/vulkan/mod.rs
 @@ -1055,6 +1055,11 @@
      }
  }
-
+ 
 +struct CachedFramebuffer {
 +    raw: vk::Framebuffer,
 +    used: bool,
@@ -108,21 +123,22 @@
  /// A texture view paired with its identity.
  #[derive(Copy, Clone)]
  struct IdentifiedTextureView {
-@@ -1112,7 +1117,7 @@
+@@ -1112,7 +1117,8 @@
      /// the given pool & location.
      end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
-
+ 
 -    framebuffers: FastHashMap<FramebufferKey, vk::Framebuffer>,
++    completed_resets: u8,
 +    framebuffers: FastHashMap<FramebufferKey, CachedFramebuffer>,
      temp_texture_views: FastHashMap<TempTextureViewKey, IdentifiedTextureView>,
-
+ 
      counters: Arc<wgt::HalCounters>,
-@@ -1140,7 +1145,7 @@
+@@ -1140,7 +1146,7 @@
          }
-
+ 
          for (_, fb) in self.framebuffers.drain() {
 -            unsafe { self.device.raw.destroy_framebuffer(fb, None) };
 +            unsafe { self.device.raw.destroy_framebuffer(fb.raw, None) };
          }
-
+ 
          for (_, view) in self.temp_texture_views.drain() {

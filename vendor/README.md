@@ -149,12 +149,15 @@ nil (which disables color matching). The Apple application currently requests
 Display P3; retain this delta until alternate callers and surface tests are
 qualified for removal or upstream supplies the fix.
 
-`wgpu-android-command-memory.patch` destroys nonempty completed Android Vulkan
-command pools at wgpu's existing all-completed boundary. It recreates each pool
-and allocates command buffers on demand; empty resets allocate nothing.
-Retaining command buffers or pool storage across repeated photo transforms
-exhausts Adreno host mappings despite available RAM. The renderer also submits cold placement previews in bounded
-tile batches to limit command storage before a submission completes.
+`wgpu-android-command-memory.patch` resets completed Android Vulkan command pools
+at wgpu's existing all-completed boundary. Pools containing more than 128 buffers
+are destroyed there; smaller pools reuse buffers and storage for at most 16
+nonempty completed cycles before destruction. Replacement buffers are allocated
+on demand. These limits bound reuse cycles and buffer count, not retained driver
+bytes. Empty resets allocate nothing and do not advance the lifetime.
+Unbounded command-buffer or pool retention exhausts Adreno host mappings despite
+available RAM. The renderer also submits cold placement previews in bounded tile
+batches to limit command storage before a submission completes.
 
 The same patch retains up to 128 Vulkan framebuffers per completed Android
 encoder. Entries expire after one unused completed cycle; encoders with larger
@@ -166,6 +169,26 @@ object destruction must not access the referenced objects. Cache entries do not
 retain textures. Framebuffer retention is independent of command-storage cleanup.
 Submission ownership and completion synchronization are unchanged. Other
 platforms keep their original pool and framebuffer policies.
+
+`wgpu-android-pool-retirement.patch` transfers reclaimed, already-completed pools
+to one worker with one queued and one active pool. Each pool exclusively owns its
+handle and registers per-device cleanup debt before transfer. A full or stopped queue,
+or failed worker creation, destroys the pool synchronously. The worker starts at
+device open. Final device destruction drains the already-completed pools' CPU
+cleanup before destroying device objects or releasing the instance/drop guard.
+Drawing and pool reset do not wait. The 16-cycle/128-buffer policy stays
+the same; the two deferred pools have no known driver byte bound.
+The hardware Vulkan ownership tests cover absent/full/disconnected queues and
+final-device teardown while pool destruction is still pending. Run them with:
+
+```sh
+cargo test --offline --manifest-path vendor/wgpu-hal/Cargo.toml --features vulkan \
+  --lib vulkan::pool_retirement::tests \
+  --config 'patch.crates-io.wgpu-types.path="vendor/wgpu-types"'
+```
+
+These tests exercise the worker on the desktop. Android compilation and device
+motion, memory, idle/resume and teardown journeys still verify the Android path.
 
 `wgpu-instance-identity.patch` makes native wgpu handles equal only when the
 same instance owns them. Upstream compares only the registry identifier, and

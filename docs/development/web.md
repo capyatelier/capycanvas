@@ -261,6 +261,10 @@ checks that a removed field cannot publish a deferred color-dialog result.
 checking Colorize and Threshold compositor pixels, controls, focus and archive
 reopening without slider motion.
 
+Before pixel assertions or screenshots, await `brush_ready()` for required canvas
+pipelines, then frame and submitted-queue completion. `wait_for_canvas()` waits
+only for submitted work; an idle queue can precede required pipeline readiness.
+
 `--layer-relationships` exercises contextual attachment controls, clipping rails,
 effect links, hidden owners, group modes and normalized saved-selection drops.
 It checks narrow and wide panels in both themes; `--layers` includes this journey.

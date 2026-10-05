@@ -533,3 +533,11 @@ resources-layer-color-mode = Modo de cor
 resources-layer-color-full = Todas as cores
 resources-layer-color-gray = Escala de cinza
 resources-layer-color-two-tone = Dois tons (preto e branco)
+
+resources-filter-brightness-to-opacity = Brilho para opacidade
+resources-illustration-colors = Cores
+resources-illustration-black = Preto
+resources-illustration-white = Branco
+resources-illustration-transparency = Transparência
+resources-illustration-keep = Manter
+resources-illustration-alpha-threshold = Limiar alfa

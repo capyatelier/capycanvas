@@ -134,6 +134,75 @@ fn threshold(image: bool, value: f32) -> EffectInstance {
 }
 
 #[test]
+fn illustration_conversions_preserve_coverage_and_define_exact_threshold_classes() {
+    for space in RgbSpace::ALL {
+        let mut r=WgpuRasterizer::new_native_headless(DocumentColor {space,depth:SampleDepth::F32}).unwrap();
+        for image in [false,true] {
+            for (encoded,coverage) in [(0.,1.),(1.,1.),(0.5,0.4),(-0.25,0.4),(1.25,0.4),(0.,0.)] {
+                let rgb=[space.decode(encoded) as f32;3];
+                let converted=effect(2,"brightness_to_opacity",image);
+                let actual=frame(&mut r,&[converted,source(rgb,coverage)]);
+                let alpha=coverage*(1.-encoded.clamp(0.,1.) as f32);
+                assert!((actual[3]-alpha).abs()<2e-6,"brightness: {actual:?} vs {alpha}");
+                assert_eq!(&actual[..3],&[0.;3]);
+            }
+            for encoded in [0.25,0.75] {for coverage in [0.,0.25,0.5,0.75,1.] {
+                for colors in 0..3 {for binary in 0..2 {
+                    let mut conversion=threshold(image,0.5);
+                    set(&mut conversion,"colors",EffectValue::Choice(colors));
+                    set(&mut conversion,"transparency",EffectValue::Choice(binary));
+                    let actual=frame(&mut r,&[conversion,source([space.decode(encoded) as f32;3],coverage)]);
+                    let white=encoded>=0.5;
+                    let mut alpha=if binary==1 {if coverage>=0.5 {1.}else{0.}}else{coverage};
+                    if (colors==1&&white)||(colors==2&&!white) {alpha=0.;}
+                    assert_color(actual,[if white{1.}else{0.};3],alpha,"illustration threshold");
+                }}
+            }}
+            assert_color(frame(&mut r,&[threshold(image,0.),source([0.;3],1.)]),[1.;3],1.,"threshold equality belongs to white");
+            let mut conversion=threshold(image,0.5);
+            set(&mut conversion,"transparency",EffectValue::Choice(1));
+            set(&mut conversion,"alpha_threshold",EffectValue::Number(0.));
+            assert_eq!(frame(&mut r,&[conversion,source([0.;3],0.)]),[0.;4]);
+            for coverage in [1e-12,1e-30] {
+                let rgb=[space.decode(0.25) as f32;3];
+                let actual=frame(&mut r,&[effect(2,"brightness_to_opacity",image),source(rgb,coverage)]);
+                let expected=coverage*0.75;
+                assert!((actual[3]/expected-1.).abs()<2e-6,"tiny brightness coverage: {actual:?} vs {expected}");
+                assert_eq!(&actual[..3],&[0.;3]);
+                let mut conversion=threshold(image,0.5);
+                assert_eq!(frame(&mut r,&[conversion.clone(),source(rgb,coverage)]),[0.,0.,0.,coverage]);
+                set(&mut conversion,"transparency",EffectValue::Choice(1));
+                set(&mut conversion,"alpha_threshold",EffectValue::Number(0.));
+                assert_eq!(frame(&mut r,&[conversion,source(rgb,coverage)]),[0.,0.,0.,1.]);
+            }
+        }
+    }
+}
+
+#[test]
+fn pointwise_conversions_separate_linear_and_encoded_chains() {
+    for space in RgbSpace::ALL {for blend in layer_core::BlendSpace::ALL {
+        let mut r=WgpuRasterizer::new_native_headless(DocumentColor {space,depth:SampleDepth::F32}).unwrap();
+        for name in ["threshold","brightness_to_opacity"] {
+            for conversion_first in [false,true] {
+            let render=|r:&mut WgpuRasterizer,image:bool| {
+                let mut exposure=effect(3,"exposure",image);set(&mut exposure,"exposure",EffectValue::Number(1.));
+                let chain=if conversion_first {[exposure,effect(2,"invert",image),effect(1,name,image)]}
+                    else {[exposure,effect(2,name,image),effect(1,"invert",image)]};
+                let document=effect_document(&[chain[0].clone(),chain[1].clone(),chain[2].clone(),source([0.13,0.29,0.71],0.375)],[256;2],r.document_color);
+                let mut frame=packet(document.scene(),document.composition().size);frame.blend_space=blend;
+                r.submit(frame).unwrap();
+                let bytes=crate::layer_tests::page_bytes(r,crate::test_support::document_texture(r));
+                std::array::from_fn::<_,4,_>(|c|f32::from_le_bytes(bytes[c*4..c*4+4].try_into().unwrap()))
+            };
+            let actual=render(&mut r,false);let expected=render(&mut r,true);
+            for (a,b) in actual.into_iter().zip(expected) {assert!((a-b).abs()<3e-6,"{name} {space:?} {blend:?} conversion_first={conversion_first}: {actual:?} vs {expected:?}");}
+            }
+        }
+    }}
+}
+
+#[test]
 fn p21_hue_ranges_match_original_linear_oklab_membership_in_every_profile_and_path() {
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space, depth: SampleDepth::F32 }).unwrap();

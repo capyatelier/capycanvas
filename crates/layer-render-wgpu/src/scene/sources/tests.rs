@@ -202,22 +202,30 @@ fn effect_mask_bindings_reuse_retire_and_bound_real_texture_views() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut scene = Scene::new(&r);
     let layout = scene.effects.masks.clone();
-    let views = std::array::from_fn::<_, { crate::effects::MASK_SLOTS }, _>(|_| r.empty_view.clone());
-    let create = |views: &[wgpu::TextureView; crate::effects::MASK_SLOTS]| r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("mask binding lifetime oracle"), layout: &layout,
-        entries: &std::array::from_fn::<_, { crate::effects::MASK_SLOTS }, _>(|i| wgpu::BindGroupEntry {
-            binding: i as u32, resource: wgpu::BindingResource::TextureView(&views[i]),
-        }),
-    });
+    let views = (std::array::from_fn::<_, { crate::effects::MASK_SLOTS }, _>(|_| r.empty_view.clone()), r.changed_cells.as_ref().unwrap().disabled.clone());
+    let create = |key: &([wgpu::TextureView; crate::effects::MASK_SLOTS], wgpu::Buffer)| {
+        let mut entries: Vec<_> = key.0.iter().enumerate().map(|(i, view)| wgpu::BindGroupEntry {
+            binding: i as u32, resource: wgpu::BindingResource::TextureView(view),
+        }).collect();
+        entries.push(wgpu::BindGroupEntry { binding: crate::effects::MASK_SLOTS as u32, resource: key.1.as_entire_binding() });
+        r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mask binding lifetime oracle"), layout: &layout, entries: &entries,
+        })
+    };
     let original = scene.mask_bindings.get(&views, || create(&views)).clone();
     scene.begin_frame();
     assert_eq!(*scene.mask_bindings.get(&views, || panic!("an unchanged mask set must reuse its binding")), original);
-    scene.forget_bindings(&[views[0].clone()]);
+    let distinct_flags = (views.0.clone(), r.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("distinct changed-cell binding"), size: 20, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
+    }));
+    assert_ne!(*scene.mask_bindings.get(&distinct_flags, || create(&distinct_flags)), original,
+        "matching mask textures must not share bindings with a different changed-cell buffer");
+    scene.forget_bindings(&[views.0[0].clone()]);
     assert!(scene.mask_bindings.entries.is_empty());
     assert_ne!(*scene.mask_bindings.get(&views, || create(&views)), original);
     for _ in 0..=4096 {
         let mut distinct = views.clone();
-        distinct[0] = r.empty_view.texture().create_view(&Default::default());
+        distinct.0[0] = r.empty_view.texture().create_view(&Default::default());
         scene.mask_bindings.get(&distinct, || create(&distinct));
         assert!(scene.mask_bindings.entries.len() <= 4096);
     }

@@ -1578,11 +1578,49 @@ class AndroidHostTest {
                 assertEquals(41.0, value("${range}_feather"), 0.0)
             }
             action(obj("type" to "set_layer_visibility", "id" to properties().getLong("layer"), "visible" to false))
-            for (id in listOf("invert", "desaturate", "threshold", "photo_filter")) {
+            for (id in listOf("invert", "desaturate", "brightness_to_opacity", "threshold", "photo_filter")) {
                 action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
                 when (id) {
-                    "invert", "desaturate" -> assertTrue(controls().isEmpty())
-                    "threshold" -> { edit("threshold", "0.73"); p21Capture("p21-$theme-threshold") }
+                    "invert", "desaturate", "brightness_to_opacity" -> {
+                        assertTrue(controls().isEmpty())
+                        if (id == "brightness_to_opacity") p21Capture("p21-$theme-brightness-to-opacity")
+                    }
+                    "threshold" -> {
+                        fun choice(key: String, index: Int) {
+                            val control = controls().single { it.getString("key") == key }
+                            compose.onNodeWithTag("property-$key").performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .8f, height * .5f)) }
+                            compose.onNode(hasText(control.getJSONObject("kind").array("options").getString(index)) and hasAnyAncestor(isPopup())).performClick()
+                            waitState { controls().single { it.getString("key") == key }.getJSONObject("value").getInt("value") == index }
+                        }
+                        edit("threshold", "0.73")
+                        assertEquals(listOf("threshold", "colors", "transparency"), controls().map { it.getString("key") })
+                        choice("colors", 1); choice("transparency", 1); edit("alpha_threshold", "37")
+                        p21Capture("p21-$theme-threshold")
+                        choice("transparency", 0)
+                        assertFalse(controls().any { it.getString("key") == "alpha_threshold" })
+                        invoke("undo"); assertEquals(37.0, value("alpha_threshold"), 0.0)
+                        invoke("redo"); choice("transparency", 1)
+                        assertEquals(37.0, value("alpha_threshold"), 0.0)
+                        choice("colors", 2); p21Capture("p21-$theme-threshold-white")
+                        val authoredThreshold = value("threshold")
+                        val archive = File(device.root, "illustration-$theme.capy")
+                        host.writeDrawingCopy(archive, compose)
+                        compose.runOnUiThread { assertTrue(host.documents.openUris(listOf(android.net.Uri.fromFile(archive)))) }
+                        host.awaitMain("reopened illustration", 60_000, {
+                            "blocked=${host.documentInputBlocked}, switching=${host.drawingTabs.switching}, brush=${host.snapshot?.optBoolean("brush_ready")}, workspace=${host.workspaceManager}, file=${state().getJSONObject("document_file")}, requests=${state().array("requests")}, load=${state().getJSONObject("filter_load")}, commands=${state().array("commands").objects().filter { it.getString("id") in listOf("open_document", "save_document_as") }}"
+                        }, compose) {
+                            host.snapshot?.optBoolean("brush_ready") == true &&
+                                state().getJSONObject("document_file").optString("location").contains(archive.name) &&
+                                !host.documentInputBlocked && !host.drawingTabs.switching
+                        }
+                        val reopened = state().array("layers").objects().single { it.optString("label") == "Threshold" && it.getBoolean("visible") }.getLong("id")
+                        action(obj("type" to "select_layer", "id" to reopened))
+                        assertEquals(authoredThreshold, value("threshold"), 0.0)
+                        assertEquals(2.0, value("colors"), 0.0)
+                        assertEquals(1.0, value("transparency"), 0.0)
+                        assertEquals(37.0, value("alpha_threshold"), 0.0)
+                        p21Capture("p21-$theme-threshold-reopened")
+                    }
                     "photo_filter" -> {
                         edit("density", "67"); toggle("preserve_luminance")
                         val tagged = controls().first { it.getString("key") == "color" }.getJSONObject("value").toString()

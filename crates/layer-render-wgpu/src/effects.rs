@@ -14,12 +14,15 @@ pub(super) trait Gpu {
     fn queue(&self) -> &wgpu::Queue;
     fn analysis_resource(&self, _occurrence: OccurrenceHandle) -> Option<Arc<resources::Resource>> { None }
     fn effect_time(&self, scene: SceneView<'_>, occurrence: OccurrenceHandle, elapsed: f32) -> f32 {
-        captured_phase(scene,occurrence).unwrap_or_else(|| scene.effect(occurrence).unwrap().time_seconds(elapsed))
+        effective_phase(scene,occurrence,elapsed)
     }
 }
 fn captured_phase(scene: SceneView<'_>, occurrence: OccurrenceHandle) -> Option<f32> {
     let target=scene.effect_handle(occurrence)?;
     scene.evaluation_context()?.phases.iter().find(|(h,_)|*h==target).map(|(_,phase)|*phase)
+}
+pub(super) fn effective_phase(scene:SceneView<'_>,occurrence:OccurrenceHandle,elapsed:f32)->f32 {
+    captured_phase(scene,occurrence).unwrap_or_else(||scene.effect(occurrence).unwrap().time_seconds(elapsed))
 }
 pub(super) type Clocks = HashMap<OccurrenceHandle, (Arc<str>, layer_core::EffectClock)>;
 impl Gpu for WgpuRasterizer {
@@ -55,12 +58,23 @@ pub(super) const MASK_SLOTS: usize = 14;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Execution {
     Fused,
+    Reduced,
+    ReducedContribution,
     Image(usize),
     Preview,
 }
+impl Execution {
+    fn reduced(self)->bool {matches!(self,Self::Reduced|Self::ReducedContribution)}
+    fn contribution(self)->bool {self==Self::ReducedContribution}
+    fn pointwise(self)->bool {self==Self::Fused || self.reduced()}
+}
 /// A compiled variant: the execution, and the blend space of the composite
 /// the effect blends onto. Linear variants convert nothing.
-type Stage = (Execution, layer_core::BlendSpace);
+type Stage = (Execution, layer_core::BlendSpace, bool);
+
+fn normal_chain(scene:SceneView<'_>,layers:&[OccurrenceHandle])->bool {
+    layers.iter().all(|handle|scene.occurrence(*handle).is_some_and(|o|o.blend==layer_core::LayerBlend::Normal))
+}
 
 pub(super) fn image_grid(output: display_mips::Plan, front: display_mips::Plan, original: display_mips::Plan) -> [f32; 32] {
     let mut data = [0.; 32];
@@ -125,10 +139,26 @@ pub(super) fn damage_radius(effect: EffectView<'_>, level: u32) -> Option<u32> {
 
 #[derive(Clone)]
 pub(super) struct PreparedEffect {
-    pub pipeline: Deferred<wgpu::RenderPipeline>,
+    pub pipeline: Pipeline,
     pub binding: wgpu::BindGroup,
     pub pointwise: bool,
+    pub original_independent: bool,
+    pub mask_slots: usize,
     pub _resource: Arc<resources::Resource>,
+}
+#[derive(Clone)]
+pub(super) enum Pipeline {
+    Render(Deferred<wgpu::RenderPipeline>),
+    Compute(Deferred<wgpu::ComputePipeline>),
+}
+impl Pipeline {
+    fn ready(&self) -> bool { match self { Self::Render(p)=>p.ready(),Self::Compute(p)=>p.ready() } }
+    #[cfg(not(target_arch="wasm32"))]
+    fn compile(&self) { match self {Self::Render(p)=>{p.compile();},Self::Compute(p)=>{p.compile();}} }
+    #[cfg(target_arch="wasm32")]
+    fn compile_async(&self)->std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),String>>>> {
+        match self { Self::Render(p)=>p.compile_async(),Self::Compute(p)=>p.compile_async() }
+    }
 }
 struct CachedEffect {
     program: Arc<EffectProgram>,
@@ -149,19 +179,22 @@ struct Instance {
     binding: wgpu::BindGroup,
     compute_binding: wgpu::BindGroup,
     resource: Arc<resources::Resource>,
-    pipelines: HashMap<Stage, Deferred<wgpu::RenderPipeline>>,
+    pipelines: HashMap<Stage, (Pipeline, bool)>,
     lookups: Vec<preparation::State>,
     offsets: Vec<u32>,
 }
 pub(super) struct Effects {
     layout: wgpu::BindGroupLayout,
     pub masks: wgpu::BindGroupLayout,
+    pub outputs: Vec<wgpu::BindGroupLayout>,
     pub sources: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
+    compute_layout: Vec<wgpu::PipelineLayout>,
     pipelines: Vec<(
         Vec<Arc<EffectProgram>>,
         Stage,
-        Deferred<wgpu::RenderPipeline>,
+        Pipeline,
+        bool,
     )>,
     // Parameters and GPU tables are shared by every pass of the same chain.
     instances: HashMap<(Vec<OccurrenceHandle>, u32), Instance>,
@@ -173,18 +206,22 @@ pub(super) struct Effects {
 impl Effects {
     pub(super) fn chain_ready(&self, scene: SceneView<'_>, layers: &[OccurrenceHandle], execution: Execution, space: layer_core::BlendSpace) -> bool {
         let programs: Vec<_> = layers.iter().filter_map(|&h| scene.effect(h).map(|e| e.program)).collect();
-        self.pipelines.iter().any(|(chain, stage, pipeline)| *stage == (execution, space)
+        self.pipelines.iter().any(|(chain, stage, pipeline, _)| *stage == (execution, space, normal_chain(scene,layers))
             && chain.iter().map(Arc::as_ref).eq(programs.iter().copied()) && pipeline.ready())
             && self.preparation.pipelines.iter().all(|(_, p)| p.ready())
     }
     /// Queue missing variants without starting compilation on the render path.
     /// The same cache serves document rendering and visible filter previews.
     pub(super) fn enqueue(&self, compiler: &startup::Compiler, priority: u8) -> bool {
-        compiler.require(self.pipelines.iter().map(|(_, _, p)| p), priority)
+        compiler.require(self.pipelines.iter().filter_map(|(_,_,p,_)|match p {Pipeline::Render(p)=>Some(p),_=>None}), priority)
+            & compiler.require(self.pipelines.iter().filter_map(|(_,_,p,_)|match p {Pipeline::Compute(p)=>Some(p),_=>None}), priority)
             & compiler.require(self.preparation.pipelines.iter().map(|(_, p)| p), priority)
     }
     pub(super) fn enqueue_active(&self, compiler: &startup::Compiler, priority: u8) -> bool {
-        compiler.require(self.instances.values().flat_map(|instance| instance.pipelines.values()), priority)
+        compiler.require(self.instances.values().flat_map(|instance| instance.pipelines.values())
+            .filter_map(|(pipeline,_)|match pipeline {Pipeline::Render(p)=>Some(p),_=>None}), priority)
+            & compiler.require(self.instances.values().flat_map(|instance| instance.pipelines.values())
+                .filter_map(|(pipeline,_)|match pipeline {Pipeline::Compute(p)=>Some(p),_=>None}), priority)
             & compiler.require(self.preparation.pending.iter().filter_map(|work| match work {
                 preparation::Work::Dispatch(dispatch) => Some(&dispatch.pipeline),
                 preparation::Work::Copy { .. } => None,
@@ -196,7 +233,7 @@ impl Effects {
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(&self) {
-        for (_, _, pipeline) in &self.pipelines {
+        for (_, _, pipeline, _) in &self.pipelines {
             pipeline.compile();
         }
         for (_, pipeline) in &self.preparation.pipelines {
@@ -212,7 +249,7 @@ impl Effects {
         let futures: Vec<_> = self
             .pipelines
             .iter()
-            .map(|(_, _, p)| p.compile_async())
+            .map(|(_, _, p, _)| p.compile_async())
             .chain(
                 self.preparation
                     .pipelines
@@ -242,15 +279,17 @@ impl Effects {
             }
         }
         self.pipelines
-            .retain(|(chain, _, _)| chain.iter().all(|p| keep.contains(p)));
+            .retain(|(chain, _, _, _)| chain.iter().all(|p| keep.contains(p)));
         self.preparation.retain_programs(&keep);
     }
     pub fn fork(&self) -> Self {
         Self {
             layout: self.layout.clone(),
             masks: self.masks.clone(),
+            outputs: self.outputs.clone(),
             sources: self.sources.clone(),
             pipeline_layout: self.pipeline_layout.clone(),
+            compute_layout: self.compute_layout.clone(),
             pipelines: self.pipelines.clone(),
             instances: HashMap::new(),
             ids: (Vec::new(), 0),
@@ -259,13 +298,13 @@ impl Effects {
         }
     }
     pub fn merge_validated(&mut self, other: Self) {
-        for (programs, stage, pipeline) in other.pipelines {
+        for (programs, stage, pipeline, original_independent) in other.pipelines {
             if !self
                 .pipelines
                 .iter()
-                .any(|(p, s, _)| *p == programs && *s == stage)
+                .any(|(p, s, _, _)| *p == programs && *s == stage)
             {
-                self.pipelines.push((programs, stage, pipeline));
+                self.pipelines.push((programs, stage, pipeline, original_independent));
             }
         }
         self.preparation.merge(other.preparation);
@@ -287,37 +326,43 @@ impl Effects {
         if let Some(cache) = &r.validated_effects {
             return cache.fork();
         }
+        let visibility=wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE;
         let sources = crate::bindings::layout(&r.device, "effect sources", &[
-            crate::bindings::texture(0,wgpu::ShaderStages::FRAGMENT,true),
-            crate::bindings::texture(1,wgpu::ShaderStages::FRAGMENT,true),
-            crate::bindings::sampler(2,wgpu::ShaderStages::FRAGMENT,wgpu::SamplerBindingType::Filtering),
+            crate::bindings::texture(0,visibility,true),
+            crate::bindings::texture(1,visibility,true),
+            crate::bindings::sampler(2,visibility,wgpu::SamplerBindingType::Filtering),
         ]);
         let layout = crate::bindings::layout(&r.device, "effect parameters", &[crate::bindings::buffer(
             0,
-            wgpu::ShaderStages::FRAGMENT,
+            visibility,
             wgpu::BufferBindingType::Storage { read_only: true },
             false,
             NonZeroU64::new(16),
-        ), crate::bindings::buffer(1, wgpu::ShaderStages::FRAGMENT, wgpu::BufferBindingType::Storage {read_only: true}, false, NonZeroU64::new(16))]);
-        let masks = crate::bindings::layout(
-            &r.device,
-            "effect mask inputs",
-            &(0..MASK_SLOTS)
-                .map(|i| crate::bindings::texture(i as u32, wgpu::ShaderStages::FRAGMENT, true))
-                .collect::<Vec<_>>(),
-        );
-        let pipeline_layout = r
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        ), crate::bindings::buffer(1, visibility, wgpu::BufferBindingType::Storage {read_only: true}, false, NonZeroU64::new(16))]);
+        let masks = crate::bindings::layout(&r.device, "effect mask inputs",
+            &(0..MASK_SLOTS).map(|i| crate::bindings::texture(i as u32, visibility, true))
+                .chain([crate::bindings::buffer(MASK_SLOTS as u32,wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BufferBindingType::Storage {read_only:true},false,NonZeroU64::new(20))]).collect::<Vec<_>>());
+        let outputs:Vec<_>=(1..=MASK_SLOTS).map(|count|crate::bindings::layout(&r.device,"pointwise effect destination",
+            &(0..count).map(|i|crate::bindings::texture(i as u32,wgpu::ShaderStages::COMPUTE,true))
+                .chain([crate::bindings::storage_texture(count as u32,wgpu::ShaderStages::COMPUTE,
+                    wgpu::TextureFormat::Rgba32Float,wgpu::StorageTextureAccess::WriteOnly)]).collect::<Vec<_>>())).collect();
+        let pipeline_layout = r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("WGSL effects ABI 5"),
                 bind_group_layouts: &[Some(uniforms), Some(&sources), Some(&layout), Some(&masks)],
                 immediate_size: 0,
             });
+        let compute_layout=outputs.iter().map(|outputs|r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:Some("pointwise effects ABI 5"),
+            bind_group_layouts:&[Some(uniforms),Some(&sources),Some(&layout),Some(outputs)],immediate_size:0,
+        })).collect();
         Self {
             layout,
             masks,
+            outputs,
             sources,
             pipeline_layout,
+            compute_layout,
             pipelines: Vec::new(),
             instances: HashMap::new(),
             ids: (Vec::new(), 0),
@@ -342,7 +387,7 @@ impl Effects {
         space: layer_core::BlendSpace,
     ) -> Result<PreparedEffect, GpuRasterError> {
         let execution = stage;
-        let stage = (execution, space);
+        let stage = (execution, space, normal_chain(scene,layers));
         self.ids.0.clear();
         self.ids.0.extend_from_slice(layers);
         self.ids.1 = level;
@@ -364,12 +409,14 @@ impl Effects {
                 .iter()
                 .zip(layers)
                 .all(|(a, layer)| *a == effect_properties(r.device(), scene, *layer, r.effect_time(scene, *layer, time), space))
-            && let Some(pipeline) = old.pipelines.get(&stage)
+            && let Some((pipeline, original_independent)) = old.pipelines.get(&stage)
         {
             return Ok(PreparedEffect {
                 pipeline: pipeline.clone(),
                 binding: old.binding.clone(),
-                pointwise: execution == Execution::Fused,
+                pointwise: execution.pointwise(),
+                original_independent: *original_independent,
+                mask_slots: old.effects.len().min(MASK_SLOTS),
                 _resource: old.resource.clone(),
             });
         }
@@ -400,12 +447,12 @@ impl Effects {
             .flatten()
             .flat_map(|v| v.to_le_bytes())
             .collect();
-        let pipeline = if let Some((_, _, pipeline)) = self
+        let (pipeline, original_independent) = if let Some((_, _, pipeline, original_independent)) = self
             .pipelines
             .iter()
-            .find(|(p, s, _)| *p == programs && *s == stage)
+            .find(|(p, s, _, _)| *p == programs && *s == stage)
         {
-            pipeline.clone()
+            (pipeline.clone(), *original_independent)
         } else {
             let source = shader_source(
                 &programs,
@@ -414,16 +461,25 @@ impl Effects {
                 r.device().working_space(),
                 r.device().hdr(),
                 space,
+                stage.2,
             )?;
-            validate_source(&source)?;
+            let compute=computable(&programs,execution);
+            let original_independent=validate_source(&source,compute,programs.len().min(MASK_SLOTS),execution.reduced())?;
             let module = r
                 .device()
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("checked pointwise effect"),
                     source: wgpu::ShaderSource::Wgsl(source.into()),
                 });
-            let (device, layout) = (r.device().clone(), self.pipeline_layout.clone());
-            let pipeline = Deferred::pipeline(move |mode| {
+            let pipeline = if compute {
+                let (device,layout)=(r.device().clone(),self.compute_layout[programs.len().min(MASK_SLOTS)-1].clone());
+                Pipeline::Compute(Deferred::pipeline(move |mode|mode.compute(&device,&wgpu::ComputePipelineDescriptor {
+                    label:Some("pointwise effect tiles"),layout:Some(&layout),module:&module,entry_point:Some("effect_compute"),
+                    compilation_options:Default::default(),cache:None,
+                })))
+            } else {
+                let (device, layout) = (r.device().clone(), self.pipeline_layout.clone());
+                Pipeline::Render(Deferred::pipeline(move |mode| {
                 fullscreen_pipeline_recipe(
                     mode,
                     &device,
@@ -434,10 +490,11 @@ impl Effects {
                     device.working_format(),
                     "pointwise effect chain",
                 )
-            });
-            self.pipelines.push((programs, stage, pipeline.clone()));
+                }))
+            };
+            self.pipelines.push((programs, stage, pipeline.clone(), original_independent));
             self.compilations += 1;
-            pipeline
+            (pipeline, original_independent)
         };
         let reusable = self
             .instances
@@ -564,11 +621,13 @@ impl Effects {
         {
             pipelines = old.pipelines.clone();
         }
-        pipelines.insert(stage, pipeline.clone());
+        pipelines.insert(stage, (pipeline.clone(), original_independent));
         let prepared = PreparedEffect {
             pipeline,
             binding: binding.clone(),
-            pointwise: execution == Execution::Fused,
+            pointwise: execution.pointwise(),
+            original_independent,
+            mask_slots: effects.len().min(MASK_SLOTS),
             _resource: resource.clone(),
         };
         self.instances.insert(
@@ -615,24 +674,39 @@ fn effect_properties(device: &PipelineDevice, scene: SceneView<'_>, handle: Occu
 }
 
 pub(super) fn parse_validated(source: &str) -> Result<naga::Module, GpuRasterError> {
+    validated_module(source).map(|(module,_)|module)
+}
+fn validated_module(source:&str)->Result<(naga::Module,naga::valid::ModuleInfo),GpuRasterError> {
     let module = naga::front::wgsl::parse_str(source)
         .map_err(|e| GpuRasterError::Effect(e.emit_to_string(source)))?;
-    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
+    let info=naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
         .validate(&module)
-        .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
-    Ok(module)
+        .map_err(|e| GpuRasterError::Effect(e.emit_to_string(source)))?;
+    Ok((module,info))
 }
-fn validate_source(source: &str) -> Result<(), GpuRasterError> {
-    let module = parse_validated(source)?;
-    if module.global_variables.len() != 9 + MASK_SLOTS
-        || module.entry_points.len() != 3
+fn position_independent(programs:&[Arc<EffectProgram>],source:&str)->Result<bool,GpuRasterError> {
+    let (module,info)=validated_module(source)?;
+    Ok(programs.iter().all(|program| program.kind==EffectKind::Adjustment
+        && module.functions.iter().find(|(_,function)|function.name.as_deref()==Some(&program.entry))
+            .is_some_and(|(handle,function)|function.expressions.iter().all(|(expression,value)|
+                !matches!(value,naga::Expression::FunctionArgument(1)) || info[handle][expression].ref_count==0))))
+}
+fn computable(programs:&[Arc<EffectProgram>],execution:Execution)->bool {
+    execution==Execution::Fused && programs.iter().all(|p|!p.fusion_boundary())
+}
+fn validate_source(source: &str, compute:bool,mask_slots:usize,reduced:bool) -> Result<bool, GpuRasterError> {
+    let (module,info) = validated_module(source)?;
+    if module.global_variables.len() != 9 + if compute { mask_slots + 1 } else { MASK_SLOTS + usize::from(reduced) }
+        || module.entry_points.len() != 3 + usize::from(compute)
         || !module.overrides.is_empty()
     {
         return Err(GpuRasterError::Effect(
             "Effects cannot add bindings, overrides or entry points".into(),
         ));
     }
-    Ok(())
+    Ok(module.global_variables.iter().find(|(_,global)|global.name.as_deref()==Some("back"))
+        .is_some_and(|(back,_)|module.functions.iter().find(|(_,function)|function.name.as_deref()==Some("effect_value"))
+            .is_some_and(|(handle,_)|info[handle][back].is_empty())))
 }
 
 fn shader_source(
@@ -642,6 +716,7 @@ fn shader_source(
     space: layer_core::color::RgbSpace,
     hdr: bool,
     blend: layer_core::BlendSpace,
+    normal:bool,
 ) -> Result<String, GpuRasterError> {
     if programs.len() > 1 && programs.iter().any(|program| program.auxiliary.is_some()) {
         return Err(GpuRasterError::Effect("An auxiliary resource requires its own effect stage".into()));
@@ -650,10 +725,11 @@ fn shader_source(
     // values convert their input and output; a filter that follows the
     // document's Blending reads the composite as it is.
     let perceptual = blend == layer_core::BlendSpace::Perceptual;
-    let input_encoded = stage != Execution::Fused && programs[0].space.encoded(blend);
+    let input_encoded = programs[0].space.encoded(blend);
     let converts = perceptual && !input_encoded;
     let encoded = |expression: String| if converts { format!("working_encode({expression})") } else { expression };
     let linear = |expression: &str| if converts { format!("working_decode({expression})") } else { expression.into() };
+    let blend_code=if normal {"0u"} else {"u32(controls.y)"};
     let mut source = working_color::source(space);
     source.push_str(&crate::view_color::hdr_shader(space, layer_core::color::RgbSpace::Srgb));
     source.push_str(include_str!("blend_modes.wgsl"));
@@ -669,7 +745,8 @@ fn shader_source(
     source.push_str(crate::gradient::SOURCE);
     source.push_str(include_str!("float_number.wgsl"));
     source.push_str(include_str!("guide_luminance.wgsl"));
-    for i in 0..MASK_SLOTS {
+    let mask_slots=if computable(programs,stage) {programs.len().min(MASK_SLOTS)} else {MASK_SLOTS};
+    for i in 0..mask_slots {
         source.push_str(&format!(
             "@group(3) @binding({i}) var effect_mask_{i}:texture_2d<f32>;\n"
         ));
@@ -801,12 +878,14 @@ fn fx_sample_bounds()->vec4<f32> {
 fn fx_original(p:vec2<f32>)->vec4<f32> {
     return fx_reference_sample(back,p,settings.backdrop,settings.operation_linear.y,fx_original_support());
 }
-@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {
-    return effect_result(v);
-}
-
 "#,
     );
+    if stage.reduced() {source.push_str(&format!("struct RetainedChangedCells {{side:u32,enabled:u32,padding0:u32,padding1:u32,cells:array<u32>}}\n@group(3) @binding({MASK_SLOTS}) var<storage,read> retained_cells:RetainedChangedCells;\n"));}
+    source.push_str(if stage.reduced() {
+        "@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {return effect_reduced(vec2<u32>(floor(v.position.xy-settings.rect.xy)));}\n"
+    } else {
+        "@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {return effect_result(v);}\n"
+    });
     source.push_str(include_str!("effect_tables.wgsl"));
     source.push_str(if stage == Execution::Fused {
         "fn fx_original_support()->vec4<f32>{return vec4(settings.color.zw,settings.operation_offset.zw);}\n"
@@ -863,32 +942,51 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         if last && p.kind == EffectKind::Adjustment {
             source.push_str(&format!("let c={};let controls=effect_data[{}u];var coverage=controls.z;if settings.options.w>.5 {{coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).a;}}", encoded("fx_original(position)".into()), offsets[0]));
             if p.alpha == layer_core::EffectAlpha::Filter {
-                source.push_str("return fx_filter(c,adjusted,u32(controls.y),controls.x*coverage);}");
+                source.push_str(&format!("return fx_filter(c,adjusted,{blend_code},controls.x*coverage);}}"));
             } else {
-                source.push_str("return fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage);}");
+                source.push_str(&format!("return fx_adjustment(c,adjusted,{blend_code},controls.x*coverage);}}"));
             }
         } else {
             source.push_str("return adjusted;}");
         }
         return Ok(source);
     }
+    source.push_str("fn effect_front(local:vec2<f32>)->vec4<f32> {\n");
+    if stage.contribution() || stage==Execution::Fused {
+        if stage==Execution::Fused {source.push_str("if settings.source_over.w>2.5 {\n");}
+        source.push_str("return textureLoad(front,vec2<i32>(floor(local*vec2<f32>(textureDimensions(front))/vec2(256.))),0);\n");
+        if stage==Execution::Fused {source.push_str("}\n");}
+    }
+    if !stage.contribution() {source.push_str("return textureLoad(front,vec2<i32>(local),0);\n");}
+    source.push_str("}\nfn effect_result(v:Vertex)->vec4<f32> {let local=select(v.position.xy-settings.rect.xy,v.position.xy,settings.operation_linear.z>0.);return effect_value(v,effect_front(local),textureLoad(back,vec2<i32>(local),0));}\n");
+    source.push_str("fn effect_value(v:Vertex,front_value:vec4<f32>,back_value:vec4<f32>)->vec4<f32> {\n");
     source.push_str(
         r#"
-fn effect_result(v:Vertex)->vec4<f32> {
     let local=select(v.position.xy-settings.rect.xy,v.position.xy,settings.operation_linear.z>0.);
-    var c=textureLoad(front,vec2<i32>(local),0);
-    if settings.source_over.w>.5 {
+    var c=vec4(0.);
 "#,
     );
-    if perceptual {
-        source.push_str("        c=working_encode(c);\n");
+    if stage.contribution() || stage==Execution::Fused {
+        if stage==Execution::Fused {source.push_str("if settings.source_over.w>2.5 {\n");}
+        source.push_str("let preview=front_value;let base=back_value;\n");
+        source.push_str(if perceptual {"c=working_encode(preview)+working_encode(base)*(1.-preview.a);"} else {"c=preview+base*(1.-preview.a);"});
+        source.push_str("c*=settings.source_over.x;\n");
+        if stage==Execution::Fused {source.push_str("} else {\n");}
+    }
+    if !stage.contribution() {
+        source.push_str("c=front_value;if settings.source_over.w>.5 {\n");
+        if perceptual {source.push_str("c=working_encode(c);\n");}
+        source.push_str(r#"
+            let coverage=select(settings.source_over.y,mix(back_value.r,1.-back_value.r,settings.source_over.z-2.),settings.source_over.z>=2.);
+            c*=settings.source_over.x*coverage;
+            if settings.source_over.w<1.5 {c+=settings.backdrop*(1.-c.a);}
+        }
+"#);
+        if stage==Execution::Fused {source.push_str("}\n");}
     }
     source.push_str(
-        r#"        let coverage=select(settings.source_over.y,mix(textureLoad(back,vec2<i32>(local),0).r,1.-textureLoad(back,vec2<i32>(local),0).r,settings.source_over.z-2.),settings.source_over.z>=2.);
-        c*=settings.source_over.x*coverage;
-        if settings.source_over.w<1.5 {c+=settings.backdrop*(1.-c.a);}
-    }
-    let mask=select(1.,textureLoad(back,vec2<i32>(local),0).a,settings.options.w>.5);
+        r#"
+    let mask=select(1.,back_value.a,settings.options.w>.5);
     let position=fx_position(local);
 "#,
     );
@@ -911,12 +1009,24 @@ fn effect_result(v:Vertex)->vec4<f32> {
                 let bit = 1u32 << i;
                 source.push_str(&format!("else if (u32(settings.extent.z)&{bit}u)!=0u {{let m=textureLoad(effect_mask_{i},vec2<i32>(local),0).r;coverage=select(m,1.-m,(u32(settings.extent.w)&{bit}u)!=0u);}}\n"));
             }
-            source.push_str(if p.alpha == layer_core::EffectAlpha::Filter { "c=fx_filter(c,adjusted,u32(controls.y),controls.x*coverage); }\n" } else { "c=fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage); }\n" });
+            let operation=if p.alpha==layer_core::EffectAlpha::Filter {"fx_filter"} else {"fx_adjustment"};
+            source.push_str(&format!("c={operation}(c,adjusted,{blend_code},controls.x*coverage); }}\n"));
         } else {
             source.push_str("c=select(vec4(0.),adjusted,fx_in_frame(position)); }\n");
         }
     }
-    source.push_str("if settings.options.x>.5 {c=blend_composite(select(c*settings.options.y,c,settings.options.y==1.),settings.backdrop,u32(settings.options.z));} return c; }\n");
+    if !stage.reduced() {source.push_str("if settings.options.x>.5 {let backdrop=select(settings.backdrop,back_value,settings.options.x>1.5);c=blend_composite(select(c*settings.options.y,c,settings.options.y==1.),backdrop,u32(settings.options.z));}");}
+    source.push_str("return c; }\n");
+    if stage.reduced() {
+        source.push_str("const EFFECT_POSITION_INDEPENDENT:bool=false;\n");
+        source.push_str(include_str!("effect_reduce.wgsl"));
+        if position_independent(programs,&source)? {
+            source=source.replace("const EFFECT_POSITION_INDEPENDENT:bool=false;","const EFFECT_POSITION_INDEPENDENT:bool=true;");
+        }
+    } else if computable(programs,stage) {
+        source.push_str(&format!("@group(3) @binding({mask_slots}) var effect_output:texture_storage_2d<rgba32float,write>;\n"));
+        source.push_str(include_str!("effect_compute.wgsl"));
+    }
     Ok(source)
 }
 
@@ -941,6 +1051,7 @@ mod tests {
                 }
             } else {
                 validate(std::slice::from_ref(p), Execution::Fused);
+                if !p.fusion_boundary() {for execution in [Execution::Reduced,Execution::ReducedContribution] {validate(std::slice::from_ref(p),execution);}}
             }
         }
         validate(
@@ -950,6 +1061,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             Execution::Fused,
         );
+    }
+    #[test]
+    fn cached_reduction_requires_coordinate_independent_entries() {
+        for (name,expected) in [("threshold",true),("brightness_to_opacity",true),("film_grain",false)] {
+            let program=crate::tests::fixture(name).program();
+            for blend in layer_core::BlendSpace::ALL {
+                let source=shader_source(std::slice::from_ref(&program),&[3],Execution::Reduced,Default::default(),false,blend,true).unwrap();
+                assert_eq!(position_independent(std::slice::from_ref(&program),&source).unwrap(),expected,"{name} {blend:?}");
+            }
+        }
     }
     #[test]
     fn intermediate_support_tracks_preceding_separable_pass_in_authored_axes() {
@@ -996,10 +1117,26 @@ mod tests {
         validate(&[builtin],Execution::Fused);
         validate(&[Arc::new(custom)],Execution::Fused);
     }
-    fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
-        for blend in layer_core::BlendSpace::ALL {
-            let source = shader_source(p, &vec![3; p.len()], execution, Default::default(), false, blend).unwrap();
-            validate_source(&source).unwrap();
+    #[test]
+    fn pixel_backdrop_fusion_rejects_original_reads_through_helpers() {
+        for name in ["threshold","brightness_to_opacity"] {
+            let program=crate::tests::fixture(name).program();
+            for blend in layer_core::BlendSpace::ALL {
+                let source=shader_source(std::slice::from_ref(&program),&[3],Execution::Fused,Default::default(),false,blend,true).unwrap();
+                assert!(validate_source(&source,true,1,false).unwrap());
+                let mut original=(*program).clone();
+                original.entry="original_probe".into();
+                original.wgsl=format!("{}\nfn original_helper(p:vec2<f32>)->vec4<f32>{{return fx_original(p);}}\nfn original_probe(c:vec4<f32>,p:vec2<f32>,base:u32)->vec4<f32>{{return original_helper(p);}}",
+                    program.wgsl.sources().unwrap().join("\n")).into();
+                let source=shader_source(&[Arc::new(original)],&[3],Execution::Fused,Default::default(),false,blend,true).unwrap();
+                assert!(!validate_source(&source,true,1,false).unwrap());
+            }
         }
+    }
+    fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
+        for blend in layer_core::BlendSpace::ALL {for normal in [false,true] {
+            let source = shader_source(p, &vec![3; p.len()], execution, Default::default(), false, blend,normal).unwrap();
+            validate_source(&source,computable(p,execution),p.len().min(MASK_SLOTS),execution.reduced()).unwrap();
+        }}
     }
 }

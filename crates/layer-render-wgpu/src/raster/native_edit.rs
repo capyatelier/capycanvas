@@ -84,11 +84,7 @@ impl NativeEdit {
             colors,
             scalars,
             preview_scalars: None,
-            color: if in_place {
-                NativeTileEncoder::validated_in_place(&r.device)
-            } else {
-                NativeTileEncoder::with_device(&r.device)
-            },
+            color: NativeTileEncoder::prevalidated(&r.device, in_place),
             scalar: if in_place {
                 NativeScalarEncoder::validated_in_place(&r.device)
             } else {
@@ -148,12 +144,20 @@ pub(crate) struct NativeJob {
     pub frame: NativeFrame,
     inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>,
     views: crate::native_tiles::PublicationViews,
+    changes: Vec<Option<wgpu::Buffer>>,
     validated: usize,
     encoded: usize,
     started: bool,
 }
 impl NativeJob {
+    const TIMING_PASSES: usize = 6;
     pub fn complete(&self) -> bool { self.started && self.encoded == self.inputs.len() }
+    fn pass_count(&self, native: &NativeEdit) -> usize {
+        self.inputs.chunks(MAX_BATCH_TILES).map(|chunk| {
+            native.validator.pass_count(chunk.iter().map(|(texture, _, _)| texture.format()))
+                + 1 + usize::from(native.promoter.is_some())
+        }).sum()
+    }
 }
 impl Drop for NativeFrame {
     fn drop(&mut self) {
@@ -324,7 +328,34 @@ impl WgpuRasterizer {
 
     pub(crate) fn encode_native_rasters(&mut self, scene: SceneView<'_>, encoder: &mut submission::CommandEncoder) -> Result<Option<NativeFrame>, GpuRasterError> {
         let Some(mut job) = self.prepare_native_rasters(scene)? else { return Ok(None); };
-        while self.step_native_rasters(&mut job, encoder)? {}
+        let timed = if crate::performance_trace::enabled() {
+            let passes = job.pass_count(self.native_edit.as_ref().unwrap());
+            let timed = encoder.can_fit_passes(passes + NativeJob::TIMING_PASSES)
+                && self.telemetry.phase_begin(14, &self.device, &self.queue, encoder);
+            if !timed {
+                crate::performance_trace::counter(c"Capy GPU native capture omitted", self.metrics.submissions);
+            }
+            timed
+        } else { false };
+        if timed { encoder.reserve_passes(2); }
+        let preflight = timed && self.telemetry.phase_begin(15, &self.device, &self.queue, encoder);
+        if preflight { encoder.reserve_passes(2); }
+        else if timed { crate::performance_trace::counter(c"Capy GPU native preflight omitted", self.metrics.submissions); }
+        let result = (|| -> Result<(), GpuRasterError> {
+            while job.validated < job.inputs.len() { self.step_native_rasters(&mut job, encoder)?; }
+            Ok(())
+        })();
+        if preflight { self.telemetry.phase_end(15, encoder); }
+        let encoding = timed && result.is_ok() && self.telemetry.phase_begin(16, &self.device, &self.queue, encoder);
+        if encoding { encoder.reserve_passes(2); }
+        else if timed { crate::performance_trace::counter(c"Capy GPU native encoding omitted", self.metrics.submissions); }
+        let result = result.and_then(|()| {
+            while self.step_native_rasters(&mut job, encoder)? {}
+            Ok(())
+        });
+        if encoding { self.telemetry.phase_end(16, encoder); }
+        if timed { self.telemetry.phase_end(14, encoder); }
+        result?;
         Ok(Some(job.frame))
     }
 
@@ -420,7 +451,8 @@ impl WgpuRasterizer {
             queue: self.queue.clone(),
         });
         validate::Validator::validate(&inputs.iter().map(|(t, tile, _)| (t, tile.clone())).collect::<Vec<_>>())?;
-        Ok(NativeJob { frame, inputs, views: Default::default(), validated: 0, encoded: 0, started: false })
+        let changes=frame.canonical_pages.iter().map(|&(id,coordinate)|self.changed_cells.as_ref().and_then(|c|c.buffer(id,coordinate)).cloned()).collect();
+        Ok(NativeJob { frame, inputs, views: Default::default(), changes, validated: 0, encoded: 0, started: false })
     }
 
     pub(crate) fn encode_private_tiles(&mut self, inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>, encoder: &mut submission::CommandEncoder)
@@ -459,11 +491,13 @@ impl WgpuRasterizer {
             }));
             let mut color = Vec::new();
             let mut scalar = Vec::new();
+            let mut color_changes=Vec::new();
             let mut promotions = Vec::new();
-            for ((texture, tile, mode), output) in chunk.iter().zip(&capture.outputs[first..]) {
+            for (index,((texture, tile, mode), output)) in chunk.iter().zip(&capture.outputs[first..]).enumerate() {
                 let canonical = if tile.descriptor().channels != 1 {
                     let canonical = native.colors.get(color.len()).unwrap_or(texture);
                     let encoded = match &output.resource { pool::Resource::Texture(t) => t.into(), pool::Resource::Buffer(b) => b.into() };
+                    color_changes.push(job.changes.get(job.encoded+index).and_then(Option::as_ref));
                     color.push(NativeTileRequest {
                         mode: *mode, space: self.document_color().space,
                         working: texture,
@@ -495,10 +529,9 @@ impl WgpuRasterizer {
                     region: [0, 0, 256, 256],
                 });
             }
-            let color =
-                native
-                    .color
-                    .prepare(&self.device, &color, status, views)?;
+            let color=if color_changes.iter().any(Option::is_some) {
+                native.color.prepare_tracked(&self.device,&color,status,views,&color_changes)?
+            } else {native.color.prepare(&self.device,&color,status,views)?};
             let scalar =
                 native
                     .scalar

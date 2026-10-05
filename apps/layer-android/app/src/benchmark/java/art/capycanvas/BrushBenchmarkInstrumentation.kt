@@ -54,6 +54,9 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val size = arguments.getString("brushSize", "1000")!!.toDouble()
             val duration = arguments.getString("durationMs", "10000")!!.toInt()
             val repeats = arguments.getString("repeats", "3")!!.toInt()
+            val memorySnapshots = arguments.getString("memorySnapshots") == "true"
+            val memoryIdleMs = arguments.getString("memoryIdleMs", "0")!!.toLong()
+            check(memoryIdleMs in 0L..120000L && (memoryIdleMs == 0L || memorySnapshots))
             val mode = arguments.getString("mode", "constant")!!
             val prediction = arguments.getString("prediction", "true") == "true"
             val statsPanel = arguments.getString("statsPanel", "false") == "true"
@@ -68,7 +71,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val speed = arguments.getString("speed", "1")!!.toDouble()
             val blending = arguments.getString("blending")
             check(blending == null || blending in listOf("linear", "perceptual"))
-            check(duration in 1000..60000 && repeats in 1..10)
+            check(duration in 1000..60000 && repeats in 1..100)
             check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch", "settle", "object-affine"))
             check(mode != "object-affine" || objectWorkload)
             val pauseMs = arguments.getString("pauseMs", "100")!!.toInt()
@@ -190,12 +193,13 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 report(true)
                 native { Native.completionTimings(it, true) }
             }
-            if (arguments.getString("memorySnapshots") == "true") {
+            if (memorySnapshots) {
                 val memoryFile = File(output, "$label-memory.jsonl")
+                memoryFile.writeText("")
                 memorySampler = Thread {
                     try {
                         while (samplingMemory.get()) {
-                            memoryFile.appendText(resources().toString() + "\n")
+                            memoryFile.appendText(resources().put("process_pss_kib", android.os.Debug.getPss()).toString() + "\n")
                             Thread.sleep(100)
                         }
                     } catch (_: InterruptedException) { }
@@ -262,6 +266,29 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             repeat((insertedPaintIndex - paintLayerIndex).coerceAtLeast(0)) { invoke("raise_layer") }
             repeat((paintLayerIndex - insertedPaintIndex).coerceAtLeast(0)) { invoke("lower_layer") }
             var attachmentFixture: JSONObject? = null
+            var liveFilterFixture: JSONObject? = null
+            val liveFilter = arguments.getString("liveFilter", "")!!
+            if (liveFilter.isNotEmpty()) {
+                check(workload == "ordinary" && mode != "pinch")
+                val paint = state().getJSONObject("layer_properties").getLong("layer")
+                action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to liveFilter)))
+                stage("live-filter-inserted")
+                val filter = state().getJSONObject("layer_properties").getLong("layer")
+                val values = JSONObject(arguments.getString("liveFilterValues", "{}")!!)
+                for (key in values.keys()) action(obj("type" to "effect", "action" to obj("op" to "set",
+                    "layer" to filter, "key" to key, "value" to values.getJSONObject(key))))
+                stage("live-filter-values")
+                val observed = JSONObject()
+                val controls = state().getJSONObject("layer_properties").array("controls").objects()
+                for (key in values.keys()) observed.put(key, controls.single { it.getString("key") == key }.getJSONObject("value"))
+                val disabled = arguments.getString("liveFilterDisabled", "false") == "true"
+                action(obj("type" to "set_layer_visibility", "id" to filter, "visible" to !disabled))
+                action(obj("type" to "layer", "action" to obj("op" to "attach_effect", "id" to filter, "owner" to paint)))
+                action(obj("type" to "select_layer", "id" to paint))
+                stage("live-filter-attached")
+                liveFilterFixture = obj("paint" to paint, "effect" to filter, "effect_id" to liveFilter,
+                    "disabled" to disabled, "values" to observed)
+            }
             if (workload in listOf("clipped", "blurred-base")) {
                 check(photoLayers == 1 && paintLayerIndex == 0 && mode != "pinch")
                 val paint = state().getJSONObject("layer_properties").getLong("layer")
@@ -450,14 +477,16 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             check(displayInfo.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
             File(output, "$label-info.json").writeText(obj("label" to label, "preset" to preset,
                 "brush_size" to size, "mode" to mode, "prediction" to prediction, "speed" to speed,
-                "memory_snapshots" to (arguments.getString("memorySnapshots") == "true"),
+                "memory_snapshots" to memorySnapshots,
                 "stats_panel" to statsPanel,
                 "color_mode" to colorMode, "workload" to workload, "attachment_fixture" to attachmentFixture,
                 "object_fixture" to objectFixture,
+                "live_filter_fixture" to liveFilterFixture,
                 "color_before_strokes" to colorBeforeStrokes,
                 "navigation_between_strokes" to (arguments.getString("navigationBetweenStrokes") == "true"),
                 "navigation_settle_ms" to arguments.getString("navigationSettleMs", "750")!!.toInt(),
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
+                "memory_idle_ms" to memoryIdleMs,
                 "pause_ms" to pauseMs,
                 "contact_ms" to contactMs,
                 "settle_delay_ms" to settleDelayMs,
@@ -602,6 +631,11 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     invoke("fit_canvas")
                 }
                 sendStatus(0, Bundle().apply { putString("stream", "BRUSH_RUN $label $run\n") })
+                if (run == repeats - 1 && memoryIdleMs > 0) {
+                    File(output, "$label-idle-before.json").writeText(resources().toString())
+                    SystemClock.sleep(memoryIdleMs)
+                    File(output, "$label-idle-after.json").writeText(resources().toString())
+                }
                 if (mode in listOf("lifts", "pauses")) repeat(duration / (if (mode == "pauses") contactCycle * 5 else 200)) { invoke("undo") } else repeat(if (mode == "settle") 2 else 1) { invoke("undo") }
                 if (mode == "settle") invoke("fit_canvas")
                 SystemClock.sleep(2000)

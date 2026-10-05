@@ -51,8 +51,8 @@ impl Hierarchy {
         configured.saturating_sub(CACHE_BYTES)
     }
     pub fn fits(&self, r: &WgpuRasterizer) -> bool { self.bytes <= Self::budget(r, self.bytes) }
-    fn new(r: &mut WgpuRasterizer, cache: &Cache, encoder: &mut crate::submission::CommandEncoder) -> Option<Self> {
-        if r.artwork_frame.as_ref().is_some_and(|frame| frame.scene.view().order().iter().any(|h| frame.scene.view().object_layer(*h).is_some())) { return None; }
+    fn new(r: &mut WgpuRasterizer, cache: &Cache, packet: FramePacket<'_>, encoder: &mut crate::submission::CommandEncoder) -> Option<Self> {
+        if packet.scene.order().iter().any(|h| packet.scene.object_layer(*h).is_some()) { return None; }
         #[cfg(not(target_arch = "wasm32"))]
         if r.snapshot_worker { return None; }
         let budget = Self::budget(r, 0);
@@ -64,6 +64,8 @@ impl Hierarchy {
         let plans: Vec<_> = (0..=last).map(|level| display_mips::Plan::at(extent, level)).collect();
         let bytes = records + plans.iter().map(|p| p.level_bytes(p.level)).sum::<u64>();
         if bytes > budget || extent.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) { return None; }
+        if r.native_edit.as_ref().is_some_and(|native|
+            windows::Plan::new(packet.scene, extent, native.image_pixel_budget(bytes), r.device.limits().max_texture_dimension_2d).is_err()) { return None; }
         let existing: Vec<_> = std::iter::once(cache).chain(cache.overview.as_deref())
             .flat_map(|c| c.pixels.root().into_iter().chain(c.pixels.next())).collect();
         let levels: Arc<[Image]> = plans.into_iter().map(|plan| {
@@ -99,11 +101,14 @@ impl Hierarchy {
     pub fn invalidate(&mut self, dirty: Damage) {
         self.refined.retain(|c| !dirty.intersects(page_rect(*c)));
     }
-    pub fn write(&mut self, encoder: &mut crate::submission::CommandEncoder, source: &wgpu::Texture,
+    pub fn write(&mut self, encoder: &mut crate::submission::CommandEncoder, source: &Image,
         coordinate: [u32; 2], region: PixelRect,
     ) {
         if !self.refined.insert(coordinate) { return; }
-        if source != &self.levels[0].texture { encoder.copy_texture_to_texture(source.as_image_copy(), wgpu::TexelCopyTextureInfo {
+        if source.texture != self.root().texture { encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo {
+            origin: wgpu::Origin3d { x: region.min_x() - source.plan.bounds.min_x(), y: region.min_y() - source.plan.bounds.min_y(), z: 0 },
+            ..source.texture.as_image_copy()
+        }, wgpu::TexelCopyTextureInfo {
             origin: wgpu::Origin3d { x: region.min_x(), y: region.min_y(), z: 0 },
             ..self.levels[0].texture.as_image_copy()
         }, wgpu::Extent3d { width: region.width(), height: region.height(), depth_or_array_layers: 1 }); }
@@ -118,17 +123,17 @@ impl Cache {
     pub(crate) fn resident_bytes(&self) -> u64 {
         self.hierarchy.as_ref().map_or(0, Hierarchy::storage_bytes)
     }
-    pub(super) fn working_bytes(&self) -> u64 {
+    pub(crate) fn working_bytes(&self) -> u64 {
         self.storage_bytes().saturating_sub(self.resident_bytes())
     }
     pub(super) fn output_plan(&self) -> display_mips::Plan {
         self.pixels.root().map_or(self.plan, |i| i.plan)
     }
-    pub(super) fn admit_hierarchy(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
+    pub(super) fn admit_hierarchy(&mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, encoder: &mut crate::submission::CommandEncoder,
         commands: &mut Commands,
     ) -> Result<(), GpuRasterError> {
         if !self.residency_checked && self.hierarchy.is_none()
-            && let Some(hierarchy) = Hierarchy::new(r, self, encoder) {
+            && let Some(hierarchy) = Hierarchy::new(r, self, packet, encoder) {
                 let materialized = self.pixels.root().is_some();
                 self.share_levels(r, &hierarchy, false);
                 self.hierarchy = Some(hierarchy);

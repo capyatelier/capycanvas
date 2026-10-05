@@ -789,7 +789,7 @@ occurrence and filter data versions. The temporary occurrence `/2` adapter
 retains this fixture’s projective and mesh placement until the paint placement
 cutover. Its fixed values exercise opening, editing,
 saving, reopening and compiling current filters. `builtin-contracts.json` fixes
-all 52 built-in contracts and 282 parameter keys: kinds, choice IDs,
+all 53 built-in contracts and 285 parameter keys: kinds, choice IDs,
 dimensions, accepted bounds, constraints, color domain, alpha behavior and time
 use. Parameters are keyed; control order, shader parameter order, runtime ABI
 and displayed unit labels are excluded. Choice order may change because built-in
@@ -809,6 +809,12 @@ An intentional data-version change requires a concrete conversion and tests
 opening the unchanged released fixture, editing and resaving it. Do not replace
 the baseline with output from the new writer to make a compatibility failure pass.
 Superseded pre-release formats have no conversion readers.
+
+`illustration-conversions.capy` fixes Brightness to Opacity 1 and Threshold 2,
+including single-color output, binary alpha and the hidden alpha threshold after
+switching back to Keep. The pre-release Threshold 1 entry in the original
+52-filter fixture is replaced with Threshold 2's complete neutral values;
+its raster samples and every other authored value are retained.
 
 Retain exact-byte/source/material/profile/LUT/selection assertions from the existing
 codec tests when replacing their envelope fixtures. Retain the integrated-phase

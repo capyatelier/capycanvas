@@ -961,3 +961,11 @@ resources-layer-color-mode = Mode warna
 resources-layer-color-full = Warna penuh
 resources-layer-color-gray = Skala abu-abu
 resources-layer-color-two-tone = Dua nada (hitam dan putih)
+
+resources-filter-brightness-to-opacity = Kecerahan ke opasitas
+resources-illustration-colors = Warna
+resources-illustration-black = Hitam
+resources-illustration-white = Putih
+resources-illustration-transparency = Transparansi
+resources-illustration-keep = Pertahankan
+resources-illustration-alpha-threshold = Ambang alfa

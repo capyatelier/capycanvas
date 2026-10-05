@@ -158,6 +158,16 @@ Generated fixtures remain local under `artifacts/`.
 
 ## Interactive display residency
 
+Native raster publication scans every dirty Float32 page before writing native
+samples or promoting canonical working pixels. Internal FullColor encoding reads
+that completed scan's status without repeating validation; in-place and scratch
+destinations use the same rule. Standalone candidate encoding, Gray/TwoTone mode
+projection and scalar coverage retain their own validity checks. Native rounding,
+alpha association and transfer boundaries remain the publication contract.
+Untracked color batches omit writable change flags; tracked batches bind only
+their admitted source buffers. Batches contain at most sixteen pages, with at
+most two color pages per dispatch and format-specific storage-buffer limits.
+
 Large unchanged photos use completed Float32 display mips. Full-resolution
 filters run before reduction; these display textures never feed edits or exports.
 Contiguous mip levels use hardware bilinear/trilinear sampling, with a bounded

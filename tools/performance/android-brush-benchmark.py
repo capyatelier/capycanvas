@@ -9,6 +9,7 @@ import argparse
 import json
 import math
 import pathlib
+import shlex
 import subprocess
 import time
 from android_brush_metrics import completion_window, validate_setup
@@ -63,12 +64,16 @@ def main():
     p.add_argument("--image-count", type=int, default=4)
     p.add_argument("--image-sources", choices=["shared", "unshared"], default="shared")
     p.add_argument("--effect-radius", type=float, default=8, help="Gaussian sigma in document pixels for blurred-base")
+    p.add_argument("--live-filter", help="Built-in effect attached to the changing paint input")
+    p.add_argument("--live-filter-values", default="{}", help="JSON object of keyed typed effect values")
+    p.add_argument("--live-filter-disabled", action="store_true", help="Matched graph with its live filter disabled")
     tracing = p.add_mutually_exclusive_group()
     tracing.add_argument("--trace", action="store_true", help="Full CPU/GPU phase attribution")
     tracing.add_argument("--presentation-trace", action="store_true",
                          help="SurfaceFlinger/gfx only, without per-brush app trace scopes or GPU phase readbacks")
     p.add_argument("--profile", action="store_true", help="Also sample the isolated process with simpleperf")
     p.add_argument("--memory", action="store_true", help="Sample GPU allocations outside rate qualification runs")
+    p.add_argument("--memory-idle-ms", type=int, default=0, help="Retain the final stroke while sampling idle memory")
     p.add_argument("--stats", action="store_true", help="Open Stats and enable GPU timing; omit for the default workspace")
     p.add_argument("--prefix", default="screen")
     args = p.parse_args()
@@ -82,6 +87,8 @@ def main():
         p.error("--navigation-settle-ms must be between 0 and 5000")
     if not 1 <= args.image_count <= 32:
         p.error("--image-count must be between 1 and 32")
+    if not 0 <= args.memory_idle_ms <= 120000 or (args.memory_idle_ms and (not args.memory or args.mode == "pinch")):
+        p.error("--memory-idle-ms requires --memory, a stroke mode, and 0..120000 ms")
     if args.paint_load is not None and not 0 <= args.paint_load <= 1:
         p.error("--paint-load must be between 0 and 1")
     if not 0 <= args.paint_layer_index < args.photo_layers:
@@ -106,6 +113,8 @@ def main():
         label = f"{args.prefix}-{PRESETS[preset]}-{args.size}-{args.mode}"
         if args.workload != "ordinary":
             label += f"-{args.workload}"
+        if args.live_filter:
+            label += f"-{args.live_filter}" + ("-disabled" if args.live_filter_disabled else "")
         requested = dict(preset=preset, brush_size=args.size, mode=args.mode,
                          prediction=args.prediction == "true", speed=args.speed,
                          duration_ms=args.duration, repeats=args.repeats,
@@ -119,6 +128,9 @@ def main():
             requested["canvas"] = [args.canvas_width, args.canvas_height]
         if args.navigation_between_strokes:
             requested.update(navigation_between_strokes=True, navigation_settle_ms=args.navigation_settle_ms)
+        if args.live_filter:
+            requested.update(live_filter=args.live_filter, live_filter_values=json.loads(args.live_filter_values),
+                             live_filter_disabled=args.live_filter_disabled)
         if args.mode == "pauses":
             requested["pause_ms"] = args.pause_ms
             requested["contact_ms"] = args.contact_ms
@@ -146,10 +158,13 @@ def main():
                                settleDelayMs=args.settle_delay_ms,
                                navigationBetweenStrokes=str(args.navigation_between_strokes).lower(),
                                navigationSettleMs=args.navigation_settle_ms,
-                               memorySnapshots=str(args.memory).lower(), statsPanel=str(args.stats).lower(),
+                               memorySnapshots=str(args.memory).lower(), memoryIdleMs=args.memory_idle_ms, statsPanel=str(args.stats).lower(),
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]
         cmd += ["-e", "colorMode", args.color_mode]
+        if args.live_filter:
+            cmd += ["-e", "liveFilter", args.live_filter, "-e", "liveFilterValues", shlex.quote(args.live_filter_values),
+                    "-e", "liveFilterDisabled", str(args.live_filter_disabled).lower()]
         if args.paint_load is not None:
             cmd += ["-e", "paintLoad", str(args.paint_load)]
         if args.zoom is not None:
@@ -185,7 +200,7 @@ def main():
                     process.wait(timeout=30)
                     raise
             if args.trace or args.presentation_trace:
-                milliseconds = args.repeats * (args.duration + (15000 if args.mode == "settle" else 3500)) + 8000
+                milliseconds = args.repeats * (args.duration + (15000 if args.mode == "settle" else 3500)) + args.memory_idle_ms + 8000
                 app_trace = (f'ftrace_events: "sched/sched_switch"\n'
                              f'ftrace_events: "sched/sched_waking"\n'
                              f'atrace_apps: "{args.package}"' if args.trace else "")
@@ -209,7 +224,7 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
                 trace.stdin.close()
                 time.sleep(1)
             if args.profile:
-                seconds = math.ceil(args.repeats * (args.duration / 1000 + 3.5) + 3)
+                seconds = math.ceil(args.repeats * (args.duration / 1000 + 3.5) + args.memory_idle_ms / 1000 + 3)
                 profile_log = (args.output / f"{label}-profile.log").open("w")
                 profile = subprocess.Popen(adb + ["shell", "simpleperf", "record", "--app", args.package,
                     "-e", "cpu-clock", "-f", "199", "--call-graph", "dwarf,16384", "--duration",
@@ -217,7 +232,7 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
                     stdout=profile_log, stderr=profile_log)
                 time.sleep(1)
             run("shell", f"touch {remote}/{label}-go")
-            process.wait(timeout=args.repeats * (args.duration / 1000 + 15) + 120)
+            process.wait(timeout=args.repeats * (args.duration / 1000 + 15) + args.memory_idle_ms / 1000 + 120)
             if args.memory:
                 run("pull", f"{remote}/{label}-memory.jsonl", str(args.output / f"{label}-memory.jsonl"))
             if trace:
@@ -255,6 +270,8 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
                     + (["-detail.png"] if args.mode == "visual" else []) + [f"-{i}.json" for i in range(args.repeats)])
         if args.workload.startswith("objects"):
             suffixes += ["-cold-setup.json", "-prime.json"]
+        if args.memory_idle_ms:
+            suffixes += ["-idle-before.json", "-idle-after.json"]
         for suffix in suffixes:
             run("pull", f"{remote}/{label}{suffix}", str(args.output / f"{label}{suffix}"), stdout=subprocess.DEVNULL)
         info_path = args.output / f"{label}-info.json"

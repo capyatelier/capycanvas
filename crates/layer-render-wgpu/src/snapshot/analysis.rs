@@ -7,7 +7,7 @@ impl SnapshotRenderer {
         self.check_cancelled().map_err(|e| e.to_string())?;
         let scene = self.scene.view().with_scope(&self.scope).with_offset(self.offset);
         let contributors = if matches!(self.scope,SceneScope::Raw(_)) {Vec::new()} else {match output {
-            scene::Output::EffectInput(id) | scene::Output::EffectChannels(id) => layer_core::composite_input_layers(scene, id),
+            scene::Output::EffectInput(id) | scene::Output::EffectChannels(id) | scene::Output::EffectComposite(id) => layer_core::composite_input_layers(scene, id),
             scene::Output::Source(_) => Vec::new(), _ => scene.effect_input().map_or_else(||scene.order().to_vec(),|h|layer_core::composite_input_layers(scene,h)),
         }};
         let mut pending: Vec<_> = contributors.into_iter().filter(|&h| scene.visible(h)

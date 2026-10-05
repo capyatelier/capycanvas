@@ -112,7 +112,16 @@ fn capy_invert(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
     return fx_rgba(vec3(1.)-fx_rgb(c),c.a);
 }
 fn capy_threshold(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
-    return fx_rgba(vec3(select(0.,1.,fx_luma(fx_rgb(c))>=fx_parameter(base,0u).x)),c.a);
+    let white=fx_luma(fx_rgb(c))>=fx_parameter(base,0u).x;
+    let colors=u32(fx_parameter(base,1u).x);
+    var alpha=c.a;
+    if fx_parameter(base,2u).x>.5 {alpha=select(0.,1.,c.a>0. && c.a>=fx_parameter(base,3u).x/100.);}
+    if (colors==1u && white) || (colors==2u && !white) {alpha=0.;}
+    return fx_rgba(vec3(select(0.,1.,white)),alpha);
+}
+fn capy_brightness_to_opacity(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
+    let alpha=c.a*(1.-clamp(fx_luma(fx_rgb(c)),0.,1.));
+    return vec4<f32>(0.,0.,0.,alpha);
 }
 fn capy_desaturate(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32> {
     let rgb=fx_rgb(c);let domain=fx_hsl_domain(rgb);

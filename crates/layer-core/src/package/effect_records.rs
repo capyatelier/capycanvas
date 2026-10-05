@@ -66,7 +66,7 @@ fn decode_gradient_stops(value: &Value) -> DecodeResult<Vec<GradientStop>> {
     }).collect()
 }
 fn builtin_version(id: &str) -> u32 {
-    match id {"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"=>2,_=>1}
+    match id {"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"|"threshold"=>2,_=>1}
 }
 fn decode_value(value: &Value, kind: &EffectParameterKind, reader: &mut impl ResourceReader) -> DecodeResult<EffectValue> {
     let fields = object(value, &["kind", "value"])?;

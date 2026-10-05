@@ -273,9 +273,9 @@ impl ObjectCache {
                     let mut data=[0.;32];data[..4].copy_from_slice(&[0.,0.,task.key.size[0] as f32,task.key.size[1] as f32]);
                     data[4..8].copy_from_slice(&[task.key.size[0] as f32,task.key.size[1] as f32,0.,0.]);
                     data[8]=1.;data[9]=1.;data[31]=if c.request.blend==layer_core::BlendSpace::Perceptual {Convert::Encode.code()} else {0.};
-                    scene.jobs.push(Job::Draw {target:spare.clone(),sources:[child.clone(),r.empty_view.clone(),r.empty_view.clone()],data,over:false,clip:None});
+                    scene.jobs.push(Job::Draw {target:spare.clone(),sources:[child.clone(),r.empty_view.clone(),r.empty_view.clone()],data,over:false,clip:None,source_target:None});
                     data[8]=4.;data[10]=crate::blend_code(layer_core::LayerBlend::Normal,&r.device,c.request.blend) as f32;data[31]=0.;
-                    scene.jobs.push(Job::Draw {target:child,sources:[spare,prefix,r.empty_view.clone()],data,over:false,clip:None});
+                    scene.jobs.push(Job::Draw {target:child,sources:[spare,prefix,r.empty_view.clone()],data,over:false,clip:None,source_target:None});
                     scene.encode_jobs(r,encoder)?;
                     std::mem::swap(&mut task.texture,&mut c.prefix);
                     c.cursor+=1;

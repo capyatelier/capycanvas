@@ -47,11 +47,11 @@ fn colorize_filters_empty_pages_preserves_range_values_and_undo_restores_control
 #[test]
 fn simple_adjustments_publish_existing_typed_controls_and_roundtrip_complete_effect_values() {
     use layer_core::EffectValue;
-    for id in ["invert","threshold","desaturate","photo_filter","hue_saturation"] {
+    for id in ["invert","threshold","desaturate","brightness_to_opacity","photo_filter","hue_saturation"] {
         let mut s=color_adjustment_session(id);
         match id {
-            "invert"|"desaturate"=>assert!(s.state.layer_properties.controls.is_empty()),
-            "threshold"=>{assert_eq!(s.state.layer_properties.controls.len(),1);assert!(matches!(s.state.layer_properties.controls[0].kind,PropertyKind::Number {..}));color_adjustment_set(&mut s,"threshold",EffectValue::Number(0.73));},
+            "invert"|"desaturate"|"brightness_to_opacity"=>assert!(s.state.layer_properties.controls.is_empty()),
+            "threshold"=>{assert_eq!(s.state.layer_properties.controls.len(),3);assert!(matches!(s.state.layer_properties.controls[0].kind,PropertyKind::Number {..}));color_adjustment_set(&mut s,"threshold",EffectValue::Number(0.73));},
             "photo_filter"=>{assert_eq!(s.state.layer_properties.controls.len(),3);assert!(matches!(s.state.layer_properties.controls[0].value,EffectValue::Color(_)));assert!(matches!(s.state.layer_properties.controls[1].kind,PropertyKind::Number {..}));assert!(matches!(s.state.layer_properties.controls[2].value,EffectValue::Toggle(true)));color_adjustment_set(&mut s,"density",EffectValue::Number(67.));color_adjustment_set(&mut s,"preserve_luminance",EffectValue::Toggle(false));},
             _=>{color_adjustment_set(&mut s,"blues_saturation",EffectValue::Number(-34.));color_adjustment_set(&mut s,"colorize",EffectValue::Toggle(true));},
         }
@@ -72,6 +72,28 @@ fn threshold_properties_use_depth_bounds_and_soft_slider_limits_on_each_host() {
         assert_eq!((numeric.min,numeric.max),(-65504.,65504.));
         assert_eq!((numeric.soft_min,numeric.soft_max),(0.,1.));
     }}
+}
+
+#[test]
+fn illustration_threshold_retains_hidden_alpha_controls_across_history_and_files() {
+    use layer_core::EffectValue;
+    for platform in Platform::ALL {
+        let mut s=color_adjustment_session_on("threshold",platform);
+        assert_eq!(s.state.layer_properties.controls.iter().map(|c|c.key.as_str()).collect::<Vec<_>>(),["threshold","colors","transparency"]);
+        color_adjustment_set(&mut s,"colors",EffectValue::Choice(1));
+        color_adjustment_set(&mut s,"transparency",EffectValue::Choice(1));
+        assert_eq!(s.state.layer_properties.controls.last().unwrap().key,"alpha_threshold");
+        color_adjustment_set(&mut s,"alpha_threshold",EffectValue::Number(37.));
+        color_adjustment_set(&mut s,"transparency",EffectValue::Choice(0));
+        assert_eq!(s.state.layer_properties.controls.len(),3);
+        invoke(&mut s,CommandId::Undo);
+        assert_eq!(s.state.layer_properties.controls.last().unwrap().value,EffectValue::Number(37.));
+        invoke(&mut s,CommandId::Redo);
+        let document=s.engine.document();let reopened=package_roundtrip(document);
+        assert_effect_semantics(reopened.scene().effect(reopened.scene().order()[0]).unwrap(),document.scene().effect(document.scene().order()[0]).unwrap());
+        color_adjustment_set(&mut s,"transparency",EffectValue::Choice(1));
+        assert_eq!(s.state.layer_properties.controls.last().unwrap().value,EffectValue::Number(37.));
+    }
 }
 
 #[test]

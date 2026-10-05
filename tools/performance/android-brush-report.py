@@ -8,7 +8,7 @@ import pathlib
 import statistics
 import subprocess
 import sys
-from android_brush_metrics import completion_window, contact_latencies, input_completions, object_completions
+from android_brush_metrics import completion_window, contact_latencies, input_completions, object_completions, input_feedback
 
 
 def distribution(values):
@@ -60,6 +60,7 @@ def main():
             contacts = contact_latencies(data)
             object_edits = motion.get("object_edits", [])
             posed = object_completions(data)
+            feedback = input_feedback(data)
             runs.append({"run": i, **progress, "cpu_update_count": len(frames),
                 "completion_gap_ms": completion_gaps,
                 "object_edits": len(object_edits),
@@ -67,6 +68,9 @@ def main():
                 "object_completion_gap_ms": distribution([(b[0][2] - a[0][2]) / 1e6 for a,b in zip(posed,posed[1:])]),
                 "object_edit_gpu_ms": distribution([(row[2] - edit[0]) / 1e6 for row,edit in posed]),
                 "object_edit_call_ms": distribution([(edit[1] - edit[0]) / 1e6 for edit in object_edits]),
+                "feedback_attribution": feedback["attribution"],
+                "latest_input_age_ms": distribution(feedback["age_ms"]),
+                "input_to_gpu_ms": distribution(feedback["input_to_gpu_ms"]),
                 "input_completed_per_s": sum(map(len, input_updates)) / progress["active_input_seconds"],
                 "input_completion_gap_ms": distribution([(b[2] - a[2]) / 1e6 for interval in input_updates for a, b in zip(interval, interval[1:])]),
                 "callback_count": len(callbacks), "cpu_ms": cpu,

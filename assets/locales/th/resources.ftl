@@ -533,3 +533,11 @@ resources-layer-color-mode = โหมดสี
 resources-layer-color-full = สีเต็มรูปแบบ
 resources-layer-color-gray = ระดับสีเทา
 resources-layer-color-two-tone = สองโทน (ขาวและดำ)
+
+resources-filter-brightness-to-opacity = แปลงความสว่างเป็นความทึบ
+resources-illustration-colors = สี
+resources-illustration-black = ดำ
+resources-illustration-white = ขาว
+resources-illustration-transparency = ความโปร่งใส
+resources-illustration-keep = คงไว้
+resources-illustration-alpha-threshold = เกณฑ์อัลฟา

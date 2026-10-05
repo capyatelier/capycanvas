@@ -170,54 +170,60 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
 
 #[test]
 fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
-    for (visible,opacity) in [(true,1.),(false,1.),(true,0.35)] {
-        let mut doc = document_at([1537, 1025]);
-        let fill_id=add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
-        let fill=doc.artwork.occurrences.get_mut(fill_id).unwrap();
-        fill.visible=visible;fill.opacity=opacity;
-        let extent = doc.composition().size;
-        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-        exact.test.reference = true;
-        let mut frame = packet(doc.scene(), extent);
-        frame.composite_all = false;
-        frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
-        let work = r.metrics.composited_pixels;
-        let passes = r.metrics.command_passes;
-        r.submit(frame).unwrap();
-        let refined = r.metrics.composited_pixels - work;
-        assert!(r.metrics.command_passes - passes <= 5, "resident pages share one composition pass");
-        assert!(refined > 2 * u64::from(PAGE_SIZE).pow(2), "idle work must amortize submission and presentation across pages");
-        assert!(refined <= 4 * u64::from(PAGE_SIZE).pow(2), "an idle submission must leave room for new input");
-        assert!(r.has_pending_work());
-        let completed = r.background_ready.clone();
-        r.hold_background(false);
-        completed.store(true, std::sync::atomic::Ordering::Release);
-        assert!(!r.background_ready.load(std::sync::atomic::Ordering::Acquire),
-            "an earlier completion cannot release the latest background work");
-        r.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        r.background_refinement = false;
-        assert!(!r.can_submit(), "mandatory raster work retains submission backpressure");
-        r.background_refinement = true;
-        assert!(r.can_submit(), "fresh artwork can queue behind unfinished refinement");
-        let submissions = r.metrics.submissions;
-        r.submit(frame).unwrap();
-        assert_eq!(r.metrics.submissions, submissions, "unfinished refinement cannot queue another idle batch: fill visible={visible}, opacity={opacity}");
-        let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
-        let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-        let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-        for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
-        assert!(r.metrics.submissions>submissions,"fresh artwork still submits: fill visible={visible}, opacity={opacity}");
-        r.background_ready.store(true, std::sync::atomic::Ordering::Release);
-        assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
-        let mut changed=doc.clone();
-        changed.artwork.occurrences.get_mut(fill_id).unwrap().visible=!visible;
-        r.background_ready=Arc::new(std::sync::atomic::AtomicBool::new(false));
-        r.background_refinement=true;
-        let submissions=r.metrics.submissions;
-        r.submit(FramePacket {scene:changed.scene(),..frame}).unwrap();
-        assert!(r.metrics.submissions>submissions,"fill visibility edits bypass unfinished idle backpressure");
+    for (extent, expected_pages, expected_pixels) in [
+        ([1537, 1025], 14, 1537 * 512), ([4609, 769], SOURCE_SLOTS, 4096 * 256),
+    ] {
+        for (visible,opacity) in [(true,1.),(false,1.),(true,0.35)] {
+            let mut doc = document_at(extent);
+            let fill_id=add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
+            let fill=doc.artwork.occurrences.get_mut(fill_id).unwrap();
+            fill.visible=visible;fill.opacity=opacity;
+            let extent = doc.composition().size;
+            let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            exact.test.reference = true;
+            let mut frame = packet(doc.scene(), extent);
+            frame.composite_all = false;
+            frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+            for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+            let work = r.metrics.composited_pixels;
+            let passes = r.metrics.command_passes;
+            r.submit(frame).unwrap();
+            let refined = r.metrics.composited_pixels - work;
+            assert!(r.metrics.command_passes - passes <= 5, "resident pages share one composition pass");
+            assert_eq!(r.metrics.frame_composited_pages.len(), expected_pages, "idle work fills one bounded strip");
+            assert_eq!(refined, expected_pixels, "idle work stops at the strip boundary");
+            let strip = r.scale_display.as_ref().unwrap().exact_tile.as_ref().unwrap();
+            assert!(refined <= u64::from(strip.texture.width()) * u64::from(strip.texture.height()));
+            assert!(r.has_pending_work());
+            let completed = r.background_ready.clone();
+            r.hold_background(false);
+            completed.store(true, std::sync::atomic::Ordering::Release);
+            assert!(!r.background_ready.load(std::sync::atomic::Ordering::Acquire),
+                "an earlier completion cannot release the latest background work");
+            r.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            r.background_refinement = false;
+            assert!(!r.can_submit(), "mandatory raster work retains submission backpressure");
+            r.background_refinement = true;
+            assert!(r.can_submit(), "fresh artwork can queue behind unfinished refinement");
+            let submissions = r.metrics.submissions;
+            r.submit(frame).unwrap();
+            assert_eq!(r.metrics.submissions, submissions, "unfinished refinement cannot queue another idle batch: fill visible={visible}, opacity={opacity}");
+            let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
+            let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+            let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
+            for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+            assert!(r.metrics.submissions>submissions,"fresh artwork still submits: fill visible={visible}, opacity={opacity}");
+            r.background_ready.store(true, std::sync::atomic::Ordering::Release);
+            assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
+            let mut changed=doc.clone();
+            changed.artwork.occurrences.get_mut(fill_id).unwrap().visible=!visible;
+            r.background_ready=Arc::new(std::sync::atomic::AtomicBool::new(false));
+            r.background_refinement=true;
+            let submissions=r.metrics.submissions;
+            r.submit(FramePacket {scene:changed.scene(),..frame}).unwrap();
+            assert!(r.metrics.submissions>submissions,"fill visibility edits bypass unfinished idle backpressure");
+        }
     }
 }
 
@@ -322,7 +328,10 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "settling repairs the drawing texture in place");
     assert!(r.scale_display.as_ref().unwrap().hierarchy.as_ref().unwrap().missing().is_none());
-    assert!(r.scale_display.as_ref().unwrap().exact_tile.is_none(), "resident refinement writes directly into its retained image");
+    let cache = r.scale_display.as_ref().unwrap();
+    let strip = cache.exact_tile.as_ref().expect("resident refinement uses a bounded render attachment");
+    assert_eq!([strip.texture.width(), strip.texture.height()], exact_strip(extent));
+    assert_ne!(strip.texture, cache.hierarchy.as_ref().unwrap().root().texture);
     let work = r.metrics.composited_pixels;
     for zoom in [0.5, 1., 2., 0.25, 0.125] {
         frame.view.document_to_surface = [zoom, 0., 0., zoom, -40., -20.];

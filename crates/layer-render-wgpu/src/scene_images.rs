@@ -181,7 +181,7 @@ impl Scene {
                 sources: [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone()],
                 data: fill,
                 over: false,
-                clip: Some(region),
+                clip: Some(region),source_target:None,
             };
             for job in &mut self.jobs[start + 1..] {
                 let Job::Draw {
@@ -239,7 +239,7 @@ impl Scene {
             let extent = [destination.texture.width(), destination.texture.height()];
             let view = &self.pool[output].view;
             let direct = match self.jobs.last_mut() {
-                Some(Job::Draw { target, sources, data, over: false, clip })
+                Some(Job::Draw { target, sources, data, over: false, clip, .. })
                     if clip.is_none_or(|clip| clip == PixelRect::full([PAGE_SIZE; 2])) => Some((target, sources, data, Some(clip))),
                 Some(Job::Effect { target, sources, data, prepared, .. }) if prepared.pointwise => Some((target, sources, data, None)),
                 _ => None,
@@ -583,7 +583,7 @@ impl Scene {
                             grid.level,
                             packet.blend_space,
                         )?,
-                        masks,
+                        masks,source_target:None,changed_cells:None,
                     });
                     previous = target;
                     self.images.pass_updates += 1;

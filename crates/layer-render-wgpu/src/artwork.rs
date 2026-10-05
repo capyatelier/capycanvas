@@ -37,6 +37,8 @@ impl Frame {
                 packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated())))
             && self.previews.is_empty() && packet.dab_batches.is_empty()
             && old.same_artwork(packet.scene)
+            && packet.scene.evaluation_context().is_none_or(|_|packet.scene.order().iter().filter(|h|packet.scene.effect(**h).is_some()).all(|h|
+                effects::effective_phase(old,*h,self.time).to_bits()==effects::effective_phase(packet.scene,*h,packet.time_seconds).to_bits()))
     }
 
     pub fn new(packet: FramePacket<'_>, context: EvaluationContext) -> Self {
@@ -229,6 +231,8 @@ impl WgpuRasterizer {
             brush_tiles::plan(batch, dabs, self.target_extent(batch.target))
         }).collect::<Vec<_>>();
         self.preview_level = 0;
+        self.preview_contribution = false;
+        self.preview_requires_base = true;
         self.preview_pages.clear();
         self.ensure_preview_pages(self.preview_damage, self.preview_contact_tiles.clone().as_ref());
         self.prepare_uploads(packet, &mut tiles, encoder)?;

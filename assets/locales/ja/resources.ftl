@@ -649,3 +649,11 @@ resources-layer-color-mode = カラーモード
 resources-layer-color-full = フルカラー
 resources-layer-color-gray = グレースケール
 resources-layer-color-two-tone = 2階調（白黒）
+
+resources-filter-brightness-to-opacity = 明るさを不透明度に
+resources-illustration-colors = 色
+resources-illustration-black = 黒
+resources-illustration-white = 白
+resources-illustration-transparency = 透明度
+resources-illustration-keep = 保持
+resources-illustration-alpha-threshold = アルファしきい値

@@ -532,3 +532,11 @@ resources-layer-color-mode = Modo de color
 resources-layer-color-full = Color completo
 resources-layer-color-gray = Escala de grises
 resources-layer-color-two-tone = Dos tonos (blanco y negro)
+
+resources-filter-brightness-to-opacity = Brillo a opacidad
+resources-illustration-colors = Colores
+resources-illustration-black = Negro
+resources-illustration-white = Blanco
+resources-illustration-transparency = Transparencia
+resources-illustration-keep = Conservar
+resources-illustration-alpha-threshold = Umbral alfa

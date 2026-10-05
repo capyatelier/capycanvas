@@ -4,9 +4,6 @@ use ash::vk;
 use core::{mem, ops::Range};
 use hashbrown::hash_map::Entry;
 
-// Android's reset policy releases completed buffers instead of retaining the
-// free list. Allocate on demand there: the other fifteen buffers in the usual
-// batch would otherwise be allocated and freed without ever recording work.
 const ALLOCATION_GRANULARITY: u32 = if cfg!(target_os = "android") { 1 } else { 16 };
 const DST_IMAGE_LAYOUT: vk::ImageLayout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
 
@@ -192,9 +189,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
         I: Iterator<Item = super::CommandBuffer>,
     {
         self.temp.clear();
+        let available = self.free.len();
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
         self.free.append(&mut self.discarded);
+        let reclaim_storage = if cfg!(target_os = "android") && self.free.len() > available {
+            self.completed_resets += 1;
+            let reclaim = self.completed_resets >= 16 || self.free.len() > 128;
+            if reclaim { self.completed_resets = 0; }
+            reclaim
+        } else { false };
         // Adreno framebuffer creation/destruction is expensive even when the
         // attachment textures are reused. Keep a bounded working set across
         // completed submissions; retire entries after one unused cycle. Large
@@ -214,13 +218,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
             keep
         });
-        if cfg!(target_os = "android") {
-            if !self.free.is_empty() {
-                unsafe { self.device.raw.destroy_command_pool(self.raw, None) };
-                self.raw = vk::CommandPool::null();
-                self.free.clear();
-            }
-        } else {
+        if reclaim_storage {
+            let raw = mem::replace(&mut self.raw, vk::CommandPool::null());
+            self.free.clear();
+            #[cfg(target_os = "android")]
+            super::pool_retirement::retire(&self.device, raw);
+            #[cfg(not(target_os = "android"))]
+            unsafe { self.device.raw.destroy_command_pool(raw, None) };
+        } else if self.raw != vk::CommandPool::null() {
             let _ = unsafe {
                 self.device.raw.reset_command_pool(self.raw, vk::CommandPoolResetFlags::empty())
             };

@@ -324,10 +324,21 @@ fn native_pointwise_filters_controls_and_persistence() {
     let mut input=RemoteInput::new().timeout_secs(30);input.ready();let source=document(&w);let width=w.window.width();
     for theme in [Theme::Light,Theme::Dark] {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)});
-        for effect in ["invert","threshold","desaturate","photo_filter"] {
+        for effect in ["invert","threshold","desaturate","brightness_to_opacity","photo_filter"] {
             insert(&w,effect);
             match effect {
-                "threshold"=>{let before=value(&w,"threshold");edit(&w,&mut input,"threshold","0.378");w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(value(&w,"threshold"),before);w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);},
+                "threshold"=>{
+                    let before=value(&w,"threshold");edit(&w,&mut input,"threshold","0.378");
+                    w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(value(&w,"threshold"),before);
+                    w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);
+                    choose(&w,&mut input,"property-colors",1);choose(&w,&mut input,"property-transparency",1);
+                    edit(&w,&mut input,"alpha_threshold","37");
+                    choose(&w,&mut input,"property-transparency",0);
+                    assert!(!state(&w).layer_properties.controls.iter().any(|c|c.key=="alpha_threshold"));
+                    w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);
+                    assert_eq!(value(&w,"alpha_threshold"),EffectValue::Number(37.));
+                    choose(&w,&mut input,"property-colors",2);
+                },
                 "photo_filter"=>{
                     edit(&w,&mut input,"density","37");toggle(&w,&mut input,"preserve_luminance");
                     let button=find_named(w.window.upcast_ref(),"effect-color-color").unwrap();scroll_to(&button);input.click(screen_point(&button,&w.window,[0.5,0.5]));

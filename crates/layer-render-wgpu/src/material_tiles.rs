@@ -145,7 +145,7 @@ impl WgpuRasterizer {
         for (record_index, job) in jobs.iter().enumerate() {
             // A decoded original slot may be overwritten by the next source
             // preparation. Owned paint pages never have that eviction hazard.
-            let borrowed = from_persistent
+            let borrowed = from_persistent && !self.compact_preview_contribution(batch)
                 && !self.paint_layers[layer_index]
                     .pages
                     .iter()
@@ -209,10 +209,15 @@ impl WgpuRasterizer {
                 continue;
             }
             if self.compute_dry_material(batch) && local == PixelRect::full([PAGE_SIZE; 2]) {
-                let output = self.dry_material_pipeline(batch).output(
+                let tracked_display=self.compact_preview_contribution(batch)
+                    && self.pipelines.dry_display_tracked.is_some()
+                    && self.changed_cells.as_ref().unwrap().preview_reusable(self,batch.target,job.coordinate,destination);
+                let pipeline=if tracked_display {self.pipelines.dry_display_tracked.as_ref().unwrap()} else {self.dry_material_pipeline(batch)};
+                let output = pipeline.output(
                     self,
                     destination,
                     coverage_surface,
+                    batch.target, job.coordinate,
                 );
                 compute_jobs.push((
                     output,
@@ -220,13 +225,16 @@ impl WgpuRasterizer {
                     job.coordinate,
                     coverage_view.is_some(),
                     record_offset,
+                    tracked_display,
                 ));
+                destination.preview.set(None);
                 if borrowed {
                     self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
                     compute_jobs.clear();
                 }
                 continue;
             }
+            destination.preview.set(None);
             let scalar_state_view = if from_persistent {
                 None
             } else if plan.state.watercolor_wetness {
@@ -352,6 +360,7 @@ impl WgpuRasterizer {
             None
         };
 
+        let contribution=self.compact_preview_contribution(batch);
         let (pages, coverage_pages) = if preview {
             (&mut self.preview_pages, &mut self.preview_coverage_pages)
         } else {
@@ -360,6 +369,9 @@ impl WgpuRasterizer {
         };
         for job in &jobs {
             pages[job.page_index].active_secondary = job.destination_secondary;
+            if preview && contribution && !job.destination_secondary {
+                pages[job.page_index].primary.preview.set(Some((batch.target,job.coordinate)));
+            }
             if let Some((i, secondary)) = job.coverage_index.zip(job.coverage_destination_secondary)
             {
                 coverage_pages[i].active_secondary = secondary;

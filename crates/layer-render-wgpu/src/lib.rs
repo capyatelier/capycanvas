@@ -46,6 +46,7 @@ mod source_access;
 mod material_sources;
 mod brush_tiles;
 mod dry_material;
+mod changed_cells;
 mod material_tiles;
 mod bindings;
 use brush_tiles::BrushTile;
@@ -302,6 +303,8 @@ pub struct GpuRasterMetrics {
     /// paint, the full composite and driver allocations.
     pub image_window_submissions: u64,
     pub image_window_peak_bytes: u64,
+    pub native_effect_reuse_candidate_cells:u64,
+    pub native_effect_forced_cells:u64,
 }
 
 pub fn memory_hints() -> wgpu::MemoryHints {
@@ -708,6 +711,7 @@ struct LayerPage {
 }
 
 struct PageSurface {
+    preview: std::cell::Cell<Option<(SourceTarget,[u32;2])>>,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     texture_bind_group: wgpu::BindGroup,
@@ -728,6 +732,7 @@ impl PageSurface {
     }
 
     fn copy_to(&self, destination: &Self, encoder: &mut crate::submission::CommandEncoder) {
+        destination.preview.set(None);
         encoder.copy_texture_to_texture(
             self.texture.as_image_copy(),
             destination.texture.as_image_copy(),
@@ -796,7 +801,9 @@ struct TextureSet {
 struct Pipelines {
     dry_material: dry_material::Pipelines,
     dry_display: dry_material::Pipelines,
+    dry_display_tracked: Option<dry_material::Pipelines>,
     dry_in_place: Option<dry_material::Pipelines>,
+    dry_tracked: Option<dry_material::Pipelines>,
     direct: [Deferred<wgpu::RenderPipeline>; DirectPipelineKind::COUNT],
     material: [Deferred<wgpu::RenderPipeline>;
         MaterialOperation::ALL.len() * MaterialPipelineKind::COUNT],
@@ -844,6 +851,7 @@ pub struct WgpuRasterizer {
     document_extent: [u32; 2],
     target_geometry: target_geometry::TargetGeometry,
     paint_layers: Vec<PaintLayer>,
+    changed_cells: Option<changed_cells::ChangedCells>,
     raster: Option<raster::RasterRuntime>,
     document_color: layer_core::color::DocumentColor,
     native_edit: Option<raster::native_edit::NativeEdit>,
@@ -936,6 +944,7 @@ pub struct WgpuRasterizer {
     preview_contact_tiles: Option<std::collections::BTreeSet<[u32; 2]>>,
     preview_layer_id: Option<SourceTarget>,
     preview_requires_base: bool,
+    preview_contribution: bool,
     preview_level: u32,
     masks: Vec<MaskAsset>,
     texture_sets: Vec<TextureSet>,
@@ -960,7 +969,6 @@ pub struct WgpuRasterizer {
     style_bind_group: wgpu::BindGroup,
     style_stride: u64,
     style_capacity: usize,
-    preview_block: u32,
     style_upload: Vec<u8>,
     dab_upload: Vec<DabGpu>,
     target_buffer: wgpu::Buffer,
@@ -1191,6 +1199,7 @@ impl WgpuRasterizer {
         let telemetry = telemetry::Telemetry::new(&device, &queue);
         let selection_clip = selection_clip::SelectionClip::new(&device);
         let scene_pipelines = scene::Pipelines::new(&device);
+        let changed_cells = Some(changed_cells::ChangedCells::new(&device));
         let portable_blend = portable_blend::Renderer::new(&device);
         let transforms = Some(paint_transform::PaintTransforms::new(&device));
         let mut renderer = Self {
@@ -1278,6 +1287,7 @@ impl WgpuRasterizer {
             ui_preview_pipeline: None,
             tiled_sources: Default::default(),
             paint_layers: Vec::with_capacity(8),
+            changed_cells,
             raster: None,
             document_color: Default::default(),
             native_edit: None,
@@ -1290,6 +1300,7 @@ impl WgpuRasterizer {
             preview_contact_tiles: None,
             preview_layer_id: None,
             preview_requires_base: false,
+            preview_contribution: false,
             preview_level: 0,
             masks: Vec::with_capacity(8),
             texture_sets: Vec::with_capacity(16),
@@ -1314,7 +1325,6 @@ impl WgpuRasterizer {
             style_bind_group,
             style_stride,
             style_capacity,
-            preview_block: 1,
             style_upload: Vec::with_capacity(style_stride as usize * style_capacity),
             dab_upload: Vec::new(),
             target_buffer,
@@ -1641,6 +1651,7 @@ impl WgpuRasterizer {
             self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
+            self.preview_contribution = false;
         }
         self.update_target_geometry(scene, resized)?;
         self.thumbnails.source_placements = scene.order().iter().filter_map(|&h| {
@@ -1761,7 +1772,8 @@ impl WgpuRasterizer {
             _ => None,
         };
         let offsets = std::array::from_fn::<_, 9, _>(|i| {
-            if in_place || ((pointwise(&batch.style) || gathered.is_some()) && i != 4) {
+            if in_place || self.compact_preview_contribution(batch)
+                || ((pointwise(&batch.style) || gathered.is_some()) && i != 4) {
                 // Dry paint reads only its destination pixel. Completed gather
                 // fields already contain nonlocal smudge/liquify samples.
                 // Neither needs to decode or bind surrounding source tiles.
@@ -2137,6 +2149,7 @@ impl WgpuRasterizer {
             .saturating_add(self.selection_previews.buffer.as_ref().map_or(0, |b|b.size()*2))
             .saturating_add(self.color_sampler.storage_bytes())
             .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
+        self.metrics.paint_state_storage_bytes += self.changed_cells.as_ref().map_or(0, changed_cells::ChangedCells::storage_bytes);
         self.metrics.retouch_storage_bytes =
             self.retouch.as_ref().map_or(0, |retouch| retouch.storage_bytes());
         self.metrics.composite_storage_bytes =
@@ -2212,7 +2225,6 @@ impl WgpuRasterizer {
         let used = self.style_stride as usize * records;
         self.style_upload.clear();
         self.style_upload.resize(used, 0);
-        self.preview_block = preview_block(packet.view.document_to_surface);
         for index in 0..packet.dab_batches.len() {
             let batch = &packet.dab_batches[index];
             let block = if self.compute_dry_material(batch) { self.dry_material_block(batch) } else { 1 };
@@ -2340,6 +2352,10 @@ impl WgpuRasterizer {
         label: &'static str,
         value: f32,
     ) {
+        for page in &self.preview_pages {
+            if page.primary.preview.get().is_some() && page.primary.view==*view {page.primary.preview.set(None);}
+            if let Some(secondary)=&page.secondary {if secondary.preview.get().is_some() && secondary.view==*view {secondary.preview.set(None);}}
+        }
         let _pass = encoder.color_pass(
             label,
             view,
@@ -3591,9 +3607,15 @@ impl CanvasRenderer for WgpuRasterizer {
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> { self.submit_frame(packet, None) }
 }
 impl WgpuRasterizer {
+    fn clear_preview_stamps(&self) {
+        for page in &self.preview_pages {page.primary.preview.set(None);if let Some(secondary)=&page.secondary {secondary.preview.set(None);}}
+    }
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
         let submitted = self.metrics.submissions;
-        self.submit_frame_inner(packet, native_commit)?;
+        if let Err(error)=self.submit_frame_inner(packet, native_commit) {
+            self.clear_preview_stamps();
+            return Err(error);
+        }
         if self.metrics.submissions != submitted {
             let context = self.submitted_context.as_ref().unwrap();
             self.effect_clocks.retain(|handle, _| packet.scene.effect(*handle).is_some());
@@ -3635,7 +3657,7 @@ impl WgpuRasterizer {
         EvaluationContext { elapsed: packet.time_seconds, phases }
     }
 
-    fn submit_frame_inner(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+    fn submit_frame_inner(&mut self, packet: FramePacket<'_>, settled_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
         let analysis_dirty = std::mem::take(&mut self.analysis_dirty);
         let packet = FramePacket {composite_all: packet.composite_all || analysis_dirty, ..packet};
         let packet = FramePacket { inspect_mask: if self.clipping_preview.iter().any(|enabled| *enabled) { None } else { packet.inspect_mask }, ..packet };
@@ -3647,7 +3669,7 @@ impl WgpuRasterizer {
             && !self.object_deferred && !self.scene.as_ref().is_some_and(|scene| scene.objects_pending())
             && packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
             && packet.dabs.is_empty() && packet.dab_batches.is_empty()
-            && native_commit.is_none() && self.transform_preview.is_none()
+            && settled_commit.is_none() && self.transform_preview.is_none()
             && self.moving_layer.is_none() && self.moving_pixels.is_none()
             && self.artwork_frame.as_ref().is_some_and(|frame|
                 frame.view == packet.view && frame.same_artwork(packet))
@@ -3784,6 +3806,7 @@ impl WgpuRasterizer {
             self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
+            self.preview_contribution = false;
         }
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
@@ -3828,10 +3851,18 @@ impl WgpuRasterizer {
         self.ensure_destination_companions(packet.dab_batches, &batch_tiles);
         self.ensure_paint_state_pages(packet.dab_batches, &batch_tiles)?;
 
+        let mut changed_cells = self.changed_cells.take().unwrap();
+        changed_cells.prepare(self, FramePacket {dab_batches:original_batches,..packet}, &batch_tiles, unchanged && !display_rebuilt, &mut encoder);
+        if settled_commit.is_some() { changed_cells.force_all(); }
+        if let Some(scene)=&mut self.scene {scene.retire_changed_cells(&changed_cells.take_retired());}
+        self.changed_cells = Some(changed_cells);
+
         let old_preview_damage = self.preview_damage;
-        let old_preview_contact_tiles = self.preview_contact_tiles.take();
+        let old_preview_contact_tiles = if packet.commit_rasters {self.preview_contact_tiles.take()} else {None};
         let mut new_preview_contact_tiles = Some(std::collections::BTreeSet::new());
         let old_preview_layer = self.preview_layer_id;
+        let old_preview_level = self.preview_level;
+        let old_preview_contribution = self.preview_contribution;
         let watercolor_style_dirty = self.update_watercolor_layer_styles(packet.dab_batches);
         let mut dirty = old_preview_damage.union(watercolor_style_dirty);
         if moving_images_changed { dirty = PixelRect::full(packet.document_extent); }
@@ -3910,33 +3941,47 @@ impl WgpuRasterizer {
                 .all(|batch| {
                     BrushPassPlan::for_device(&batch.style, &self.device).requires_destination()
                 });
+        let mut preview_contribution=new_preview_from_persistent && self.scale_display.as_ref().is_some_and(|cache|
+            new_preview_layer.is_some_and(|id|cache.native_preview_input(packet,id)))
+            && packet.dab_batches.iter().filter(|b|b.kind==DabBatchKind::Preview && b.dab_count!=0)
+                .all(|b|dry_material::display_preview_eligible(&b.style) && b.style.mode==DabMode::Paint
+                    && b.style.blend_space==packet.blend_space
+                    && packet.scene.color_mode(b.target)==layer_core::color::LayerColorMode::FullColor);
+        if preview_contribution {new_preview_requires_base=false;}
         let preview_level = self.scale_display.as_ref().filter(|_| new_preview_from_persistent
             && packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview && b.dab_count != 0)
                 .all(|b| dry_material::display_preview_eligible(&b.style)))
-            .map_or(0, |cache| new_preview_layer.map_or(0, |id| cache.preview_level(packet, id)));
-        if self.preview_level != preview_level {
-            self.preview_pages.clear();
-            self.preview_level = preview_level;
-        }
-        if new_preview_layer.is_none() {
-            // Preview is disposable by contract. Release its high-water pool
-            // when the tail commits or is cancelled instead of retaining pages
-            // visited anywhere along the completed stroke.
-            self.preview_pages.clear();
-            self.preview_coverage_pages.clear();
-            self.preview_watercolor_wetness_pages.clear();
-        } else {
-            self.ensure_preview_pages(new_preview_damage, new_preview_contact_tiles.as_ref());
-            self.ensure_preview_watercolor_wetness_pages(new_preview_damage, preview_is_watercolor);
-            if new_preview_from_persistent {
-                // This pass reads committed coverage directly and writes only
-                // color. Retire any previous private fork instead of copying
-                // coverage into unused prediction attachments every frame.
-                self.preview_coverage_pages.clear();
-            } else {
-                self.ensure_preview_coverage_pages(packet.dab_batches);
-                self.ensure_preview_destination_companions(packet.dab_batches);
+            .map_or(0, |cache| new_preview_layer.map_or(0, |id| cache.preview_level(packet, id,preview_contribution)));
+        preview_contribution &= preview_level>0;
+        if !preview_contribution && new_preview_from_persistent {new_preview_requires_base=true;}
+        if packet.commit_rasters {
+            self.preview_contribution=preview_contribution;
+            let mut preview_cells=self.changed_cells.take().unwrap();
+            preview_cells.prepare_preview(self,
+                changed_cells::Preview {id:old_preview_layer,level:old_preview_level,contribution:old_preview_contribution,
+                    damage:old_preview_damage,tiles:old_preview_contact_tiles.as_ref()},
+                changed_cells::Preview {id:new_preview_layer,level:preview_level,contribution:preview_contribution,
+                    damage:new_preview_damage,tiles:new_preview_contact_tiles.as_ref()});
+            self.changed_cells=Some(preview_cells);
+            if self.preview_level != preview_level {
+                self.preview_pages.clear();
+                self.preview_level = preview_level;
             }
+            if new_preview_layer.is_none() {
+                self.preview_pages.clear();
+                self.preview_coverage_pages.clear();
+                self.preview_watercolor_wetness_pages.clear();
+            } else {
+                self.ensure_preview_pages(new_preview_damage, new_preview_contact_tiles.as_ref());
+                self.ensure_preview_watercolor_wetness_pages(new_preview_damage, preview_is_watercolor);
+                if new_preview_from_persistent {
+                    self.preview_coverage_pages.clear();
+                } else {
+                    self.ensure_preview_coverage_pages(packet.dab_batches);
+                    self.ensure_preview_destination_companions(packet.dab_batches);
+                }
+            }
+
         }
 
         self.prepare_uploads(packet, &mut batch_tiles, &mut encoder)?;
@@ -4143,6 +4188,7 @@ impl WgpuRasterizer {
         }
 
         if self.settling.is_some() {
+            self.clear_preview_stamps();
             self.uploads.finish(&encoder);
             self.telemetry.phase_end(0, &mut encoder);
             self.telemetry.end(&mut encoder);
@@ -4158,7 +4204,7 @@ impl WgpuRasterizer {
         if let Some(started) = started { cpu_phases[1] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.capture");
         self.telemetry.phase_end(0, &mut encoder);
-        let native_commit = match native_commit { Some(frame) => Some(frame), None => self.encode_native_rasters(packet.scene, &mut encoder)? };
+        let native_commit = match settled_commit { Some(frame) => Some(frame), None => self.encode_native_rasters(packet.scene, &mut encoder)? };
         if let Some(started) = started { cpu_phases[2] = started.elapsed().as_secs_f64() * 1000.; }
         if !packet.commit_rasters {
             self.uploads.finish(&encoder);
@@ -4422,7 +4468,11 @@ impl WgpuRasterizer {
                     && pointwise(&b.style)
                     && !b.style.rendering.edge_after_stroke
             });
+        let mut changed_cells = self.changed_cells.take().unwrap();
+        for &(id, region) in &self.transform_damage { changed_cells.force(id, region); }
+        self.changed_cells = Some(changed_cells);
         let canonical_pages = native_commit.as_ref().map_or(&[][..], |frame| &frame.canonical_pages[..]);
+        if canonical_pages.iter().any(|(id,_)|!matches!(id,SourceTarget::Paint(_))) {self.changed_cells.as_mut().unwrap().force_all();}
         self.transform_damage.extend(canonical_pages.iter().map(|&(id,coordinate)|(id,page_rect(coordinate))));
         let mut composite_tiles = (!reset && !packet.composite_all
             && (local_contacts || (dirty.is_empty()
@@ -5176,6 +5226,7 @@ fn create_page_surface(
         "layer sparse surface binding",
     );
     PageSurface {
+        preview: Default::default(),
         texture,
         view,
         texture_bind_group,
@@ -5238,6 +5289,10 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     // storage support. Each dry invocation owns exactly one destination texel.
     let dry_in_place = device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
         .then(|| dry_material::Pipelines::new(device, &layouts, &dry_material::shader(device, dry_material::Target::InPlace), dry_material::Target::InPlace));
+    let dry_display_tracked = dry_in_place.as_ref().map(|_| dry_material::Pipelines::new(device, &layouts,
+        &dry_material::shader(device, dry_material::Target::DisplayTracked), dry_material::Target::DisplayTracked));
+    let dry_tracked = dry_in_place.as_ref().map(|_| dry_material::Pipelines::new(device, &layouts,
+        &dry_material::shader(device, dry_material::Target::Tracked), dry_material::Target::Tracked));
     let stroke_edge_shader = {
         let device = device.clone();
         Deferred::new(move || {
@@ -5584,7 +5639,9 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
     Pipelines {
         dry_material,
         dry_display,
+        dry_display_tracked,
         dry_in_place,
+        dry_tracked,
         direct,
         material,
         material_gather,

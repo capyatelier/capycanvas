@@ -9451,7 +9451,7 @@ mod tests {
                 result: Ok(()),
             });
             s.frame(0, 0).unwrap();
-            assert_eq!(s.state.adjustments.len(), 53);
+            assert_eq!(s.state.adjustments.len(), s.effect_catalog.filters().len());
             assert_eq!(
                 s.state.filter_categories.last().unwrap().label.as_ref(),
                 "Examples"

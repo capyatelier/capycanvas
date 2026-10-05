@@ -3,6 +3,33 @@ use crate::test_support::{page_texture as texture, upload_page as upload};
 use crate::{READBACK_TIMEOUT, WgpuRasterizer, layer_tests::page_bytes};
 use layer_core::color::RgbSpace;
 
+#[test]
+fn prevalidated_full_color_status_and_optional_tracking_bindings() {
+    for in_place in [false,true] {for prevalidated in [false,true] {for tracked in [false,true] {
+        for (format,name) in [(Some(wgpu::TextureFormat::Rgba8Uint),"rgba8uint"),
+            (Some(wgpu::TextureFormat::Rgba16Uint),"rgba16uint"),
+            (Some(wgpu::TextureFormat::Rgba32Uint),"rgba32uint"),(None,"gray_alpha")] {
+            for count in [1,2] {
+                let (entries,source)=NativeTileEncoder::pipeline_source(in_place,prevalidated,tracked,count,format,name);
+                let module=naga::front::wgsl::parse_str(&source).unwrap();
+                naga::valid::Validator::new(naga::valid::ValidationFlags::all(),naga::valid::Capabilities::all()).validate(&module).unwrap();
+                let readonly=prevalidated && format.is_some();
+                let status=module.global_variables.iter().find(|(_,v)|v.name.as_deref()==Some("status")).unwrap().1;
+                assert_eq!(status.space,naga::AddressSpace::Storage {access:if readonly {naga::StorageAccess::LOAD} else {naga::StorageAccess::LOAD|naga::StorageAccess::STORE}});
+                let naga::TypeInner::Struct {members,..}=&module.types[status.ty].inner else {panic!("Status must be a struct")};
+                assert_eq!(matches!(module.types[members[0].ty].inner,naga::TypeInner::Atomic(_)),!readonly);
+                assert_eq!(source.contains("atomicLoad(&status.invalid)"),!readonly && in_place);
+                assert_eq!(source.contains("atomicOr(&status.invalid"),!readonly);
+                let flags=module.global_variables.iter().filter(|(_,v)|v.name.as_deref().is_some_and(|n|n.starts_with("changes"))).count();
+                assert_eq!(flags,if tracked {count} else {0});
+                let shared=count as u32*if in_place {2} else {3};
+                let status_entry=entries.iter().find(|entry|entry.binding==shared+2).unwrap();
+                assert!(matches!(status_entry.ty,wgpu::BindingType::Buffer {ty:wgpu::BufferBindingType::Storage {read_only},..} if read_only==readonly));
+            }
+        }
+    }}}
+}
+
 fn working_bytes(pixels: &[[f32; 4]]) -> Vec<u8> {
     pixels
         .iter()
@@ -103,6 +130,34 @@ fn reference(
     }
     out
 }
+fn native_boundary(space: RgbSpace, maximum: u32, code: u32) -> f32 {
+    let boundary = space.decode((f64::from(code) + 0.5) / f64::from(maximum));
+    let rounded = boundary as f32;
+    if f64::from(rounded) < boundary { rounded.next_up() } else { rounded }
+}
+
+#[test]
+fn sdr_endpoints_and_adjacent_boundaries_match_native_transfer() {
+    for space in RgbSpace::ALL {
+        assert_eq!((space.decode(0.) as f32).to_bits(), 0);
+        assert_eq!((space.decode(1.) as f32).to_bits(), 1f32.to_bits());
+        for depth in [SampleDepth::U8, SampleDepth::U16] {
+            let maximum = depth.maximum();
+            assert_eq!(maximum * (65535 / maximum), 65535);
+            for (value, code) in [(0f32, 0), (1., maximum)] {
+                assert_eq!((space.encode(f64::from(value)) * f64::from(maximum)).round() as u32, code);
+            }
+            for code in [0, maximum - 1] {
+                let boundary = native_boundary(space, maximum, code);
+                assert!(boundary > 0. && boundary < 1.);
+                for (value, expected) in [(boundary.next_down(), code), (boundary, code + 1), (boundary.next_up(), code + 1)] {
+                    assert_eq!((space.encode(f64::from(value)) * f64::from(maximum)).round() as u32, expected,
+                        "{space:?} {depth:?} code={code} value={value}");
+                }
+            }
+        }
+    }
+}
 fn assert_pixels(
     actual: &[u8],
     pixels: &[[f32; 4]],
@@ -151,6 +206,63 @@ fn native_writeback_codes_boundaries_and_partial_tiles() { writeback_corpus(fals
 fn native_in_place_writeback_codes_boundaries_and_partial_tiles() { writeback_corpus(true); }
 
 #[test]
+fn four_storage_buffer_devices_batch_rgba_and_bound_gray_native_writes() {
+    use layer_core::color::LayerColorMode;
+    let instance = WgpuRasterizer::headless_instance();
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default()
+    })).unwrap();
+    assert_ne!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    let features = adapter.features() & (wgpu::Features::FLOAT32_FILTERABLE
+        | wgpu::Features::FLOAT32_BLENDABLE | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+    limits.max_storage_buffers_per_shader_stage = 4;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: features, required_limits: limits, ..Default::default()
+    })).unwrap();
+    let mut r = WgpuRasterizer::native_capture_on_gpu(adapter, device.into(), queue, Default::default()).unwrap();
+    assert_eq!(r.device.limits().max_storage_buffers_per_shader_stage, 4);
+    let working: Vec<_> = (0..2).map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float)).collect();
+    let canonical: Vec<_> = (0..2).map(|_| texture(&r, wgpu::TextureFormat::Rgba32Float)).collect();
+    let rgba: Vec<_> = (0..2).map(|_| texture(&r, wgpu::TextureFormat::Rgba8Uint)).collect();
+    let gray: Vec<_> = (0..2).map(|_| r.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("limited-device native gray bytes"), size: 256 * 256 * 2,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+    })).collect();
+    let transfer = r.prepare_native_transfer(RgbSpace::Srgb).unwrap();
+    let status = NativeEncodeStatus::new(&r.device);
+    let pixels = vec![[0.3, 0.3, 0.3, 0.5]; 256 * 256];
+    for in_place in [false, true] {
+        let encoder = if in_place { NativeTileEncoder::with_mode(&r.device, true, false) } else { NativeTileEncoder::with_device(&r.device) };
+        for mode in [LayerColorMode::FullColor, LayerColorMode::Grayscale, LayerColorMode::TwoTone] {
+            for image in &working { upload(&r, image, &working_bytes(&pixels)); }
+            let requests: Vec<_> = (0..2).map(|i| NativeTileRequest {
+                working: &working[i], canonical: if in_place { &working[i] } else { &canonical[i] },
+                encoded: if mode == LayerColorMode::FullColor { (&rgba[i]).into() } else { (&gray[i]).into() },
+                mode, space: RgbSpace::Srgb, transfer: &transfer, depth: SampleDepth::U8,
+                alpha: AlphaAssociation::Straight, region: [0, 0, 256, 256],
+            }).collect();
+            let batch = encoder.prepare(&r.device, &requests, &status, &mut Default::default()).unwrap();
+            assert_eq!(batch.jobs.len(), if mode == LayerColorMode::FullColor { 1 } else { 2 },
+                "four-buffer device {mode:?} in_place={in_place}");
+            submit(&r, &encoder, &status, &[batch], true);
+            read_status(&r, &status).unwrap();
+            for i in 0..2 {
+                if mode == LayerColorMode::FullColor {
+                    assert_pixels(&page_bytes(&r, &rgba[i]), &pixels, SampleDepth::U8, RgbSpace::Srgb, AlphaAssociation::Straight, [0, 0, 256, 256], 0);
+                } else {
+                    let actual = pollster::block_on(crate::local_tone::read_buffer_async(&r.device, &r.queue, &gray[i])).unwrap();
+                    let expected = if mode == LayerColorMode::TwoTone { [255, 255] }
+                        else { let rgba = reference(pixels[0], SampleDepth::U8, RgbSpace::Srgb, AlphaAssociation::Straight); [rgba[0] as u8, rgba[3] as u8] };
+                    let differing = actual.as_chunks::<2>().0.iter().filter(|pixel| **pixel != expected).count();
+                    assert_eq!(differing, 0, "four-buffer device {mode:?} in_place={in_place} native bytes expected={expected:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn gray_alpha_packed_writes_preserve_unedited_half_words() {
     use layer_core::{color::LayerColorMode, raster::RasterTile};
     use crate::raster::{CaptureSource, TileCapture};
@@ -168,7 +280,7 @@ fn gray_alpha_packed_writes_preserve_unedited_half_words() {
         let value = (i % 256) as f32 / 255.; [value; 4]
     }).collect::<Vec<_>>();
     for in_place in [false, true] {
-        let encoder = if in_place { NativeTileEncoder::validated_in_place(&r.device) } else { NativeTileEncoder::with_device(&r.device) };
+        let encoder = if in_place { NativeTileEncoder::with_mode(&r.device, true, false) } else { NativeTileEncoder::with_device(&r.device) };
         for mode in [LayerColorMode::Grayscale, LayerColorMode::TwoTone] {
             for region in [[0, 0, 256, 256], [1, 7, 253, 243], [3, 255, 1, 1], [255, 0, 1, 256], [17, 31, 0, 71]] {
                 upload(&r, &working, &working_bytes(&pixels));
@@ -223,9 +335,36 @@ fn reduced_color_writeback_rejects_invalid_pixels_before_projection() {
     }
 }
 
+fn before_endpoint_encoder(r: &WgpuRasterizer, in_place: bool) -> NativeTileEncoder {
+    let mut encoder = NativeTileEncoder::with_mode(&r.device, in_place, false);
+    let mut index = 0;
+    for (format, name) in [(Some(wgpu::TextureFormat::Rgba8Uint), "rgba8uint"),
+        (Some(wgpu::TextureFormat::Rgba16Uint), "rgba16uint"),
+        (Some(wgpu::TextureFormat::Rgba32Uint), "rgba32uint"), (None, "gray_alpha")] {
+        for tracked in [false, true] {
+            for count in 1..=if format.is_some() {encoder.tiles_per_dispatch} else {encoder.gray_tiles_per_dispatch} {
+                let (_, source) = NativeTileEncoder::pipeline_source(in_place, false, tracked, count, format, name);
+                let decode = "fn decode_quantized(code:u32)->f32 {\n    if code==0u {return 0.;}\n    if code==65535u {return 1.;}\n    return transfer[code].x;\n}\n";
+                let endpoints = "    if value==0. {return 0u;}\n    if value==1. {return settings.maximum;}\n";
+                assert!(source.contains(decode) && source.contains(endpoints));
+                let source = source.replace(decode, "").replace(endpoints, "")
+                    .replace("vec3(decode_quantized(code.r),decode_quantized(code.g),decode_quantized(code.b))",
+                        "vec3(transfer[code.r].x,transfer[code.g].x,transfer[code.b].x)");
+                let layout = r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("native endpoint baseline"), bind_group_layouts: &[Some(&encoder.layouts[index])], immediate_size: 0,
+                });
+                encoder.pipelines[index] = crate::Deferred::compute(&r.device, "native endpoint baseline", &layout,
+                    &crate::Deferred::wgsl(&r.device, "native endpoint baseline", source), "main");
+                index += 1;
+            }
+        }
+    }
+    encoder
+}
+
 fn writeback_corpus(in_place: bool) {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let encoder = if in_place { NativeTileEncoder::validated_in_place(&r.device) } else { NativeTileEncoder::with_device(&r.device) };
+    let encoder = if in_place { NativeTileEncoder::with_mode(&r.device, true, false) } else { NativeTileEncoder::with_device(&r.device) };
     let status = NativeEncodeStatus::new(&r.device);
     let working = texture(&r, wgpu::TextureFormat::Rgba32Float);
     let canonical = if in_place { working.clone() } else { texture(&r, wgpu::TextureFormat::Rgba32Float) };
@@ -233,6 +372,7 @@ fn writeback_corpus(in_place: bool) {
         texture(&r, format(SampleDepth::U8)),
         texture(&r, format(SampleDepth::U16)),
     ];
+    let baseline = before_endpoint_encoder(&r, in_place);
     let mut tables = transfer::Tables::default();
     let mut cases = 0;
     for space in RgbSpace::ALL {
@@ -246,7 +386,11 @@ fn writeback_corpus(in_place: bool) {
                 AlphaAssociation::Straight,
                 AlphaAssociation::PremultipliedLinear,
             ] {
-                for mode in 0..10 {
+                for mode in 0..12 {
+                    let first = native_boundary(space, max, 0);
+                    let last = native_boundary(space, max, max - 1);
+                    let endpoints = [0., -0., f32::from_bits(1), 1., 1f32.next_down(), 1f32.next_up(),
+                        first.next_down(), first, first.next_up(), last.next_down(), last, last.next_up()];
                     let pixels: Vec<[f32; 4]> = (0..65536u32)
                         .map(|i| {
                             let coverage = match mode {
@@ -260,13 +404,19 @@ fn writeback_corpus(in_place: bool) {
                                     [rounded.next_down(), rounded, rounded.next_up()][mode - 5]
                                 }
                                 8 => 0.25 / max as f32,
+                                10 => [1., 1. / max as f32, 0.37, 0.5, 0., 1e-30, 1e-8][i as usize % 7],
+                                11 if i as usize / 7 % endpoints.len() < 6 => [1., 1. / max as f32, 0.37, 0.5, 0., 1e-30, 1e-8][i as usize % 7],
                                 _ => 1.,
                             };
                             let mut p = [0.; 4];
                             p[3] = coverage;
                             for c in 0..3 {
                                 let n = i.wrapping_mul([1, 101, 237][c]) & max;
-                                let linear = if mode == 9 {
+                                let linear = if mode == 10 {
+                                    endpoints[(i as usize + c * 5) % endpoints.len()]
+                                } else if mode == 11 {
+                                    endpoints[i as usize / 7 % endpoints.len()]
+                                } else if mode == 9 {
                                     let boundary =
                                         space.decode((f64::from(n) + 0.5) / f64::from(max)) as f32;
                                     [boundary.next_down(), boundary, boundary.next_up()][c]
@@ -298,7 +448,7 @@ fn writeback_corpus(in_place: bool) {
                     let batch = encoder
                         .prepare(
                             &r.device,
-                            &[NativeTileRequest { mode: Default::default(), space: RgbSpace::Srgb,
+                            &[NativeTileRequest { mode: Default::default(), space,
                                 working: &working,
                                 canonical: &canonical,
                                 encoded: encoded.into(),
@@ -312,8 +462,36 @@ fn writeback_corpus(in_place: bool) {
                         .unwrap();
                     submit(&r, &encoder, &status, &[batch], true);
                     read_status(&r, &status).unwrap();
+                    let native_bytes = page_bytes(&r, encoded);
+                    let canonical_bytes = page_bytes(&r, &canonical);
+                    if mode >= 10 {
+                        upload(&r, &working, &bytes);
+                        upload(&r, &canonical, &bytes);
+                        upload(&r, encoded, &seed);
+                        let batch = baseline.prepare(&r.device, &[NativeTileRequest { mode: Default::default(), space,
+                            working: &working, canonical: &canonical, encoded: encoded.into(), transfer,
+                            depth, alpha, region }], &status, &mut Default::default()).unwrap();
+                        submit(&r, &baseline, &status, &[batch], true);
+                        read_status(&r, &status).unwrap();
+                        let before_native = page_bytes(&r, encoded);
+                        let before_canonical = page_bytes(&r, &canonical);
+                        assert!(native_bytes == before_native, "endpoint native differs from baseline {depth:?} {space:?} {alpha:?} in_place={in_place} mode={mode}");
+                        assert!(canonical_bytes == before_canonical, "endpoint canonical bits differ from baseline {depth:?} {space:?} {alpha:?} in_place={in_place} mode={mode}");
+                        if mode == 10 {
+                            let first = pixels.iter().enumerate().find_map(|(i, pixel)| {
+                                let expected = reference(*pixel, depth, space, alpha);
+                                (0..4).find_map(|c| {
+                                    let actual = code(&before_native[i * 4 * depth.bytes()..], c, depth);
+                                    (actual != expected[c]).then_some((i, c, actual, expected[c], *pixel))
+                                })
+                            });
+                            eprintln!("ENDPOINT_BASELINE {depth:?} {space:?} {alpha:?} in_place={in_place} cpu_first={first:?} pixels=65536 exact_native_and_canonical=true");
+                            cases += 1;
+                            continue;
+                        }
+                    }
                     assert_pixels(
-                        &page_bytes(&r, encoded),
+                        &native_bytes,
                         &pixels,
                         depth,
                         space,
@@ -326,7 +504,6 @@ fn writeback_corpus(in_place: bool) {
                         },
                     );
                     if !in_place { assert!(page_bytes(&r, &working) == bytes, "writeback modified working source"); }
-                    let canonical_bytes = page_bytes(&r, &canonical);
                     for (i, encoded) in canonical_bytes.chunks_exact(16).enumerate() {
                         let x = i as u32 % 256;
                         let y = i as u32 / 256;
@@ -357,6 +534,10 @@ fn writeback_corpus(in_place: bool) {
                                     decoded
                                 }
                             };
+                            if mode == 11 && (coverage == 0. || coverage == 1.) {
+                                assert_eq!(actual.to_bits(), expected.to_bits(),
+                                    "endpoint canonical {depth:?} {space:?} {alpha:?} pixel={i} component={c}");
+                            }
                             assert!(
                                 (actual - expected).abs()
                                     <= 0.00000024 * expected.abs().max(0.0000001),
@@ -570,7 +751,7 @@ fn writeback_shaders_validate_for_every_format_tile_count_and_mode() {
     for in_place in [false, true] {
         for (format, name) in formats {
             for count in 1..=2 {
-                let (_, source) = writeback_shader(format, name, count, in_place);
+                let (_, source) = NativeTileEncoder::pipeline_source(in_place, false, false, count, format, name);
                 let module = naga::front::wgsl::parse_str(&source)
                     .unwrap_or_else(|error| panic!("{name} x{count}: {}", error.emit_to_string(&source)));
                 naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())

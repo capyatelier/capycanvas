@@ -225,8 +225,8 @@ recomputation at 120 fps is required for every intermediate pass.
 
 At the release cut, a filter that fails quality or its
 [performance gate](#per-filter-performance-and-incremental-rendering), including
-any explicitly qualified slower allowance, is deferred to 1.1 with its missing
-evidence recorded. A justified slower artistic result can pass that gate without
+any explicitly qualified slower or baseline-relative acceptance, is deferred to
+1.1 with its missing evidence recorded. A justified slower artistic result can pass that gate without
 being reported as meeting the ordinary tier FPS target. Ship no unusable
 stub, hidden unqualified mode or CPU painting fallback. This rule leaves the
 candidate list and controls intact today; it prevents one difficult algorithm
@@ -299,8 +299,9 @@ controls or modes that are not required for GA. Feasibility is still unproven.
 | Watercolor Border | Brush material only | First |
 | Extract Lines | Basic Edge Detect | First |
 | Tone / Halftone | Basic circular Halftone | First |
-| Decrease Color | Grayscale exists; binary transparency incomplete | First |
-| Brightness to Opacity and Color to Alpha | Missing | Next |
+| Decrease Color | Threshold supports color classes and binary transparency | First |
+| Brightness to Opacity | Implemented without additional controls | Next |
+| Color to Alpha | Missing | Next |
 | Adjust Line Width and Remove Dust | Missing artwork filters | Next |
 | Palette reduction and creative dithering | Posterize only; delivery dithering exists | Next |
 | Cartoon and paper/canvas texture | Some building blocks | Next |
@@ -450,8 +451,9 @@ References: [Clip Studio Tone](https://help.clip-studio.com/en-us/manual_en/180_
 ### Decrease Color: grayscale and monochrome
 
 **Gap:** grayscale conversion is already covered. Desaturate, Black & White and
-Channel Mixer's Monochrome mode retain gray shades. Threshold makes binary RGB
-but preserves fractional alpha. Posterize is per-channel reduction, not a fixed
+Channel Mixer's Monochrome mode retain gray shades. Threshold now supports
+binary RGB and optional binary alpha; single-color choices make the other class
+transparent. Posterize is per-channel reduction, not a fixed
 total palette size.
 
 **Behavior:** reuse the grayscale effects. Improve Threshold to cover hard
@@ -461,6 +463,11 @@ grayscale mixer. A new combined Decrease Color entry is unnecessary unless
 discovery trials show the existing entries are confusing.
 
 **Main controls for improved Threshold:**
+
+These controls are implemented in Threshold parameter-data version 2. Equality
+selects white and accepts the alpha cutoff; zero source coverage remains empty.
+The [runtime contract](../reference/runtime-filters.md#photo-color-adjustments)
+records the exact units, accepted ranges and saved choice IDs.
 
 | Control | Meaning and starting behavior |
 | --- | --- |
@@ -507,7 +514,8 @@ References: [Affinity Outer Shadow](https://affinity.help/photo2/en-US.lproj/pag
 
 ### Brightness to Opacity
 
-**Gap:** no direct paper-removal conversion for grayscale line art.
+**Coverage:** Brightness to Opacity is implemented as a control-free black-ink
+conversion. Its saved parameter-data version is 1 with an empty values map.
 
 **Behavior:** white becomes transparent, black becomes opaque black and gray
 becomes partially transparent black. Multiply by existing coverage so transparent
@@ -1809,12 +1817,47 @@ algorithm efficiency, memory and responsiveness. Fast/Medium/Slow describe
 expected cost and tolerance for slower feedback, not permanent artistic contracts
 or controls shown to the user. Every class still aims for the tier rate.
 
-Cheap filters must meet the normal target at ordinary settings. More expensive
-ones can ship with a measured, explicitly qualified slower result only when the
-hardware model and comparison with adequate alternatives justify it. The gate
-specifies minimum fresh-filtered update rates, result-age limits and settling
-limits; a class name alone grants no exception. Repainting stale output at a high
-FPS does not count, and input/navigation must remain responsive in every class.
+Cheap filters aim for the normal target at ordinary settings. When the matched
+disabled baseline already misses, an efficient filter can pass
+[baseline-relative acceptance](../performance/measuring.md#acceptance-when-the-disabled-baseline-misses):
+measure a small, algorithm-explained increment without unnecessary regeneration,
+and defer the shared baseline gap. Record absolute misses and added
+throughput, age, gap, settle/resume and memory costs; this is not a tier-target
+pass or a claim of global algorithmic optimality.
+
+Otherwise, a slower result requires the gate's hardware model and comparison
+with adequate alternatives. A class name grants no exception. Stale redraws do
+not count as fresh output; preserve native detail and every authored input.
+
+### Implementation pitfalls
+
+1. **Alpha behavior is not a global dependency.** Do not route every coverage
+   change through full-image staging. Keep pointwise damage local; evaluate
+   nonlinear conversions on native samples before reducing their output.
+2. **Algebraic equivalence is not numerical equivalence.** Averaging first or
+   rewriting conversion math can change threshold classes and faint coverage.
+   Check native color/alpha, extended values, masks and signed spatial boundaries.
+3. **Warm damage is not cold initialization.** Retain initialized output and
+   track freshness separately. Initialize cold pages fully; update warm reduction
+   cells and old/new prediction damage only. Keep islands separate and account
+   for every writer.
+4. **Bound passes as well as pixels.** Per-page materialization and flushes can
+   dominate local math. Reuse admitted output and bounded contiguous batches;
+   test Fit, 100%, islands and both sides of batch limits with actual pass counts.
+5. **Avoid redundant intermediates and inputs.** Fuse paint, effects and backdrop
+   only where original-input, mask, ordering and lifetime rules permit it. Do not
+   prepare reduced sources that a native-only consumer never reads.
+6. **Count the optimization's own work.** A uniformity rescan adds reads before
+   fallback reduction. Compare complete workloads, track changes during required
+   writes where cheaper, and delete failed alternatives instead of layering them.
+7. **Bound resource lifetime through teardown.** Pool counts do not bound driver
+   bytes. Reuse only completed work, budget idle refinement, let new input resume,
+   and finish retirement before device destruction. Test long contacts and idle.
+8. **Measure what the artist receives.** Match source/build hashes, raw timing
+   records and actual process exits. Distinguish physical passes from logical
+   effects, processed from resident pages, and fresh ink from repeated output.
+   Wait for required pipelines and fresh output; report startup, queue age and
+   resume separately from warmed shader time.
 
 ### First-pass filter performance classes
 
@@ -1961,7 +2004,8 @@ resolution/format, pass/tap/operation/byte counts, retained and peak memory,
 calibrated prediction, measured fresh-filtered rate/age/gaps, ordinary and broad
 settling, and interrupted-input behavior. Include the disabled baseline and a
 simpler adequate candidate. Record the verdict as target met, qualified slower
-filter with evidence, or open failure; keep raw traces in `artifacts/`.
+filter, incremental efficiency accepted with the baseline gap deferred, or open
+failure; keep raw traces in `artifacts/`.
 
 Validate incremental/full equivalence and preview quality independently from
 speed. Include source/mask/seed/resource edits, undo, tile crossings, negative
@@ -1971,8 +2015,9 @@ expensive admitted cases explicitly; they must remain correct and responsive.
 
 If a filter misses its class expectation, first fix dependency waste, caching,
 shader scheduling or algorithm choice. A justified Medium/Slow exception follows
-the shared gate; an unexplained miss or unusable feedback invokes the release cut
-rule. No new filter is performance-qualified by this design document.
+the shared gate; an unexplained filter regression or unusable feedback beyond
+the accepted baseline gap invokes the release cut rule. No new filter is
+performance-qualified by this design document.
 
 ## Revised GA work and acceptance
 

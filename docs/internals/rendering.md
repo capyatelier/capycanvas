@@ -681,7 +681,8 @@ provides a small package to study.
 ## Shader fusion and intermediate images
 
 A pointwise adjustment computes each output pixel from the input at that position.
-Compatible chains of these adjustments are fused into a single fragment shader by
+Compatible chains of these adjustments are fused into one shader invocation by
+the compute or fragment variants in
 [`effects.rs`](../../crates/layer-render-wgpu/src/effects.rs). Each adjustment can
 consume the previous one's result without writing it to a texture first. Ordinary
 aligned masks can be sampled in the same shader, preserving each effect's mask,
@@ -717,10 +718,12 @@ shared image-grid descriptor. Filter sampling clamps at the declared finite inpu
 support; samples beyond an allocated dependency window are transparent. Reduced inputs use
 the centers of their actual covered cells, including partial boundary cells.
 Native composition batches up to sixteen source tiles even when a full display
-pyramid is not admitted. A bounded horizontal strip replaces the single-tile
-working image; each reduction reads its own document-space offset. Admission
-includes the strip's one to sixteen MiB, according to document width. Full
-pyramids retain their existing destination and batching. Root reductions share
+pyramid is not admitted. A working image holds at most sixteen page slots,
+using several rows for narrow documents; each reduction reads its own
+document-space offset. Admission includes its one to sixteen MiB, according to
+document dimensions. Full pyramids retain their destination and receive changed
+rectangles from that image.
+Root reductions share
 one compute pass per batch, then update the adjacent display level together.
 Sparse batches reduce only their covered source rectangles.
 

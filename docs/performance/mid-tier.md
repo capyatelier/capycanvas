@@ -721,3 +721,206 @@ raw completions do not establish fresh photo previews: completion records
 include Navigator and lack effect input/revision pairing. The low-tier numeric
 decrease and its attribution limits remain explicit. Numeric thermal status
 was zero before every gesture; the final after-snapshot was not captured.
+
+## Brightness to Opacity and Threshold
+
+Measured on the reference tablet on 2026-10-05. Fresh merged first-pair
+measurements use `merged-pair` benchmark APK
+`5cc546ae3f9bb1a0372f660660757c970949becfca8f90440f3c85edeb75cf97`, built from
+`09e2193f86f155977022fadd4248c768b7fd5acc`. Each completed case verifies its
+installed APK; raw completion and contact timing are independently recomputed.
+Recorded thermal boundaries are zero.
+
+The optimized Android benchmark uses 6000 × 4000, G-Pen 1536 px, default
+workspace with Navigator, Stats closed, prediction enabled and workspace ink
+color. Motion cases use three warmed five-second strokes. Threshold uses Black,
+Threshold Transparency and retained Alpha Threshold 37%; Brightness to Opacity
+has no parameters. Enabled and disabled cases use matching authored graphs and
+workloads.
+
+**Incremental efficiency accepted; absolute tier targets are not met.** The
+revised criterion accepts efficient incremental work over an already failing
+disabled baseline. Disabled-baseline failures remain failures; paired throughput
+does not isolate GPU filter cost or prove optimality.
+
+| Filter | Blending | Zoom | 64 px canvas on / off | Large canvas on / off | 64 px fresh on / off | Large fresh on / off | Added large canvas time (ms) |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Brightness to Opacity | Perceptual | Fit | 281.35 / 293.35 | 90.19 / 65.10 | 198.23 / 197.36 | 90.19 / 65.10 | -4.273 |
+| Brightness to Opacity | Perceptual | 100% | 285.45 / 307.11 | 18.76 / 22.75 | 198.28 / 197.97 | 18.76 / 22.75 | +9.351 |
+| Brightness to Opacity | Linear | Fit | 286.73 / 301.95 | 91.14 / 66.86 | 198.05 / 197.35 | 91.14 / 66.66 | -3.984 |
+| Brightness to Opacity | Linear | 100% | 284.45 / 308.81 | 19.35 / 23.97 | 197.94 / 197.82 | 19.35 / 23.97 | +9.945 |
+| Threshold | Perceptual | Fit | 280.18 / 294.32 | 90.88 / 64.20 | 198.50 / 197.59 | 90.88 / 64.20 | -4.572 |
+| Threshold | Perceptual | 100% | 282.58 / 307.64 | 18.94 / 22.93 | 198.30 / 197.88 | 18.94 / 22.93 | +9.178 |
+| Threshold | Linear | Fit | 285.60 / 303.67 | 92.67 / 67.02 | 197.91 / 197.32 | 92.67 / 67.02 | -4.129 |
+| Threshold | Linear | 100% | 288.09 / 306.27 | 19.54 / 24.14 | 198.23 / 197.98 | 19.54 / 24.14 | +9.746 |
+
+The target is 90 completed canvas updates/s with p99 gaps at most 22.222 ms.
+Fresh input-consuming updates and their gaps are reported separately. Medians
+above summarize three runs; the gap and age columns show ranges across the three
+per-run percentiles. Added time is `1000/enabled rate − 1000/disabled rate`, a
+throughput comparison rather than isolated GPU filter timing.
+
+Response measurements for the large brush (ranges across per-run percentiles):
+
+| Filter / blending / zoom / state | Canvas gap p99 (ms) | Fresh gap p99 (ms) | Input age p95 (ms) | Input→GPU p95 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Threshold / perceptual / Fit / Enabled | 19.93–21.38 | 19.93–21.38 | 40.00–41.00 | 42.37–43.67 |
+| Threshold / perceptual / Fit / Disabled | 22.33–22.57 | 22.33–22.57 | 50.00–50.00 | 50.68–53.11 |
+| Brightness to Opacity / perceptual / Fit / Enabled | 19.85–21.43 | 19.85–21.43 | 40.00–40.00 | 43.01–44.05 |
+| Brightness to Opacity / perceptual / Fit / Disabled | 21.77–23.39 | 21.77–23.39 | 50.00–50.00 | 50.55–51.15 |
+| Threshold / perceptual / 100% / Enabled | 58.43–62.94 | 58.43–62.94 | 155.00–155.00 | 157.46–158.74 |
+| Threshold / perceptual / 100% / Disabled | 47.88–49.14 | 47.88–49.14 | 130.00–130.00 | 129.19–130.39 |
+| Brightness to Opacity / perceptual / 100% / Enabled | 59.86–61.39 | 59.86–61.39 | 155.00–155.00 | 158.28–159.16 |
+| Brightness to Opacity / perceptual / 100% / Disabled | 49.02–56.73 | 49.02–56.73 | 130.00–130.00 | 131.13–133.24 |
+| Threshold / linear / Fit / Enabled | 19.73–20.21 | 19.73–20.21 | 40.00–40.00 | 40.56–42.28 |
+| Threshold / linear / 100% / Enabled | 57.94–59.42 | 57.94–59.42 | 150.00–150.00 | 151.60–153.64 |
+| Threshold / linear / Fit / Disabled | 20.66–22.79 | 20.66–22.79 | 45.00–50.00 | 48.39–53.13 |
+| Threshold / linear / 100% / Disabled | 45.67–46.92 | 45.67–46.92 | 120.00–120.00 | 123.40–124.03 |
+| Brightness to Opacity / linear / Fit / Enabled | 19.93–20.25 | 19.93–20.25 | 40.00–40.00 | 41.91–42.22 |
+| Brightness to Opacity / linear / 100% / Enabled | 58.49–59.27 | 58.49–59.27 | 150.00–150.00 | 154.12–154.75 |
+| Brightness to Opacity / linear / Fit / Disabled | 21.04–23.84 | 20.47–23.84 | 45.00–50.00 | 48.66–52.84 |
+| Brightness to Opacity / linear / 100% / Disabled | 46.32–52.30 | 46.32–52.30 | 120.00–125.00 | 123.06–125.34 |
+
+Among 36 completed motion cases, 18 pass all three runs of the canvas
+rate-and-gap gate, 18 pass the fresh rate-and-gap gate, and 16 meet the age
+limit. These separate counts do not establish a combined pass.
+
+[Full current rows, individual
+gates](../../artifacts/illustration-filters/pair1/merged-pair-performance-doc-draft-mid.txt).
+Absolute disabled-baseline misses remain failures; the revised criterion
+assesses efficient incremental cost separately.
+
+ | Fit Perceptual large brush | State | Long-stroke settle range (ms) | | --- |
+--- | ---: | | threshold | Enabled | 371.31–472.61 | | threshold | Disabled |
+458.08–515.41 | | brightness_to_opacity | Enabled | 361.98–368.73 | |
+brightness_to_opacity | Disabled | 449.90–503.83 |
+
+Three long strokes give a range, not a settling percentile. Short local-stroke
+settling remains separate.
+
+| Three-photo translucent stack, varying pressure | Canvas on / off | Fresh on / off |
+| --- | ---: | ---: |
+| threshold | 143.85 / 144.90 | 136.19 / 128.87 |
+| brightness_to_opacity | 144.03 / 143.29 | 135.74 / 128.79 |
+
+Native pointwise output is evaluated into retained filter images before
+reduction. Invalid required native pages are captured in contiguous row batches
+of at most 16, skipping valid pages and gaps. Historical native-direct
+diagnostic traces and reviews describe this implementation; their older APK
+measurements do not qualify this merged build. Current paired rates preserve the
+material native-resolution increments: approximately 9–10 ms per effective
+canvas update on Mid, 2.5–3.0 ms for Threshold and 4.9–5.4 ms for Brightness to
+Opacity on Top. The pointwise algorithm evaluates required changed native pixels
+once before reduction. Current 73 GPU tests and 16 refinement tests cover no-op
+reuse, bounded passes, native ordering, source leases and the older-path
+counterfactual. Source and output bindings cache actual view tuples for the
+current and previous frame; different resources require distinct groups. These
+code and physical-work checks support scoped algorithmic efficiency acceptance
+without proving every measured tail unavoidable or global optimality.
+
+On the 6000 × 4000 canvas, matched Threshold enabled/disabled runs each
+completed 20 five-second 1536 px GPen contacts with Undo between contacts, then
+retained the final stroke for 120 seconds. Threshold uses Colors=1,
+Transparency=1 and alpha threshold=37 in Perceptual blending. Thermal status was
+0 at both boundaries of every run. Settling uses nearest-rank p95 across 20
+contacts.
+
+| Threshold | Five-second settle p95 (ms) | Max sampled GPU allocated / reserved (MiB) | Max sampled PSS / RSS (MiB) | Minimum sampled system MemAvailable (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| Enabled | 485.344 | 1425.77 / 1451.20 | 2123.18 / 2219.66 | 2391.81 |
+| Disabled | 521.043 | 1422.86 / 1443.20 | 2149.73 / 2247.32 | 2319.88 |
+
+The maxima and minimum span the whole captured sampler, including setup and Undo
+after idle where recorded; maxima are separate samples, not simultaneous or
+continuous peaks. Idle comparisons exclude Undo after idle. These long-stroke
+settling results do not establish the short local-stroke settling target.
+
+Enabled contact 5→20 endpoints: PSS -62.38 MiB, RSS -26.79 MiB, mappings -463;
+tracked GPU allocated +0.05 MiB and reserved +0.00 MiB. During 120.051s idle:
+PSS +0.91 MiB, RSS +0.02 MiB, mappings -120, tracked GPU allocated -0.06 MiB and
+reserved +0.00 MiB. Disabled contact 5→20 endpoints: PSS -13.61 MiB, RSS +20.48
+MiB, mappings -36; tracked GPU allocated +0.06 MiB and reserved +0.00 MiB.
+During 120.051s idle: PSS -17.28 MiB, RSS -52.16 MiB, mappings -160, tracked GPU
+allocated -0.06 MiB and reserved +0.00 MiB.
+
+After idle, enabled minus disabled was PSS +40.66 MiB, RSS +40.02 MiB, tracked
+GPU allocated +2.85 MiB and reserved +8.00 MiB. These are separate
+processes/runs with matching requested setup; the differences do not isolate
+allocator or driver history.
+
+The private-photo large accepted-affine journey passed in 189.541s: 20 nonzero
+drags, accepted Apply, 120.155s idle, resumed nonzero drag and Apply. All 30
+snapshots and 21 input probes share one PID and ordered boot times; map counts
+and live canvas input paths match. This exercises accepted resource high-water,
+not an exceptionally large individual command buffer.
+
+| Large affine stage samples | GPU allocated / reserved (MiB) | PSS / RSS (MiB) | Minimum system MemAvailable (MiB) |
+| --- | ---: | ---: | ---: |
+| Separate maxima over 30 stages | 1411.47 / 1431.00 | 2287.96 / 2385.83 | 2437.45 |
+
+Accepted idle: PSS -126.55 MiB, RSS -147.60 MiB, mappings -200, tracked GPU
+allocated +0.00 MiB and reserved +0.00 MiB. Idle end→resumed Apply: PSS +21.88
+MiB, RSS +18.62 MiB, mappings +143, tracked GPU allocated +0.00 MiB and reserved
++0.00 MiB.
+
+[Large-affine resource
+ledger](../../artifacts/illustration-filters/pair1/mid-merged-pair-large-memory-summary.json).
+
+PSS is process-level evidence, not isolated driver command-memory accounting.
+Snapshot fields are read sequentially; nearest same-PID contact PSS samples are
+strictly inside idle with explicit time offsets. Mapping counts do not count
+command pools. These sampled runs establish neither a transient peak bound, a
+per-command byte bound, nor a leak or its absence.
+
+[Current resource ledger and raw
+audit](../../artifacts/illustration-filters/pair1/merged-pair-current-memory-summary.json).
+
+Resumed 100 ms contacts use three runs of 21 contacts per state. Cold is the
+first contact; warm groups use actual pending-composition flags. Requested 5
+ms/1,000 ms gaps alone do not determine actual state. The table reports actual
+warm pending/settled next GPU completion, including completions after release;
+GPU completion is not scanout.
+
+| Filter | Requested gap (ms) | Actual warm group | Count on / off | Next GPU p95 on / off (ms) | Added p95 (ms) |
+| --- | ---: | --- | ---: | ---: | ---: |
+| threshold | 5 | warm_pending | 60 / 60 | 287.76 / 242.92 | +44.839 |
+| threshold | 1000 | warm_settled | 60 / 60 | 58.72 / 52.22 | +6.502 |
+| brightness_to_opacity | 5 | warm_pending | 60 / 60 | 290.34 / 236.67 | +53.675 |
+| brightness_to_opacity | 1000 | warm_settled | 60 / 60 | 59.16 / 51.67 | +7.492 |
+
+All completed matched resume rows fail absolute throughput and input-age
+criteria. Contacts without an active-window fresh completion remain failures;
+post-release completions count only as latency evidence. Final-input settling is
+not per-contact settling p95. Positive paired contact penalties remain material
+unresolved observations; historical traces do not establish their current cause
+or inevitability. They remain explicit limitations of the scoped algorithmic
+efficiency acceptance.
+
+| Contacts without fresh completion in the active window | 5 ms enabled / disabled | 1,000 ms enabled / disabled |
+| --- | ---: | ---: |
+| threshold | 60/63 / 63/63 | 1/63 / 3/63 |
+| brightness_to_opacity | 60/63 / 63/63 | 1/63 / 3/63 |
+
+[Current raw resume
+recomputation](../../artifacts/illustration-filters/pair1/merged-pair-matched-resume-summary.json).
+Measurements remain attributed to benchmark APK
+`5cc546ae3f9bb1a0372f660660757c970949becfca8f90440f3c85edeb75cf97`; final
+fixture-correction APK confirmation is separate and does not relabel these
+samples.
+
+Separate final APK
+`9de4984f656bbbd12a17e3023f7fc85e959d10d9885a3cc6d6150e3d25026c76` confirmation
+uses three warmed Fit, Perceptual large-brush strokes per state. The
+fixture-only correction has a separate runtime-equivalence audit; the full
+matrix and resource evidence above remain attributed to the measured APK.
+
+| Final APK Fit confirmation | Canvas on / off | Fresh on / off |
+| --- | ---: | ---: |
+| threshold | 91.46 / 64.49 | 91.46 / 64.49 |
+| brightness_to_opacity | 91.46 / 64.54 | 91.46 / 64.54 |
+
+[Final APK primary raw
+audit](../../artifacts/illustration-filters/pair1/merged-pair-final-matched-evidence-audit-primary.json).
+Native paint/mask/history/reopen and parameter/source-persistence checks pass
+separately on both tiers. The Top supplemental trace and identical rerun fail
+strict GPU coverage and remain preserved.

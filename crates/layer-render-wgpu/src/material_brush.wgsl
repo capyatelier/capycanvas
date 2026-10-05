@@ -1,4 +1,5 @@
 override MATERIAL_OPERATION: u32;
+override MATERIAL_PREVIEW_CONTRIBUTION: bool = false;
 
 const OP_DEPOSIT: u32 = 0u;
 const OP_COVERAGE: u32 = 1u;
@@ -851,7 +852,7 @@ fn dry_block_result(id: vec2<u32>) -> MaterialOutput {
 fn compute_display_color(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= textureDimensions(material_color_output)) { return; }
     let result = dry_block_result(id.xy);
-    textureStore(material_color_output, vec2<i32>(id.xy), result.color);
+    store_display_color(id.xy,result.color);
 }
 
 fn dry_block_pixel(id: vec2<u32>, offset: vec2<u32>, result: MaterialOutput) -> MaterialOutput {
@@ -886,6 +887,7 @@ fn compute_color(@builtin(global_invocation_id) id: vec3<u32>) {
             let p = vec2<i32>(id.xy * block + vec2<u32>(x, y));
             if !MATERIAL_IN_PLACE || any(pixel.color != dry_original(p)) {
                 textureStore(material_color_output, p, pixel.color);
+                mark_changed_cell(vec2<u32>(p));
             }
         }
     }
@@ -906,6 +908,7 @@ fn compute_coverage(@builtin(global_invocation_id) id: vec3<u32>) {
             let p = vec2<i32>(id.xy * block + vec2<u32>(x, y));
             if !MATERIAL_IN_PLACE || any(pixel.color != dry_original(p)) {
                 textureStore(material_color_output, p, pixel.color);
+                mark_changed_cell(vec2<u32>(p));
             }
             textureStore(material_coverage_output, p, pixel.coverage);
         }

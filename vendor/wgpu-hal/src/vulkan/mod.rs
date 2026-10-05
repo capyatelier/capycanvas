@@ -31,6 +31,8 @@ mod descriptor;
 mod device;
 mod drm;
 mod instance;
+#[cfg(any(target_os = "android", test))]
+mod pool_retirement;
 mod sampler;
 mod semaphore_list;
 mod swapchain;
@@ -535,6 +537,8 @@ struct DeviceShared {
     render_passes: Mutex<FastHashMap<RenderPassKey, vk::RenderPass>>,
     sampler_cache: Mutex<sampler::SamplerCache>,
     memory_allocations_counter: InternalCounter,
+    #[cfg(any(target_os = "android", test))]
+    retired_pools: Arc<pool_retirement::PendingPools>,
 
     /// Because we have cached framebuffers which are not deleted from until
     /// the device is destroyed, if the implementation of vulkan re-uses handles
@@ -553,6 +557,8 @@ struct DeviceShared {
 
 impl Drop for DeviceShared {
     fn drop(&mut self) {
+        #[cfg(any(target_os = "android", test))]
+        self.retired_pools.drain();
         for &raw in self.render_passes.lock().values() {
             unsafe { self.raw.destroy_render_pass(raw, None) };
         }
@@ -1117,6 +1123,7 @@ pub struct CommandEncoder {
     /// the given pool & location.
     end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
 
+    completed_resets: u8,
     framebuffers: FastHashMap<FramebufferKey, CachedFramebuffer>,
     temp_texture_views: FastHashMap<TempTextureViewKey, IdentifiedTextureView>,
 

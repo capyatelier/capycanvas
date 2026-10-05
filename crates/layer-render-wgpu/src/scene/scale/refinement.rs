@@ -11,7 +11,7 @@ impl Cache {
         }
         if missing.is_empty() { return Ok(PixelRect::EMPTY); }
         let Encoding { encoder, commands } = encoding;
-        self.admit_hierarchy(r, encoder, commands)?;
+        self.admit_hierarchy(r, packet, encoder, commands)?;
         let reverse = scene.native_reverse;
         scene.native_reverse = !reverse;
         let changed = missing.iter().fold(PixelRect::EMPTY, |a, c| a.union(page_rect(*c))).intersect(PixelRect::full(packet.document_extent));
@@ -20,12 +20,8 @@ impl Cache {
         let mut regions: Vec<_> = plan.map_or_else(|| vec![(changed, scene.cached_capture_window(packet.scene, changed))], |p| p.regions_cached(packet.scene, changed,Some(&scene.object_spatial))
             .filter(|(output, _)| page_coordinates(*output).any(|c| missing.contains(&c))).collect());
         if reverse { regions.reverse(); }
-        let mut image = match &self.hierarchy {
-            Some(hierarchy) => hierarchy.root().clone(),
-            None => self.exact_tile.get_or_insert_with(|| Image::new(r,
-                display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone(),
-        };
-        let texture = image.texture.clone();
+        let mut image = self.exact_tile.get_or_insert_with(|| Image::new(r,
+            display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone();
         let batch_size = if packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some()) { 1 } else { SOURCE_SLOTS };
         let mut batch = Vec::with_capacity(batch_size);
         if plan.is_some() {
@@ -46,20 +42,11 @@ impl Cache {
                     let Some(&coordinate) = coordinates.peek() else {break;};
                     let region = page_rect(coordinate).intersect(PixelRect::full(packet.document_extent));
                     let combined = bounds.union(region);
-                    if self.hierarchy.is_none() && (combined.width() > image.texture.width() || combined.height() > image.texture.height()) {break;}
+                    if combined.width() > image.texture.width() || combined.height() > image.texture.height() {break;}
                     coordinates.next();bounds = combined;batch.push(region);
                 }
                 if batch.is_empty() {break;}
-                if self.hierarchy.is_none() {image.plan = display_mips::Plan::window(packet.document_extent, 0, bounds);}
-                scene.capture_prepared_regions(r, packet, &image, &batch, scene::Output::Display, false, encoder)?;
-                for &region in &batch {
-                    let coordinate = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE];
-                    if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, &texture, coordinate, region); }
-                    r.metrics.composited_pixels += region.area();
-                    r.metrics.frame_composited_pages.push((0, coordinate));
-                }
-                self.write_exact(r, encoder, commands, &image, &batch)?;
-                if let Some(overview) = &mut self.overview { overview.write_exact(r, encoder, commands, &image, &batch)?; }
+                self.capture_exact(scene, r, packet, &mut image, &batch, encoder, commands)?;
             }
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }
             if plan.is_some() {
@@ -116,13 +103,9 @@ impl Cache {
         encoder: &mut crate::submission::CommandEncoder, commands: &mut Commands,
     ) -> Result<PixelRect, GpuRasterError> {
         if packet.scene.order().iter().any(|h| packet.scene.object_layer(*h).is_some()) { return Ok(PixelRect::EMPTY); }
-        self.admit_hierarchy(r, encoder, commands)?;
-        let mut image = match &self.hierarchy {
-            Some(hierarchy) => hierarchy.root().clone(),
-            None => self.exact_tile.get_or_insert_with(|| Image::new(r,
-                display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone(),
-        };
-        let texture = image.texture.clone();
+        self.admit_hierarchy(r, packet, encoder, commands)?;
+        let mut image = self.exact_tile.get_or_insert_with(|| Image::new(r,
+            display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone();
         let mut seen = BTreeSet::new();
         let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
         let passes = packet.scene.order().iter().filter_map(|h|packet.scene.effect(*h).filter(|effect|
@@ -130,9 +113,11 @@ impl Cache {
             .map(|effect|effect.program.passes.len().max(1) as u64).sum::<u64>();
         let mut bounds = PixelRect::EMPTY;
         let mut work_limit=4*u64::from(PAGE_SIZE).pow(2);
-        let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(4).take_while(|c| {
+        let page_limit = if passes > 0 { 4 } else { SOURCE_SLOTS };
+        let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(page_limit).take_while(|c| {
             let region = page_rect(*c).intersect(PixelRect::full(self.plan.extent));
             let combined = bounds.union(region);
+            if combined.width() > image.texture.width() || combined.height() > image.texture.height() {return false;}
             let window = scene.cached_capture_window(packet.scene, combined);
             let work = combined.area().saturating_add(window.area().saturating_mul(passes));
             if bounds.is_empty() {work_limit=work_limit.max(work.saturating_add(work/2));}
@@ -142,27 +127,38 @@ impl Cache {
             true
         }).collect();
         let regions: Vec<_> = pages.iter().map(|c| page_rect(*c).intersect(PixelRect::full(self.plan.extent))).collect();
+        r.telemetry.phase_begin(9, &r.device, &r.queue, encoder);
         r.ensure_exact_preview(encoder)?;
         if !bounds.is_empty() {
             scene.prepare_region(r, packet, scene.cached_capture_window(packet.scene, bounds), PixelRect::EMPTY, false, encoder)?;
         }
-        let batched = self.hierarchy.is_some();
-        if batched { scene.capture_prepared_regions(r, packet, &image, &regions, scene::Output::Display, false, encoder)?; }
-        let mut changed = PixelRect::EMPTY;
-        for (coordinate, region) in pages.into_iter().zip(regions) {
-            if self.hierarchy.is_none() { image.plan = display_mips::Plan::window(packet.document_extent, 0, region); }
-            if !batched { scene.capture_prepared_region(r, packet, &image, region, scene::Output::Display, encoder)?; }
-            if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, &texture, coordinate, region); }
-            self.write_exact(r, encoder, commands, &image, &[region])?;
-            if let Some(overview) = &mut self.overview {
-                overview.write_exact(r, encoder, commands, &image, &[region])?;
-            }
+        let changed = if regions.is_empty() { PixelRect::EMPTY }
+            else { self.capture_exact(scene, r, packet, &mut image, &regions, encoder, commands)? };
+        if crate::performance_trace::enabled() { commands.flush(r, encoder)?; }
+        r.telemetry.phase_end(9, encoder);
+        r.telemetry.phase_begin(11, &r.device, &r.queue, encoder);
+        if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }
+        r.telemetry.phase_end(11, encoder);
+        Ok(changed)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn capture_exact(
+        &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
+        image: &mut Image, regions: &[PixelRect], encoder: &mut crate::submission::CommandEncoder, commands: &mut Commands,
+    ) -> Result<PixelRect, GpuRasterError> {
+        let bounds = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(*region));
+        image.plan = display_mips::Plan::window(packet.document_extent, 0, bounds);
+        scene.capture_prepared_regions(r, packet, image, regions, scene::Output::Display, false, None, encoder)?;
+        for &region in regions {
+            let coordinate = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE];
+            if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, image, coordinate, region); }
             r.metrics.composited_pixels += region.area();
             r.metrics.frame_composited_pages.push((0, coordinate));
-            changed = changed.union(region);
         }
-        if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }
-        Ok(changed)
+        self.write_exact(r, encoder, commands, image, regions)?;
+        if let Some(overview) = &mut self.overview { overview.write_exact(r, encoder, commands, image, regions)?; }
+        Ok(bounds)
     }
 
     fn write_exact(

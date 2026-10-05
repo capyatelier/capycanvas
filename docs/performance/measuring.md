@@ -195,6 +195,28 @@ Measure end-to-end latency as well as shader time. If the disabled baseline
 already misses, report that shared gap and the incremental filter cost; do not
 claim either an absolute pass or a filter-specific hardware exception from it.
 
+### Acceptance when the disabled baseline misses
+
+A filter can be accepted while shared baseline performance improvements are
+deferred if its matched disabled control already misses the applicable targets.
+Require current reference-device measurements of throughput, age, gaps,
+settle/resume and memory, with an added cost small enough to be explained by the
+simplest adequate algorithm and its actual dependency footprint. Check simpler
+alternatives and eliminate unnecessary regeneration, passes, copies and retained
+work. A favorable rate ratio or lightweight shader alone is insufficient.
+
+Preserve native color/alpha, every authored input and the existing final-result
+correctness and error contract. Report material incremental latency and memory
+costs, including interrupted resume. Correctness failures or unnecessary filter
+work still block acceptance; unresolved latency must remain explicit rather than
+being attributed to the baseline. Record the verdict as **incremental efficiency
+accepted; baseline target gap deferred**.
+Keep absolute misses visible: this is neither a tier-target pass nor a
+filter-specific hardware exception. Workloads whose disabled baseline meets the
+targets retain the normal filter gate.
+
+### Dependency correctness
+
 Each stage must declare both directions of dependency: which input an output
 region samples, and which output an input edit invalidates. These differ for
 displacement, radial paths and directional shadows. Compose them across passes,
@@ -319,9 +341,27 @@ and their mip reductions. Retained Navigator refreshes have a separate GPU phase
 CPU span, pixel count, image age, pending flag and storage counter. Main
 composition includes source updates performed
 inside that view. Trace mode flushes queued composition records before the mip
-timestamp so the mip interval excludes deferred blends. Match GPU observations
-to renderer frame IDs inside the input window; publication of timing counters
-can occur after motion has ended. Missing observations are skipped, never waited
+timestamp so the mip interval excludes deferred blends.
+Idle exact refinement uses the main composition phase for native capture and
+the main mip phase for updating the resident hierarchy.
+Ordinary stroke publication has a separate `Capy GPU native capture ns` total.
+`Capy GPU native preflight ns` covers the complete working-source validation,
+including the initial shared status reset, before any native output writes.
+`Capy GPU native encoding ns` covers native color/scalar encoding and any
+canonical scratch promotion after that preflight. The total includes the split
+markers; CPU resource preparation and backing readback/compression are outside
+these GPU intervals. All six possible marker passes and the complete native job
+must fit the current encoder before timing starts. Instrumentation never forces
+a rotation or submission. Capacity or timer-slot omissions are explicit counters,
+not zero cost; compare only matching renderer IDs with complete split observations.
+Background/private jobs retain their existing timing behavior. These timestamp
+intervals include GPU scheduling gaps and do not identify hardware occupancy or
+prove that transfer arithmetic, validation, or memory traffic dominates.
+Match GPU observations
+to renderer frame IDs inside the input window. Ready timing counters drain at
+each measured frame; final observations can arrive after motion has ended. Each
+timer retains at most 256 ready observations between drains. Missing observations
+are skipped, never waited
 for, and do not represent zero cost.
 Trace counters report the main composite's changed output pixels, output regions
 and enclosing mip rectangle. Compare these on the same frames before replacing
@@ -357,7 +397,10 @@ time separately. Its one-second pinch probes interruption; it does not qualify
 the separate sustained five-second navigation target.
 
 **Memory (Android).** Run a separate diagnostic with `--memory` to save GPU
-allocator snapshots. Sampling allocations adds CPU work, so do not use that run
+allocator snapshots and process PSS. Each run starts a fresh memory log.
+Use `--memory-idle-ms 30000` to retain the final stroke for thirty seconds before
+Undo, with snapshots throughout and separate before/after idle records.
+Sampling allocations adds CPU work, so do not use that run
 to qualify frame rates. Keep process PSS, allocator allocated/reserved bytes and
 system `MemAvailable` together. Android drivers can hold GPU allocations outside
 process PSS; PSS alone cannot establish the memory bound. These measurements

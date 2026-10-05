@@ -212,6 +212,41 @@ fn placed_photo_smudge_reads_beyond_adjacent_source_tiles() {
 }
 
 #[test]
+fn raster_gradients_preserve_authored_stops_and_opacity() {
+    let extent=[128;2];
+    let mut doc=paint_document(extent,"gradient stops");
+    set_source(&mut doc,rgba8_source(extent,|_,_|[255;4]));
+    let operation=RasterOperation {
+        placement:Affine::IDENTITY,
+        coverage:reveal_all(extent,Point::default()),
+        kind:RasterOperationKind::Gradient {
+            start:Point{x:16.,y:64.},end:Point{x:112.,y:64.},
+            gradient:layer_core::GradientDefinition {
+                stops:[[1.,0.,0.,1.],[0.,0.,1.,1.]].into_iter().enumerate().map(|(i,rgba)|layer_core::GradientStop {
+                    position:i as f32,color:layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,rgba).unwrap(),
+                }).collect(),interpolation:layer_core::ColorMixSpace::LinearRgb,
+            },
+            shape:layer_core::GradientShape::Linear,reverse:false,opacity:0.5,alpha_locked:false,
+        },
+    };
+    let command=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,damage:operation.bounds(extent),..batch(target(&doc))};
+    paint_mut(&mut doc).operations=Arc::new(vec![operation]);
+    for blend in layer_core::BlendSpace::ALL {
+        paint_mut(&mut doc).raster=layer_core::raster::RasterRevision::pending();
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        r.submit(FramePacket {dab_batches:std::slice::from_ref(&command),reset_layers:true,blend_space:blend,..packet(doc.scene(),extent)}).unwrap();
+        paint(&doc).raster.wait_data().unwrap();
+        let pixels=r.readback_srgb_rgba8().unwrap();
+        for x in [4usize,32,64,96,124] {
+            let t=((x as f32+0.5-16.)/96.).clamp(0.,1.);
+            let expected=[1.-0.5*t,0.5,0.5+0.5*t].map(|v|(layer_core::color::RgbSpace::Srgb.encode(f64::from(v))*255.).round() as u8);
+            let actual=&pixels[(64*128+x)*4..][..4];
+            assert!(actual[..3].iter().zip(expected).all(|(a,b)|a.abs_diff(b)<=2) && actual[3]==255,"{blend:?} x={x}: {actual:?} vs {expected:?}");
+        }
+    }
+}
+
+#[test]
 fn placed_photo_gradient_and_figure_use_document_geometry() {
     let size = [900, 700];
     let mut layer = paint_document([128; 2], "placed operation geometry");

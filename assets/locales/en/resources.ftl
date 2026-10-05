@@ -533,3 +533,11 @@ resources-layer-color-mode = Color mode
 resources-layer-color-full = Full color
 resources-layer-color-gray = Grayscale
 resources-layer-color-two-tone = Two-tone (black & white)
+
+resources-filter-brightness-to-opacity = Brightness to Opacity
+resources-illustration-colors = Colors
+resources-illustration-black = Black
+resources-illustration-white = White
+resources-illustration-transparency = Transparency
+resources-illustration-keep = Keep
+resources-illustration-alpha-threshold = Alpha threshold

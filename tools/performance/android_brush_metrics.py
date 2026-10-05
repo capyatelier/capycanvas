@@ -63,6 +63,48 @@ def object_completions(report):
     return rows
 
 
+def input_feedback(report):
+    events = sorted((dict(zip(report["input_fields"], row)) for row in report["inputs"]),
+                    key=lambda event: event["arrival_ns"])
+    raster = int(next(row["value"] for row in report["renderer_before"]["rows"] if row["label"] == "Frames"))
+    completions = []
+    for row in sorted(report["completions"], key=lambda row: row[2]):
+        if row[3] > raster:
+            completions.append(row)
+            raster = row[3]
+    begin, end = report["motion"]["begin_ns"], report["motion"]["end_ns"]
+    event_index = completion_index = 0
+    contact = latest = visible = None
+    ages = []
+    for now in range(begin, end, 1_000_000):
+        while event_index < len(events) and events[event_index]["arrival_ns"] <= now:
+            event = events[event_index]
+            event_index += 1
+            if event["phase"] == 1:
+                contact, latest, visible = event, event, None
+            elif event["phase"] == 2 and contact is not None:
+                latest = event
+            elif event["phase"] == 3:
+                contact = None
+        while completion_index < len(completions) and completions[completion_index][2] <= now:
+            row = completions[completion_index]
+            completion_index += 1
+            if contact is not None and row[4] >= contact["event_ns"]:
+                visible = max(visible or row[4], row[4])
+        if contact is not None:
+            ages.append(max(0, latest["event_ns"] - visible) / 1e6 if visible is not None
+                        else (now - contact["arrival_ns"]) / 1e6)
+    latency = []
+    for event in events:
+        if event["phase"] not in (1, 2) or not begin <= event["arrival_ns"] < end:
+            continue
+        done = next((row[2] for row in completions if row[2] >= event["arrival_ns"] and row[4] >= event["event_ns"]), None)
+        if done is not None:
+            latency.append((done - event["event_ns"]) / 1e6)
+    return dict(age_ms=ages, input_to_gpu_ms=latency, sample_period_ms=1,
+                attribution="GPU completion of synchronous visible output; no scanout timestamps")
+
+
 def validate_setup(info, requested):
     state = info["state"]
     camera = state["camera"]
@@ -99,7 +141,7 @@ def validate_setup(info, requested):
         expected[f"radius_{axis}"] = min(radius, extent * .45)
         actual[f"radius_{axis}"] = info["radii"][axis]
     workload = requested.get("workload", "ordinary")
-    effect_count = int(workload in ("blurred-base", "objects-effects"))
+    effect_count = int(workload in ("blurred-base", "objects-effects")) + int(bool(requested.get("live_filter")))
     expected.update(layers=requested["photo_layers"] + 2 + effect_count,
                     diameter=requested["brush_size"], selected_preset=requested["preset"],
                     feedback=requested["prediction"])
@@ -108,13 +150,24 @@ def validate_setup(info, requested):
                   feedback=state["settings"]["feedback"])
     expected["workload"] = workload
     actual["workload"] = info.get("workload", "ordinary")
+    if requested.get("live_filter"):
+        fixture=info.get("live_filter_fixture") or {}
+        expected.update(live_filter=requested["live_filter"], live_filter_disabled=requested["live_filter_disabled"],
+                        live_filter_values=requested["live_filter_values"], changing_filter_input=True)
+        actual.update(live_filter=fixture.get("effect_id"), live_filter_disabled=fixture.get("disabled"),
+                      live_filter_values=fixture.get("values"),
+                      changing_filter_input=fixture.get("paint")==state["layer_properties"].get("layer"))
+        rows=state["layers"]
+        expected["live_filter_attachment"] = True
+        actual["live_filter_attachment"] = any(row.get("id")==fixture.get("effect") and row.get("relationship")==dict(kind="effect",target=fixture.get("paint"))
+                                              and row.get("visible")== (not requested["live_filter_disabled"]) for row in rows)
     if workload in ("clipped", "blurred-base"):
         fixture = info.get("attachment_fixture") or {}
         paint, base, effect = (fixture.get(key) for key in ("paint", "base", "effect"))
         expected["attachment_order"] = [paint] + ([effect] if effect_count else []) + [base]
         actual["attachment_order"] = [layer.get("id") for layer in state["layers"][:2 + effect_count]]
-        expected["attached_rows"] = [True] * (1 + effect_count) + [False]
-        actual["attached_rows"] = [layer.get("clipped") for layer in state["layers"][:2 + effect_count]]
+        expected["attached_rows"] = [dict(kind="clip",target=base)] + ([dict(kind="effect",target=base)] if effect_count else []) + [None]
+        actual["attached_rows"] = [layer.get("relationship") for layer in state["layers"][:2 + effect_count]]
         expected["attachment_handles"] = True
         actual["attachment_handles"] = paint is not None and base is not None and paint != base and (not effect_count or effect is not None and effect not in (paint, base))
         if effect_count:
@@ -133,7 +186,7 @@ def validate_setup(info, requested):
             actual[key] = [value.get(key) for value in objects]
     if "paint_layer_index" in requested:
         index = requested["paint_layer_index"]
-        expected["paint_layer_index"] = [index + int(workload == "objects-effects" and index > 0)]
+        expected["paint_layer_index"] = [index + int(workload == "objects-effects" and index > 0) + int(bool(requested.get("live_filter")))]
         actual["paint_layer_index"] = [i for i, layer in enumerate(state["layers"]) if layer.get("selected")]
     if requested["prediction"]:
         expected["horizon"] = requested["horizon"]

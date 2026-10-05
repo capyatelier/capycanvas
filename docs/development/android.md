@@ -349,11 +349,16 @@ manual save checkpoints and undo/redo after an actual process death.
   InputConnection. `AndroidRasterTest#imagePlacementBatchHistoryAndStaleRequests`
   includes Position anchor, pivot, held nudges and Transform Again.
 - `AndroidHostTest#pointwiseColorPagesUseNativeControlsAndRetainHiddenValues`
-  checks Hue range pages, Colorize, Threshold and Photo Filter controls and
+  checks Hue range pages, Colorize, Brightness to Opacity, Threshold and Photo Filter controls and
   slider history in both themes. Run with and without `-e presentationNarrow true`.
   `AndroidRasterTest#pointwiseColorEffectsPersistAllParametersAndOriginalSource`
   covers all Hue parameters, tagged filter colors, source identity and Activity
   recreation across integer and floating document profiles.
+  `AndroidRasterTest#illustrationConversionsKeepPaintMaskHistoryAndNativeValues`
+  exercises Brightness to Opacity and Threshold with native U16 ProPhoto paint
+  in both blending spaces. Stylus contacts cross tile seams and source edges,
+  paint separated marks and a mask, and erase with Undo/Redo. It checks partial
+  alpha, unchanged filter input and native paint, and exact save/reopen results.
 
 ### Test data
 
@@ -492,6 +497,16 @@ APK calls, so test-APK benchmarks use the unminified build.
   `-e imagePlacementAffineSmoke true -e affineSmokeDrags 4` and
   `-e affineSmokeWatercolor true`; it records process maps after each drag,
   idle, and Apply without reopening between gestures.
+  `-e imagePlacementCanvasWidth 9504 -e imagePlacementCanvasHeight 6336`
+  opens `-e imagePlacementPhotos photo.jpg` from this test app's private files
+  directory as the initial document and verifies its extent, then imports another
+  occurrence. Each smoke drag selects a live image contact clear of the action
+  bar and records its bounds in `validation/pixel-bake/input-probes/`. `-e affineSmokeIdleMs 120000`
+  waits after Apply, records memory before and after idle, then verifies a resumed
+  drag and Apply. Each stage also records PSS, RSS, system memory and GPU
+  allocations in `validation/pixel-bake/maps/*-memory.json`; motion records are
+  in `validation/pixel-bake/motion-affine.json`. This measures large accepted
+  resources and their retention; renderer submission chunks still bound commands.
   `-e memory true` records tracked renderer allocation; `-e rendererProfile true`
   records CPU submission and GPU observations. These rates exclude presented
   input latency. Each scenario records the initial camera and its input window in
@@ -627,10 +642,28 @@ Perfetto and simpleperf captures. The default preset list is the dry brushes;
 the default workspace keeps Stats closed. `--stats` opens Stats and enables GPU
 timing; use `--trace --stats` for GPU phase diagnostics. Report these runs
 separately because Stats changes the workspace and adds measurement work.
+`Capy GPU native capture ns` measures GPU validation, native encoding and
+canonical promotion after paint and before prediction. It excludes CPU
+preparation and backing-worker readback. A scope that cannot fit the current
+command encoder or obtain a timer slot records its renderer frame ID in
+`Capy GPU native capture omitted`; treat those frames as missing phase data.
 `--presets` accepts every built-in preset, including wet, smudge, Liquify, and
 Clone Stamp, Healing Brush and Spot Healing Brush, which read the photo as a
 reference layer.
 `--workload clipped` clips the empty paint layer to the photo.
+`--live-filter threshold --live-filter-values '{"colors":{"kind":"choice","value":1},"transparency":{"kind":"choice","value":1},"alpha_threshold":{"kind":"number","value":50}}'`
+attaches the selected effect to the changing paint layer. The values object uses
+the existing typed effect values. `--live-filter-disabled` retains the same
+graph with that effect hidden for the matched baseline. Setup checks the owner,
+attachment, enabled state and requested values before motion. These options
+require the ordinary workload and a brush gesture. Completion observations cover
+the submitted canvas work, including synchronous filter evaluation; separately
+attribute derived revisions before using them for asynchronous filters.
+The report samples latest-input age every millisecond during active contact and
+records input-to-GPU-completion latency. These are completion proxies, not scanout
+measurements. Use at least 20 separate contacts for response and settling
+percentiles, for example `--duration 1000 --repeats 20`; report these separately
+from sustained five-second strokes.
 `--workload blurred-base --effect-radius 8` also attaches Gaussian Blur to the
 photo, then paints its clipped layer. The radius argument is the Gaussian sigma
 in document pixels; sigma 8 has 24 px sampling support along each axis in the

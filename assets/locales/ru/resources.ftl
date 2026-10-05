@@ -533,3 +533,11 @@ resources-layer-color-mode = Цветовой режим
 resources-layer-color-full = Полный цвет
 resources-layer-color-gray = Оттенки серого
 resources-layer-color-two-tone = Два тона (чёрный и белый)
+
+resources-filter-brightness-to-opacity = Яркость в непрозрачность
+resources-illustration-colors = Цвета
+resources-illustration-black = Чёрный
+resources-illustration-white = Белый
+resources-illustration-transparency = Прозрачность
+resources-illustration-keep = Сохранить
+resources-illustration-alpha-threshold = Порог альфа

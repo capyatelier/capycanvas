@@ -85,6 +85,13 @@ impl Validator {
         }
         Ok(())
     }
+    pub fn pass_count(&self, formats: impl Iterator<Item = wgpu::TextureFormat>) -> usize {
+        let mut counts = [0usize; 2];
+        for format in formats {
+            counts[usize::from(format == wgpu::TextureFormat::R32Float)] += 1;
+        }
+        counts.into_iter().map(|count| count.div_ceil(self.tiles_per_dispatch)).sum()
+    }
     pub fn encode(
         &self,
         r: &WgpuRasterizer,

@@ -352,9 +352,7 @@
     "radius":{"dimension":"scalar","kind":{"kind":"number","max":150.0,"min":1.0},"opaque":false},
     "turn":{"dimension":"angle","kind":{"kind":"number","max":720.0,"min":-720.0},"opaque":false}
   }},
-  "threshold": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
-    "threshold":{"dimension":"scalar","kind":{"kind":"number","max":65504.0,"min":-65504.0},"opaque":false}
-  }},
+  "threshold": {"version":2,"kind":"adjustment","alpha":"filter","space":"blending","time":false,"constraints":[],"parameters":{"threshold":{"dimension":"scalar","kind":{"kind":"number","max":65504.0,"min":-65504.0},"opaque":false},"colors":{"dimension":"scalar","kind":{"kind":"choice","options":["black","black_white","white"]},"opaque":false},"transparency":{"dimension":"scalar","kind":{"kind":"choice","options":["keep","threshold"]},"opaque":false},"alpha_threshold":{"dimension":"scalar","kind":{"kind":"number","min":0.0,"max":100.0},"opaque":false}}},
   "unsharp_mask": {"version":1,"kind":"adjustment","alpha":"preserve","space":"blending","time":false,"constraints":[],"parameters": {
     "amount":{"dimension":"scalar","kind":{"kind":"number","max":300.0,"min":0.0},"opaque":false},
     "sigma":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
@@ -384,5 +382,6 @@
     "preserve_luminance":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
     "temperature":{"dimension":"scalar","kind":{"kind":"number","max":1000.0,"min":-1000.0},"opaque":false},
     "tint":{"dimension":"scalar","kind":{"kind":"number","max":800.0,"min":-800.0},"opaque":false}
-  }}
+  }},
+  "brightness_to_opacity": {"version":1,"kind":"adjustment","alpha":"filter","space":"blending","time":false,"constraints":[],"parameters":{}}
 }

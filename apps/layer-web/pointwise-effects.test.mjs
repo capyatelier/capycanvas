@@ -8,7 +8,7 @@ const selectedEffect=manifest=>packageObject(manifest,packageOccurrences(manifes
 const effectKeys=manifest=>Object.keys(effectValues(manifest));
 const effectValues=manifest=>selectedEffect(manifest).data.values??{};
 
-export async function checkPointwiseEffects({call,evaluate,settle,motion=true,widths=[640,1100],effects=['invert','threshold','desaturate','photo_filter'],colorPages=false,localAdjustments=false}) {
+export async function checkPointwiseEffects({call,evaluate,settle,motion=true,widths=[640,1100],effects=['invert','threshold','desaturate','brightness_to_opacity','photo_filter'],colorPages=false,localAdjustments=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/photo-editing-color/p21-web';
   await mkdir(directory,{recursive:true});
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function poll(){if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-900)));else setTimeout(poll,40)}poll()})`);
@@ -31,9 +31,10 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
     assert.ok(Math.abs((await value(key)).value-Number(text))<1e-6);
   };
   const keyPress=()=>key('Enter',13);
-  const capture=async name=>{await evaluate('layerApp.app.wait_for_canvas()');await settle();const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,'base64'));};
+  const canvasReady=async()=>{await wait('layerApp.app.brush_ready()');await settle();await evaluate('layerApp.app.wait_for_canvas()');await settle();};
+  const capture=async name=>{await canvasReady();const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,'base64'));};
   const canvasPixel=async([docX,docY]=[64,192])=>{
-    await evaluate('layerApp.app.wait_for_canvas()');await settle();
+    await canvasReady();
     const point=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${docX}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${docY}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
     const shot=await call('Page.captureScreenshot',{format:'png',clip:{...point,width:1,height:1,scale:1}});
     const pixel=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return Array.from(context.getImageData(0,0,1,1).data)})()`);
@@ -228,7 +229,15 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
         await send({type:'layer',action:{op:'delete_selected'}});
         for(const effect of effects) {
           await send({type:'effect',action:{op:'insert',effect}});
-          if(effect==='threshold') {const before=await value('threshold');await edit('threshold','0.378');await invoke('undo');assert.deepEqual(await value('threshold'),before);await invoke('redo');const pixel=await canvasPixel();assert.ok(pixel.every(v=>v>=250),'Threshold visibly classifies opaque artwork: '+pixel);}
+          if(effect==='threshold') {
+            const before=await value('threshold');await edit('threshold','0.378');await invoke('undo');assert.deepEqual(await value('threshold'),before);await invoke('redo');
+            const pixel=await canvasPixel();assert.ok(pixel.every(v=>v>=250),'Threshold visibly classifies opaque artwork: '+pixel);
+            const choice=async(name,index)=>{await click(`${selector(name)} select`);await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);await key('Enter',13);await idle();assert.equal((await value(name)).value,index);};
+            await choice('colors',1);await choice('transparency',1);await edit('alpha_threshold','37');
+            await choice('transparency',0);assert.equal(await value('alpha_threshold'),undefined);
+            await invoke('undo');assert.equal((await value('alpha_threshold')).value,37);
+            await choice('colors',2);
+          }
           else if(effect==='photo_filter') {
             await edit('density','37');await click(`${selector('preserve_luminance')} input[type=checkbox]`);
             await click(`${selector('color')} .property-color`);await wait(`!!document.querySelector('.color-dialog[open]')`);

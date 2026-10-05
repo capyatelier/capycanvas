@@ -331,7 +331,8 @@ impl Scene {
             for &tile in chunk {
                 let entry = &self.scale_sources.entries[&id];
                 let mut scratch = None;
-                let (source, base, reduced_preview, over, empty) = if placement.is_some() || (entry.watercolor.is_some() && !entry.raw_material) {
+                let (source, base, reduced_preview, over, empty) = if placement.is_some() || (entry.watercolor.is_some() && !entry.raw_material)
+                    || (r.preview_contribution && r.preview_layer_id==Some(id)) {
                     let (tile, pigment) = match &placement {
                         Some(placement) => self.placed_material_inputs(r, packet, handle, placement.clone(), tile)?,
                         None => (self.local_color_tile(r, packet, handle, tile)?, r.empty_view.clone()),

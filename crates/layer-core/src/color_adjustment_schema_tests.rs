@@ -1,5 +1,6 @@
 use crate::{bundled_effect_catalog,EffectInstance,EffectValue,EffectParameterKind};
 use crate::color::{RgbSpace};
+use std::sync::Arc;
 
 fn color_effect(id:&str)->EffectInstance {EffectInstance::new(bundled_effect_catalog().get(id).unwrap().program())}
 
@@ -38,6 +39,38 @@ fn threshold_data_bounds_are_independent_of_slider_bounds() {
     assert_eq!(color_bounds(&threshold,"threshold"),(-65504.,65504.));
     assert_eq!(threshold.program.parameters[0].soft_bounds,Some([0.,1.]));
     for value in [-65504.,-0.01,8.,65504.] {threshold.set("threshold",EffectValue::Number(value)).unwrap();}
+}
+
+#[test]
+fn illustration_conversion_choices_have_stable_codes_and_alpha_bounds() {
+    let brightness=color_effect("brightness_to_opacity");
+    assert!(brightness.program.parameters.is_empty());
+    assert_eq!(brightness.program.alpha,crate::EffectAlpha::Filter);
+    assert_eq!(brightness.program.space,crate::EffectSpace::Blending);
+    assert!(!brightness.program.image_boundary());
+    assert!(!brightness.program.fusion_boundary());
+    let mut threshold=color_effect("threshold");
+    assert_eq!(threshold.program.alpha,crate::EffectAlpha::Filter);
+    assert_eq!(threshold.program.space,crate::EffectSpace::Blending);
+    assert!(!threshold.program.image_boundary());
+    assert!(!threshold.program.fusion_boundary());
+    for (key,ids) in [("colors",&["black_white","black","white"][..]),("transparency",&["keep","threshold"][..])] {
+        for (index,id) in ids.iter().enumerate() {
+            threshold.set(key,EffectValue::Choice(index as u32)).unwrap();
+            assert_eq!(threshold.choice(key),Some(*id));
+            let slot=threshold.program.parameters.iter().position(|p|p.key.as_ref()==key).unwrap()+1;
+            assert_eq!(threshold.gpu_parameters(RgbSpace::Srgb).unwrap()[slot][0],index as f32);
+            let mut program=(*threshold.program).clone();let parameter=&mut Arc::make_mut(&mut program.parameters)[slot-1];
+            let EffectParameterKind::Choice {options}=&mut parameter.kind else {panic!()};
+            Arc::make_mut(options).reverse();
+            let mut reordered=EffectInstance::new(Arc::new(program));
+            reordered.set(key,EffectValue::Choice((ids.len()-1-index) as u32)).unwrap();
+            assert_eq!(reordered.gpu_parameters(RgbSpace::Srgb).unwrap()[slot][0],index as f32);
+        }
+    }
+    assert_eq!(color_bounds(&threshold,"alpha_threshold"),(0.,100.));
+    for value in [0.,100.] {threshold.set("alpha_threshold",EffectValue::Number(value)).unwrap();}
+    for value in [-0.01,100.01,f32::NAN] {let before=threshold.clone();assert!(threshold.set("alpha_threshold",EffectValue::Number(value)).is_err());assert_eq!(threshold,before);}
 }
 
 fn color_bounds(effect:&EffectInstance,key:&str)->(f64,f64) {

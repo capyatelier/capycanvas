@@ -24,7 +24,26 @@ edge. Neutral controls preserve the original premultiplied pixel exactly.
 Colorize replaces Hue and Saturation with its own stored values and keeps Master
 Lightness. It hides the inactive range pages while retaining their settings.
 Invert and Desaturate need no numeric controls. Threshold compares document
-luminance in encoded coordinates with one threshold. Photo Filter mixes toward a
+luminance in the document's blending coordinates; equality belongs to White. Colors selects
+Black & White, Black or White; a single-color result makes the other class
+transparent. Transparency selects Keep or Threshold. Alpha threshold is shown
+only for Threshold, accepts 0–100 percent, and keeps equality. Zero source
+coverage always stays empty. Hidden values are retained. Threshold's numeric
+boundary accepts −65504…65504 with a 0–1 slider and a default of 0.5.
+
+Brightness to Opacity has no parameters. It converts document blending luminance
+to black ink with coverage `source_alpha * (1 - clamp(luminance, 0, 1))`. White
+becomes transparent, black retains its source coverage, and gray keeps soft
+edges. Both conversions evaluate at native resolution and allow their output
+alpha to change; effect masks, opacity and blend are applied afterward.
+Their saved built-in IDs and versions are `brightness_to_opacity` 1 and
+`threshold` 2. Threshold stores `threshold`, `colors` (`black_white`, `black`,
+`white`), `transparency` (`keep`, `threshold`) and `alpha_threshold`, including
+inactive and default values. Threshold 2 replaces its pre-release parameter
+interface without an old-format reader. No layer-opacity screening or duplicate
+grayscale controls are saved.
+
+Photo Filter mixes toward a
 tagged color with Density and optional Preserve luminosity; color alpha reduces
 its strength. Invert, Desaturate and Photo Filter use display-resolution previews
 after passing the reduced-graph quality checks. Threshold stays at native
@@ -309,7 +328,23 @@ supports remain separate, so later passes blend opacity and read `fx_original()`
 against the original input boundary. Encoded jobs retain immutable parameter
 and coordinate buffers; unchanged prepared lookup ranges copy between buffers
 without recomputing their tables. Native views and programs
-declaring native resolution retain exact evaluation.
+declaring native resolution retain exact evaluation. Surrounding composition
+can still use the reduced grid and its existing exact idle refinement.
+
+Static pointwise alpha conversions use the same tile execution and fusion as
+color adjustments. Changing coverage alone does not require a full-image stage.
+Image stages are reserved for declared image passes and time-dependent programs.
+Native adjustment programs that change alpha, have no image passes or time use,
+and need no auxiliary input evaluate their complete input scope at native
+resolution. Fusible programs combine pixel evaluation and area reduction in
+fragment draws sharing an output pass; other programs use bounded native strips.
+Their output is reduced before surrounding composition. Reducing the
+source before a binary conversion would change its classes and edges. Painting
+invalidates only the affected pages. This path needs no dedicated full-frame
+image stage; admitted branch outputs can retain the complete requested window.
+Sources consumed only by that native scope do not also prepare unused reduced
+images. Analytic paint predictions can use reduced contributions over the native
+source. Existing source detail remains at native resolution before conversion.
 
 The current filter ABI is **5**. Curves and gradients each occupy 65 vec4
 parameter records: one header plus up to 32 pairs. Curves store Hermite segments
@@ -431,9 +466,9 @@ output returns, both premultiplied:
 - `blending`: the document's [Blending](../internals/rendering.md#blend-space).
   In a Perceptual document the filter reads and writes the document's encoded
   values, as Photoshop filters do; in a Linear light document, linear values.
-  Only programs with `passes` declare it. A pointwise program sees one pixel,
-  so it converts that pixel itself with `fx_rgb` and `fx_rgba`, and validation
-  rejects the declaration.
+  Pointwise programs can declare it too. Compatible built-in chains share the
+  same space; a change of space ends the chain. `fx_rgb` and `fx_rgba` convert
+  only when the filter's input is linear.
 
 The window is captured once per pixel in the declared space, never converted
 per tap, and a linear filter's output is converted once where it composites.
@@ -458,7 +493,7 @@ read the input immediately before the selected filter.
 
 | Space | Built-in filters |
 | --- | --- |
-| `blending` (retouching) | Gaussian Blur, Unsharp Mask, High Pass, Soft Focus, Edge-Preserving Smooth |
+| `blending` (retouching) | Gaussian Blur, Unsharp Mask, High Pass, Soft Focus, Edge-Preserving Smooth, Threshold, Brightness to Opacity |
 | `linear`, declared (light) | Vignette (in stops), Bloom, Motion Blur |
 | `linear`, undeclared | Every other filter; the pointwise tone and color adjustments convert each pixel to the values they edit |
 
@@ -551,15 +586,15 @@ lengths. Built-in periods used as divisors use a numerical floor of 1/256 unit;
 all other pixel lengths pass to shaders unchanged. The [package math contract](capy-package.md#evaluation-meaning)
 owns their lasting meaning.
 
-Every pass of an effect chain at one resolution shares a persistent
+Every pass of an effect chain at one resolution shares an immutable
 parameter/table buffer. Resolution variants retain separate buffers and reuse
 the same pipelines, so exact queries cannot overwrite a display kernel.
-Edits upload parameter prefixes, never GPU-owned tables. Preparation runs in the
-existing scene encoder before consumers, with no extra submit, readback, blocking
-wait or intermediate table copy. Pointwise prepared filters still fuse. Ordinary
-warm cache lookup reuses its CPU key storage and updates cached time scalars in
-place rather than constructing three temporary vectors per frame. Parameter
-repacking uses small CPU temporaries; it does not allocate fresh GPU lookup storage.
+Unchanged prepared inputs reuse the buffer and CPU lookup key. Parameter,
+coordinate or effective-phase changes create a replacement buffer, copying
+unchanged prepared lookup ranges without recomputing them. Preparation runs
+in the existing scene encoder before consumers, with no extra submit,
+readback or blocking wait. Pointwise prepared filters still fuse. Parameter
+repacking uses small CPU temporaries.
 
 | Change | Preparation | Image work |
 | --- | --- | --- |

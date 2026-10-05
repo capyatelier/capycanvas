@@ -649,3 +649,11 @@ resources-layer-color-mode = 颜色模式
 resources-layer-color-full = 全彩
 resources-layer-color-gray = 灰度
 resources-layer-color-two-tone = 双色（黑白）
+
+resources-filter-brightness-to-opacity = 亮度转不透明度
+resources-illustration-colors = 颜色
+resources-illustration-black = 黑色
+resources-illustration-white = 白色
+resources-illustration-transparency = 透明度
+resources-illustration-keep = 保留
+resources-illustration-alpha-threshold = 透明度阈值

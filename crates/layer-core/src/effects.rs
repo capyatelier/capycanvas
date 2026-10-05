@@ -88,8 +88,7 @@ pub enum EffectSpace {
     #[default]
     Linear,
     /// Encoded values in Perceptual documents, linear ones in Linear light
-    /// documents. Only filters with passes declare it; pointwise filters
-    /// convert per pixel themselves.
+    /// documents. Pointwise fusion keeps programs with matching spaces together.
     Blending,
 }
 impl EffectSpace {
@@ -228,9 +227,7 @@ impl EffectProgram {
         match self.auxiliary { Some(EffectAuxiliary::Analysis {analysis}) => Some(analysis), _ => None }
     }
     pub fn image_boundary(&self) -> bool {
-        !self.passes.is_empty()
-            || self.time
-            || (self.kind == EffectKind::Adjustment && self.alpha == EffectAlpha::Filter)
+        !self.passes.is_empty() || self.time
     }
     pub fn literal_labels(&self) -> bool {
         let literal = |label: &ResourceLabel| matches!(label, ResourceLabel::Literal(_));
@@ -524,9 +521,6 @@ impl<'a> EffectView<'a> {
                 return Err("Invalid parameter-derived sampling footprint");
             }
         }
-        if self.program.space == EffectSpace::Blending && self.program.passes.is_empty() {
-            return Err("Only filters with passes follow the document's Blending");
-        }
         if self.program.lookups.len() > 8 {
             return Err("Too many effect lookup tables");
         }
@@ -627,6 +621,10 @@ impl<'a> EffectView<'a> {
                             ("curves", "domain", Some("log_hdr")) | ("selective_color", "mode", Some("absolute"))
                                 | ("gradient_fill", "style", Some("radial")) => 1,
                             ("gradient_fill", "style", Some("reflected")) => 2,
+                            ("threshold", "colors", Some("black_white")) | ("threshold", "transparency", Some("keep")) => 0,
+                            ("threshold", "colors", Some("black")) | ("threshold", "transparency", Some("threshold")) => 1,
+                            ("threshold", "colors", Some("white")) => 2,
+                            ("threshold", "colors"|"transparency", _) => return Err("Unknown built-in choice".into()),
                             ("curves", "domain", _) | ("selective_color", "mode", _) | ("gradient_fill", "style", _) => return Err("Unknown built-in choice".into()),
                             _ => *v,
                         }

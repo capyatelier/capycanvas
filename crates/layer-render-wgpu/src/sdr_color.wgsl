@@ -5,11 +5,13 @@ fn sdr_decode_component(value: f32, space: u32) -> f32 {
     let magnitude = abs(value);
     var decoded: f32;
     if space < 2u {
-        decoded = select(pow((magnitude + 0.055) / 1.055, 2.4), magnitude / 12.92, magnitude <= 0.04045);
+        if magnitude<=0.04045 {return value/12.92;}
+        decoded = pow((magnitude + 0.055) / 1.055, 2.4);
     } else if space == 2u {
         decoded = pow(magnitude, 563.0 / 256.0);
     } else {
-        decoded = select(pow(magnitude, 1.8), magnitude / 16.0, magnitude <= 1.0 / 32.0);
+        if magnitude<=1.0/32.0 {return value/16.0;}
+        decoded = pow(magnitude, 1.8);
     }
     return sign(value) * decoded;
 }
@@ -18,11 +20,13 @@ fn sdr_encode_component(value: f32, space: u32) -> f32 {
     if magnitude==1. {return value;}
     var encoded: f32;
     if space < 2u {
-        encoded = select(1.055 * pow(magnitude, 1.0 / 2.4) - 0.055, magnitude * 12.92, magnitude <= 0.0031308);
+        if magnitude<=0.0031308 {return value*12.92;}
+        encoded = 1.055 * pow(magnitude, 1.0 / 2.4) - 0.055;
     } else if space == 2u {
         encoded = pow(magnitude, 256.0 / 563.0);
     } else {
-        encoded = select(pow(magnitude, 1.0 / 1.8), magnitude * 16.0, magnitude <= 1.0 / 512.0);
+        if magnitude<=1.0/512.0 {return value*16.0;}
+        encoded = pow(magnitude, 1.0 / 1.8);
     }
     return sign(value) * encoded;
 }

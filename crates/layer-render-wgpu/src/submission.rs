@@ -95,6 +95,9 @@ impl CommandEncoder {
         self.total_passes += count as u64;
     }
     pub fn pass_count(&self) -> u64 { self.total_passes }
+    pub fn can_fit_passes(&self, count: usize) -> bool {
+        count <= Self::PASSES_PER_SUBMISSION - self.passes
+    }
     pub fn begin_render_pass<'a>(
         &'a mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,

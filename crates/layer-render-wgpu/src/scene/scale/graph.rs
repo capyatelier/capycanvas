@@ -109,6 +109,24 @@ impl Expression {
                 input.required(region.dependency(*radius, plan), plan), |r, n| r.union(n.required(region.clone(), plan))),
         }
     }
+    pub(super) fn source_domains(&self, scene: SceneView<'_>) -> [BTreeSet<SourceTarget>; 2] {
+        fn visit(node: &Expression, scene: SceneView<'_>, native: bool, domains: &mut [BTreeSet<SourceTarget>; 2]) {
+            match node {
+                Expression::Source { id, .. } => { domains[usize::from(native)].insert(*id); }
+                Expression::Opacity { input, .. } => visit(input, scene, native, domains),
+                Expression::Combine { front, back, .. } => { visit(front, scene, native, domains); visit(back, scene, native, domains); }
+                Expression::Effect { input, chain, masks, .. } => {
+                    let native = native || chain.iter().any(|(h, ..)| native_pointwise_alpha(&scene.effect(*h).unwrap().program));
+                    visit(input, scene, native, domains);
+                    for mask in masks.iter().flatten() { visit(mask, scene, native, domains); }
+                }
+                Expression::Color(_) | Expression::Objects {..} => {}
+            }
+        }
+        let mut domains = Default::default();
+        visit(self, scene, false, &mut domains);
+        domains
+    }
     fn visit(node: &Node, all: &mut HashSet<Node>) {
         if !all.insert(node.clone()) { return; }
         match node.as_ref() {
@@ -149,6 +167,7 @@ impl Expression {
 pub(super) struct Branch {
     image: Option<Image>,
     valid: BTreeSet<[u32; 2]>,
+    initialized:BTreeSet<[u32;2]>,
 }
 #[derive(Default)]
 pub(super) struct Graph {
@@ -188,8 +207,8 @@ impl Graph {
             .filter_map(|(_, branch)| branch.image.filter(|image| image.plan == plan)).collect();
         for node in wanted {
             let dirty = node.damage(sources, plan);
-            let branch = self.branches.entry(node).or_insert_with(|| Branch { image: reusable.pop(), valid: BTreeSet::new() });
-            if branch.image.as_ref().is_some_and(|image| image.plan != plan) { branch.image = None; branch.valid.clear(); }
+            let branch = self.branches.entry(node).or_insert_with(|| Branch { image: reusable.pop(), valid: BTreeSet::new(),initialized:BTreeSet::new() });
+            if branch.image.as_ref().is_some_and(|image| image.plan != plan) { branch.image = None; branch.valid.clear();branch.initialized.clear(); }
             branch.valid.retain(|c| !dirty.intersects(page_rect(*c)));
         }
         self.root = Some(root);
@@ -288,8 +307,7 @@ impl stack::Compositor for Builder<'_> {
         let radius = indices.iter().try_fold(0u32, |radius, i| radius.checked_add(
             crate::effects::damage_radius(self.packet.scene.effect(*i).unwrap(), self.level)?));
         let chain = indices.iter().map(|i| {
-            let effect = self.packet.scene.effect(*i).unwrap();
-            (*i, self.effects.map_or(0, |effects| effects[i].1), if effect.animated() { self.packet.time_seconds.to_bits() } else { 0 })
+            (*i, self.effects.map_or(0, |effects| effects[i].1), crate::effects::effective_phase(self.packet.scene,*i,self.packet.time_seconds).to_bits())
         }).collect();
         let masks = indices.iter().map(|i| {
             let layer = self.packet.scene.occurrence(*i).unwrap();
@@ -304,6 +322,16 @@ impl stack::Compositor for Builder<'_> {
     }
 }
 
+impl Cache {
+    pub(super) fn initialized_pages(&self,target:&Target)->Option<&BTreeSet<[u32;2]>> {
+        match target.slot {
+            Some(Slot::Root)=>Some(&self.valid),
+            None=>self.graph.branches.values().find_map(|b|b.image.as_ref()
+                .filter(|image|image.view==target.view && image.plan==target.plan).map(|_|&b.initialized)),
+            _=>None,
+        }
+    }
+}
 impl Evaluator<'_> {
     pub(super) fn evaluate_root(&mut self, node: &Node, direct: bool) -> Result<Value, GpuRasterError> {
         let deferred = if direct && self.cache.plan.level > 0 && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
@@ -330,34 +358,87 @@ impl Evaluator<'_> {
             let image = branch.image.get_or_insert_with(|| Image::new(self.r, self.input, "composition branch"));
             Some(Target { view: image.view.clone(), slot: None, plan: image.plan })
         } else { output };
-        let result = match node.as_ref() {
+        let evaluation=self.cache.graph.branches.get(node).filter(|branch| self.region == DocRect::from(region)
+            && branch.image.as_ref().unwrap().plan.doc_bounds == DocRect::from(branch.image.as_ref().unwrap().plan.bounds)
+            && matches!(node.as_ref(),Expression::Effect {chain,..}
+            if self.cache.plan.level>0 && chain.iter().any(|(h,..)|native_pointwise_alpha(&self.packet.scene.effect(*h).unwrap().program))))
+            .map_or(self.region,|branch|page_coordinates(region).filter(|c|!branch.initialized.contains(c))
+                .fold(region,|bounds,c|bounds.union(page_rect(c).intersect(branch.image.as_ref().unwrap().plan.bounds))).into());
+        let result = self.with_region(evaluation,|compositor|Ok(match node.as_ref() {
             Expression::Color(c) => Value::Color(c.map(f32::from_bits)),
-            Expression::Objects {content,preview} => self.objects(content,*preview,output)?,
-            Expression::Source { id, placement, extent, outside } => self.source(*id, placement.0.clone(), *extent, f32::from_bits(*outside))?,
-            Expression::Opacity { input, opacity } => self.evaluate(input)?.with_opacity(f32::from_bits(*opacity)),
+            Expression::Objects {content,preview} => compositor.objects(content,*preview,output)?,
+            Expression::Source { id, placement, extent, outside } => compositor.source(*id, placement.0.clone(), *extent, f32::from_bits(*outside))?,
+            Expression::Opacity { input, opacity } => compositor.evaluate(input)?.with_opacity(f32::from_bits(*opacity)),
             Expression::Combine { front, back, blend, flags } => {
                 let (front, back) = if front.cost().1 >= back.cost().1 {
-                    let front = self.evaluate(front)?;
-                    (front, self.evaluate(back)?)
+                    let front = compositor.evaluate(front)?;
+                    (front, compositor.evaluate(back)?)
                 } else {
-                    let back = self.evaluate(back)?;
-                    (self.evaluate(front)?, back)
+                    let back = compositor.evaluate(back)?;
+                    (compositor.evaluate(front)?, back)
                 };
-                self.draw(front, back, layer_core::LayerBlend::ALL[*blend as usize], *flags, output)?
+                compositor.draw(front, back, layer_core::LayerBlend::ALL[*blend as usize], *flags, output)?
             }
-            Expression::Effect { input, chain, masks, .. } => self.effect(input, chain, masks, output)?,
-        };
+            Expression::Effect { input, chain, masks, .. } => compositor.effect(input, chain, masks, output)?,
+        }))?;
         if let Some(branch) = self.cache.graph.branches.get_mut(node) {
             let bounds = branch.image.as_ref().unwrap().plan.doc_bounds.in_frame(self.cache.plan.extent);
-            branch.valid.extend(page_coordinates(region).filter(|c| page_rect(*c).intersect(bounds).intersect(region) == page_rect(*c).intersect(bounds)));
+            let complete:Vec<_>=page_coordinates(evaluation.in_frame(self.cache.plan.extent)).filter(|c|page_rect(*c).intersect(bounds).intersect(evaluation.in_frame(self.cache.plan.extent))==page_rect(*c).intersect(bounds)).collect();
+            branch.valid.extend(complete.iter().copied());branch.initialized.extend(complete);
         }
         Ok(result)
     }
 }
 
+impl Cache {
+    pub(super) fn prepare_native_branches(
+        &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, regions: &[PixelRect],
+        input: display_mips::Plan, encoding: &mut Encoding<'_>,
+    ) -> Result<(), GpuRasterError> {
+        if self.plan.level != 0 || input.doc_bounds != DocRect::from(input.bounds) { return Ok(()); }
+        let mut pending = vec![self.graph.root.clone().unwrap()]; let mut wanted = BTreeSet::new();
+        while let Some(node) = pending.pop() {
+            match node.as_ref() {
+                graph::Expression::Opacity { input, .. } => pending.push(input.clone()),
+                graph::Expression::Combine { front, back, .. } => pending.extend([front.clone(), back.clone()]),
+                graph::Expression::Effect { chain, .. } if self.graph.branches.contains_key(&node)
+                    && super::effects::native_alpha_capture(packet.scene, &chain.iter().map(|(h, ..)| *h).collect::<Vec<_>>(), 0) => { wanted.insert(node); }
+                _ => {}
+            }
+        }
+        if wanted.is_empty() { return Ok(()); }
+        let Encoding { encoder, commands } = encoding;
+        commands.flush(r, encoder)?; if !scene.jobs.is_empty() { scene.encode_jobs(r, encoder)?; }
+        for node in wanted {
+            let graph::Expression::Effect { chain, .. } = node.as_ref() else { unreachable!() };
+            let branch = self.graph.branches.get_mut(&node).unwrap();
+            let image = branch.image.get_or_insert_with(|| Image::new(r, input, "composition branch"));
+            let target = Target { view: image.view.clone(), slot: None, plan: image.plan };
+            let mut pages: Vec<_> = regions.iter().flat_map(|region| page_coordinates(region.intersect(target.plan.bounds)))
+                .filter(|page| !branch.valid.contains(page)).collect::<BTreeSet<_>>().into_iter().collect();
+            pages.sort_by_key(|[x, y]| (*y, *x));
+            let mut first = 0;
+            while first < pages.len() {
+                let mut end = first + 1;
+                while end < pages.len() && end - first < SOURCE_SLOTS
+                    && pages[end][1] == pages[first][1] && pages[end][0] == pages[end - 1][0] + 1 { end += 1; }
+                let regions: Vec<DocRect> = pages[first..end].iter().map(|page| page_rect(*page).intersect(target.plan.bounds).into()).collect();
+                super::effects::capture_native_effect(scene, r, packet, chain.last().unwrap().0, &target, &regions, None, encoder)?;
+                branch.valid.extend(pages[first..end].iter().copied()); branch.initialized.extend(pages[first..end].iter().copied());
+                first = end;
+            }
+        }
+        Ok(())
+    }
+}
+
+
 #[cfg(test)]
 mod reuse_tests {
     use super::*;
+    use super::super::tests::{paint_mut, paint_occurrence, insert_occurrence, effect_occurrence};
+    use layer_core::{color::source::rgba8_source, authored::Attachment};
+    use crate::test_support::{packet, float_pixels as pixels};
     use super::super::tests::{document_at, add_fill, coverage_mask, set_effect_value, display_pixels};
     use layer_core::{EffectValue, Point, Selection};
     use layer_core::color::RgbColor;
@@ -406,6 +487,58 @@ mod reuse_tests {
             previous_textures = textures;
         }
     }
+#[test]
+fn native_level_retained_branches_batch_live_graph_pages_and_keep_islands_separate() {
+    for count in [6, 16, 19] { for name in ["threshold", "brightness_to_opacity"] {
+        let extent = [count * PAGE_SIZE - 13, 117];
+        let mut doc = document_at(extent);
+        paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y| [(x * 17) as u8, (y * 23) as u8, 129, 173]))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+        let filter = effect_occurrence(&mut doc, layer_core::EffectInstance::new(crate::tests::fixture(name).program()), name); doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
+        insert_occurrence(&mut doc, filter, 0);
+        let photo = paint_occurrence(&mut doc, "photo", Some(rgba8_source(extent, |x, y| [(x * 29) as u8, (y * 31) as u8, 173, 255])));
+        insert_occurrence(&mut doc, photo, 2);
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let frame = packet(doc.scene(), extent); r.submit(frame).unwrap(); r.wait_idle().unwrap();
+        let reference = display_pixels(&r);
+        let mut scene = r.scene.take().unwrap(); let mut cache = r.scale_display.take().unwrap();
+        r.document_damage.clear(); r.transform_damage.clear();
+        assert_eq!(cache.plan.level, 0); assert_eq!(cache.plan.bounds, PixelRect::full(extent));
+        assert!(cache.graph.branches.keys().any(|node| matches!(node.as_ref(), graph::Expression::Effect { .. })));
+        for sparse in [false, true] {
+            for source in scene.scale_sources.entries.values_mut() { source.damage = Damage::EMPTY; }
+            cache.valid.clear();
+            for branch in cache.graph.branches.values_mut() { branch.valid.clear(); }
+            let regions = if sparse { vec![PixelRect::new(11, 17, 29, 37), PixelRect::new(extent[0] - 19, 71, extent[0] - 3, 91)] }
+                else { vec![PixelRect::full(extent)] };
+            if sparse {
+                cache.valid.extend((1..count - 1).map(|x| [x, 0]));
+                for branch in cache.graph.branches.values_mut() { branch.valid.extend((1..count - 1).map(|x| [x, 0])); }
+                let target = doc.scene().source_target(doc.scene().order()[1]).unwrap();
+                scene.scale_sources.entries.get_mut(&target).unwrap().damage = Damage::from_regions(regions);
+            }
+            let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default()); let mut commands = Commands::new(&r);
+            let work = r.metrics.composited_pixels;
+            cache.render_graph(&mut scene, &mut r, frame, PixelRect::EMPTY,
+                &mut Encoding { encoder: &mut encoder, commands: &mut commands }, Destination::View, Some(&BTreeSet::new())).unwrap();
+            commands.flush(&mut r, &mut encoder).unwrap();
+            let passes = encoder.pass_count(); let pages = if sparse { 2 } else { count };
+            let batches = if sparse { 2 } else { count.div_ceil(SOURCE_SLOTS as u32) };
+            assert!(passes <= u64::from(batches + pages.div_ceil(32) + 1),
+                "{name} count={count} sparse={sparse}: physical passes={passes} must batch branch pages, not materialize each page");
+            assert!(r.metrics.composited_pixels - work <= u64::from(pages * PAGE_SIZE * extent[1]));
+            r.uploads.finish(&encoder); encoder.submit(&r.queue);
+            let actual = pixels(&r, cache.texture());
+            for (i, (actual, expected)) in actual.iter().zip(&reference).enumerate() {
+                assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits), "{name} count={count} sparse={sparse} pixel={i}");
+            }
+            for (node, branch) in &cache.graph.branches {
+                if matches!(node.as_ref(), graph::Expression::Effect { .. }) { assert_eq!(branch.valid.len(), count as usize); }
+            }
+        }
+        r.scene = Some(scene); r.scale_display = Some(cache);
+    }}
+}
+
 }
 
 #[cfg(test)]

@@ -71,9 +71,11 @@ from valid finer regions; gaps in a partial finer image cannot overwrite valid
 coarse pixels.
 Native composition checks complete-hierarchy admission before rendering, including
 documents opened with native filters already active. Admitted updates gather at
-most 16 tiles per command batch. Final pointwise effects write directly into that
-existing destination, sharing render passes across compatible tiles. Window-only
-composition retains the single working tile and its existing admission.
+most 16 tiles per command batch. Compatible built-in pointwise effects share
+compute passes; fragment variants share render passes. They write into
+a working image bounded to sixteen page slots. Narrow documents use several
+page rows within that bound. Changed rectangles then copy into the
+retained native hierarchy or reduce into the display window.
 Small batches move independent source decodes before their pointwise consumers.
 An earlier source or mask read prevents moving a decode that would overwrite its
 slot; reused decode targets keep their original order.
@@ -122,7 +124,12 @@ priority. No cached expression owns original image bytes or raster history.
 Evaluation visits the child needing more scratch first, reuses completed
 branches, and writes changed pages into a stable root image. An edit in a
 balanced normal run needs logarithmically many composition operations when
-its unchanged branches fit the budget.
+its unchanged branches fit the budget. Normal root writes from retained, full-plan
+images with unit opacity and no conversion or preview share the existing compute
+composition pass across independent dirty regions before output mips. Scratch
+inputs, root aliases, shifted or cropped plans, opacity, other blend modes and
+sampling dependencies keep their immediate ordering. Deferred root writes hold
+at most 32 existing composition records and allocate no image storage.
 Placed sources and masks use the common transform
 resampler. Their most magnified axis determines source resolution; an additional
 level of detail and up to four samples per axis limit placement-edge error.
@@ -145,7 +152,13 @@ bounds. Dense filter scratch reserves the expression graph's peak live images,
 including held masks and intermediate passes. Reduced pointwise effects use the
 whole input window when its sources and graph scratch fit the same allowance.
 Larger stacks and native-resolution pointwise evaluation reuse 256-texel working
-tiles. Every value and output carries its own grid,
+tiles. A final pointwise effect can blend its result over a pixel backdrop in
+the same invocation when the existing second source is unused. Shader analysis
+checks original-image reads through all callees; masks, source coverage and
+prediction contributions retain their separate composite. Normal, unclipped
+layer blending preserves the effect's arithmetic and then applies owner opacity
+and source-over. This removes a filtered intermediate without changing job
+order or adding a texture binding. Every value and output carries its own grid,
 so a tile can compose directly into a viewport image without changing document
 coordinates. Aligned native sources borrow paint or decoded tiles directly.
 Decoded tiles carry leases until their consuming commands are encoded; eviction
@@ -158,9 +171,14 @@ uniform records and compute dispatches, flushing before source preparation,
 transforms, effects or reduction consume or replace their inputs. Admission
 reserves the root, its adjacent mip,
 bounded working tiles and placement gathers separately. Panning reuses valid
-overlap and renders only newly required or changed pages. Shared sparse contact
-plans restrict pointwise edits to touched pages, including retired prediction
-pages. Spatial and global programs retain their dependency propagation. A full-document
+overlap. New root pages initialize completely; warm root pages update contact
+rectangles aligned to complete reduction cells, including old and new prediction
+footprints. Separate contact islands preserve intervening pixels.
+History restores also propagate their transformed rectangles when the changed
+source no longer appears in the composition graph. Source mip
+levels and reusable branches retain conservative page invalidation, and native
+canonicalization still invalidates every rewritten page. Spatial and global
+programs retain their dependency propagation. A full-document
 overview serves pixels outside the window. Covered overview
 regions derive from completed detail; uncovered regions use reduced composition,
 avoiding duplicate exact-source work.
@@ -258,14 +276,16 @@ existing dry material evaluator, reading averaged exact destination color and
 stroke coverage. The combined layer placement and camera use a half-surface-pixel
 contact evaluation density along the most magnified axis, capped at four local
 pixels per prediction texel and by the source level its compositor consumes.
-At Fit this gives 64 × 64 prediction pages instead of 256 × 256 pages. No private
+Depending on the view, compact pages are 64 × 64 or 128 × 128 rather than
+256 × 256 pages. Contribution tails start from zero and bind only their committed
+stroke coverage; destination color is not prepared or bound. No private
 full-size coverage fork is needed. Reduction weights partial edge texels by their
 actual document area. Changing or cancelling a tail invalidates its old footprint;
 committing it still executes the authoritative full-resolution brush.
 
 Exact queries replay a compact tail through the existing exact tile executor
-using retained preview contacts. Replay preserves the existing full-size preview
-semantics, including its view-dependent block evaluation. This happens on demand,
+using retained preview contacts. Full-size prediction pages evaluate every native
+pixel; compact prediction pages retain their display sampling density. Replay happens on demand,
 once for that tail, replacing the compact scratch pages. The already-composed display stays valid;
 the next live tail returns to compact scratch. Save/undo history contains only
 committed native pixels. Idle display refinement composes those authoritative
@@ -276,18 +296,20 @@ before composition. After that frame publishes its backing, the source cache
 acknowledges the same pixels under their new backing identity. Capture-only work,
 restored rasters and external replacements retain normal source invalidation.
 
-Once the view and artwork stop changing, the renderer refines up to four native pages
+Once the view and artwork stop changing, the renderer refines up to sixteen native pages
 per idle submission through the same region executor used by exact queries.
 It reduces the exact composite into the retained display window and overview,
-then updates the adjacent presentation mip. When a native hierarchy is resident,
-composition writes directly into it, batching pages that share a prepared source
-window into one command sequence. Neighborhood filters prepare the batch's
+then updates the adjacent presentation mip. Composition renders into the bounded
+working image and copies each rectangle from its window-relative origin into a
+resident native hierarchy. Pages that fit the image share one command sequence;
+the next page waits for another submission when its combined bounds exceed the
+working image. Neighborhood filters retain a maximum of four pages and prepare the batch's
 combined halo once. Before adding a page, the batch counts output pixels and
 dependency-window pixels per image pass against four pages of pixel work, or
 1.5 times the first page's work when its halo already exceeds that limit.
 One page with its complete halo is the minimum batch. Spatial effects evaluate
 pages separated by a gap in different batches. Without spatial effects, explicit
-page regions retain the four-page batch. The image allowance can also reduce it.
+page regions fill the bounded working image. The image allowance can also reduce it.
 Only one refinement batch may remain in flight. Idle comparisons include fill
 visibility and opacity, so unchanged constant-fill contributions do not enqueue
 empty work behind that batch.
@@ -357,8 +379,27 @@ An unchanged view may retain one neighboring composed output within the same
 component budget. Returning to it reuses its pixels; artwork changes retire it.
 Transform input allocations are reserved in admission. Source levels have independent ownership and validity, so returning through a
 native view need not reread a previously reduced photo. Unretained finer content
-still requires authoritative pixels. Composition currently uses bounded damage
-rectangles rather than a separate pixel scheduler.
+still requires authoritative pixels. Composition uses bounded damage rectangles. Native pointwise alpha filters at
+100% use the native tile compositor and write directly into their retained branch, avoiding separate input and
+output materialization. Invalid required branch pages execute in contiguous row runs of at most sixteen before
+root composition. Preparation leaves gaps between islands untouched. Native tiles initialize complete intersected
+pages; fusion boundaries and branches without retained output keep their existing evaluator. Attached native pointwise effects can reuse initialized reduced output cells when the GPU observes no input changes.
+Admission checks each retained output page independently; a cold neighboring
+page receives full evaluation while initialized pages can still reuse cells.
+Tracked in-place dry painting and native color canonicalization mark changed
+cells; untracked dry kernels bind no writable flags. A retained compact prediction
+compares old and new RGBA32F bits while writing its complete page. Its surface
+records the source and coordinate of that write. Native-only submissions retain
+the last rendered prediction; visible removal retires prediction-only flags. Cold, rebound, removed and
+unsupported contributions force their affected cells. Unchanged idle refinement
+retains conservative flags until the next source-write frame; changes to the
+view, display admission or authored input prepare them again.
+Untracked writes force every retained cell for their source; composition damage
+still bounds the requested output. History restores, changed masks, metadata and
+geometry retain conservative invalidation. Cold retained effect pages initialize completely;
+temporary targets evaluate every requested cell. Flags share display admission
+and occupy at most 32 MiB. This cache
+preserves the native filter loop and authored pixel formats.
 
 Materialized projective transforms use the same render-pass layout as Warp,
 with one immutable source binding. Direct and materialized transforms share

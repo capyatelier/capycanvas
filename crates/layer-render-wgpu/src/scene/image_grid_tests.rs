@@ -164,6 +164,7 @@ fn effect_grids_preserve_document_coordinates_and_partial_edge_centers() {
                 target: result.view.clone(), sources: [front_image.view.clone(), original_image.view.clone(), r.empty_view.clone()],
                 data: effects::image_grid(output, front, original), prepared,
                 masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),
+                source_target: None, changed_cells: None,
             });
             scene.encode_jobs(&mut r, &mut encoder).unwrap();
             r.uploads.finish(&encoder);
@@ -281,7 +282,7 @@ fn authored_spatial_references_preserve_builtin_windows_and_orientation() {
                 }
                 scene.begin_frame();
                 scene.jobs.push(Job::Effect { target: output.view.clone(), sources: [previous.view.clone(), original.clone(), r.empty_view.clone()],
-                    data, prepared, masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())) });
+                    data, prepared, masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())), source_target:None, changed_cells:None });
                 let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
                 scene.encode_jobs(r, &mut encoder).unwrap();
                 r.uploads.finish(&encoder);
@@ -366,7 +367,7 @@ fn multipass_opacity_reads_original_finite_support_independently_of_intermediate
             scene.begin_frame();
             scene.jobs.push(Job::Effect { target: output.view.clone(), sources: [previous, input.view.clone(), r.empty_view.clone()],
                 data: effects::image_grid(input_plan, front, input_plan), prepared,
-                masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())) });
+                masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())), source_target:None, changed_cells:None });
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             scene.encode_jobs(r, &mut encoder).unwrap();
             r.uploads.finish(&encoder);
@@ -424,7 +425,7 @@ fn encoded_effect_jobs_retain_distinct_spatial_mappings_and_parameters_before_su
             let output = Image::new(r, plan, "immutable spatial result");
             let prepared = scene.effects.prepare(r, document.scene(), &[handle], effects::Execution::Preview, 0., 0, layer_core::BlendSpace::Linear).unwrap();
             scene.jobs.push(Job::Effect {target:output.view.clone(), sources:[input.view.clone(), input.view.clone(), r.empty_view.clone()],
-                data:effects::image_grid(plan, plan, plan), prepared, masks:Box::new(std::array::from_fn(|_| r.empty_view.clone()))});
+                data:effects::image_grid(plan, plan, plan), prepared, masks:Box::new(std::array::from_fn(|_| r.empty_view.clone())), source_target:None, changed_cells:None});
             output
         }).collect();
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());

@@ -475,7 +475,7 @@ impl FilterPreviews {
                 sources: [r.empty_view.clone(), r.empty_view.clone(), r.empty_view.clone()],
                 data,
                 over: false,
-                clip: None,
+                clip: None,source_target:None,
             });
             fallback.1.clone()
         };
@@ -521,7 +521,7 @@ impl FilterPreviews {
                 sources: [source.clone(), r.empty_view.clone(), r.empty_view.clone()],
                 data,
                 over: false,
-                clip: None,
+                clip: None,source_target:None,
             });
             encoded.1.clone()
         } else {
@@ -619,6 +619,7 @@ impl FilterPreviews {
                     row as u32*height+(i64::from(visible.min_y())-origin[1]) as u32,
                     (i64::from(visible.max_x())-origin[0]) as u32,
                     row as u32*height+(i64::from(visible.max_y())-origin[1]) as u32)),
+                source_target:None,
             });
         }
         self.scene.encode_jobs(r, &mut encoder)?;
@@ -739,7 +740,7 @@ impl Scene {
             let mut data = effects::image_grid(grid, if stage == 0 { source_grid } else { grid }, source_grid);
             data[4..8].copy_from_slice(&[texture.width() as f32, texture.height() as f32, 0., stage as f32]);
             self.jobs.push(Job::Effect { target: target.clone(), sources: [previous, source.clone(), r.empty_view.clone()],
-                data, prepared: prepared.clone(), masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())) });
+                data, prepared: prepared.clone(), masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),source_target:None,changed_cells:None });
             previous = target.clone();
         }
         previous

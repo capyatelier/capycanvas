@@ -531,6 +531,128 @@ fn set_pixel(r: &WgpuRasterizer, texture: &wgpu::Texture, values: &[f32]) {
     );
 }
 
+fn assert_native_bytes(actual:&[u8],expected:&[u8],context:&str) {
+    assert_eq!(actual.len(),expected.len(),"{context} byte length");
+    let differing=actual.iter().zip(expected).filter(|(a,b)|a!=b).count();
+    let first=actual.iter().zip(expected).position(|(a,b)|a!=b);
+    assert_eq!(differing,0,"{context} differing bytes={differing} first={first:?}");
+}
+
+#[test]
+fn prevalidated_publication_matches_independent_native_encoding_at_every_depth() {
+    use crate::native_tiles::{NativeTileEncoder,NativeEncoded};
+    use crate::test_support::{page_texture,upload_page};
+    use layer_core::color::LayerColorMode;
+    for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
+        for space in RgbSpace::ALL {
+            let color=DocumentColor {space,depth};
+            let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
+            let image=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+            let canonical=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+            let output=page_texture(&r,match depth {SampleDepth::U8=>wgpu::TextureFormat::Rgba8Uint,
+                SampleDepth::F32=>wgpu::TextureFormat::Rgba32Uint,_=>wgpu::TextureFormat::Rgba16Uint});
+            let pixels=(0..65536).map(|i| {
+                let alpha=[0.,1e-30,1e-8,1./65536.,0.37,0.5,1.][i%7];
+                if alpha==0. {[1e30,-1e20,3e10,0.]}
+                else {let rgb=if depth.is_float() {[-2.00001,3.012345,10000.125]} else {[-1.,0.1234567,3.]};
+                    [rgb[0]*alpha,rgb[1]*alpha,rgb[2]*alpha,alpha]}
+            }).flat_map(|pixel|pixel.into_iter().flat_map(f32::to_le_bytes)).collect::<Vec<_>>();
+            upload_page(&r,&image,&pixels);
+            let status=NativeEncodeStatus::new(&r.device);
+            let transfer=r.prepare_native_transfer(space).unwrap();
+            let independent=NativeTileEncoder::with_device(&r.device);
+            let batch=independent.prepare(&r.device,&[NativeTileRequest {working:&image,canonical:&canonical,
+                encoded:NativeEncoded::Texture(&output),mode:LayerColorMode::FullColor,space,transfer:&transfer,
+                depth,alpha:color.paint_descriptor().alpha,region:[0,0,256,256]}],&status,&mut Default::default()).unwrap();
+            let mut commands=r.device.create_command_encoder(&Default::default());
+            status.reset(&mut commands);
+            {let mut pass=commands.begin_compute_pass(&Default::default());independent.encode(&mut pass,&batch);}
+            r.queue.submit([commands.finish()]);
+            let expected=crate::layer_tests::page_bytes(&r,&output);
+            let expected_working=crate::layer_tests::page_bytes(&r,&canonical);
+            for in_place in [false,true] {
+                upload_page(&r,&image,&pixels);
+                let transfer=r.prepare_native_transfer(space).unwrap();
+                r.native_edit=Some(NativeEdit::with_mode(&r,transfer,in_place));
+                let tile=RasterTile::pending(color.paint_descriptor());
+                let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
+                let capture=r.encode_private_tiles(vec![(image.clone(),tile.clone(),LayerColorMode::FullColor)],&mut commands).unwrap();
+                commands.submit(&r.queue);
+                capture.finish().unwrap();
+                let context=format!("{depth:?} {space:?} in_place={in_place}");
+                assert_native_bytes(&tile.wait_backing().unwrap().decode().unwrap(),&expected,&context);
+                assert_native_bytes(&crate::layer_tests::page_bytes(&r,&image),&expected_working,&context);
+            }
+        }
+    }
+}
+
+#[test]
+fn prevalidated_late_invalid_color_or_scalar_rejects_siblings_without_canonical_adoption() {
+    use crate::test_support::page_texture;
+    use layer_core::color::LayerColorMode;
+    for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
+        for in_place in [false,true] {for scalar_failure in [false,true] {
+            let color=DocumentColor {space:RgbSpace::DisplayP3,depth};
+            let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
+            let transfer=r.prepare_native_transfer(color.space).unwrap();
+            r.native_edit=Some(NativeEdit::with_mode(&r,transfer,in_place));
+            let mut inputs=(0..17).map(|_|(page_texture(&r,wgpu::TextureFormat::Rgba32Float),
+                RasterTile::pending(color.paint_descriptor()),LayerColorMode::FullColor)).collect::<Vec<_>>();
+            set_pixel(&r,&inputs[0].0,&[0.01234567,0.2345678,0.7890123,1.]);
+            if scalar_failure {
+                let scalar=page_texture(&r,wgpu::TextureFormat::R32Float);
+                set_pixel(&r,&scalar,&[-0.25]);
+                inputs.push((scalar,RasterTile::pending(color.coverage_descriptor()),LayerColorMode::FullColor));
+            } else {set_pixel(&r,&inputs[16].0,if depth==SampleDepth::F32 {&[f32::MAX,0.,0.,0.125]} else {&[f32::NAN,0.,0.,1.]});}
+            let first=inputs[0].0.clone();
+            let bad=inputs.last().unwrap().0.clone();
+            let before=crate::layer_tests::page_bytes(&r,&first);
+            let bad_before=crate::layer_tests::page_bytes(&r,&bad);
+            let tickets=inputs.iter().map(|(_,tile,_)|tile.clone()).collect::<Vec<_>>();
+            let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
+            let capture=r.encode_private_tiles(inputs,&mut commands).unwrap();
+            commands.submit(&r.queue);
+            assert!(capture.finish().is_err(),"{depth:?} in_place={in_place} scalar_failure={scalar_failure}");
+            assert!(tickets.iter().all(|tile|tile.wait_backing().is_err()),"all siblings must fail");
+            assert_native_bytes(&crate::layer_tests::page_bytes(&r,&first),&before,"earlier working page");
+            assert_native_bytes(&crate::layer_tests::page_bytes(&r,&bad),&bad_before,"invalid working page");
+        }}
+    }
+}
+
+#[test]
+fn prevalidated_mixed_tracking_marks_only_actual_canonical_changes() {
+    use crate::test_support::page_texture;
+    use layer_core::color::LayerColorMode;
+    for in_place in [false,true] {
+        let color=DocumentColor {depth:SampleDepth::U16,..Default::default()};
+        let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
+        let transfer=r.prepare_native_transfer(color.space).unwrap();
+        r.native_edit=Some(NativeEdit::with_mode(&r,transfer,in_place));
+        let pages=(0..2).map(|_|page_texture(&r,wgpu::TextureFormat::Rgba32Float)).collect::<Vec<_>>();
+        for page in &pages {set_pixel(&r,page,&[0.01234567,0.2345678,0.7890123,1.]);}
+        let side=4u32;
+        let flags=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("native canonical changed cells"),
+            size:16+u64::from(256/side).pow(2)*4,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+        r.queue.write_buffer(&flags,0,&[side,1,0,0].map(u32::to_le_bytes).as_flattened());
+        for expected in [1u32,0u32] {
+            let inputs=pages.iter().map(|page|(page.clone(),RasterTile::pending(color.paint_descriptor()),LayerColorMode::FullColor)).collect();
+            let mut job=r.native_capture_job(NativeFrame {capture:None,publications:Vec::new(),canonical_pages:Vec::new()},inputs).unwrap();
+            job.changes=vec![None,Some(flags.clone())];
+            let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
+            commands.clear_buffer(&flags,16,None);
+            while r.step_native_rasters(&mut job,&mut commands).unwrap() {}
+            commands.submit(&r.queue);
+            job.frame.capture.take().unwrap().finish().unwrap();
+            let bytes=pollster::block_on(crate::local_tone::read_buffer_async(&r.device,&r.queue,&flags)).unwrap();
+            let values=bytes[16..].as_chunks::<4>().0;
+            assert_eq!(u32::from_le_bytes(values[0]),expected,"in_place={in_place} canonical flag");
+            assert!(values[1..].iter().all(|cell|*cell==[0;4]),"only the changed native cell is marked");
+        }
+    }
+}
+
 #[test]
 fn invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adoption() {
     for mask_failure in [false, true] {
@@ -597,6 +719,64 @@ fn invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adop
             backing(&paint(&checkpoint).raster),
             backing(&replacement.raster.as_ref().unwrap().targets[&target(&checkpoint)].revision)
         );
+    }
+}
+
+#[test]
+fn native_capture_pass_budget_keeps_mixed_plane_jobs_in_one_encoder() {
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
+    for in_place in [false, true] {
+        let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+        assert!(r.native_edit.as_ref().unwrap().promoter.is_none());
+        let mut layers = restored_fixture(&mut r);
+        let transfer = r.prepare_native_transfer(color.space).unwrap();
+        r.native_edit = Some(NativeEdit::with_mode(&r, transfer, in_place));
+        mark_changed(&mut r, &mut layers);
+        while !r.raster_ready() { std::thread::yield_now(); }
+        let mut job = r.prepare_native_rasters(layers.scene()).unwrap().unwrap();
+        assert!(job.inputs.len() > MAX_BATCH_TILES);
+        assert!(job.inputs.iter().any(|(t, _, _)| t.format() == wgpu::TextureFormat::Rgba32Float));
+        assert!(job.inputs.iter().any(|(t, _, _)| t.format() == wgpu::TextureFormat::R32Float));
+        let passes = job.pass_count(r.native_edit.as_ref().unwrap());
+        let markers = NativeJob::TIMING_PASSES;
+        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+        encoder.reserve_passes(512 - passes - markers);
+        assert!(encoder.can_fit_passes(passes + markers));
+        assert!(!encoder.can_fit_passes(passes + markers + 1));
+        let mut insufficient = submission::CommandEncoder::new(&r.device, &Default::default());
+        insufficient.reserve_passes(512 - passes - markers + 1);
+        assert!(insufficient.can_fit_passes(passes));
+        assert!(!insufficient.can_fit_passes(passes + markers));
+        let before = encoder.pass_count();
+        encoder.reserve_passes(markers);
+        let mut timers = [0,1,2].map(|_| crate::frame_timing::GpuFrameTimer::new(&r.device, &r.queue));
+        assert!(timers[0].begin_encoded(&mut encoder, 42));
+        assert!(timers[1].begin_encoded(&mut encoder, 42));
+        while job.validated < job.inputs.len() { r.step_native_rasters(&mut job, &mut encoder).unwrap(); }
+        assert_eq!(job.encoded, 0);
+        assert!(job.frame.capture.as_ref().unwrap().outputs.is_empty());
+        timers[1].end_encoded(&mut encoder);
+        assert!(timers[2].begin_encoded(&mut encoder, 42));
+        while r.step_native_rasters(&mut job, &mut encoder).unwrap() {}
+        timers[2].end_encoded(&mut encoder);
+        timers[0].end_encoded(&mut encoder);
+        assert_eq!(encoder.pass_count() - before, (passes + markers) as u64);
+        assert!(!encoder.can_fit_passes(1), "native capture rotated away from its starting encoder");
+        encoder.submit(&r.queue);
+        for timer in &mut timers { timer.submitted(&r.queue); }
+        for _ in 0..2 {
+            r.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(crate::READBACK_TIMEOUT) }).unwrap();
+            for timer in &mut timers { timer.poll(&r.device, &r.queue); }
+        }
+        let samples = timers.each_mut().map(|timer| {
+            let mut sample = [crate::frame_timing::GpuFrameSample::default()];
+            assert_eq!(timer.take_into(&mut sample), 1);
+            assert_eq!(sample[0].status, 1);
+            assert_eq!(sample[0].frame, 42);
+            sample[0].elapsed_ns
+        });
+        assert!(samples[0] >= samples[1] + samples[2], "split phases must be inside the ordinary native total");
+
     }
 }
 

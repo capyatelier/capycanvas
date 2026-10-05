@@ -2964,6 +2964,8 @@ impl super::Adapter {
                 self.private_caps.maximum_samplers,
             )),
             memory_allocations_counter: Default::default(),
+            #[cfg(any(target_os = "android", test))]
+            retired_pools: Default::default(),
 
             texture_identity_factory: super::ResourceIdentityFactory::new(),
             texture_view_identity_factory: super::ResourceIdentityFactory::new(),
@@ -3013,6 +3015,9 @@ impl super::Adapter {
             render_doc: Default::default(),
             counters: Default::default(),
         };
+
+        #[cfg(target_os = "android")]
+        super::pool_retirement::initialize();
 
         Ok(crate::OpenDevice { device, queue })
     }

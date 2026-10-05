@@ -533,3 +533,11 @@ resources-layer-color-mode = Chế độ màu
 resources-layer-color-full = Đầy đủ màu
 resources-layer-color-gray = Thang xám
 resources-layer-color-two-tone = Hai tông (đen và trắng)
+
+resources-filter-brightness-to-opacity = Độ sáng thành độ đục
+resources-illustration-colors = Màu sắc
+resources-illustration-black = Đen
+resources-illustration-white = Trắng
+resources-illustration-transparency = Độ trong suốt
+resources-illustration-keep = Giữ nguyên
+resources-illustration-alpha-threshold = Ngưỡng alpha
