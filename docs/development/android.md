@@ -306,7 +306,9 @@ manual save checkpoints and undo/redo after an actual process death.
   resize handles while its own controls remain interactive.
 - `AndroidRasterTest`: document, file and GPU lifecycle.
   - `#encloseFillNativeContactsControlsAndHistory` uses Android stylus events
-    with Reference source in both themes. It checks the edge controls, fills
+    with Reference source in both themes. It chooses the remembered Enclose
+    and Fill subtool in the Lasso fill category and switches the Source control.
+    It checks the edge controls, fills
     two enclosed transparent areas, leaves open and partly enclosed areas
     intact, and verifies cancellation and exact undo/redo.
   - `#drawingTabsRestoreMultipleInactiveDrawingsWithoutPrompt` restores order,

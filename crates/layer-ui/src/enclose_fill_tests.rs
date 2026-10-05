@@ -30,6 +30,82 @@ mod enclose_fill_checks {
     }
 
     #[test]
+    fn enclose_fill_is_a_remembered_lasso_subtool_in_toolbar_and_header_drawers() {
+        for platform in Platform::ALL {
+            for control in [ToolbarControl::Command { command: CommandId::Fill },
+                ToolbarControl::ToolSlot { slot: ToolSlotId::PhotoFill }] {
+                let (mut s, panel, ids) = group_fixture(platform, &[control]);
+                let tile = DrawerAnchor::Tile { panel, tile: ids[0] };
+                let header = add_group_header(&mut s, control);
+                let enclose = ToolVariant::Command { command: CommandId::EncloseFill };
+                let fill_label = CommandId::Fill.localized_label(s.localization());
+                let lasso_label = CommandId::LassoFill.localized_label(s.localization());
+                let enclose_label = CommandId::EncloseFill.localized_label(s.localization());
+                for anchor in [tile, header] {
+                    s.dispatch(slot_choice(&s, anchor, enclose)).unwrap();
+                    let check = |s: &UiSession<Recorder>, view: &ToolSetView| {
+                        let categories = view.groups.iter().filter(|item|
+                            [fill_label.as_ref(), lasso_label.as_ref(), enclose_label.as_ref()].contains(&item.label.as_ref()))
+                            .map(|item| item.label.as_ref()).collect::<Vec<_>>();
+                        assert_eq!(categories, [fill_label.as_ref(), lasso_label.as_ref()]);
+                        assert_eq!(view.groups.iter().filter(|item| item.selected).map(|item| item.label.as_ref()).collect::<Vec<_>>(), [lasso_label.as_ref()]);
+                        assert_eq!(view.subtools.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(), [lasso_label.as_ref(), enclose_label.as_ref()]);
+                        assert_eq!(view.subtools.iter().filter(|item| item.selected).map(|item| item.label.as_ref()).collect::<Vec<_>>(), [enclose_label.as_ref()]);
+                        assert!(s.command(CommandId::EncloseFill).selected);
+                    };
+                    check(&s, &s.state().tool_set);
+                    activate_slot(&mut s, anchor);
+                    let drawer = s.state().customization.drawer.as_ref().unwrap();
+                    assert_eq!(drawer.anchor, anchor);
+                    check(&s, drawer.tool_set.as_ref().unwrap());
+                    for source in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
+                        let options = s.state().tool_options();
+                        let ToolOption::Choice { label, items: variants, .. } = options.iter().find(|option|
+                            matches!(option, ToolOption::Choice { id: "variant", .. })).unwrap() else { unreachable!() };
+                        assert_eq!(label, &s.localization().text(MessageId::TOOLBAR_VARIANT));
+                        assert_eq!(variants.len(), 2);
+                        let ToolOption::Choice { items, .. } = options.iter().find(|option|
+                            matches!(option, ToolOption::Choice { id: "selection-source", .. })).unwrap() else { unreachable!() };
+                        assert_eq!(items.len(), 3);
+                        let action = items.iter().find(|item| item.action == UiAction::Invoke { command: source }).unwrap().action.clone();
+                        s.dispatch(UiAction::ToolbarEdit { context: s.state().toolbar_context(), action: Box::new(action) }).unwrap();
+                        assert!(s.command(source).selected);
+                        check(&s, &s.state().tool_set);
+                        check(&s, s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap());
+                    }
+                    let category = |s: &UiSession<Recorder>, label: &str| s.state().tool_set.groups.iter().find(|item| item.label.as_ref() == label).unwrap().action.clone();
+                    s.dispatch(category(&s, &fill_label)).unwrap();
+                    assert!(s.command(CommandId::Fill).selected);
+                    s.dispatch(category(&s, &lasso_label)).unwrap();
+                    check(&s, &s.state().tool_set);
+                    assert_eq!(selected_slot_variant(&s, tile), enclose);
+                    assert_eq!(selected_slot_variant(&s, header), enclose);
+                    let ordinary = s.state().tool_set.subtools.iter().find(|item| item.label.as_ref() == lasso_label.as_ref()).unwrap().action.clone();
+                    s.dispatch(ordinary).unwrap();
+                    assert!(s.command(CommandId::LassoFill).selected);
+                    assert!(!s.state().tool_actions.iter().any(|action| action.group() == Some(ToolActionGroup::SelectionSource)));
+                    s.dispatch(category(&s, &fill_label)).unwrap();
+                    s.dispatch(category(&s, &lasso_label)).unwrap();
+                    assert!(s.command(CommandId::LassoFill).selected);
+                    activate_slot(&mut s, anchor);
+                    assert!(s.state().customization.drawer.is_none());
+                }
+                s.dispatch(slot_choice(&s, tile, enclose)).unwrap();
+                s.dispatch(slot_choice(&s, tile, ToolVariant::Command { command: CommandId::Fill })).unwrap();
+                let capture = s.capture_workspace().unwrap();
+                let mut restored = session(platform);
+                restored.restore_editing(s.editing_state()).unwrap();
+                restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
+                let category = restored.state().tool_set.groups.iter().find(|item| item.label.as_ref() == lasso_label.as_ref()).unwrap().action.clone();
+                restored.dispatch(category).unwrap();
+                assert!(restored.command(CommandId::EncloseFill).selected);
+                assert_eq!(selected_slot_variant(&restored, tile), enclose);
+                assert_eq!(selected_slot_variant(&restored, header), enclose);
+            }
+        }
+    }
+
+    #[test]
     fn enclose_fill_starts_with_reference_and_keeps_its_source_separate_from_bucket() {
         for platform in Platform::ALL {
             let mut s = session(platform);

@@ -332,7 +332,7 @@ impl ToolbarControl {
             Self::ToolSlot {..} => Some(vec![vec![Panel::Brushes],vec![Panel::ToolSettings]]),
             Self::ColorPicker => Some(vec![vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Select | CommandId::SelectionBrush | CommandId::TonalSelect | CommandId::Lasso | CommandId::AutoSelect | CommandId::RectangleSelect | CommandId::EllipseSelect | CommandId::PolygonSelect | CommandId::ColorSelect } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
-            Self::Command { command: CommandId::Crop | CommandId::LassoFill } => Some(vec![vec![Panel::ToolSettings]]),
+            Self::Command { command: CommandId::Crop } => Some(vec![vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Eraser } => Some(vec![vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::Sculpt } => Some(vec![vec![Panel::SculptSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),
             Self::Command { command: CommandId::DrawingBrush } => Some(vec![vec![Panel::BrushSets], vec![Panel::Tools], vec![Panel::ToolSettings]]),
@@ -348,6 +348,7 @@ impl ToolbarControl {
                             | CommandId::Figure
                             | CommandId::Ruler
                             | CommandId::Fill
+                            | CommandId::LassoFill
                             | CommandId::EncloseFill
                     ) =>
             {

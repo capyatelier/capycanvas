@@ -80,6 +80,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
       const selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`,anchor={kind:'tile',panel:'toolbar',tile:tile.id};
       const variants=await model({kind:'tool_variants',anchor}),rows=variants.sections.flat();assert.ok(rows.length>1);
       if(slot==='fill')assert.deepEqual(rows.map(row=>row.label),['Fill','Lasso fill','Enclose and Fill']);
+      const categories=rows.filter(row=>row.label!=='Enclose and Fill').map(row=>row.label);
       await markerPoint(anchor,selector);
       assert.ok(rows.every(r=>r.action&&r.icon));
       const target={kind:'tile',panel:'toolbar',tile:tile.id},full=await model(target);
@@ -91,7 +92,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.equal(await menuOpen(),false);
         const view=await evaluate(`layerApp.app.panel_view('toolbar').tiles.find(t=>t.id===${tile.id})`);
         assert.equal(view.label,alternate.label);assert.equal(view.icon,alternate.icon);
-        assert.deepEqual(await evaluate(`layerApp.state().tool_set.groups.map(item=>item.label)`),rows.map(row=>row.label),'docked projection agrees with group menu');
+        assert.deepEqual(await evaluate(`layerApp.state().tool_set.groups.map(item=>item.label)`),categories,'docked projection has tool categories');
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===retainedVariationTile`),true,'variant retains pressed tile');
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' > button:first-child > svg')}).dataset.asset`),alternate.icon);
         await send({type:'customize',action:{type:'close_expanded'}});
@@ -99,7 +100,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.ok(await evaluate('layerApp.state().customization.drawer!=null'),`${device}: active click opens drawer`);
         const drawer=await evaluate('layerApp.state().customization.drawer');
         assert.deepEqual(drawer.anchor,anchor);assert.deepEqual(drawer.columns,[['brushes'],['tool_settings']]);
-        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer .brushes-control .tool-groups .tool-choice-name')].map(n=>n.textContent)"),rows.map(r=>r.label));
+        assert.deepEqual(await evaluate("[...document.querySelectorAll('.content-drawer .brushes-control .tool-groups .tool-choice-name')].map(n=>n.textContent)"),categories);
         await evaluate("window.retainedSlotDrawer=document.querySelector('.content-drawer .brushes-control')");
         for(let choice=0;choice<3;choice++) {
           await settleDrawer();
@@ -133,6 +134,16 @@ export async function checkToolVariations({call,evaluate,settle}) {
       await key('Enter');assert.equal(await menuOpen(),false,'Enter activates focused variant');assert.equal(await evaluate(`${groupView(anchor)}.icon`),choice.icon);
       await evaluate(`document.querySelector(${JSON.stringify(groupBody(anchor,selector))}).focus()`);await key('F10',8);await key('Escape');assert.equal(await menuOpen(),false);assert.equal(await evaluate(`document.activeElement===document.querySelector(${JSON.stringify(groupBody(anchor,selector))})`),true,'Escape returns focus to tool button');
       await shot(`${workspace}-${theme}`);
+      if(workspace==='photographer'){
+        const fill=tiles.find(t=>t.control.slot==='photo_fill');assert.ok(fill);
+        const fillAnchor={kind:'tile',panel:'toolbar',tile:fill.id},fillSelector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${fill.id}"]`;
+        const leaves=(await model({kind:'tool_variants',anchor:fillAnchor})).sections.flat();
+        assert.deepEqual(leaves.slice(-3).map(row=>row.label),['Fill','Lasso fill','Enclose and Fill']);
+        await openChoices(fillAnchor,fillSelector);await choose('Enclose and Fill');
+        assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),
+          leaves.filter(row=>row.label!=='Enclose and Fill').map(row=>row.label),'Photo Fill retains broad categories');
+        assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),['Lasso fill','Enclose and Fill']);
+      }
       await send({type:'restore_workspace',workspace:fixture});
     }
     for(const theme of ['light','dark']) {
@@ -158,12 +169,13 @@ export async function checkToolVariations({call,evaluate,settle}) {
         await openChoices(anchor,selector);await choose(rows[0].label);await wait(`${view}.selected`);
         const dock='.dock-group .brushes-control .'+(slot.includes('selection')?'tool-subtools':'tool-groups');
         const dockLabels=await evaluate(`[...document.querySelectorAll('${dock} .tool-choice-name')].map(n=>n.textContent)`);
-        assert.deepEqual([...dockLabels].sort(),rows.map(row=>row.label).sort(),'docked Tool Set uses the same scoped choices as the menu');
+        const categories=slot==='fill'?['Fill','Lasso fill']:rows.map(row=>row.label);
+        assert.deepEqual([...dockLabels].sort(),categories.slice().sort(),'docked Tool Set has the scoped categories');
         const alternate=rows.find(row=>row.label!==rows[0].label)||rows[0];
         await click(`${dock} [data-tool-choice="${alternate.label}"]`);assert.equal(await evaluate(`${view}.icon`),alternate.icon,'docked sibling updates its group icon');
         await send({type:'customize',action:{type:'close_expanded'}});await click(groupBody(anchor,selector));await settleDrawer();
         const drawerLabels=await evaluate("[...document.querySelectorAll('.content-drawer .brushes-control .tool-groups .tool-choice-name')].map(n=>n.textContent)");
-        assert.deepEqual(drawerLabels,rows.map(row=>row.label),'full selection drawer keeps the scoped choices');
+        assert.deepEqual(drawerLabels,categories,'full selection drawer keeps the scoped categories');
         selection[slot]={menu:rows.map(row=>row.label),dock:dockLabels,drawer:drawerLabels};
         await shot(`${slot}-${theme}`);await send({type:'customize',action:{type:'close_expanded'}});
       }

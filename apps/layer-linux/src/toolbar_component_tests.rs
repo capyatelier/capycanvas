@@ -211,7 +211,7 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
         (ToolSlotId::ManualSelection, vec![CommandId::Lasso, CommandId::RectangleSelect,
             CommandId::EllipseSelect, CommandId::PolygonSelect, CommandId::SelectionBrush]),
         (ToolSlotId::AutomaticSelection, vec![CommandId::AutoSelect, CommandId::ColorSelect]),
-        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill]),
+        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill]),
         (ToolSlotId::Blend, vec![CommandId::Blend, CommandId::Clone]),
     ] {
         let anchor = slot_anchor(d, slot);
@@ -224,7 +224,8 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
             _ => None,
         }).collect::<Vec<_>>();
         assert_eq!(actual.len(), commands.len());
-        assert!(commands.iter().all(|command| actual.contains(command)));
+        assert!(commands.iter().all(|command| actual.contains(command)
+            || slot == ToolSlotId::Fill && *command == CommandId::LassoFill && actual.contains(&CommandId::EncloseFill)));
         let tools = d.w.panel_widget(Panel::Brushes);
         for command in &commands {
             let label = ui_session(&d.w).command(*command).label;
@@ -233,7 +234,25 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
         let last = commands.last().unwrap();
         let label = ui_session(&d.w).command(*last).label;
         d.click(&mapped_label(&tools, &label).unwrap());
-        assert!(ui_session(&d.w).command(*last).selected);
+        assert!(ui_session(&d.w).command(*last).selected
+            || slot == ToolSlotId::Fill && ui_session(&d.w).command(CommandId::EncloseFill).selected);
+        if slot == ToolSlotId::Fill {
+            assert_eq!(state(&d.w).tool_set.subtools.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
+                ["Lasso fill", "Enclose and Fill"]);
+            let ordinary = widgets(&tools).find(|widget| widget.has_css_class("brush-choice")
+                && mapped_label(widget, "Lasso fill").is_some()).unwrap();
+            d.click(&ordinary);
+            assert!(ui_session(&d.w).command(CommandId::LassoFill).selected);
+            d.click(&mapped_label(&tools, "Enclose and Fill").unwrap());
+            assert!(ui_session(&d.w).command(CommandId::EncloseFill).selected);
+            let groups = widgets(&tools).find(|widget| widget.has_css_class("tool-groups")).unwrap();
+            d.click(&mapped_label(&groups, "Fill").unwrap());
+            assert!(ui_session(&d.w).command(CommandId::Fill).selected);
+            d.click(&mapped_label(&groups, "Lasso fill").unwrap());
+            assert!(ui_session(&d.w).command(CommandId::EncloseFill).selected,
+                "the Lasso Fill category remembers its Enclose subtool");
+            assert_eq!(state(&d.w).tool_set.groups.len(), 2);
+        }
         d.capture_canvas(&format!("paint-selection-{slot:?}-{theme:?}.png"));
     }
 }
@@ -616,7 +635,8 @@ fn native_toolbar_variations_input() {
                     let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
                     let docked = state(&d.w).tool_set.groups;
                     assert_eq!(docked.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
-                        menu.sections[0].iter().map(|item| item.label.as_str()).collect::<Vec<_>>());
+                        menu.sections[0].iter().filter(|item| item.label != "Enclose and Fill")
+                            .map(|item| item.label.as_str()).collect::<Vec<_>>());
                     let label = &menu.sections[0][index].label;
                     let drawer = d.named("drawer-panel-Brushes");
                     d.click(&mapped_label(&drawer, label).unwrap());

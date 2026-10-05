@@ -16,6 +16,11 @@ export async function checkEncloseFill({call,evaluate,settle}) {
     x>=left&&x<left+90&&y>=50&&y<170&&(x<left+6||x>=left+84||y<56||y>=164))?[0,0,0,255]:[0,0,0,0],4);
   const screen=([x,y])=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
   const pointer=(type,p)=>call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1});
+  const contact=async selector=>{
+    const p=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await pointer('mousePressed',p);await pointer('mouseReleased',p);await settle();
+  };
+  const selected=command=>evaluate(`!!layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.selected`);
   const path=async(cancel=false)=>{
     const points=[[20,30],[315,30],[315,190],[20,190],[20,30]];
     await pointer('mousePressed',await screen(points[0]));
@@ -46,7 +51,22 @@ export async function checkEncloseFill({call,evaluate,settle}) {
       const referencePackage=await save(),reference=rasterIdentity(referencePackage),referenceOriginals=sourceIdentity(referencePackage);
       await send({type:'layer',action:{op:'reference_selection'}});
       await send({type:'layer',action:{op:'new',group:false,clipped:false}});
-      await invoke('enclose_fill');await invoke('selection_reference');
+      await invoke('fill');
+      const toolset='.dock-group .brushes-control';
+      assert.deepEqual(await evaluate('layerApp.state().tool_set.groups.map(item=>item.label)'),['Fill','Lasso fill']);
+      await contact(`${toolset} .tool-groups [data-tool-choice="Lasso fill"]`);
+      assert.deepEqual(await evaluate('layerApp.state().tool_set.subtools.map(item=>item.label)'),['Lasso fill','Enclose and Fill']);
+      await contact(`${toolset} .tool-subtools [data-tool-choice="Enclose and Fill"]`);
+      assert.ok(await selected('enclose_fill'));
+      await contact(`${toolset} .tool-groups [data-tool-choice="Fill"]`);assert.ok(await selected('fill'));
+      await contact(`${toolset} .tool-groups [data-tool-choice="Lasso fill"]`);
+      assert.ok(await selected('enclose_fill'),'Lasso Fill category remembers the Enclose subtool');
+      for(const source of ['selection_visible','selection_editing','selection_reference']){
+        await contact(`.dock-group [data-tool-action="${source}"]`);
+        assert.ok(await selected(source));assert.ok(await selected('enclose_fill'),'source preserves Enclose variant');
+      }
+      await evaluate(`document.querySelector('.dock-group [data-tool-action="selection_reference"]').scrollIntoView({block:'nearest'})`);await settle();
+      await writeFile(`${directory}/controls-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
       const controls=await evaluate('layerApp.state().tool_settings.map(c=>c.id)');
       for(const id of ['tolerance','gap_closing','expansion','smoothing']){
         assert.ok(controls.includes(id),`${id} is shared with Fill`);

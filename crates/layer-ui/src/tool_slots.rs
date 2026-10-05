@@ -6,7 +6,7 @@ variants! {
     #[serde(rename_all = "snake_case")]
     pub enum ToolSlotId {
         Drawing, Marquee, Lasso, AutomaticSelection, ManualSelection, Healing,
-        PhotoFill, Fill, Blend, Operation, Figure, Ruler, Gradient,
+        PhotoFill, Fill, LassoFill, Blend, Operation, Figure, Ruler, Gradient,
     }
 }
 
@@ -42,6 +42,7 @@ impl ToolbarControl {
                 CommandId::Gradient => G::Slot(ToolSlotId::Gradient),
                 CommandId::Move => G::Slot(ToolSlotId::Operation),
                 CommandId::Fill => G::Slot(ToolSlotId::Fill),
+                CommandId::LassoFill => G::Slot(ToolSlotId::LassoFill),
                 _ => G::Brush(command.paint_tool()?),
             },
             _ => return None,
@@ -139,6 +140,7 @@ impl ToolSlotId {
                 }
             }
             Self::Fill => const { &[command(C::Fill), command(C::LassoFill), command(C::EncloseFill)] },
+            Self::LassoFill => const { &[command(C::LassoFill), command(C::EncloseFill)] },
             Self::Blend => const { &[command(C::Blend), command(C::Clone)] },
             Self::Operation => const { &[command(C::Move), command(C::ScaleRotate)] },
             Self::Figure => {
@@ -190,6 +192,7 @@ impl ToolSlotId {
             Self::ManualSelection => CommandId::Select.localized_label(localization).to_string(),
             Self::Figure => CommandId::Figure.localized_label(localization).to_string(),
             Self::Ruler => CommandId::Ruler.localized_label(localization).to_string(),
+            Self::LassoFill => CommandId::LassoFill.localized_label(localization).to_string(),
             Self::Gradient => CommandId::Gradient
                 .localized_label(localization)
                 .to_string(),
@@ -435,6 +438,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let group = if self.layer_interaction.tool.selection_tool().is_some() {
             ToolControlGroup::Selection
+        } else if matches!(self.layer_interaction.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. }) {
+            ToolControlGroup::Slot(ToolSlotId::LassoFill)
         } else if self.layer_interaction.tool == LayerCanvasTool::Transform {
             ToolControlGroup::Slot(ToolSlotId::Operation)
         } else {
@@ -446,13 +451,25 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn group_tool_set(&self, group: ToolControlGroup, anchor: Option<DrawerAnchor>) -> ToolSetView {
         let mut view = tools::view(&self.state.brush, self.layer_interaction.tool, self.localization());
         if matches!(group, ToolControlGroup::Drawing | ToolControlGroup::Sculpt) { return view; }
-        let choices = self.group_choices(group, anchor).into_iter().map(|(_, item)| item).collect();
+        let lasso = ToolControlGroup::Slot(ToolSlotId::LassoFill);
+        let remembered_lasso = self.group_variant(lasso);
+        let choices = self.group_choices(group, anchor).into_iter().filter_map(|(variant, mut item)| {
+            if lasso.contains(variant) {
+                if variant != remembered_lasso { return None; }
+                item.label = CommandId::LassoFill.localized_label(self.localization());
+                item.icon = CommandId::LassoFill.icon().unwrap();
+                item.selected = lasso.active(&self.state);
+            }
+            Some(item)
+        }).collect();
+        if lasso.active(&self.state) {
+            view.subtools = self.group_choices(lasso, anchor).into_iter().map(|(_, item)| item).collect();
+        }
         match group {
             ToolControlGroup::Slot(_) => {
                 if self.layer_interaction.tool == LayerCanvasTool::Paint {
                     view.subtools.splice(0..0, std::mem::take(&mut view.groups));
-                } else if self.layer_interaction.tool.selection_tool().is_some()
-                    || self.layer_interaction.tool == LayerCanvasTool::LassoFill {
+                } else if self.layer_interaction.tool.selection_tool().is_some() {
                     view.subtools.clear();
                 }
                 view.groups = choices;

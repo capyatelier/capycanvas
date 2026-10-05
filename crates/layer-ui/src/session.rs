@@ -5371,6 +5371,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .collect()
         };
         self.sync_retouch();
+        if matches!(self.layer_interaction.tool, LayerCanvasTool::EncloseFill { .. }) {
+            self.state.tool_actions = [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference]
+                .into_iter().map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect();
+        }
         if let Some(tool) = self.layer_interaction.tool.selection_tool() {
             let commands: &[CommandId] = if tool==SelectionTool::Tonal { &[]
             } else if tool.geometric() {

@@ -76,13 +76,36 @@ fn native_enclose_fill_pointer_workflow() {
         let reference_source = active_paint(ui_session(&w).engine().document()).clone();
         w.dispatch(UiAction::Layer { action: LayerAction::ReferenceSelection });
         w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } });
-        let workspace = tool_settings_workspace(&w, &[CommandId::EncloseFill], true, false);
+        let workspace = tool_settings_workspace(&w, &[CommandId::Fill], true, false);
         w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
         invoke(&w, CommandId::FitCanvas);
-        let enclose = command(&w, CommandId::EncloseFill);
-        assert!(enclose.is_mapped() && enclose.is_sensitive());
-        input.click(screen_point(enclose.upcast_ref(), &w.window, [0.5, 0.5]));
-        invoke(&w, CommandId::SelectionReference);
+        let fill = command(&w, CommandId::Fill);
+        input.click(screen_point(fill.upcast_ref(), &w.window, [0.5, 0.5]));
+        let tools = w.panel_widget(Panel::Brushes);
+        let groups = widgets(&tools).find(|widget| widget.has_css_class("tool-groups")).unwrap();
+        assert_eq!(state(&w).tool_set.groups.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
+            ["Fill", "Lasso fill"]);
+        input.click(screen_point(&mapped_label(&groups, "Lasso fill").unwrap(), &w.window, [0.5, 0.5]));
+        assert_eq!(state(&w).tool_set.subtools.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
+            ["Lasso fill", "Enclose and Fill"]);
+        input.click(screen_point(&mapped_label(&tools, "Enclose and Fill").unwrap(), &w.window, [0.5, 0.5]));
+        assert!(ui_session(&w).command(CommandId::EncloseFill).selected);
+        input.click(screen_point(&mapped_label(&groups, "Fill").unwrap(), &w.window, [0.5, 0.5]));
+        assert!(ui_session(&w).command(CommandId::Fill).selected);
+        input.click(screen_point(&mapped_label(&groups, "Lasso fill").unwrap(), &w.window, [0.5, 0.5]));
+        assert!(ui_session(&w).command(CommandId::EncloseFill).selected);
+        for source in [CommandId::SelectionVisible, CommandId::SelectionEditing, CommandId::SelectionReference] {
+            let option = find_named(&w.panel_widget(Panel::ToolSettings), &format!("tool-action-{source:?}")).unwrap();
+            histogram::scroll_to(&option);
+            input.click(screen_point(&option, &w.window, [0.5, 0.5]));
+            assert!(ui_session(&w).command(source).selected);
+            assert!(ui_session(&w).command(CommandId::EncloseFill).selected,
+                "source choices preserve the Enclose variant");
+        }
+        capture_ui(&w, &output, &format!("enclose-controls-{theme:?}.png"));
+        let source = find_named(&w.panel_widget(Panel::ToolSettings), "tool-action-SelectionReference").unwrap();
+        histogram::scroll_to(&source);
+        capture_ui(&w, &output, &format!("enclose-source-{theme:?}.png"));
         for (id, value) in [("tolerance", "15"), ("gap_closing", "0"), ("expansion", "0"), ("smoothing", "0")] {
             let control = named::<crate::number_control::NumberControl>(
                 &w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"));

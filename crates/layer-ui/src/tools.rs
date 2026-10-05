@@ -381,7 +381,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
     if let LayerCanvasTool::Figure { shape, paint } = canvas_tool {
         return ToolSetView { groups: Vec::new(), subtools: crate::session::figures::modes(shape, paint, localizer) };
     }
-    if let Some((fill, source, _)) = canvas_tool.region().filter(|_| !matches!(canvas_tool, LayerCanvasTool::SelectColor { .. })) {
+    if let LayerCanvasTool::Region { fill, source } = canvas_tool {
         return ToolSetView {
             groups: Vec::new(),
             subtools: [
@@ -395,9 +395,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
                 icon: command.icon().unwrap(),
                 action: UiAction::Layer {
                     action: LayerAction::Tool {
-                        tool: if matches!(canvas_tool, LayerCanvasTool::EncloseFill { .. }) {
-                            LayerCanvasTool::EncloseFill { source: item_source }
-                        } else { LayerCanvasTool::Region { fill, source: item_source } },
+                        tool: LayerCanvasTool::Region { fill, source: item_source },
                     },
                 },
                 selected: source == item_source,
@@ -411,7 +409,6 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
     }
     if canvas_tool != LayerCanvasTool::Paint {
         let (label, icon) = match canvas_tool {
-            LayerCanvasTool::LassoFill => (MessageId::TOOL_MODE_LASSO_FILL, "lasso-fill"),
             LayerCanvasTool::Hand => (MessageId::TOOL_MODE_HAND, "hand"),
             LayerCanvasTool::Crop => (MessageId::TOOL_MODE_CROP, "crop"),
             _ => return ToolSetView::default(),

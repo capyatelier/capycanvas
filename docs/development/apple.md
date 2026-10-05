@@ -178,7 +178,10 @@ cargo test -p layer-apple tests::photo -- --test-threads=1
 The tests drive both Apple platform policies through the real C ABI and a
 hardware GPU, comparing exact document pixels through Undo and Redo. Reuse
 `fixtures::tempfile()` for private file descriptors. Filter by module (`tests::input`, `tests::recovery`, `tests::workspace` and the other
-`*_tests.rs` files under `native/src`). The ignored 61 MP regression needs a
+`*_tests.rs` files under `native/src`). The windowless `tests::toolbar_component`
+checks category and subtool choices, remembered Enclose and Fill, and Source
+actions through the native bridge in both themes and platform policies.
+The ignored 61 MP regression needs a
 disposable sRGB JPEG:
 
 ```sh

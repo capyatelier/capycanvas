@@ -336,6 +336,7 @@ fn tool_group_existing_nonpaint_commands_keep_layout_identity() {
         (CommandId::Figure, ToolSlotId::Figure), (CommandId::Ruler, ToolSlotId::Ruler),
         (CommandId::Gradient, ToolSlotId::Gradient), (CommandId::Move, ToolSlotId::Operation),
         (CommandId::Fill, ToolSlotId::Fill),
+        (CommandId::LassoFill, ToolSlotId::LassoFill),
     ] {
         let control = ToolbarControl::Command { command };
         assert!(control.has_variants());
@@ -433,7 +434,7 @@ fn shipped_tool_slot_presets_keep_compact_counts_and_separate_pen_and_pencil() {
 fn slot_menus_publish_only_member_choices_and_activate_their_leaf_tools() {
     let slots = [ToolSlotId::Drawing, ToolSlotId::Marquee, ToolSlotId::Lasso,
         ToolSlotId::AutomaticSelection, ToolSlotId::ManualSelection, ToolSlotId::Healing,
-        ToolSlotId::PhotoFill, ToolSlotId::Fill, ToolSlotId::Blend, ToolSlotId::Operation,
+        ToolSlotId::PhotoFill, ToolSlotId::Fill, ToolSlotId::LassoFill, ToolSlotId::Blend, ToolSlotId::Operation,
         ToolSlotId::Figure, ToolSlotId::Ruler, ToolSlotId::Gradient];
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
         let (mut s, panel, ids) = slot_fixture(platform, &slots);
@@ -515,20 +516,41 @@ fn grouped_slots_publish_the_same_siblings_in_menus_panels_and_drawers() {
             let docked = &s.state().tool_set;
             let siblings: Vec<_> = docked.groups.iter().chain(&docked.subtools)
                 .filter(|item| matches!(item.action, UiAction::ChooseToolVariant { anchor: origin, .. } if origin == anchor)).collect();
-            assert_eq!(siblings.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
-                menu.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(), "{slot:?}");
-            assert_eq!(siblings.iter().map(|item| item.enabled).collect::<Vec<_>>(),
-                menu.iter().map(|item| item.enabled).collect::<Vec<_>>(), "{slot:?}");
+            let nested_lasso = slot.variants().iter().any(|variant| variant.command() == CommandId::LassoFill);
+            if !nested_lasso {
+                assert_eq!(siblings.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
+                    menu.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(), "{slot:?}");
+                assert_eq!(siblings.iter().map(|item| item.enabled).collect::<Vec<_>>(),
+                    menu.iter().map(|item| item.enabled).collect::<Vec<_>>(), "{slot:?}");
+            }
+            let docked = docked.clone();
             activate_slot(&mut s, anchor);
             let drawer = s.state().customization.drawer.as_ref().unwrap();
             assert_eq!(drawer.columns, [vec![Panel::Brushes], vec![Panel::ToolSettings]]);
             let choices = drawer.tool_set.as_ref().unwrap();
-            assert_eq!(choices.groups.len(), slot.variants().len());
+            let categories: Vec<_> = slot.variants().iter().copied()
+                .filter(|variant| variant.command() != CommandId::EncloseFill).collect();
+            assert_eq!(choices.groups.len(), categories.len());
             assert_eq!(choices.groups.iter().filter(|choice| choice.selected).count(), 1);
-            for (choice, &variant) in choices.groups.iter().zip(slot.variants()) {
-                assert_eq!(choice.action, UiAction::ChooseToolVariant { anchor, variant });
+            for (choice, variant) in choices.groups.iter().zip(categories) {
+                if variant.command() == CommandId::LassoFill {
+                    assert_eq!(choice.label.as_ref(), CommandId::LassoFill.localized_label(s.localization()).as_ref());
+                    assert!(matches!(choice.action, UiAction::ChooseToolVariant { anchor: origin, variant: ToolVariant::Command { command: CommandId::LassoFill | CommandId::EncloseFill } } if origin == anchor));
+                } else {
+                    assert_eq!(choice.action, UiAction::ChooseToolVariant { anchor, variant });
+                }
                 assert!(!choice.label.is_empty());
                 assert!(!choice.icon.is_empty());
+            }
+            if nested_lasso {
+                assert_eq!(choices, &docked);
+                if matches!(s.state().layer_tools.tool, LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. }) {
+                    assert_eq!(choices.subtools.len(), 2);
+                    for (choice, command) in choices.subtools.iter().zip([CommandId::LassoFill, CommandId::EncloseFill]) {
+                        assert_eq!(choice.action, UiAction::ChooseToolVariant { anchor, variant: ToolVariant::Command { command } });
+                        assert_eq!(choice.selected, s.command(command).selected);
+                    }
+                }
             }
             if s.state().layer_tools.tool == LayerCanvasTool::Paint {
                 assert!(!choices.subtools.is_empty());

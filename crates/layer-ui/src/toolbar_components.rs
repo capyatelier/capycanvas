@@ -321,7 +321,7 @@ impl UiState {
                 .cloned()
                 .partition(|i| matches!(i.action, UiAction::SetColorSampleSize { .. }));
             let label = if self.layer_tools.tool.picks_color()
-                || matches!(self.layer_tools.tool, LayerCanvasTool::Region { .. } | LayerCanvasTool::EncloseFill { .. })
+                || matches!(self.layer_tools.tool, LayerCanvasTool::Region { .. })
             {
                 self.localization.text(MessageId::TOOLBAR_SOURCE)
             } else {

@@ -617,6 +617,15 @@ class AndroidRasterTest {
 
     @Test fun encloseFillNativeContactsControlsAndHistory() {
         fun ui(value: JSONObject) { host.drain(value, 10); compose.waitForIdle() }
+        fun published() = host.snapshot!!.getJSONObject("state")
+        fun tool(tag: String) = compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("panel-body-brushes")))
+        fun settings(tag: String) = compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("panel-body-tool_settings")))
+        fun label(command: String) = published().array("commands").objects().first { it.getString("id") == command }.getString("label")
+        fun selected(command: String) = published().array("commands").objects().first { it.getString("id") == command }.getBoolean("selected")
+        fun chooseTool(tag: String, command: String) {
+            tool(tag).performScrollTo().assertIsDisplayed().performClick(); host.drain()
+            compose.waitUntil(10_000) { selected(command) }
+        }
         val reference = File(files, "enclose-reference.png")
         val bitmap = android.graphics.Bitmap.createBitmap(256, 128, android.graphics.Bitmap.Config.ARGB_8888)
         try {
@@ -668,12 +677,30 @@ class AndroidRasterTest {
             send(obj("type" to "layer", "action" to obj("op" to "reference", "id" to owner)))
             invoke("add_layer"); send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
             ui(obj("type" to "set_theme", "theme" to theme))
-            ui(obj("type" to "invoke", "command" to "enclose_fill"))
-            ui(obj("type" to "invoke", "command" to "selection_reference"))
+            ui(obj("type" to "invoke", "command" to "fill"))
+            val toolGroup = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "brushes" in it.array("panels").values() }.getInt("id")
+            ui(obj("type" to "select_panel_tab", "group" to toolGroup, "panel" to "brushes"))
+            val fill = label("fill"); val lasso = label("lasso_fill"); val enclose = label("enclose_fill")
+            tool("tool-group-$enclose").assertDoesNotExist()
+            tool("tool-group-$lasso").performScrollTo().assertIsDisplayed().performClick(); host.drain()
+            chooseTool("subtool-$lasso", "lasso_fill")
+            chooseTool("subtool-$enclose", "enclose_fill")
+            chooseTool("tool-group-$fill", "fill")
+            chooseTool("tool-group-$lasso", "enclose_fill")
+            val tools = published().getJSONObject("tool_set")
+            assertEquals(listOf(fill, lasso), tools.array("groups").objects().map { it.getString("label") })
+            assertEquals(listOf(lasso, enclose), tools.array("subtools").objects().map { it.getString("label") })
+            assertEquals(enclose, tools.array("subtools").objects().single { it.getBoolean("selected") }.getString("label"))
             val group = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "tool_settings" in it.array("panels").values() }.getInt("id")
             ui(obj("type" to "select_panel_tab", "group" to group, "panel" to "tool_settings"))
+            for (command in listOf("selection_visible", "selection_editing", "selection_reference")) {
+                settings("tool-action-$command").performScrollTo().assertIsDisplayed().performClick(); host.drain()
+                compose.waitUntil(10_000) { selected(command) }
+                settings("tool-action-$command").assertIsOn()
+                assertTrue(selected("enclose_fill"))
+            }
             for (id in listOf("tolerance", "gap_closing", "expansion", "smoothing")) {
-                compose.onNode(hasTestTag("tool-setting-$id") and hasAnyAncestor(hasTestTag("panel-body-tool_settings"))).performScrollTo().assertIsDisplayed()
+                settings("tool-setting-$id").performScrollTo().assertIsDisplayed()
                 ui(obj("type" to "set_tool_setting", "id" to id, "value" to 0))
             }
             ui(obj("type" to "customize", "action" to obj("type" to "close_expanded")))

@@ -64,14 +64,16 @@ retain the application drag and reorder convention.
 
 ## Enclose and Fill
 
-The Fill group includes **Enclose and Fill** beside Bucket and Lasso Fill.
-Draw a loose loop around closed transparent regions in line art, then release
+The Fill tool set has **Fill** and **Lasso Fill** categories. Lasso Fill contains
+ordinary **Lasso Fill** and **Enclose and Fill**. Returning to the category restores
+the last lasso tool used. Draw a loose loop around closed transparent regions in
+line art, then release
 it to paint those regions in the active paint layer. Lasso Fill continues to
 paint the loop's entire interior. Enclose and Fill paints all eligible regions
 in one undo step; an empty result makes no edit. Escape, focus loss, a tool
 change or pointer cancellation discards the unfinished loop.
 
-The existing Source choices select visible artwork, the editing layer or marked
+Source in Tool settings selects visible artwork, the editing layer or marked
 reference layers. Enclose and Fill starts with Reference and remembers its choice
 separately from Bucket. With no marked references, the existing notice explains
 how to mark one and offers a suitable layer below when available. For flats on a separate layer, mark the transparent line-art
