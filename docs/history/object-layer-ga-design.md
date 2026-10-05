@@ -3,7 +3,11 @@
 [Design history](README.md)
 
 Design date: 2026-10-04. Code inspected at
-`69c21ae03` on `origin/main`, including the format fixes through `d20862721`.
+`9f6b774bc`, with the concurrent documentation decisions in `e30671c35` integrated
+before publication. Those decisions add the illustration-filter policy and crop
+compensation; they do not implement the required renderer changes. The final
+audit was checked against code; its proposed solutions are adopted only where
+specified below.
 
 This record defines the intended GA state, the long-term direction, and the work
 needed to reach GA. It is a design decision, not a claim that these capabilities
@@ -98,7 +102,7 @@ model; do not schedule it again as an unfixed defect:
 | `272f669fb`: separate tile-binding accounting and capability-limit handling. | `shared_original_references_do_not_consume_evaluation_graph_edges` and boundary cases in [admission.rs](../../crates/layer-core/src/package/codec/admission.rs). | Extend the accounting and regressions to image records, object lists and new placements. |
 | `d6b1c9325`: optional representations and extra archive members do not gate editable artwork. | [Optional-content regressions](../../crates/layer-core/src/package/codec/optional.rs). | Keep these passing with the replacement record versions. |
 | `cc061dbda`: permanent `application/vnd.capycanvas` identity. | [Archive constant](../../crates/layer-core/src/package/archive.rs) and host registrations. | Retain this identity; no suffix change or old alias is needed. |
-| `e66d40f5a`: drift contract and 140 hardware render cases. | [Render contracts](../../crates/layer-render-wgpu/src/package_render_tests.rs) and [baseline index](../../crates/layer-render-wgpu/src/fixtures/authored-renders.tsv). | Replace the eight `placement/*` cases, preserve the other 132, and add the missing object and destructive-transform cases. |
+| `e66d40f5a`: drift contract and 140 hardware render cases. | [Render contracts](../../crates/layer-render-wgpu/src/package_render_tests.rs) and [baseline index](../../crates/layer-render-wgpu/src/fixtures/authored-renders.tsv). | Replace the eight `placement/*` cases, retain the other 132 as regression cases under section 14.1, and add object/destructive-transform references. |
 | `d20862721`: fresh bounded save previews. | [Preview capture](../../crates/layer-render-wgpu/src/snapshot/package_preview.rs). | Include object content in the existing capture path without making preview success a save requirement. |
 
 ## 3. GA state and deliberately deferred work
@@ -227,7 +231,34 @@ over that tile's valid pixels, including explicitly transparent painted pixels.
 Require the complete base-image rectangle to fit inside the paint domain. The
 domain can be larger. Rendering, merge, export and admission use this same rule.
 Reject inconsistent records instead of rendering a clipped base in one consumer
-and its full extent in another.
+and its full extent in another. Check the rectangle with overflow-safe arithmetic
+in both record decoding and `Document::validate`; neither currently checks this
+relationship. With zero-origin storage this requires nonnegative base offsets,
+even though the shared integer encoding also serves signed layer positions.
+
+**Base offsets may be arbitrary integers, not only multiples of 256.** An exact
+horizontal flip produces `new_base_x = domain_width - base_x - image_width`,
+which need not be tile-aligned. Requiring alignment would add recutting/padding
+and potentially channel changes to otherwise exact operations.
+
+Introduce one paint-local tile/window reader: subtract the base offset, gather
+the intersecting image tiles, supply transparency outside the base, then apply
+the authoritative painted override. A 256-square destination tile intersects
+at most two source tiles per axis, hence four image tiles. The aligned case
+retains a direct lookup. Do not duplicate this arithmetic in consumers or turn
+image tiles into independently paintable targets. Prepared views keep their
+source backing alive until GPU submission completes.
+
+Replace the same-coordinate assumptions in
+[source access](../../crates/layer-render-wgpu/src/source_access.rs),
+[region sources](../../crates/layer-render-wgpu/src/region_sources.rs),
+[retouch sources](../../crates/layer-render-wgpu/src/retouch_sources.rs),
+[thumbnails](../../crates/layer-render-wgpu/src/thumbnails.rs) and
+[material tiles](../../crates/layer-render-wgpu/src/material_tiles.rs), including
+occupancy/bounds queries, neighboring-page initialization and source preparation.
+Base assembly happens on bounded jobs; once a paint page is resident, drawing
+keeps its existing direct incremental path. Test offsets 1, 255, 256 and 257,
+partial edges, transparent overrides and eviction during sampling.
 
 Growing left/up can rebase the paint domain by whole storage tiles: shift tile
 keys and the base offset together, compensate the layer offset, and preserve mask
@@ -266,6 +297,40 @@ selection into stored coverage through the existing asynchronous GPU path.
 Transient operation selections and saved-selection geometry remain supported.
 Scaling/rotating a painted mask is a pixel operation, never retained placement.
 
+Transient coverage cannot keep using the authored `CoverageSource.initial`
+field after it is removed. Erase, clear, selection-to-layer and transform jobs
+currently use it too. Give operation coverage its own geometry-or-materialized
+snapshot type; private in-flight transfer may carry that geometry. Completed
+authored masks serialize only tiles/default coverage. Do not reintroduce a
+hidden initial-selection field in portable coverage.
+
+The following table is the required replacement for parent-space mask writes.
+`d` is an integer displacement; `P`, `L`, `M` use the definitions above. A row
+describes movement, not arbitrary pixel resampling.
+
+| Operation | Owner offset `L` | Stored mask offset `M` |
+| --- | --- | --- |
+| Move owner content by `d` | `L+d` | Unchanged; linked follows, unlinked stays. |
+| Move linked mask with linkage active | `L+d` | Unchanged; the owner follows too, matching current linked Move behavior. |
+| Move unlinked mask only | Unchanged | `M+d`. |
+| Move an image object inside its layer | Unchanged | Unchanged. Only the object affine changes. |
+| Rebase paint-local pixels/base by `+d` without moving artwork | `L-d` | Linked: `M+d`; unlinked: unchanged. |
+| Rebase mask-local storage by `+d` without moving coverage | Unchanged | `M-d`. |
+| Reparent/ungroup, preserving document position; parent changes from `P` to `P'` | `L+P-P'` | Linked: unchanged; unlinked: `M+P-P'`. |
+| Shift a root for crop origin `c` | `L-c` | Linked: unchanged; unlinked: `M-c`. Descendants already follow their parent. |
+| Owner has no `L` (effect/generator/selection) and its parent changes by `d` | No field to write | To preserve mask world position, `M-d` for either linkage state. On a root crop use `M-c`. Update actual selection geometry separately. |
+| Pixel transform or conversion publishes new owner/mask storage | Derive new integer origin from the result | Derive `M` from the required mask world origin minus `P` and, when linked, the new `L`; never copy the old parent-space value blindly. |
+
+For owners without `L`, linkage has no independent owner-translation effect;
+moving an allowed mask edits `M` alone. This table does not grant masks to saved
+selections or any other type that currently forbids them. Group movement
+changes descendant `P` once.
+Canvas-wide rotation/scale resamples coverage once and derives these origins
+from the transformed result, including unlinked masks. Cover `layers.rs` Move
+and ungroup, `occurrence_edits.rs` reattachment, every crop/grow/resample path in
+`canvas_geometry.rs`, and publication in `transform_pixels.rs`. Centralize the
+coordinate conversions instead of retaining per-call pre-map fixes.
+
 ## 5. Minimal GA records and ownership
 
 Retain the current restricted ZIP/ZIP64 envelope, typed record table, typed binary
@@ -274,8 +339,9 @@ The envelope's `objects` table contains all record kinds; it is not synonymous
 with the drawable objects inside an object layer.
 
 Introduce three record roles, with the following registry names for the new
-types. Replace implementation adapters without retaining a legacy interpreter,
-but give changed wire contracts distinct versions:
+types. Give changed wire contracts distinct versions. Section 5.4 defines the
+temporary coexistence needed for usable milestone landings; no legacy adapter
+remains in the GA registry.
 
 | Changed record | GA version | Reason |
 | --- | --- | --- |
@@ -347,6 +413,9 @@ lifetime. These image-backed filters depend on Milestone 1's shared image model
 and Milestone 2's source evaluation, not completion of all object authoring UI.
 Add actual typed bindings when their consumers are implemented; do not revive
 empty general-purpose graph maps on every effect.
+Milestone 1 establishes the image/closure machinery; the first real filter use
+and its round-trip test land with that consumer after those dependencies. Do not
+add an unused wire binding or a fake filter just to meet a model milestone.
 
 ### 5.1 Paint originals use the same image record
 
@@ -361,7 +430,8 @@ paint-use color policy needed by current behavior:
 
 This policy replaces `SourceKind` on the shared image; it is not a second image
 representation. The source-profile policy is the default. Working-pixel bases
-must match the composition's declared working color/depth. A color change
+must be RGBA, use the composition's built-in working profile and depth, and have
+`profile_assumed:false`. A color change
 replaces affected image references without mutating an image still used by an
 object. Image objects always retain the referenced image's own color interpretation.
 Filter image uses select their sampling role separately, as described in section 5.
@@ -370,6 +440,46 @@ The distinction is necessary, not disposable provenance:
 [current color edits](../../crates/layer-core/src/color_edit.rs) preserve imported
 originals but update rasterized bases. Test Assign Profile, Convert Profile and
 depth changes before replacing this behavior.
+
+Preserve source-edit workflows through the **binding policy**, not an image-wide
+`SourceKind`. Repair Source Profile replaces the selected source-profile use's
+immutable image interpretation, leaving other users unchanged. Rasterize Source
+converts that paint base to working pixels without accidentally applying the
+occurrence's mask/effects. It is distinct from Rasterize Layer on objects.
+Image objects also expose profile repair for their selected image use, through
+the same immutable replacement job and validation. Generalize the source-edit
+request's target to a paint-base use or image-object use; do not require a paint
+target to repair a placed photograph. A raw-data filter use keeps its declared
+sampling role when another use repairs its color interpretation.
+Document Properties lists image interpretation and each paint binding's role;
+an image shared by paint and objects has no single document-wide original kind.
+
+The current Revert to Original command only discards painted overrides and
+material; it does not reset placement. Preserve this useful operation under the
+accurate label **Discard Paint Edits** for a source-profile base with edits. It
+restores the current retained base, domain and placement, not the originally
+imported photograph after a destructive crop/resample. Undo restores discarded
+edits. Remove the old label and placement-dependent refusals at milestone 5,
+not the underlying capability. Do not retain a second historical original just
+to support the old wording.
+
+Move Web's original-stripping/restoration around color worker transfer into
+shared Rust's color-job capture/publication policy; hosts schedule the job only.
+For working-base depth conversion, dithering uses paint-local pixel coordinates
+including the base offset, just like override tiles. Cache converted bytes by
+image, conversion and relevant paint-local phase; two differently offset uses
+cannot incorrectly reuse dithered bytes. Source-profile bases remain unchanged
+by document color edits. Object source conversion does not bake viewport-dependent
+dither into authored images.
+
+Internal paste is compatible for direct base reuse when its decoded image
+layout, profile, depth and intended color policy are already valid for the
+destination. Same-document working RGBA uses working-pixel policy. A full-depth
+clip in a different document color, or a preserved source-profile clip, retains
+its explicit interpretation with source-profile policy under the current
+cross-document policy. Otherwise prepare a converted immutable image off-thread.
+In all cases paste sets `base_offset=0` and stores copied/centered position in
+the occurrence's integer offset; it does not encode placement in base storage.
 
 ### 5.2 Fields that remain out of the file
 
@@ -393,15 +503,33 @@ references and evaluation phases address that identity. Preserve all authored
 values, including defaults, and every existing built-in ID/data-version meaning.
 Do not confuse the record version `/2` with a particular built-in's data version.
 
-Remove `capy.effect-definition/1` from the portable known registry, and do not
+Remove `capy.effect-definition/1` from the known registry at the effect cutover, and do not
 write a separate portable record/ID solely to hold `{builtin, version}`. Built-in
 programs resolve through the catalog; shared runtime program objects need no
 authored definition identity. The current
 [definition adapter](../../crates/layer-core/src/package/effect_records.rs)
-contains no editable built-in definition beyond that descriptor. Private custom
-filter definitions/programs remain in private session/worker contracts as needed;
-they do not justify the portable indirection. Keep those private workflows tested
-and remove obsolete portable last-use bookkeeping without breaking private uses.
+contains no editable built-in definition beyond that descriptor.
+
+Private recovery, history and worker transfers currently use the same adapters
+and definition store. Replace that dependency in the same cutover: private
+`capy.effect/2` accepts either the portable built-in descriptor or a private
+`{program, values}` alternative. A program carries its validated custom-filter
+descriptor and references deduplicated code/table resources. These alternatives
+are mutually exclusive; the portable context never admits the custom alternative
+as editable artwork. Do not introduce a second definition identity to rescue it.
+
+Use a direct `program: Arc<EffectProgram>` and `values` on `EffectApplication`,
+plus the consumed spatial reference defined below where applicable.
+Intern built-ins through the catalog and custom programs through their immutable
+descriptor/resources. Remove `Definition`, `DefinitionHandle`, its authored
+store, `Edit::Definition`, the transfer-layout slot, `Shape::Definition`, and
+the last-use release in `layers.rs::effect_edits`. That release is runtime
+bookkeeping, not merely a portable-writer detail. Keep effect application IDs
+and phase bindings. Move custom-program wire grammar from the portable package
+guide into the private-format section of the
+[session/recovery guide](../internals/session-recovery.md) when this lands.
+Exercise custom-filter autosave, undo/redo, parked tabs and Web worker transfer;
+portable rejection must not disable these private workflows.
 
 Remove empty `inputs`/`bindings` reservations from the portable effect contract.
 They are not implemented graph editing; current readers already reject nonempty
@@ -417,8 +545,13 @@ effect's coordinate evaluation. Existing scalar parameters keep their meanings
 relative to this reference: pattern phase uses its origin, and percentage
 centres/radii use its extent. It is neither an image domain nor a hidden general
 layer transform. Pointwise effects that do not use it have no such binding.
-Section 7 specifies crop compensation; the field layout, admission limits and
-non-default fixture must land with its evaluator before the effect record freezes.
+Use `spatial: {origin:[x,y], extent:[width,height]}` on the effect application;
+all four numbers are finite doubles and both extents are positive. Effects whose
+declared evaluation consumes this reference require it on read; do not substitute
+the current frame for a missing saved reference. Unknown future spatial forms
+are Unsupported. Numerical/range admission and a non-default crop fixture must
+land with the evaluator before this record freezes. Section 7 specifies crop
+compensation and the limit of origin/extent for directional remapping.
 
 Image and spatial bindings above represent implemented authored inputs, not the
 removed empty `inputs`/`bindings` reservations. Keep their references discoverable
@@ -426,6 +559,79 @@ and typed. Future additions to a released built-in's controls use the
 [parameter-data version and concrete converter rule](../reference/capy-package.md#adding-controls-after-ga),
 with all implemented values saved, including defaults; no future control is
 reserved now.
+
+### 5.4 Registry contexts and the pre-GA occurrence transition
+
+Portable packages and private sessions have different envelopes, but share
+record adapters, type strings and admission. In particular,
+[incremental history](../../crates/layer-core/src/package/session_transfer.rs)
+encodes individual changed records through the portable adapters. Runtime-only
+object helpers cannot satisfy milestone 1's save/open/undo exit condition.
+
+Use one registry table with explicit portable/private applicability, consumed
+by manifest classification, topology, adapters, admission and session/transfer.
+Do not maintain independently drifting registries. Private-only program content
+is a context restriction, not permission to execute package-embedded shaders.
+
+From milestone 1 until milestone 5, keep the existing occurrence `/2` adapter
+and add the **final** `/3` adapter. Write `/3` only when the runtime occurrence
+is exactly representable: integer permitted offsets, identity retained owner
+placement, representable mask geometry, and applicable GA fields. Object layers
+always meet this contract. Existing placed paint continues writing `/2`; this
+retains an existing adapter temporarily, not a newly written migration reader.
+Mixed-version occurrence records in one package/session are supported during
+these milestones. `/3` never acquires interim float or general-placement fields.
+
+For an old mask, evaluate its actual map into parent space. It must be exactly
+an integer translation with unchanged coverage semantics to qualify. If that
+translation is `T`, write `M=T-L` when linked, otherwise `M=T`. Do not round a
+fractional value or discard nonidentity geometry to force qualification.
+Inapplicable effect/selection offsets likewise require their real conversion,
+not omission while they still influence rendering.
+
+History change descriptors derive their type from the selected encoded record,
+rather than hardcoding `capy.occurrence/2`. Both adapters resolve to the same
+runtime handle/identity; undo across the representability boundary keeps the
+correct value. Deletion descriptors and transfer layouts use the same registry.
+Test a batch mixing new objects, old placed paint and linked masks through
+portable open, autosave/recovery, worker transfer and incremental undo/redo.
+
+Milestone 5 switches every caller to the final integer model and removes `/2`
+and its placement adapter. Existing pre-cutover private sessions are unsupported
+after that pre-release change; no recovery migration is promised. Other changed
+records switch once, when their complete new semantics are available, under
+their final versions in the table above. Update affected fixtures at each switch.
+
+### 5.5 Immutable images in captures and incremental history
+
+An image is an immutable ID-bearing value, shared like today's `Arc<SourceImage>`;
+reuse the ownership mechanism in
+[authored/resource.rs](../../crates/layer-core/src/authored/resource.rs).
+The wire image table does not require an editable runtime image store, image
+handles or `Edit::Image`. Paint-base/object edits publish replacement references.
+Strong references from artwork, history and accepted captures own the data.
+
+The history writer collects the image dependency closure of **each changed
+record value**, including undo values absent from the current document. Encode
+those images/resources alongside the change or in the transfer's deduplicated
+dependency pool before decoding that change. They are dependencies, not separate
+undo edits. A current-document inventory alone is insufficient.
+
+Intern decoded images by portable image ID across the current state and all
+history entries. Reject conflicting immutable descriptors for the same ID in
+one session/transfer; remap foreign ID collisions on copy/import. Replace the
+current original-image JSON-text cache in
+[resources.rs](../../crates/layer-core/src/package/resources.rs). Tile/profile
+resource deduplication remains separate. This preserves allocation sharing and
+the existing 512 MiB history accounting, rather than charging a decoded copy
+of the same photo to every state.
+
+Topology counts image references as immutable dependencies, not single-owner
+editable uses. The current shared-editable check applies to selected ownership
+edges, not literally every reference. Add an image shape/edge classification
+that permits many users while counting their record/resource limits correctly.
+Test 1,025 users of one image remaining editable and an undo entry restoring the
+last deleted image after session transfer. Portable retention is section 10.1.
 
 ## 6. Image evaluation and sampling
 
@@ -452,7 +658,8 @@ authored choice. Do not switch insertion to bicubic/Lanczos merely to address
 minification: all current smooth modes use bilinear taps when integrating a
 larger footprint. Kernel choice and antialiasing of that footprint are distinct.
 Nearest preserves the deliberate pixel-art choice. Bilinear sampling already has
-[independent sampling oracles](../../crates/layer-render-wgpu/src/transform_oracle_tests.rs).
+[algorithm oracles](../../crates/layer-render-wgpu/src/transform_oracle_tests.rs),
+but their capped tap grid is not an independent footprint-quality reference.
 Move the applicable definition into the image-object contract rather than
 retaining a general occurrence-placement grammar.
 Do not expose bicubic or Lanczos on GA image objects; the GA reader treats these
@@ -461,16 +668,53 @@ after their complete contracts are implemented. Existing paint-transform and
 export choices may continue using those kernels: those operations commit pixels
 or produce an output and do not retain a kernel name in portable paint artwork.
 
-Before freezing those names, specify and test the complete sampling behavior:
-sample centres, transform direction, transparent edges, premultiplication,
-overshoot handling, minification and rounding. Current smooth minification uses
-a grid of bilinear samples; current exact and moving passes have different tap
-budgets. Those implementation choices must not accidentally become synonymous
-with a kernel name or with authored cache quality. Retain the existing exact
-reference as the baseline while recording its minification behavior explicitly;
-intentional corrections happen before the fixture freeze. Preview approximations
-may use lower quality, but canonical document-grid operations and exports must
-match the frozen reference within their declared numerical tolerances.
+The selected reference is a scale-adapted tent reconstruction, with no tap cap.
+This is Capy's chosen smooth contract, not a claim that all applications use
+this filter. Define it in source coordinates after profile conversion and
+premultiplication:
+
+- `nearest`: inverse-map the output pixel centre to `q`, select
+  `(floor(q.x), floor(q.y))` at level zero, or transparent outside the image.
+  This also applies under minification. Aliasing is deliberate; neither moving
+  nor settled display may substitute an averaged mip for this choice.
+- `linear`: let `J` be the inverse mapping's 2×2 linear part from one output
+  pixel to source units. If `J = U diag(s1,s2) Vᵀ`, set
+  `S = U diag(max(1,s1),max(1,s2)) Uᵀ`. This symmetric stretch is independent
+  of SVD sign choices and expands the filter along minified source directions.
+  For every source-lattice centre `p`, set `r = inverse(S)*(p-q)` and weight
+  `w(p) = max(0,1-|r.x|) * max(0,1-|r.y|)`. Sum weighted premultiplied samples
+  and divide by the sum of weights over the **whole** contributing lattice,
+  including transparent samples outside the image. No edge renormalization to
+  opaque pixels. With no minification `S=I`, giving ordinary bilinear sampling;
+  aligned identity and exact grid permutations reproduce samples exactly.
+
+Compute the CPU reference independently in binary64 by enumerating its finite
+support, not by copying GPU tap counts, mip levels or shader branches. Positive
+normalized weights avoid ringing/overshoot; retain valid HDR/signed RGB rather
+than clamping to SDR. Quantization happens only at an explicit output encoding.
+For unit-range premultiplied RGBA conformance fixtures require maximum absolute
+error at most `2e-3` and mean absolute error at most `2e-4` per channel before
+output quantization. For HDR fixtures scale the RGB bounds by
+`max(1, maximum absolute reference-input RGB)`; alpha uses the unit bounds.
+Exact permutations require exact source/coverage samples, not this looser bound.
+These are required tolerances, not measured claims about the current renderer.
+
+The existing exact path caps at 16 taps per axis and has no corresponding
+source-mip path; moving caps of four appear in placement, paint-transform and
+display resampling. The display mip shortcut also constructs a default transform
+without preserving authored Nearest. Replace these behaviors for image objects.
+Beyond a work budget, use admitted prefiltered image levels and anisotropic
+evaluation that meets the reference, or schedule bounded refinement/exact work.
+Never truncate the footprint to the cap and publish it as a canonical result.
+Refuse unsupported resource/precision requests before an authored commit.
+
+Settled object display, canonical pixel-tool sampling, Rasterize/Convert captures,
+merge/bake and raster export must conform to the same authored image filter for
+the requested mapping. Moving display may temporarily approximate `linear`, with
+cancelled/stale refinements excluded from export and pixel tools. Nearest remains
+nearest even while moving. Paint operations using the same nearest/linear helper
+must pass its affine conformance cases; transient perspective/mesh and other
+paint kernels retain separate explicit tests and no new portable contract.
 
 Test severe and anisotropic reductions as well as magnification: checkerboards,
 thin lines, transparent edges and the existing zone-plate reference. A 4096-wide
@@ -480,6 +724,20 @@ reconstruction kernel's name alone supplies no such guarantee. Keep the existing
 preview-versus-commit distinction explicit and qualify the actual footprint
 filter, including reductions beyond its current tap cap, before GA. Do not
 declare every reduction antialiased from the one 8× case.
+
+For example, at a 32× reduction and an interior source-centre alignment, a
+16×16 uniformly spaced sample grid can hit only one parity of a unit checkerboard
+and return zero instead of one half. Enumerating the uncapped tent weights gives
+one half at 8×, 16×, 32× and 64× in this check. This is a mathematical counterexample
+to the capped grid, not a GPU conformance or visual-quality measurement.
+
+Measure reconstruction, transparent-edge coverage and detail along the
+unminified axis as well as average alias rejection. Include 1/16, 1/32, 1/64,
+noninteger reductions and rotated anisotropy; a simple isotropic mip can blur
+the narrow axis even while suppressing aliases. The reference and bounded GPU
+implementation are milestone 2 exit requirements. If their quality/performance
+tradeoff requires a different smooth contract, revise this section and fixtures
+**before** exposing objects or freezing `/1`; do not silently weaken tolerances.
 
 This is a release gate, not a claim that current sampling already meets an
 unmeasured quality target. New algorithms after GA must preserve the frozen
@@ -570,6 +828,16 @@ belongs in private-format documentation. Future object-local effects or
 scale-independent effects receive their own declared evaluation semantics,
 without changing the meaning of GA attached raster filters.
 
+The [illustration-filter proposal](../development/illustration-filters-proposal.md#crop-compensation-and-source-boundaries)
+and this plan use the same crop-compensated effect reference. This deliberately
+changes today's re-anchoring on crop. It does not put a hidden origin back on the
+composition or make effects owner-local. Image Size and image orientation need
+explicit per-filter rules for both declared controls and implicit directional
+patterns; origin/extent alone must not be assumed to rotate an arbitrary shader.
+Qualify each supported operation, or refuse the complete operation when its
+effect geometry cannot be represented. Implement these rules with the spatial
+reference, not as a later silent interpretation of a frozen field.
+
 Well-formed relationships outside the supported subset are `Unsupported`.
 Malformed references, duplicate ownership identities and prohibited cycles are
 `Invalid`. A future relaxation of an editor restriction must not make a GA reader
@@ -582,9 +850,9 @@ misdiagnose a well-formed future document as corrupt.
 | Action | GA behavior |
 | --- | --- |
 | Open Image | Create a paint layer at identity with a referenced imported base. It is immediately paintable. |
-| Place Image, image file drop, external clipboard image | Insert image objects into the active editable object layer; otherwise create an object layer immediately above the selected layer in its parent stack. Preserve placement preview and cancellation for Place and ordinary external Paste. |
+| Place Image, image file drop, external clipboard image | Insert image objects into the active editable object layer; otherwise create an object layer using the insertion-destination rules below (selected group, clipping run or explicit row drop). Preserve placement preview and cancellation for Place and ordinary external Paste. |
 | Paste a second external image | The first paste leaves its object layer active, so the second normally enters the same object layer. Both remain independently selectable and ordered. No one-image-per-layer rule. |
-| Paste / Paste in Place from Capy's pixel clipboard | Create a new paint layer above the selected layer in its parent stack, regardless of the active content kind. Preserve the copied position for Paste in Place; ordinary Paste keeps the existing visible-position/otherwise-view-centre rule. Align placement to the document pixel grid. The result can be painted or erased immediately. |
+| Paste / Paste in Place from Capy's pixel clipboard | Create a new paint layer using the insertion-destination rules below, including insertion into a selected group. Preserve the copied position for Paste in Place; ordinary Paste keeps the existing visible-position/otherwise-view-centre rule. Align placement to the document pixel grid. The result can be painted or erased immediately. |
 | Paste copied Capy objects | Preserve their object structure and share/remap immutable resources correctly. Allocate new object identities. |
 | Paste Into a pixel selection | For internal or external pixel images, create a new object layer with a stored coverage mask made from that selection. Put the pasted image inside it. Moving the image changes its position behind the fixed layer mask. Structured object paste into a selection preserves those objects inside the new masked layer. |
 | Paint or erase while object content is active | Refuse the stroke without changing artwork. Offer direct actions to Add/Edit Mask, New Paint Layer, and Rasterize Layer; name the selected object layer as the affected scope. Never modify a cache or silently rasterize. |
@@ -597,6 +865,15 @@ Ordinary Paste does not implicitly turn an existing pixel selection into a mask;
 Paste Into is the explicit masked operation. A locked or inadmissible insertion
 parent causes a refusal before mutation, not insertion into an unrelated group.
 
+Keep `image_layer_destination`'s established insertion rules: an explicit row
+drop wins; selecting a group inserts into it; ordinary insertion above a content
+row is above its complete active clipping/attachment run, with the existing
+`content_insertion` normalization. When the active destination is an editable
+object layer, ordinary image/object insertion adds children there. An explicit
+Above/Below drop creates a sibling layer; an Into drop on an object layer adds
+children. Paint paste always uses the paint-layer destination rule. “Above the
+selected layer” is shorthand for these rules, not a replacement algorithm.
+
 This distinction follows the existing `PixelClip` versus external-source routes
 in [clipboard.rs](../../crates/layer-ui/src/clipboard.rs). Copy, Cut and Copy
 Merged that explicitly capture pixels produce the internal pixel flavor, even
@@ -607,6 +884,17 @@ external clipboard offering only image bytes follows the external-image rule.
 Never guess provenance from pixel equality, file name or a stale clipboard.
 Preserve full-depth/color interpretation and the existing cross-document color
 policy. Clipboard provenance is transient and adds no field to `.capy` artwork.
+
+The structured object flavor is a window-held (GTK application-held) immutable
+object clip, selected by the existing system nonce and accompanied by a PNG
+fallback. No new native system clipboard format is required. It carries ordered
+object values, image dependency closure, source color context, document-space
+F64 geometry and unclipped signed bounds. Replace `PixelClip.origin: [u32;2]`
+with checked signed pixel coordinates for pixel clips too; do not force object
+bounds through the old unsigned, canvas-clipped pixel crop. Object PNG fallback
+is a bounded worker capture of the complete selected bounds, or a specific
+refusal when it cannot be admitted. Publish successfully before executing Cut;
+nonce expiry must never delete the source or reuse an unrelated clip.
 
 Internal pixel paste does not require a resample simply to insert it. Reuse a
 compatible immutable image as the paint base and choose an integer offset;
@@ -626,6 +914,18 @@ Rasterize Layer is the explicit destructive conversion of the whole object
 layer. Do not replay the refused stroke automatically after any action. Keep
 these choices in the existing shared refusal/action UI rather than persistent
 instructional text in the canvas.
+
+The existing notice model has only one action, and all five hosts render one
+button. Extend the shared notice projection to an ordered action list with
+stable action tokens and add `DrawingRefusal::Object`. Offer the three actions
+above with localized labels and native accessible controls; disabled choices
+carry the real lock/admission reason. Revalidate the owner, document epoch and
+target when invoking an action. GTK review must include narrow/touch layouts,
+then update Web, Android, Apple and Windows together. Notices may retain the
+current timeout/next-canvas-contact dismissal: a refused new contact raises a
+fresh notice, and the same actions remain in the layer menu. Clicking a notice
+action is UI contact, not a canvas contact that dismisses it before invocation.
+No stroke is queued for replay.
 
 Convert to Object captures current paint overrides and resolved material
 appearance, not just the imported base. It does not turn paint into editable
@@ -711,6 +1011,61 @@ Required shared UI behavior:
   unavailable for GA image objects. Never silently rasterize an image to make
   an unsupported retained transform appear to work.
 
+**Target activation and drag precedence:** entering Move/Scale–Rotate from an
+object layer's content or selecting an object child row activates `Objects`.
+Entering from paint retains the existing selected-pixels/whole-layer behavior;
+mask editing, selection-outline editing and explicit Move Layer/Mask commands
+remain explicit distinct targets. Changing to a pixel-selection tool makes its
+coverage target active; returning to object content restores object targeting,
+even if old pixel coverage still exists. Cross-layer picking operates while
+`Objects` is active, not while an explicit paint/layer/mask operation is active.
+
+In object mode, handles of the current selection win first; otherwise the
+frontmost eligible object hit wins and may activate another object layer.
+Dragging that hit moves the selected objects. A miss clears object selection;
+an empty mouse/pen drag does nothing in GA (no marquee or implicit pixel move).
+Empty touch contact keeps the established navigation gestures. Object bounds
+must participate in `object_touch_hit` before touch is routed to pan/zoom, so
+touch can select an unselected image rather than always navigating.
+
+Keep an object transform **session** open while object selection is active,
+with persistent handles but one undo transaction per completed drag/nudge.
+Every gesture previews from its starting F64 affines, commits once on release,
+and cancels without mutation. Escape cancels a live gesture; otherwise it clears
+object selection. Enter accepts pending placement/transform work. Switching
+targets resolves the gesture before changing selection. Reuse the operation
+controller and handles, but do not round-trip authored objects through today's
+F32 `Transaction`, `Pose`, `Point` or `last_transform: Projective`. Use a typed
+F64 object transaction and camera-relative conversion for native pointer input;
+existing F32 pixel operations need not all be widened.
+
+| Transform command | Object-target behavior |
+| --- | --- |
+| Arrow nudge | Translate by 1 composition unit, or 10 with Shift, independent of zoom; coalesce one held-key gesture into one undo step. |
+| Alt-drag copy | Allocate copies once when movement starts, share image values, then move the copies. Cancel removes unpublished copies and produces no undo entry. Touch uses Duplicate then Move. |
+| Transform Again | Reapply the last committed object gesture's F64 document-space delta, with its pivot embodied in that map, to the current object selection. Keep typed history separate from paint perspective/mesh deltas; refuse an incompatible or absent last transform. |
+| Original Size | Restore unit source-pixel scale with no shear, preserving each selected object's document-space centre, rotation and mirror orientation; use the affine's orthogonal polar factor. It does not restore the original placement or erase an object's source. |
+| Transform flips / quarter turns | Apply exact document-space affine reflections/turns around the selection's active pivot to every selected object in one edit. Camera Flip commands continue to change only the view. |
+| Reset / cancel placement | Restore the session's starting affines, or cancel unpublished insertion; never replace them with an assumed canvas-fit transform. |
+| Interpolation menu | Only Nearest and Linear for objects. Paint/export may still offer their transient kernels; menus are target-specific. |
+
+Shared shortcut routing follows the visible semantic target after native text
+editing, focused controls and an active gesture have handled their keys:
+
+| Action | Active object target | Pixel/coverage target or explicit layer target |
+| --- | --- | --- |
+| Select All | Select all children of the active object layer, including list-accessible hidden objects; never all document objects. | Existing pixel/coverage Select All; explicit layer-row selection remains a layer-panel operation. |
+| Deselect | Clear object selection; leave pixel coverage unchanged. | Clear pixel selection/coverage selection as appropriate; do not clear hidden object state by accident. |
+| Delete/Backspace | Delete selected objects atomically; empty object selection is a no-op, never deletion of its layer. | Existing pixel clear with selection and target protections; explicit layer Delete remains a separate action. |
+| Copy/Cut | Structured selected-object clip; Cut removes whole objects only after publication. | Explicit pixel copy/cut/copy-merged keeps its current capture scope. Explicit layer copying/duplication remains layer-scoped. |
+| Ctrl/Cmd+J | Duplicate selected objects inside their layer. | With pixel selection, Copy Selection to Layer; without it, retain duplicate-selected-layers behavior. |
+| Ctrl/Cmd+Shift+J | No object selection-to-layer cut in GA; unavailable with its reason. | Existing Cut Selection to Layer on writable paint. |
+| Arrows | Object nudge above. | Existing paint/mask/outline nudge; integer layer movement stays integer. Focused layer-row keyboard navigation wins before canvas routing. |
+
+Command labels, enabled states and context menus use this same target resolver;
+do not implement a separate shortcut-only policy. An explicit Copy Pixels command
+can capture an object layer into pixels without changing structured object Copy.
+
 Object selection, focus, temporary handles and hit-test structures live in
 working/session state. UI controls and native transport do not add `.capy`
 fields. Rules and text remain in shared Rust; hosts forward input and present
@@ -740,6 +1095,25 @@ cost is not established by that precedent. Affinity's own
 warns about all-layer candidate costs. Reusing rulers does not supply bounded
 object discovery, exclusions, coordinate precision or gesture tests for free.
 
+Object layers nevertheless join the existing **layer-bounds** snap candidates
+alongside paint and groups in `image_geometry.rs`, using cached read-only bounds.
+Exclude moving owners/ancestors and hidden/clipped candidates under the existing
+rules. Do not scan or alpha-read every object on each pointer sample. Snapping
+to an individual sibling object remains deferred.
+
+The shared layer panel currently projects occurrences only. Add typed row IDs
+(`Occurrence` versus `Object`) and shared row projections for object children;
+never cast object IDs into occurrence tokens. Include parent/indent/expanded
+state, visibility, selection, name, thumbnail, supported actions and drag/drop
+destinations. Layer rows keep layer controls; object rows cannot receive masks,
+clip flags, alpha lock or occurrence-only filters. Child reordering stays within
+the owning object layer in GA; explicit Cut/Paste moves between layers. The
+layer-row Filter menu applies to object **layer** owners with the existing
+attachment rules, not to image child rows. Hide right-swipe alpha-lock behavior
+for both object layers and their children. All five hosts build rows by hand
+today, so update their rendering, accessibility, menus, thumbnails and drag
+adapters; a shared enum change alone does not supply this UI.
+
 ### 8.3 Transform and canvas operations
 
 Paint transform previews resample the current committed content captured at
@@ -765,6 +1139,24 @@ Rotating only the base would discard/misalign painted edits. Test the largest
 admitted photo, an edited photo and a shared image still used by an object;
 larger-than-admitted requests must refuse atomically.
 
+For Image Size, straighten, free rotation and other resampling of an untouched
+source-profile photo base, retain source-profile policy when the result can be
+encoded in a supported source interpretation. RGB/gray may acquire their
+already-supported alpha channel when rotation exposes transparency; preserve
+profile/depth rather than inventing a matte. There is no CMYK-plus-alpha layout
+today. General CMYK resampling, or an interpretation without a supported faithful
+output encoder, produces working RGBA with working-pixel policy; do not promise
+source-profile preservation universally or add new channel formats for this
+workflow. Exact CMYK flips/turns/crops remain sample permutations and keep CMYK.
+For a paint layer with overrides or material,
+resample the **combined current paint content once** into working pixels, with
+the transformed material planes required for subsequent painting. Do not
+resample the base and overrides independently and composite their edges later;
+that creates seams. The working-pixel base/overrides must represent the one
+result without applying resolved material twice. A working-pixel base remains
+working-pixel even when no overrides exist. Undo owns the previous immutable
+image; no separate “original before every transform” enters the portable file.
+
 Destructive transforms also resample scalar watercolor wetness. The current
 [membership threshold](../../crates/layer-render-wgpu/src/watercolor_floor.wgsl)
 is `2/255`, so values around it can change membership after resampling. Retain
@@ -785,12 +1177,49 @@ Canvas-wide rotation/flip and other already supported image operations need
 atomic mixed-content handling as part of GA, not silent omission of object
 layers. An unsupported descendant or exceeded limit refuses the whole operation.
 
+Photo paint layers participate in grow/crop just like other paint. Remove the
+`original.is_some()` exclusions in `canvas_changes` and `extents_cover_canvas`,
+and check the engine's canvas-coverage assertion under the new model. Grow may
+rebase by whole tiles; ordinary crop preserves content outside the window.
+With **Delete Cropped Pixels**, intersect a paint base with the kept local
+rectangle, recut its retained samples exactly into a new image (or remove an
+empty base), trim/clear overrides and material outside it, and recompute the
+base offset/domain. Do not keep the full photo behind a smaller declared domain.
+Retain source profile/depth/resolution for an exact crop; share unaffected tile
+payloads where indexing permits. Partial tiles are rebuilt in bounded workers.
+Other objects using the old image and private undo keep their original data.
+
+The deletion option applies to paint pixels and stored coverage tiles; masks
+retain their declared default/inversion outside stored tiles. Image-object
+sources and geometry remain retained. Make that scope explicit in the crop
+control (delete cropped **paint** pixels), rather than implying destructive
+trimming of placed images. To destructively trim an image object, Rasterize
+Layer first. This keeps ordinary/off-frame object crop behavior consistent and
+does not add an object source-crop field to GA.
+
+Replace portable composition origin with an accumulated checked integer view
+origin in `WorkingState`. Record it in private sessions, working edits and
+undo/redo; camera-follow logic consumes it without changing artwork coordinates.
+Rendering still derives positions from actual occurrence/object offsets. Compare
+canvas extent, this private origin and changed storage domains/rebases when
+deciding rebuilds during history navigation; today's origin-only check misses a
+right/bottom-only crop undo. Allocation rebuilds and appearance damage are
+separate: an ordinary object affine edit uses section 9's damage path, not a
+canvas rebuild. Test all four crop edges, grow, undo/redo after recovery, and
+integer offset/rebase changes with unchanged canvas size.
+
 Group Move changes integer offsets only. Remove group scale/rotate/flip/warp
 commands from GA availability rather than maintaining descendant-rewrite code
 for arbitrary group gestures. Canvas-wide operations still update all relevant
 paint, objects, masks, selections and guides atomically. Object multi-selection
 transforms edit the selected affines together without giving the object-layer
 container a matrix.
+
+At milestone 5 remove Apply Transform to Pixels, its command registration and
+all “apply first” notices: no retained paint transform remains to apply.
+Discard Paint Edits replaces Revert to Original's wording as section 5.1
+specifies. Keep supported transient paint Transform Again through one new pixel
+operation from current content; it must not call the removed retained helpers.
 
 ### 8.4 Commands that consume or inspect layers
 
@@ -825,10 +1254,31 @@ complete semantic inventory or an acceptance metric.
 | Crop / Canvas Size / Image Size / image orientation | Include object layers under section 8.3. Any unsupported descendant, lock restriction or admission failure aborts the complete operation. |
 | Save, recovery, tab parking, transfer, clipboard, raster export and previews | Enumerate object/image dependencies from immutable captures; do not rely on paint targets to discover all content. Use the existing job/checkpoint and publication mechanism. |
 
+The following existing journeys require explicit policies too:
+
+| Command / consumer | Required behavior |
+| --- | --- |
+| Use Reference Below | Consider visible object layers as well as paint, retaining current stack/visibility rules. Mark the layer as a reference and sample its canonical isolated result through the existing reference closure. |
+| Wand / color selection / Fill sampling | Editing, Visible and Reference sources accept readable object-layer content. Editing reads the layer's raw internal composite; selecting pixels never requires a writable object target. Fill still writes only paint/coverage, so an active object content target refuses with the object actions. Visible/reference routes already use scoped scene capture; the missing piece is object evaluation and the paint-only Editing/reference discovery. |
+| Clone/smudge or other reference-sampling brushes | Read objects through canonical artwork queries; the destination must remain paint. Stable object sampling may use caches, independent of viewport quality. |
+| Frequency Separation | Preserve its paint-only preparation and existing blend/color/visibility restrictions for GA. An object-layer invocation offers explicit Rasterize Layer first; do not secretly flatten objects. |
+| New Dodge & Burn Layer | Accept an object layer as the insertion context under current parent-lock rules; create and select a new paint layer above its clipping stack. The current command does not consume or require paint content, contrary to the audit's claim. It needs no prior Rasterize. Direct Dodge/Burn brushing still requires a writable paint target. |
+| Copy Selection to Layer | In explicit pixel mode, capture selected raw object-layer appearance at the document grid into a new paint layer, with the command's established presentation-property handling and one undo step. No selection keeps existing selected-layer duplication. |
+| Cut Selection to Layer | Remains paint-only because it removes pixel coverage. On objects refuse and offer mask/rasterization; whole-object Cut is the distinct structured clipboard operation. |
+| Layer-row Filter menu | Include object layer owners in the menu added at `9f6b774bc`; disable on image child rows in GA. Tests must exercise creation, attachment and editing, not only display the menu. |
+
+Internal Paste Into deliberately creates an unpaintable object layer even though
+ordinary internal Paste produces paint. It is an explicitly chosen masked-frame
+workflow: move the image behind its mask, or choose Rasterize to paint. It must
+not run implicitly whenever a pixel selection happens to exist.
+
 Bounds are a shared read-only content query, not an inference from paint targets.
 For every destructive bake/merge involving objects, take the complete union of
-the finite contributing paint and transformed object bounds, plus required effect
-output support, and round outward to the document grid. Masks may reduce
+the finite contributing paint and transformed object bounds, plus sampling-filter
+and effect output support, and round outward to the document grid. Intrinsic
+image rectangles used for picking are not automatically sufficient rendered
+bounds; fractional smooth sampling can contribute beyond them. Exact identity
+and grid-permutation paths may use their proven tighter support. Masks may reduce
 appearance but do not justify clipping surviving content to the current frame.
 Store the result with an integer offset and admitted finite paint domain. Hidden
 objects are not made visible by merging; their editability returns through undo.
@@ -840,13 +1290,51 @@ intersects its computed bounds with the supplied bake extent. Update all those
 paths and the renderer's region/scope evaluation together. Merely teaching
 `bake_extent` about objects is insufficient.
 
-Frame-defined generators contribute their existing frame-domain output; they
-must not force the rest of a finite content union back into that frame. Preserve
-existing frame-relative filter coordinates rather than treating an expanded
-bake rectangle as a new composition frame. Where output support is unbounded or
-cannot be conservatively represented within admission, refuse the bake with a
-specific reason; do not silently clamp it. Dependency input halos may extend
-beyond output bounds and must be fetched without becoming an accidental crop.
+Frame-defined generators contribute their declared frame-domain output; they
+must not force the rest of a finite content union into that frame.
+Separate three things in frame/job packets: the authored composition frame
+(origin and extent in evaluation coordinates), the requested evaluation/output
+region and mapping, and each source's intrinsic domain. For a bake whose origin
+is `B`, the authored frame starts at `-B` and keeps its composition extent;
+the bake's extent is only the destination allocation. `fx_position`, `fx_extent`,
+global guides and generator coordinates use the authored frame. Today's
+`scene/bake.rs` substitutes the destination extent and cannot satisfy this rule.
+
+Add the effect's authored spatial reference as a fourth, distinct input: it
+supplies coordinates/percentage geometry and survives crop compensation; it is
+neither the current composition frame nor the source or output domain. If it
+starts at composition coordinate `R`, its origin in a bake is `R-B`. Compute
+effect-local coordinates from the point minus that origin; do not subtract a
+translated root a second time. Global analyses explicitly defined on the current
+frame continue to use that frame, not a larger temporary bake allocation.
+
+**Remove the current frame clamp from filter dependency sampling.** Fetch
+retained source content throughout each stage's dependency region, including
+outside the composition frame. Transparent extension begins at true finite
+source support; a filter's explicit Repeat/Clamp input policy applies only at
+its declared source boundary. Neither the output rectangle, a tile edge, the
+stored effect reference nor a viewport cache is that boundary. Replace the
+clamping behavior in `PixelRect::expand`, capture windows, `scene/windows.rs`
+and filter-stage windows together in both evaluators. Raw captures already
+bypass one frame clamp; that alone does not fix effect captures.
+
+This is an intentional **pre-GA behavior change**: off-frame content may now
+affect pixels inside the frame, and crop no longer resets eligible patterns.
+Implement it for viewport, exact queries, export and bakes together. “Preserve
+the current composite” below means preserve this resulting GA composite through
+an accepted destructive operation, not preserve the old frame-clipped renderer
+only in one path. The new effect record/reference and evaluation contract must
+land with these semantics before freeze. Keep unchanged geometry/color/alpha
+tests, add independent edge/halo references, and review any affected old baseline
+with a concrete reason; do not call every changed edge an artistic improvement.
+
+Flatten/Stamp also deliberately stop cropping retained content to the frame.
+Filter-bearing off-frame bakes are supported when their full output and upstream
+dependency support are finite and admitted. Unknown/unbounded support or a
+resource-limit failure refuses the whole operation; a frame-clipped partial
+result is never a fallback. Test accepted merges against the same extended
+scene evaluation at identical document coordinates, with nonzero bake origins,
+multi-stage halos and frame-based global analyses.
 
 Merging must preserve the current composite on the affected support. Include
 the required masks, attached effects and clipping members, and retain current
@@ -916,6 +1404,28 @@ wait for camera settling or draw above unrelated layers.
 Sampling tools such as merged-source cloning remain tied to a consistent
 document-grid evaluation. A better viewport image must not change what a brush
 picks up. This separation is also necessary for deterministic exports.
+
+Both evaluators need this integration. The native per-tile compositor and the
+display graph currently discover content through paint targets in several paths;
+simply adding a new enum variant would omit its content or reach a paint-target
+`unwrap` when an attached effect requests its input. These are integration gaps,
+not a claim that current valid files already contain crashing object layers.
+
+| Renderer boundary | Required object integration in milestone 2 |
+| --- | --- |
+| `scene/stack.rs`, `scene.rs` | Content discovery, layer evaluation and raw-content reads accept object layers without requiring a paint target. Reuse `owner_image` for the existing mask/effect/clipping order after supplying object content. |
+| `scene/scale/graph.rs` | Add the equivalent content/source/layer nodes to the display evaluator, including effect inputs, empty collections and masked layers. A working native path alone is insufficient. |
+| `SceneScope::Raw`, renderer `Output`, core `ArtworkSource`, render `RegionSource` | Distinguish readable object/occurrence content from writable `SourceTarget`. Carry these identities through exact queries, references, alpha selection, captures and filter inputs. |
+| `scene/scale.rs` and source residency | Discover immutable image dependencies independently of paint/mask targets. Key image mips by image identity plus color/data sampling role and color/filter context; share them across placements. Charge mips, decoded tiles, isolated results and in-flight resources to memory admission and eviction. |
+| Engine authored edits and history | Carry explicit old/new object bounds and owner/content revisions through preview, commit, undo and redo. Preserve existing raster-only damage handling; do not classify every object motion as `composite_all`. Fall back to full dependency damage for genuinely global filters or unknown support. |
+| `scene/metadata.rs` and filter stages | Include ordered child content, visibility, placement, image identity and relevant evaluation context in revisions/keys. Propagate bounded damage through masks, clips and effect support. A paint-original weak pointer cannot invalidate an object's filter result. |
+
+Image pixels are immutable and cacheable by image identity; an instance's affine
+or visibility edit must not rebuild another user's image mip chain. Conversely,
+replacing a source image or changing color interpretation cannot leave an old
+filtered object result valid. Test both evaluators with effects/masks, repeated
+object drag and undo, and cold/evicted source levels. These tests precede the
+early tablet gate and do not depend on the full host UI being built.
 
 ### 9.3 Pan, zoom, rotation and refinement
 
@@ -997,13 +1507,21 @@ sampling required by temporary previews and pixel commits. Remove obsolete
 
 ### 10.1 Image dependency lifetime
 
-A portable save starts from all retained artwork records, including known
-unplaced artwork and retained copy-safe ancillary records, then follows their
-discoverable references. Write an image record and its tile/profile dependencies
-only if this closure references it. Follow references from every retained
-record, not just visible objects, the active composition or placed paint sources.
+A portable save first starts from retained known artwork records, including
+deliberate unplaced artwork, then follows their discoverable dependencies.
+Write an image record and its tile/profile dependencies only if this closure
+references it. Follow references from every such retained record, not just
+visible objects, the active composition or placed paint sources.
 An unused image in the image table is omitted. Writers compact unreferenced tile
 payloads under the existing package resource rules.
+
+Only then apply `PackageExtras::edited_retained` to copy-safe ancillary records.
+Ancillary references never keep an otherwise dead image or object alive; an
+ancillary record depending on one is dropped. Retained ancillary records may
+retain their own resource dependencies under the existing closure rules. This
+ordering matches [extensions.rs](../../crates/layer-core/src/authored/extensions.rs)
+and avoids turning metadata into a hidden image archive. Copy Original preserves
+the original bytes and is not this edited-save pruning operation.
 
 Deleting the last object must remove its owned object record too; otherwise the
 orphan record would still retain the image. Deleting a layer likewise removes its
@@ -1018,7 +1536,7 @@ versions they need through their own roots. Portable-save pruning does not
 mutate that history or invalidate an accepted job. Reclaim private backing only
 when neither current artwork, history nor a live capture references it. Undoing
 deletion restores the same image/object identities. Test last-use deletion,
-remaining shared uses, hidden objects, unplaced artwork, copy-safe references,
+remaining shared uses, hidden objects, unplaced artwork, ancillary drop/retention,
 conversion, cancellation, portable save/reopen and private recovery separately.
 
 ## 11. Reader, writer and compatibility rules
@@ -1189,8 +1707,9 @@ wrapper or universal object superclass in GA.
 immutable images, and future many-use editable definitions have different edit
 and invalidation rules. Enforce those rules by record type, not a universal
 "every referenced record is single-use unless it is an image" rule. Current
-`Shape::Definition` already allows multiple references; it does not supply all
-future editable-swatches/symbols behavior. New definition types add explicit
+`Shape::Definition` demonstrates that multiple-reference classes already exist,
+but is removed with the obsolete effect store; do not keep it as a placeholder.
+New editable swatch/symbol definition types add explicit
 update propagation, expansion/evaluation edges and cycle checks. Instances need
 identity paths for per-instance overrides or phases. No dormant definition store
 or generalized graph editor is needed for GA image objects.
@@ -1246,7 +1765,7 @@ general placement to GA paint layers. This plan does not promise that workflow.
 | --- | --- |
 | Stack-derived clipping, attached effects and adjustments | Keep their implemented painter workflows and exact order. Future object-local relationships use explicit typed references; they need not overload sibling inference. Future code may change representation through an explicit conversion, but GA files always retain the frozen stack meaning. |
 | Saved selections as occurrences | Keep in GA. They already have separate selection records, but occurrences supply names, edit locks, ordering, group ownership, group-relative geometry, duplication and deletion. [Selection editing](../../crates/layer-core/src/selection.rs) and [shared selection UI](../../crates/layer-ui/src/selection_masks.rs) depend on this. Moving them into a collection is not merely removing flags; it must replace those relationships and host journeys. Strip meaningless presentation fields now; a separate future panel can project the existing records without changing the file. |
-| Built-in definition-only records | Remove from portable artwork under section 5.3. They carry catalog identity without user-editable definition semantics. Private custom programs and future shared editable styles are separate requirements. |
+| Built-in definition-only records | Remove from portable artwork and the runtime store under section 5.3. They carry catalog identity without user-editable definition semantics. Private custom programs and future shared editable styles are separate requirements. |
 | Pass-through groups, reference sampling closure, per-application phases and frame-relative generators | Keep: they control existing authored appearance or tool behavior. Qualify their interaction with object content. A record or field is not baggage solely because it requires code. |
 
 ## 13. Changes required to reach GA
@@ -1262,34 +1781,42 @@ not permission to leave earlier commits with broken fixtures.
 
 | Milestone | Required changes | Exit condition |
 | --- | --- | --- |
-| 1. Shared model and package records | Add immutable image records, paint-base references/policy/offset, typed object-layer/image-object records, object IDs and F64 affine adapters. Extend topology, resource inventory, admission, immutable capture, edits/undo, session and transfer encoding. Replace inline-image ownership everywhere. Add object dependency lifetime rules and typed filter image uses with per-use color/data sampling roles. | Two independently editable objects, two paint uses and a filter input can share one image through model save/open/copy/undo, with role/color/extent and retention semantics checked. Existing paint/import paths still work. New object authoring is not exposed before its consumers exist. |
-| 2. Image rendering and early performance gate | Implement read-only region/output-mapping evaluation and bounds for images; connect isolated results, clipping, effects, masks, scoped snapshots and damage tracking. Replace frame-bounded filter dependencies/captures so retained off-frame input contributes through every required halo. Reuse sampling helpers; exercise scales above/below one. Keep the still-used old paint-placement path until milestone 5. | Reference renders and raw/composite sampling agree. Object results are never paint targets. On the lowest-tier reference tablet, measure painting above/below a multi-image layer and cache pressure before proceeding to UI integration. Resolve failures of the caching assumption here. |
-| 3. Layer consumers and conversions | Complete section 8.4's command dispatch, masks, merge/bake bounds, alpha selection, source properties and read-only sampling. Implement Convert to Object/Rasterize Layer and explicit apply-mask conversion; adapt canvas-wide image size/orientation to mixed content. Prepare shared object selection/undo state needed by these operations. | No supported consumer omits objects or invents a paint target. Off-frame content, current edited appearance, color/material semantics and outer properties survive the specified conversions. Jobs are bounded, atomic and cancellable. Existing unsupported scopes have specific refusals. |
-| 4. Tools and creation | Implement section 8's source-aware clipboard, object insertion, Move picking/handles/list/order and actionable painting refusals. First review the GTK interactions, then complete all host projections. Replace external Place/Paste destinations with objects; preserve internal pixel paste as paint. | Real multi-image, internal copy/paste/paint, cross-layer picking, overlap, mask, touch, cancel and undo journeys work on every affected host. All replacement consumers are available before retained paint placement is removed. |
-| 5. Integer-only paint/container/mask cutover | Replace retained occurrence/mask placement and its callers with integer offsets and pixel-preview/commit transactions. Replace crop navigation's portable origin with private history/view data and compensate authored effect spatial references, including implicit patterns and percentage geometry. Complete exact base-image permutations and mixed image operations. Remove old placement fields/adapters/caches/refusals in this same milestone. | Open, Place, every paste flavor, paint transforms, crop/grow, image resize/orientation, conversions and undo all remain usable. Paint/mask grids stay aligned and no general retained layer/container placement remains. |
-| 6. Remaining format cleanup and reader audit | Complete section 10's removals and version table, including inline built-in descriptors, implemented typed image/spatial uses, and removal of portable definition wrappers and empty graph reservations. Centralize saved-selection/property applicability checks; correct relationship classification and unit definitions. Audit all new admission and dependency paths. Preserve already-fixed preview/extension-member/limit behavior and permanent MIME identity. | Same-limit admission/save/reopen and malformed-versus-unsupported fixtures pass, including each removed record version. No discarded image data survives portable save solely through image-table membership. Private custom filters still work. Current package/model documentation specifies the implemented wire fields and defaults. |
+| 1. Shared model and package records | Add immutable ID-bearing images (no editable image store), final paint-base references/policy/offset, object-layer/image-object records and F64 affine adapters. Use section 5.4's single context-aware registry with temporary `/2` and final `/3` occurrence adapters. Update image dependencies in capture/admission, per-change history closure, ID interning and immutable-sharing topology, including the common dependency path that implemented filter image uses will consume. Replace inline originals and `SourceKind` ownership everywhere, preserving existing consumers through the binding policy. Validate base-inside-domain; adapt base access before publishing nonzero offsets. | Two independently editable objects and two paint uses share one image through model save/open/copy/undo, including an undo-only image and mixed occurrence versions. Existing paint/import paths work. New object authoring is not exposed before its consumers exist. No interim `/3` meaning or duplicate decoded history images. |
+| 2. Image rendering and early performance gate | Implement objects in both native and display evaluators, every read-only scope/query, image-ID mip residency/admission, object-edit damage and filter cache revisions. Separate current frame, effect spatial reference, source support and evaluation/output domain; remove frame-clamped dependency captures as section 8.4 specifies. Land final effect `/2`, direct runtime programs, private custom alternatives and spatial evaluation together here, including crop compensation and declared rules for every already available canvas image operation; introduce typed image uses with their implemented consumers. Implement section 6's independent sampling reference and bounded conforming image evaluation above/below native scale. Keep the still-used old paint-placement path until milestone 5. | Raw/composite and both evaluator results agree, including attached effects and mask/clipping. Private custom effects and all existing canvas commands survive the effect cutover; unsupported geometry refuses atomically. Object results never become paint targets. Sampling conformance passes. On the lowest-tier reference tablet measure painting above/below multi-image layers, object-affine motion and cache pressure before UI integration; fix failed caching assumptions here. |
+| 3. Layer consumers and conversions | Complete both command tables in section 8.4, full supported bake/dependency bounds and explicit unknown-support/admission refusals, masks, alpha/reference/region sampling and source-color workflows. Implement Convert to Object/Rasterize Layer and apply-mask conversion; prepare mixed-content image operations and shared selection/history state. Remove Web-only color-transfer policy. | No supported consumer omits objects or invents a paint target. Conversions preserve current appearance/color/material/outer properties and off-frame content, or refuse atomically under the stated domain/admission rules. Photo resampling uses one combined operation when edited. Jobs are bounded and cancellable. |
+| 4. Tools and creation | Implement target activation/gesture/shortcut tables, F64 object sessions, all transform command policies, typed child rows/actions/thumbnails/drag, multi-action notices and source-aware window-held clipboard. Reuse insertion destinations. GTK review first, then all five host projections and localization. External Place/Paste creates objects; internal pixel paste remains paint; explicit Paste Into creates a masked object layer. | Real multi-image, internal copy/paste/paint, cross-layer picking, overlap, touch, mask, notices, clipboard publication failure/cancel and undo work on every affected host. No native occurrence-only assumptions remain in object rows. Replacement creation/consumer paths work before retained placement removal. |
+| 5. Integer-only paint/container/mask cutover | Replace retained occurrence/mask placement and callers using the mask-operation table and pixel preview/commit jobs. Publish private integer view origin with complete resize/rebase rebuild detection. Preserve the effect spatial compensation already established in milestone 2 when removing portable composition origin; retain the per-filter image-operation rules through the integer cutover. Complete arbitrary-offset base reads, photo crop/grow/deletion, exact image permutations and combined resampling. Remove `/2`, old placement/cache/helpers, Apply Transform to Pixels and obsolete refusals; rename Revert to Original while retaining Discard Paint Edits. Materialize authored masks and split transient operation coverage before removing `initial`. Switch composition/coverage versions at this complete cutover. | Open, Place, all paste flavors, paint transforms, crop on every edge, grow/deletion, image resize/orientation, conversions and recovered undo remain usable. No general retained layer/container placement or portable origin survives. Photo domains cover the canvas under the same rules as paint, and base rectangles validate. |
+| 6. Remaining format cleanup and reader audit | Complete remaining section 10 removals and audit the effect cutover already landed in milestone 2. Confirm no Definition handles/store/edits/layout/topology or portable custom grammar survives; keep application phases and implemented typed image/spatial uses. Centralize saved-selection/property applicability, relationship classification and unit definitions. Audit admission/dependencies and preserve fixed preview/archive/limit/MIME behavior. | Same-limit admission/save/reopen and Unsupported-versus-Invalid fixtures pass, including all removed types. Ancillary metadata cannot keep dead images alive. Built-ins and private custom programs survive required sessions/worker/undo workflows. Current guides specify actual wire fields, private alternatives and defaults. |
 | 7. Semantic freeze and full qualification | Finish object and destructive-transform fixtures, replace obsolete placement baselines, retain unaffected render contracts, settle sampling conformance, complete all host journeys and tier performance rows. Update current guides. | Every section 14 gate has implementation evidence. Unmet or unmeasured gates block GA; passing the design review only permits starting implementation. |
 
 Version each wire contract when its meaning changes, using section 5's final
-registry names. Do not reuse a final version for two incompatible intermediate
-meanings. If a dependency requires changes to land together, combine complete
-milestones or stage internal helpers until the atomic cutover; do not publish a
-temporary portable schema or add legacy readers. Keeping an old path until its
-last caller switches is temporary sequencing, not part of the GA contract.
-In particular, adding object stores does not license an interim
-`capy.occurrence/3` that still has float offsets or parent-relative linked masks.
-Stage runtime helpers before that record's complete wire cutover, or combine the
-dependent tools and integer-contract milestones into one usable landing. The
-same rule applies to the coverage/composition/output replacements. An unchanged
-pre-release adapter can remain only until its replacement and callers switch;
-it is removed before the GA fixture freeze.
+registry names. Do not reuse a final version for incompatible intermediate
+meanings. Section 5.4's exact-representability writer and temporary existing `/2`
+adapter resolve the milestone ordering: objects can round-trip from milestone 1
+while Place/Paste and old paint transforms remain usable until their replacements
+land. Remove that adapter at milestone 5. This is the selected path, not an open
+choice between early destructive paste and one oversized tools/model cutover.
+For other records, stage runtime helpers until their one complete wire cutover;
+do not create temporary new schemas. Milestone 2's effect change replaces
+private custom programs, runtime definitions, crop/spatial-reference evaluation
+and the final effect adapter in the same complete landing. It cannot wait until
+milestone 6 once a spatial/image binding is being serialized.
+
+Milestones 2 and 4 are substantial integration milestones: two evaluators plus
+damage/residency are required in the former; five native row/notice/clipboard
+projections in the latter. Plan implementation time accordingly. Internal
+subtasks may be developed separately, but do not call an incomplete consumer or
+one-host UI milestone complete.
 
 The early hardware gate uses the [low-tier reference](../performance/low-tier.md),
 currently the TCL TAB 11 Gen 2 (9465X), with the tier's 4248×2832 canvas and 60 fps
 target. Reserve it through the [device workflow](../development/devices.md).
 Compare matched paint-only controls with multiple images sharing and not sharing
 sources, warm/cold object results, painting above/below, repeated eviction, and
-the first stroke after view changes. Record frame times, latency and peak/cache
+the first stroke after view changes. Include object-affine drag with effects and
+shared images, driven through the shared edit/render path before the full UI
+exists; stationary cache reuse alone does not qualify object editing. Record
+frame times, latency and peak/cache
 residency under the [measurement rules](../performance/measuring.md). A desktop
 measurement or the allocation arithmetic in section 9.4 cannot pass this gate.
 An unavailable reference tablet means the gate remains unmeasured, not passed.
@@ -1387,8 +1914,9 @@ Save, reopen, edit and undo fixtures cover:
 - Same-limit admission/save/reopen at object, image, reference, tile and metadata
   boundaries, including the shared-original duplication case.
 - Last-use deletion omits the unused image and payloads on portable save while
-  undo/private recovery retains them; shared, hidden, unplaced and copy-safe
-  referenced content remains. Cancelled jobs release unpublished image records.
+  undo/private recovery retains them; shared, hidden and deliberately unplaced
+  authored uses remain. Ancillary records referencing a dead image are dropped,
+  not promoted to retention roots. Cancelled jobs release unpublished images.
 - Internal pixel Copy/Cut/Copy Merged → Paste → move → paint/erase, compared with
   external bitmap/file placement and structured object copy. Test all paste
   modes, nonce mismatch, cross-document color and translated destination parents.
@@ -1417,6 +1945,49 @@ Save, reopen, edit and undo fixtures cover:
   encodings, unsupported relationships/limits, valid unknown extension members,
   malformed required records and unusable optional previews.
 
+Milestone-specific regressions also cover the final audit's integration gaps:
+
+- Mixed `/2` and final `/3` occurrences before the cutover, exact linked-mask
+  conversion, and undo across version choice. After the cutover the old adapter
+  is absent. No final type version is used for two incompatible meanings.
+- Incremental history restoring an image absent from the current document and
+  other entries; one interned image allocation across states; shared images do
+  not trigger the shared-editable-content restriction. Test the history memory
+  budget with repeated edits to a large shared image.
+- Built-in and private custom applications after deletion of the Definition
+  store: session recovery, tab parking, worker transfer and undo all preserve
+  program values/resources and per-application phase. Portable custom content
+  remains Unsupported and never becomes an executed portable shader.
+- Arbitrary paint-base offsets across tile boundaries in display, exact reads,
+  retouch, thumbnails and material initialization. Invalid base/domain pairs
+  fail in both decoder and document validation; aligned direct lookup and
+  four-tile assembly produce identical pixels where equivalent.
+- Both renderer evaluators with empty/multiple objects, masks, attached effects,
+  clipping and object edits. Old/new-bound damage clears the vacated image;
+  filter caches invalidate; shared source mips survive unrelated affine edits.
+- Independent uncapped sampling reference at strong/anisotropic reductions,
+  rotation and transparent edges; Nearest uses no smoothed mip. Settled display,
+  pixel queries, rasterization and export meet section 6's numerical bounds.
+  Low-quality moving content never leaks into a canonical capture.
+- Nonzero bake origins and different allocation sizes keep the authored frame
+  and in-frame filter pixels identical. Accepted captures fetch halos beyond
+  their output rectangle, including retained input beyond the composition frame.
+  Accepted filtered
+  off-frame merges preserve the GA composite; unknown/unbounded or inadmissible
+  support refuses without edits. Flatten/Stamp keep off-frame content.
+- Every row of the mask-operation table, including effects/selections with no
+  owner offset, linked mask moves, storage rebasing, reparenting, crop and
+  conversion. Temporary clear/erase geometry survives private operation transfer
+  without resurrecting authored mask `initial`.
+- Source-profile versus working-pixel resampling, shared-image profile repair,
+  base-offset dithering, cross-color internal paste and Discard Paint Edits.
+  Crop deletion removes the paint base's excluded samples from portable save
+  while retaining other authored users and undo. Test a partially overlapping
+  base, no overlap, and grow/paint after deletion.
+- Private origin round-trip and undo/redo of right/bottom-only crop, other crop
+  edges and storage-only rebases; renderer rebuilding must not depend solely
+  on an origin change.
+
 Regenerate [authored-filters.capy](../../crates/layer-core/src/package/codec/fixtures/authored-filters.capy),
 including its Independent copy's projective/mesh placement, to the GA records.
 Keep independent assertions for exact pixels, material data, filter parameters
@@ -1424,9 +1995,13 @@ and source interpretation. The existing
 [140-case render suite](../../crates/layer-render-wgpu/src/package_render_tests.rs)
 already covers all 52 built-ins, blend modes, watercolor, SDR rendition and FBM.
 Replace its eight `placement/*` cases with image-object references covering both
-GA kernels and affine/mirrored/minified/fractional cases. Preserve the other 132
-baselines and their per-case tolerances; add the missing object, scale and
-destructive-transform cases above. Keep transient paint perspective/mesh tests
+GA kernels and affine/mirrored/minified/fractional cases. Keep the other 132
+cases and their tolerances as regression checks. Most should remain unchanged;
+any changed edge caused by the explicit pre-GA source-domain correction requires
+an independent reference and recorded before/after justification. Evolving
+artistic filters follow section 11.4's separate reviewed policy; that policy
+does not waive sampling, color or alpha failures. Add the missing object, scale
+and destructive-transform cases above. Keep transient paint perspective/mesh tests
 even though those placements no longer occur in the file. Changing expected
 images alone does not validate an effect change. Replace obsolete pre-release
 representations without adding old readers.
@@ -1458,6 +2033,16 @@ paths as applicable, in light and dark themes:
     and Rasterize Layer independently. No refused stroke replays unexpectedly.
 11. Exercise section 8.4's merges, apply-mask conversion, alpha selection, property
     panels and off-frame bakes. Verify both cancellation and one-step undo.
+12. Run every target-routing and transform-command row with both object and pixel
+    selections present: keyboard focus, Select All/Deselect/Delete/Copy/Cut,
+    Ctrl/Cmd+J, nudges, Alt-drag, Transform Again, Original Size and flips. Touch
+    selects an unselected image; empty touch still navigates.
+13. Use object layer Filter menus, reference-below, Wand/Fill source modes,
+    Copy Selection to Layer, and paint-only retouch refusals. Distinguish image
+    child actions from layer actions, including right-swipe and drag/drop.
+14. Delete cropped paint pixels on a photo, confirm placed images remain retained,
+    then undo/recover. Verify frame-relative pattern anchoring and exact source
+    repair/rasterization/color-edit behavior, including Web's shared job path.
 
 Use private settings/documents, assigned devices and the existing host test
 harnesses. Follow the [testing guide](../development/testing.md); documentation
@@ -1477,6 +2062,15 @@ upload/cold-cache cases and the first stroke after a view change. Account for
 conversion/admission failure without input stalls.
 The milestone 2 tablet prototype is an earlier prerequisite, not a substitute
 for these final measurements after the complete model/tool cutover.
+
+Distinguish painting above an unchanged cached object result from editing the
+input to its filters. The former keeps the ordinary tier target. Changing
+filtered input also follows the
+[live-filter gate](../performance/measuring.md#live-filter-performance-gates):
+count fresh results and their age, not repeated stale presentations. Any allowed
+slower expensive-filter result requires that gate's measured justification and
+is recorded as an exception, never as meeting the ordinary tier rate. It does
+not excuse rebuilding an unchanged object layer during painting.
 
 For future vectors, extend the same workloads with many small strokes, one
 complex path, active vector editing, high zoom, newly exposed regions and mixed
