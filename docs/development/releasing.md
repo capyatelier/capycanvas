@@ -106,10 +106,6 @@ executables and the setup program; the Store signs the MSIX.
 3. Roll out the internal-track release in Play Console and promote it, upload the
    MSIX to Partner Center, and submit the TestFlight build for review.
 4. Publish the draft. With immutable releases enabled, its assets and tag can no
-   longer change. Within the hour, the `Deploy release` workflow in
-   [capycanvas-release](https://github.com/capyatelier/capycanvas-release)
-   builds the published release's commit with its own license and package
-   checks and deploys `editor.capycanvas.art`; run that workflow to deploy at
-   once, or with an earlier tag to roll back.
+   longer change.
 5. If a check fails, delete the draft, fix `main` and release the next patch
    version. Never move a tag or reuse a version.

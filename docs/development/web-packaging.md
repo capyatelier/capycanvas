@@ -5,9 +5,11 @@
 The web client needs only static hosting: no Node or Rust server and no bundler.
 The package adds installation metadata and an offline service worker, and works
 unchanged at a domain root or a subpath such as `/capycanvas/`. The
-[release workflow](releasing.md) attaches the package to a release as a ZIP, and
-the hosting repository deploys each published release from its own build of
-the release's commit ([releasing](releasing.md#publishing-a-release)).
+[release workflow](releasing.md) attaches the package to each release as a ZIP.
+`editor.capycanvas.art` runs the latest `main` instead: the **Deploy editor**
+workflow in [capycanvas-release](https://github.com/capyatelier/capycanvas-release)
+builds a chosen commit, `main` by default, with that repository's license and
+package checks and publishes it.
 
 ## Build
 
