@@ -113,6 +113,7 @@ fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay, gtk::Dr
     picture.set_can_shrink(true);
     picture.set_content_fit(gtk::ContentFit::Contain);
     picture.set_size_request(28, 28);
+    picture.set_overflow(gtk::Overflow::Hidden);
     let overlay = gtk::Overlay::new();
     // The 32px asynchronous texture must not participate in measurement.
     // Empty/rebound rows and loaded previews occupy the same 28px square.
@@ -126,16 +127,8 @@ fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay, gtk::Dr
     frame.set_can_target(false);
     frame.set_draw_func(|_, cr, w, h| {
         let (w, h) = (w as f64, h as f64);
-        for (x, y, dx, dy) in [
-            (1.5, 1.5, 1., 1.),
-            (w - 1.5, 1.5, -1., 1.),
-            (1.5, h - 1.5, 1., -1.),
-            (w - 1.5, h - 1.5, -1., -1.),
-        ] {
-            cr.move_to(x, y + dy * 6.);
-            cr.line_to(x, y);
-            cr.line_to(x + dx * 6., y);
-        }
+        let bounds = gtk::graphene::Rect::new(1.5, 1.5, (w - 3.) as f32, (h - 3.) as f32);
+        crate::squircle::rounded_rect(cr, &gtk::gsk::RoundedRect::from_rect(bounds, (w.min(h) - 3.) as f32 / 2.));
         cr.set_source_rgba(0., 0., 0., 0.8);
         cr.set_line_width(3.);
         let _ = cr.stroke_preserve();
@@ -266,6 +259,10 @@ pub(crate) fn drag_preview(
     );
     paintable.snapshot(&snapshot, row.width() as f64, row.height() as f64);
     snapshot.pop();
+    let node = snapshot.to_node()?;
+    let snapshot = gtk::Snapshot::new();
+    let scale = row.native().and_then(|native| native.surface()).map_or(f64::from(row.scale_factor()), |surface| surface.scale());
+    snapshot.append_node(crate::squircle::converted(&node, scale));
     snapshot.to_paintable(Some(&gtk::graphene::Size::new(
         row.width() as f32,
         row.height() as f32,
@@ -483,6 +480,8 @@ impl LayerPanel {
                 pass_through.set_pixel_size(12);
                 pass_through.set_halign(gtk::Align::End);
                 pass_through.set_valign(gtk::Align::End);
+                pass_through.set_margin_end(3);
+                pass_through.set_margin_bottom(3);
                 pass_through.set_can_target(false);
                 pass_through.add_css_class("layer-type-symbol");
                 pass_through.add_css_class("layer-group-pass-through");
@@ -1531,6 +1530,8 @@ impl Row {
         self.effect_icon.set_pixel_size(if thumbnail { 12 } else { 24 });
         self.effect_icon.set_halign(if thumbnail { gtk::Align::End } else { gtk::Align::Center });
         self.effect_icon.set_valign(if thumbnail { gtk::Align::End } else { gtk::Align::Center });
+        self.effect_icon.set_margin_end(if thumbnail { 3 } else { 0 });
+        self.effect_icon.set_margin_bottom(if thumbnail { 3 } else { 0 });
         if thumbnail && self.effect_icon.is_visible() { self.effect_icon.add_css_class("layer-type-symbol"); }
         else { self.effect_icon.remove_css_class("layer-type-symbol"); }
         if s.adjustment_effect { self.content.add_css_class("layer-effect"); }

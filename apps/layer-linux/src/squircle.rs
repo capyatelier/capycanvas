@@ -457,9 +457,8 @@ impl Converter {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn converted(node: &gsk::RenderNode) -> gsk::RenderNode {
-    Converter::default().frame(node, 1.)
+pub(crate) fn converted(node: &gsk::RenderNode, scale: f64) -> gsk::RenderNode {
+    Converter::default().frame(node, scale)
 }
 
 fn append_converted(widget: &gtk::Widget, converter: &RefCell<Converter>, content: gtk::Snapshot, snapshot: &gtk::Snapshot) {

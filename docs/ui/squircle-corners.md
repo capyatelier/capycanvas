@@ -26,8 +26,10 @@ the former 8–10px circular corners.
   Controls 24px tall or shorter become capsules.
 - **Concave joins** (tab feet, drawer bridges and expanded-panel joins) keep
   their sizes and use inverted squircle curves.
-- Checkboxes, thumbnails, slider thumbs and other small details keep their
-  former visual rounding with squircle corners.
+- GTK layer and mask thumbnails use full squircles. Their editing target has
+  a white squircle outline, and type badges sit inside the preview corners.
+- Checkboxes, other hosts' thumbnails, slider thumbs and other small details
+  keep their former visual rounding with squircle corners.
 
 A drawer's source tile squares only the corners facing its drawer and keeps
 its selected blue; an unselected source turns panel grey. Its container
@@ -116,6 +118,8 @@ bars, chips, document tabs and toolbar tiles keep WinUI's circular
 
 ## Checks
 
+- GTK layer thumbnails: `tools/performance/workspace-motion.sh gtk --native-test=native_layer_thumbnail_squircles`
+  checks image and mask clipping, corner clicks and drag previews in both themes.
 - GTK: `tools/performance/workspace-motion.sh gtk --native-test=native_squircle_corners`
   (corner picks reach tiles, shadowed subtrees convert and blurred drawer shadows
   stay finite; add `GDK_DEBUG=color-mgmt MUTTER_DEBUG_FORCE_HDR=1` for the HDR
