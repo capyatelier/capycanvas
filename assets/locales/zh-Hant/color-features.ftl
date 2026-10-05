@@ -302,33 +302,16 @@ color-outside-prophoto-preview-gamut = 超出 ProPhoto RGB 預覽色域。
 color-above-sdr-white = 亮度高於 SDR 白色。
 color-features-export-finishing-file = 正在完成檔案…
 color-features-export-writing-image = 正在寫入影像…
-color-form-model-document-rgb = 文件 RGB
 color-form-model-linear-rgb = 線性 RGB
-color-form-model-srgb-hex = sRGB 十六進位
-color-form-model-hsv = HSV（文件 RGB）
-color-form-model-hls = HLS（文件 RGB）
-color-form-model-oklch = OKLCH
-color-form-field-red-encoded = 紅（編碼）
-color-form-field-green-encoded = 綠（編碼）
-color-form-field-blue-encoded = 藍（編碼）
-color-form-field-red-linear = 紅（線性）
-color-form-field-green-linear = 綠（線性）
-color-form-field-blue-linear = 藍（線性）
-color-form-field-alpha = Alpha（%）
-color-form-field-hex = sRGB 十六進位（#RRGGBB）
 color-form-field-hue = 色相（°）
 color-form-field-saturation = 飽和度（%）
 color-form-field-value = 明度（%）
 color-form-field-lightness = 亮度（%）
 color-form-field-chroma = 彩度
-color-form-document-srgb = 文件 RGB：sRGB。
-color-form-document-display-p3 = 文件 RGB：Display P3。
-color-form-document-adobe-rgb = 文件 RGB：Adobe RGB (1998)。
-color-form-document-prophoto = 文件 RGB：ProPhoto RGB。
-color-form-reference-white = 1 = 參考白色。
-color-form-hex-description = 十六進位使用 8 位元 sRGB。
 
 color-form-finite-field = 請為{ $label }輸入有限數值。
+
+color-form-color-syntax = 請使用十六進位碼（例如 #3B7EA1）或色彩（例如 rgb(59 126 161)）。
 
 color-properties-title = 文件內容
 color-properties-canvas-size = 畫布大小
@@ -352,11 +335,6 @@ color-properties-retained-rasterized = 已依文件座標點陣化。
 color-properties-retained-icc = 保留原始像素數值與嵌入的 ICC。
 color-properties-retained-original = 保留原始像素數值與色彩解讀。
 
-color-form-entries-too-long = 色彩輸入不得超過 128 位元組。
-color-form-alpha-range = Alpha 必須介於 0 到 100%。
-color-form-hex-syntax = 請使用 #RGB 或 #RRGGBB；Alpha 需另行編輯。
-color-form-percent-range = 飽和度、亮度與明度必須介於 0 到 100%。
-color-form-negative-lightness-chroma = 亮度與彩度不能為負數。
 
 color-profile-select-imported = 請選擇已匯入的描述檔。
 color-profile-read-limit = ICC 描述檔超過 16 MiB。

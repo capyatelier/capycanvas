@@ -231,7 +231,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           else if(effect==='photo_filter') {
             await edit('density','37');await click(`${selector('preserve_luminance')} input[type=checkbox]`);
             await click(`${selector('color')} .property-color`);await wait(`!!document.querySelector('.color-dialog[open]')`);
-            await evaluate(`(()=>{const n=document.querySelector('[data-color-field="0"]');n.value='0.1234567';n.dispatchEvent(new Event('input',{bubbles:true}));const alpha=document.querySelector('[data-color-field="3"]');alpha.value='37';alpha.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+            await evaluate(`(()=>{const d=document.querySelector('.color-dialog[open]');d.querySelector('.color-value[data-color-value="0-0"]').click();const n=d.querySelector('.color-value-input[data-color-value="0-0"]');n.value='31';n.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));})()`);
             await click('.color-dialog .suggested-action');assert.equal((await value('color')).value.space,'Srgb');
           } else assert.equal((await properties()).controls.length,0);
           await capture(`${effect}-${width}-${theme}`);await reopen(`${effect}-${width}-${theme}`);

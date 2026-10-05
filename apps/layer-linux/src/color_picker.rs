@@ -251,7 +251,7 @@ impl Hold {
         *self.pending.borrow_mut() = Some((id, position, timer));
     }
 }
-fn finger_offset(w: &Workspace) -> f32 {
+pub(crate) fn finger_offset(w: &Workspace) -> f32 {
     let scale = w.area.scale_factor() as f32;
     let monitor = w
         .area

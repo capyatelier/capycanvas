@@ -1,12 +1,13 @@
 //! Tagged effect definitions through retained GTK controls and native archives.
-use super::new_photo::{capture_ui, combo, ready, response};
+use super::new_photo::{capture_ui, ready, response};
 use super::place_source::authored_snapshot as snapshot;
 use super::*;
 use layer_core::{
     EffectValue, GradientStop,
     color::{DocumentColor, SampleDepth, RgbColor, RgbSpace},
 };
-use layer_ui::{ColorAction, ColorInputModel, EffectAction};
+use crate::color_editor::tests::{every_form, form};
+use layer_ui::{ColorAction, ColorForm, EffectAction};
 use serde_json::json;
 
 fn press(w: &Rc<Workspace>, name: &str) {
@@ -17,10 +18,9 @@ fn press(w: &Rc<Workspace>, name: &str) {
         .emit_clicked();
     pump(100);
 }
-fn field(w: &Rc<Workspace>, index: usize, text: &str) {
-    named::<adw::EntryRow>(w.window.visible_dialog().unwrap().upcast_ref(), &format!("edit-color-value-{index}"))
-    .set_text(text);
-    pump(20);
+fn field(w: &Rc<Workspace>, form_name: ColorForm, text: &str) {
+    form(w, 0, form_name);
+    crate::color_editor::tests::value(w, 0, 0, text);
 }
 fn value(w: &Rc<Workspace>, key: &str) -> EffectValue {
     state(w)
@@ -167,27 +167,18 @@ fn native_effect_colors_gradients_and_retained_controls() {
     set(&w, "color", EffectValue::Color(original));
     let before = snapshot(&w);
     press(&w, "effect-color-color");
-    for i in 0..ColorInputModel::ALL.len() {
-        combo(&w, "edit-color-model").set_selected(i as u32);
-    }
+    every_form(&w);
     response(&w, "apply");
     ready(&w);
     assert_eq!(value(&w, "color"), EffectValue::Color(original));
-    assert!(snapshot(&w) == before, "untouched models create no edit");
+    assert!(snapshot(&w) == before, "untouched formats create no edit");
     press(&w, "effect-color-color");
-    field(&w, 0, "NaN");
-    assert!(
-        !w.window
-            .visible_dialog()
-            .unwrap()
-            .downcast::<adw::AlertDialog>()
-            .unwrap()
-            .is_response_enabled("apply")
-    );
+    field(&w, ColorForm::Rgb, "NaN");
+    assert!(!crate::color_editor::tests::editor(&w).apply_button.is_sensitive());
     response(&w, "cancel");
     assert_eq!(snapshot(&w), before);
     press(&w, "effect-color-color");
-    field(&w, 0, "0.1234567");
+    field(&w, ColorForm::RgbUnit, "0.1234567");
     response(&w, "apply");
     ready(&w);
     let edited = value(&w, "color");
@@ -229,19 +220,14 @@ fn native_effect_colors_gradients_and_retained_controls() {
     ]};
     set(&w, "gradient", EffectValue::Gradient(stops.clone()));
     press(&w, "effect-gradient-color");
-    field(&w, 3, "37");
+    field(&w, ColorForm::RgbUnit, "0.37");
     response(&w, "apply");
     ready(&w);
     let EffectValue::Gradient(mut accepted) = value(&w, "gradient") else {
         panic!()
     };
-    assert_eq!(
-        accepted.stops[0].color,
-        RgbColor { linear_rgb: None,
-            rgba: [original.rgba[0], original.rgba[1], original.rgba[2], 0.37],
-            ..original
-        }
-    );
+    let edited = accepted.stops[0].color;
+    assert!(edited.space == RgbSpace::ProPhoto && edited.rgba[0] == 0.37 && edited.rgba[3] == original.rgba[3], "{edited:?}");
     assert_eq!(accepted.stops[1], stops.stops[1]);
     w.dispatch(UiAction::Invoke {
         command: CommandId::Undo,
@@ -302,9 +288,7 @@ fn native_effect_colors_gradients_and_retained_controls() {
     pump(100);
     w.color.widget.emit_clicked();
     pump(100);
-    for i in 0..ColorInputModel::ALL.len() {
-        combo(&w, "edit-color-model").set_selected(i as u32);
-    }
+    every_form(&w);
     response(&w, "apply");
     assert_eq!(state(&w).colors.definition(), original);
     assert_eq!(state(&w).brush.opacity, 0.23);
@@ -671,17 +655,17 @@ fn native_gradient_editor_modes_contacts_and_archive() {
             native.perform(json!([{"key":0xff53,"down":true},{"wait_ms":200}]));native.key(0xff1b);native.perform(json!([{"key":0xff53,"down":false}]));ready(&w);
             assert_eq!(value(&w,"gradient"),EffectValue::Gradient(g.clone()));
             let color=named::<gtk::Button>(w.window.upcast_ref(),"effect-gradient-color");
-            native.click(screen_point(color.upcast_ref(),&w.window,[0.5,0.5]));field(&w,3,"42");response(&w,"cancel");ready(&w);
+            native.click(screen_point(color.upcast_ref(),&w.window,[0.5,0.5]));field(&w,ColorForm::RgbUnit,"0.42");response(&w,"cancel");ready(&w);
             assert_eq!(value(&w,"gradient"),EffectValue::Gradient(g.clone()));
-            native.click(screen_point(color.upcast_ref(),&w.window,[0.5,0.5]));field(&w,3,"42");response(&w,"apply");ready(&w);
+            native.click(screen_point(color.upcast_ref(),&w.window,[0.5,0.5]));field(&w,ColorForm::RgbUnit,"0.42");response(&w,"apply");ready(&w);
             let EffectValue::Gradient(colored)=value(&w,"gradient") else {panic!("gradient")};
-            assert!((colored.stops[1].color.rgba[3]-0.42).abs()<0.0001);
+            assert!((colored.stops[1].color.rgba[0]-0.42).abs()<0.0001);
+            assert_eq!(colored.stops[1].color.rgba[3],g.stops[1].color.rgba[3]);
             w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(value(&w,"gradient"),EffectValue::Gradient(g));
             w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(value(&w,"gradient"),EffectValue::Gradient(colored.clone()));
             native.click(screen_point(color.upcast_ref(),&w.window,[0.5,0.5]));
-            combo(&w,"edit-color-model").set_selected(ColorInputModel::ALL.iter().position(|mode|*mode==ColorInputModel::LinearRgb).unwrap() as u32);
-            field(&w,0,"2.5");response(&w,"apply");ready(&w);
-            let EffectValue::Gradient(hdr)=value(&w,"gradient") else {panic!("gradient")};assert!((hdr.stops[1].color.linear_in(RgbSpace::Srgb).unwrap()[0]-2.5).abs()<0.00001);
+            field(&w,ColorForm::LinearRgb,"0.25");response(&w,"apply");ready(&w);
+            let EffectValue::Gradient(hdr)=value(&w,"gradient") else {panic!("gradient")};assert!((hdr.stops[1].color.linear_in(RgbSpace::Srgb).unwrap()[0]-0.25).abs()<0.00001);
             assert_eq!(hdr.stops[1].color.rgba[3],colored.stops[1].color.rgba[3]);
             w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(value(&w,"gradient"),EffectValue::Gradient(colored));
             w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(value(&w,"gradient"),EffectValue::Gradient(hdr));
@@ -949,7 +933,7 @@ fn native_gradient_color_completion_keeps_its_original_destination() {
         let retained=gtk::Window::new();retained.set_application(Some(&app.0));retained.set_child(Some(&editor.root));retained.present();pump(100);
         named::<gtk::Button>(retained.upcast_ref(),"effect-gradient-color").emit_clicked();
         until(|| w.window.visible_dialog().is_some_and(|dialog|dialog.widget_name()=="edit-color-dialog" && dialog.is_mapped()),"deferred gradient color dialog");
-        field(&w,3,"42");
+        field(&w,ColorForm::RgbUnit,"0.42");
         w.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:"gradient_map".into()}});ready(&w);
         let replacement=state(&w).layer_properties.controls.into_iter().find(|c|c.key=="gradient").unwrap();
         assert_eq!(old.value,replacement.value);
@@ -966,7 +950,7 @@ fn native_gradient_color_completion_keeps_its_original_destination() {
 
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
-fn native_opaque_filter_colors_hide_alpha_in_both_themes() {
+fn native_opaque_filter_colors_keep_full_alpha_in_both_themes() {
     let app=native_test_app("art.capycanvas.OpaqueFilterColors");
     let w=fixture_workspace(&app);w.window.present();ready(&w);
     for theme in [layer_ui::Theme::Light,layer_ui::Theme::Dark] {
@@ -978,11 +962,7 @@ fn native_opaque_filter_colors_hide_alpha_in_both_themes() {
         let EffectValue::Color(authored)=value(&w,"tint_color") else {panic!()};
         assert_eq!(authored.rgba[3],1.);
         press(&w,"effect-color-tint_color");
-        for i in 0..ColorInputModel::ALL.len() {
-            combo(&w,"edit-color-model").set_selected(i as u32);
-            let alpha=find_named(w.window.upcast_ref(),"edit-color-value-3").unwrap();
-            assert!(!alpha.is_visible());
-        }
+        every_form(&w);
         response(&w,"apply");ready(&w);
         assert_eq!(value(&w,"tint_color"),EffectValue::Color(authored));
         let saved=snapshot(&w);let reopened=open_native_document(std::io::Cursor::new(saved));

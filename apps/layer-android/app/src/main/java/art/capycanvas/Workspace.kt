@@ -187,6 +187,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                             confirmButton = { TextButton(host::clearActionError) { Text(host.bootstrap!!.getJSONObject("common").getString("ok")) } })
                     }
                     CommandSearch(host)
+                    ColorEditorLayer(host)
                     PreferencesOverlay(host, snapshot?.objectOrNull("preferences"))
                     if (snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") != null)
                         ToolPicker(host, snapshot.getJSONObject("picker"))

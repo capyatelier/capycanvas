@@ -31,7 +31,7 @@ fn pixels(w: &Rc<Workspace>, id: u32) -> Vec<u8> {
 #[ignore = "private Wayland display and hardware GPU"]
 fn native_numeric_colors_and_saved_palettes() {
     use layer_core::color::{DocumentColor, SampleDepth, RgbColor, RgbSpace};
-    use layer_ui::{ColorAction, ColorInputModel, ColorSlot};
+    use layer_ui::{ColorAction, ColorForm, ColorSlot};
     let app = native_test_app("art.capycanvas.NumericColors");
     let output = std::path::Path::new("../../artifacts/color-m2/numeric-palette-ui");
     std::fs::create_dir_all(output).unwrap();
@@ -77,50 +77,28 @@ fn native_numeric_colors_and_saved_palettes() {
         output.join("numeric-document-rgb.png").to_str().unwrap(),
         1.,
     );
-    let dialog = w.window.visible_dialog().unwrap();
-    let model = named::<adw::ComboRow>(dialog.upcast_ref(), "edit-color-model");
-    for selected in 0..ColorInputModel::ALL.len() {
-        model.set_selected(selected as u32);
-        pump(10);
-    }
+    crate::color_editor::tests::every_form(&w);
+    crate::color_editor::tests::form(&w, 2, ColorForm::Oklch);
     capture_reference(&w, output.join("numeric-oklch.png").to_str().unwrap(), 1.);
     respond(&w, "Use Color");
     assert_eq!(
         state(&w).colors.definition(),
         original,
-        "unchanged models never quantize RGB/alpha"
+        "unchanged formats never quantize RGB/alpha"
     );
     click_named(&w, "color-edit-menu");
-    let dialog = w.window.visible_dialog().unwrap();
-    let entry = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-value-0");
-    entry.set_text("NaN");
-    pump(10);
-    assert!(
-        !find_button(dialog.upcast_ref(), "Use Color")
-            .unwrap()
-            .is_sensitive()
-    );
+    crate::color_editor::tests::value(&w, 0, 0, "NaN");
+    assert!(!crate::color_editor::tests::editor(&w).apply_button.is_sensitive());
     respond(&w, "Cancel");
     assert_eq!(state(&w).colors.definition(), original);
     click_named(&w, "color-edit-menu");
-    let dialog = w.window.visible_dialog().unwrap();
-    let model = named::<adw::ComboRow>(dialog.upcast_ref(), "edit-color-model");
-    model.set_selected(
-        ColorInputModel::ALL
-            .iter()
-            .position(|m| *m == ColorInputModel::SrgbHex)
-            .unwrap() as u32,
-    );
-    pump(10);
-    let entry = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-value-0");
-    entry.set_text("#12A5E3");
+    crate::color_editor::tests::type_into(&w, "edit-color-hex", "#12A5E3");
     respond(&w, "Use Color");
-    let hex = state(&w).colors.definition();
-    assert_eq!(hex.space, RgbSpace::Srgb);
-    assert_eq!(
-        hex.rgba,
-        [18. / 255., 165. / 255., 227. / 255., original.rgba[3]]
-    );
+    let hex = state(&w).colors.definition().encoded_in(RgbSpace::Srgb).unwrap();
+    for (channel, expected) in hex.iter().zip([18., 165., 227.]) {
+        assert!((channel * 255. - expected).abs() < 0.01, "{hex:?}");
+    }
+    assert_eq!(hex[3], original.rgba[3]);
     assert_eq!(state(&w).brush.opacity, 0.37);
     w.dispatch(UiAction::Color {
         action: ColorAction::Definition { color: original },

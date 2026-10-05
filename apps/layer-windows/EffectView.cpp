@@ -21,7 +21,7 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
     std::shared_ptr<ColorForm> form;
     void rebuild(){
         fields.Children().Clear();form=std::make_shared<ColorForm>(property->data);auto weak=weak_from_this();
-        form->init([weak,expected=editingContext](J value){if(auto self=weak.lock();self&&(!self->context||self->context()==expected))self->set(value);},property->id()+L"-color");
+        form->init([weak,expected=editingContext](J value,std::optional<double>){if(auto self=weak.lock();self&&(!self->context||self->context()==expected))self->set(value);},property->id()+L"-color");
         fields.Children().Append(form->root);
     }
     void init(hstring const& title){
@@ -44,9 +44,8 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
         auto title=currentTitle?currentTitle():str(property->model(),L"label");name.Text(title);AutomationProperties::SetName(pick,title);
         auto next=context?context():L"";
         if(next!=editingContext){editingContext=next;rebuild();}
-        auto space=str(object(property->data->model,L"color_panel"),L"rgb_space",L"Srgb");
-        form->load(get(),space,object(property->data->model,L"color_panel"),false,flag(object(property->model(),L"kind"),L"opaque"));
-        sample.Color(displayColor(object(form->view,L"preview")));
+        form->load(displayColors(property->data->state),O({{L"color",get()}}),flag(object(property->model(),L"kind"),L"opaque"),object(property->data->model,L"color_panel"));
+        sample.Color(displayColor(object(form->view,L"new")));
     }
 };
 struct PropertiesView : std::enable_shared_from_this<PropertiesView> {

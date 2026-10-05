@@ -77,10 +77,12 @@ mod toolbar_preview;
 pub use toolbar_preview::*;
 mod tools;
 pub use color::{
-    color_intensity_input, color_intensity_input_typed, ColorEditor, ColorEditorError, ColorInputModel, ColorFormCopy, ColorFormCopyView, ColorValidationCopy, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form_localized, color_preview, color_validation_localized, color_ui_localized,
+    COLOR_FORM_FAMILIES, ColorEditor, ColorEditorAction, ColorEditorError, ColorEditorMemory, ColorEditorTarget, ColorEditorView, ColorForm, ColorFormChoice,
+    ColorHexNote, ColorHexNoteKind, ColorRowView, ColorScrubSpeed, ColorShapeChoice, ColorStripCorner, ColorStripPlacement, ColorStripView, ColorValueName, ColorValueView,
+    ColorValidationCopy, ColorPreview, ColorUiRequest, color_preview, color_validation_localized, color_ui_localized,
     ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor,
     PaletteChoiceView, PaletteCommand, PaletteExport, PaletteFileRequest, PaletteFormat, palette_file, PaletteMenuItem, PaletteMenuTarget, PalettePanelView,
-    PaletteTileView, selected_swatch,
+    PaletteTileView, SwatchSectionView, SwatchSheetView, selected_swatch,
     HdrIntensityArc, ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, PaintPairView, PaintSwatchView, ColorWheelGeometry, ColorWheelPart, render_color_field, render_hue_guide_in, render_hue_ring_f16_in,
 };

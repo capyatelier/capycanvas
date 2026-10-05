@@ -96,8 +96,8 @@ Empty localization metadata preserves the current context; a pending envelope
 stays queued until a full snapshot carries it. Properties, tool controls, filter
 results and options use semantic identities for their structural keys. Current
 captions update retained controls, accessibility names and tooltips. Numeric
-refusals retain their shared reason, and color forms project their cached
-`form_copy` descriptor without reparsing drafts or converting previews. Profile,
+refusals retain their shared reason, and color forms relabel their rows and
+re-read a refused value in the new language without changing the draft. Profile,
 proof and export captions preserve raw names, selections and prepared candidates.
 Preferences reserves the measured titlebar height when fitting its centered
 dialog; its narrow-window check dismisses it with an actual pointer click.

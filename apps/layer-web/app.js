@@ -2,6 +2,7 @@ import { brushSizeGrid } from "./brush-sizes.js";
 import init, { WebApp, WebGpu, configure_raster_worker, automatic_tab_names } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
 import { createPaintPairIcon } from './color-controls.js';
+import { configureColorEditor, refreshColorEditors } from './color-editor.js';
 import { createDocumentStorage } from "./document-storage.js";
 import { workspaceStore, modulePromise, setWorkspaceWake } from "./workspace-preload.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
@@ -315,7 +316,7 @@ function applyChange(change) {
     commandBar?.refresh(state.command_search);
     if (change.regions === 512) { if (change.canvas_wake) wake(); return; }
   }
-  if(change.regions & 256) editor?.refreshColorPreview();
+  if(change.regions & 256) { editor?.refreshColorPreview(); refreshColorEditors(); }
   if(change.regions===256){if(change.canvas_wake)wake();return;}
   if (change.regions & (1 | 2 | 4 | 8 | 128)) workspaceManager?.observe();
   if (change.regions) {
@@ -354,6 +355,7 @@ function applyChange(change) {
     if (workspaceModelRevision === presentation.model_revision)
       queueWorkspacePresentation(presentation);
   }
+  if (change.regions) refreshColorEditors();
   if (change.canvas_wake) wake();
   if (change.regions && !workspaceGesture?.started) wake();
 }
@@ -1810,6 +1812,7 @@ try {
     element,button,numberField,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
   canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,icon,numberField,resolve:request=>app.number_input(request),dispatch});
   imageSizeUi = createImageSizeUi({state:()=>state,element,button,numberField,resolve:request=>app.number_input(request),dispatch});
+  configureColorEditor({dispatch,icon});
   editor = createEditorPanels({selectionUi,app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged});
   palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,
     dismissContext: () => customization?.dismissContext(), contentChanged: panelContentChanged });

@@ -8,6 +8,7 @@ mod document_tests;
 mod gamut;
 mod okhsv;
 mod editor;
+mod text;
 mod hdr_picker;
 mod quick_colors;
 mod paint_pair;
@@ -16,15 +17,18 @@ pub use quick_colors::QuickColorView;
 use hdr_picker::HdrPaint;
 mod hdr_arc;
 pub use hdr_arc::HdrIntensityArc;
-pub use editor::{color_intensity_input, color_intensity_input_typed, ColorEditor, ColorEditorError, ColorInputModel};
+pub use editor::{
+    COLOR_FORM_FAMILIES, ColorEditor, ColorEditorAction, ColorEditorError, ColorEditorMemory, ColorEditorTarget, ColorEditorView, ColorForm,
+    ColorFormChoice, ColorHexNote, ColorHexNoteKind, ColorRowView, ColorScrubSpeed, ColorShapeChoice, ColorStripCorner, ColorStripPlacement, ColorStripView, ColorValueName, ColorValueView,
+};
 mod form;
-pub use form::{ColorFormCopy, ColorFormCopyView, ColorValidationCopy, ColorFormRequest, ColorFormView, ColorPreview, ColorUiRequest, color_form_localized, color_preview, color_validation_localized, color_ui_localized};
+pub use form::{ColorValidationCopy, ColorPreview, ColorUiRequest, color_preview, color_validation_localized, color_ui_localized};
 mod library;
 mod palette_file;
 pub use palette_file::{PaletteExport, PaletteFileRequest, PaletteFormat, palette_file};
 mod palette_view;
 pub use palette_view::{
-    PaletteChoiceView, PaletteCommand, PaletteMenuItem, PaletteMenuTarget, PalettePanelView, PaletteTileView,
+    PaletteChoiceView, PaletteCommand, PaletteMenuItem, PaletteMenuTarget, PalettePanelView, PaletteTileView, SwatchSectionView, SwatchSheetView,
     selected_swatch,
 };
 pub use library::{ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor};
@@ -112,6 +116,9 @@ pub enum ColorAction {
         point: [f32; 2],
         size: f32,
     },
+    EditorMemory {
+        memory: ColorEditorMemory,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -133,6 +140,8 @@ pub struct ColorState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hdr_picker: Option<[HdrPaint; 3]>,
     hdr_depth: layer_core::color::SampleDepth,
+    #[serde(default)]
+    editor: ColorEditorMemory,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -207,7 +216,7 @@ impl Default for ColorState {
 impl ColorState {
     #[cfg(test)]
     fn apply_canonical(&mut self, action: ColorAction) -> Result<(), String> {
-        self.apply(action).map_err(|reason| reason.message(ColorInputModel::DocumentRgb, &crate::Localizer::shared(crate::UiLanguage::English)))
+        self.apply(action).map_err(|reason| reason.message(&crate::Localizer::shared(crate::UiLanguage::English)))
     }
     pub fn new() -> Self {
         Self {
@@ -226,12 +235,14 @@ impl ColorState {
             coordinates: [None; 3],
             hdr_picker: None,
             hdr_depth: layer_core::color::SampleDepth::F16,
+            editor: ColorEditorMemory::default(),
         }
     }
 }
 impl ColorState {
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_hdr_picker()?;
+        self.editor.validate()?;
         for color in [self.foreground, self.background, self.temporary] {
             Self::validate_definition(color)?;
         }
@@ -488,6 +499,9 @@ impl ColorState {
             .rem_euclid(360.)
     }
     pub fn wheel_hue_stops(&self) -> &'static [ColorHueStop] {
+        Self::hue_stops(self.shape, self.rgb_space)
+    }
+    pub fn hue_stops(shape: ColorShape, space: RgbSpace) -> &'static [ColorHueStop] {
         static OKHSV: std::sync::LazyLock<Vec<ColorHueStop>> =
             std::sync::LazyLock::new(okhsv::hue_stops);
         static HSV: std::sync::LazyLock<[Vec<ColorHueStop>; 4]> = std::sync::LazyLock::new(|| {
@@ -502,12 +516,12 @@ impl ColorState {
                     .collect()
             })
         });
-        if self.shape == ColorShape::Circle {
+        if shape == ColorShape::Circle {
             &OKHSV
         } else {
             &HSV[RgbSpace::ALL
                 .iter()
-                .position(|s| *s == self.rgb_space)
+                .position(|s| *s == space)
                 .unwrap()]
         }
     }
@@ -670,7 +684,7 @@ impl ColorState {
                     match part {
                         ColorWheelPart::Hue => values[0] = self.wheel_hue_at(&g, point),
                         ColorWheelPart::Field => {
-                            let [s, v] = g.disc_components(point);
+                            let [s, v] = g.disc_snap(point).unwrap_or_else(|| g.disc_components(point));
                             values[1] = s * 100.;
                             values[2] = v * 100.;
                         }
@@ -688,6 +702,10 @@ impl ColorState {
             }
             ColorAction::ToggleTransparent => {
                 self.slot = if self.slot == ColorSlot::Transparent { self.paint_slot } else { ColorSlot::Transparent };
+            }
+            ColorAction::EditorMemory { memory } => {
+                memory.validate()?;
+                self.editor = memory;
             }
             ColorAction::Swap => {
                 std::mem::swap(&mut self.foreground, &mut self.background);
@@ -1265,6 +1283,18 @@ impl ColorWheelGeometry {
             self.center[1] + self.disc_radius() * b * (1. - a * a * 0.5).sqrt(),
         ]
     }
+    pub const DISC_SNAP_DEGREES: f32 = 18.;
+    pub fn disc_snap(&self, point: [f32; 2]) -> Option<[f32; 2]> {
+        let (x, y) = (point[0] - self.center[0], point[1] - self.center[1]);
+        if x.hypot(y) <= self.outer {
+            return None;
+        }
+        let angle = y.atan2(x).to_degrees();
+        [(-135., [0., 1.]), (-45., [1., 1.]), (90., [0.5, 0.])]
+            .into_iter()
+            .find(|(corner, _)| ((angle - corner + 540.).rem_euclid(360.) - 180.).abs() <= Self::DISC_SNAP_DEGREES)
+            .map(|(_, sv)| sv)
+    }
     /// The analytical inverse uses f64 to avoid cancellation near rim corners.
     /// Outside drags clamp to the rim without losing pointer capture.
     pub fn disc_components(&self, point: [f32; 2]) -> [f32; 2] {
@@ -1723,6 +1753,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn circle_drags_past_the_hue_ring_snap_to_white_full_color_and_black() {
+        let g = ColorWheelGeometry::new(200.).unwrap();
+        let rim = |degrees: f32, radius: f32| {
+            let a = degrees.to_radians();
+            [g.center[0] + radius * a.cos(), g.center[1] + radius * a.sin()]
+        };
+        let beyond = g.outer + 4.;
+        for (degrees, expected) in [(-135., [0., 1.]), (-45., [1., 1.]), (90., [0.5, 0.])] {
+            for offset in [-ColorWheelGeometry::DISC_SNAP_DEGREES + 0.1, 0., ColorWheelGeometry::DISC_SNAP_DEGREES - 0.1] {
+                assert_eq!(g.disc_snap(rim(degrees + offset, beyond)), Some(expected), "{degrees} {offset}");
+            }
+            assert_eq!(g.disc_snap(rim(degrees + ColorWheelGeometry::DISC_SNAP_DEGREES + 0.5, beyond)), None);
+            assert_eq!(g.disc_snap(rim(degrees, g.outer - 1.)), None);
+        }
+        let mut state = ColorState::default();
+        state.apply_canonical(ColorAction::Shape { shape: ColorShape::Circle }).unwrap();
+        state.apply_canonical(ColorAction::PickWheel { part: ColorWheelPart::Field, point: rim(-133., beyond), size: 200. }).unwrap();
+        assert_eq!(ColorLibrary::hex_preview(state.definition()), "#FFFFFF");
+        let hue = state.okhsv_components()[0];
+        state.apply_canonical(ColorAction::PickWheel { part: ColorWheelPart::Field, point: rim(-47., beyond), size: 200. }).unwrap();
+        assert_eq!(state.okhsv_components()[1..], [100., 100.]);
+        assert_eq!(state.okhsv_components()[0], hue);
+        state.apply_canonical(ColorAction::PickWheel { part: ColorWheelPart::Field, point: rim(-120., beyond), size: 200. }).unwrap();
+        assert_ne!(state.okhsv_components()[1..], [100., 100.]);
+        state.apply_canonical(ColorAction::PickWheel { part: ColorWheelPart::Field, point: rim(95., beyond), size: 200. }).unwrap();
+        assert_eq!(state.definition().encoded_in(RgbSpace::Srgb).unwrap()[..3], [0., 0., 0.]);
+    }
     #[test]
     fn disc_projection_is_reversible_at_edges_center_and_interior() {
         for size in [1., 100., 236., 472.] {

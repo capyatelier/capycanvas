@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeElement} from './fake-dom.mjs';
-import {chooseColor} from './color-controls.js';
+import {chooseColor} from './color-editor.js';
+import {colorDialogDom,fakeColorApp} from './color-dialog-fixture.mjs';
 import {createEffectPanels} from './effects.js';
 import {createEditorPanels} from './editor-panels.js';
 import {createSelectionUi} from './selection-masks.js';
@@ -30,40 +31,45 @@ class Element extends FakeElement {
   querySelectorAll(tags){const wanted=tags.split(',').map(tag=>tag.toUpperCase());return this.children.flatMap(node=>node.tagName?[...(wanted.includes(node.tagName)?[node]:[]),...node.querySelectorAll(tags)]:[]);}
   querySelector(tag){return this.querySelectorAll(tag)[0]??null;}
 }
-function harness(t,hdr){
-  const previous=globalThis.document,doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)})};doc.body=new Element('body',doc);globalThis.document=doc;t.after(()=>globalThis.document=previous);
-  let language='en',forms=0,copies=0,lastForm,lastRequest;const cachedValidation={space:'Srgb',display_space:'Srgb',outside_document:false,outside_display:false,above_white:true};
-  const project=copy=>({models:[['document_rgb',`${language}:document_rgb`],['srgb_hex',`${language}:srgb_hex`]],labels:[0,1,2,3].map(i=>`${language}:field${i}`),description:`${language}:${copy.model}`,validation:`${language}:cached-gamut`,error:copy.error?`${language}:invalid-intensity`:null});
-  const app={state:()=>({document_file:{epoch:1},colors:{hdr_depth:hdr?'F32':'U8'},layer_tools:{}}),color_panel:()=>({rgb_space:'Srgb',hdr,rendition:null}),language_tag:()=>language,
-    catalog:()=>({native_copy:{color:Object.fromEntries(['edit','model','intensity_ev','base','adjusted','use_color'].map(key=>[key,`${language}:${key}`]))}}),bootstrap_view:()=>({common:{cancel:`${language}:cancel`}}),
-    color_ui(request){
-      if(request.type==='form_copy'){copies++;assert.equal(request.copy,lastForm.copy);return project(request.copy);}
-      assert.equal(request.type,'form');forms++;lastRequest=request.request;const invalid=!!request.request.change_intensity_text&&!Number.isFinite(Number(request.request.change_intensity_text));
-      const copy={model:request.request.change_model??request.request.model,document_space:'Srgb',validation:cachedValidation,error:invalid?{type:'intensity',detail:{reason:'invalid_number'}}:null};
-      lastForm={draft:{...request.request,model:copy.model,fields:request.request.fields??['0.25','0.5','0.75','1'],intensity:hdr?1:null,change_intensity_text:invalid?request.request.change_intensity_text:null},copy,...project(copy),value:{space:'Srgb',rgba:[.25,.5,.75,1]},preview:{rgba:[.25,.5,.75,1]},base_preview:hdr?{rgba:[.1,.2,.3,1]}:null};return lastForm;
-    }};
-  const element=(tag,cls,text)=>{const node=new Element(tag,doc);node.className=cls??'';if(text!=null){if(typeof text==='function')bindCopy(node,text);else node.textContent=text;}return node;};
-  const button=(text,action,cls)=>{const node=element('button',cls,text);node.click=()=>{if(!node.disabled)action();};return node;};
-  const result=chooseColor({app,color:{space:'Srgb',rgba:[.25,.5,.75,1]},element,button,intensity:hdr?1:null});
-  const root=doc.body.children[0],form=root.querySelectorAll('form')[0];return {app,doc,root,form,result,stats:()=>({forms,copies}),view:()=>lastForm,request:()=>lastRequest,switch(tag){language=tag;refreshCopy(app);}};
+const keydown=key=>({type:'keydown',key,preventDefault(){},stopPropagation(){}});
+function dialogHarness(t,hdr){
+  let language='en';const dom=colorDialogDom(t),{app,stats}=fakeColorApp({language:()=>language,hdr});
+  const result=chooseColor({app,slot:'foreground',element:dom.element,button:dom.button});
+  const root=dom.doc.body.children.find(node=>node.tagName==='DIALOG'),nodes=()=>root.descendants();
+  const value=name=>nodes().find(node=>node.tagName==='BUTTON'&&node.dataset.colorValue===name),input=name=>nodes().find(node=>node.tagName==='INPUT'&&node.dataset.colorValue===name);
+  const apply=()=>nodes().find(node=>node.className==='suggested-action'),status=()=>nodes().find(node=>node.className==='color-editor-error');
+  return {...dom,app,stats,root,result,nodes,value,input,apply,status,switch(tag){language=tag;refreshCopy(app);}};
 }
 
-test('color form publication projects cached copy without parsing, replacing controls or altering dirty HDR input',async t=>{
-  const h=harness(t,true),controls=h.form.querySelectorAll('select,input,button'),model=controls[0],intensity=controls[1],options=[...model.options];
-  intensity.value='１é🎨 invalid';intensity.focus();intensity.oninput();intensity.setSelectionRange(1,6);model.focus();
-  assert.equal(h.request().change_intensity_text,intensity.value,'intensity text goes to shared parsing');
-  const before=h.stats(),view=h.view();assert.ok(view.value,'failed intensity retains the prior parsed color');const draft=JSON.stringify(view.draft),preview=JSON.stringify(view.preview),text=intensity.value;
-  h.switch('tr');assert.equal(h.stats().forms,before.forms);assert.ok(h.stats().copies>before.copies);assert.equal(h.view(),view);assert.equal(JSON.stringify(view.draft),draft);assert.equal(JSON.stringify(view.preview),preview);
-  assert.deepEqual(h.form.querySelectorAll('select,input,button'),controls);assert.deepEqual([...model.options],options);assert.equal(model.options[0].textContent,'tr:document_rgb');assert.equal(intensity.value,text);assert.deepEqual([intensity.selectionStart,intensity.selectionEnd],[1,6]);assert.equal(h.doc.activeElement,model);
-  assert.equal(h.form.querySelectorAll('p').at(-1).textContent,'tr:invalid-intensity');assert.equal(h.form.querySelectorAll('button').at(-1).disabled,true);
-  h.root.close();await h.result;
+test('Edit Color keeps a refused number, its selection and the retained controls while relabeling',async t=>{
+  for(const hdr of [false,true]){
+    const h=dialogHarness(t,hdr),controls=h.nodes();
+    h.value('0-0').click();const field=h.input('0-0');assert.equal(field.hidden,false);assert.equal(h.doc.activeElement,field);
+    field.value='１é🎨 lots';field.setSelectionRange(1,6);field.dispatchEvent(keydown('Enter'));
+    assert.deepEqual(h.stats.actions.at(-1),{op:'value',row:0,index:0,text:'１é🎨 lots'},'typed text goes to shared parsing');
+    assert.equal(h.status().textContent,'en:refused');assert.ok(field.hasAttribute('aria-invalid'));assert.equal(h.apply().disabled,true);
+    const before=h.stats.actions.length;h.switch('tr');
+    assert.deepEqual(h.nodes(),controls,'language changes keep every control');assert.deepEqual(h.stats.actions.slice(before),[h.stats.actions[before-1]],'relabeling only re-reads the refusal');
+    assert.equal(h.status().textContent,'tr:refused');
+    assert.equal(field.value,'１é🎨 lots');assert.deepEqual([field.selectionStart,field.selectionEnd],[1,6]);assert.equal(h.doc.activeElement,field);
+    assert.equal(h.apply().disabled,true);assert.equal(h.apply().textContent,'tr:use_color');assert.equal(h.root.ariaLabel,'tr:edit');
+    assert.equal(h.value('0-0').getAttribute('aria-label'),'tr:value0 64');assert.equal(h.input('ev')!=null&&!h.value('ev').parentNode.hidden,hdr);
+    field.dispatchEvent(keydown('Escape'));assert.equal(field.hidden,true);assert.equal(h.apply().disabled,false);assert.equal(h.status().textContent,'');
+    h.root.close();assert.equal(await h.result,null);
+  }
 });
 
-test('SDR form preserves literal fields, selected model and cached preview while relabeling retained options',async t=>{
-  const h=harness(t,false),model=h.form.querySelectorAll('select')[0],field=h.form.querySelectorAll('input')[1];model.value='srgb_hex';model.onchange();field.value='#é雪{draft}';field.focus();field.setSelectionRange(2,5);
-  const view=h.view(),before=h.stats(),options=[...model.options],preview=h.form.querySelectorAll('div').find(node=>node.className==='color-form-preview').style.background;
-  h.switch('vi');assert.equal(h.stats().forms,before.forms);assert.equal(h.view(),view);assert.equal(model.value,'srgb_hex');assert.deepEqual([...model.options],options);assert.equal(model.options[1].textContent,'vi:srgb_hex');assert.equal(field.value,'#é雪{draft}');assert.deepEqual([field.selectionStart,field.selectionEnd],[2,5]);assert.equal(h.doc.activeElement,field);assert.equal(h.form.querySelectorAll('div').find(node=>node.className==='color-form-preview').style.background,preview);
-  h.root.close();await h.result;
+test('Edit Color publishes the draft, its intensity and remembered formats only through Use Color',async t=>{
+  for(const hdr of [false,true]){
+    const h=dialogHarness(t,hdr);
+    h.value('1-0').click();h.input('1-0').value='200';h.input('1-0').dispatchEvent(keydown('Enter'));
+    assert.equal(h.input('1-0').hidden,true);assert.equal(h.status().textContent,'');
+    h.nodes().find(node=>String(node.dataset.colorFormat)==='2').click();h.nodes().find(node=>node.dataset.form==='oklch').click();
+    assert.deepEqual(h.stats.actions.at(-1),{op:'form',row:2,form:'oklch'});
+    h.apply().click();
+    assert.deepEqual(await h.result,{color:{space:'Srgb',rgba:[.25,.5,.75,1]},intensity:hdr?1:null});
+    assert.equal(h.doc.body.children.length,0,'closing removes the dialog and its strip');
+  }
 });
 
 test('effect publication retains page options, color controls and semantic actions while refreshing captions',t=>{

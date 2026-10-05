@@ -21,6 +21,7 @@ pub enum ColorPickerAction {
     Settings { anchor: crate::DrawerAnchor },
     Style { style: ColorPickerStyle },
     Source { layer: bool },
+    Editor { original: RgbColor, #[serde(default)] touch_offset: f32 },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorPickerState {
@@ -31,10 +32,13 @@ pub struct ColorPickerState {
     pub can_sample_layer: bool,
     pub preview: Option<RgbColor>,
     pub sample_sizes: &'static [u32],
+    pub editor: bool,
+    pub picked: Option<RgbColor>,
+    pub sample_point: Option<[f32; 2]>,
 }
 impl crate::UiState {
     pub fn preview_colors(&self) -> std::borrow::Cow<'_, ColorState> {
-        if !self.color_picker.calibrating && let Some(sample) = self.color_picker.preview {
+        if !self.color_picker.calibrating && !self.color_picker.editor && let Some(sample) = self.color_picker.preview {
             let mut colors = self.display_colors().clone();
             if colors.set_color(sample).is_ok() {
                 return std::borrow::Cow::Owned(colors);
@@ -49,6 +53,7 @@ pub(crate) struct Picking {
     pub previous: Option<LayerCanvasTool>,
     pub original: Option<RgbColor>,
     pub position: Option<[f32; 2]>,
+    pub published_point: Option<[f32; 2]>,
     pub touch: Option<u64>,
     pub touch_offset: f32,
     pub finishing: bool,
@@ -58,6 +63,7 @@ pub(crate) struct Picking {
 #[derive(Default)]
 pub(crate) struct Eyedropper {
     pub calibration: Option<crate::session::calibration::Calibration>,
+    pub editor: bool,
     pub layer: bool,
     pub area: ColorSampleArea,
     pub picking: Picking,
@@ -137,7 +143,7 @@ impl Eyedropper {
 impl Default for ColorPickerState {
     fn default() -> Self {
         Self { calibrating: false, style: ColorPickerStyle::Glass, layer: false, sample_width: 1,
-            can_sample_layer: false, preview: None, sample_sizes: &COLOR_SAMPLE_WIDTHS }
+            can_sample_layer: false, preview: None, sample_sizes: &COLOR_SAMPLE_WIDTHS, editor: false, picked: None, sample_point: None }
     }
 }
 

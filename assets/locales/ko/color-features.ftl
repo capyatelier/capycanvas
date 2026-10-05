@@ -302,33 +302,16 @@ color-outside-prophoto-preview-gamut = ProPhoto RGB 미리보기 색역 밖의 �
 color-above-sdr-white = SDR 흰색보다 밝은 색입니다.
 color-features-export-finishing-file = 파일 마무리 중…
 color-features-export-writing-image = 이미지 기록 중…
-color-form-model-document-rgb = 문서 RGB
 color-form-model-linear-rgb = 선형 RGB
-color-form-model-srgb-hex = sRGB 16진수
-color-form-model-hsv = HSV (문서 RGB)
-color-form-model-hls = HLS (문서 RGB)
-color-form-model-oklch = OKLCH
-color-form-field-red-encoded = 빨강 (인코딩)
-color-form-field-green-encoded = 초록 (인코딩)
-color-form-field-blue-encoded = 파랑 (인코딩)
-color-form-field-red-linear = 빨강 (선형)
-color-form-field-green-linear = 초록 (선형)
-color-form-field-blue-linear = 파랑 (선형)
-color-form-field-alpha = 알파 (%)
-color-form-field-hex = sRGB 16진수 (#RRGGBB)
 color-form-field-hue = 색상 (°)
 color-form-field-saturation = 채도 (%)
 color-form-field-value = 명도 (%)
 color-form-field-lightness = 밝기 (%)
 color-form-field-chroma = 크로마
-color-form-document-srgb = 문서 RGB: sRGB.
-color-form-document-display-p3 = 문서 RGB: Display P3.
-color-form-document-adobe-rgb = 문서 RGB: Adobe RGB (1998).
-color-form-document-prophoto = 문서 RGB: ProPhoto RGB.
-color-form-reference-white = 1 = 기준 흰색.
-color-form-hex-description = 16진수는 8비트 sRGB를 사용합니다.
 
 color-form-finite-field = { $label }에 유한한 숫자를 입력하세요.
+
+color-form-color-syntax = #3B7EA1 같은 16진수 코드나 rgb(59 126 161) 같은 색을 입력하세요.
 
 color-properties-title = 문서 속성
 color-properties-canvas-size = 캔버스 크기
@@ -352,11 +335,6 @@ color-properties-retained-rasterized = 문서 좌표로 래스터화되었습니
 color-properties-retained-icc = 원본 픽셀 값과 포함된 ICC가 보존됩니다.
 color-properties-retained-original = 원본 픽셀 값과 색 해석이 보존됩니다.
 
-color-form-entries-too-long = 색상 입력은 128바이트 이하여야 합니다.
-color-form-alpha-range = 알파는 0~100% 범위여야 합니다.
-color-form-hex-syntax = #RGB 또는 #RRGGBB를 사용하세요. 알파는 따로 편집하세요.
-color-form-percent-range = 채도, 밝기, 명도는 0~100% 범위여야 합니다.
-color-form-negative-lightness-chroma = 밝기와 크로마는 음수일 수 없습니다.
 
 color-profile-select-imported = 가져온 프로파일을 선택하세요.
 color-profile-read-limit = ICC 프로파일이 16 MiB를 초과합니다.

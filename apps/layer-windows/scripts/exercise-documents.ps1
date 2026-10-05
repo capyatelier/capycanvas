@@ -296,11 +296,13 @@ function Draw {
     Wait-Until {(Model).state.colors.slot -eq 'foreground'} 'Foreground paint did not select'
     Wait-Until {$control=Find-Id 'color-edit';$control -and !$control.Current.IsOffscreen} 'Controlled ink edit control did not appear'
     (Find-Id 'color-edit').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {Find-Id 'precise-color-model'} 'Controlled ink editor did not open'
-    Combo-Select (Find-Id 'precise-color-model') {$_.Current.Name -eq 'Linear RGB'}
-    $channels=@('.03',$channel,'.025','100')
-    for($i=0;$i -lt 4;$i++){
-        (Find-Id "precise-color-$i").GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($channels[$i])
+    Wait-Until {Find-Id 'precise-color-form-0'} 'Controlled ink editor did not open'
+    Combo-Select (Find-Id 'precise-color-form-0') {$_.Current.Name -eq 'Linear RGB'}
+    $channels=@('.03',$channel,'.025')
+    for($i=0;$i -lt 3;$i++){
+        $entry=Find-Id "precise-color-0-$i";$entry.SetFocus()
+        $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($channels[$i])
+        [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
     }
     (Find-Id 'precise-color-apply').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$definition=(Model).paint_pair.definition;$definition.linear_rgb -and [Math]::Abs($definition.linear_rgb[1]-[double]$channel) -lt .000001 -and $definition.rgba[3] -eq 1} 'Controlled ink color did not publish'

@@ -597,33 +597,20 @@ color-features-export-finishing-file = Menyelesaikan berkas…
 
 color-features-export-writing-image = Menulis gambar…
 
-color-form-model-document-rgb = RGB dokumen
 
 color-form-model-linear-rgb = RGB linear
 
-color-form-model-srgb-hex = Heksadesimal sRGB
 
-color-form-model-hsv = HSV (RGB dokumen)
 
-color-form-model-hls = HLS (RGB dokumen)
 
-color-form-model-oklch = OKLCH
 
-color-form-field-red-encoded = Merah (terenkode)
 
-color-form-field-green-encoded = Hijau (terenkode)
 
-color-form-field-blue-encoded = Biru (terenkode)
 
-color-form-field-red-linear = Merah (linear)
 
-color-form-field-green-linear = Hijau (linear)
 
-color-form-field-blue-linear = Biru (linear)
 
-color-form-field-alpha = Alpha (%)
 
-color-form-field-hex = Heksadesimal sRGB (#RRGGBB)
 
 color-form-field-hue = Rona (°)
 
@@ -635,19 +622,15 @@ color-form-field-lightness = Kecerahan (%)
 
 color-form-field-chroma = Kroma
 
-color-form-document-srgb = RGB dokumen: sRGB.
 
-color-form-document-display-p3 = RGB dokumen: Display P3.
 
-color-form-document-adobe-rgb = RGB dokumen: Adobe RGB (1998).
 
-color-form-document-prophoto = RGB dokumen: ProPhoto RGB.
 
-color-form-reference-white = 1 = putih acuan.
 
-color-form-hex-description = Heksadesimal menggunakan sRGB 8-bit.
 
 color-form-finite-field = Masukkan angka berhingga untuk { $label }.
+
+color-form-color-syntax = Gunakan kode hex seperti #3B7EA1, atau warna seperti rgb(59 126 161).
 
 color-properties-title = Properti Dokumen
 
@@ -686,15 +669,10 @@ color-properties-retained-icc = Sampel asli dan ICC tertanam dipertahankan.
 
 color-properties-retained-original = Sampel asli dan interpretasi warna dipertahankan.
 
-color-form-entries-too-long = Isian warna harus paling banyak 128 bita.
 
-color-form-alpha-range = Alpha harus antara 0 dan 100%.
 
-color-form-hex-syntax = Gunakan #RGB atau #RRGGBB; edit alpha secara terpisah.
 
-color-form-percent-range = Saturasi, kecerahan, dan nilai harus antara 0 dan 100%.
 
-color-form-negative-lightness-chroma = Kecerahan dan kroma tidak boleh negatif.
 
 color-profile-select-imported = Pilih profil impor.
 

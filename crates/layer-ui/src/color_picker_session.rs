@@ -76,7 +76,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return false;
         };
         self.eyedropper.cancel();
-        self.eyedropper.picking.position = None;
+        self.clear_picker_position();
         self.eyedropper.picking.touch = None;
         self.eyedropper.picking.finishing = false;
         self.state.color_picker.preview = None;
@@ -115,6 +115,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             ColorPickerAction::Style { style } => self.state.color_picker.style = style,
+            ColorPickerAction::Editor { original, touch_offset } => {
+                if !touch_offset.is_finite() || touch_offset < 0. {
+                    return Err("Invalid touch offset".into());
+                }
+                original.validate()?;
+                self.cancel_picker();
+                self.start_picker()?;
+                self.eyedropper.editor = true;
+                self.eyedropper.picking.original = Some(original);
+                self.eyedropper.picking.touch_offset = touch_offset;
+                self.state.color_picker.picked = None;
+            }
             ColorPickerAction::Source { layer } => {
                 if self.eyedropper.calibration.is_some() || self.targeted_curve.is_some() { return Ok(()); }
                 if layer && !self.picker_layer_available() {
@@ -159,12 +171,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.eyedropper.picking.finishing = true;
     }
 
+    pub(super) fn clear_picker_position(&mut self) {
+        self.eyedropper.picking.position = None;
+        self.state.color_picker.sample_point = None;
+    }
+
     pub(super) fn picker_position(&mut self, position: [f32; 2]) {
         if !position.into_iter().all(f32::is_finite) {
             return;
         }
         self.eyedropper.picking.position = Some(position);
         let (_, sample, _) = self.picker_geometry(position);
+        self.state.color_picker.sample_point = Some(sample);
         let point = self.state.camera.input_transform().map(Point {
             x: sample[0],
             y: sample[1],
@@ -284,7 +302,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 _ => (),
                             }
                         } else if phase == ContactPhase::Down {
-                            if self.eyedropper.picking.touch.is_some() {
+                            if self.eyedropper.picking.touch.is_none() && self.eyedropper.editor {
+                                self.eyedropper.picking.touch = Some(id);
+                                self.picker_position(position);
+                            } else if self.eyedropper.picking.touch.is_some() {
                                 if self.picker_layer_available() {
                                     self.configure_picker(ColorPickerAction::Source {
                                         layer: !self.eyedropper.layer,

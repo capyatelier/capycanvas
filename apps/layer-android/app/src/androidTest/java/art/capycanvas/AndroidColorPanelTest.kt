@@ -7,6 +7,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -218,16 +219,138 @@ class AndroidColorPanelTest {
         val label = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit")
         waitFor("compact active color") { findTag("property-color-$label", owner) != null }
         instrumentation.runOnMainSync { assertTrue(findTag("property-color-$label", owner)!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
-        waitFor("active color editor") { findTag("color-input-0") != null }
-        val form = JSONObject(Native.colorUi(obj("type" to "form", "request" to obj("color" to paintPair().getJSONObject("definition"), "document_space" to documentRgbSpace(host), "model" to "document_rgb")).toString(), host.languageTag))
+        waitFor("active color editor") { findTag("color-value-hex") != null }
+        val opened = JSONObject(Native.colorUi(obj("type" to "editor_open", "colors" to state().displayColors(), "color" to paintPair().getJSONObject("definition"), "display_space" to "Srgb").toString(), host.languageTag))
         instrumentation.runOnMainSync {
-            for (i in 0..3) assertEquals("active definition channel $i", form.getJSONObject("draft").array("fields").getString(i), findTag("color-input-$i")!!.second.config[SemanticsProperties.EditableText].text)
-            assertTrue(findTag("color-input-0")!!.second.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(channel)))
+            assertTrue("active definition", findTag("color-value-hex")!!.second.config[SemanticsProperties.ContentDescription].single().endsWith(opened.getJSONObject("view").getString("hex")))
+            assertTrue(findTag("color-value-0-0")!!.second.config[SemanticsActions.OnClick].action!!.invoke())
         }
+        waitFor("typing red") { findTag("color-value-0-0-input") != null }
+        instrumentation.runOnMainSync { assertTrue(findTag("color-value-0-0-input")!!.second.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString((channel.toFloat() * 255).roundToInt().toString()))) }
         settle()
-        instrumentation.runOnMainSync { assertTrue(findTag("color-form-use")!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
-        waitFor("color editor closed") { findTag("color-form-use") == null }; settle()
+        instrumentation.runOnMainSync { assertTrue(findTag("color-value-0-0-input")!!.second.config[SemanticsActions.OnImeAction].action!!.invoke()) }
+        waitFor("red accepted") { findTag("color-value-0-0-input") == null }
+        instrumentation.runOnMainSync { assertTrue(findTag("color-use")!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+        waitFor("color editor closed") { findTag("color-use") == null }; settle()
         action(obj("type" to "customize", "action" to obj("type" to "close_control")))
+    }
+    @Test fun editColorRowsSheetAndCanvasPick() {
+        fun click(tag: String) = instrumentation.runOnMainSync { assertTrue(tag, findTag(tag)!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+        fun description(tag: String): String { var text = ""; instrumentation.runOnMainSync { text = findTag(tag)!!.second.config[SemanticsProperties.ContentDescription].single() }; return text }
+        fun enabled(tag: String): Boolean { var on = false; instrumentation.runOnMainSync { on = findTag(tag)!!.second.config.getOrNull(SemanticsProperties.Disabled) == null }; return on }
+        fun type(name: String, text: String) {
+            if (findTag("color-value-$name-input") == null) click("color-value-$name")
+            waitFor("typing $name") { findTag("color-value-$name-input") != null }
+            instrumentation.runOnMainSync { assertTrue(findTag("color-value-$name-input")!!.second.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(text))) }
+            settle()
+            instrumentation.runOnMainSync { assertTrue(findTag("color-value-$name-input")!!.second.config[SemanticsActions.OnImeAction].action!!.invoke()) }
+            settle()
+        }
+        fun hex(color: JSONObject) = JSONObject(Native.colorUi(obj("type" to "editor_open", "colors" to state().displayColors(), "color" to color, "display_space" to "Srgb").toString(), host.languageTag)).getJSONObject("view").getString("hex")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            color(obj("op" to "definition", "color" to obj("space" to "Srgb", "rgba" to JSONArray(listOf(1, 1, 1, 1)))))
+            color(obj("op" to "editor_memory", "memory" to obj("forms" to JSONArray(listOf("rgb", "hsl", "oklch")), "search" to "")))
+            val original = colors().getJSONObject("foreground").toString()
+            click("color-edit-button")
+            waitFor("Edit Color") { findTag("color-value-hex") != null }; settle()
+            fullCapture("edit-color-$theme")
+            fun box(tag: String) = findTag(tag)!!.second.boundsInRoot
+            assertEquals("the title is centered", box("color-editor").center.x, box("color-editor-title").center.x, 1.5f)
+            assertEquals("Current and New match the eyedropper height", box("color-pair").height, box("color-pick").height, 1f)
+            for (tag in listOf("color-pick", "color-value-hex")) assertEquals("$tag centers on Current and New", box("color-pair").center.y, box(tag).center.y, 1f)
+            val opened = box("color-editor").size
+            assertTrue(description("color-value-hex").endsWith("#FFFFFF"))
+            assertEquals("remembered row format", "HSL", description("color-format-1"))
+            type("hex", "#CA4B35")
+            assertTrue(description("color-value-hex").endsWith("#CA4B35"))
+            assertTrue(description("color-value-0-0").endsWith(" 202"))
+            type("0-0", "lots")
+            assertNotNull("a refused number stays open", findTag("color-value-0-0-input"))
+            assertNotNull(findTag("color-editor-error"))
+            assertFalse(enabled("color-use"))
+            fullCapture("edit-color-refused-$theme")
+            instrumentation.runOnMainSync { findTag("color-value-0-0-input")!!.first.view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE)) }
+            waitFor("refusal dismissed") { findTag("color-value-0-0-input") == null }
+            assertTrue(enabled("color-use"))
+            val before = description("color-value-0-2").substringAfterLast(' ').toInt()
+            val cell = findTag("color-value-0-2")!!.second.boundsInRoot
+            tool = MotionEvent.TOOL_TYPE_FINGER
+            event(MotionEvent.ACTION_DOWN, cell.center)
+            for (step in 1..6) { SystemClock.sleep(16); event(MotionEvent.ACTION_MOVE, cell.center - Offset(0f, step * 8f * density)) }
+            event(MotionEvent.ACTION_UP); settle()
+            val after = description("color-value-0-2").substringAfterLast(' ').toInt()
+            assertTrue("dragging a number up raises it: $before -> $after", after > before)
+            assertNull("a drag never opens the field", findTag("color-value-0-2-input"))
+            click("color-copy-hex"); settle()
+            val shownHex = description("color-value-hex").substringAfterLast(' ')
+            instrumentation.runOnMainSync {
+                val clip = activity.getSystemService(android.content.ClipboardManager::class.java).primaryClip!!
+                assertEquals(shownHex, clip.getItemAt(0).text.toString())
+            }
+            click("color-current"); settle()
+            assertTrue(description("color-value-hex").endsWith("#FFFFFF"))
+            fun slide(open: Boolean): List<Float> {
+                click(if (open) "color-swatches" else "color-sheet-close")
+                return (0 until 40).mapNotNull { SystemClock.sleep(10); findTag("color-sheet")?.second?.boundsInRoot?.top?.takeIf { it > 0f } }
+            }
+            val opening = slide(true)
+            waitFor("swatch sheet") { findTag("color-sheet-search") != null }; settle()
+            val rest = box("color-sheet").top
+            val rising = opening.dropWhile { it <= rest + 1f }
+            assertTrue("the sheet slides up from below: $opening / $rest", rising.isNotEmpty() && rising.zipWithNext().all { (a, b) -> b <= a + 1f })
+            assertEquals("the swatch list reaches the divider", box("color-editor-divider").top, box("color-sheet-list").bottom, 1.5f)
+            instrumentation.runOnMainSync { assertTrue(findTag("color-sheet-search")!!.second.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("zzzz-no-color"))) }
+            waitFor("no swatches match") { findTag("color-sheet-empty") != null }
+            instrumentation.runOnMainSync { assertTrue(findTag("color-sheet-search")!!.second.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(""))) }
+            waitFor("swatches listed") { findTag("color-sheet-tile") != null }
+            fullCapture("edit-color-sheet-$theme")
+            click("color-sheet-tile"); settle()
+            assertFalse(description("color-value-hex").endsWith("#FFFFFF"))
+            val closing = slide(false)
+            assertTrue("the sheet slides down: $closing / $rest", closing.any { it > rest + 1f } && closing.dropWhile { it <= rest + 1f }.zipWithNext().all { (a, b) -> b >= a - 1f })
+            waitFor("sheet closed") { findTag("color-sheet-search") == null }
+            assertEquals("the dialog keeps its size", opened, box("color-editor").size)
+            type("hex", "#CA4B35")
+            click("color-pick")
+            waitFor("picking strip") { findTag("color-strip") != null && picker().optBoolean("editor") }
+            settle()
+            val strip = findTag("color-strip")!!.second.boundsInRoot
+            val area = state().getJSONObject("camera").array("work_area").let { a -> Rect(a.getDouble(0).toFloat(), a.getDouble(1).toFloat(), (a.getDouble(0) + a.getDouble(2)).toFloat(), (a.getDouble(1) + a.getDouble(3)).toFloat()).translate(host.surfaceOrigin) }
+            assertTrue("strip sits inside the canvas work area: $strip / $area", area.contains(strip.topLeft) && area.contains(strip.bottomRight))
+            fullCapture("edit-color-strip-$theme")
+            val touch = tool
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            event(MotionEvent.ACTION_HOVER_MOVE, area.center)
+            waitFor("the canvas sample follows the mouse") { picker().optJSONArray("sample_point") != null }
+            event(MotionEvent.ACTION_HOVER_MOVE, Offset(strip.left - 4f, strip.center.y))
+            waitFor("the strip moves away from the sample") { findTag("color-strip")!!.second.boundsInRoot.topLeft != strip.topLeft }
+            val hovered = findTag("color-strip")!!.second.boundsInRoot.center
+            event(MotionEvent.ACTION_HOVER_MOVE, hovered)
+            waitFor("hovering the strip moves it away") { !findTag("color-strip")!!.second.boundsInRoot.contains(hovered) }
+            event(MotionEvent.ACTION_HOVER_EXIT); tool = touch
+            click("color-strip")
+            waitFor("strip goes back") { findTag("color-value-hex") != null && !picker().optBoolean("editor") }
+            assertTrue("the strip keeps the draft", description("color-value-hex").endsWith("#CA4B35"))
+            click("color-pick")
+            waitFor("picking again") { findTag("color-strip") != null && picker().optBoolean("editor") }
+            tap(canvasPoint())
+            waitFor("dialog returns with the sample") { findTag("color-value-hex") != null && !picker().optBoolean("editor") }
+            val picked = state().getJSONObject("color_picker").getJSONObject("picked")
+            assertTrue(description("color-value-hex").endsWith(hex(picked)))
+            assertEquals("picking only changes the draft", original, colors().getJSONObject("foreground").toString())
+            click("color-use")
+            waitFor("Edit Color closed") { findTag("color-use") == null }; settle()
+            assertEquals(hex(picked), hex(colors().getJSONObject("foreground")))
+            assertEquals("hsl", colors().getJSONObject("editor").getJSONArray("forms").getString(1))
+            color(obj("op" to "editor_memory", "memory" to obj("forms" to JSONArray(listOf("linear_rgb", "hsb", "oklab")), "search" to "")))
+            click("color-edit-button")
+            waitFor("Edit Color with wider formats") { findTag("color-value-hex") != null }; settle()
+            assertEquals("wider formats keep the dialog size", opened, box("color-editor").size)
+            fullCapture("edit-color-linear-$theme")
+            click("color-cancel")
+            waitFor("Edit Color closed") { findTag("color-cancel") == null }
+        }
     }
     @Test fun retainedPaintIconsAndCompactControlFollowCommittedContext() {
         paintPairFixture()
@@ -291,9 +414,7 @@ class AndroidColorPanelTest {
         instrumentation.runOnMainSync { host.documentChanged() }
         waitFor("HDR document ready", 60_000) { view().optBoolean("hdr") && host.snapshot?.optBoolean("brush_ready") == true }
         val ids = listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id)
-        val form = JSONObject(Native.colorUi(obj("type" to "form", "request" to obj("color" to paintPair().getJSONObject("definition"),
-            "document_depth" to "F16", "document_space" to "Srgb", "model" to "linear_rgb", "fields" to JSONArray(listOf("4", "1", "0.25", "50")))).toString(), host.languageTag))
-        color(obj("op" to "definition", "color" to form.getJSONObject("value")))
+        color(obj("op" to "definition", "color" to srgbLinear(4.0, 1.0, .25, alpha = .5)))
         val definition = paintPair().getJSONObject("definition").toString()
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))

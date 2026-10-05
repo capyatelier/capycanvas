@@ -202,11 +202,35 @@ native-color-edit-menu = Rengi düzenle…
 
 native-color-base = Temel
 
-native-color-adjusted = Ayarlanmış
 
-native-color-model = Renk modeli
 
 native-color-use-color = Rengi kullan
+
+native-color-current = Geçerli
+
+native-color-new = Yeni
+
+native-color-hex = Hex
+
+native-color-format = Biçim
+
+native-color-copied = Kopyalandı
+
+native-color-pick-canvas = Tuvalden al
+
+native-color-picking-strip = Tuvalden renk alınıyor. Değişiklik yapmadan dönmek için Escape tuşuna basın veya buraya dokunun.
+
+native-color-nearest-srgb = sRGB dışında. Hex, en yakın sRGB rengini gösterir.
+
+native-color-all-swatches = Son renkler ve tüm paletler
+
+native-color-close-swatches = Paletleri kapat
+
+native-color-swatch-search = Palet, renk veya hex ara
+
+native-color-swatch-matches = { $shown } / { $total }
+
+native-color-swatch-no-match = “{ $query }” ile eşleşen palet veya renk yok.
 
 native-color-palettes = Paletler…
 

@@ -82,7 +82,7 @@ struct GradientEditor: View {
                 action("minus", nativeCopy["color"]["remove_stop"].string, "remove", enabled: interior, run: remove)
                 if !stops.isEmpty {
                     ManagedColorButton(label: nativeCopy["color"]["color"].string, identifier: identifier + "-stop", value: stops[index]["color"],
-                        documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing, titled: false, swatchWidth: 36) { [index] color in
+                        colors: store.displayColors, viewing: store.colorViewing, titled: false, swatchWidth: 36) { [index] color in
                         edit(["kind": "stop", "index": index, "position": stops[index]["position"].number, "color": color.raw, "remove": false])
                     }.fixedSize()
                 }

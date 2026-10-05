@@ -305,34 +305,17 @@ color-above-sdr-white = Acima do branco SDR.
 color-features-export-finishing-file = Concluindo arquivo…
 color-features-export-writing-image = Gravando imagem…
 
-color-form-model-document-rgb = RGB do documento
 color-form-model-linear-rgb = RGB linear
-color-form-model-srgb-hex = Hexadecimal sRGB
-color-form-model-hsv = HSV (RGB do documento)
-color-form-model-hls = HLS (RGB do documento)
-color-form-model-oklch = OKLCH
-color-form-field-red-encoded = Vermelho (codificado)
-color-form-field-green-encoded = Verde (codificado)
-color-form-field-blue-encoded = Azul (codificado)
-color-form-field-red-linear = Vermelho (linear)
-color-form-field-green-linear = Verde (linear)
-color-form-field-blue-linear = Azul (linear)
-color-form-field-alpha = Alfa (%)
-color-form-field-hex = Hexadecimal sRGB (#RRGGBB)
 color-form-field-hue = Matiz (°)
 color-form-field-saturation = Saturação (%)
 color-form-field-value = Valor (%)
 color-form-field-lightness = Luminosidade (%)
 color-form-field-chroma = Croma
-color-form-document-srgb = RGB do documento: sRGB.
-color-form-document-display-p3 = RGB do documento: Display P3.
-color-form-document-adobe-rgb = RGB do documento: Adobe RGB (1998).
-color-form-document-prophoto = RGB do documento: ProPhoto RGB.
-color-form-reference-white = 1 = branco de referência.
-color-form-hex-description = Hexadecimal usa sRGB de 8 bits.
 
 
 color-form-finite-field = Digite um número finito para { $label }.
+
+color-form-color-syntax = Use um código hex como #3B7EA1 ou uma cor como rgb(59 126 161).
 
 color-properties-title = Propriedades do documento
 color-properties-canvas-size = Tamanho da tela
@@ -356,11 +339,6 @@ color-properties-retained-rasterized = Rasterizado em coordenadas do documento.
 color-properties-retained-icc = Amostras originais e ICC incorporado preservados.
 color-properties-retained-original = Amostras originais e interpretação de cor preservadas.
 
-color-form-entries-too-long = Entradas de cor devem ter no máximo 128 bytes.
-color-form-alpha-range = Alfa deve estar entre 0 e 100%.
-color-form-hex-syntax = Use #RGB ou #RRGGBB; edite alfa separadamente.
-color-form-percent-range = Saturação, luminosidade e valor devem estar entre 0 e 100%.
-color-form-negative-lightness-chroma = Luminosidade e croma não podem ser negativos.
 
 color-profile-select-imported = Selecione um perfil importado.
 color-profile-read-limit = O perfil ICC excede 16 MiB.

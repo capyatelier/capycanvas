@@ -946,7 +946,8 @@ pub struct Workspace {
     size_number: crate::number_control::NumberControl,
     opacity: crate::number_control::NumberControl,
     color: Rc<crate::color_editor::ColorButton>,
-    pub(crate) color_editors: RefCell<Vec<std::rc::Weak<crate::color_editor::Form>>>,
+    pub(crate) color_editors: RefCell<Vec<Rc<crate::color_editor::Editor>>>,
+    pub(crate) color_strip: crate::color_editor::Strip,
     tool_settings: crate::tool_panels::ToolSettings,
     pub(crate) canvas_bar: crate::canvas_bar::CanvasBar,
     selection_refine: crate::preview_dialog::PreviewDialog,
@@ -1233,6 +1234,8 @@ impl Workspace {
         image_drop_label.set_can_target(false);
         image_drop_label.set_visible(false);
         content.add_overlay(&image_drop_label);
+        let color_strip = crate::color_editor::Strip::new();
+        content.add_overlay(&color_strip.root);
         window.set_content(Some(&crate::squircle::Squircles::new(&content)));
         let this = Rc::new(Self {
             localization: RefCell::new(localization.clone()),
@@ -1298,6 +1301,7 @@ impl Workspace {
             opacity,
             color,
             color_editors: RefCell::default(),
+            color_strip,
             tool_settings,
             canvas_bar,
             selection_refine: crate::preview_dialog::PreviewDialog::new("selection-refine-dialog", "selection-refine-value", |radius| {
@@ -1360,6 +1364,7 @@ impl Workspace {
         this.image_size.bind(&this);
         this.color_panel.bind(&this);
         this.palette_panel.bind(&this);
+        this.color_strip.bind(&this);
         this.navigator.bind(&this);
         this.navigator_overviews.bind(&this);
         this.customization.bind(&this);
@@ -2680,6 +2685,7 @@ impl Workspace {
             for drawer in self.columns.drawers.borrow().iter() {
                 drawer.refresh_color_preview(&colors, view, headroom, preview);
             }
+            crate::color_editor::refresh_display(self);
         }
     }
     fn refresh(self: &Rc<Self>, regions: u32) {

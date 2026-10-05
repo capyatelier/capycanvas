@@ -81,6 +81,68 @@ fn color_picker_mouse_press_and_pen_release_commit_without_a_stroke() {
 }
 
 #[test]
+fn color_picker_editor_picks_publish_the_sample_without_changing_paint_or_history() {
+    for kind in [PointerKind::Mouse, PointerKind::Touch] {
+        let mut s = session(Platform::Gtk);
+        let original = s.state.colors.clone();
+        let history = s.state.color_library.history.clone();
+        let space = s.engine.document().composition().color.space;
+        let draft = layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.1, 0.9, 0.3, 1.]).unwrap();
+        s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Editor { original: draft, touch_offset: 0. } }).unwrap();
+        assert!(s.state.color_picker.editor);
+        let hover = event(&s, 1, PenPhase::Hover, 0.);
+        let point = [hover.surface_position.x, hover.surface_position.y];
+        if kind == PointerKind::Mouse {
+            s.cursor_input(Some(hover));
+        } else {
+            picker_pointer(&mut s, 7, ContactPhase::Down, kind, point);
+        }
+        s.frame(1, 1).unwrap();
+        picker_reply(&mut s, [0.2, 0.4, 0.8, 1.]);
+        assert!(s.state.color_picker.preview.is_some());
+        assert_eq!(s.state.color_picker.sample_point, Some(s.color_picker_overlay().unwrap().sample));
+        assert_eq!(*s.state.preview_colors(), original);
+        assert_eq!(s.color_picker_overlay().unwrap().original, draft.linear_in(space).unwrap());
+        let phase = if kind == PointerKind::Mouse { ContactPhase::Down } else { ContactPhase::Up };
+        picker_pointer(&mut s, 7, phase, kind, point);
+        s.frame(2, 2).unwrap();
+        assert!(!s.state.color_picker.editor);
+        assert_eq!(s.state.color_picker.sample_point, None);
+        let picked = s.state.color_picker.picked.unwrap().linear_in(space).unwrap();
+        assert!(picked.iter().zip([0.2, 0.4, 0.8, 1.]).all(|(a, b)| (a - b).abs() < 1e-6));
+        assert_eq!(s.state.colors, original);
+        assert_eq!(s.state.color_library.history, history);
+        assert_eq!(s.renderer_mut().dabs, 0);
+    }
+    let mut s = session(Platform::Gtk);
+    s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Editor { original: layer_core::color::RgbColor::WHITE, touch_offset: 0. } }).unwrap();
+    s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.)));
+    assert_ne!(s.frame(1, 1).unwrap().regions & crate::regions::COLOR_PREVIEW, 0, "a moved sample republishes the picker");
+    assert_eq!(s.frame(2, 2).unwrap().regions & crate::regions::COLOR_PREVIEW, 0);
+    key(&mut s, "Escape", true, false, false);
+    assert!(!s.state.color_picker.editor);
+    assert!(s.state.color_picker.picked.is_none());
+    assert!(s.dispatch(UiAction::ColorPicker { action: ColorPickerAction::Editor { original: layer_core::color::RgbColor::WHITE, touch_offset: f32::NAN } }).is_err());
+}
+
+#[test]
+fn color_editor_memory_reaches_paint_and_mask_colors_without_editing_the_drawing() {
+    let mut s = session(Platform::Gtk);
+    invoke(&mut s, CommandId::SelectAll);
+    invoke(&mut s, CommandId::QuickMask);
+    let revision = s.engine.document().revision;
+    let memory = crate::ColorEditorMemory { forms: [crate::ColorForm::LinearRgb, crate::ColorForm::Hsl, crate::ColorForm::Oklab], search: "sand".into() };
+    s.dispatch(UiAction::Color { action: ColorAction::EditorMemory { memory: memory.clone() } }).unwrap();
+    for colors in [s.state.display_colors(), &s.state.colors] {
+        assert_eq!(crate::ColorEditor::for_slot(colors, crate::ColorSlot::Foreground).unwrap().memory(), &memory);
+    }
+    assert_eq!(s.engine.document().revision, revision);
+    let mixed = crate::ColorEditorMemory { forms: [crate::ColorForm::Hsb; 3], search: String::new() };
+    assert!(s.dispatch(UiAction::Color { action: ColorAction::EditorMemory { memory: mixed } }).is_err());
+    assert_eq!(crate::ColorEditor::for_slot(&s.state.colors, crate::ColorSlot::Foreground).unwrap().memory(), &memory);
+}
+
+#[test]
 fn color_picker_keeps_selection_mask_colors_separate_from_artwork() {
     for saved in [false, true] {
         let mut s = session(Platform::Gtk);

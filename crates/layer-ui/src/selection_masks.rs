@@ -633,16 +633,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_masks.colors.apply(ColorAction::SetSlot {
                     slot: ColorSlot::Foreground,
                     color: layer_core::color::RgbColor::BLACK,
-                }).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?;
+                }).map_err(|reason|reason.message(self.localization()))?;
                 self.selection_masks.colors.apply(ColorAction::SetSlot {
                     slot: ColorSlot::Background,
                     color: layer_core::color::RgbColor::WHITE,
-                }).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?;
+                }).map_err(|reason|reason.message(self.localization()))?;
                 self.selection_masks.colors.apply(ColorAction::Select {
                     slot: ColorSlot::Foreground,
-                }).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?;
+                }).map_err(|reason|reason.message(self.localization()))?;
             }
-            CommandId::SwapMaskColors => self.selection_masks.colors.apply(ColorAction::Swap).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?,
+            CommandId::SwapMaskColors => self.selection_masks.colors.apply(ColorAction::Swap).map_err(|reason|reason.message(self.localization()))?,
             CommandId::ClearSelectionMask | CommandId::FillSelectionMask => {
                 let target = self
                     .selection_masks
@@ -879,7 +879,7 @@ impl UiState {
 }
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn mask_color_action(&mut self, action: ColorAction) -> Result<(), String> {
-        self.selection_masks.colors.apply(action).map_err(|reason|reason.message(crate::ColorInputModel::DocumentRgb, self.localization()))?;
+        self.selection_masks.colors.apply(action).map_err(|reason|reason.message(self.localization()))?;
         self.refresh_tools();
         Ok(())
     }

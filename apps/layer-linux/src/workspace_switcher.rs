@@ -54,6 +54,7 @@ pub(super) fn build() -> (gtk::Box, gtk::Box, gtk::MenuButton) {
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     root.set_widget_name("workspace-switcher");
     root.add_css_class("workspace-switcher");
+    root.add_css_class("choice-well");
     root.set_valign(gtk::Align::Center);
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     let scroll = crate::input::pen_scroller(

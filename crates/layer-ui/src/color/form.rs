@@ -14,10 +14,31 @@ pub enum ColorUiRequest {
     ProofDial { size: f32, recipe: layer_core::color::hdr::SdrRendition, point: Option<[f32;2]>, part: Option<u8> },
     ProofControl { recipe: layer_core::color::hdr::SdrRendition, part: u8, edit: crate::proof_panel::SdrControlEdit },
     PrintProof { settings: crate::proof_panel::PrintProofSettings },
-    Form {
-        request: ColorFormRequest,
+    EditorOpen {
+        #[serde(default)]
+        colors: ColorState,
+        #[serde(default)]
+        slot: Option<ColorSlot>,
+        #[serde(default)]
+        color: Option<RgbColor>,
+        #[serde(default)]
+        opaque: bool,
+        #[serde(default)]
+        display_space: RgbSpace,
+        rendition: Option<layer_core::color::hdr::SdrRendition>,
     },
-    FormCopy { copy: ColorFormCopy },
+    Editor {
+        editor: ColorEditor,
+        #[serde(default)]
+        action: Option<ColorEditorAction>,
+        #[serde(default)]
+        display_space: RgbSpace,
+        rendition: Option<layer_core::color::hdr::SdrRendition>,
+    },
+    EditorStrip { editor: ColorEditor, sample: RgbColor },
+    HueStops { shape: ColorShape, space: RgbSpace },
+    WheelHit { size: f32, point: [f32; 2], shape: ColorShape },
+    StripPlacement { area: [f32; 4], size: [f32; 2], scale: f32, avoid: Vec<[f32; 2]>, corner: ColorStripCorner },
     Preview {
         colors: Vec<RgbColor>,
         #[serde(default)]
@@ -52,7 +73,7 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
             return Ok(serde_json::json!(minimum+a.fraction(point)*(maximum-minimum)));
         },
         ColorUiRequest::IntensityArc {size,stops,depth,base,document_space,recipe,headroom} => {
-            super::hdr_picker::HdrPaint::validate_stops(stops).map_err(|reason|reason.message(ColorInputModel::DocumentRgb, localizer))?;
+            super::hdr_picker::HdrPaint::validate_stops(stops).map_err(|reason|reason.message(localizer))?;
             let a=HdrIntensityArc::new(size).ok_or("Invalid picker extent")?;
             let minimum=(-2f32).min(stops.floor()); let limit=if depth==Some(layer_core::color::SampleDepth::F32) {128.} else {65504f32.log2()}; let maximum=6f32.max(stops.ceil()).min(limit);
             let samples=(0..=80).map(|i|{
@@ -85,8 +106,31 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
             let arc=HdrIntensityArc::new(size).ok_or("Invalid HDR arc size")?;
             return Ok(serde_json::json!({"geometry":arc,"point":arc.point(fraction),"path":(0..=64).map(|i|arc.point(i as f32/64.)).collect::<Vec<_>>(),"hit":point.is_some_and(|p|arc.contains(p)),"fraction":point.map(|p|arc.fraction(p))}));
         }
-        ColorUiRequest::Form { request } => serde_json::to_value(color_form_localized(request, localizer)?),
-        ColorUiRequest::FormCopy { copy } => serde_json::to_value(copy.localized(localizer)?),
+        ColorUiRequest::EditorOpen { colors, slot, color, opaque, display_space, rendition } => {
+            colors.validate()?;
+            let editor = match (slot, color) {
+                (Some(slot), None) => ColorEditor::for_slot(&colors, slot),
+                (None, Some(color)) => ColorEditor::for_color(&colors, color, opaque),
+                _ => return Err("Edit either a paint slot or a color".into()),
+            }
+            .map_err(|reason| reason.message(localizer))?;
+            editor_response(editor, None, display_space, rendition, localizer)
+        }
+        ColorUiRequest::Editor { editor, action, display_space, rendition } => {
+            editor.validate()?;
+            editor_response(editor, action, display_space, rendition, localizer)
+        }
+        ColorUiRequest::EditorStrip { editor, sample } => {
+            editor.validate()?;
+            serde_json::to_value(editor.strip(sample)?)
+        }
+        ColorUiRequest::HueStops { shape, space } => serde_json::to_value(ColorState::hue_stops(shape, space)),
+        ColorUiRequest::WheelHit { size, point, shape } => {
+            serde_json::to_value(ColorWheelGeometry::new(size).and_then(|g| g.hit_shape(point, shape)))
+        }
+        ColorUiRequest::StripPlacement { area, size, scale, avoid, corner } => {
+            serde_json::to_value(ColorStripPlacement::new(area, size, scale, &avoid, corner))
+        }
         ColorUiRequest::Preview {
             colors,
             document_space,
@@ -129,41 +173,16 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
     value.map_err(|e| e.to_string())
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ColorFormRequest {
-    #[serde(default)]
-    pub opaque: bool,
-    pub color: RgbColor,
-    pub document_space: RgbSpace,
-    #[serde(default)]
-    pub document_depth: Option<layer_core::color::SampleDepth>,
-    #[serde(default)]
-    pub display_space: RgbSpace,
-    #[serde(default)]
-    pub model: ColorInputModel,
-    pub fields: Option<[String; 4]>,
-    pub change_model: Option<ColorInputModel>,
-    pub intensity: Option<f32>,
-    pub change_intensity: Option<f32>,
-    #[serde(default)]
-    pub change_intensity_text: Option<String>,
-    pub rendition: Option<layer_core::color::hdr::SdrRendition>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct ColorFormView {
-    pub copy: ColorFormCopy,
-    pub draft: ColorFormRequest,
-    pub models: Vec<(ColorInputModel, std::sync::Arc<str>)>,
-    pub labels: [std::sync::Arc<str>; 4],
-    pub description: String,
-    pub validation: Option<String>,
-    pub value: Option<RgbColor>,
-    pub preview: Option<ColorPreview>,
-    pub base_preview: Option<ColorPreview>,
-    pub base: Option<RgbColor>,
-    pub error: Option<String>,
+fn editor_response(
+    mut editor: ColorEditor,
+    action: Option<ColorEditorAction>,
+    display: RgbSpace,
+    rendition: Option<layer_core::color::hdr::SdrRendition>,
+    localizer: &crate::Localizer,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let error = action.and_then(|action| editor.apply(action).err()).map(|reason| reason.message(localizer));
+    let view = editor.view(display, rendition, localizer).map_err(serde::ser::Error::custom)?;
+    Ok(serde_json::json!({"editor": editor, "view": view, "error": error}))
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -230,301 +249,58 @@ impl ColorValidationCopy {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ColorFormCopy {
-    #[serde(default)]
-    pub opaque: bool,
-    pub model: ColorInputModel,
-    pub document_space: RgbSpace,
-    pub validation: Option<ColorValidationCopy>,
-    pub error: Option<ColorEditorError>,
-}
-#[derive(Serialize)]
-pub struct ColorFormCopyView {
-    pub models: Vec<(ColorInputModel, std::sync::Arc<str>)>,
-    pub labels: [std::sync::Arc<str>;4],
-    pub description: String,
-    pub validation: Option<String>,
-    pub error: Option<String>,
-}
-impl ColorFormCopy {
-    pub fn localized(&self, localizer: &crate::Localizer) -> Result<ColorFormCopyView, String> {
-        if self.error.as_ref().is_some_and(|reason| !reason.valid()) { return Err("Invalid color form copy".into()); }
-        Ok(ColorFormCopyView {
-            models:ColorInputModel::ALL.into_iter().map(|model|(model,model.localized_name(localizer))).collect(),
-            labels:{let mut labels=self.model.localized_labels(localizer);if self.opaque {labels[3]="".into();}labels},
-            description:self.model.localized_description(self.document_space, localizer),
-            validation:self.validation.as_ref().map(|copy|copy.message(localizer)),
-            error:self.error.as_ref().map(|reason|reason.message(self.model, localizer)),
-        })
-    }
-}
-
 pub fn color_validation_localized(color: RgbColor, document: RgbSpace, display: RgbSpace, hdr: bool, localizer: &crate::Localizer) -> Result<String, String> {
     Ok(ColorValidationCopy::new(color, document, display, hdr)?.message(localizer))
 }
 
 #[cfg(test)]
-fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> { color_form_localized(request, &crate::localization::Localizer::shared(crate::localization::UiLanguage::English)) }
-
-pub fn color_form_localized(request: ColorFormRequest, localizer: &crate::localization::Localizer) -> Result<ColorFormView, String> {
-    let mut editor = ColorEditor::new(request.color, request.document_space)?;
-    editor.set_opaque(request.opaque);
-    if let Some(depth)=request.document_depth {editor.set_document_depth(depth);}
-    editor.set_model(request.model).map_err(|reason|reason.message(editor.model(),localizer))?;
-    let intensity=request.intensity.or_else(||request.document_depth.filter(|d|d.is_float()).map(|_|request.color.brightness_ev(request.document_space).ok().flatten().unwrap_or(0.).max(0.)));
-    if let Some(stops) = intensity { editor.enable_hdr(stops).map_err(|reason|reason.message(editor.model(),localizer))?; }
-    if let Some(fields) = request.fields {
-        for (i, text) in fields.into_iter().enumerate() {
-            editor.set_field(i, text)?;
-        }
-    }
-    let mut error = None;
-    let typed_intensity = request.change_intensity_text.as_deref().map(super::editor::color_intensity_input_typed).transpose();
-    let change_intensity = match typed_intensity { Ok(value) => value.or(request.change_intensity), Err(message) => { error = Some(message); None } };
-    let mut value = match editor.color() {
-        Ok(color) => Some(color),
-        Err(reason) => {
-            error = Some(reason);
-            None
-        }
-    };
-    if let Some(color) = value {
-        if let Some(stops) = change_intensity {
-            match editor.set_intensity_color(stops,color) {
-                Ok(color) => value=Some(color),
-                Err(reason) => error=Some(reason),
-            }
-        }
-        if let Some(model) = request.change_model {
-            match editor.set_model_color(model,value.unwrap()) {
-                Ok(()) => value=Some(editor.definition()),
-                Err(reason) => error=Some(reason),
-            }
-        }
-    }
-    let base = value.and_then(|color|editor.intensity().and_then(|_|editor.base_for_color(color).ok()));
-    let preview = value
-        .map(|color| mapped_preview(color, request.document_space, request.display_space, request.rendition))
-        .transpose()?;
-    let has_error = error.is_some();
-    let copy = ColorFormCopy {
-        opaque:request.opaque,
-        model:editor.model(), document_space:request.document_space,
-        validation:value.map(|color|ColorValidationCopy::new(color, request.document_space, request.display_space, editor.intensity().is_some())).transpose()?,
-        error,
-    };
-    let captions = copy.localized(localizer)?;
-    Ok(ColorFormView {
-        copy,
-        draft: ColorFormRequest {
-            opaque:request.opaque,
-            color: editor.definition(),
-            document_space: request.document_space,
-            document_depth: request.document_depth,
-            display_space: request.display_space,
-            model: editor.model(),
-            fields: Some(editor.fields().clone()),
-            change_model: None,
-            intensity: editor.intensity(),
-            change_intensity: None,
-            change_intensity_text: request.change_intensity_text.clone().filter(|_| has_error),
-            rendition: request.rendition,
-        },
-        models:captions.models,
-        labels:captions.labels,
-        description:captions.description,
-        validation:captions.validation,
-        value,
-        preview,
-        base,
-        base_preview: base.map(|c| mapped_preview(c,request.document_space,request.display_space,request.rendition)).transpose()?,
-        error:captions.error,
-    })
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    fn request(color: RgbColor) -> ColorFormRequest {
-        ColorFormRequest {
-            opaque:false,            color,
-            document_space: RgbSpace::ProPhoto,
-            document_depth: None,
-            display_space: RgbSpace::Srgb,
-            model: Default::default(),
-            fields: None,
-            change_model: None,
-            intensity: None,
-            change_intensity: None,
-            change_intensity_text: None,
-            rendition: None,
-        }
-    }
-    fn copied(view: &ColorFormView, localizer: &crate::Localizer) -> serde_json::Value {
-        let copy = serde_json::to_value(&view.copy).unwrap();
-        assert!(copy.to_string().len() < 4096);
-        let request = serde_json::json!({"type":"form_copy","copy":copy});
-        color_ui_localized(serde_json::from_value(request).unwrap(), localizer).unwrap()
-    }
-    fn assert_copy(view: &ColorFormView, copy: &serde_json::Value) {
-        for key in ["models","labels","description","validation","error"] {
-            assert_eq!(copy[key], serde_json::to_value(view).unwrap()[key], "{key}");
-        }
-        assert_eq!(copy.as_object().unwrap().len(), 5);
-        for key in ["fields","value","preview","base_preview","draft","base","copy"] { assert!(!copy.as_object().unwrap().contains_key(key)); }
+    fn editor_json(request: serde_json::Value) -> serde_json::Value {
+        color_ui(serde_json::from_value(request).unwrap()).unwrap()
     }
     #[test]
-    fn color_form_copy_reprojects_every_model_without_draft_values_or_preview_work() {
-        let english = crate::Localizer::shared(crate::UiLanguage::English);
-        for model in ColorInputModel::ALL {
-            for document in RgbSpace::ALL {
-                for (color, hdr) in [
-                    (RgbColor::new(RgbSpace::DisplayP3,[1.,0.01,0.23,1./65535.]).unwrap(),false),
-                    (RgbColor::from_linear(RgbSpace::Srgb,[-0.2,4.,1.,0.3]).unwrap(),true),
-                ] {
-                    let mut source=request(color);source.document_space=document;source.model=model;
-                    if hdr { source.document_depth=Some(layer_core::color::SampleDepth::F32); }
-                    let view=color_form_localized(source.clone(),&english).unwrap();
-                    let unchanged=serde_json::to_value(&view).unwrap();
-                    for language in crate::UiLanguage::ALL {
-                        let localizer=crate::Localizer::shared(language);
-                        let formatted=copied(&view,&localizer);
-                        let actual=color_form_localized(source.clone(),&localizer).unwrap();
-                        assert_copy(&actual,&formatted);
-                        assert_eq!(serde_json::to_value(&view).unwrap(),unchanged);
-                        assert_eq!(serde_json::to_value(&actual.draft).unwrap(),unchanged["draft"]);
-                        for key in ["value","preview","base_preview","base"] { assert_eq!(serde_json::to_value(&actual).unwrap()[key],unchanged[key]); }
-                    }
-                    let mut edited=view.draft.clone();edited.fields.as_mut().unwrap()[0]="literal İı ไทย { $field } unfinished".into();
-                    let invalid=color_form_localized(edited.clone(),&english).unwrap();
-                    assert!(invalid.copy.error.is_some());
-                    let retained=serde_json::to_value(&invalid).unwrap();
-                    for language in crate::UiLanguage::ALL {
-                        let localizer=crate::Localizer::shared(language);
-                        assert_copy(&color_form_localized(edited.clone(),&localizer).unwrap(),&copied(&invalid,&localizer));
-                        assert_eq!(serde_json::to_value(&invalid).unwrap(),retained);
-                    }
-                }
-            }
-        }
-    }
-    #[test]
-    fn color_form_copy_retains_invalid_and_range_refused_hdr_intensity_sources() {
-        let english=crate::Localizer::shared(crate::UiLanguage::English);
-        for text in ["literal İı ไทย { $stops }", "NaN", "18"] {
-            let mut source=request(RgbColor::WHITE);source.document_depth=Some(layer_core::color::SampleDepth::F16);source.intensity=Some(0.);source.change_intensity_text=Some(text.into());
-            let view=color_form_localized(source.clone(),&english).unwrap();
-            assert!(view.copy.error.is_some());
-            assert_eq!(view.draft.change_intensity_text.as_deref(),Some(text));
-            let retained=serde_json::to_value(&view).unwrap();
-            for language in crate::UiLanguage::ALL {
-                let localizer=crate::Localizer::shared(language);
-                assert_copy(&color_form_localized(source.clone(),&localizer).unwrap(),&copied(&view,&localizer));
-                assert_eq!(serde_json::to_value(&view).unwrap(),retained);
-            }
-        }
-    }
-
-    #[test]
-    fn color_form_copy_validates_typed_errors_and_preserves_literal_diagnostics() {
-        let literal="literal İı ไทย Tie\u{302}\u{301}ng { $name }\n{\"type\":\"numeric_error\"} 🎨";
-        let errors=[
-            ColorEditorError::Numeric { field:2,reason:crate::NumericError::InvalidNumber },
-            ColorEditorError::EntriesTooLong, ColorEditorError::AlphaRange, ColorEditorError::HexSyntax,
-            ColorEditorError::PercentRange, ColorEditorError::NegativeLightnessChroma,
-            ColorEditorError::Intensity(crate::NumericError::FiniteNumber),
-            ColorEditorError::Hdr(layer_core::color::hdr::HdrPixelError::StorageRange),
-            ColorEditorError::Detail(literal.into()),
-        ];
-        for model in ColorInputModel::ALL {
-            for error in &errors {
-                let copy=ColorFormCopy {opaque:false,model,document_space:RgbSpace::AdobeRgb,validation:None,error:Some(error.clone())};
-                let wire=serde_json::json!({"type":"form_copy","copy":copy});
-                for language in crate::UiLanguage::ALL {
-                    let localizer=crate::Localizer::shared(language);
-                    let formatted=color_ui_localized(serde_json::from_value(wire.clone()).unwrap(),&localizer).unwrap();
-                    assert_eq!(formatted["error"],error.message(model,&localizer));
-                    if matches!(error,ColorEditorError::Detail(_)) { assert_eq!(formatted["error"],literal); }
-                    assert_eq!(serde_json::to_value(&copy).unwrap(),wire["copy"]);
-                }
-            }
-        }
-        let localizer=crate::Localizer::shared(crate::UiLanguage::English);
-        for error in [
-            ColorEditorError::Numeric {field:4,reason:crate::NumericError::InvalidNumber},
-            ColorEditorError::Intensity(crate::NumericError::Range {label:"literal".into(),min:2.,max:1.}),
-            ColorEditorError::Numeric {field:0,reason:crate::NumericError::WholePixels {label:layer_core::ResourceLabel::Message {message:"unknown-color-label".into()}}},
-        ] {
-            assert!(!error.valid());
-            let copy=ColorFormCopy {opaque:false,model:ColorInputModel::DocumentRgb,document_space:RgbSpace::Srgb,validation:None,error:Some(error)};
-            assert!(color_ui_localized(ColorUiRequest::FormCopy {copy},&localizer).is_err());
-        }
-        let copy=ColorFormCopy {opaque:false,model:ColorInputModel::Hls,document_space:RgbSpace::Srgb,validation:None,error:None};
-        let valid=serde_json::json!({"type":"form_copy","copy":copy});
-        let mut malformed=valid.clone();malformed["copy"]["fields"]=serde_json::json!(["bad","bad","bad","bad"]);
-        assert!(serde_json::from_value::<ColorUiRequest>(malformed).is_err());
-        let mut malformed=valid.clone();malformed["request"]=serde_json::json!({"color":"bad"});
-        assert!(serde_json::from_value::<ColorUiRequest>(malformed).is_err());
-        let mut malformed=valid.clone();malformed["copy"]["model"]=serde_json::json!("unknown");
-        assert!(serde_json::from_value::<ColorUiRequest>(malformed).is_err());
-        let mut malformed=valid.clone();malformed["copy"]["error"]=serde_json::json!({"type":"unknown"});
-        assert!(serde_json::from_value::<ColorUiRequest>(malformed).is_err());
-        let mut malformed=valid;malformed["copy"]["validation"]=serde_json::json!({"space":"Srgb","display_space":"Srgb","outside_document":false,"outside_display":false,"above_white":false,"color":"forbidden"});
-        assert!(serde_json::from_value::<ColorUiRequest>(malformed).is_err());
-    }
-
-    #[test]
-    fn hdr_property_color_uses_the_gtk_initial_ev_and_preserves_samples() {
-        let color=RgbColor::from_linear(RgbSpace::Srgb,[-0.2,4.,1.,0.3]).unwrap();
-        let mut draft=request(color);
-        draft.document_space=RgbSpace::Srgb;
-        draft.document_depth=Some(layer_core::color::SampleDepth::F16);
-        draft.model=ColorInputModel::LinearRgb;
-        let form=color_form(draft).unwrap();
-        assert_eq!(form.value,Some(color));
-        assert_eq!(form.draft.intensity,Some(2.));
-        assert!(form.base_preview.is_some());
-        assert!(!color.in_hdr_gamut(RgbSpace::Srgb).unwrap());
-        assert!(form.validation.as_deref().unwrap().contains("Above SDR white."));
-        assert!(form.validation.as_deref().unwrap().contains("Outside the document gamut."));
-        assert_eq!(color_form(form.draft).unwrap().value,Some(color));
-    }
-    #[test]
-    fn transported_drafts_keep_native_precision_and_reject_invalid_edits() {
-        let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0.01, 0.23, 1. / 65535.]).unwrap();
-        let mut form = color_form(request(color)).unwrap();
-        assert!(!form.preview.unwrap().in_gamut);
-        for model in ColorInputModel::ALL {
-            form.draft.change_model = Some(model);
-            let wire = serde_json::to_string(&form.draft).unwrap();
-            form = color_form(serde_json::from_str(&wire).unwrap()).unwrap();
-            assert_eq!(form.value, Some(color));
-        }
-        form.draft.fields.as_mut().unwrap()[0] = "not a number".into();
-        form.draft.change_model = Some(ColorInputModel::SrgbHex);
-        form = color_form(form.draft).unwrap();
-        assert!(form.value.is_none());
-        assert!(form.error.is_some());
-        assert_eq!(form.draft.model, ColorInputModel::Oklch);
-        assert_eq!(form.draft.color, color);
-    }
-    #[test]
-    fn native_hdr_intensity_text_preserves_precision_and_invalid_drafts() {
-        let color=RgbColor::new(RgbSpace::ProPhoto,[1.;4]).unwrap();
-        for depth in [layer_core::color::SampleDepth::F16,layer_core::color::SampleDepth::F32] {
-            let mut draft=request(color);draft.document_depth=Some(depth);draft.intensity=Some(0.);
-            draft.change_intensity_text=Some("18".into());
-            let form=color_form(draft).unwrap();
-            if depth==layer_core::color::SampleDepth::F32 {
-                assert!(form.error.is_none());assert_eq!(form.value.unwrap().linear_in(RgbSpace::ProPhoto).unwrap()[0],262144.);
-            } else {assert!(form.error.is_some());assert_eq!(form.draft.change_intensity_text.as_deref(),Some("18"));}
-        }
-        for text in ["not a number","NaN","inf"] {
-            let mut draft=request(color);draft.document_depth=Some(layer_core::color::SampleDepth::F32);draft.intensity=Some(0.);draft.change_intensity_text=Some(text.into());
-            let form=color_form(draft).unwrap();assert!(form.error.is_some());assert_eq!(form.draft.change_intensity_text.as_deref(),Some(text));
-        }
+    fn stateless_editor_round_trips_actions_errors_and_strips() {
+        let colors = ColorState::default();
+        let opened = editor_json(serde_json::json!({"type":"editor_open","colors":colors,"slot":"foreground","display_space":"Srgb"}));
+        assert!(opened["error"].is_null());
+        assert_eq!(opened["view"]["rows"].as_array().unwrap().len(), 3);
+        let edited = editor_json(serde_json::json!({"type":"editor","editor":opened["editor"],"action":{"op":"text","text":"#3B7EA1"}}));
+        assert_eq!(edited["view"]["hex"], "#3B7EA1");
+        assert_eq!(edited["view"]["changed"], true);
+        let refused = editor_json(serde_json::json!({"type":"editor","editor":edited["editor"],"action":{"op":"value","row":0,"index":0,"text":"lots"}}));
+        assert!(refused["error"].as_str().unwrap().contains("Red"));
+        assert_eq!(refused["editor"], edited["editor"]);
+        let strip = editor_json(serde_json::json!({"type":"editor_strip","editor":edited["editor"],"sample":RgbColor::WHITE}));
+        assert_eq!(strip["hex"], "#FFFFFF");
+        assert_eq!(strip["label"], "OKLCH");
+        let mut tampered = edited["editor"].clone();
+        tampered["picker"]["editor"]["search"] = serde_json::json!("x".repeat(300));
+        assert!(color_ui(serde_json::from_value(serde_json::json!({"type":"editor","editor":tampered})).unwrap()).is_err());
+        assert!(color_ui(serde_json::from_value(serde_json::json!({"type":"editor_open","colors":colors,"slot":"foreground","color":RgbColor::WHITE})).unwrap()).is_err());
+        let opaque = editor_json(serde_json::json!({"type":"editor_open","colors":colors,"color":RgbColor::new(RgbSpace::Srgb,[1.,0.,0.,0.25]).unwrap(),"opaque":true}));
+        assert_eq!(opaque["view"]["value"]["rgba"][3], 1.);
+        let wheel = |shape: &str| {
+            let picker = &editor_json(serde_json::json!({"type":"editor","editor":edited["editor"],"action":{"op":"wheel","action":{"op":"shape","shape":shape}}}))["view"]["panel"];
+            let stops = editor_json(serde_json::json!({"type":"hue_stops","shape":picker["shape"],"space":picker["rgb_space"]}));
+            let size = 200.;
+            let geometry = ColorWheelGeometry::new(size).unwrap();
+            let center = editor_json(serde_json::json!({"type":"wheel_hit","size":size,"point":geometry.center,"shape":shape}));
+            let ring = editor_json(serde_json::json!({"type":"wheel_hit","size":size,"point":[geometry.center[0] + (geometry.inner + geometry.outer) * 0.5, geometry.center[1]],"shape":shape}));
+            let outside = editor_json(serde_json::json!({"type":"wheel_hit","size":size,"point":[0., 0.],"shape":shape}));
+            (stops.as_array().unwrap().len(), center, ring, outside)
+        };
+        let (circle_stops, circle_center, circle_ring, outside) = wheel("circle");
+        let (square_stops, square_center, square_ring, _) = wheel("square");
+        assert_eq!(circle_stops, ColorState::hue_stops(ColorShape::Circle, RgbSpace::Srgb).len());
+        assert_eq!(square_stops, ColorState::hue_stops(ColorShape::Square, RgbSpace::Srgb).len());
+        assert_ne!(circle_stops, square_stops);
+        assert!(!circle_center.is_null() && !square_center.is_null() && circle_center == square_center);
+        assert!(!circle_ring.is_null() && circle_ring == square_ring && circle_ring != circle_center);
+        assert!(outside.is_null());
+        let strip = editor_json(serde_json::json!({"type":"strip_placement","area":[0., 0., 800., 600.],"size":[272., 64.],"scale":1.,"avoid":[[700., 40.]],"corner":"top_right"}));
+        assert_eq!(strip, serde_json::to_value(ColorStripPlacement::new([0., 0., 800., 600.], [272., 64.], 1., &[[700., 40.]], ColorStripCorner::TopRight)).unwrap());
+        assert_eq!(strip["corner"], "top_left");
     }
 
     fn gradient_image(gradient:layer_core::GradientDefinition,size:[u32;2],depth:layer_core::color::SampleDepth,rendition:Option<layer_core::color::hdr::SdrRendition>)->Result<serde_json::Value,String> {
@@ -587,24 +363,4 @@ mod tests {
         for (actual,expected) in color.linear_in(RgbSpace::DisplayP3).unwrap().into_iter().zip([4.,2.,0.5,0.5]) {assert!((actual-expected).abs()<1e-6);}
     }
 
-}
-
-#[cfg(test)]
-mod opaque_tests {
-    use super::*;
-    #[test]
-    fn opaque_forms_hide_alpha_in_every_language_and_keep_it_opaque_after_edits() {
-        let color=RgbColor::new(RgbSpace::DisplayP3,[0.6,0.1,0.2,0.25]).unwrap();
-        let request:ColorFormRequest=serde_json::from_value(serde_json::json!({"color":color,"document_space":"Srgb","opaque":true})).unwrap();
-        let mut view=color_form(request).unwrap();
-        for language in crate::UiLanguage::ALL {
-            let copy=view.copy.localized(&crate::Localizer::shared(language)).unwrap();
-            assert!(copy.labels[3].is_empty());
-        }
-        assert_eq!(view.value.unwrap().rgba[3],1.);
-        view.draft.fields.as_mut().unwrap()[3]="25".into();
-        let view=color_form(view.draft).unwrap();
-        assert_eq!(view.value.unwrap().rgba[3],1.);
-        assert!(view.labels[3].is_empty());
-    }
 }

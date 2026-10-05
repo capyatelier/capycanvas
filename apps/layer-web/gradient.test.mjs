@@ -295,13 +295,14 @@ export async function checkGradientDefinitions({call,evaluate,settle}) {
     await invoke('gradient');tool=true;await toolLayout();await edit({kind:'reset'});await edit({kind:'interpolation',value:expected.interpolation});
     for(const [index,stop] of expected.stops.entries())await edit({kind:'stop',index,position:stop.position,color:stop.color,remove:false});
     if(depth==='F32') {
+      const editValue=async(name,text)=>{await click(`.color-dialog .color-value[data-color-value="${name}"]`);await wait(`document.activeElement?.dataset.colorValue===${JSON.stringify(name)}`);
+        await evaluate(`(()=>{const input=document.activeElement;input.value=${JSON.stringify(text)};input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));})()`);};
       const before=await definition();await click('[data-control=tool_settings] .property-color');await wait(`!!document.querySelector('.color-dialog[open]')`);
-      await typeValue('.color-dialog [data-color-field="3"]','37.5','Tab');
-      await typeValue('.color-dialog .color-entry-group > .color-entry input:not([data-color-field])','4','Tab');
-      await click('.color-dialog footer .suggested-action');await wait(`!document.querySelector('.color-dialog[open]')`);
-      const changed=await definition();assert.equal(changed.stops[0].color.rgba[3],.375);assert.ok(changed.stops[0].color.rgba.slice(0,3).some(value=>value>1),'Native color entry preserves HDR above one');
-      await click('[data-control=tool_settings] .property-color');await wait(`!!document.querySelector('.color-dialog[open]')`);await typeValue('.color-dialog [data-color-field="3"]','12.5','Tab');await click('.color-dialog footer button:first-child');
-      assert.deepEqual(await definition(),changed,'Native color dialog Cancel preserves the previous HDR and alpha');
+      await editValue('ev','4');
+      await click('.color-dialog .suggested-action');await wait(`!document.querySelector('.color-dialog[open]')`);
+      const changed=await definition();assert.equal(changed.stops[0].color.rgba[3],before.stops[0].color.rgba[3],'Edit Color keeps the stop alpha');assert.ok(changed.stops[0].color.rgba.slice(0,3).some(value=>value>1),'Native color entry preserves HDR above one');
+      await click('[data-control=tool_settings] .property-color');await wait(`!!document.querySelector('.color-dialog[open]')`);await editValue('ev','1');await click('.color-dialog .color-cancel');
+      assert.deepEqual(await definition(),changed,'Native color dialog Cancel preserves the previous HDR color');
       await edit({kind:'stop',index:0,position:before.stops[0].position,color:before.stops[0].color,remove:false});assert.deepEqual(await definition(),before);
     }
     await click('.toolbar-gradient > button');await capture(`preview-${depth}`);

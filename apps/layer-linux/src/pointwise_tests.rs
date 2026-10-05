@@ -331,7 +331,7 @@ fn native_pointwise_filters_controls_and_persistence() {
                 "photo_filter"=>{
                     edit(&w,&mut input,"density","37");toggle(&w,&mut input,"preserve_luminance");
                     let button=find_named(w.window.upcast_ref(),"effect-color-color").unwrap();scroll_to(&button);input.click(screen_point(&button,&w.window,[0.5,0.5]));
-                    let row=named::<adw::EntryRow>(w.window.visible_dialog().unwrap().upcast_ref(),"edit-color-value-0");row.set_text("0.1234567");
+                    crate::color_editor::tests::form(&w,0,layer_ui::ColorForm::RgbUnit);crate::color_editor::tests::value(&w,0,0,"0.1234567");
                     super::new_photo::response(&w,"apply");ready(&w);
                     assert!(matches!(value(&w,"color"),EffectValue::Color(RgbColor {space:RgbSpace::DisplayP3,rgba,..}) if rgba[0]==0.1234567));
                 },

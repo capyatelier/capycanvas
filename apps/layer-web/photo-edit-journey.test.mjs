@@ -127,7 +127,7 @@ export async function checkPhotoEdit({call,evaluate,settle,device=false}) {
         assert.equal((await control('tint_color')).kind.opaque,true);
         await tap(await middle('.effect-properties .property-color'),kind);
         await wait(`!!document.querySelector('.color-dialog[open]')`);
-        assert.equal(await evaluate(`document.querySelector('.color-dialog [data-color-field="3"]').closest('label').hidden`),true,`${name}: Tint has no alpha control`);
+        assert.equal(await evaluate(`[...document.querySelectorAll('.color-dialog[open] .color-format')].length`),3,`${name}: Tint edits three formats and no alpha`);
         await evaluate(`[...document.querySelectorAll('.color-dialog button')].find(b=>b.textContent==='Use Color').click()`);
         await wait(`!document.querySelector('.color-dialog[open]')`);
         assert.equal((await control('tint_color')).value.value.rgba[3],1);

@@ -2,7 +2,8 @@ import { createNavigationControls } from "./navigation-controls.js";
 import {createScope} from './histogram.js';
 import {liveCopy,bindCopy} from './localization.js';
 import { createRasterWorker } from './raster-worker-client.js';
-import { chooseColor } from './color-controls.js';
+import { chooseColor } from './color-editor.js';
+import { wheelPainter, wheelPicker, hueStopCache, wheelHit, rgba } from './color-wheel.js';
 import { createRangeControl } from './range-control.js';
 import { choiceField } from './toolbar-components.js';
 import {gradientEditor} from './gradient.js';
@@ -15,7 +16,6 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
   const fieldWorker = createRasterWorker();
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   const color = action => dispatch({ type: "color", action });
-  const rgba = values => `rgba(${values.slice(0,3).map(v => v * 255).join(",")},${values[3] ?? 1})`;
   const control = (kind, readToolSet = null) => {
     const root = element("div", `${kind.replaceAll("_", "-")}-control`);
     root.dataset.control = kind;
@@ -163,8 +163,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     const stage=element("div","color-wheel-square"),frame=element("div","color-wheel-stage");frame.append(stage);root.append(frame);
     const edit=button("",async()=>{
       const slot=displayColors().slot;
-      let intensity;const selected=await chooseColor({app,color:displayColors()[slot],element,button,intensity:app.color_panel().hdr?app.color_panel().intensity:null,onIntensity:v=>intensity=v});
-      if(selected)color(intensity==null?{op:"set_slot",slot,color:selected}:{op:"set_slot_intensity",slot,color:selected,stops:intensity});
+      const selected=await chooseColor({app,slot,element,button});
+      if(selected)color(selected.intensity==null?{op:"set_slot",slot,color:selected.color}:{op:"set_slot_intensity",slot,color:selected.color,stops:selected.intensity});
     },"color-edit color-utility");
     bindCopy(edit,()=>copy.color.edit_menu,"title");bindCopy(edit,()=>copy.color.edit,"ariaLabel");edit.append(icon("pencil"));stage.append(edit);
     const wheel=element("canvas","color-wheel");bindCopy(wheel,()=>copy.color.wheel,"ariaLabel");stage.append(wheel);
@@ -194,28 +194,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     track.ondblclick=()=>color({op:'hdr_intensity',stops:0});track.onkeydown=e=>{if(['ArrowLeft','ArrowDown','ArrowRight','ArrowUp','Home'].includes(e.key)){e.preventDefault();color({op:'hdr_intensity',stops:e.key==='Home'?0:Math.max(-2,Math.min(6,view.intensity+(['ArrowLeft','ArrowDown'].includes(e.key)?-.1:.1)))});}};
     const readout=button("",()=>color({op:"toggle_readout"}),"color-readout"),numbers=element("canvas");
     numbers.setAttribute("aria-hidden","true");readout.append(numbers);stage.append(readout);
-    let view,layout,layoutWidth=0,frameWidth=0,frameHeight=0,naturalLayout,naturalAspect="",paintKey="",fieldKey="",ringKey="";
-    const field=document.createElement("canvas"),ring=document.createElement("canvas");
-    let fieldJob=null,fieldPending=null,fieldEpoch=0,fieldGeometry='',disposed=false,previewing=false;
-    function installField(bytes,side,key){
-      if(field.width!==side)field.width=field.height=side;
-      fieldContext.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer,bytes.byteOffset,bytes.byteLength),side,side),0,0);
-      fieldKey=key;
-    }
-    async function renderField(){
-      if(fieldJob||!fieldPending||disposed)return;
-      const job=fieldPending;fieldPending=null;fieldJob=job;
-      try {
-        const bytes=await fieldWorker({operation:'color-field',metadata:job.metadata,buffers:[]});
-        if(!disposed&&job.epoch===fieldEpoch){
-          if(fieldPending?.key===job.key)fieldPending=null;
-          installField(bytes,job.side,job.key);paintKey='';queuePaint();
-        }
-      } catch(error) { if(!disposed)console.error('Color field preview',error); }
-      finally {fieldJob=null;renderField();}
-    }
-    const ctx=wheel.getContext("2d",{willReadFrequently:true});
-    const fieldContext=field.getContext("2d",{willReadFrequently:true}),ringContext=ring.getContext("2d",{willReadFrequently:true});
+    let view,layout,layoutWidth=0,frameWidth=0,frameHeight=0,naturalLayout,naturalAspect="",paintKey="",previewing=false;
+    const painter=wheelPainter({canvas:wheel,worker:fieldWorker,request:pixels=>app.color_field_request(pixels),hueStops:hueStopCache(app),repaint:()=>{paintKey='';queuePaint();}});
     const place=(node,[x,y,w,h])=>Object.assign(node.style,{left:`${x}px`,top:`${y}px`,width:`${w}px`,height:`${h}px`});
     function draw() {
       const availableWidth=frame.clientWidth;if(!view||availableWidth<128)return;
@@ -258,37 +238,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       const side=layout.wheel[2],scale=Math.min(devicePixelRatio||1,2),pixels=Math.ceil(side*scale);
       const ink=getComputedStyle(readout).color,focus=readout.matches(":focus-visible");
       const next=JSON.stringify([view,pixels,width,ink,focus]);if(next===paintKey)return;paintKey=next;
-      if(wheel.width!==pixels){wheel.width=wheel.height=pixels;}
-      ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,pixels,pixels);ctx.scale(pixels/side,pixels/side);
-      const g=view.geometry,[cx,cy]=g.center.map(v=>v*side),inner=g.inner*side,outer=g.outer*side;
-      const fieldPixels=view.shape==="circle"?Math.ceil(side):pixels;
-      const fieldLayout=JSON.stringify([view.rgb_space,view.shape,view.rendition]);
-      if(fieldLayout!==fieldGeometry){fieldGeometry=fieldLayout;fieldEpoch++;fieldPending=null;}
-      const key=JSON.stringify([view.rgb_space,view.shape,view.wheel_components[0],view.intensity,view.rendition,fieldPixels]);
-      if(key!==fieldKey) {
-        if(fieldJob?.key===key&&fieldJob.epoch===fieldEpoch)fieldPending=null;
-        else if(fieldPending?.key!==key||fieldPending.epoch!==fieldEpoch){
-          fieldPending={key,side:fieldPixels,metadata:app.color_field_request(fieldPixels),epoch:fieldEpoch};renderField();
-        }
-      } else if(fieldJob||fieldPending){fieldPending=null;fieldEpoch++;}
-      ctx.save();
-      if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,g.disc_radius*side,0,2*Math.PI);ctx.clip();}
-      else if(view.shape==="square"){const [x,y,w]=g.square.map(v=>v*side);ctx.beginPath();ctx.roundRect(x,y,w,w,Math.min(6,side*.02));ctx.clip();}
-      if(field.width)ctx.drawImage(field,0,0,side,side);ctx.restore();
-      // The ring depends on the color model and size, never the selected hue.
-      // Retain its raster so a drag only repaints the changing field and markers.
-      const nextRing=JSON.stringify([view.rgb_space,view.shape,pixels,side,g,view.wheel_hue_start_degrees]);
-      if(nextRing!==ringKey){
-        ringKey=nextRing;ring.width=ring.height=pixels;ringContext.scale(pixels/side,pixels/side);
-        const hue=ringContext.createConicGradient(view.wheel_hue_start_degrees*Math.PI/180,cx,cy);
-        app.color_hue_stops().forEach(stop=>hue.addColorStop(stop.offset,rgba(stop.color)));
-        ringContext.strokeStyle=hue;ringContext.lineWidth=outer-inner;ringContext.beginPath();ringContext.arc(cx,cy,(inner+outer)/2,0,Math.PI*2);ringContext.stroke();
-      }
-      ctx.drawImage(ring,0,0,side,side);
-      const radius=Math.min(10,Math.max(6,side*.04));
-      for(const [p,fill] of [[view.wheel_hue_marker,rgba(view.wheel_hue_color)],[view.wheel_marker,rgba(view.marker_color)]]) {
-        ctx.beginPath();ctx.arc(p[0]*side,p[1]*side,radius,0,2*Math.PI);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle="rgba(0,0,0,.5)";ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle="white";ctx.lineWidth=2;ctx.stroke();
-      }
+      painter.paint(view,side,pixels);
       drawReadout(half,scale,ink,focus);
     }
     function drawReadout(half,scale,ink,focus) {
@@ -318,11 +268,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         for(const glyph of text){const cell=advance(glyph);at(mid+(along+cell*.5)/radius,()=>{ctx.globalAlpha=.8;ctx.fillStyle=ink;ctx.fillText(glyph,-ctx.measureText(glyph).width*.5,0);});along+=cell;}
       });
     }
-    let contact=null;
-    const pick=e=>{const r=wheel.getBoundingClientRect();color({op:"pick_wheel",part:contact.part,size:r.width,point:[e.clientX-r.x,e.clientY-r.y]});};
-    wheel.addEventListener("pointerdown",e=>{if(e.button!==0)return;const r=wheel.getBoundingClientRect(),part=app.color_wheel_hit(r.width,e.clientX-r.x,e.clientY-r.y);if(!part)return;contact={id:e.pointerId,part};wheel.setPointerCapture(e.pointerId);e.preventDefault();pick(e);});
-    wheel.addEventListener("pointermove",e=>{if(contact?.id===e.pointerId)pick(e);});
-    for(const name of ["pointerup","pointercancel","lostpointercapture"])wheel.addEventListener(name,e=>{if(contact?.id===e.pointerId)contact=null;});
+    const hit=wheelHit(app);
+    wheelPicker(wheel,(size,point)=>hit(size,point,view.shape),color);
     // Preserve native button activation instead of treating Space as canvas pan.
     for(const name of ["keydown","keyup"])root.addEventListener(name,e=>{if(e.target.closest("button")&&(e.key===" "||e.key==="Enter"))e.stopPropagation();});
     for(const name of ["focus","blur"])readout.addEventListener(name,draw);
@@ -330,11 +277,11 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     function flushPaint() { pendingPaints.delete(flushPaint); cancelAnimationFrame(resizeFrame); resizeFrame=null; draw(); }
     function queuePaint() { pendingPaints.add(flushPaint); if(!resizeFrame)resizeFrame=requestAnimationFrame(flushPaint); }
     const resize=new ResizeObserver(queuePaint);resize.observe(frame);
-    root.navigatorDispose=()=>{disposed=true;fieldPending=null;fieldEpoch++;resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
+    root.navigatorDispose=()=>{painter.dispose();resize.disconnect();cancelAnimationFrame(resizeFrame);pendingPaints.delete(flushPaint)};
     return ()=>{
       const preview=app.color_preview();
       const active=preview.picker.preview!=null;
-      if(previewing!==active){fieldEpoch++;fieldPending=null;}
+      if(previewing!==active)painter.invalidate();
       previewing=active;view=preview.view;
       edit.disabled=displayColors().slot==="transparent";
       quickColors.forEach(({white,node,paint})=>{const preset=view.quick_colors.find(p=>p.white===white);node.title=preset.label;node.setAttribute("aria-label",preset.label);node.setAttribute("aria-pressed",String(preset.selected));paint.style.background=rgba(preset.rgba);});

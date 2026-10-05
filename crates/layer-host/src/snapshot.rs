@@ -204,7 +204,7 @@ impl NativeHost {
             crate::UiColor::Tagged(space) => colors.view_in_localized(space, self.session.localization()),
         }
     }
-    fn swatch_preview(&self, colors: &layer_ui::ColorState, color: layer_core::color::RgbColor) -> [f32; 4] {
+    pub(crate) fn swatch_preview(&self, colors: &layer_ui::ColorState, color: layer_core::color::RgbColor) -> [f32; 4] {
         match self.ui_color {
             crate::UiColor::Mapped => colors.mapped_swatch(color, self.session.effective_sdr_rendition()),
             crate::UiColor::Tagged(space) => colors.preview_in(color, space),

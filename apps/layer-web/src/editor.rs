@@ -75,9 +75,12 @@ impl WebApp {
             self.session.localization(),
         ))
     }
-    /// Static for each shape; fetch when switching models, not on every drag.
-    pub fn color_hue_stops(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.state().display_colors().wheel_hue_stops())
+    pub fn swatch_sheet(&self, query: String, current: JsValue) -> Result<JsValue, JsValue> {
+        let current = serde_wasm_bindgen::from_value(current).map_err(js)?;
+        let state = self.session.state();
+        let colors = state.display_colors();
+        let rendition = self.session.effective_sdr_rendition();
+        serialize(&layer_ui::SwatchSheetView::new(&state.color_library, &query, current, |color| colors.mapped_swatch(color, rendition), self.session.localization()))
     }
     /// Small cached UI raster only; the painting canvas remains on WebGPU.
     pub fn color_field_pixels(&self, side: u32) -> Result<Vec<u8>, JsValue> {
@@ -94,12 +97,6 @@ impl WebApp {
 
     pub fn workspace_persistence(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.durable_workspace())
-    }
-    pub fn color_wheel_hit(&self, size: f32, x: f32, y: f32) -> Result<JsValue, JsValue> {
-        serialize(
-            &layer_ui::ColorWheelGeometry::new(size)
-                .and_then(|g| g.hit_shape([x, y], self.session.state().display_colors().shape)),
-        )
     }
     pub fn navigator_geometry(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
         let document = self.session.engine().document();

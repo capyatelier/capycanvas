@@ -1,60 +1,245 @@
-//! Draft numeric entry: switching readouts and accepting an untouched form must
-//! not quantize or reinterpret the retained paint definition.
 use super::*;
+use super::text::parse_color_text;
+use std::sync::Arc;
+
+const MAX_SEARCH: usize = 256;
+const SCRUB_PIXELS: f64 = 2.;
+const SCRUB_INTENSITY_STEP: f64 = 0.05;
+const SCRUB_INTENSITY_RANGE: (f64, f64) = (-2., 6.);
 
 crate::variants! {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
-    pub enum ColorInputModel {
+    pub enum ColorForm {
         #[default]
-        DocumentRgb,
+        Rgb,
+        RgbUnit,
         LinearRgb,
-        SrgbHex,
-        Hsv,
-        Hls,
+        Hsb,
+        Hsl,
         Oklch,
-    }
-}
-impl ColorInputModel {
-    pub fn localized_name(self, localizer: &crate::Localizer) -> std::sync::Arc<str> {
-        localizer.text(match self {
-            Self::DocumentRgb => crate::MessageId::COLOR_FORM_MODEL_DOCUMENT_RGB,
-            Self::LinearRgb => crate::MessageId::COLOR_FORM_MODEL_LINEAR_RGB,
-            Self::SrgbHex => crate::MessageId::COLOR_FORM_MODEL_SRGB_HEX,
-            Self::Hsv => crate::MessageId::COLOR_FORM_MODEL_HSV,
-            Self::Hls => crate::MessageId::COLOR_FORM_MODEL_HLS,
-            Self::Oklch => crate::MessageId::COLOR_FORM_MODEL_OKLCH,
-        })
-    }
-    pub fn localized_description(self, document_space: RgbSpace, localizer: &crate::Localizer) -> String {
-        use crate::MessageId as M;
-        let mut text = localizer.text(match document_space { RgbSpace::Srgb => M::COLOR_FORM_DOCUMENT_SRGB, RgbSpace::DisplayP3 => M::COLOR_FORM_DOCUMENT_DISPLAY_P3, RgbSpace::AdobeRgb => M::COLOR_FORM_DOCUMENT_ADOBE_RGB, RgbSpace::ProPhoto => M::COLOR_FORM_DOCUMENT_PROPHOTO }).to_string();
-        let extra = match self { ColorInputModel::LinearRgb => Some(M::COLOR_FORM_REFERENCE_WHITE), ColorInputModel::SrgbHex => Some(M::COLOR_FORM_HEX_DESCRIPTION), _ => None };
-        if let Some(id) = extra { text.push(' '); text.push_str(&localizer.text(id)); }
-        text
-    }
-    pub fn localized_labels(self, localizer: &crate::Localizer) -> [std::sync::Arc<str>; 4] {
-        let ids = match self {
-            Self::DocumentRgb => [Some(crate::MessageId::COLOR_FORM_FIELD_RED_ENCODED), Some(crate::MessageId::COLOR_FORM_FIELD_GREEN_ENCODED), Some(crate::MessageId::COLOR_FORM_FIELD_BLUE_ENCODED), Some(crate::MessageId::COLOR_FORM_FIELD_ALPHA)],
-            Self::LinearRgb => [Some(crate::MessageId::COLOR_FORM_FIELD_RED_LINEAR), Some(crate::MessageId::COLOR_FORM_FIELD_GREEN_LINEAR), Some(crate::MessageId::COLOR_FORM_FIELD_BLUE_LINEAR), Some(crate::MessageId::COLOR_FORM_FIELD_ALPHA)],
-            Self::SrgbHex => [Some(crate::MessageId::COLOR_FORM_FIELD_HEX), None, None, Some(crate::MessageId::COLOR_FORM_FIELD_ALPHA)],
-            Self::Hsv => [Some(crate::MessageId::COLOR_FORM_FIELD_HUE), Some(crate::MessageId::COLOR_FORM_FIELD_SATURATION), Some(crate::MessageId::COLOR_FORM_FIELD_VALUE), Some(crate::MessageId::COLOR_FORM_FIELD_ALPHA)],
-            Self::Hls => [Some(crate::MessageId::COLOR_FORM_FIELD_HUE), Some(crate::MessageId::COLOR_FORM_FIELD_LIGHTNESS), Some(crate::MessageId::COLOR_FORM_FIELD_SATURATION), Some(crate::MessageId::COLOR_FORM_FIELD_ALPHA)],
-            Self::Oklch => [Some(crate::MessageId::COLOR_FORM_FIELD_LIGHTNESS), Some(crate::MessageId::COLOR_FORM_FIELD_CHROMA), Some(crate::MessageId::COLOR_FORM_FIELD_HUE), Some(crate::MessageId::COLOR_FORM_FIELD_ALPHA)],
-        };
-        ids.map(|id| id.map_or_else(|| "".into(), |id|localizer.text(id)))
+        Oklab,
     }
 }
 
+pub const COLOR_FORM_FAMILIES: [&[ColorForm]; 3] = [
+    &[ColorForm::Rgb, ColorForm::RgbUnit, ColorForm::LinearRgb],
+    &[ColorForm::Hsb, ColorForm::Hsl],
+    &[ColorForm::Oklch, ColorForm::Oklab],
+];
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "detail", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
+pub struct ColorEditorMemory {
+    pub forms: [ColorForm; 3],
+    pub search: String,
+}
+impl Default for ColorEditorMemory {
+    fn default() -> Self {
+        Self { forms: [ColorForm::Rgb, ColorForm::Hsb, ColorForm::Oklch], search: String::new() }
+    }
+}
+impl ColorEditorMemory {
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self.search.len() > MAX_SEARCH || self.forms.iter().enumerate().any(|(row, form)| form.family() != row) {
+            return Err("Invalid color editor memory".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ColorValueName {
+    Message(crate::MessageId),
+    Literal(&'static str),
+}
+impl ColorValueName {
+    pub fn text(self, localizer: &crate::Localizer) -> Arc<str> {
+        match self {
+            Self::Message(id) => localizer.text(id),
+            Self::Literal(text) => text.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Component {
+    name: ColorValueName,
+    unit: &'static str,
+    min: f64,
+    max: f64,
+    wrap: bool,
+    step: f64,
+    digits: usize,
+    edit_digits: usize,
+}
+impl Component {
+    const fn new(name: ColorValueName, unit: &'static str, max: f64, digits: usize, edit_digits: usize) -> Self {
+        Self { name, unit, min: 0., max, wrap: false, step: 1., digits, edit_digits }
+    }
+    const fn fine(self, min: f64, step: f64) -> Self {
+        Self { min, step, ..self }
+    }
+    const fn hue(self) -> Self {
+        Self { wrap: true, ..self }
+    }
+    fn bound(self, value: f64) -> f64 {
+        if self.wrap { value.rem_euclid(360.) } else { value.clamp(self.min, self.max) }
+    }
+    fn display(self, value: f64) -> String {
+        let value = if self.wrap && self.digits == 0 { value.round().rem_euclid(360.) } else { value };
+        format!("{}{}", fixed(value, self.digits), self.unit)
+    }
+    fn edit(self, value: f64) -> String {
+        let text = fixed(value, self.edit_digits);
+        if self.edit_digits == 0 { text } else { text.trim_end_matches('0').trim_end_matches('.').to_string() }
+    }
+}
+
+fn fixed(value: f64, digits: usize) -> String {
+    let text = format!("{value:.digits$}");
+    if text.trim_start_matches('-').chars().all(|c| c == '0' || c == '.') { text.trim_start_matches('-').to_string() } else { text }
+}
+
+const M: fn(crate::MessageId) -> ColorValueName = ColorValueName::Message;
+use crate::MessageId as Id;
+
+impl ColorForm {
+    pub fn family(self) -> usize {
+        match self {
+            Self::Rgb | Self::RgbUnit | Self::LinearRgb => 0,
+            Self::Hsb | Self::Hsl => 1,
+            Self::Oklch | Self::Oklab => 2,
+        }
+    }
+    pub fn label(self) -> ColorValueName {
+        match self {
+            Self::Rgb => ColorValueName::Literal("RGB"),
+            Self::RgbUnit => ColorValueName::Literal("RGB 0–1"),
+            Self::LinearRgb => M(Id::COLOR_FORM_MODEL_LINEAR_RGB),
+            Self::Hsb => ColorValueName::Literal("HSB"),
+            Self::Hsl => ColorValueName::Literal("HSL"),
+            Self::Oklch => ColorValueName::Literal("OKLCH"),
+            Self::Oklab => ColorValueName::Literal("OKLab"),
+        }
+    }
+    fn components(self) -> [Component; 3] {
+        let rgb = [Id::SETTINGS_RED, Id::SETTINGS_GREEN, Id::SETTINGS_BLUE];
+        let hue = Component::new(M(Id::COLOR_FORM_FIELD_HUE), "°", 360., 0, 2).hue();
+        let percent = |id| Component::new(M(id), "%", 100., 0, 2);
+        let lightness = Component::new(M(Id::COLOR_FORM_FIELD_LIGHTNESS), "%", 100., 1, 2);
+        match self {
+            Self::Rgb => rgb.map(|id| Component::new(M(id), "", 255., 0, 2)),
+            Self::RgbUnit => rgb.map(|id| Component::new(M(id), "", 1., 3, 5).fine(0., 0.001)),
+            Self::LinearRgb => rgb.map(|id| Component::new(M(id), "", 1., 3, 5).fine(0., 0.001)),
+            Self::Hsb => [hue, percent(Id::COLOR_FORM_FIELD_SATURATION), percent(Id::COLOR_FORM_FIELD_VALUE)],
+            Self::Hsl => [hue, percent(Id::COLOR_FORM_FIELD_SATURATION), percent(Id::COLOR_FORM_FIELD_LIGHTNESS)],
+            Self::Oklch => [lightness, Component::new(M(Id::COLOR_FORM_FIELD_CHROMA), "", 0.5, 3, 4).fine(0., 0.001), hue],
+            Self::Oklab => [
+                lightness,
+                Component::new(ColorValueName::Literal("a"), "", 0.5, 3, 4).fine(-0.5, 0.001),
+                Component::new(ColorValueName::Literal("b"), "", 0.5, 3, 4).fine(-0.5, 0.001),
+            ],
+        }
+    }
+    pub(super) fn values(self, color: RgbColor, space: RgbSpace, memory: Option<&ColorState>) -> Result<[f64; 3], String> {
+        let encoded = color.encoded_in(space)?;
+        let rgb = [encoded[0], encoded[1], encoded[2]].map(f64::from);
+        let clamped = encoded.map(|v| v.clamp(0., 1.));
+        let remembered = memory.filter(|picker| picker.picker_base() == color);
+        let lab = || -> Result<[f64; 3], String> {
+            let linear = color.linear_in(space)?;
+            Ok(gamut::Gamut::get(space).lab([linear[0], linear[1], linear[2]].map(f64::from)))
+        };
+        Ok(match self {
+            Self::Rgb => rgb.map(|v| v * 255.),
+            Self::RgbUnit => rgb,
+            Self::LinearRgb => {
+                let linear = color.linear_in(space)?;
+                [linear[0], linear[1], linear[2]].map(f64::from)
+            }
+            Self::Hsb => remembered.map_or_else(|| components(clamped, ColorSpace::Hsv, 0.), |p| p.components_in(ColorSpace::Hsv)).map(f64::from),
+            Self::Hsl => {
+                let [h, l, s] = remembered.map_or_else(|| components(clamped, ColorSpace::Hls, 0.), |p| p.components_in(ColorSpace::Hls));
+                [h, s, l].map(f64::from)
+            }
+            Self::Oklch => {
+                let [l, a, b] = lab()?;
+                let chroma = a.hypot(b);
+                let hue = if chroma < 1e-6 {
+                    remembered.map_or(0., |p| f64::from(p.okhsv_components()[0]))
+                } else {
+                    b.atan2(a).to_degrees().rem_euclid(360.)
+                };
+                [l * 100., chroma, hue]
+            }
+            Self::Oklab => {
+                let [l, a, b] = lab()?;
+                [l * 100., a, b]
+            }
+        })
+    }
+    pub(super) fn color(self, values: [f64; 3], space: RgbSpace, alpha: f32) -> Result<RgbColor, ColorEditorError> {
+        let [a, b, c] = values;
+        let lab = |lab: [f64; 3]| -> Result<RgbColor, ColorEditorError> {
+            let rgb = gamut::Gamut::get(space).linear_rgb(lab);
+            Ok(RgbColor::from_linear(space, [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, alpha])?)
+        };
+        let color = match self {
+            Self::Rgb => RgbColor::new(space, [(a / 255.) as f32, (b / 255.) as f32, (c / 255.) as f32, alpha])?,
+            Self::RgbUnit => RgbColor::new(space, [a as f32, b as f32, c as f32, alpha])?,
+            Self::LinearRgb => RgbColor::from_linear(space, [a as f32, b as f32, c as f32, alpha])?,
+            Self::Hsb => RgbColor::new(space, from_components([a, b, c].map(|v| v as f32), ColorSpace::Hsv, alpha))?,
+            Self::Hsl => RgbColor::new(space, from_components([a, c, b].map(|v| v as f32), ColorSpace::Hls, alpha))?,
+            Self::Oklch => {
+                let hue = c.to_radians();
+                lab([a / 100., b * hue.cos(), b * hue.sin()])?
+            }
+            Self::Oklab => lab([a / 100., b, c])?,
+        };
+        ColorState::validate_definition(color)?;
+        Ok(color)
+    }
+    fn copy(self, values: [f64; 3], space: RgbSpace) -> String {
+        let css = match space {
+            RgbSpace::Srgb => "srgb",
+            RgbSpace::DisplayP3 => "display-p3",
+            RgbSpace::AdobeRgb => "a98-rgb",
+            RgbSpace::ProPhoto => "prophoto-rgb",
+        };
+        let list = |digits: usize, units: [&str; 3]| -> String {
+            values.iter().zip(units).map(|(v, unit)| format!("{}{unit}", trimmed(*v, digits))).collect::<Vec<_>>().join(" ")
+        };
+        let srgb = space == RgbSpace::Srgb;
+        match self {
+            Self::Rgb if srgb => format!("rgb({})", list(0, ["", "", ""])),
+            Self::Rgb => format!("color({css} {})", values.map(|v| trimmed(v / 255., 4)).join(" ")),
+            Self::RgbUnit => format!("color({css} {})", list(4, ["", "", ""])),
+            Self::LinearRgb if srgb => format!("color(srgb-linear {})", list(5, ["", "", ""])),
+            Self::LinearRgb => list(5, ["", "", ""]),
+            Self::Hsb if srgb => format!("hsb({})", list(0, ["", "%", "%"])),
+            Self::Hsl if srgb => format!("hsl({})", list(0, ["", "%", "%"])),
+            Self::Hsb | Self::Hsl => list(0, ["°", "%", "%"]),
+            Self::Oklch => format!("oklch({})", [trimmed(values[0], 2) + "%", trimmed(values[1], 4), trimmed(values[2], 2)].join(" ")),
+            Self::Oklab => format!("oklab({})", [trimmed(values[0], 2) + "%", trimmed(values[1], 4), trimmed(values[2], 4)].join(" ")),
+        }
+    }
+}
+
+fn trimmed(value: f64, digits: usize) -> String {
+    let text = fixed(value, digits);
+    if digits == 0 { text } else { text.trim_end_matches('0').trim_end_matches('.').to_string() }
+}
+
+fn parse_value(text: &str, component: Component) -> Result<f64, crate::NumericError> {
+    let text = text.trim().trim_end_matches(component.unit).trim_end_matches("deg").trim();
+    Ok(f64::from(crate::numeric::parse_numeric_text(text)?))
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum ColorEditorError {
-    Numeric { field: usize, reason: crate::NumericError },
-    EntriesTooLong,
-    AlphaRange,
-    HexSyntax,
-    PercentRange,
-    NegativeLightnessChroma,
+    Numeric { name: ColorValueName, reason: crate::NumericError },
+    ColorSyntax,
     Intensity(crate::NumericError),
     Hdr(layer_core::color::hdr::HdrPixelError),
     Detail(String),
@@ -69,389 +254,621 @@ impl From<layer_core::color::hdr::HdrPixelError> for ColorEditorError {
     fn from(value: layer_core::color::hdr::HdrPixelError) -> Self { Self::Hdr(value) }
 }
 impl ColorEditorError {
-    pub fn valid(&self) -> bool {
+    pub fn message(&self, localizer: &crate::Localizer) -> String {
         match self {
-            Self::Numeric { field, reason } => *field < 4 && reason.valid(),
-            Self::Intensity(reason) => reason.valid(),
-            _ => true,
+            Self::Numeric { name, reason } => finite_field_message(localizer, name.text(localizer).as_ref(), reason),
+            Self::ColorSyntax => localizer.text(Id::COLOR_FORM_COLOR_SYNTAX).to_string(),
+            Self::Intensity(reason) => finite_field_message(localizer, localizer.text(Id::NATIVE_COLOR_INTENSITY_EV).as_ref(), reason),
+            Self::Hdr(reason) => localizer.text(match reason {
+                layer_core::color::hdr::HdrPixelError::ExpectedFloat => Id::COLOR_HDR_EXPECTED_FLOAT,
+                layer_core::color::hdr::HdrPixelError::FiniteCoverage => Id::COLOR_HDR_FINITE_COVERAGE,
+                layer_core::color::hdr::HdrPixelError::StorageRange => Id::COLOR_HDR_STORAGE_RANGE,
+            }).to_string(),
+            Self::Detail(reason) => reason.clone(),
         }
     }
-    pub fn message(&self, model: ColorInputModel, localizer: &crate::Localizer) -> String {
-        if !self.valid() { return crate::NumericError::InvalidDefinition.message(localizer); }
-        use crate::MessageId as M;
-        let id = match self {
-            Self::Numeric { field, reason } => return finite_field_message(localizer, model.localized_labels(localizer)[*field].as_ref(), reason),
-            Self::EntriesTooLong => M::COLOR_FORM_ENTRIES_TOO_LONG,
-            Self::AlphaRange => M::COLOR_FORM_ALPHA_RANGE,
-            Self::HexSyntax => M::COLOR_FORM_HEX_SYNTAX,
-            Self::PercentRange => M::COLOR_FORM_PERCENT_RANGE,
-            Self::NegativeLightnessChroma => M::COLOR_FORM_NEGATIVE_LIGHTNESS_CHROMA,
-            Self::Intensity(reason) => return finite_field_message(localizer, localizer.text(M::NATIVE_COLOR_INTENSITY_EV).as_ref(), reason),
-            Self::Hdr(reason) => match reason {
-                layer_core::color::hdr::HdrPixelError::ExpectedFloat => M::COLOR_HDR_EXPECTED_FLOAT,
-                layer_core::color::hdr::HdrPixelError::FiniteCoverage => M::COLOR_HDR_FINITE_COVERAGE,
-                layer_core::color::hdr::HdrPixelError::StorageRange => M::COLOR_HDR_STORAGE_RANGE,
-            },
-            Self::Detail(reason) => return reason.clone(),
-        };
-        localizer.text(id).to_string()
-    }
-}
-#[derive(Clone, Debug)]
-pub struct ColorEditor {
-    opaque: bool,
-    definition: RgbColor,
-    document_space: RgbSpace,
-    model: ColorInputModel,
-    fields: [String; 4],
-    initial: [String; 4],
-    hdr: Option<HdrPaint>,
-    depth: layer_core::color::SampleDepth,
-}
-impl ColorEditor {
-    pub fn new(definition: RgbColor, document_space: RgbSpace) -> Result<Self, String> {
-        ColorState::validate_definition(definition)?;
-        let mut editor = Self {
-            opaque: false,
-            definition,
-            document_space,
-            model: ColorInputModel::DocumentRgb,
-            fields: Default::default(),
-            initial: Default::default(),
-            hdr: None,
-            depth: layer_core::color::SampleDepth::F16,
-        };
-        editor.populate();
-        Ok(editor)
-    }
-    pub fn opaque(&self) -> bool { self.opaque }
-    pub fn set_opaque(&mut self, opaque: bool) {
-        self.opaque=opaque;
-        if opaque { self.definition.rgba[3]=1.; self.fields[3]="100".into(); self.initial[3]=self.fields[3].clone(); }
-    }
-    pub fn localized_labels(&self, localizer: &crate::Localizer) -> [std::sync::Arc<str>;4] {
-        let mut labels=self.model.localized_labels(localizer);
-        if self.opaque {labels[3]="".into();}
-        labels
-    }
-    pub fn set_document_depth(&mut self, depth: layer_core::color::SampleDepth) { self.depth = depth; }
-    fn validate_range(&self, color: RgbColor) -> Result<(), ColorEditorError> {
-        if self.hdr.is_some() { layer_core::color::hdr::validate_pixel_typed(self.depth, color.linear_in(self.document_space)?)?; }
-        Ok(())
-    }
-    pub fn enable_hdr(&mut self, stops: f32) -> Result<(), ColorEditorError> {
-        self.hdr = Some(HdrPaint::at_intensity(self.color()?, self.document_space, stops)?);
-        Ok(())
-    }
-    pub fn intensity(&self) -> Option<f32> { self.hdr.map(|p| p.stops) }
-    /// Current draft before its EV multiplier, including pending component edits.
-    pub fn base_color(&self) -> Result<RgbColor, ColorEditorError> {
-        let color = self.color()?;
-        self.base_for_color(color)
-    }
-    pub(super) fn base_for_color(&self, color: RgbColor) -> Result<RgbColor, ColorEditorError> {
-        match self.hdr {
-            Some(paint) => Ok(HdrPaint::at_intensity(color, self.document_space, paint.stops)?.base),
-            None => Ok(color),
-        }
-    }
-    /// RGB fields describe the final color. EV multiplies its remembered base,
-    /// while numeric RGB edits keep the explicitly selected EV.
-    pub fn set_intensity(&mut self, stops: f32) -> Result<(), ColorEditorError> {
-        let color = self.color()?;
-        self.set_intensity_color(stops, color).map(|_| ())
-    }
-    pub(super) fn set_intensity_color(&mut self, stops: f32, color: RgbColor) -> Result<RgbColor, ColorEditorError> {
-        super::hdr_picker::validate_intensity(self.depth, stops)?;
-        let mut paint = self.hdr.ok_or_else(|| ColorEditorError::Detail("Intensity requires an HDR color draft".into()))?;
-        if paint.stops == stops { return Ok(color); }
-        if color != self.definition { paint = HdrPaint::at_intensity(color, self.document_space, paint.stops)?; }
-        paint.stops = stops;
-        let color = paint.color(self.document_space)?;
-        ColorState::validate_definition(color)?;
-        self.validate_range(color)?;
-        self.hdr = Some(paint);
-        self.definition = color;
-        self.populate();
-        Ok(color)
-    }
-    pub fn model(&self) -> ColorInputModel {
-        self.model
-    }
-    pub fn fields(&self) -> &[String; 4] {
-        &self.fields
-    }
-    pub fn definition(&self) -> RgbColor {
-        self.definition
-    }
-    pub fn set_field(&mut self, index: usize, text: String) -> Result<(), String> {
-        if index >= 4 {
-            return Err("Invalid color entry".into());
-        }
-        if self.opaque && index==3 {return Ok(());}
-        self.fields[index] = text;
-        Ok(())
-    }
-    pub fn set_model(&mut self, model: ColorInputModel) -> Result<(), ColorEditorError> {
-        let color = self.color()?;
-        self.set_model_color(model, color)
-    }
-    pub(super) fn set_model_color(&mut self, model: ColorInputModel, color: RgbColor) -> Result<(), ColorEditorError> {
-        if color != self.definition && let Some(paint) = self.hdr {
-            self.hdr = Some(HdrPaint::at_intensity(color, self.document_space, paint.stops)?);
-        }
-        self.definition = color;
-        self.model = model;
-        self.populate();
-        Ok(())
-    }
-    fn populate(&mut self) {
-        let rgba = self.definition.encoded_in(self.document_space).unwrap();
-        let rgb = [rgba[0], rgba[1], rgba[2]];
-        let values = match self.model {
-            ColorInputModel::DocumentRgb | ColorInputModel::SrgbHex => rgb,
-            ColorInputModel::LinearRgb => { let p=self.definition.linear_in(self.document_space).unwrap(); [p[0],p[1],p[2]] },
-            ColorInputModel::Hsv => components(rgba, ColorSpace::Hsv, 0.),
-            ColorInputModel::Hls => components(rgba, ColorSpace::Hls, 0.),
-            ColorInputModel::Oklch => okhsv::to_oklch_in(self.document_space, rgb, 0.),
-        };
-        self.fields = [
-            values[0].to_string(),
-            values[1].to_string(),
-            values[2].to_string(),
-            format!("{:.6}", self.definition.rgba[3] as f64 * 100.)
-                .trim_end_matches('0')
-                .trim_end_matches('.')
-                .to_string(),
-        ];
-        if self.model == ColorInputModel::SrgbHex {
-            self.fields[0] = ColorLibrary::hex_preview(self.definition);
-            self.fields[1].clear();
-            self.fields[2].clear();
-        }
-        self.initial = self.fields.clone();
-    }
-    pub fn color_localized(&self, localizer: &crate::Localizer) -> Result<RgbColor, String> {
-        self.color().map_err(|reason| reason.message(self.model, localizer))
-    }
-    pub fn colors(&self) -> Result<(RgbColor, RgbColor), ColorEditorError> {
-        let color = self.color()?;
-        Ok((color,self.base_for_color(color)?))
-    }
-    pub fn color(&self) -> Result<RgbColor, ColorEditorError> {
-        if self.fields.iter().any(|text| text.len() > 128) {
-            return Err(ColorEditorError::EntriesTooLong);
-        }
-        let parse = |i: usize| -> Result<f32, ColorEditorError> {
-            crate::numeric::parse_numeric_text(&self.fields[i]).map_err(|reason| ColorEditorError::Numeric { field: i, reason })
-        };
-        let alpha = if self.opaque {1.} else if self.fields[3] == self.initial[3] {
-            self.definition.rgba[3]
-        } else {
-            let percent = parse(3)?;
-            if !(0.0..=100.).contains(&percent) {
-                return Err(ColorEditorError::AlphaRange);
-            }
-            percent / 100.
-        };
-        // Readout formatting, hex previews, and alpha-only edits never rebuild RGB.
-        if self.fields[..3] == self.initial[..3] {
-            let mut color = self.definition;
-            color.rgba[3] = alpha;
-            color.validate()?;
-            return Ok(color);
-        }
-        let color = match self.model {
-            ColorInputModel::SrgbHex => {
-                let text = self.fields[0].trim().trim_start_matches('#');
-                if !matches!(text.len(), 3 | 6) || !text.bytes().all(|v| v.is_ascii_hexdigit()) {
-                    return Err(ColorEditorError::HexSyntax);
-                }
-                let mut rgb = [0.; 3];
-                for i in 0..3 {
-                    let value = if text.len() == 3 {
-                        u8::from_str_radix(&text[i..i + 1], 16).unwrap() * 17
-                    } else {
-                        u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()
-                    };
-                    rgb[i] = value as f32 / 255.;
-                }
-                RgbColor::new(RgbSpace::Srgb, [rgb[0], rgb[1], rgb[2], alpha])?
-            }
-            model => {
-                let values = [parse(0)?, parse(1)?, parse(2)?];
-                match model {
-                    ColorInputModel::LinearRgb => RgbColor::from_linear(self.document_space, [values[0], values[1], values[2], alpha])?,
-                    ColorInputModel::DocumentRgb => RgbColor::new(
-                        self.document_space,
-                        [values[0], values[1], values[2], alpha],
-                    )?,
-                    ColorInputModel::Hsv | ColorInputModel::Hls => {
-                        if !(0.0..=100.).contains(&values[1]) || !(0.0..=100.).contains(&values[2])
-                        {
-                            return Err(ColorEditorError::PercentRange);
-                        }
-                        let space = if model == ColorInputModel::Hsv {
-                            ColorSpace::Hsv
-                        } else {
-                            ColorSpace::Hls
-                        };
-                        RgbColor::new(self.document_space, from_components(values, space, alpha))?
-                    }
-                    ColorInputModel::Oklch => {
-                        if values[0] < 0. || values[1] < 0. {
-                            return Err(ColorEditorError::NegativeLightnessChroma);
-                        }
-                        let hue = (values[2] as f64).to_radians();
-                        let rgb = gamut::Gamut::get(self.document_space).linear_rgb([
-                            values[0] as f64 / 100.,
-                            values[1] as f64 * hue.cos(),
-                            values[1] as f64 * hue.sin(),
-                        ]);
-                        RgbColor::from_linear(
-                            self.document_space,
-                            [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, alpha],
-                        )?
-                    }
-                    ColorInputModel::SrgbHex => unreachable!(),
-                }
-            }
-        };
-        ColorState::validate_definition(color)?;
-        self.validate_range(color)?;
-        Ok(color)
-    }
-    pub fn localized_description(&self, localizer: &crate::Localizer) -> String {
-        self.model.localized_description(self.document_space, localizer)
-    }
-
-}
-
-pub fn color_intensity_input_typed(text: &str) -> Result<f32, ColorEditorError> {
-    crate::numeric::parse_numeric_text(text).map_err(ColorEditorError::Intensity)
-}
-pub fn color_intensity_input(text: &str, localizer: &crate::Localizer) -> Result<f32, String> {
-    color_intensity_input_typed(text).map_err(|reason| reason.message(ColorInputModel::DocumentRgb, localizer))
 }
 pub(crate) fn finite_field_message(localizer: &crate::Localizer, label: &str, reason: &crate::NumericError) -> String {
     if !matches!(reason, crate::NumericError::InvalidNumber | crate::NumericError::FiniteNumber) { return reason.message(localizer); }
     let mut args = crate::FluentArgs::new(); args.set("label", label);
-    localizer.format(crate::MessageId::COLOR_FORM_FINITE_FIELD, &args)
+    localizer.format(Id::COLOR_FORM_FINITE_FIELD, &args)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ColorEditorTarget {
+    Value { row: usize, index: usize },
+    Intensity,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorScrubSpeed {
+    #[default]
+    Normal,
+    Fast,
+    Fine,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ColorEditorAction {
+    Wheel { action: ColorAction },
+    Value { row: usize, index: usize, text: String },
+    Scrub { target: ColorEditorTarget, pixels: f32, #[serde(default)] speed: ColorScrubSpeed },
+    EndScrub { cancel: bool },
+    Intensity { text: String },
+    Text { text: String, #[serde(default)] row: Option<usize> },
+    Form { row: usize, form: ColorForm },
+    Color { color: RgbColor },
+    Revert,
+    Search { text: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Scrub {
+    target: ColorEditorTarget,
+    picker: ColorState,
+    values: [f64; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColorEditor {
+    picker: ColorState,
+    start: ColorState,
+    opaque: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scrub: Option<Scrub>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorShapeChoice {
+    pub shape: ColorShape,
+    pub label: &'static str,
+    pub name: Arc<str>,
+    pub selected: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorHexNoteKind {
+    Nearest,
+    Base,
+    Srgb,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorHexNote {
+    pub kind: ColorHexNoteKind,
+    pub text: Arc<str>,
+    pub tip: Option<Arc<str>>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorValueView {
+    pub text: String,
+    pub edit: String,
+    pub name: Arc<str>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorFormChoice {
+    pub form: ColorForm,
+    pub label: Arc<str>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorRowView {
+    pub form: ColorForm,
+    pub label: Arc<str>,
+    pub forms: Vec<ColorFormChoice>,
+    pub space: Option<&'static str>,
+    pub values: [ColorValueView; 3],
+    pub copy: String,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorEditorView {
+    pub panel: ColorPanelView,
+    pub shapes: [ColorShapeChoice; 3],
+    pub current: ColorPreview,
+    pub new: ColorPreview,
+    pub hex: String,
+    pub hex_note: Option<ColorHexNote>,
+    pub rows: [ColorRowView; 3],
+    pub intensity: Option<ColorValueView>,
+    pub value: RgbColor,
+    pub current_value: RgbColor,
+    pub stops: Option<f32>,
+    pub changed: bool,
+    pub search: String,
+}
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ColorStripView {
+    pub hex: String,
+    pub label: &'static str,
+    pub values: [String; 3],
+    pub intensity: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorStripCorner {
+    #[default]
+    TopRight,
+    TopLeft,
+    BottomRight,
+    BottomLeft,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ColorStripPlacement {
+    pub origin: [f32; 2],
+    pub corner: ColorStripCorner,
+}
+impl ColorStripPlacement {
+    pub fn new(area: [f32; 4], size: [f32; 2], scale: f32, avoid: &[[f32; 2]], corner: ColorStripCorner) -> Self {
+        use ColorStripCorner::*;
+        let [margin, clearance] = [12. * scale, 8. * scale];
+        let [left, top] = [area[0] + margin, area[1] + margin];
+        let [right, bottom] = [(area[0] + area[2] - size[0] - margin).max(left), (area[1] + area[3] - size[1] - margin).max(top)];
+        let origin = |corner| match corner { TopRight => [right, top], TopLeft => [left, top], BottomRight => [right, bottom], BottomLeft => [left, bottom] };
+        let free = |corner| {
+            let [x, y] = origin(corner);
+            !avoid.iter().any(|&[px, py]| (x - clearance..=x + size[0] + clearance).contains(&px) && (y - clearance..=y + size[1] + clearance).contains(&py))
+        };
+        let corner = [corner, TopRight, TopLeft, BottomRight, BottomLeft].into_iter().find(|&corner| free(corner)).unwrap_or(corner);
+        Self { origin: origin(corner), corner }
+    }
+}
+
+const SHAPE_CHOICES: [(ColorShape, &str, crate::MessageId); 3] = [
+    (ColorShape::Circle, "OKLCH", Id::NATIVE_COLOR_USE_CIRCLE),
+    (ColorShape::Square, "HSB", Id::NATIVE_COLOR_USE_SQUARE),
+    (ColorShape::Triangle, "HLS", Id::NATIVE_COLOR_USE_TRIANGLE),
+];
+
+impl ColorEditor {
+    pub fn for_slot(colors: &ColorState, slot: ColorSlot) -> Result<Self, ColorEditorError> {
+        if slot == ColorSlot::Transparent {
+            return Err("Choose foreground or background".into());
+        }
+        let mut picker = colors.clone();
+        picker.apply(ColorAction::Select { slot })?;
+        Ok(Self::with_picker(picker, false))
+    }
+    pub fn for_color(colors: &ColorState, color: RgbColor, opaque: bool) -> Result<Self, ColorEditorError> {
+        let mut picker = colors.clone();
+        picker.apply(ColorAction::Select { slot: ColorSlot::Foreground })?;
+        let mut color = color;
+        if opaque {
+            color.rgba[3] = 1.;
+        }
+        picker.set_color(color)?;
+        Ok(Self::with_picker(picker, opaque))
+    }
+    fn with_picker(picker: ColorState, opaque: bool) -> Self {
+        Self { start: picker.clone(), picker, opaque, scrub: None }
+    }
+    pub fn validate(&self) -> Result<(), String> {
+        self.picker.validate()?;
+        self.start.validate()?;
+        if self.opaque && self.picker.definition().rgba[3] != 1. {
+            return Err("Opaque colors keep full alpha".into());
+        }
+        Ok(())
+    }
+    pub fn picker(&self) -> &ColorState {
+        &self.picker
+    }
+    pub fn value(&self) -> RgbColor {
+        self.picker.definition()
+    }
+    pub fn intensity(&self) -> Option<f32> {
+        self.picker.hdr_picker.map(|_| self.picker.hdr_intensity())
+    }
+    pub fn changed(&self) -> bool {
+        self.picker.definition() != self.start.definition() || self.picker.hdr_intensity() != self.start.hdr_intensity()
+    }
+    pub fn memory(&self) -> &ColorEditorMemory {
+        &self.picker.editor
+    }
+    pub fn memory_changed(&self) -> bool {
+        self.picker.editor != self.start.editor
+    }
+    fn space(&self) -> RgbSpace {
+        self.picker.rgb_space
+    }
+    fn base(&self) -> RgbColor {
+        self.picker.picker_base()
+    }
+    fn alpha(&self) -> f32 {
+        self.picker.definition().rgba[3]
+    }
+    fn form(&self, row: usize) -> Result<ColorForm, ColorEditorError> {
+        self.picker.editor.forms.get(row).copied().ok_or_else(|| "Invalid color row".into())
+    }
+    fn row_values(&self, row: usize) -> Result<[f64; 3], ColorEditorError> {
+        Ok(self.form(row)?.values(self.base(), self.space(), Some(&self.picker))?)
+    }
+    pub fn apply(&mut self, action: ColorEditorAction) -> Result<(), ColorEditorError> {
+        let mut next = self.clone();
+        next.apply_action(action)?;
+        *self = next;
+        Ok(())
+    }
+    fn apply_action(&mut self, action: ColorEditorAction) -> Result<(), ColorEditorError> {
+        match action {
+            ColorEditorAction::Wheel { action } => match action {
+                ColorAction::PickWheel { .. } | ColorAction::Shape { .. } | ColorAction::HdrIntensity { .. } => self.picker.apply(action),
+                _ => Err("Unsupported color editor action".into()),
+            },
+            ColorEditorAction::Value { row, index, text } => {
+                let form = self.form(row)?;
+                let component = *form.components().get(index).ok_or("Invalid color value")?;
+                match parse_value(&text, component) {
+                    Ok(value) => {
+                        let mut values = self.row_values(row)?;
+                        values[index] = component.bound(value);
+                        self.set_row(form, values)
+                    }
+                    Err(reason) => match parse_color_text(&text, self.space(), Some(form)) {
+                        Ok(color) => self.set_base(color),
+                        Err(_) => Err(ColorEditorError::Numeric { name: component.name, reason }),
+                    },
+                }
+            }
+            ColorEditorAction::Scrub { target, pixels, speed } => self.scrub(target, pixels, speed),
+            ColorEditorAction::EndScrub { cancel } => {
+                if let Some(scrub) = self.scrub.take() && cancel {
+                    self.picker = scrub.picker;
+                }
+                Ok(())
+            }
+            ColorEditorAction::Intensity { text } => {
+                let stops = crate::numeric::parse_numeric_text(text.trim().trim_end_matches("EV").trim()).map_err(ColorEditorError::Intensity)?;
+                self.picker.apply(ColorAction::HdrIntensity { stops })
+            }
+            ColorEditorAction::Text { text, row } => {
+                let form = row.map(|row| self.form(row)).transpose()?;
+                let color = parse_color_text(&text, self.space(), form)?;
+                self.set_base(color)
+            }
+            ColorEditorAction::Form { row, form } => {
+                if form.family() != row {
+                    return Err("That format belongs to another row".into());
+                }
+                self.picker.editor.forms[row] = form;
+                Ok(())
+            }
+            ColorEditorAction::Color { mut color } => {
+                color.rgba[3] = self.alpha();
+                self.picker.set_color(color)?;
+                Ok(())
+            }
+            ColorEditorAction::Revert => {
+                let (shape, memory) = (self.picker.shape, self.picker.editor.clone());
+                self.picker = self.start.clone();
+                self.picker.shape = shape;
+                self.picker.editor = memory;
+                Ok(())
+            }
+            ColorEditorAction::Search { text } => {
+                if text.len() > MAX_SEARCH {
+                    return Err("Search text is too long".into());
+                }
+                self.picker.editor.search = text;
+                Ok(())
+            }
+        }
+    }
+    fn scrub(&mut self, target: ColorEditorTarget, pixels: f32, speed: ColorScrubSpeed) -> Result<(), ColorEditorError> {
+        if !pixels.is_finite() {
+            return Err("Invalid drag distance".into());
+        }
+        if self.scrub.as_ref().is_none_or(|scrub| scrub.target != target) {
+            let values = match target {
+                ColorEditorTarget::Value { row, .. } => self.row_values(row)?,
+                ColorEditorTarget::Intensity => [f64::from(self.intensity().ok_or("HDR intensity requires an HDR drawing")?), 0., 0.],
+            };
+            self.scrub = Some(Scrub { target, picker: self.picker.clone(), values });
+        }
+        let scrub = self.scrub.clone().unwrap();
+        self.picker = scrub.picker;
+        let steps = (f64::from(pixels) / SCRUB_PIXELS).round() * match speed {
+            ColorScrubSpeed::Normal => 1.,
+            ColorScrubSpeed::Fast => 10.,
+            ColorScrubSpeed::Fine => 0.1,
+        };
+        match target {
+            ColorEditorTarget::Value { row, index } => {
+                let form = self.form(row)?;
+                let component = *form.components().get(index).ok_or("Invalid color value")?;
+                let mut values = scrub.values;
+                values[index] = component.bound(values[index] + steps * component.step);
+                self.set_row(form, values)
+            }
+            ColorEditorTarget::Intensity => {
+                let stops = (scrub.values[0] + steps * SCRUB_INTENSITY_STEP).clamp(SCRUB_INTENSITY_RANGE.0, SCRUB_INTENSITY_RANGE.1);
+                self.picker.apply(ColorAction::HdrIntensity { stops: ((stops * 100.).round() / 100.) as f32 })
+            }
+        }
+    }
+    fn set_base(&mut self, mut base: RgbColor) -> Result<(), ColorEditorError> {
+        base.rgba[3] = self.alpha();
+        ColorState::validate_definition(base)?;
+        match self.intensity() {
+            Some(stops) => {
+                let paint = HdrPaint { base, stops };
+                let color = paint.color(self.space())?;
+                self.picker.set_color_with_picker(color, Some(paint))?;
+            }
+            None => self.picker.set_color(base)?,
+        }
+        Ok(())
+    }
+    fn set_row(&mut self, form: ColorForm, values: [f64; 3]) -> Result<(), ColorEditorError> {
+        self.set_base(form.color(values, self.space(), self.alpha())?)?;
+        let index = self.picker.index();
+        let hue = values[0] as f32;
+        let coordinates = self.picker.coordinates[index].as_mut().ok_or("Missing picker coordinates")?;
+        match form {
+            ColorForm::Hsb | ColorForm::Hsl => {
+                if form == ColorForm::Hsb {
+                    coordinates.hsv = values.map(|v| v as f32);
+                } else {
+                    coordinates.hls = [values[0], values[2], values[1]].map(|v| v as f32);
+                }
+                coordinates.hsv[0] = hue;
+                coordinates.hls[0] = hue;
+                self.picker.hues[index] = hue;
+            }
+            ColorForm::Oklch if values[1] < 1e-6 => coordinates.okhsv[0] = values[2] as f32,
+            _ => {}
+        }
+        Ok(())
+    }
+    pub fn view(&self, display: RgbSpace, rendition: Option<layer_core::color::hdr::SdrRendition>, localizer: &crate::Localizer) -> Result<ColorEditorView, String> {
+        let space = self.space();
+        let hdr = self.picker.hdr_picker.is_some();
+        let panel = match rendition {
+            Some(recipe) if hdr => self.picker.view_mapped(recipe, localizer),
+            _ => self.picker.view_in_localized(display, localizer),
+        };
+        let base = self.base();
+        let hex_note = if !base.in_gamut(RgbSpace::Srgb)? {
+            Some(ColorHexNote { kind: ColorHexNoteKind::Nearest, text: "≈".into(), tip: Some(localizer.text(Id::NATIVE_COLOR_NEAREST_SRGB)) })
+        } else if hdr {
+            Some(ColorHexNote { kind: ColorHexNoteKind::Base, text: localizer.text(Id::NATIVE_COLOR_BASE), tip: None })
+        } else if space != RgbSpace::Srgb {
+            Some(ColorHexNote { kind: ColorHexNoteKind::Srgb, text: "sRGB".into(), tip: None })
+        } else {
+            None
+        };
+        let rows = std::array::from_fn(|row| -> Result<ColorRowView, String> {
+            let form = self.picker.editor.forms[row];
+            let values = form.values(base, space, Some(&self.picker))?;
+            let components = form.components();
+            Ok(ColorRowView {
+                form,
+                label: form.label().text(localizer),
+                forms: COLOR_FORM_FAMILIES[row].iter().map(|form| ColorFormChoice { form: *form, label: form.label().text(localizer) }).collect(),
+                space: (row == 0).then(|| space.name()),
+                values: std::array::from_fn(|i| ColorValueView {
+                    text: components[i].display(values[i]),
+                    edit: components[i].edit(values[i]),
+                    name: components[i].name.text(localizer),
+                }),
+                copy: form.copy(values, space),
+            })
+        });
+        let [a, b, c] = rows;
+        Ok(ColorEditorView {
+            panel,
+            shapes: SHAPE_CHOICES.map(|(shape, label, name)| ColorShapeChoice { shape, label, name: localizer.text(name), selected: self.picker.shape == shape }),
+            current: form::mapped_preview(self.start.definition(), space, display, rendition)?,
+            new: form::mapped_preview(self.value(), space, display, rendition)?,
+            hex: ColorLibrary::hex_preview(base),
+            hex_note,
+            rows: [a?, b?, c?],
+            intensity: self.intensity().map(|stops| ColorValueView {
+                text: format!("{stops:+.2} EV"),
+                edit: trimmed(f64::from(stops), 2),
+                name: localizer.text(Id::NATIVE_COLOR_INTENSITY_EV),
+            }),
+            value: self.value(),
+            current_value: self.start.definition(),
+            stops: self.intensity(),
+            changed: self.changed(),
+            search: self.picker.editor.search.clone(),
+        })
+    }
+    pub fn strip(&self, sample: RgbColor) -> Result<ColorStripView, String> {
+        let space = self.space();
+        let (base, stops) = if self.picker.hdr_picker.is_some() {
+            let paint = HdrPaint::from_color(sample, space)?;
+            (paint.base, Some(paint.stops))
+        } else {
+            (sample, None)
+        };
+        let (label, form) = match self.picker.shape {
+            ColorShape::Circle => ("OKLCH", ColorForm::Oklch),
+            ColorShape::Square => ("HSB", ColorForm::Hsb),
+            ColorShape::Triangle => ("HLS", ColorForm::Hsl),
+        };
+        let mut values = form.values(base, space, None)?;
+        if form == ColorForm::Hsl {
+            values.swap(1, 2);
+        }
+        let components = form.components();
+        Ok(ColorStripView {
+            hex: ColorLibrary::hex_preview(base),
+            label,
+            values: std::array::from_fn(|i| components[if form == ColorForm::Hsl && i > 0 { 3 - i } else { i }].display(values[i])),
+            intensity: stops.map(|stops| format!("{stops:+.2} EV")),
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn hdr_known_refusals_are_typed_and_retain_the_draft() {
-        let localizer = crate::Localizer::shared(crate::UiLanguage::English);
-        let mut editor = ColorEditor::new(RgbColor::WHITE, RgbSpace::Srgb).unwrap();
-        editor.enable_hdr(0.).unwrap();
-        let before = editor.definition();
-        let reason = editor.set_intensity(16.).unwrap_err();
-        assert!(matches!(reason, ColorEditorError::Intensity(crate::NumericError::Range { max, .. }) if max == f64::from(65504f32.log2())));
-        assert_eq!(editor.definition(), before);
-        assert!(!reason.message(ColorInputModel::DocumentRgb, &localizer).is_empty());
-        assert!(matches!(editor.set_intensity(f32::NAN), Err(ColorEditorError::Intensity(crate::NumericError::FiniteNumber))));
-        editor.set_document_depth(layer_core::color::SampleDepth::F32);
-        editor.set_intensity(16.).unwrap();
-        assert!(matches!(super::super::hdr_picker::HdrPaint { base: RgbColor::WHITE, stops: 128. }.color(RgbSpace::Srgb), Err(ColorEditorError::Hdr(layer_core::color::hdr::HdrPixelError::FiniteCoverage))));
-        for reason in [layer_core::color::hdr::HdrPixelError::ExpectedFloat, layer_core::color::hdr::HdrPixelError::FiniteCoverage, layer_core::color::hdr::HdrPixelError::StorageRange] {
-            assert!(!ColorEditorError::Hdr(reason).message(ColorInputModel::DocumentRgb, &localizer).is_empty());
-        }
+    fn english() -> std::sync::Arc<crate::Localizer> { crate::Localizer::shared(crate::UiLanguage::English) }
+    fn colors(space: RgbSpace) -> ColorState {
+        let mut state = ColorState::default();
+        state.set_rgb_space(space).unwrap();
+        state
     }
+    fn editor(hex: u32) -> ColorEditor {
+        let rgb = [16, 8, 0].map(|shift| ((hex >> shift) & 0xff) as f32 / 255.);
+        ColorEditor::for_color(&colors(RgbSpace::Srgb), RgbColor::new(RgbSpace::Srgb, [rgb[0], rgb[1], rgb[2], 1.]).unwrap(), false).unwrap()
+    }
+    fn view(editor: &ColorEditor) -> ColorEditorView { editor.view(RgbSpace::Srgb, None, &english()).unwrap() }
+    fn texts(row: &ColorRowView) -> [&str; 3] { [0, 1, 2].map(|i| row.values[i].text.as_str()) }
+
     #[test]
-    fn hdr_numeric_draft_retains_exact_color_ev_black_and_alpha() {
-        for space in RgbSpace::ALL {
-            for linear in [[0.08, 0.02, 0.04, 0.37], [0., 0., 0., 0.25], [4., -0.2, 2., 0.8]] {
-                let original = RgbColor::from_linear(space, linear).unwrap();
-                let mut state = ColorState::default();
-                state.set_rgb_space(space).unwrap();
-                state.set_hdr_enabled(true).unwrap();
-                state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Foreground, color: original, stops: 2. }).unwrap();
-                let mut editor = ColorEditor::new(original, space).unwrap();
-                editor.enable_hdr(2.).unwrap();
-                for model in ColorInputModel::ALL {
-                    editor.set_model(model).unwrap();
-                    assert_eq!(editor.color().unwrap(), original);
-                    assert_eq!(editor.intensity(), Some(2.));
-                }
-                let untouched = state.clone();
-                state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Foreground, color: editor.color().unwrap(), stops: editor.intensity().unwrap() }).unwrap();
-                assert_eq!(state, untouched);
-                let base = editor.base_color().unwrap().linear_in(space).unwrap();
-                for c in 0..3 { assert!((base[c] - linear[c] / 4.).abs() < 1e-5); }
-                editor.set_intensity(3.).unwrap();
-                let next_base = editor.base_color().unwrap().linear_in(space).unwrap();
-                for c in 0..4 { assert!((base[c] - next_base[c]).abs() < 1e-5); }
-                let color = editor.color().unwrap().linear_in(space).unwrap();
-                for c in 0..3 { assert!((color[c] - linear[c] * 2.).abs() < 1e-5); }
-                assert_eq!(color[3], linear[3]);
-                state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Background, color: editor.color().unwrap(), stops: 3. }).unwrap();
-                state.validate().unwrap();
-                assert_eq!(state.hdr_intensity(), 3.);
-                assert_eq!(state.foreground, original);
-                state.apply(ColorAction::Select { slot: ColorSlot::Foreground }).unwrap();
-                state.apply(ColorAction::SetSlotIntensity { slot: ColorSlot::Background, color: editor.color().unwrap(), stops: 3. }).unwrap();
-                assert_eq!(state.slot, ColorSlot::Background);
-                assert_eq!(state.hdr_intensity(), 3.);
-                state.validate().unwrap();
-                editor.set_model(ColorInputModel::LinearRgb).unwrap();
-                editor.set_field(0, "0.25".into()).unwrap();
-                assert!((editor.base_color().unwrap().linear_in(space).unwrap()[0] - 0.25 / 8.).abs() < 1e-5);
-                editor.set_intensity(4.).unwrap();
-                assert!((editor.color().unwrap().linear_in(space).unwrap()[0] - 0.5).abs() < 1e-5);
-                let accepted = editor.color().unwrap();
-                for invalid in [f32::NAN, f32::INFINITY, -17., 17.] { assert!(editor.set_intensity(invalid).is_err()); }
-                assert_eq!(editor.color().unwrap(), accepted);
-                editor.set_field(0, "65504".into()).unwrap();
-                assert!(editor.set_intensity(5.).is_err());
-                assert_eq!(editor.intensity(), Some(4.));
+    fn rows_use_painter_units_and_copy_standard_notations() {
+        let view = view(&editor(0x3B7EA1));
+        assert_eq!(view.hex, "#3B7EA1");
+        assert_eq!(texts(&view.rows[0]), ["59", "126", "161"]);
+        assert_eq!(texts(&view.rows[1]), ["201°", "63%", "63%"]);
+        assert_eq!(texts(&view.rows[2]), ["56.5%", "0.087", "234°"]);
+        assert_eq!(view.rows[0].copy, "rgb(59 126 161)");
+        assert_eq!(view.rows[1].copy, "hsb(201 63% 63%)");
+        assert!(view.rows[2].copy.starts_with("oklch(56.4"));
+        assert_eq!(view.rows[0].space, Some("sRGB"));
+        assert!(view.hex_note.is_none());
+        let original = editor(0x3B7EA1).value().encoded_in(RgbSpace::Srgb).unwrap();
+        for row in &view.rows {
+            let pasted = parse_color_text(&row.copy, RgbSpace::Srgb, None).unwrap().encoded_in(RgbSpace::Srgb).unwrap();
+            assert!((0..3).all(|c| (pasted[c] - original[c]).abs() <= 1. / 255.), "{}", row.copy);
+        }
+        assert_eq!(ColorLibrary::hex_preview(parse_color_text(&view.rows[2].copy, RgbSpace::Srgb, None).unwrap()), "#3B7EA1");
+    }
+
+    #[test]
+    fn untouched_rows_keep_the_exact_definition_and_one_edit_changes_one_channel() {
+        let definition = RgbColor::new(RgbSpace::DisplayP3, [0.23137, 0.4941177, 0.631, 1.]).unwrap();
+        let mut editor = ColorEditor::for_color(&colors(RgbSpace::DisplayP3), definition, false).unwrap();
+        for row in 0..3 {
+            for form in COLOR_FORM_FAMILIES[row] {
+                editor.apply(ColorEditorAction::Form { row, form: *form }).unwrap();
+                assert_eq!(editor.value(), definition);
             }
         }
+        editor.apply(ColorEditorAction::Form { row: 0, form: ColorForm::Rgb }).unwrap();
+        editor.apply(ColorEditorAction::Value { row: 0, index: 0, text: "100".into() }).unwrap();
+        let encoded = editor.value().encoded_in(RgbSpace::DisplayP3).unwrap();
+        assert!((encoded[0] - 100. / 255.).abs() < 1e-6);
+        assert!((encoded[1] - 0.4941177).abs() < 1e-6 && (encoded[2] - 0.631).abs() < 1e-6);
+        assert!(editor.changed());
+        editor.apply(ColorEditorAction::Revert).unwrap();
+        assert_eq!(editor.value(), definition);
+        assert!(!editor.changed());
     }
+
     #[test]
-    fn model_changes_and_alpha_do_not_quantize_definitions() {
-        for space in RgbSpace::ALL {
-            let definition =
-                RgbColor::new(space, [-0.12, 1.2, 31234. / 65535., 213. / 65535.]).unwrap();
-            let mut editor = ColorEditor::new(definition, RgbSpace::Srgb).unwrap();
-            for model in ColorInputModel::ALL {
-                editor.set_model(model).unwrap();
-                assert_eq!(editor.color().unwrap(), definition);
-            }
-            editor.set_field(3, "37".into()).unwrap();
-            let color = editor.color().unwrap();
-            assert_eq!(color.space, space);
-            assert_eq!(color.rgba[..3], definition.rgba[..3]);
-            assert_eq!(color.rgba[3], 0.37);
-        }
+    fn pasting_a_whole_color_into_a_value_reads_it_in_full_and_refusals_keep_the_draft() {
+        let mut editor = editor(0x3B7EA1);
+        editor.apply(ColorEditorAction::Value { row: 0, index: 0, text: "rgb(202, 75, 53)".into() }).unwrap();
+        assert_eq!(view(&editor).hex, "#CA4B35");
+        editor.apply(ColorEditorAction::Value { row: 1, index: 0, text: "120 100 100".into() }).unwrap();
+        assert_eq!(view(&editor).hex, "#00FF00");
+        let before = editor.clone();
+        let refused = editor.apply(ColorEditorAction::Value { row: 0, index: 1, text: "lots".into() }).unwrap_err();
+        assert!(matches!(refused, ColorEditorError::Numeric { .. }));
+        assert!(refused.message(&english()).contains("Green"));
+        assert!(matches!(editor.apply(ColorEditorAction::Text { text: "#12".into(), row: None }), Err(ColorEditorError::ColorSyntax)));
+        assert_eq!(editor, before);
+        editor.apply(ColorEditorAction::Value { row: 1, index: 1, text: "250%".into() }).unwrap();
+        assert_eq!(texts(&view(&editor).rows[1])[1], "100%");
     }
+
     #[test]
-    fn numeric_entries_name_their_space_and_keep_extended_rgb() {
-        let mut editor = ColorEditor::new(RgbColor::WHITE, RgbSpace::DisplayP3).unwrap();
-        editor.set_field(0, "-0.1".into()).unwrap();
-        assert_eq!(editor.color().unwrap().space, RgbSpace::DisplayP3);
-        assert_eq!(editor.color().unwrap().rgba[0], -0.1);
-        editor.set_model(ColorInputModel::SrgbHex).unwrap();
-        editor.set_field(0, "#ff0033".into()).unwrap();
-        assert_eq!(
-            editor.color().unwrap(),
-            RgbColor::new(RgbSpace::Srgb, [1., 0., 0.2, 1.]).unwrap()
-        );
-        editor.set_model(ColorInputModel::Hsv).unwrap();
-        for (i, text) in ["120", "100", "100"].into_iter().enumerate() {
-            editor.set_field(i, text.into()).unwrap();
+    fn scrubbing_steps_from_the_drag_start_without_drift_and_cancel_restores() {
+        let mut editor = editor(0x3B7EA1);
+        let target = ColorEditorTarget::Value { row: 0, index: 0 };
+        for pixels in [4., 10., 40.] {
+            editor.apply(ColorEditorAction::Scrub { target, pixels, speed: ColorScrubSpeed::Normal }).unwrap();
         }
-        assert_eq!(
-            editor.color().unwrap(),
-            RgbColor::new(RgbSpace::DisplayP3, [0., 1., 0., 1.]).unwrap()
-        );
-        editor.set_model(ColorInputModel::Oklch).unwrap();
-        editor.set_field(1, "0.4".into()).unwrap();
-        assert!(!editor.color().unwrap().in_gamut(RgbSpace::Srgb).unwrap());
-        editor.set_field(1, "NaN".into()).unwrap();
-        assert!(editor.set_model(ColorInputModel::DocumentRgb).is_err());
-        assert_eq!(editor.model(), ColorInputModel::Oklch);
+        assert_eq!(texts(&view(&editor).rows[0]), ["79", "126", "161"]);
+        editor.apply(ColorEditorAction::Scrub { target, pixels: 40., speed: ColorScrubSpeed::Fast }).unwrap();
+        assert_eq!(texts(&view(&editor).rows[0])[0], "255");
+        editor.apply(ColorEditorAction::EndScrub { cancel: true }).unwrap();
+        assert_eq!(view(&editor).hex, "#3B7EA1");
+        let hue = ColorEditorTarget::Value { row: 1, index: 0 };
+        editor.apply(ColorEditorAction::Scrub { target: hue, pixels: 400., speed: ColorScrubSpeed::Normal }).unwrap();
+        editor.apply(ColorEditorAction::EndScrub { cancel: false }).unwrap();
+        assert_eq!(texts(&view(&editor).rows[1])[0], "41°");
+    }
+
+    #[test]
+    fn neutral_rows_keep_their_typed_hue() {
+        let mut editor = editor(0x808080);
+        editor.apply(ColorEditorAction::Value { row: 1, index: 0, text: "210".into() }).unwrap();
+        assert_eq!(texts(&view(&editor).rows[1])[0], "210°");
+        assert_eq!(view(&editor).hex, "#808080");
+        editor.apply(ColorEditorAction::Value { row: 2, index: 2, text: "33".into() }).unwrap();
+        assert_eq!(texts(&view(&editor).rows[2])[2], "33°");
+    }
+
+    #[test]
+    fn picking_strip_keeps_a_free_work_area_corner_without_oscillating() {
+        use ColorStripCorner::*;
+        let place = |area, avoid: &[[f32; 2]], corner| ColorStripPlacement::new(area, [272., 64.], 2., avoid, corner);
+        let wide = [100., 50., 800., 600.];
+        assert_eq!(place(wide, &[], TopRight), ColorStripPlacement { origin: [604., 74.], corner: TopRight });
+        assert_eq!(place(wide, &[[700., 100.]], TopRight), ColorStripPlacement { origin: [124., 74.], corner: TopLeft });
+        assert_eq!(place(wide, &[[700., 100.]], TopLeft).corner, TopLeft, "a strip that moved away stays put");
+        assert_eq!(place(wide, &[[200., 300.]], TopLeft).corner, TopLeft);
+        assert_eq!(place(wide, &[[200., 300.], [200., 100.]], TopLeft).corner, TopRight, "the pointer over the strip moves it too");
+        let narrow = [0., 0., 560., 800.];
+        let covered = place(narrow, &[[300., 60.]], TopRight);
+        assert_eq!(covered, ColorStripPlacement { origin: [264., 712.], corner: BottomRight }, "both top corners overlap the sample");
+        assert_eq!(place(narrow, &[[300., 60.]], covered.corner).corner, BottomRight);
+        assert_eq!(place([0., 0., 200., 100.], &[[100., 50.]], TopRight).corner, TopRight, "with no free corner the strip stays");
+    }
+
+    #[test]
+    fn wide_gamut_and_hdr_hex_notes_and_strip_follow_the_shape() {
+        let p3 = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 1.]).unwrap();
+        let editor = ColorEditor::for_color(&colors(RgbSpace::DisplayP3), p3, false).unwrap();
+        let view = view(&editor);
+        assert_eq!(view.hex_note.as_ref().map(|n| n.kind), Some(ColorHexNoteKind::Nearest));
+        assert_eq!(view.rows[0].space, Some("Display P3"));
+        assert!(view.rows[0].copy.starts_with("color(display-p3 1 0 0"));
+        let mut hdr = colors(RgbSpace::Srgb);
+        hdr.set_document_depth(layer_core::color::SampleDepth::F16).unwrap();
+        let bright = RgbColor::from_linear(RgbSpace::Srgb, [2., 1., 0.5, 1.]).unwrap();
+        let mut editor = ColorEditor::for_color(&hdr, bright, false).unwrap();
+        let view = editor.view(RgbSpace::Srgb, None, &english()).unwrap();
+        assert_eq!(view.hex_note.as_ref().map(|n| n.kind), Some(ColorHexNoteKind::Base));
+        assert_eq!(view.intensity.as_ref().unwrap().text, "+1.00 EV");
+        editor.apply(ColorEditorAction::Text { text: "#FFFFFF".into(), row: None }).unwrap();
+        assert_eq!(editor.intensity(), Some(1.));
+        assert!((editor.value().linear_in(RgbSpace::Srgb).unwrap()[0] - 2.).abs() < 1e-5);
+        let strip = editor.strip(bright).unwrap();
+        assert_eq!((strip.label, strip.intensity.as_deref()), ("OKLCH", Some("+1.00 EV")));
+        editor.apply(ColorEditorAction::Wheel { action: ColorAction::Shape { shape: ColorShape::Triangle } }).unwrap();
+        let strip = editor.strip(RgbColor::new(RgbSpace::Srgb, [0.2313725, 0.4941176, 0.6313725, 1.]).unwrap()).unwrap();
+        assert_eq!((strip.label, strip.values.clone()), ("HLS", ["201°".into(), "43%".into(), "46%".into()]));
+    }
+
+    #[test]
+    fn slots_opaque_targets_and_memory_are_validated() {
+        let mut state = colors(RgbSpace::Srgb);
+        state.apply(ColorAction::SetSlot { slot: ColorSlot::Background, color: RgbColor::BLACK }).unwrap();
+        let editor = ColorEditor::for_slot(&state, ColorSlot::Background).unwrap();
+        assert_eq!(editor.value(), RgbColor::BLACK);
+        assert!(ColorEditor::for_slot(&state, ColorSlot::Transparent).is_err());
+        let half = RgbColor::new(RgbSpace::Srgb, [1., 0., 0., 0.5]).unwrap();
+        let mut opaque = ColorEditor::for_color(&state, half, true).unwrap();
+        assert_eq!(opaque.value().rgba[3], 1.);
+        opaque.apply(ColorEditorAction::Color { color: half }).unwrap();
+        assert_eq!(opaque.value().rgba[3], 1.);
+        assert!(opaque.apply(ColorEditorAction::Form { row: 0, form: ColorForm::Hsl }).is_err());
+        opaque.apply(ColorEditorAction::Form { row: 1, form: ColorForm::Hsl }).unwrap();
+        opaque.apply(ColorEditorAction::Search { text: "sand".into() }).unwrap();
+        assert!(opaque.memory_changed());
+        assert_eq!(opaque.memory().forms[1], ColorForm::Hsl);
+        let mut json = serde_json::to_value(&opaque).unwrap();
+        json["picker"]["editor"]["forms"][1] = serde_json::json!("oklch");
+        let tampered: ColorEditor = serde_json::from_value(json).unwrap();
+        assert!(tampered.validate().is_err());
     }
 }

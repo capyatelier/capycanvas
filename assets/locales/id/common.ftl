@@ -257,11 +257,35 @@ native-color-edit-menu = Edit Warna…
 
 native-color-base = Dasar
 
-native-color-adjusted = Disesuaikan
 
-native-color-model = Model warna
 
 native-color-use-color = Gunakan Warna
+
+native-color-current = Saat ini
+
+native-color-new = Baru
+
+native-color-hex = Hex
+
+native-color-format = Format
+
+native-color-copied = Disalin
+
+native-color-pick-canvas = Ambil dari kanvas
+
+native-color-picking-strip = Mengambil warna dari kanvas. Tekan Escape, atau ketuk di sini, untuk kembali tanpa perubahan.
+
+native-color-nearest-srgb = Di luar sRGB. Hex menampilkan warna sRGB terdekat.
+
+native-color-all-swatches = Warna terbaru dan semua palet
+
+native-color-close-swatches = Tutup palet
+
+native-color-swatch-search = Cari palet, warna, atau hex
+
+native-color-swatch-matches = { $shown } dari { $total }
+
+native-color-swatch-no-match = Tidak ada palet atau warna yang cocok dengan “{ $query }”.
 
 native-color-palettes = Palet…
 

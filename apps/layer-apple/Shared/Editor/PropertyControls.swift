@@ -138,7 +138,7 @@ private struct PropertyField: View {
         case "color":
             HStack(spacing: 6) {
                 ManagedColorButton(label: label, identifier: "property-" + key, value: value,
-                    documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing, opaque: control["kind"]["opaque"].bool) { change($0.raw, revision: revision) }
+                    colors: store.displayColors, viewing: store.colorViewing, opaque: control["kind"]["opaque"].bool) { change($0.raw, revision: revision) }
                 if !control["color_action"].isNull {
                     IconTile(icon: "fill", label: nativeCopy["color"]["use_selected"].string) { store.dispatch(control["color_action"]) }
                         .frame(width: 40, height: 36).accessibilityIdentifier("property-\(key)-bucket")

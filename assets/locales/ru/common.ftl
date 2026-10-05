@@ -202,11 +202,35 @@ native-color-edit-menu = Изменить цвет…
 
 native-color-base = Основа
 
-native-color-adjusted = С коррекцией
 
-native-color-model = Цветовая модель
 
 native-color-use-color = Использовать цвет
+
+native-color-current = Текущий
+
+native-color-new = Новый
+
+native-color-hex = Hex
+
+native-color-format = Формат
+
+native-color-copied = Скопировано
+
+native-color-pick-canvas = Взять с холста
+
+native-color-picking-strip = Выбор цвета на холсте. Нажмите Escape или коснитесь здесь, чтобы вернуться без изменений.
+
+native-color-nearest-srgb = Вне sRGB. Hex показывает ближайший цвет sRGB.
+
+native-color-all-swatches = Недавние цвета и все палитры
+
+native-color-close-swatches = Закрыть образцы
+
+native-color-swatch-search = Искать палитры, цвета или hex
+
+native-color-swatch-matches = { $shown } из { $total }
+
+native-color-swatch-no-match = Нет палитр или цветов, подходящих под «{ $query }».
 
 native-color-palettes = Палитры…
 

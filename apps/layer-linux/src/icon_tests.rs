@@ -198,11 +198,10 @@ fn native_color_pair_updates() {
                 assert_eq!(patch.imp().key.get(), Some((state(&w).display_colors().foreground, base, w.picker_headroom())));
                 crate::color_editor::show(&w, Foreground);
                 pump(220);
-                let dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
-                assert_eq!(dialog.widget_name(), "edit-color-dialog");
-                assert!(!find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().is_visible(), "mask color editing has no HDR intensity");
-                let preview = named::<crate::display_color::ColorPatch>(dialog.upcast_ref(), "edit-color-preview");
-                assert_eq!(preview.imp().key.get().unwrap().1, base);
+                let editor = crate::color_editor::tests::editor(&w);
+                let dialog = editor.dialog.clone();
+                assert!(!editor.intensity.stack.is_visible(), "mask color editing has no HDR intensity");
+                assert_eq!(editor.new_patch.imp().key.get().unwrap().1, base);
                 capture_reference(&w, output.join(format!("{theme:?}-Mask-Editor.png")).to_str().unwrap(), 1.);
                 dialog.close();
                 pump(220);
@@ -240,9 +239,9 @@ fn native_color_pair_updates() {
         capture_reference(&w, output.join(format!("{theme:?}-workspace.png")).to_str().unwrap(), 1.);
         crate::color_editor::show(&w, Foreground);
         pump(220);
-        let dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
-        assert!(find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().is_visible(), "HDR artwork keeps its intensity editor");
-        dialog.close();
+        let editor = crate::color_editor::tests::editor(&w);
+        assert!(editor.intensity.stack.is_visible(), "HDR artwork keeps its intensity editor");
+        editor.dialog.close();
         pump(220);
     }
     input.finish();

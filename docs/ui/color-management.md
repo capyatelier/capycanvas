@@ -429,11 +429,11 @@ white of 203 cd/m². Unsupported AVIF profiles, transforms and gain-map layouts
 fail explicitly.
 The footer reports **HDR**, **SDR preview** or **Showing SDR**; click it for the
 screen details described above. New Drawing offers an **HDR drawing** preset.
-HDR Edit Color opens in **Linear RGB**, accepting above-white and negative
-values. Only HDR documents show the colored intensity arc below the hue ring.
+Only HDR documents show the colored intensity arc below the hue ring.
 Double-click resets it to 1× (0 EV); the angled EV caption is read-only. The
 upper-right pencil, or a double-click on either paint bubble, opens Edit Color,
-which includes editable EV and side-by-side Base / Adjusted previews. +2 EV
+whose rows show the base color with an editable Intensity (EV) row, and whose
+Current and New compare the full colors. +2 EV
 multiplies the circle/square/triangle field and paint bubbles by four in linear
 light; black stays black and alpha is unchanged. Hue and field edits retain the
 chosen intensity, and EV edits retain the marker. The field, ramp and bubbles

@@ -857,7 +857,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Some(e) = event.filter(|e| e.phase == PenPhase::Hover) {
                 self.picker_position([e.surface_position.x, e.surface_position.y]);
             } else if event.is_none() {
-                self.eyedropper.picking.position = None;
+                self.clear_picker_position();
                 self.eyedropper.cancel();
                 self.state.color_picker.preview = None;
             }
@@ -3311,6 +3311,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 (affected, false)
             }
+            UiAction::Color { action: ColorAction::EditorMemory { memory } } => {
+                self.state.colors.apply(ColorAction::EditorMemory { memory: memory.clone() })
+                    .and_then(|()| self.selection_masks.colors.apply(ColorAction::EditorMemory { memory }))
+                    .map_err(|reason| reason.message(self.localization()))?;
+                self.refresh_tools();
+                (BRUSH, false)
+            }
             UiAction::Color { action } => {
                 if self.selection_masks.target().is_some() {
                     self.mask_color_action(action)?;
@@ -3321,7 +3328,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("HDR intensity requires an HDR drawing".into());
                 }
                 self.state.colors.set_document_depth(self.engine.document().composition().color.depth)?;
-                self.state.colors.apply(action).map_err(|reason|reason.message(ColorInputModel::DocumentRgb, self.localization()))?;
+                self.state.colors.apply(action).map_err(|reason|reason.message(self.localization()))?;
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
                 (BRUSH, false)
@@ -3763,7 +3770,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !self.layer_interaction.tool.picks_color() {
                     self.eyedropper.picking.previous = None;
                     self.eyedropper.picking.finishing = false;
-                    self.eyedropper.picking.position = None;
+                    self.clear_picker_position();
                 }
                 self.state.color_picker.preview = None;
                 if explicit_color || revision != self.engine.document().revision { self.cancel_picker(); }
@@ -4409,9 +4416,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             && self.eyedropper.sample.is_none() && self.state.color_picker.preview.take().is_some() {
             changed |= regions::COLOR_PREVIEW;
         }
+        if self.eyedropper.editor && self.eyedropper.picking.published_point != self.state.color_picker.sample_point {
+            self.eyedropper.picking.published_point = self.state.color_picker.sample_point;
+            changed |= regions::COLOR_PREVIEW;
+        }
         if self.eyedropper.calibration.is_none() && self.eyedropper.picking.finishing && !self.eyedropper.busy() {
             if let Some(color) = self.eyedropper.sample {
-                if self.selection_masks.target().is_some() {
+                if self.eyedropper.editor {
+                    self.state.color_picker.picked = Some(color);
+                } else if self.selection_masks.target().is_some() {
                     self.mask_color_action(ColorAction::Definition { color })?;
                 } else {
                     self.state.colors.set_color(color)?;
@@ -5371,6 +5384,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
 
         self.state.color_picker.layer = self.eyedropper.layer;
+        self.eyedropper.editor &= self.eyedropper.picking.previous.is_some();
+        self.state.color_picker.editor = self.eyedropper.editor;
         self.state.color_picker.calibrating = self.eyedropper.calibration.is_some() || self.targeted_curve.is_some();
         self.state.color_picker.sample_width = if self.targeted_curve.is_some() {5} else {self.eyedropper.calibration.as_ref().map_or(self.eyedropper.area.width(), |calibration| calibration.width)};
         self.state.color_picker.sample_sizes = if self.targeted_curve.is_some() {&[5]} else {&COLOR_SAMPLE_WIDTHS};

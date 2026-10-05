@@ -202,11 +202,35 @@ native-color-edit-menu = Sửa màu…
 
 native-color-base = Gốc
 
-native-color-adjusted = Đã điều chỉnh
 
-native-color-model = Mô hình màu
 
 native-color-use-color = Dùng màu
+
+native-color-current = Hiện tại
+
+native-color-new = Mới
+
+native-color-hex = Hex
+
+native-color-format = Định dạng
+
+native-color-copied = Đã sao chép
+
+native-color-pick-canvas = Lấy từ khung vẽ
+
+native-color-picking-strip = Đang lấy màu từ khung vẽ. Nhấn Escape hoặc chạm vào đây để quay lại mà không thay đổi.
+
+native-color-nearest-srgb = Nằm ngoài sRGB. Hex hiển thị màu sRGB gần nhất.
+
+native-color-all-swatches = Màu gần đây và mọi bảng màu
+
+native-color-close-swatches = Đóng bảng màu
+
+native-color-swatch-search = Tìm bảng màu, màu hoặc hex
+
+native-color-swatch-matches = { $shown } / { $total }
+
+native-color-swatch-no-match = Không có bảng màu hoặc màu nào khớp với “{ $query }”.
 
 native-color-palettes = Bảng màu…
 

@@ -149,6 +149,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     internal var colorPreview by mutableStateOf<JSONObject?>(null)
         private set
+    internal var colorEditor by mutableStateOf<ColorEditorRequest?>(null)
     internal var keymapFile by mutableStateOf<JSONObject?>(null)
     private var modelSnapshot: JSONObject? = null // Native owner only.
     var surfaceReady by mutableStateOf(false)

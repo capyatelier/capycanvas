@@ -86,7 +86,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
         override val minimumTouchTargetSize = DpSize.Zero
     } }
     fun color(action: JSONObject) = host.dispatch(obj("type" to "color", "action" to action))
-    var edit by remember {mutableStateOf(false)}
+    val windowed = inSeparateWindow()
     Column {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val hdr=view.optBoolean("hdr")
@@ -113,7 +113,9 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
             Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")
                 .then(if(hdr) Modifier.hdrIntensityInput(view, ::color) else Modifier)) {
                 if(hdr)ColorIntensityArc(view,layout,Modifier.matchParentSize(),::color)
-                ColorWheel(host,view, Modifier.place(layout.array("wheel")), ::color)
+                val preview = host.colorPreview
+                ColorWheel(host, view, if (view.optBoolean("hdr")) (preview?.objectOrNull("colors") ?: host.snapshot!!.getJSONObject("state").displayColors()).toString() else "",
+                    preview?.objectOrNull("picker")?.objectOrNull("preview") != null, Modifier.place(layout.array("wheel")), ::color)
                 for (white in listOf(true, false)) {
                     val preset = view.array("quick_colors").objects().first { it.getBoolean("white") == white }
                     val key = if (white) "white" else "black"
@@ -146,7 +148,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                     Canvas(Modifier.matchParentSize()) { if (hovered) drawCircle(colors.text.copy(alpha = .12f)) }
                     SharedIcon("color-swap", null, Modifier.size(16.dp))
                 }
-                ColorButton(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit"),Modifier.place(layout.array("edit")).testTag("color-edit-button"),onClick={if(host.snapshot?.objectOrNull("state")?.displayColors()?.optString("slot")!="transparent")edit=true}) {_,_->SharedIcon("pencil",null,Modifier.size(16.dp))}
+                ColorButton(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit"),Modifier.place(layout.array("edit")).testTag("color-edit-button"),onClick={host.snapshot?.objectOrNull("state")?.displayColors()?.optString("slot")?.takeIf{it!="transparent"}?.let{slot->editSlot(host,slot,windowed)}}) {_,_->SharedIcon("pencil",null,Modifier.size(16.dp))}
                 val readoutClip = remember(layout) { ReadoutCorner(layout.array("wheel").getDouble(2).toFloat() * view.getJSONObject("geometry").number("outer") + 2f) }
                 ColorButton(view.getString("readout_description"), Modifier.place(layout.array("readout")).testTag("color-readout"),
                     shape = readoutClip, showFocusRing = false, onClick = { color(obj("op" to "toggle_readout")) }) { focused, _ ->
@@ -156,13 +158,12 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
         }
     }
     }
-    if(edit) {
-        val state=host.snapshot!!.getJSONObject("state").displayColors()
-        val slot=state.getString("slot")
-        var intensity:Float?=null
-        ColorEditorDialog(host,state.getJSONObject(slot),{edit=false},initialIntensity=if(view.optBoolean("hdr"))view.number("intensity")else null,onIntensity={intensity=it}) {selected->
-            edit=false;color(if(intensity!=null)obj("op" to "set_slot_intensity","slot" to slot,"color" to selected,"stops" to intensity)else obj("op" to "set_slot","slot" to slot,"color" to selected))
-        }
+}
+
+internal fun editSlot(host: CanvasHost, slot: String, windowed: Boolean) {
+    host.colorEditor = ColorEditorRequest(slot, null, false, windowed) { selected, intensity ->
+        host.dispatch(obj("type" to "color", "action" to if (intensity != null) obj("op" to "set_slot_intensity", "slot" to slot, "color" to selected, "stops" to intensity)
+            else obj("op" to "set_slot", "slot" to slot, "color" to selected)))
     }
 }
 
@@ -200,13 +201,13 @@ private class ReadoutCorner(private val radius: Float) : Shape {
     val slot = swatch.getString("slot")
     val selected = swatch.getBoolean("selected")
     var menu by remember { mutableStateOf(false) }
-    var edit by remember { mutableStateOf(false) }
     var lastTap by remember { mutableLongStateOf(0L) }
+    val windowed = inSeparateWindow()
     val tapTimeout = LocalViewConfiguration.current.doubleTapTimeoutMillis
     fun select() {
         color(obj("op" to "select", "slot" to slot))
         val now=android.os.SystemClock.uptimeMillis()
-        if(slot!="transparent" && now-lastTap<=tapTimeout) { edit=true;lastTap=0 } else lastTap=now
+        if(slot!="transparent" && now-lastTap<=tapTimeout) { editSlot(host, if (slot == "background") "background" else "foreground", windowed);lastTap=0 } else lastTap=now
     }
     val focusedWindow = LocalWindowInfo.current.isWindowFocused
     ColorButton(swatch.getString("label"), modifier.testTag("color-swatch-$slot").semantics { this.selected = selected }.clip(CircleShape)
@@ -269,17 +270,8 @@ private class ReadoutCorner(private val radius: Float) : Shape {
             val stroke = (if (selected || hovered) 2.dp else 1.dp).toPx()
             drawCircle(colors.text.copy(alpha = if (selected || hovered) 1f else .25f), radius - stroke / 2, style = Stroke(stroke))
         }
-        if (edit) {
-            val paintSlot = if (slot == "background") "background" else "foreground"
-            val definition = host.snapshot!!.getJSONObject("state").displayColors().getJSONObject(paintSlot)
-            var intensity:Float?=null
-            val view=host.snapshot!!.getJSONObject("color_panel")
-            ColorEditorDialog(host, definition, { edit = false },initialIntensity=if(view.optBoolean("hdr"))view.number("intensity")else null,onIntensity={intensity=it}) { selected ->
-                edit = false; color(if(intensity!=null)obj("op" to "set_slot_intensity", "slot" to paintSlot, "color" to selected,"stops" to intensity)else obj("op" to "set_slot", "slot" to paintSlot, "color" to selected))
-            }
-        }
         DropdownMenu(menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit_menu")) }, onClick = { menu = false;color(obj("op" to "select","slot" to slot)); edit = true })
+            DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit_menu")) }, onClick = { menu = false;color(obj("op" to "select","slot" to slot)); editSlot(host, if (slot == "background") "background" else "foreground", windowed) })
             DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("palettes")) }, modifier = Modifier.testTag("color-library-menu"),
                 onClick = { menu = false; if (slot != "transparent") color(obj("op" to "select", "slot" to slot)); host.revealPanel("palettes") })
             DropdownMenuItem(text = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("swap")) }, leadingIcon = { SharedIcon("color-swap", null) },
@@ -294,7 +286,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
         hdr==other.hdr && rendition==other.rendition && preview==other.preview && (preview || this==other)
 }
 
-@Composable private fun ColorWheel(host:CanvasHost,view: JSONObject, modifier: Modifier, color: (JSONObject) -> Unit) {
+@Composable internal fun ColorWheel(host:CanvasHost,view: JSONObject, fieldColors: String, previewing: Boolean, modifier: Modifier, color: (JSONObject) -> Unit) {
     val shape = view.getString("shape")
     val rgbSpace = view.getString("rgb_space")
     val hue = view.array("wheel_components").getDouble(0).toFloat()
@@ -312,10 +304,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
         val pixels = ceil(maxWidth.value * if (shape == "circle") 1f else density).toInt().coerceIn(1, 2048)
         // Like GTK/Web, sample the smooth disc once per logical pixel. Keep the
         // ring, clip, triangle and marker outlines at the tablet's physical DPI.
-        val preview = host.colorPreview
-        val request = ColorFieldRequest(shape, hue, pixels, rgbSpace, view.optBoolean("hdr"),
-            if(view.optBoolean("hdr"))(preview?.objectOrNull("colors") ?: host.snapshot!!.getJSONObject("state").displayColors()).toString() else "",
-            view.optJSONObject("rendition")?.toString(), preview?.objectOrNull("picker")?.objectOrNull("preview") != null)
+        val request = ColorFieldRequest(shape, hue, pixels, rgbSpace, view.optBoolean("hdr"), fieldColors, view.optJSONObject("rendition")?.toString(), previewing)
         val requests = remember { Channel<ColorFieldRequest>(Channel.CONFLATED) }
         val latest by rememberUpdatedState(request)
         var field by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -458,7 +447,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
     }
 }
 
-@Composable private fun Modifier.hdrIntensityInput(view:JSONObject,color:(JSONObject)->Unit):Modifier {
+@Composable internal fun Modifier.hdrIntensityInput(view:JSONObject,color:(JSONObject)->Unit):Modifier {
     val host = LocalCanvasHost.current
     val current by rememberUpdatedState(view)
     val action by rememberUpdatedState(color)
@@ -480,7 +469,7 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
     }
 }
 
-@Composable private fun ColorIntensityArc(view:JSONObject,layout:JSONObject,modifier:Modifier,color:(JSONObject)->Unit) {
+@Composable internal fun ColorIntensityArc(view:JSONObject,layout:JSONObject,modifier:Modifier,color:(JSONObject)->Unit,caption:Boolean=true) {
     val host=LocalCanvasHost.current
     val action by rememberUpdatedState(color)
     val density=LocalDensity.current.density
@@ -493,8 +482,8 @@ private data class ColorFieldRequest(val shape:String,val hue:Float,val pixels:I
             val g=arc.getJSONObject("geometry")
             val path=arc.array("path");val ramp=view.array("intensity_ramp")
             for(i in 0 until path.length()-1)drawLine(ramp.getJSONArray(i).color(),path.getJSONArray(i).point(1f),path.getJSONArray(i+1).point(1f),g.number("width"),cap=StrokeCap.Round)
-            val caption=layout.array("intensity_caption");val x=caption.getDouble(0).toFloat();val y=caption.getDouble(1).toFloat();val font=caption.getDouble(2).toFloat()
-            drawIntoCanvas{canvas->canvas.nativeCanvas.drawText("%+.2f EV".format(view.number("intensity")),x,y,Paint(Paint.ANTI_ALIAS_FLAG).apply{this.color=android.graphics.Color.GRAY;textSize=font;textAlign=Paint.Align.CENTER})}
+            if(caption){val place=layout.array("intensity_caption");val x=place.getDouble(0).toFloat();val y=place.getDouble(1).toFloat();val font=place.getDouble(2).toFloat()
+            drawIntoCanvas{canvas->canvas.nativeCanvas.drawText("%+.2f EV".format(view.number("intensity")),x,y,Paint(Paint.ANTI_ALIAS_FLAG).apply{this.color=android.graphics.Color.GRAY;textSize=font;textAlign=Paint.Align.CENTER})}}
             val p=arc.array("point").point(1f);val markerRadius=g.number("marker_radius")
             drawCircle(view.array("marker_color").color(),markerRadius,p)
             drawCircle(Color.Black.copy(alpha=.5f),markerRadius,p,style=Stroke(4f))

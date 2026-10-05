@@ -79,6 +79,7 @@ mod imp {
         pub(crate) texture: RefCell<Option<(ArcKey, gdk::Texture)>>,
         pub preview: Cell<bool>,
         pub resizing: Cell<bool>,
+        pub caption_hidden: Cell<bool>,
         pub(super) raster: crate::color_preview_raster::PreviewRaster<ArcKey, ArcKey>,
         pub(super) paths: RefCell<Option<ArcPaths>>,
     }
@@ -159,6 +160,7 @@ mod imp {
                     gtk::graphene::Rect::new(cx-r, cy-r, r*2., r*2.), r), &[2.;4], &[ink;4]);
             }
             snapshot.append_stroke(&paths.zero, &gtk::gsk::Stroke::new(1.), &ink);
+            if self.caption_hidden.get() { return; }
             // Retained text stays below the compact swatch groups.
             let [x, y, font] = layer_ui::ColorPanelLayout::with_hdr(obj.width() as f32)
                 .unwrap().intensity_caption.map(f64::from);
@@ -258,6 +260,9 @@ impl HdrColorScale {
         ))]);
         self.set_tooltip_text(Some("Color intensity · Double-click to reset to 1× (0 EV)"));
         self.imp().updating.set(false);
+    }
+    pub fn hide_caption(&self) {
+        self.imp().caption_hidden.set(true);
     }
     pub fn updating(&self) -> bool {
         self.imp().updating.get()

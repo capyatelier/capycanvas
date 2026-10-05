@@ -305,34 +305,17 @@ color-above-sdr-white = Выше белого SDR.
 color-features-export-finishing-file = Завершение файла…
 color-features-export-writing-image = Запись изображения…
 
-color-form-model-document-rgb = RGB документа
 color-form-model-linear-rgb = Линейный RGB
-color-form-model-srgb-hex = Шестнадцатеричный sRGB
-color-form-model-hsv = HSV (RGB документа)
-color-form-model-hls = HLS (RGB документа)
-color-form-model-oklch = OKLCH
-color-form-field-red-encoded = Красный (кодированный)
-color-form-field-green-encoded = Зелёный (кодированный)
-color-form-field-blue-encoded = Синий (кодированный)
-color-form-field-red-linear = Красный (линейный)
-color-form-field-green-linear = Зелёный (линейный)
-color-form-field-blue-linear = Синий (линейный)
-color-form-field-alpha = Альфа (%)
-color-form-field-hex = Шестнадцатеричный sRGB (#RRGGBB)
 color-form-field-hue = Тон (°)
 color-form-field-saturation = Насыщенность (%)
 color-form-field-value = Яркость (%)
 color-form-field-lightness = Светлота (%)
 color-form-field-chroma = Цветность
-color-form-document-srgb = RGB документа: sRGB.
-color-form-document-display-p3 = RGB документа: Display P3.
-color-form-document-adobe-rgb = RGB документа: Adobe RGB (1998).
-color-form-document-prophoto = RGB документа: ProPhoto RGB.
-color-form-reference-white = 1 = эталонный белый.
-color-form-hex-description = Шестнадцатеричная запись использует 8-битный sRGB.
 
 
 color-form-finite-field = Для поля «{ $label }» введите конечное число.
+
+color-form-color-syntax = Введите hex-код, например #3B7EA1, или цвет, например rgb(59 126 161).
 
 color-properties-title = Свойства документа
 color-properties-canvas-size = Размер холста
@@ -356,11 +339,6 @@ color-properties-retained-rasterized = Растеризовано в коорд�
 color-properties-retained-icc = Исходные данные и встроенный ICC сохранены.
 color-properties-retained-original = Исходные данные и интерпретация цвета сохранены.
 
-color-form-entries-too-long = Значения цвета должны занимать не более 128 байт.
-color-form-alpha-range = Альфа должна быть от 0 до 100%.
-color-form-hex-syntax = Используйте #RGB или #RRGGBB; альфа редактируется отдельно.
-color-form-percent-range = Насыщенность, светлота и значение должны быть от 0 до 100%.
-color-form-negative-lightness-chroma = Светлота и цветность не могут быть отрицательными.
 
 color-profile-select-imported = Выберите импортированный профиль.
 color-profile-read-limit = Размер профиля ICC превышает 16 MiB.

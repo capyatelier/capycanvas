@@ -319,9 +319,11 @@ export async function checkColorPanel({call,evaluate,settle}) {
     await send({type:'customize',action:{type:'open_control',control:'brush_color'}});
     const definition=(await pairView()).definition;
     await gesture('mouse',await point('.tile-popover:popover-open .property-color'));
-    const draft=await evaluate(`(()=>{const model=document.querySelector('.color-dialog select');model.value='srgb_hex';model.dispatchEvent(new Event('change'));return document.querySelector('.color-dialog [data-color-field="0"]').value;})()`);
-    assert.equal(draft,(await evaluate(`layerApp.app.color_ui({type:'form',request:{color:${JSON.stringify(definition)},document_space:'Srgb',model:'srgb_hex'}})`)).draft.fields[0],'Compact editor opens the active definition');
-    await evaluate(`(()=>{const field=document.querySelector('.color-dialog [data-color-field="0"]');field.value=${JSON.stringify(hex)};field.dispatchEvent(new Event('input'));})()`);
+    await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();(function poll(){if(document.querySelector('.color-dialog[open] .color-value[data-color-value="hex"]'))resolve();else if(performance.now()-start>10000)reject(Error('Edit Color did not open'));else setTimeout(poll,20);})();})`);
+    const draft=await evaluate(`document.querySelector('.color-dialog[open] .color-value[data-color-value="hex"]').textContent`);
+    assert.equal(draft,await evaluate(`layerApp.app.color_ui({type:'editor_open',colors:layerApp.state().layer_tools.mask_editing?.colors??layerApp.state().colors,color:${JSON.stringify(definition)},display_space:'Srgb',rendition:null}).view.hex`),'Compact editor opens the active definition');
+    await evaluate(`document.querySelector('.color-dialog[open] .color-value[data-color-value="hex"]').click()`);
+    await evaluate(`(()=>{const field=document.querySelector('.color-dialog[open] .color-value-input[data-color-value="hex"]');field.value=${JSON.stringify(hex)};field.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));})()`);
     const before=await read();await gesture('mouse',await point('.color-dialog .suggested-action'));
     assert.notDeepEqual((await read())[slot],before[slot],`Compact editing changes ${slot}`);
     for(const other of ['foreground','background','temporary'].filter(s=>s!==slot))assert.deepEqual((await read())[other],before[other],`Compact editing preserves ${other}`);

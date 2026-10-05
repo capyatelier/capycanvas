@@ -202,6 +202,14 @@ pub(crate) fn response(w: &Rc<Workspace>, id: &str) {
         until(|| !dialog.is_mapped(), "profile library dismissal");
         return;
     }
+    if w.window.visible_dialog().is_some_and(|d| d.widget_name() == "edit-color-dialog") {
+        let dialog = w.window.visible_dialog().unwrap();
+        let button = named::<gtk::Button>(dialog.upcast_ref(), &format!("edit-color-{id}"));
+        assert!(button.is_sensitive(), "{id} disabled");
+        click(&button);
+        until(|| !dialog.is_mapped(), "Edit Color dismissal");
+        return;
+    }
     let dialog = w
         .window
         .visible_dialog()

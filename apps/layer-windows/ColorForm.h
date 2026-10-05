@@ -1,7 +1,7 @@
 #pragma once
 #include "UiControls.h"
 #include <array>
-#include <tuple>
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
 
 namespace CapyUi {
 inline V colorUi(CapyLocalization const* localization,J const& request) {
@@ -16,108 +16,155 @@ inline Windows::UI::Color previewColor(A const& a){
     return {byte(3),byte(0),byte(1),byte(2)};
 }
 inline Windows::UI::Color displayColor(J const& value){return previewColor(array(value,L"rgba"));}
-// Native draft controls; Rust owns coordinates, parsing, conversion and precision.
+inline void copyText(hstring const& text){
+    Windows::ApplicationModel::DataTransfer::DataPackage package;package.SetText(text);
+    Windows::ApplicationModel::DataTransfer::Clipboard::SetContent(package);
+}
+// Native value rows; Rust owns the draft, parsing, conversion and formats.
 struct ColorForm : std::enable_shared_from_this<ColorForm> {
     std::shared_ptr<WorkspaceData> data;
     explicit ColorForm(std::shared_ptr<WorkspaceData> context):data(std::move(context)){}
     StackPanel root;
-    ComboBox model;
-    TextBox intensity;
-    std::array<TextBox,4> entries;
-    TextBlock description,error;
-    Grid comparison;
-    StackPanel baseFigure,adjustedFigure;
-    Border basePreview,preview;
-    TextBlock adjustedLabel;
-    hstring modelsKey,language;
-    Button apply;
-    J view;
-    std::optional<hstring> diagnostic;
+    Grid pair,rows;
+    Border current,preview;
+    TextBox hex,intensity;
+    Button hexCopy,apply;
+    std::array<ComboBox,3> forms;
+    std::array<TextBlock,3> spaces;
+    std::array<std::array<TextBox,3>,3> values;
+    std::array<Button,3> copies;
+    TextBlock hexLabel,intensityLabel,error;
+    J editor,view,rendition;
+    std::optional<J> refused;
+    hstring source,language;
     bool updating=false;
-    hstring source;
-    std::function<void(J)> commit;
-    void present(bool fieldsChanged){
+    std::function<void(J,std::optional<double>)> commit;
+    std::optional<hstring> send(std::optional<J> action){
+        auto request=O({{L"type",S(L"editor")},{L"editor",editor},{L"display_space",S(L"Srgb")},{L"rendition",rendition}});
+        if(action)request.Insert(L"action",*action);
+        auto next=colorUi(data->localization.get(),request).GetObject();
+        if(!next.HasKey(L"editor"))return str(next,L"error");
+        editor=object(next,L"editor");view=object(next,L"view");
+        auto failure=next.GetNamedValue(L"error",JsonValue::CreateNullValue());
+        if(failure.ValueType()==JsonValueType::String)return failure.GetString();
+        return std::nullopt;
+    }
+    void act(J const& action){
+        std::optional<hstring> failure;
+        try{failure=send(action);}catch(hresult_error const& e){failure=e.message();}
+        if(failure)refused=action;else refused.reset();
+        error.Text(failure.value_or(L""));apply.IsEnabled(!failure);present();
+    }
+    void present(){
         updating=true;
-        auto draft=object(view,L"draft");auto choices=array(view,L"models");
-        A ids;for(auto item:choices)ids.Append(item.GetArray().GetAt(0));
-        if(auto key=ids.Stringify();key!=modelsKey){
-            modelsKey=key;model.Items().Clear();
-            for(uint32_t i=0;i<choices.Size();++i)comboOption(model,choices.GetArrayAt(i).GetStringAt(1));
+        auto shown=[](TextBox const& box,hstring const& text){if(box.FocusState()==FocusState::Unfocused&&box.Text()!=text)box.Text(text);};
+        current.Background(fill(displayColor(object(view,L"current"))));preview.Background(fill(displayColor(object(view,L"new"))));
+        shown(hex,str(view,L"hex"));
+        auto shownRows=array(view,L"rows");
+        for(uint32_t row=0;row<3&&row<shownRows.Size();++row){
+            auto item=shownRows.GetObjectAt(row);auto choices=array(item,L"forms");
+            if(forms[row].Items().Size()!=choices.Size()){forms[row].Items().Clear();for(auto choice:choices)comboOption(forms[row],str(choice.GetObject(),L"label"),str(choice.GetObject(),L"form"));}
+            for(uint32_t i=0;i<choices.Size();++i){
+                comboOptionText(forms[row],i,str(choices.GetObjectAt(i),L"label"));
+                if(str(choices.GetObjectAt(i),L"form")==str(item,L"form")&&forms[row].SelectedIndex()!=int32_t(i))forms[row].SelectedIndex(i);
+            }
+            AutomationProperties::SetName(forms[row],str(item,L"label"));
+            auto space=item.GetNamedValue(L"space",JsonValue::CreateNullValue());
+            spaces[row].Text(space.ValueType()==JsonValueType::String?space.GetString():L"");
+            auto entries=array(item,L"values");
+            for(uint32_t i=0;i<3&&i<entries.Size();++i){
+                auto value=entries.GetObjectAt(i);
+                AutomationProperties::SetName(values[row][i],str(value,L"name"));
+                shown(values[row][i],str(value,L"text"));
+            }
         }
-        for(uint32_t i=0;i<choices.Size();++i)comboOptionText(model,i,choices.GetArrayAt(i).GetStringAt(1));
-        for(uint32_t i=0;i<choices.Size();++i)if(choices.GetArrayAt(i).GetStringAt(0)==str(draft,L"model")&&model.SelectedIndex()!=int32_t(i))model.SelectedIndex(i);
-        auto fields=array(draft,L"fields"),labels=array(view,L"labels");
-        for(uint32_t i=0;i<4;++i){
-            entries[i].Visibility(labels.GetStringAt(i).empty()?Visibility::Collapsed:Visibility::Visible);
-            entries[i].Header(box_value(labels.GetStringAt(i)));
-            AutomationProperties::SetName(entries[i],labels.GetStringAt(i));
-            if(fieldsChanged&&entries[i].FocusState()==FocusState::Unfocused&&entries[i].Text()!=fields.GetStringAt(i))entries[i].Text(fields.GetStringAt(i));
-        }
-        auto shown=object(view,L"preview"),base=object(view,L"base_preview");
-        preview.Background(shown.Size()?fill(displayColor(shown)):clear());
-        baseFigure.Visibility(base.Size()?Visibility::Visible:Visibility::Collapsed);adjustedLabel.Visibility(base.Size()?Visibility::Visible:Visibility::Collapsed);
-        Grid::SetColumnSpan(adjustedFigure,base.Size()?1:2);Grid::SetColumn(adjustedFigure,base.Size()?1:0);
-        if(base.Size())basePreview.Background(fill(displayColor(base)));
-        description.Text(str(view,L"description"));error.Text(diagnostic.value_or(str(view,L"error",str(view,L"validation"))));
-        if(fieldsChanged)apply.IsEnabled(!diagnostic&&view.GetNamedValue(L"value").ValueType()==JsonValueType::Object&&str(view,L"error").empty());
-        auto stops=draft.GetNamedValue(L"intensity",JsonValue::CreateNullValue());intensity.Visibility(stops.ValueType()==JsonValueType::Number?Visibility::Visible:Visibility::Collapsed);
-        if(fieldsChanged&&stops.ValueType()==JsonValueType::Number)intensity.Text(str(draft,L"change_intensity_text",to_hstring(stops.GetNumber())));
-        auto modelText=data->caption(L"color",L"model"),intensityText=data->caption(L"color",L"intensity_ev"),applyText=data->common(L"apply");
-        model.Header(box_value(modelText));AutomationProperties::SetName(model,modelText);
-        intensity.Header(box_value(intensityText));AutomationProperties::SetName(intensity,intensityText);
-        apply.Content(box_value(applyText));AutomationProperties::SetName(apply,applyText);root.Language(data->language());language=data->language();
+        auto stops=view.GetNamedValue(L"intensity",JsonValue::CreateNullValue());
+        auto hdr=stops.ValueType()==JsonValueType::Object;
+        intensity.Visibility(hdr?Visibility::Visible:Visibility::Collapsed);intensityLabel.Visibility(intensity.Visibility());
+        if(hdr)shown(intensity,str(stops.GetObject(),L"text"));
+        auto copy=[&](wchar_t const* key){return data->caption(L"color",key);};
+        hexLabel.Text(copy(L"hex"));intensityLabel.Text(copy(L"intensity_ev"));
+        AutomationProperties::SetName(hex,copy(L"hex"));AutomationProperties::SetName(intensity,copy(L"intensity_ev"));
+        for(auto const& button:copies)AutomationProperties::SetName(button,copy(L"copy"));
+        AutomationProperties::SetName(hexCopy,copy(L"copy"));
+        AutomationProperties::SetName(current,copy(L"current"));AutomationProperties::SetName(preview,copy(L"new"));
+        apply.Content(box_value(copy(L"use_color")));AutomationProperties::SetName(apply,copy(L"use_color"));
+        root.Language(data->language());language=data->language();
         updating=false;
     }
     void relocalize(){
-        if(!view.HasKey(L"copy")||language==data->language())return;
-        auto copy=colorUi(data->localization.get(),O({{L"type",S(L"form_copy")},{L"copy",object(view,L"copy")}})).GetObject();
-        for(auto key:{L"models",L"labels",L"description",L"validation",L"error"})view.Insert(key,copy.GetNamedValue(key));
-        present(false);
+        if(!view.Size()||language==data->language())return;
+        try{send(std::nullopt);if(refused){if(auto failure=send(*refused))error.Text(*failure);}}catch(hresult_error const& e){error.Text(e.message());}
+        present();
     }
-    bool refresh(J request){
-        auto next=colorUi(data->localization.get(),O({{L"type",S(L"form")},{L"request",request}})).GetObject();
-        if(!next.HasKey(L"draft")){diagnostic=str(next,L"error");error.Text(*diagnostic);apply.IsEnabled(false);return false;}
-        diagnostic.reset();view=next;present(true);
-        return true;
-    }
-    J draft(){auto request=J::Parse(object(view,L"draft").Stringify());A fields;for(auto entry:entries)fields.Append(S(entry.Text()));request.Insert(L"fields",fields);if(intensity.Visibility()==Visibility::Visible)request.Insert(L"change_intensity_text",S(intensity.Text()));return request;}
-    void load(J const& color,hstring const& space,J const& panel=J{},bool paint=false,bool opaque=false){
-        auto request=O({{L"color",color},{L"document_space",S(space)},{L"opaque",B(opaque)}});
-        if(flag(panel,L"hdr")){request.Insert(L"document_depth",S(str(panel,L"document_depth")));if(paint)request.Insert(L"intensity",N(num(panel,L"intensity")));request.Insert(L"rendition",object(panel,L"rendition"));}
+    void load(J const& colors,J const& target,bool opaque,J const& panel){
+        rendition=object(panel,L"rendition");
+        auto request=O({{L"type",S(L"editor_open")},{L"colors",colors},{L"opaque",B(opaque)},{L"display_space",S(L"Srgb")},{L"rendition",rendition}});
+        for(auto const& [key,value]:target)request.Insert(key,value);
         auto next=request.Stringify();if(next==source){relocalize();return;}source=next;
-        if(view.HasKey(L"draft"))request.Insert(L"model",S(str(object(view,L"draft"),L"model")));
-        refresh(request);
+        try{
+            auto opened=colorUi(data->localization.get(),request).GetObject();
+            if(!opened.HasKey(L"editor")){error.Text(str(opened,L"error"));apply.IsEnabled(false);return;}
+            editor=object(opened,L"editor");view=object(opened,L"view");refused.reset();error.Text(L"");apply.IsEnabled(true);
+        }catch(hresult_error const& e){error.Text(e.message());apply.IsEnabled(false);return;}
+        present();
     }
-    void init(std::function<void(J)> action,hstring const& id){
-        commit=std::move(action);root.Spacing(6);auto weak=weak_from_this();
-        for(int i=0;i<2;++i){ColumnDefinition column;column.Width({1,GridUnitType::Star});comparison.ColumnDefinitions().Append(column);}
-        comparison.ColumnSpacing(8);
-        for(auto [figure,swatch,key]:{std::tuple{baseFigure,basePreview,L"base"},std::tuple{adjustedFigure,preview,L"adjusted"}}){
-            swatch.MinHeight(48);swatch.CornerRadius({6,6,6,6});figure.Spacing(4);
-            auto name=label(data,data->copyCaption(L"color",key));name.Opacity(.72);AutomationProperties::SetAutomationId(name,id+L"-"+key);if(figure==adjustedFigure)adjustedLabel=name;
-            figure.Children().Append(name);figure.Children().Append(swatch);comparison.Children().Append(figure);
+    void entry(TextBox const& box,std::function<J(hstring const&)> action){
+        auto weak=weak_from_this();box.MaxLength(256);
+        auto submit=[weak,box,action]{if(auto self=weak.lock();self&&!self->updating)self->act(action(box.Text()));};
+        box.KeyDown([submit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter){e.Handled(true);submit();}});
+        box.LostFocus([submit](auto&&,auto&&){submit();});
+    }
+    Button copyButton(hstring const& id,std::function<hstring()> text){
+        auto copy=button(data,data->caption(L"color",L"copy"),[text]{copyText(text());});
+        AutomationProperties::SetAutomationId(copy,id);return copy;
+    }
+    void init(std::function<void(J,std::optional<double>)> action,hstring const& id){
+        commit=std::move(action);root.Spacing(8);auto weak=weak_from_this();
+        for(int i=0;i<2;++i){ColumnDefinition column;column.Width({1,GridUnitType::Star});pair.ColumnDefinitions().Append(column);}
+        for(auto [swatch,column,key]:{std::tuple{current,0,L"current"},std::tuple{preview,1,L"new"}}){
+            swatch.MinHeight(44);Grid::SetColumn(swatch,column);pair.Children().Append(swatch);AutomationProperties::SetAutomationId(swatch,id+L"-"+key);
         }
-        Grid::SetColumn(adjustedFigure,1);
-        root.Children().Append(comparison);
-        model.Header(box_value(data->caption(L"color",L"model")));model.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetAutomationId(model,id+L"-model");root.Children().Append(model);
-        model.SelectionChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->model.SelectedIndex()>=0){
-            auto request=self->draft();request.Insert(L"change_model",array(self->view,L"models").GetArrayAt(self->model.SelectedIndex()).GetAt(0));self->refresh(request);
-        }});
-        for(uint32_t i=0;i<4;++i){auto entry=entries[i];entry.MaxLength(128);AutomationProperties::SetAutomationId(entry,id+L"-"+to_hstring(i));root.Children().Append(entry);}
-        intensity.Header(box_value(data->caption(L"color",L"intensity_ev")));AutomationProperties::SetAutomationId(intensity,id+L"-intensity");root.Children().Append(intensity);
-        description.TextWrapping(TextWrapping::Wrap);error.TextWrapping(TextWrapping::Wrap);AutomationProperties::SetAutomationId(description,id+L"-description");AutomationProperties::SetAutomationId(error,id+L"-error");root.Children().Append(description);root.Children().Append(error);
-        apply.Content(box_value(data->common(L"apply")));AutomationProperties::SetAutomationId(apply,id+L"-apply");root.Children().Append(apply);
-        apply.Click([weak](auto&&,auto&&){if(auto self=weak.lock()){
-            try{if(!self->refresh(self->draft()))return;}catch(hresult_error const& e){self->diagnostic=e.message();self->error.Text(*self->diagnostic);self->apply.IsEnabled(false);return;}auto value=self->view.GetNamedValue(L"value",JsonValue::CreateNullValue());
-            if(value.ValueType()==JsonValueType::Object&&str(self->view,L"error").empty())self->commit(value.GetObject());
-        }});
-        // Invalid drafts must remain editable and retryable.
-        intensity.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating){auto draft=object(self->view,L"draft");if(self->intensity.Text()!=str(draft,L"change_intensity_text",to_hstring(num(draft,L"intensity"))))self->apply.IsEnabled(true);}});
-        for(uint32_t i=0;i<entries.size();++i)entries[i].TextChanged([weak,i](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating){
-            auto fields=array(object(self->view,L"draft"),L"fields");if(fields.Size()<=i||self->entries[i].Text()==fields.GetStringAt(i))return;
-            self->apply.IsEnabled(true);
-            try{self->refresh(self->draft());}catch(hresult_error const& e){self->diagnostic=e.message();self->error.Text(*self->diagnostic);self->apply.IsEnabled(false);}
+        pair.CornerRadius({6,6,6,6});
+        current.Tapped([weak](auto&&,auto&&){if(auto self=weak.lock())self->act(O({{L"op",S(L"revert")}}));});
+        root.Children().Append(pair);
+        Grid hexRow;for(int column=0;column<3;++column){ColumnDefinition definition;definition.Width(column==0?GridLength{1,GridUnitType::Star}:GridLength{0,GridUnitType::Auto});hexRow.ColumnDefinitions().Append(definition);}hexRow.ColumnSpacing(6);
+        hexLabel.VerticalAlignment(VerticalAlignment::Center);hexRow.Children().Append(hexLabel);
+        hex.FontSize(20);AutomationProperties::SetAutomationId(hex,id+L"-hex");Grid::SetColumn(hex,1);hexRow.Children().Append(hex);
+        entry(hex,[](hstring const& text){return O({{L"op",S(L"text")},{L"text",S(text)}});});
+        hexCopy=copyButton(id+L"-hex-copy",[weak]{auto self=weak.lock();return self?str(self->view,L"hex"):hstring{};});Grid::SetColumn(hexCopy,2);hexRow.Children().Append(hexCopy);
+        root.Children().Append(hexRow);
+        for(int column=0;column<6;++column){ColumnDefinition definition;definition.Width(column==0?GridLength{1,GridUnitType::Star}:GridLength{0,GridUnitType::Auto});rows.ColumnDefinitions().Append(definition);}
+        rows.ColumnSpacing(6);rows.RowSpacing(4);
+        for(int32_t row=0;row<4;++row)rows.RowDefinitions().Append(RowDefinition());
+        for(int32_t row=0;row<3;++row){
+            StackPanel name;name.Orientation(Orientation::Horizontal);name.Spacing(4);
+            AutomationProperties::SetAutomationId(forms[row],id+L"-form-"+to_hstring(row));name.Children().Append(forms[row]);
+            spaces[row].VerticalAlignment(VerticalAlignment::Center);spaces[row].Opacity(.72);name.Children().Append(spaces[row]);
+            Grid::SetRow(name,row);rows.Children().Append(name);
+            forms[row].SelectionChanged([weak,row](auto&&,auto&&){if(auto self=weak.lock();self&&!self->updating&&self->forms[row].SelectedIndex()>=0){
+                auto choices=array(array(self->view,L"rows").GetObjectAt(row),L"forms");
+                self->act(O({{L"op",S(L"form")},{L"row",N(row)},{L"form",S(str(choices.GetObjectAt(self->forms[row].SelectedIndex()),L"form"))}}));
+            }});
+            for(int32_t index=0;index<3;++index){
+                auto box=values[row][index];box.Width(76);box.TextAlignment(TextAlignment::Right);
+                AutomationProperties::SetAutomationId(box,id+L"-"+to_hstring(row)+L"-"+to_hstring(index));
+                Grid::SetRow(box,row);Grid::SetColumn(box,1+index);rows.Children().Append(box);
+                entry(box,[row,index](hstring const& text){return O({{L"op",S(L"value")},{L"row",N(row)},{L"index",N(index)},{L"text",S(text)}});});
+            }
+            copies[row]=copyButton(id+L"-copy-"+to_hstring(row),[weak,row]{auto self=weak.lock();return self?str(array(self->view,L"rows").GetObjectAt(row),L"copy"):hstring{};});
+            Grid::SetRow(copies[row],row);Grid::SetColumn(copies[row],4);rows.Children().Append(copies[row]);
+        }
+        Grid::SetRow(intensityLabel,3);rows.Children().Append(intensityLabel);
+        AutomationProperties::SetAutomationId(intensity,id+L"-intensity");intensity.TextAlignment(TextAlignment::Right);
+        Grid::SetRow(intensity,3);Grid::SetColumn(intensity,1);Grid::SetColumnSpan(intensity,3);rows.Children().Append(intensity);
+        entry(intensity,[](hstring const& text){return O({{L"op",S(L"intensity")},{L"text",S(text)}});});
+        root.Children().Append(rows);
+        error.TextWrapping(TextWrapping::Wrap);AutomationProperties::SetAutomationId(error,id+L"-error");root.Children().Append(error);
+        AutomationProperties::SetAutomationId(apply,id+L"-apply");root.Children().Append(apply);
+        apply.Click([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->refused){
+            auto stops=self->view.GetNamedValue(L"stops",JsonValue::CreateNullValue());
+            self->commit(object(self->view,L"value"),stops.ValueType()==JsonValueType::Number?std::optional<double>(stops.GetNumber()):std::nullopt);
         }});
         data->copyView([weak]{if(auto self=weak.lock()){self->relocalize();return true;}return false;});
     }

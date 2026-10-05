@@ -200,13 +200,9 @@ check raw ICC names, localized absence, search and retained controls without
 rereading files. `native_white_balance_live_language` checks retained calibration
 buttons and notices. Run each through `--native-test=<name>` on the private display.
 
-Edit Color retains the shared `ColorFormCopy` from the last edit or display
-capability change. Language publication projects its model captions, typed
-refusal and cached gamut flags without parsing fields or converting colors.
-The same combo row, list model, numeric fields and preview widgets remain in
-place; immutable list strings update under the existing selection guard.
-The selected color model appears below its title so longer titles leave the
-choice readable in narrow dialogs.
+Edit Color keeps its widgets, an open refused value, its selection and its
+message across language changes; the shared editor relabels its rows and
+re-reads the refusal in the new language without changing the draft.
 Color and gradient buttons, including effect buttons that use the selected
 color, refresh their current shared captions through weak workspace callbacks.
 A stale document refuses color acceptance through the

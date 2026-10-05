@@ -305,34 +305,17 @@ color-above-sdr-white = Trên màu trắng SDR.
 color-features-export-finishing-file = Đang hoàn tất tệp…
 color-features-export-writing-image = Đang ghi ảnh…
 
-color-form-model-document-rgb = RGB tài liệu
 color-form-model-linear-rgb = RGB tuyến tính
-color-form-model-srgb-hex = Hex sRGB
-color-form-model-hsv = HSV (RGB tài liệu)
-color-form-model-hls = HLS (RGB tài liệu)
-color-form-model-oklch = OKLCH
-color-form-field-red-encoded = Đỏ (mã hóa)
-color-form-field-green-encoded = Xanh lục (mã hóa)
-color-form-field-blue-encoded = Xanh lam (mã hóa)
-color-form-field-red-linear = Đỏ (tuyến tính)
-color-form-field-green-linear = Xanh lục (tuyến tính)
-color-form-field-blue-linear = Xanh lam (tuyến tính)
-color-form-field-alpha = Alpha (%)
-color-form-field-hex = Hex sRGB (#RRGGBB)
 color-form-field-hue = Sắc màu (°)
 color-form-field-saturation = Độ bão hòa (%)
 color-form-field-value = Giá trị (%)
 color-form-field-lightness = Độ sáng cảm nhận (%)
 color-form-field-chroma = Độ thuần màu
-color-form-document-srgb = RGB tài liệu: sRGB.
-color-form-document-display-p3 = RGB tài liệu: Display P3.
-color-form-document-adobe-rgb = RGB tài liệu: Adobe RGB (1998).
-color-form-document-prophoto = RGB tài liệu: ProPhoto RGB.
-color-form-reference-white = 1 = màu trắng tham chiếu.
-color-form-hex-description = Hex dùng sRGB 8 bit.
 
 
 color-form-finite-field = Nhập số hữu hạn cho { $label }.
+
+color-form-color-syntax = Dùng mã hex như #3B7EA1, hoặc màu như rgb(59 126 161).
 
 color-properties-title = Thuộc tính tài liệu
 color-properties-canvas-size = Kích thước khung vẽ
@@ -356,11 +339,6 @@ color-properties-retained-rasterized = Đã chuyển thành ảnh điểm theo t
 color-properties-retained-icc = Đã giữ mẫu gốc và ICC nhúng.
 color-properties-retained-original = Đã giữ mẫu gốc và cách diễn giải màu.
 
-color-form-entries-too-long = Mục nhập màu không được quá 128 byte.
-color-form-alpha-range = Alpha phải trong khoảng từ 0 đến 100%.
-color-form-hex-syntax = Dùng #RGB hoặc #RRGGBB; chỉnh alpha riêng.
-color-form-percent-range = Độ bão hòa, độ sáng cảm nhận và giá trị phải trong khoảng từ 0 đến 100%.
-color-form-negative-lightness-chroma = Độ sáng cảm nhận và độ thuần màu không được âm.
 
 color-profile-select-imported = Chọn hồ sơ màu đã nhập.
 color-profile-read-limit = Hồ sơ màu ICC vượt quá 16 MiB.

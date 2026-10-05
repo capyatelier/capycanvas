@@ -414,10 +414,12 @@ APK calls, so test-APK benchmarks use the unminified build.
 
 - **Workspace motion.** `AndroidWorkspacePerformanceTest` runs with
   `-e workspaceBenchmark true`. `#colorPanelOverlapFrameTiming`,
-  `#continuousDragFrameTiming` and `#continuousResizeFrameTiming` use the real
-  display clock and `FrameMetrics`. `-e workspaceTransparency 0`–`3` sets panel
-  transparency (off to high) and restores it afterwards. Results appear in
-  logcat under `CapyDragPerf` and `CapyResizePerf`.
+  `#colorWheelFrameTiming`, `#editColorWheelFrameTiming` (the Edit Color
+  dialog's wheel), `#continuousDragFrameTiming` and
+  `#continuousResizeFrameTiming` use the real display clock and `FrameMetrics`.
+  `-e workspaceTransparency 0`–`3` sets panel transparency (off to high) and
+  restores it afterwards. Results appear in logcat under `CapyDragPerf` and
+  `CapyResizePerf`.
 - **Workspace switcher scrolling.**
   `AndroidWorkspacePerformanceTest#workspaceSwitcherScrollFrameTiming` runs with
   `-e switcherBenchmark true -e photo <readable-tier-photo.jpg>`. It scrolls the

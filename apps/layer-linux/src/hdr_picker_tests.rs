@@ -95,8 +95,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
         assert!(pencil_bounds.x() > label_bounds.x() + label_bounds.width());
         pencil.emit_clicked();
         pump(100);
-        let entry = find_named(w.window.visible_dialog().unwrap().upcast_ref(), "edit-color-ev").unwrap();
-        assert_eq!(entry.is_visible(), hdr);
+        assert_eq!(crate::color_editor::tests::editor(&w).intensity.stack.is_visible(), hdr);
         response(&w, "cancel");
         if !hdr {
             assert_eq!(
@@ -123,17 +122,18 @@ fn native_hdr_picker_intensity_shape_and_input() {
         let original = state(&w).colors;
         pencil.emit_clicked();
         pump(100);
-        let dialog = w.window.visible_dialog().unwrap();
-        let base_preview = find_named(dialog.upcast_ref(), "edit-color-base-preview").unwrap();
-        let adjusted_preview = find_named(dialog.upcast_ref(), "edit-color-preview").unwrap();
-        let base_bounds = base_preview.compute_bounds(&dialog).unwrap();
+        let editor = crate::color_editor::tests::editor(&w);
+        let dialog = editor.dialog.clone();
+        let base_preview = editor.current_patch.clone().upcast::<gtk::Widget>();
+        let adjusted_preview = editor.new_patch.clone().upcast::<gtk::Widget>();
+        let base_bounds = editor.current.compute_bounds(&dialog).unwrap();
         let adjusted_bounds = adjusted_preview.compute_bounds(&dialog).unwrap();
         assert!((base_bounds.width() - adjusted_bounds.width()).abs() <= 1., "Equal halves within native pixel rounding");
         assert!((base_bounds.x() + base_bounds.width() - adjusted_bounds.x()).abs() < 0.01);
         let base_peak = peak(&patch_texture(&base_preview));
         let adjusted_peak = peak(&patch_texture(&adjusted_preview));
-        assert!(adjusted_peak > base_peak + 0.05, "EV comparison must show the different renditions");
-        assert!((peak(&patch_texture(&paint_patch(&w, ColorSlot::Foreground))) - adjusted_peak).abs() < 0.002, "Paint bubble matches adjusted dialog preview");
+        assert!((adjusted_peak - base_peak).abs() < 0.002, "Current and New match until an edit");
+        assert!((peak(&patch_texture(&paint_patch(&w, ColorSlot::Foreground))) - adjusted_peak).abs() < 0.002, "Paint bubble matches the dialog preview");
         // Numerical alpha check above the display shoulder: alpha changes the
         // checker blend, never the straight color's HDR mapping.
         for alpha in [0., 0.25, 0.5, 1.] {
@@ -144,11 +144,10 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 assert!((peak(texture) - expected).abs() < 0.005, "HDR alpha {alpha}: {} != {expected}", peak(texture));
             }
         }
-        let entry = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-ev");
-        assert_eq!(entry.text().parse::<f32>().unwrap(), 2.);
-        entry.set_text("3");
+        assert_eq!(editor.draft.borrow().intensity(), Some(2.));
+        crate::color_editor::tests::type_into(&w, "edit-color-ev", "3");
         pump(60);
-        assert!((peak(&patch_texture(&base_preview)) - base_peak).abs() < 0.002, "EV keeps base preview stable");
+        assert!((peak(&patch_texture(&base_preview)) - base_peak).abs() < 0.002, "EV keeps the Current preview stable");
         assert!(peak(&patch_texture(&adjusted_preview)) > adjusted_peak + 0.01);
         if std::env::var_os("LAYER_EXPECT_HDR").is_some() {
             assert!(adjusted_peak > 1., "Adjusted preview retains HDR light");
@@ -167,18 +166,15 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 pump(80);
                 assert_eq!(patch_texture(&adjusted_preview).color_state() == gdk::ColorState::rec2100_linear(), h > 1.);
                 assert_eq!(patch_texture(&paint_patch(&w, ColorSlot::Foreground)).color_state() == gdk::ColorState::rec2100_linear(), h > 1.);
-                assert_eq!(entry.text(), "3");
+                assert_eq!(editor.draft.borrow().intensity(), Some(3.));
                 assert_eq!(state(&w).colors.definition(), original.definition());
             }
         }
-        entry.set_text("2");
-        entry.set_text("NaN");
-        assert!(!find_button(dialog.upcast_ref(), "Use Color").unwrap().is_sensitive());
-        let red = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-value-0");
-        red.set_text("1");
-        assert!(!find_button(dialog.upcast_ref(), "Use Color").unwrap().is_sensitive());
-        entry.set_text("3");
-        assert!((red.text().parse::<f32>().unwrap() - 2.).abs() < 1e-5);
+        crate::color_editor::tests::type_into(&w, "edit-color-ev", "NaN");
+        assert!(!editor.apply_button.is_sensitive());
+        crate::color_editor::tests::type_into(&w, "edit-color-ev", "3");
+        assert!(editor.apply_button.is_sensitive());
+        assert_eq!(editor.draft.borrow().intensity(), Some(3.));
         capture_ui(&w, &output, "hdr-edit-ev.png");
         response(&w, "cancel");
         assert_eq!(state(&w).colors, original, "Cancel never changes paint or EV");
@@ -188,7 +184,7 @@ fn native_hdr_picker_intensity_shape_and_input() {
         assert_eq!(state(&w).colors, original, "Untouched Edit Color retains exact state");
         pencil.emit_clicked();
         pump(100);
-        named::<adw::EntryRow>(w.window.visible_dialog().unwrap().upcast_ref(), "edit-color-ev").set_text("3");
+        crate::color_editor::tests::type_into(&w, "edit-color-ev", "3");
         response(&w, "apply");
         assert_eq!(state(&w).colors.hdr_intensity(), 3.);
         scale.set_value(0.);
@@ -375,9 +371,9 @@ fn native_hdr_picker_intensity_shape_and_input() {
                 input.perform(serde_json::json!([{"wait_ms":500},{"point":[point.x(),point.y()]},{"down":true},{"down":false},{"wait_ms":50},{"down":true},{"down":false}]));
                 let dialog = w.window.visible_dialog().expect("Double-click opens Edit Color");
                 assert_eq!(dialog.widget_name(), "edit-color-dialog");
-                assert!(find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().is_visible());
-                let red = named::<adw::EntryRow>(dialog.upcast_ref(), "edit-color-value-0").text().parse::<f32>().unwrap();
-                assert!((red - original.linear_in(RgbSpace::Srgb).unwrap()[0]).abs() < 1e-5, "Editor belongs to the double-clicked swatch");
+                let editor = crate::color_editor::tests::editor(&w);
+                assert!(editor.intensity.stack.is_visible());
+                assert_eq!(editor.draft.borrow().value(), original, "Editor belongs to the double-clicked swatch");
                 response(&w, "apply");
                 assert_eq!(if slot == ColorSlot::Foreground { state(&w).colors.foreground } else { state(&w).colors.background }, original);
             }

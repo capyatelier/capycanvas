@@ -202,11 +202,35 @@ native-color-edit-menu = Edit Color…
 
 native-color-base = Base
 
-native-color-adjusted = Adjusted
 
-native-color-model = Color model
 
 native-color-use-color = Use Color
+
+native-color-current = Current
+
+native-color-new = New
+
+native-color-hex = Hex
+
+native-color-format = Format
+
+native-color-copied = Copied
+
+native-color-pick-canvas = Pick from the canvas
+
+native-color-picking-strip = Picking from the canvas. Press Escape, or tap here, to go back without a change.
+
+native-color-nearest-srgb = Outside sRGB. Hex shows the nearest sRGB color.
+
+native-color-all-swatches = All recent colors and palettes
+
+native-color-close-swatches = Close swatches
+
+native-color-swatch-search = Search palettes, colors or hex
+
+native-color-swatch-matches = { $shown } of { $total }
+
+native-color-swatch-no-match = No palettes or colors match “{ $query }”.
 
 native-color-palettes = Palettes…
 

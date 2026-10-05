@@ -1499,7 +1499,7 @@ pub extern "system" fn Java_art_capycanvas_Native_colorHueStops(
         let mut state = layer_ui::ColorState::default();
         state.set_rgb_space(serde_json::from_value(serde_json::Value::String(read(&mut env, &space)?)).map_err(error)?)?;
         let localization = &*crate::launch::active_localization()?;
-        state.apply(layer_ui::ColorAction::Shape { shape }).map_err(|reason| reason.message(layer_ui::ColorInputModel::DocumentRgb, localization))?;
+        state.apply(layer_ui::ColorAction::Shape { shape }).map_err(|reason| reason.message(localization))?;
         serde_json::to_string(state.wheel_hue_stops()).map_err(error)
     });
     string(&mut env, result)

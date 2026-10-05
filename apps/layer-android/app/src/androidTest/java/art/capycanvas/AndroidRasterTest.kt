@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
+import kotlin.math.withSign
 import org.junit.*
 import org.junit.Assert.*
 import java.io.File
@@ -24,6 +25,9 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 
 /** Real JNI/file workers and Vulkan. Test files stay in this app's private cache. */
+internal fun srgbLinear(vararg linear: Double, alpha: Double = 1.0) = obj("space" to "Srgb", "rgba" to org.json.JSONArray(linear.map { v ->
+    val a = kotlin.math.abs(v); (if (a <= .0031308) 12.92 * a else 1.055 * Math.pow(a, 1 / 2.4) - .055).withSign(v) } + alpha))
+
 class AndroidRasterTest {
     @get:Rule(order = 0) val device = CapyDeviceRule(nativeFileJobs = true)
     @get:Rule(order = 1) val compose = createEmptyComposeRule()
@@ -1147,18 +1151,22 @@ class AndroidRasterTest {
         captureColor("color-panel.png")
         compose.onNodeWithTag("color-edit-button").performClick()
         compose.waitForIdle();SystemClock.sleep(300);captureColor("edit-color.png")
-        for(text in listOf("","-",".","17","1e999")) {
-            compose.onNodeWithTag("color-intensity-value").performTextReplacement(text)
-            compose.onNodeWithText("Use Color").assertIsNotEnabled()
+        fun intensity(text:String){
+            if(compose.onAllNodesWithTag("color-value-ev-input").fetchSemanticsNodes().isEmpty())compose.onNodeWithTag("color-value-ev").performClick()
+            compose.onNodeWithTag("color-value-ev-input").performTextReplacement(text);compose.onNodeWithTag("color-value-ev-input").performImeAction();compose.waitForIdle()
         }
-        compose.onNodeWithTag("color-intensity-value").performTextReplacement("-0.5")
-        compose.onNodeWithText("Use Color").assertIsEnabled()
-        compose.onNodeWithTag("color-intensity-value").performTextReplacement("3")
-        compose.onNodeWithText("Use Color").performClick();refresh()
+        for(text in listOf("","-",".","17","1e999")) {
+            intensity(text)
+            compose.onNodeWithTag("color-use").assertIsNotEnabled()
+        }
+        intensity("-0.5")
+        compose.onNodeWithTag("color-use").assertIsEnabled()
+        intensity("3")
+        compose.onNodeWithTag("color-use").performClick();refresh()
         assertEquals(3.0,host.snapshot!!.getJSONObject("color_panel").getDouble("intensity"),.001)
         compose.onAllNodesWithText("Palettes…").assertCountEquals(0)
         native {h->
-            val color=JSONObject(Native.colorUi(obj("type" to "form","request" to obj("color" to obj("space" to "Srgb","rgba" to org.json.JSONArray(listOf(0,0,0,1))),"document_space" to "Srgb","document_depth" to "F16","model" to "linear_rgb","intensity" to 0,"fields" to org.json.JSONArray(listOf("-4","4","1","100")))).toString())).getJSONObject("value")
+            val color=srgbLinear(-4.0,4.0,1.0)
             Native.dispatch(h,obj("type" to "select_brush","id" to 1).toString());Native.dispatch(h,obj("type" to "color","action" to obj("op" to "set_slot","slot" to "foreground","color" to color)).toString())
         };refresh()
         motion(android.view.MotionEvent.TOOL_TYPE_STYLUS,30,256.0 to 192.0);refresh()

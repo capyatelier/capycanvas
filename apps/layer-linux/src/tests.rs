@@ -15,6 +15,8 @@ mod editing_tools;
 mod color_panel;
 #[path = "color_management_tests.rs"]
 mod color_management;
+#[path = "color_editor_tests.rs"]
+mod color_editor;
 #[path = "proof_tests.rs"]
 mod proof;
 #[path = "effect_color_tests.rs"]

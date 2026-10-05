@@ -305,34 +305,17 @@ color-above-sdr-white = SDR beyazının üstünde.
 color-features-export-finishing-file = Dosya tamamlanıyor…
 color-features-export-writing-image = Görüntü yazılıyor…
 
-color-form-model-document-rgb = Belge RGB'si
 color-form-model-linear-rgb = Doğrusal RGB
-color-form-model-srgb-hex = sRGB onaltılık
-color-form-model-hsv = HSV (belge RGB'si)
-color-form-model-hls = HLS (belge RGB'si)
-color-form-model-oklch = OKLCH
-color-form-field-red-encoded = Kırmızı (kodlanmış)
-color-form-field-green-encoded = Yeşil (kodlanmış)
-color-form-field-blue-encoded = Mavi (kodlanmış)
-color-form-field-red-linear = Kırmızı (doğrusal)
-color-form-field-green-linear = Yeşil (doğrusal)
-color-form-field-blue-linear = Mavi (doğrusal)
-color-form-field-alpha = Alfa (%)
-color-form-field-hex = sRGB onaltılık (#RRGGBB)
 color-form-field-hue = Ton (°)
 color-form-field-saturation = Doygunluk (%)
 color-form-field-value = Değer (%)
 color-form-field-lightness = Açıklık (%)
 color-form-field-chroma = Kroma
-color-form-document-srgb = Belge RGB'si: sRGB.
-color-form-document-display-p3 = Belge RGB'si: Display P3.
-color-form-document-adobe-rgb = Belge RGB'si: Adobe RGB (1998).
-color-form-document-prophoto = Belge RGB'si: ProPhoto RGB.
-color-form-reference-white = 1 = referans beyaz.
-color-form-hex-description = Onaltılık gösterim 8 bit sRGB kullanır.
 
 
 color-form-finite-field = { $label } için sonlu bir sayı girin.
+
+color-form-color-syntax = #3B7EA1 gibi bir hex kodu veya rgb(59 126 161) gibi bir renk kullanın.
 
 color-properties-title = Belge özellikleri
 color-properties-canvas-size = Tuval boyutu
@@ -356,11 +339,6 @@ color-properties-retained-rasterized = Belge koordinatlarında pikselleştirilmi
 color-properties-retained-icc = Özgün örnekler ve gömülü ICC korundu.
 color-properties-retained-original = Özgün örnekler ve renk yorumlaması korundu.
 
-color-form-entries-too-long = Renk girişleri en fazla 128 bayt olabilir.
-color-form-alpha-range = Alfa 0 ile %100 arasında olmalıdır.
-color-form-hex-syntax = #RGB veya #RRGGBB kullanın; alfayı ayrı düzenleyin.
-color-form-percent-range = Doygunluk, açıklık ve değer 0 ile %100 arasında olmalıdır.
-color-form-negative-lightness-chroma = Açıklık ve kroma negatif olamaz.
 
 color-profile-select-imported = İçe aktarılmış bir profil seçin.
 color-profile-read-limit = ICC profili 16 MiB sınırını aşıyor.

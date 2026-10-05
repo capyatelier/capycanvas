@@ -70,12 +70,12 @@ window, label, text { font-size: var(--ui-text-size); }
 .header-clock { min-height: 36px; padding: 0 8px; }
 .window-bar .workspace-switcher { background: var(--glass-switcher); }
 .window-bar .header-menu-labels { background: var(--header-control-bg); }
-.window-bar .workspace-switcher, .window-bar .header-menu-labels { border: 0; border-radius: calc(18px * var(--corner-fit)); padding: 5px; }
-.workspace-switcher button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: 500; }
+.choice-well, .window-bar .header-menu-labels { border: 0; border-radius: calc(18px * var(--corner-fit)); padding: 5px; }
+.choice-well button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); background: transparent; box-shadow: none; font-weight: 500; }
 .window-bar .header-menu-labels menubutton.chrome-control > button { min-height: 26px; min-width: 0; padding: 0 8px; border-radius: calc(13px * var(--corner-fit)); font-weight: 500; }
-.workspace-switcher button:hover { background: alpha(var(--window-fg-color), .08); }
-.workspace-switcher button:checked { background: var(--header-selection); color: var(--window-fg-color); }
-.workspace-switcher button:checked:hover { background: var(--header-selection-hover); }
+.choice-well button:hover { background: alpha(var(--window-fg-color), .08); }
+.choice-well button:checked { background: var(--header-selection); color: var(--window-fg-color); }
+.choice-well button:checked:hover { background: var(--header-selection-hover); }
 .workspace-switcher .workspace-options > button { min-width: 20px; min-height: 26px; padding: 0; color: alpha(var(--window-fg-color), .7); }
 .workspace-manager-row > box.header:dir(ltr) { margin-left: 6px; }
 .workspace-manager-row > box.header:dir(rtl) { margin-right: 6px; }
@@ -355,12 +355,12 @@ window.capy-workspace.glass .document-tab.selected { background-color: var(--gla
 window.capy-workspace.glass .palette-cover { background: transparent; }
 .palette-panel { padding: 6px 8px; }
 .palette-cover { background: var(--panel-bg); }
-.palette-panel button.palette-tile { padding: 3px; min-width: 0; min-height: 0; border-radius: var(--control-radius); background: transparent; box-shadow: none; }
+.palette-panel button.palette-tile, .edit-color-dialog button.palette-tile { padding: 3px; min-width: 0; min-height: 0; border-radius: var(--control-radius); background: transparent; box-shadow: none; }
 .palette-tile > * { border-radius: var(--control-radius); }
 .palette-tile.selected { outline: 2px solid var(--accent-color); outline-offset: -2px; }
-.palette-panel button.palette-tile:hover { background: alpha(currentColor, .10); }
+.palette-panel button.palette-tile:hover, .edit-color-dialog button.palette-tile:hover { background: alpha(currentColor, .10); }
 .palette-empty { margin: 3px; border-radius: var(--control-radius); background: alpha(currentColor, .05); }
-.palette-panel button.palette-add { border: 0; border-radius: var(--control-radius); background: var(--input-bg); padding: 0; min-width: 0; min-height: 0; }
+.palette-panel button.palette-add, .edit-color-dialog button.palette-add { border: 0; border-radius: var(--control-radius); background: var(--input-bg); padding: 0; min-width: 0; min-height: 0; }
 .palette-panel button.palette-selector, .palette-panel button.palette-name { min-width: 0; min-height: 24px; padding: 0 4px; border-radius: var(--control-radius); font-weight: 400; }
 .palette-panel button.palette-name { padding: 0 2px; }
 .palette-panel .palette-detail { font-size: .9em; margin-right: 2px; }
@@ -378,3 +378,34 @@ popover.command-bar entry { background: var(--input-bg); }
 popover.command-bar list { padding: 0; background: transparent; }
 popover.command-bar row { min-height: 24px; padding: var(--command-gap) var(--command-inset); margin: 0; }
 window.canvas-preview-dialog floating-sheet > dimming, window.canvas-preview-dialog bottom-sheet > dimming { background-color: transparent; }
+.edit-color-content { background: var(--dialog-bg-color); }
+.edit-color-body { padding: 20px; }
+.edit-color-bottom { padding: 16px 20px 20px; }
+.edit-color-sheet { padding: 20px 20px 0; background: var(--dialog-bg-color); }
+.edit-color-sheet-body { padding-bottom: 16px; }
+.edit-color-dialog entry, .edit-color-dialog button { transition: none; }
+.edit-color-dialog button { font-weight: 400; }
+.edit-color-dialog .choice-well { padding: 4px; background: alpha(var(--window-fg-color), .06); }
+.edit-color-dialog .choice-well button { font-weight: 500; }
+.edit-color-bottom > button { min-height: 34px; padding: 0 16px; border-radius: var(--control-radius); font-weight: 500; }
+.edit-color-pair { border-radius: var(--control-radius); border: 1px solid alpha(currentColor, .12); }
+.edit-color-pair button.edit-color-revert { padding: 0; min-width: 0; min-height: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+button.edit-color-pick { min-width: 48px; min-height: 48px; padding: 0; border-radius: var(--control-radius); }
+.edit-color-dialog button.number-value { min-width: 0; min-height: 28px; padding: 0 4px; border-radius: var(--control-radius); }
+.edit-color-dialog entry.number-entry { min-height: 28px; padding: 0 4px; border: 0; border-radius: var(--control-radius); background: var(--input-bg); box-shadow: none; }
+.edit-color-dialog button.number-value.edit-color-hex, .edit-color-dialog entry.number-entry.edit-color-hex { min-height: 40px; }
+.edit-color-hex label, .edit-color-hex text { font-size: calc(var(--ui-text-size) * 1.6); font-weight: 500; font-feature-settings: "tnum"; }
+.edit-color-badge { padding: 0 5px; border-radius: calc(8px * var(--corner-fit)); background: alpha(currentColor, .08); }
+button.edit-color-copy { min-width: 28px; min-height: 28px; margin-right: -6px; padding: 0; border-radius: var(--control-radius); }
+menubutton.edit-color-format > button { min-height: 28px; padding: 0 6px; border-radius: var(--control-radius); }
+.edit-color-intensity-label { padding-left: 6px; }
+button.edit-color-more { min-width: 34px; min-height: 34px; padding: 0; border-radius: var(--control-radius); }
+button.edit-color-more image { -gtk-icon-transform: rotate(180deg); }
+button.edit-color-more.open image { -gtk-icon-transform: none; }
+.edit-color-dialog button.palette-add { margin: 3px; background: alpha(var(--window-fg-color), .06); }
+.edit-color-sheet flowboxchild { padding: 0; }
+.edit-color-sheet entry { min-height: 34px; border: 0; border-radius: var(--control-radius); background: var(--input-bg); box-shadow: none; }
+.edit-color-strip { padding: 8px 12px; border-radius: var(--surface-radius); background: var(--dialog-bg-color); color: var(--dialog-fg-color); box-shadow: 0 2px 12px alpha(black, .25); font-weight: 400; font-feature-settings: "tnum"; }
+.edit-color-strip .edit-color-pair { border-radius: calc(8px * var(--corner-fit)); }
+.edit-color-strip-hex { font-weight: 500; }
+.edit-color-number { font-feature-settings: "tnum"; }

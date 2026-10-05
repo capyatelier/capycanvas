@@ -31,7 +31,8 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'DisplayP3',depth:'U16'});
   await evaluate(`layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'ProPhoto',rgba:[.85,.021,.6,.33333334]}}});window.sdrColor=JSON.stringify(layerApp.state().colors.foreground);`);
   await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
-  for(const model of ['srgb_hex','oklch','hsv','hls','document_rgb'])await evaluate(`(()=>{const s=document.querySelector('.color-dialog select');s.value=${JSON.stringify(model)};s.dispatchEvent(new Event('change'));})()`);
+  await wait(`!!document.querySelector('.color-dialog[open] .color-format')`);
+  await evaluate(`(()=>{const d=document.querySelector('.color-dialog[open]');for(const format of d.querySelectorAll('.color-format')){const items=()=>[...format.parentNode.querySelectorAll('.color-format-item')];format.click();for(const form of [...items().map(i=>i.dataset.form),items()[0].dataset.form]){format.click();items().find(i=>i.dataset.form===form).click();}}})()`);
   await click('Use Color');assert.equal(await evaluate('JSON.stringify(layerApp.state().colors.foreground)'),await evaluate('sdrColor'));
   assert.equal(await evaluate(`!![...document.querySelectorAll('.color-wheel-control button')].find(b=>/Palettes/.test(b.textContent))`),false);
   await evaluate(`layerApp.dispatch({type:'color',action:{op:'library',action:{op:'store',palette:layerApp.state().color_library.palettes[0].id,name:'SDR precision regression',color:layerApp.state().colors.foreground}}})`);

@@ -757,6 +757,10 @@ impl NativeHost {
             PaletteMenu {
                 target: layer_ui::PaletteMenuTarget,
             },
+            SwatchSheet {
+                query: String,
+                current: layer_core::color::RgbColor,
+            },
             StrokeRecording {
                 #[serde(default)]
                 action: Option<StrokeRecordingAction>,
@@ -921,6 +925,11 @@ impl NativeHost {
             }
             Query::PaletteMenu { target } => {
                 json!(self.session.state().color_library.menu(target)?)
+            }
+            Query::SwatchSheet { query, current } => {
+                let state = self.session.state();
+                let colors = state.display_colors();
+                json!(layer_ui::SwatchSheetView::new(&state.color_library, &query, current, |color| self.swatch_preview(colors, color), self.session.localization()))
             }
             Query::RevealPanel { panel } => {
                 let previous = self.session.state().revision;

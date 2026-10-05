@@ -728,6 +728,7 @@ mod wheel {
         pub(super) field_path: RefCell<Option<super::field::FieldPath>>,
         pub intensity: RefCell<Option<crate::hdr_color_scale::HdrColorScale>>,
         pub hdr: Cell<bool>,
+        pub bare: Cell<bool>,
         // Background precedes foreground so their deliberate overlap also picks correctly.
         pub corners: RefCell<Vec<WheelButton>>,
         pub menu: RefCell<Option<gtk::Popover>>,
@@ -766,6 +767,14 @@ mod wheel {
             gtk::SizeRequestMode::HeightForWidth
         }
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            if self.bare.get() {
+                return if orientation == gtk::Orientation::Vertical {
+                    let height = |width: i32| super::bare_stage(width as f32, self.hdr.get()).map_or(0, |(_, _, height)| height.ceil() as i32);
+                    (height(BARE_WHEEL.0), height(if for_size < 0 { BARE_WHEEL.1 } else { for_size.clamp(BARE_WHEEL.0, BARE_WHEEL.1) }), -1, -1)
+                } else {
+                    (BARE_WHEEL.0, BARE_WHEEL.1, -1, -1)
+                };
+            }
             if orientation == gtk::Orientation::Vertical {
                 let height = |size: i32| if self.hdr.get() {
                     ColorPanelLayout::with_hdr(size as f32).unwrap().height().ceil() as i32
@@ -895,8 +904,137 @@ glib::wrapper! {
     pub struct ColorWheel(ObjectSubclass<wheel::Wheel>) @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
+const BARE_WHEEL: (i32, i32) = (160, 232);
+fn bare_stage(wheel: f32, hdr: bool) -> Option<(f32, f32, f32)> {
+    let (mut low, mut high) = (128_f32, wheel + 40.);
+    for _ in 0..24 {
+        let candidate = (low + high) * 0.5;
+        if ColorPanelLayout::new(candidate)?.wheel[2] < wheel { low = candidate; } else { high = candidate; }
+    }
+    let layout = ColorPanelLayout::new(high)?;
+    let inset = layout.wheel[1];
+    let bottom = if hdr {
+        let arc = layer_ui::HdrIntensityArc::new(high)?;
+        arc.center[1] + arc.radius + (arc.width * 0.5).max(arc.marker_radius) + 2.
+    } else {
+        inset + layout.wheel[3]
+    };
+    Some((high, inset, bottom - inset))
+}
 impl ColorWheel {
+    pub(crate) fn bare() -> Self {
+        let wheel: Self = glib::Object::new();
+        wheel.imp().bare.set(true);
+        let intensity = crate::hdr_color_scale::HdrColorScale::new();
+        intensity.hide_caption();
+        intensity.set_visible(false);
+        intensity.set_parent(&wheel);
+        *wheel.imp().intensity.borrow_mut() = Some(intensity);
+        wheel
+    }
+    pub(crate) fn intensity(&self) -> Option<crate::hdr_color_scale::HdrColorScale> {
+        self.imp().intensity.borrow().clone()
+    }
+    pub(crate) fn set_state(&self, state: &ColorState, view: ViewColor, headroom: f32, preview: bool) -> bool {
+        let imp = self.imp();
+        if imp.preview.replace(preview) != preview {
+            imp.field.cancel();
+            self.queue_draw();
+        }
+        let hdr = matches!(view, ViewColor::Mapped { .. });
+        if let Some(intensity) = imp.intensity.borrow().as_ref() {
+            intensity.set_visible(hdr);
+            intensity.set_sensitive(state.slot != ColorSlot::Transparent);
+            if hdr { intensity.refresh_color(state, view, headroom, preview); }
+        }
+        if imp.hdr.replace(hdr) != hdr { self.queue_resize(); }
+        if !hdr { imp.linear_field.borrow_mut().take(); }
+        let previous_headroom = imp.headroom.replace(headroom);
+        let previous_view = imp.view.replace(view);
+        if previous_view == view && previous_headroom == headroom && *imp.color.borrow() == *state {
+            return false;
+        }
+        *imp.color.borrow_mut() = state.clone();
+        imp.surface_node.borrow_mut().take();
+        self.queue_draw();
+        true
+    }
+    pub(crate) fn connect_pick(&self, send: impl Fn(ColorAction) + 'static) {
+        let send = Rc::new(send);
+        let part = Rc::new(Cell::new(None));
+        let drag = gtk::GestureDrag::new();
+        drag.set_button(1);
+        drag.connect_drag_begin(glib::clone!(
+            #[weak(rename_to = wheel)]
+            self,
+            #[strong]
+            part,
+            #[strong]
+            send,
+            move |gesture, x, y| {
+                part.set(None);
+                // Popovers are separate native surfaces but still descendants
+                // in GTK's widget tree. Never pick through their buttons.
+                let native_surface = wheel.native().and_then(|n| n.surface());
+                if gesture
+                    .current_event()
+                    .and_then(|e| e.surface())
+                    .is_some_and(|s| Some(s) != native_surface)
+                    || wheel
+                        .pick(x, y, gtk::PickFlags::DEFAULT)
+                        .is_some_and(|w| w != wheel.clone().upcast::<gtk::Widget>())
+                {
+                    return;
+                }
+                let (size, [ox, oy]) = wheel.drawing_bounds();
+                let point = [x as f32 - ox, y as f32 - oy];
+                let hit = ColorWheelGeometry::new(size)
+                    .and_then(|g| g.hit_shape(point, wheel.imp().color.borrow().shape));
+                part.set(hit);
+                if let Some(part) = hit {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    send(ColorAction::PickWheel { part, point, size });
+                }
+            }
+        ));
+        drag.connect_drag_update(glib::clone!(
+            #[weak(rename_to = wheel)]
+            self,
+            #[strong]
+            part,
+            move |gesture, dx, dy| {
+                if let Some(part) = part.get()
+                    && let Some((x, y)) = gesture.start_point()
+                {
+                    let (size, [ox, oy]) = wheel.drawing_bounds();
+                    send(ColorAction::PickWheel {
+                        part,
+                        point: [(x + dx) as f32 - ox, (y + dy) as f32 - oy],
+                        size,
+                    });
+                }
+            }
+        ));
+        drag.connect_drag_end({
+            let part = part.clone();
+            move |_, _, _| part.set(None)
+        });
+        drag.connect_cancel(move |_, _| part.set(None));
+        self.add_controller(drag);
+    }
     fn stage_bounds(&self) -> (f32, [f32; 2]) {
+        if self.imp().bare.get() {
+            let hdr = self.imp().hdr.get();
+            let fits = |wheel: f32| bare_stage(wheel, hdr).is_some_and(|(_, _, height)| height <= self.height() as f32);
+            let (mut low, mut high) = (BARE_WHEEL.0 as f32, self.width() as f32);
+            if fits(high) { low = high; }
+            while high - low > 0.5 {
+                let candidate = (low + high) * 0.5;
+                if fits(candidate) { low = candidate; } else { high = candidate; }
+            }
+            let Some((size, inset, _)) = bare_stage(low, hdr) else { return (0., [0., 0.]); };
+            return (size, [(self.width() as f32 - low) * 0.5 - inset, -inset]);
+        }
         let mut size = self.width().min(self.height()).max(0);
         let mut footer = 0.;
         {
@@ -1238,72 +1376,10 @@ impl ColorPanel {
                 crate::color_library::show(&workspace, slot);
             }
         ));
-        let part = Rc::new(Cell::new(None));
-        let drag = gtk::GestureDrag::new();
-        drag.set_button(1);
-        drag.connect_drag_begin(glib::clone!(
-            #[weak]
-            workspace,
-            #[weak(rename_to = wheel)]
-            self.wheel,
-            #[strong]
-            part,
-            move |gesture, x, y| {
-                part.set(None);
-                // Popovers are separate native surfaces but still descendants
-                // in GTK's widget tree. Never pick through their buttons.
-                let native_surface = wheel.native().and_then(|n| n.surface());
-                if gesture
-                    .current_event()
-                    .and_then(|e| e.surface())
-                    .is_some_and(|s| Some(s) != native_surface)
-                    || wheel
-                        .pick(x, y, gtk::PickFlags::DEFAULT)
-                        .is_some_and(|w| w != wheel.clone().upcast::<gtk::Widget>())
-                {
-                    return;
-                }
-                let (size, [ox, oy]) = wheel.drawing_bounds();
-                let point = [x as f32 - ox, y as f32 - oy];
-                let hit = ColorWheelGeometry::new(size)
-                    .and_then(|g| g.hit_shape(point, wheel.imp().color.borrow().shape));
-                part.set(hit);
-                if let Some(part) = hit {
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                    workspace.dispatch(UiAction::Color {
-                        action: ColorAction::PickWheel { part, point, size },
-                    });
-                }
-            }
-        ));
-        drag.connect_drag_update(glib::clone!(
-            #[weak]
-            workspace,
-            #[weak(rename_to = wheel)]
-            self.wheel,
-            #[strong]
-            part,
-            move |gesture, dx, dy| {
-                if let Some(part) = part.get()
-                    && let Some((x, y)) = gesture.start_point()
-                {
-                    let (size, [ox, oy]) = wheel.drawing_bounds();
-                    workspace.dispatch(UiAction::Color {
-                        action: ColorAction::PickWheel {
-                            part,
-                            point: [(x + dx) as f32 - ox, (y + dy) as f32 - oy],
-                            size,
-                        },
-                    });
-                }
-            }
-        ));
-        drag.connect_drag_end({
-            let part = part.clone();
-            move |_, _, _| part.set(None)
+        let workspace = Rc::downgrade(workspace);
+        self.wheel.connect_pick(move |action| {
+            if let Some(workspace) = workspace.upgrade() { workspace.dispatch(UiAction::Color { action }); }
         });
-        drag.connect_cancel(move |_, _| part.set(None));
-        self.wheel.add_controller(drag);
     }
     pub(crate) fn set_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
         let copy = layer_ui::NativeCopy::new(&localization).color;
@@ -1350,28 +1426,13 @@ impl ColorPanel {
         self.refresh_color(state, view, headroom, false);
     }
     fn refresh_color(&self, state: &ColorState, view: ViewColor, headroom: f32, preview: bool) {
-        let preview_changed = self.wheel.imp().preview.replace(preview) != preview;
-        if preview_changed { self.wheel.queue_draw(); }
-        if preview_changed {
-            self.wheel.imp().field.cancel();
-        }
         #[cfg(test)]
         let started = std::time::Instant::now();
-        let hdr = matches!(view, ViewColor::Mapped { .. });
-        self.intensity.set_visible(hdr);
-        if self.wheel.imp().hdr.replace(hdr) != hdr { self.wheel.queue_resize(); }
-        if !hdr { self.wheel.imp().linear_field.borrow_mut().take(); }
         self.edit_color.set_sensitive(state.slot != ColorSlot::Transparent);
-        self.intensity.set_sensitive(state.slot != ColorSlot::Transparent);
-        if hdr { self.intensity.refresh_color(state, view, headroom, preview); }
-        let previous_headroom = self.wheel.imp().headroom.replace(headroom);
-        let previous_view = self.wheel.imp().view.replace(view);
-        if self.initialized.replace(true) && previous_view == view && previous_headroom == headroom && *self.wheel.imp().color.borrow() == *state {
+        let changed = self.wheel.set_state(state, view, headroom, preview);
+        if self.initialized.replace(true) && !changed {
             return;
         }
-        *self.wheel.imp().color.borrow_mut() = state.clone();
-        self.wheel.imp().surface_node.borrow_mut().take();
-        self.wheel.queue_draw();
         let shape_descriptions = self.shape_descriptions.borrow();
         let localization = self.localization.borrow();
         for (button, shape) in self.shape_buttons.iter().zip(state.other_shapes()) {
@@ -1384,7 +1445,7 @@ impl ColorPanel {
             button.set_tooltip_text(Some(description));
             button.update_property(&[gtk::accessible::Property::Label(description)]);
         }
-        let description = state.picker_description_localized(view.space(), hdr, &localization);
+        let description = state.picker_description_localized(view.space(), matches!(view, ViewColor::Mapped { .. }), &localization);
         self.readout.set_tooltip_text(Some(&description));
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);

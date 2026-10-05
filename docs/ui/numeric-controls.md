@@ -8,7 +8,9 @@ Every host shares the same touch-first numeric controls.
   uses `GtkSpinButton` in panels and `AdwSpinRow` in Preferences.
 - Wider integers and continuous values: label left and a plain, tappable value
   right; a native slider underneath with minus and plus at its ends. Tapping
-  the value enters text editing. There are no hidden drag gestures on it.
+  the value enters text editing. There are no hidden drag gestures on it,
+  except in Edit Color, whose numbers have no slider and adjust by vertical
+  drag ([color picking](color-picker.md#edit-color)).
 - In Preferences the complete name/description/value header is above the
   slider. Rows expand for descriptions; the numeric content is capped at
   600 logical pixels. Surrounding groups share the same width so labels align.

@@ -177,34 +177,22 @@ function Property-Surfaces{
  foreach($surface in @(@{filter='split_tone';key='shadows'},@{filter='gradient_map';key='gradient'})){
   Property-Filter $surface.filter;$colorId='property-'+$surface.key+'-color'
   Invoke-Id $colorId
-  Wait-Until {(Find ($colorId+'-0'))} 'Native color form did not open' 20
-  $colorEntry=Control ($colorId+'-0');$originalRed=Value $colorEntry;Select-Draft $colorEntry $numericDraft
+  Wait-Until {(Find ($colorId+'-0-0'))} 'Native color form did not open' 20
+  $colorEntry=Control ($colorId+'-0-0');Select-Draft $colorEntry $numericDraft;Key 13
   $baseline=Fresh-Model;$propertyDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$propertyGpu=$baseline.windows_gpu_generation;$propertyValues=Property-Values $baseline
-  $colorIds=@($colorId,($colorId+'-model'),($colorId+'-apply'),($colorId+'-description'),($colorId+'-error'))
-  foreach($i in 0..3){$colorIds+=($colorId+'-'+$i)}
+  $colorIds=@($colorId,($colorId+'-form-0'),($colorId+'-apply'),($colorId+'-error'))
+  foreach($i in 0..2){$colorIds+=($colorId+'-0-'+$i)}
   if($surface.key -eq 'gradient'){$colorIds+=@('property-gradient-gradient','property-gradient-position','property-gradient-add','property-gradient-remove','property-gradient-reset')}
-  $identities=Native-Identities $colorIds;$colorOptionIdentity=(Selected-Option (Control ($colorId+'-model'))).GetRuntimeId() -join ':'
-  $otherValues=@(1..3|ForEach-Object {Value (Control ($colorId+'-'+$_))})
+  $identities=Native-Identities $colorIds;$colorOptionIdentity=(Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':'
+  $otherValues=@(1..2|ForEach-Object {Value (Control ($colorId+'-0-'+$_))})
   Surface-Languages ('retained-color-form-'+$surface.filter) {
    $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
-   $current=Control ($colorId+'-0')
-   if((Value $current) -ne $numericDraft -or (Selection $current) -ne $numericDraft -or ((Selected-Option (Control ($colorId+'-model'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Color form lost its native editor, Unicode draft/selection or selected model identity'}
-   foreach($i in 1..3){if((Value (Control ($colorId+'-'+$i))) -ne $otherValues[$i-1]){throw 'Color form changed another retained literal field'}}
-   foreach($i in 0..3){$field=@('red-encoded','green-encoded','blue-encoded','alpha')[$i];if((Control ($colorId+'-'+$i)).Current.Name -ne (Catalog-Text $choice.tag ('color-form-field-'+$field))){throw 'Color field retained an earlier language caption'}}
-   $modelLabel=Catalog-Text $choice.tag 'color-form-model-document-rgb'
-   if((Selected-Option (Control ($colorId+'-model'))).Current.Name -ne $modelLabel -or (Control ($colorId+'-model')).Current.Name -ne (Catalog-Text $choice.tag 'native-color-model' 'common') -or (Control ($colorId+'-apply')).Current.IsEnabled){throw 'Color form lost its current model caption or enabled an invalid draft'}
-   Check-VisibleText ($colorId+'-model') $modelLabel
-   if((Control ($colorId+'-description')).Current.Name -ne (Catalog-Text $choice.tag 'color-form-document-srgb') -or (Control ($colorId+'-error')).Current.Name -ne (Catalog-Text $choice.tag 'color-form-finite-field').Replace('{ $label }',(Catalog-Text $choice.tag 'color-form-field-red-encoded')) -or (Control ($colorId+'-apply')).Current.Name -ne (Catalog-Text $choice.tag 'common-apply' 'common')){throw 'Color form description, known error or action did not follow the current canonical copy'}
-  }
-  if($surface.key -eq 'gradient'){
-   Select-Draft (Control ($colorId+'-0')) $originalRed
-   Select-Draft (Control ($colorId+'-3')) '150'
-   Surface-Languages 'retained-color-form-alpha-range' {
-    $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
-    $alpha=Control ($colorId+'-3')
-    if((Value $alpha) -ne '150' -or (Selection $alpha) -ne '150' -or (Value (Control ($colorId+'-0'))) -ne $originalRed -or ((Selected-Option (Control ($colorId+'-model'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity -or (Control ($colorId+'-apply')).Current.IsEnabled){throw 'Color form range refusal lost its literal draft, selection, model or retry eligibility'}
-    if((Control ($colorId+'-error')).Current.Name -ne (Catalog-Text $choice.tag 'color-form-alpha-range') -or $alpha.Current.Name -ne (Catalog-Text $choice.tag 'color-form-field-alpha')){throw 'Color form range refusal did not follow the current canonical error and field copy'}
-   }
+   $current=Control ($colorId+'-0-0')
+   if((Value $current) -ne $numericDraft -or ((Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Color form lost its native editor, Unicode draft or selected format identity'}
+   foreach($i in 1..2){if((Value (Control ($colorId+'-0-'+$i))) -ne $otherValues[$i-1]){throw 'Color form changed another retained value'}}
+   foreach($i in 0..2){$field=@('red','green','blue')[$i];if((Control ($colorId+'-0-'+$i)).Current.Name -ne (Catalog-Text $choice.tag ('settings-'+$field) 'settings')){throw 'Color value retained an earlier language caption'}}
+   if((Selected-Option (Control ($colorId+'-form-0'))).Current.Name -ne 'RGB' -or (Control ($colorId+'-apply')).Current.IsEnabled){throw 'Color form lost its format or enabled a refused draft'}
+   if((Control ($colorId+'-error')).Current.Name -ne (Catalog-Text $choice.tag 'color-form-finite-field').Replace('{ $label }',(Catalog-Text $choice.tag 'settings-red' 'settings'))){throw 'Color form refusal did not follow the current language'}
   }
  }
  Menu-Command 'file' 'new_document'
@@ -216,23 +204,22 @@ function Property-Surfaces{
  Wait-Until {$view=Model;$view -and $view.color_panel.hdr -and $view.color_panel.document_depth -eq 'F16' -and $view.state.tabs[-1].width -eq 64} 'Floating test document did not prepare its HDR color controls' 45
  Property-Filter 'gradient_map';$colorId='property-gradient-color';Invoke-Id $colorId
  Wait-Until {(Find ($colorId+'-intensity'))} 'Floating document ColorForm did not expose intensity' 20
- Select-Draft (Control ($colorId+'-intensity')) '12+';Invoke-Id ($colorId+'-apply')
- Select-Draft (Control ($colorId+'-intensity')) '12+'
+ Select-Draft (Control ($colorId+'-intensity')) '12+';Key 13
  $baseline=Fresh-Model;$propertyDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$propertyGpu=$baseline.windows_gpu_generation;$propertyValues=Property-Values $baseline
- $identities=Native-Identities @($colorId,($colorId+'-model'),($colorId+'-intensity'),($colorId+'-apply'),($colorId+'-error'))
- $colorOptionIdentity=(Selected-Option (Control ($colorId+'-model'))).GetRuntimeId() -join ':'
+ $identities=Native-Identities @($colorId,($colorId+'-form-0'),($colorId+'-intensity'),($colorId+'-apply'),($colorId+'-error'))
+ $colorOptionIdentity=(Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':'
  Surface-Languages 'retained-hdr-color-intensity-error' {
   $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
   $intensity=Control ($colorId+'-intensity')
-  if(!$view.color_panel.hdr -or $view.color_panel.document_depth -ne 'F16' -or (Value $intensity) -ne '12+' -or (Selection $intensity) -ne '12+' -or (Control ($colorId+'-apply')).Current.IsEnabled -or ((Selected-Option (Control ($colorId+'-model'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Floating ColorForm lost its invalid EV draft, selection, model or refusal eligibility'}
+  if(!$view.color_panel.hdr -or $view.color_panel.document_depth -ne 'F16' -or (Value $intensity) -ne '12+' -or (Selection $intensity) -ne '12+' -or (Control ($colorId+'-apply')).Current.IsEnabled -or ((Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Floating ColorForm lost its invalid EV draft, selection, model or refusal eligibility'}
   if($intensity.Current.Name -ne (Catalog-Text $choice.tag 'native-color-intensity-ev' 'common') -or (Control ($colorId+'-error')).Current.Name -ne (Catalog-Text $choice.tag 'color-form-finite-field').Replace('{ $label }',(Catalog-Text $choice.tag 'native-color-intensity-ev' 'common'))){throw 'Floating ColorForm EV syntax refusal did not use current canonical copy'}
  }
- Select-Draft (Control ($colorId+'-intensity')) '1.25'
+ Select-Draft (Control ($colorId+'-intensity')) '1.25';Key 13
  Surface-Languages 'retained-hdr-color-intensity-retry' {
   $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
   $intensity=Control ($colorId+'-intensity')
-  if((Value $intensity) -ne '1.25' -or (Selection $intensity) -ne '1.25' -or !(Control ($colorId+'-apply')).Current.IsEnabled -or ((Selected-Option (Control ($colorId+'-model'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Floating ColorForm copy publication disabled retry or changed its pending EV draft'}
-  if($intensity.Current.Name -ne (Catalog-Text $choice.tag 'native-color-intensity-ev' 'common') -or (Control ($colorId+'-error')).Current.Name -ne (Catalog-Text $choice.tag 'color-form-finite-field').Replace('{ $label }',(Catalog-Text $choice.tag 'native-color-intensity-ev' 'common'))){throw 'Floating ColorForm pending retry lost its retained current typed error copy'}
+  if((Value $intensity) -ne '1.25' -or !(Control ($colorId+'-apply')).Current.IsEnabled -or ((Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Floating ColorForm retry did not accept the corrected EV'}
+  if($intensity.Current.Name -ne (Catalog-Text $choice.tag 'native-color-intensity-ev' 'common') -or (Control ($colorId+'-error')).Current.Name){throw 'Floating ColorForm retry kept a stale refusal or caption'}
  }
  Use-Window $textWindow
 }

@@ -305,34 +305,17 @@ color-above-sdr-white = Above SDR white.
 color-features-export-finishing-file = Finishing file…
 color-features-export-writing-image = Writing image…
 
-color-form-model-document-rgb = Document RGB
 color-form-model-linear-rgb = Linear RGB
-color-form-model-srgb-hex = sRGB hex
-color-form-model-hsv = HSV (document RGB)
-color-form-model-hls = HLS (document RGB)
-color-form-model-oklch = OKLCH
-color-form-field-red-encoded = Red (encoded)
-color-form-field-green-encoded = Green (encoded)
-color-form-field-blue-encoded = Blue (encoded)
-color-form-field-red-linear = Red (linear)
-color-form-field-green-linear = Green (linear)
-color-form-field-blue-linear = Blue (linear)
-color-form-field-alpha = Alpha (%)
-color-form-field-hex = sRGB hex (#RRGGBB)
 color-form-field-hue = Hue (°)
 color-form-field-saturation = Saturation (%)
 color-form-field-value = Value (%)
 color-form-field-lightness = Lightness (%)
 color-form-field-chroma = Chroma
-color-form-document-srgb = Document RGB: sRGB.
-color-form-document-display-p3 = Document RGB: Display P3.
-color-form-document-adobe-rgb = Document RGB: Adobe RGB (1998).
-color-form-document-prophoto = Document RGB: ProPhoto RGB.
-color-form-reference-white = 1 = reference white.
-color-form-hex-description = Hex uses 8-bit sRGB.
 
 
 color-form-finite-field = Enter a finite number for { $label }.
+
+color-form-color-syntax = Use a hex code such as #3B7EA1, or a color such as rgb(59 126 161).
 
 color-properties-title = Document Properties
 color-properties-canvas-size = Canvas size
@@ -356,11 +339,6 @@ color-properties-retained-rasterized = Rasterized in document coordinates.
 color-properties-retained-icc = Original samples and embedded ICC retained.
 color-properties-retained-original = Original samples and color interpretation retained.
 
-color-form-entries-too-long = Color entries must be at most 128 bytes.
-color-form-alpha-range = Alpha must be between 0 and 100%.
-color-form-hex-syntax = Use #RGB or #RRGGBB; edit alpha separately.
-color-form-percent-range = Saturation, lightness and value must be between 0 and 100%.
-color-form-negative-lightness-chroma = Lightness and chroma cannot be negative.
 
 color-profile-select-imported = Select an imported profile.
 color-profile-read-limit = ICC profile exceeds 16 MiB.

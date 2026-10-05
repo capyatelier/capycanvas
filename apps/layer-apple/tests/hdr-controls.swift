@@ -117,10 +117,10 @@ import SwiftUI
         asyncField.request(request); asyncField.cancel()
         try await drain(0.2)
         try require(asyncField.image == nil, "Retired HDR bitmap cannot republish after cancellation")
-        var draft = ColorUI.resolve(["type": "form", "request": ["color": ["space": "DisplayP3", "rgba": [1.8, 1.2, 0.4, 0.5]], "document_space": "DisplayP3", "intensity": 2, "change_intensity_text": "bad"]])
-        try require(!draft["error"].isNull, "Invalid HDR text is rejected")
-        draft = ColorUI.resolve(["type": "form", "request": draft["draft"].raw])
-        try require(!draft["error"].isNull, "Invalid EV remains invalid after another field refresh")
+        let opened = ColorUI.resolve(["type": "editor_open", "color": ["space": "DisplayP3", "rgba": [1.8, 1.2, 0.4, 0.5]], "display_space": "DisplayP3"])
+        let refused = ColorUI.resolve(["type": "editor", "editor": opened["editor"].raw, "action": ["op": "intensity", "text": "bad"]])
+        try require(!refused["error"].isNull, "Invalid HDR text is rejected")
+        try require(try refused["editor"].encoded() == opened["editor"].encoded(), "A refused EV leaves the draft unchanged")
         note("PASS: EDR surface, Float32 picker caching/coalescing/cancellation, native proof capture/cancel/keyboard/history, HDR validation and eight proof captures")
     }
     @MainActor static func main() {

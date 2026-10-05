@@ -71,6 +71,81 @@ pub struct PalettePanelView {
     pub can_redo: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SwatchSectionView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub palette: Option<u64>,
+    pub title: String,
+    pub count: String,
+    pub tiles: Vec<PaletteTileView>,
+    pub can_add: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SwatchSheetView {
+    pub sections: Vec<SwatchSectionView>,
+    pub empty: Option<String>,
+}
+
+impl SwatchSheetView {
+    pub fn new(
+        library: &ColorLibrary,
+        query: &str,
+        current: RgbColor,
+        preview: impl Fn(RgbColor) -> [f32; 4],
+        localizer: &crate::Localizer,
+    ) -> Self {
+        let typed = query.trim();
+        let query = typed.to_lowercase();
+        let hex = query.trim_start_matches('#');
+        let found = |name: &str, color: RgbColor| {
+            name.to_lowercase().contains(&query) || (!hex.is_empty() && ColorLibrary::hex_preview(color)[1..].to_lowercase().contains(hex))
+        };
+        let section = |palette: Option<u64>, title: &str, entries: Vec<(Option<u64>, &str, RgbColor)>| {
+            let whole = query.is_empty() || title.to_lowercase().contains(&query);
+            let total = entries.len();
+            let tiles: Vec<_> = entries
+                .into_iter()
+                .filter(|(_, name, color)| whole || found(name, *color))
+                .map(|(id, name, color)| PaletteTileView {
+                    id,
+                    detail: ColorLibrary::tile_detail(name, color),
+                    name: name.into(),
+                    color,
+                    rgba: preview(color),
+                    current: color == current,
+                })
+                .collect();
+            if tiles.is_empty() && !(whole && palette.is_some()) {
+                return None;
+            }
+            let count = if whole {
+                total.to_string()
+            } else {
+                let mut args = crate::FluentArgs::new();
+                args.set("shown", tiles.len());
+                args.set("total", total);
+                localizer.format(crate::MessageId::NATIVE_COLOR_SWATCH_MATCHES, &args)
+            };
+            Some(SwatchSectionView { palette, title: title.into(), count, tiles, can_add: whole && palette.is_some() })
+        };
+        let saved_name = |color: RgbColor| {
+            library.palettes.iter().flat_map(|p| &p.swatches).find(|s| s.color == color).map_or("", |s| s.name.as_str())
+        };
+        let recent = localizer.text(crate::MessageId::NATIVE_PALETTES_RECENT);
+        let sections: Vec<_> = std::iter::once(section(None, &recent, library.history.iter().map(|c| (None, saved_name(*c), *c)).collect()))
+            .chain(library.palettes.iter().map(|p| section(Some(p.id), &p.name, p.swatches.iter().map(|s| (Some(s.id), s.name.as_str(), s.color)).collect())))
+            .flatten()
+            .collect();
+        let empty = sections.is_empty().then(|| {
+            let mut args = crate::FluentArgs::new();
+            args.set("query", typed);
+            localizer.format(crate::MessageId::NATIVE_COLOR_SWATCH_NO_MATCH, &args)
+        });
+        Self { sections, empty }
+    }
+}
+
 pub fn selected_swatch(
     palette: &ColorPalette,
     current: RgbColor,
@@ -244,6 +319,35 @@ impl PalettePanelView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn swatch_sheet_searches_palette_names_color_names_and_hex() {
+        let mut library = ColorLibrary::canonical();
+        let sand = RgbColor::new(RgbSpace::Srgb, [0.894, 0.863, 0.769, 1.]).unwrap();
+        let blue = RgbColor::new(RgbSpace::Srgb, [0.184, 0.482, 0.612, 1.]).unwrap();
+        for (name, color) in [("Sand", sand), ("Blue", blue)] {
+            library.apply_canonical(ColorLibraryAction::Store { palette: 1, name: name.into(), color }).unwrap();
+        }
+        library.history = vec![blue, RgbColor::BLACK];
+        let english = crate::Localizer::shared(crate::UiLanguage::English);
+        let sheet = |query: &str| SwatchSheetView::new(&library, query, blue, |c| c.rgba, &english);
+        let all = sheet("");
+        assert_eq!(all.sections.len(), 1 + library.palettes.len());
+        assert_eq!(all.sections[0].title, "Recent colors");
+        assert_eq!(all.sections[0].tiles[0].name, "Blue");
+        assert!(all.sections[0].tiles[0].current && !all.sections[0].can_add && all.sections[1].can_add);
+        let named = sheet(" SAND ");
+        assert_eq!(named.sections.len(), 1);
+        assert_eq!(named.sections[0].count, "1 of 2");
+        assert!(!named.sections[0].can_add);
+        let hex = sheet("#2F7B");
+        assert_eq!(hex.sections.iter().map(|s| s.tiles.len()).sum::<usize>(), 2);
+        let palette = sheet(&library.palettes[0].name.to_uppercase());
+        assert!(palette.sections.iter().any(|s| s.palette == Some(1) && s.can_add && s.count == "2"));
+        let none = sheet("zzz");
+        assert!(none.sections.is_empty());
+        assert_eq!(none.empty.as_deref(), Some("No palettes or colors match “zzz”."));
+    }
+
     #[test]
     fn menus_and_views_follow_library_state() {
         let mut library = ColorLibrary::canonical();

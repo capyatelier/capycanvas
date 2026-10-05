@@ -1,11 +1,16 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 struct ManagedColorButton: View {
     @Environment(\.capyNativeCopy) private var nativeCopy
     let label: String
     let identifier: String
     let value: JSON
-    let documentSpace: String
+    let colors: JSON
     var viewing = JSON()
     var opaque = false
     var titled = true
@@ -22,92 +27,148 @@ struct ManagedColorButton: View {
             }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(identifier + "-color")
                 .help(preview["in_gamut"].bool ? label : nativeCopy["color"]["outside_p3"].string)
                 .sheet(isPresented: $editing) {
-                    ColorEditor(value: value, documentSpace: documentSpace, viewing: viewing, opaque: opaque) { change($0); editing = false }
+                    ColorEditor(colors: colors, value: value, opaque: opaque, viewing: viewing) { color, _ in change(color); editing = false }
                 }
         }
     }
 }
 
-/// The shared form retains the original tagged value across readout changes.
-/// Only Use Color publishes an edit; invalid drafts and cancellation do not.
+/// Shared Rust owns the draft, parsing, conversion and formats; only Use Color publishes.
 struct ColorEditor: View {
     @Environment(\.capyInterfaceLanguage) private var interfaceLanguage
     @Environment(\.capyNativeCopy) private var nativeCopy
     @Environment(\.capyCommonCopy) private var commonCopy
     @Environment(\.dismiss) private var dismiss
-    @State private var form: JSON
-    let use: (JSON) -> Void
-    let hdrUse: ((JSON, Double) -> Void)?
+    @State private var editor: JSON
+    @State private var view: JSON
+    @State private var drafts: [String: String] = [:]
+    @State private var error: String?
+    @State private var refused: [String: Any]?
+    @FocusState private var focused: String?
     let viewing: JSON
-    @State private var intensityText: String
-    init(value: JSON, documentSpace: String, intensity: Double? = nil, viewing: JSON = JSON(), opaque: Bool = false, hdrUse: ((JSON, Double) -> Void)? = nil, use: @escaping (JSON) -> Void) {
-        _form = State(initialValue: ColorUI.resolve(["type": "form", "request": [
-            "opaque": opaque, "color": value.raw, "document_space": documentSpace, "display_space": "DisplayP3", "document_depth": viewing["document_depth"].raw, "model": viewing["hdr"].bool ? "linear_rgb" : "document_rgb", "rendition": viewing["recipe"].raw, "intensity": intensity as Any? ?? NSNull()]]))
-        self.use = use; self.hdrUse = hdrUse; self.viewing = viewing
-        _intensityText = State(initialValue: intensity.map { String(format: "%.2f", $0) } ?? "")
+    let use: (JSON, Double?) -> Void
+    init(colors: JSON, slot: String? = nil, value: JSON? = nil, opaque: Bool = false, viewing: JSON = JSON(), use: @escaping (JSON, Double?) -> Void) {
+        var request: [String: Any] = ["type": "editor_open", "opaque": opaque, "display_space": "DisplayP3", "rendition": viewing["recipe"].raw]
+        if !colors.isNull { request["colors"] = colors.raw }
+        if let slot { request["slot"] = slot } else if let value { request["color"] = value.raw }
+        let opened = ColorUI.resolve(request)
+        _editor = State(initialValue: opened["editor"]); _view = State(initialValue: opened["view"])
+        _error = State(initialValue: opened["editor"].isNull ? opened["error"].string : nil)
+        self.viewing = viewing; self.use = use
     }
-    private func update(_ draft: JSON) { form = ColorUI.resolve(["type": "form", "request": draft.raw], language: interfaceLanguage) }
+    private func send(_ action: [String: Any]?) -> String? {
+        var request: [String: Any] = ["type": "editor", "editor": editor.raw, "display_space": "DisplayP3", "rendition": viewing["recipe"].raw]
+        if let action { request["action"] = action }
+        let next = ColorUI.resolve(request, language: interfaceLanguage)
+        if next["editor"].isNull { return next["error"].string }
+        editor = next["editor"]; view = next["view"]
+        return next["error"].isNull ? nil : next["error"].string
+    }
+    private func act(_ action: [String: Any], field: String? = nil) {
+        let failure = send(action)
+        error = failure; refused = failure == nil ? nil : action
+        if failure == nil, let field { drafts[field] = nil }
+    }
+    private func copy(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+    }
+    private func field(_ name: String, shown: JSON, width: CGFloat, action: @escaping (String) -> [String: Any]) -> some View {
+        TextField(shown["name"].string.isEmpty ? name : shown["name"].string, text: Binding(
+            get: { drafts[name] ?? (focused == name ? shown["edit"].string : shown["text"].string) },
+            set: { drafts[name] = $0 }))
+            .textFieldStyle(.plain).multilineTextAlignment(.trailing).monospacedDigit().autocorrectionDisabled()
+            .frame(width: width).focused($focused, equals: name)
+            .onSubmit { if let text = drafts[name] { act(action(text), field: name) } }
+            .accessibilityIdentifier("color-value-\(name)")
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(nativeCopy["color"]["edit"].string).font(.headline)
-            EditorScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(form["description"].string)
-                    if !form["preview"].isNull {
-                        if !form["draft"]["intensity"].isNull {
-                            HStack(spacing: 0) {
-                                VStack(spacing: 4) { Text(nativeCopy["color"]["base"].string).font(.caption); HDRColorSwatch(color: form["base"], viewing: viewing) }
-                                VStack(spacing: 4) { Text(nativeCopy["color"]["adjusted"].string).font(.caption); HDRColorSwatch(color: form["value"], viewing: viewing) }
-                            }.frame(height: 68)
-                            HStack {
-                                Text(nativeCopy["color"]["intensity_ev"].string)
-                                TextField(nativeCopy["color"]["intensity_ev"].string, text: $intensityText).textFieldStyle(.roundedBorder)
-                                    .accessibilityIdentifier("color-input-intensity")
-                                    .onChange(of: intensityText) { _, value in update(form["draft"].replacing("change_intensity_text", with: JSON(value))) }
-                            }
-                        } else { ColorSwatch(rgba: form["preview"]["rgba"]).frame(height: 48).accessibilityHidden(true) }
-                        if form["draft"]["intensity"].isNull && !form["preview"]["in_gamut"].bool {
-                            Text(nativeCopy["color"]["outside_p3"].string).font(.caption)
-                        }
+        let color = nativeCopy["color"]
+        VStack(alignment: .leading, spacing: 14) {
+            Text(color["edit"].string).font(.headline)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(spacing: 2) {
+                    HStack(spacing: 0) {
+                        Group {
+                            if viewing["hdr"].bool { HDRColorSwatch(color: view["current_value"], viewing: viewing) } else { ColorSwatch(rgba: view["current"]["rgba"]) }
+                        }.frame(width: 54, height: 48).contentShape(Rectangle()).onTapGesture { act(["op": "revert"]) }
+                            .accessibilityLabel(color["current"].string).accessibilityAddTraits(.isButton).accessibilityIdentifier("color-current")
+                        Group {
+                            if viewing["hdr"].bool { HDRColorSwatch(color: view["value"], viewing: viewing) } else { ColorSwatch(rgba: view["new"]["rgba"]) }
+                        }.frame(width: 54, height: 48).accessibilityLabel(color["new"].string).accessibilityIdentifier("color-new")
+                    }.clipShape(SquircleShape.control)
+                    HStack(spacing: 0) {
+                        Text(color["current"].string).frame(maxWidth: .infinity)
+                        Text(color["new"].string).frame(maxWidth: .infinity)
+                    }.font(.caption).foregroundStyle(.secondary).frame(width: 108)
+                }
+                Spacer()
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(color["hex"].string).font(.caption.bold()).foregroundStyle(.secondary)
+                        if !view["hex_note"].isNull { Text(view["hex_note"]["text"].string).font(.caption).help(view["hex_note"]["tip"].string) }
                     }
-                    let models = form["models"].array
-                    FormPicker(nativeCopy["color"]["model"].string, selection: Binding(get: { form["draft"]["model"].string }, set: {
-                        update(form["draft"].replacing("change_model", with: JSON($0)))
-                    })) {
-                        ForEach(models.indices, id: \.self) { i in Text(models[i][1].string).tag(models[i][0].string) }
-                    }.accessibilityIdentifier("color-input-model")
-                    VStack(spacing: 0) {
-                    ForEach(0..<4, id: \.self) { i in
-                        if !form["labels"][i].string.isEmpty {
-                            HStack {
-                                Text(form["labels"][i].string).frame(maxWidth: .infinity, alignment: .leading)
-                                TextField(form["labels"][i].string, text: Binding(get: { form["draft"]["fields"][i].string }, set: { text in
-                                    var fields = form["draft"]["fields"].array.map(\.string)
-                                    guard fields.indices.contains(i) else { return }
-                                    fields[i] = text
-                                    update(form["draft"].replacing("fields", with: JSON(fields)))
-                                })).textFieldStyle(.plain).multilineTextAlignment(.trailing).autocorrectionDisabled()
-                                    .accessibilityIdentifier("color-input-\(i)")
-                            }.padding(10)
-                            if i < 3 { Divider() }
-                        }
+                    HStack(spacing: 4) {
+                        field("hex", shown: JSON(["text": view["hex"].raw, "edit": view["hex"].raw, "name": color["hex"].raw]), width: 108) { ["op": "text", "text": $0] }
+                            .font(.title2.weight(.semibold)).multilineTextAlignment(.leading)
+                        Button { copy(view["hex"].string) } label: { SharedIcon(name: "copy") }.buttonStyle(.plain)
+                            .help(color["copy"].string).accessibilityLabel(color["copy"].string).accessibilityIdentifier("color-copy-hex")
                     }
-                    }.background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-                    if !form["validation"].isNull { Text(form["validation"].string).font(.caption) }
-                    if !form["error"].isNull { Text(form["error"].string).foregroundStyle(.red).accessibilityIdentifier("color-input-error") }
                 }
             }
+            Grid(alignment: .trailing, horizontalSpacing: 8, verticalSpacing: 6) {
+                ForEach(0..<3, id: \.self) { row in
+                    let shown = view["rows"][row]
+                    GridRow {
+                        HStack(spacing: 4) {
+                            Menu(shown["label"].string) {
+                                ForEach(shown["forms"].array.indices, id: \.self) { index in
+                                    let form = shown["forms"].array[index]
+                                    Button(form["label"].string) { act(["op": "form", "row": row, "form": form["form"].string]) }
+                                }
+                            }.menuStyle(.borderlessButton).fixedSize().accessibilityIdentifier("color-format-\(row)")
+                            if !shown["space"].isNull { Text(shown["space"].string).font(.caption).padding(.horizontal, 5).background(.primary.opacity(0.08), in: SquircleShape.control) }
+                        }.gridColumnAlignment(.leading)
+                        ForEach(0..<3, id: \.self) { index in
+                            field("\(row)-\(index)", shown: shown["values"][index], width: 64) { ["op": "value", "row": row, "index": index, "text": $0] }
+                        }
+                        Button { copy(shown["copy"].string) } label: { SharedIcon(name: "copy") }.buttonStyle(.plain)
+                            .help(color["copy"].string).accessibilityLabel(color["copy"].string).accessibilityIdentifier("color-copy-\(row)")
+                    }
+                }
+                if !view["intensity"].isNull {
+                    GridRow {
+                        Text(color["intensity_ev"].string).gridColumnAlignment(.leading)
+                        field("ev", shown: view["intensity"], width: 80) { ["op": "intensity", "text": $0] }.gridCellColumns(3)
+                        Color.clear.frame(width: 1, height: 1)
+                    }
+                }
+            }
+            if let error { Text(error).font(.caption).foregroundStyle(.red).accessibilityIdentifier("color-editor-error") }
             HStack {
                 Button(commonCopy["cancel"].string) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(nativeCopy["color"]["use_color"].string) {
-                    if let hdrUse, !form["draft"]["intensity"].isNull { hdrUse(form["value"], form["draft"]["intensity"].number) }
-                    else { use(form["value"]) }
-                }.disabled(form["value"].isNull || !form["error"].isNull)
-                    .keyboardShortcut(.defaultAction).accessibilityIdentifier("color-input-use")
+                Button(color["use_color"].string) { use(view["value"], view["stops"].isNull ? nil : view["stops"].number) }
+                    .disabled(view["value"].isNull || refused != nil)
+                    .keyboardShortcut(.defaultAction).accessibilityIdentifier("color-use")
             }
-        }.onChange(of: interfaceLanguage, initial: true) { _, _ in update(form["draft"]) }
-        .onAppear { if intensityText.isEmpty && !form["draft"]["intensity"].isNull { intensityText = String(format: "%.2f", form["draft"]["intensity"].number) } }
-        .padding(20).frame(minWidth: 320, idealWidth: 380, maxWidth: 460, minHeight: 420, idealHeight: 520)
+        }.onChange(of: interfaceLanguage) { _, _ in _ = send(nil); if let refused { error = send(refused) } }
+        .onChange(of: focused) { previous, _ in
+            if let previous, let text = drafts[previous] {
+                let action: [String: Any]
+                switch previous {
+                case "hex": action = ["op": "text", "text": text]
+                case "ev": action = ["op": "intensity", "text": text]
+                default:
+                    let parts = previous.split(separator: "-").compactMap { Int($0) }
+                    action = ["op": "value", "row": parts[0], "index": parts[1], "text": text]
+                }
+                act(action, field: previous)
+            }
+        }
+        .padding(20).frame(minWidth: 360, idealWidth: 460, maxWidth: 560)
     }
 }

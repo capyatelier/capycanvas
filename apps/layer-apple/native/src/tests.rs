@@ -1542,28 +1542,22 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
 }
 
 #[test]
-fn stateless_color_forms_preserve_tagged_precision_and_convert_previews() {
+fn stateless_color_editors_preserve_tagged_precision_and_convert_previews() {
     let resolve = |request: Value| localized_stateless(capy_apple_color_ui, request.to_string());
+    let mut colors = layer_ui::ColorState::default();
+    colors.set_rgb_space(layer_core::color::RgbSpace::ProPhoto).unwrap();
     for space in layer_core::color::RgbSpace::ALL {
-        let color = layer_core::color::RgbColor::new(space, [-0.12, 1.2, 31234. / 65535., 213. / 65535.]).unwrap();
-        let mut form = resolve(json!({"type":"form","request":{"color":color,"document_space":"ProPhoto"}}));
-        for model in layer_ui::ColorInputModel::ALL {
-            let mut draft = form["draft"].clone();
-            draft["change_model"] = serde_json::to_value(model).unwrap();
-            form = resolve(json!({"type":"form","request":draft}));
-            assert_eq!(serde_json::from_value::<layer_core::color::RgbColor>(form["value"].clone()).unwrap(), color);
+        let color = layer_core::color::RgbColor::new(space, [0.12, 0.8, 31234. / 65535., 213. / 65535.]).unwrap();
+        let mut editor = resolve(json!({"type":"editor_open","colors":colors,"color":color}));
+        for (row, forms) in layer_ui::COLOR_FORM_FAMILIES.iter().enumerate() {
+            for form in *forms {
+                editor = resolve(json!({"type":"editor","editor":editor["editor"],"action":{"op":"form","row":row,"form":form}}));
+                assert_eq!(serde_json::from_value::<layer_core::color::RgbColor>(editor["view"]["value"].clone()).unwrap(), color);
+            }
         }
-        let mut draft = form["draft"].clone();
-        draft["fields"][3] = json!("37");
-        form = resolve(json!({"type":"form","request":draft}));
-        let updated: layer_core::color::RgbColor = serde_json::from_value(form["value"].clone()).unwrap();
-        assert_eq!(updated.space, space);
-        assert_eq!(updated.rgba[..3], color.rgba[..3]);
-        assert_eq!(updated.rgba[3], 0.37);
-        let mut draft = form["draft"].clone();
-        draft["fields"][0] = json!("invalid");
-        let invalid = resolve(json!({"type":"form","request":draft}));
-        assert!(invalid["value"].is_null() && invalid["error"].is_string());
+        let invalid = resolve(json!({"type":"editor","editor":editor["editor"],"action":{"op":"value","row":0,"index":0,"text":"invalid"}}));
+        assert!(invalid["error"].is_string());
+        assert_eq!(invalid["editor"], editor["editor"]);
     }
     let preview = resolve(json!({"type":"preview","colors":[{"space":"DisplayP3","rgba":[1.,0.,0.,0.25]}]}));
     assert_eq!(preview[0]["space"], "Srgb");

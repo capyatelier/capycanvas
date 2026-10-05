@@ -913,9 +913,15 @@ class AndroidLanguageTest {
                 compose.runOnIdle { assertTrue(field(tag).config[SemanticsActions.SetSelection].action!!.invoke(start, end, false)) }
             }
             fun preview(): androidx.compose.ui.graphics.Color? {
-                if (findTag("color-form-preview") == null) return null
-                val pixels = compose.onNodeWithTag("color-form-preview").captureToImage().toPixelMap()
+                if (findTag("color-new") == null) return null
+                val pixels = compose.onNodeWithTag("color-new").captureToImage().toPixelMap()
                 return pixels[pixels.width / 2, pixels.height / 2]
+            }
+            fun type(name: String, text: String) {
+                if (findTag("color-value-$name-input") == null) compose.onNodeWithTag("color-value-$name").performClick()
+                compose.onNodeWithTag("color-value-$name-input").performTextReplacement(text)
+                compose.onNodeWithTag("color-value-$name-input").performImeAction()
+                compose.waitForIdle()
             }
             try {
                 for (theme in listOf("light", "dark")) {
@@ -925,82 +931,57 @@ class AndroidLanguageTest {
                     val colors = state.displayColors()
                     val source = colors.toString()
                     val drawing = state.getJSONObject("document_file").toString()
-                    val initial = JSONObject(Native.colorUi(obj("type" to "form", "request" to obj("color" to colors.getJSONObject(colors.getString("slot")), "document_depth" to colors.optString("hdr_depth"), "document_space" to "DisplayP3", "model" to (if (hdr) "linear_rgb" else "document_rgb"), "intensity" to (if (hdr) host.snapshot!!.getJSONObject("color_panel").number("intensity") else null), "rendition" to host.snapshot!!.getJSONObject("color_panel").objectOrNull("rendition"))).toString(), "en"))
+                    val rendition = host.snapshot!!.getJSONObject("color_panel").objectOrNull("rendition")
+                    fun editor(request: JSONObject, tag: String) = JSONObject(Native.colorUi(request.put("display_space", "Srgb").put("rendition", rendition).toString(), tag))
+                    val opened = editor(obj("type" to "editor_open", "colors" to colors, "slot" to colors.getString("slot")), "en")
+                    val accepted = editor(obj("type" to "editor", "editor" to opened.getJSONObject("editor"), "action" to obj("op" to "value", "row" to 0, "index" to 0, "text" to "64")), "en")
                     compose.onNodeWithTag("color-edit-button").performClick()
-                    compose.onNodeWithTag("color-input-0").performTextReplacement("0.2500")
-                    hideKeyboard("color-input-0")
-                    val validRequest = JSONObject(initial.getJSONObject("draft").toString())
-                    validRequest.getJSONArray("fields").put(0, "0.2500")
-                    val validCopy = JSONObject(Native.colorUi(obj("type" to "form", "request" to validRequest).toString(), "en")).getJSONObject("copy")
+                    type("0-0", "64")
+                    hideKeyboard("color-use")
                     val validPreview = preview()
                     assertNotNull(validPreview)
                     for (tag in languages ?: tags(host)) {
                         switch(host, tag)
-                        val captions = JSONObject(Native.colorUi(obj("type" to "form_copy", "copy" to validCopy).toString(), tag))
-                        compose.onNodeWithTag("color-form-status").assertTextEquals(captions.getString("validation"))
-                        compose.onNodeWithTag("color-form-use").assertIsEnabled()
-                        assertEquals("0.2500", text("color-input-0"))
+                        compose.onNodeWithTag("color-use").assertIsEnabled()
+                        compose.onNodeWithTag("color-value-hex").assertContentDescriptionContains(accepted.getJSONObject("view").getString("hex"), substring = true)
+                        compose.onNodeWithTag("color-cancel").assertTextEquals(host.bootstrap!!.getJSONObject("common").getString("cancel"))
                         assertEquals(validPreview, preview())
                         assertEquals(source, host.snapshot!!.getJSONObject("state").displayColors().toString())
                         assertEquals(drawing, host.snapshot!!.getJSONObject("state").getJSONObject("document_file").toString())
                         capture("${capturePrefix}retained-color-form-valid-$depth", theme, tag)
                     }
                     switch(host, "en")
-                    val invalidTag = if (hdr) "color-intensity-value" else "color-input-2"
-                    compose.onNodeWithTag(invalidTag).performTextReplacement(invalidText)
+                    val name = if (hdr) "ev" else "0-2"
+                    val refused = if (hdr) obj("op" to "intensity", "text" to invalidText) else obj("op" to "value", "row" to 0, "index" to 2, "text" to invalidText)
+                    type(name, invalidText)
+                    val invalidTag = "color-value-$name-input"
                     val focusedRange = androidx.compose.ui.text.TextRange(if (invalidText.length > 2) 1 else 0, invalidText.length)
                     select(invalidTag, focusedRange.start, focusedRange.end)
                     compose.waitForIdle()
                     assertEquals(focusedRange, selection(invalidTag))
-                    compose.onNodeWithTag("color-input-1").performClick().performTextReplacement("2.0000")
-                    hideKeyboard("color-input-1")
-                    select("color-input-1", 1, 4)
-                    compose.waitForIdle()
-                    val intensitySelection = selection(invalidTag)
-                    val numericSelection = selection("color-input-1")
-                    assertEquals(androidx.compose.ui.text.TextRange(1, 4), numericSelection)
                     val nativeView = findTag(invalidTag)!!.first.view
                     val color = preview()
-                    val request = initial.getJSONObject("draft")
-                    request.getJSONArray("fields").put(0, "0.2500").put(1, "2.0000")
-                    if (hdr) request.put("change_intensity_text", invalidText) else request.getJSONArray("fields").put(2, invalidText)
-                    val expected = JSONObject(Native.colorUi(obj("type" to "form", "request" to request).toString(), "en"))
-                    val copy = expected.getJSONObject("copy")
-                    assertFalse(copy.isNull("error"))
-                    if (expectedReason != null) {
-                        assertEquals("intensity", copy.getJSONObject("error").getString("type"))
-                        assertEquals(expectedReason, copy.getJSONObject("error").getJSONObject("detail").getString("reason"))
-                    }
-                    compose.onNodeWithTag("color-input-model").performClick()
+                    if (expectedReason != null) assertFalse(editor(obj("type" to "editor", "editor" to accepted.getJSONObject("editor"), "action" to refused), "en").isNull("error"))
                     for (tag in languages ?: tags(host)) {
                         switch(host, tag)
-                        val captions = JSONObject(Native.colorUi(obj("type" to "form_copy", "copy" to copy).toString(), tag))
-                        compose.onNodeWithTag("color-form-status").assertTextEquals(captions.getString("error"))
-                        if (expectedReason == "range" && tag == "fr") assertTrue(captions.getString("error").startsWith("La valeur du champ "))
-                        if (expectedReason == "finite_number" && tag == "ru") assertTrue(captions.getString("error").startsWith("Для поля «"))
-                        compose.onNodeWithTag("color-form-use").assertIsNotEnabled()
-                        val models = captions.getJSONArray("models")
-                        for (i in 0 until models.length()) compose.onAllNodesWithText(models.getJSONArray(i).getString(1)).onLast().assertExists()
+                        val message = editor(obj("type" to "editor", "editor" to accepted.getJSONObject("editor"), "action" to refused), tag).getString("error")
+                        compose.onNodeWithTag("color-editor-error").assertTextEquals(message)
+                        compose.onNodeWithTag("color-use").assertIsNotEnabled()
                         compose.runOnIdle {
                             assertEquals(invalidText, text(invalidTag))
-                            assertEquals("0.2500", text("color-input-0"))
-                            assertEquals("2.0000", text("color-input-1"))
-                            assertEquals(intensitySelection, selection(invalidTag))
-                            assertEquals(numericSelection, selection("color-input-1"))
+                            assertEquals(focusedRange, selection(invalidTag))
                             assertSame(nativeView, findTag(invalidTag)!!.first.view)
                             assertEquals(source, host.snapshot!!.getJSONObject("state").displayColors().toString())
                             assertEquals(drawing, host.snapshot!!.getJSONObject("state").getJSONObject("document_file").toString())
                         }
                         assertEquals(color, preview())
                         capture("${capturePrefix}retained-color-form-$depth", theme, tag)
-                        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-                        compose.onNodeWithTag("color-form-status").assertIsDisplayed()
-                        compose.onNodeWithTag("color-form-use").assertIsDisplayed()
-                        capture("${capturePrefix}retained-color-form-closed-$depth", theme, tag)
-                        compose.onNodeWithTag("color-input-model").performClick()
                     }
-                    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-                    compose.onNodeWithText(host.bootstrap!!.getJSONObject("common").getString("cancel")).performClick()
+                    switch(host, "en")
+                    compose.onNodeWithTag("color-cancel").performClick()
+                    compose.waitForIdle()
+                    assertNull(findTag("color-use"))
+                    assertEquals(source, host.snapshot!!.getJSONObject("state").displayColors().toString())
                 }
             } finally { switch(host, "en") }
             }

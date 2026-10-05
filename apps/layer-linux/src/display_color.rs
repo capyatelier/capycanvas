@@ -325,11 +325,27 @@ fn checker(snapshot: &gtk::Snapshot, bounds: gtk::graphene::Rect, radius: f32,
     snapshot.pop();
 }
 
+fn device_mapping(widget: &gtk::Widget) -> Option<[f32; 3]> {
+    let native = widget.native()?;
+    let scale = native.surface()?.scale() as f32;
+    let origin = widget.compute_point(&native, &gtk::graphene::Point::zero())?;
+    let (x, y) = native.surface_transform();
+    Some([origin.x() + x as f32, origin.y() + y as f32, scale])
+}
+fn device_aligned([left, top, scale]: [f32; 3], bounds: gtk::graphene::Rect) -> gtk::graphene::Rect {
+    let snap = |offset: f32, value: f32| (((offset + value) * scale).round() / scale) - offset;
+    let [x0, y0, x1, y1] = [snap(left, bounds.x()), snap(top, bounds.y()), snap(left, bounds.x() + bounds.width()), snap(top, bounds.y() + bounds.height())];
+    gtk::graphene::Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
 mod patch {
     use super::*;
     #[derive(Default)]
     pub struct Patch {
         pub round: Cell<bool>,
+        pub aligned: Cell<bool>,
+        pub mapping: Cell<Option<[f32; 3]>>,
+        pub after_paint: RefCell<Option<(gdk::FrameClock, glib::SignalHandlerId)>>,
         pub key: Cell<Option<(RgbColor, ViewColor, f32)>>,
         pub textures: RefCell<Option<[gdk::Texture; 2]>>,
     }
@@ -341,9 +357,29 @@ mod patch {
     }
     impl ObjectImpl for Patch {}
     impl WidgetImpl for Patch {
+        fn realize(&self) {
+            self.parent_realize();
+            let obj = self.obj();
+            if let Some(clock) = obj.frame_clock().filter(|_| self.aligned.get()) {
+                let patch = obj.downgrade();
+                let id = clock.connect_after_paint(move |_| {
+                    let Some(patch) = patch.upgrade() else { return; };
+                    if super::device_mapping(patch.upcast_ref()) != patch.imp().mapping.get() { patch.queue_draw(); }
+                });
+                self.after_paint.replace(Some((clock, id)));
+            }
+        }
+        fn unrealize(&self) {
+            if let Some((clock, id)) = self.after_paint.take() { clock.disconnect(id); }
+            self.parent_unrealize();
+        }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let obj = self.obj();
-            let bounds = gtk::graphene::Rect::new(0., 0., obj.width() as f32, obj.height() as f32);
+            let mut bounds = gtk::graphene::Rect::new(0., 0., obj.width() as f32, obj.height() as f32);
+            if self.aligned.get() {
+                self.mapping.set(super::device_mapping(obj.upcast_ref()));
+                if let Some(mapping) = self.mapping.get() { bounds = super::device_aligned(mapping, bounds); }
+            }
             let Some(textures) = self.textures.borrow().clone() else {
                 return;
             };
@@ -369,6 +405,11 @@ impl ColorPatch {
         let obj: Self = glib::Object::new();
         obj.imp().round.set(round);
         obj.set_can_target(false);
+        obj
+    }
+    pub fn device_aligned(round: bool) -> Self {
+        let obj = Self::new(round);
+        obj.imp().aligned.set(true);
         obj
     }
     pub fn set_color(&self, color: RgbColor, view: ViewColor) {

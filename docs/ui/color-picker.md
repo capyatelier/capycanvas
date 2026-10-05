@@ -72,6 +72,78 @@ receives its pointer contact through the color panel so an empty corner of the
 wheel's rectangular view does not hide either cap; occupied wheel and swatch
 regions keep their own contacts.
 
+## Edit Color
+
+Edit Color is one page under a centered title, in two columns: the panel's
+circle, hue ring and, in HDR drawings, intensity arc on the left with an OKLCH /
+HSB / HLS shape choice below; on the right, one row with Current and New, the
+eyedropper and a large hex, then three rows of numbers. Current and New match
+the eyedropper's height, and the eyedropper and hex center on them, not on
+their captions. In narrow windows the page stacks: Current, New and hex, then
+the wheel, then the rows; a short window scrolls the page.
+
+Shared [`ColorEditor`](../../crates/layer-ui/src/color/editor.rs) owns the
+draft. It wraps a copy of the panel's `ColorState`, so the wheel, hue memory and
+HDR base-and-intensity model are the panel's. Only **Use Color** publishes, and
+an untouched draft keeps the exact stored definition. GTK calls it directly;
+Web, Android, Apple and Windows use the stateless `editor_open`, `editor`,
+`editor_strip` and `strip_placement` requests of `color_ui`.
+
+- Each row's name is a format menu: RGB, RGB 0–1 or Linear RGB; HSB or HSL;
+  OKLCH or OKLab. Rows show the base color and name the drawing's RGB space; HDR
+  drawings add an Intensity (EV) row. Row formats and the swatch search are
+  remembered in `ColorState` and saved when the dialog closes
+  (`ColorAction::EditorMemory`), for paint and mask colors alike.
+- Tapping a number opens it for typing; Enter or leaving the field commits and
+  Escape cancels. A refused value stays open with its message and blocks Use
+  Color. Any field, and paste anywhere on the dialog, also accepts a whole
+  color: hex, CSS names, `rgb()`, `hsl()`, `hsb()`, `oklch()`, `oklab()` and
+  `color()` in the four RGB spaces. Colors have no alpha.
+- Dragging a number up or down adjusts it from its value at the start of the
+  drag (Shift for larger steps, Alt or Ctrl for finer); arrow keys step it.
+- Each row and the hex have a copy button. Copies use standard notations:
+  `rgb()` and `hsl()` in sRGB drawings, `color()` with the drawing's space
+  otherwise, and `oklch()`.
+- Current shows the starting color; tapping it reverts. Hex outside sRGB is
+  marked ≈ nearest sRGB; in HDR drawings it describes the base color.
+- The bottom row shows recent colors and, in its last cell, a chevron that
+  slides a sheet up over the page, and back down when closed, with every recent
+  color and palette, searchable by palette name, color name or hex
+  (`SwatchSheetView`), with + to add the new color to a palette. The sheet's list
+  scrolls down to the divider above the buttons.
+- The eyedropper hides the dialog and starts the session's editor-mode picker
+  (`ColorPickerAction::Editor`). The paint and color history do not change; a
+  pick publishes `color_picker.picked` and the dialog returns with it. A strip
+  in a corner of the canvas work area, between the panels, shows the hex and
+  the current shape's values. It starts top-right and stays in its corner until
+  `color_picker.sample_point` or a hovering mouse or pen covers it; it then
+  moves to the first free corner of top-right, top-left, bottom-right and
+  bottom-left, so the bottom corners serve work areas too narrow for two strips
+  side by side (`ColorStripPlacement`). A corner is free only when it covers
+  neither point, so the strip cannot oscillate. Escape, or tapping the strip,
+  returns without a change.
+
+On the OKLCH circle, dragging from the field out past the hue ring snaps to
+white, full color or black within 18° of their directions. The panel and the
+dialog share this geometry.
+
+Every host reuses its own controls: the shape choice is the workspace
+switcher's well of pills, recent and sheet swatches are palette tiles, and value
+cells are number controls. Titles are bold, the hex medium and other text
+regular. Format names and value cells reserve their widest text, so changing a
+format or showing an error never resizes the page.
+
+GTK presents an `adw::Dialog` and converts its body, footer and sheet content
+to squircles; the sheet's scroll bar stays outside the converter, and the sheet
+slides inside a clipped overlay. Current and New snap their shared edge to
+device pixels at fractional display scales. Picking
+closes the dialog and presents it again afterwards. Web closes its modal
+`<dialog>` while picking so the canvas receives input. Android draws the editor
+in the workspace tree, because a dialog window would take the canvas's input;
+an editor opened from another dialog window uses a dialog window and hides the
+eyedropper, as GTK does when another dialog is open. Apple and Windows show the
+value rows without the wheel, eyedropper or sheet.
+
 ## Picker
 
 One tool family has two presentations: **Color Picker** (default glass loupe)
@@ -272,6 +344,15 @@ tools/windows-vm/windows-vm.py fixtures compact-color:dark compact-color:light
   with `-e systemInput true`. Apple runs the `picker` tests in
   `cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` and the
   `testColorPicker` journey; `testPhotoScopes` covers the calibration menu.
+- Edit Color: `native_color_editor_rows_sheet_and_canvas_pick` (GTK, real
+  pointer drags and canvas picks), `native_color_editor_live_language` (all
+  languages, SDR and HDR, large text), `native_color_editor_visual_audit`
+  (captures every format, shape, editing, error, sheet, narrow, German and SDR
+  state, keeps the page one size across formats and shapes, and checks the
+  Current/New seam; run it also with `LAYER_MOTION_SCALE=1.25`), `test.mjs --color-editor` and
+  `--live-language-color` (Web), `node --test apps/layer-web/color-controls-copy.test.mjs`
+  and `color-button-lifecycle.test.mjs`, and Android
+  `AndroidColorPanelTest#editColorRowsSheetAndCanvasPick`. Each runs in both themes.
 - Web pen timing uses `tools/performance/web-pen.mjs --os-input --picker`
   (`LAYER_PICKER_SAMPLE_SIZE=101` for the largest sample); see
   [measuring](../performance/measuring.md). Large-area averaging still costs

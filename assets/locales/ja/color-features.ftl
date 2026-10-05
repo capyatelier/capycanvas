@@ -302,33 +302,16 @@ color-outside-prophoto-preview-gamut = ProPhoto RGBプレビューの色域外�
 color-above-sdr-white = SDRの白より明るい色です。
 color-features-export-finishing-file = ファイルの仕上げ中…
 color-features-export-writing-image = 画像を書き込み中…
-color-form-model-document-rgb = ドキュメントRGB
 color-form-model-linear-rgb = リニアRGB
-color-form-model-srgb-hex = sRGB 16進数
-color-form-model-hsv = HSV（ドキュメントRGB）
-color-form-model-hls = HLS（ドキュメントRGB）
-color-form-model-oklch = OKLCH
-color-form-field-red-encoded = 赤（符号化）
-color-form-field-green-encoded = 緑（符号化）
-color-form-field-blue-encoded = 青（符号化）
-color-form-field-red-linear = 赤（リニア）
-color-form-field-green-linear = 緑（リニア）
-color-form-field-blue-linear = 青（リニア）
-color-form-field-alpha = アルファ（%）
-color-form-field-hex = sRGB 16進数（#RRGGBB）
 color-form-field-hue = 色相（°）
 color-form-field-saturation = 彩度（%）
 color-form-field-value = 明度（%）
 color-form-field-lightness = 明るさ（%）
 color-form-field-chroma = クロマ
-color-form-document-srgb = ドキュメントRGB: sRGB。
-color-form-document-display-p3 = ドキュメントRGB: Display P3。
-color-form-document-adobe-rgb = ドキュメントRGB: Adobe RGB (1998)。
-color-form-document-prophoto = ドキュメントRGB: ProPhoto RGB。
-color-form-reference-white = 1 = 基準の白。
-color-form-hex-description = 16進数は8ビットsRGBを使用します。
 
 color-form-finite-field = { $label }に有限の数値を入力してください。
+
+color-form-color-syntax = #3B7EA1 のような16進数コード、または rgb(59 126 161) のような色を入力してください。
 
 color-properties-title = ドキュメントのプロパティ
 color-properties-canvas-size = キャンバスサイズ
@@ -352,11 +335,6 @@ color-properties-retained-rasterized = ドキュメントの座標でラスタ�
 color-properties-retained-icc = 元の画素値と埋め込みICCを保持しています。
 color-properties-retained-original = 元の画素値と色の解釈を保持しています。
 
-color-form-entries-too-long = 色の入力は128バイト以内にしてください。
-color-form-alpha-range = アルファは0〜100%の範囲にしてください。
-color-form-hex-syntax = #RGBまたは#RRGGBBを使用してください。アルファは別に編集します。
-color-form-percent-range = 彩度、明るさ、明度は0〜100%の範囲にしてください。
-color-form-negative-lightness-chroma = 明るさとクロマは負の値にできません。
 
 color-profile-select-imported = 読み込んだプロファイルを選択してください。
 color-profile-read-limit = ICCプロファイルが16 MiBを超えています。

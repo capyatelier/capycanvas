@@ -3,7 +3,7 @@ use super::new_photo::{capture_ui, chooser, combo, finish, invoke, ready, respon
 use super::place_source::snapshot;
 use super::*;
 use layer_core::color::{RgbSpace, SampleDepth, hdr::SdrRendition};
-use layer_ui::{ColorInputModel, ColorSlot, EffectAction};
+use layer_ui::{ColorForm, ColorSlot, EffectAction};
 
 #[path = "hdr_qualification_tests.rs"]
 mod qualification;
@@ -190,16 +190,11 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     invoke(&photo, CommandId::AddLayer);
     crate::color_editor::show(&photo, ColorSlot::Foreground);
     pump(100);
-    combo(&photo, "edit-color-model").set_selected(
-        ColorInputModel::ALL
-            .iter()
-            .position(|m| *m == ColorInputModel::LinearRgb)
-            .unwrap() as u32,
-    );
-    for (i, value) in ["8", "2", "1", "100"].iter().enumerate() {
-        named::<adw::EntryRow>(photo.window.visible_dialog().unwrap().upcast_ref(), &format!("edit-color-value-{i}"))
-        .set_text(value);
+    crate::color_editor::tests::form(&photo, 0, ColorForm::LinearRgb);
+    for (i, value) in ["1", "0.25", "0.125"].iter().enumerate() {
+        crate::color_editor::tests::value(&photo, 0, i, value);
     }
+    crate::color_editor::tests::type_into(&photo, "edit-color-ev", "3");
     capture_ui(&photo, &directory, "hdr-color-entry.png");
     response(&photo, "apply");
     let entered = state(&photo)
