@@ -149,12 +149,12 @@ struct Device {
         return device;
     }
 };
-struct FieldRequest {hstring key;uint32_t pixels=0;float hue=0;uint32_t projection=0,rgbSpace=0;bool hdr=false;std::string mapped;uint64_t epoch=0;};
+struct FieldRequest {hstring key;uint32_t pixels=0;float hue=0;uint32_t projection=0,rgbSpace=0;bool hdr=false,guide=false;std::string mapped;uint64_t epoch=0;};
 struct FieldResult {hstring key;uint32_t pixels=0;uint64_t epoch=0;std::vector<uint8_t> bytes;};
 bool rasterField(FieldRequest const& request,std::vector<uint8_t>& bytes){
     bytes.resize(size_t(request.pixels)*request.pixels*4);
     return request.hdr?capy_color_mapped_field(request.pixels,request.mapped.c_str(),bytes.data(),bytes.size())
-        :capy_color_raster(request.pixels,request.hue,request.projection,request.rgbSpace,false,bytes.data(),bytes.size());
+        :capy_color_raster(request.pixels,request.hue,request.projection,request.rgbSpace,request.guide,bytes.data(),bytes.size());
 }
 struct FieldWorker : std::enable_shared_from_this<FieldWorker> {
     Microsoft::UI::Dispatching::DispatcherQueue queue{Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread()};
@@ -186,20 +186,23 @@ struct WheelImage {
     int pixels=0;
     com_ptr<ID2D1ImageBrush> ring;
     com_ptr<ID2D1Bitmap> field;
-    hstring ringShape,fieldKey,fieldLayout;
-    std::shared_ptr<FieldWorker> worker;
-    std::optional<FieldResult> ready;
-    uint64_t epoch=0,synchronous=0;bool previewed=false;
-    void install(ID2D1DeviceContext2* context,std::vector<uint8_t> const& bytes,uint32_t side,hstring const& key){
-        field=nullptr;check_hresult(context->CreateBitmap(D2D1::SizeU(side,side),bytes.data(),side*4,
-            D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),field.put()));
-        fieldKey=key;
+    hstring ringKey,ringLayout,fieldKey,fieldLayout;
+    std::shared_ptr<FieldWorker> ringWorker,worker;
+    std::optional<FieldResult> ringReady,ready;
+    uint64_t ringEpoch=0,epoch=0;uint32_t fieldPixels=0;
+    static com_ptr<ID2D1Bitmap> bitmap(ID2D1DeviceContext2* context,FieldResult const& result){
+        com_ptr<ID2D1Bitmap> bitmap;check_hresult(context->CreateBitmap(D2D1::SizeU(result.pixels,result.pixels),result.bytes.data(),result.pixels*4,
+            D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),bitmap.put()));
+        return bitmap;
     }
-    void draw(Image const& image,J const& model,J const& state,double size,double scale,bool previewing,bool reset=false){
+    void draw(Image const& image,J const& model,J const& state,double size,double scale,bool reset=false){
         int next=std::max(1,int(std::ceil(size*scale)));
         if(reset){surface=nullptr;device.reset();}
-        if(!surface||pixels!=next||!device||FAILED(device->d3d->GetDeviceRemovedReason())){
-            device=Device::get();pixels=next;ring=nullptr;field=nullptr;
+        if(!device||FAILED(device->d3d->GetDeviceRemovedReason())){
+            device=Device::get();surface=nullptr;ring=nullptr;field=nullptr;ringKey=fieldKey=L"";
+        }
+        if(!surface||pixels!=next){
+            pixels=next;
             surface=Imaging::SurfaceImageSource(pixels,pixels,false);
             check_hresult(surface.as<ISurfaceImageSourceNativeWithD2D>()->SetDevice(device->d2d.get()));
             image.Source(surface);
@@ -222,47 +225,39 @@ struct WheelImage {
             float inner=float(num(geometry,L"inner")),outer=float(num(geometry,L"outer"));
             auto shape=str(model,L"shape");uint32_t projection=shape==L"circle"?2:shape==L"triangle"?1:0;
             auto working=str(model,L"rgb_space",L"Srgb");uint32_t rgbSpace=working==L"DisplayP3"?1:working==L"AdobeRgb"?2:working==L"ProPhoto"?3:0;
-            auto ringKey=shape+L"/"+working+L"/"+to_hstring(pixels);
-            if(!ring||ringShape!=ringKey){
-                std::vector<uint8_t> bytes(size_t(pixels)*pixels*4);
-                if(!capy_color_raster(pixels,0,projection,rgbSpace,true,bytes.data(),bytes.size()))throw hresult_invalid_argument(L"Invalid shared hue guide");
-                com_ptr<ID2D1Bitmap> bitmap;check_hresult(context->CreateBitmap(D2D1::SizeU(pixels,pixels),bytes.data(),pixels*4,
-                    D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED)),bitmap.put()));
-                ring=nullptr;check_hresult(context->CreateImageBrush(bitmap.get(),D2D1::ImageBrushProperties(D2D1::RectF(0,0,float(pixels),float(pixels))),
-                    D2D1::BrushProperties(1,D2D1::Matrix3x2F::Scale(1.f/pixels,1.f/pixels)),ring.put()));ringShape=ringKey;
+            auto shapeKey=shape+L"/"+working;
+            if(shapeKey!=ringLayout){ringLayout=shapeKey;ring=nullptr;ringKey=L"";++ringEpoch;ringReady.reset();ringWorker->cancel();}
+            if(ringReady&&ringReady->epoch==ringEpoch){
+                auto bitmap=WheelImage::bitmap(context.get(),*ringReady);float side=float(ringReady->pixels);
+                ring=nullptr;check_hresult(context->CreateImageBrush(bitmap.get(),D2D1::ImageBrushProperties(D2D1::RectF(0,0,side,side)),
+                    D2D1::BrushProperties(1,D2D1::Matrix3x2F::Scale(1/side,1/side)),ring.put()));ringKey=ringReady->key;
             }
+            ringReady.reset();
+            auto wantedRing=shapeKey+L"/"+to_hstring(pixels);
+            if(ringKey!=wantedRing)ringWorker->submit(FieldRequest{wantedRing,uint32_t(pixels),0,projection,rgbSpace,false,true,{},ringEpoch});
             Paint white{1,1,1,1};
-            uint32_t fieldPixels=uint32_t(pixels);float hueValue=float(array(model,L"wheel_components").GetNumberAt(0));
+            float hueValue=float(array(model,L"wheel_components").GetNumberAt(0));
             bool hdr=flag(model,L"hdr");auto rendition=object(model,L"rendition").Stringify();
-            auto layoutKey=ringKey+(hdr?L"/hdr"+rendition:hstring{});
-            if(layoutKey!=fieldLayout||previewed!=previewing){
-                if(layoutKey!=fieldLayout)field=nullptr;
-                fieldLayout=layoutKey;previewed=previewing;++epoch;ready.reset();if(worker)worker->cancel();
-            }
-            if(ready&&ready->epoch==epoch&&ready->pixels==fieldPixels)install(context.get(),ready->bytes,fieldPixels,ready->key);
+            auto layoutKey=shapeKey+(hdr?L"/hdr"+rendition:hstring{});
+            if(layoutKey!=fieldLayout){fieldLayout=layoutKey;field=nullptr;fieldKey=L"";++epoch;ready.reset();worker->cancel();}
+            if(ready&&ready->epoch==epoch){field=WheelImage::bitmap(context.get(),*ready);fieldKey=ready->key;fieldPixels=ready->pixels;}
             ready.reset();
-            auto wanted=ringKey+L"/"+to_hstring(hueValue);if(hdr)wanted=wanted+state.Stringify()+rendition;
-            if(!field||fieldKey!=wanted){
-                FieldRequest request{wanted,fieldPixels,hueValue,projection,rgbSpace,hdr,
-                    hdr?to_string(O({{L"state",state},{L"rendition",object(model,L"rendition")}}).Stringify()):std::string{},epoch};
-                if(previewing&&field&&worker)worker->submit(std::move(request));
-                else{
-                    std::vector<uint8_t> bytes;
-                    if(!rasterField(request,bytes))throw hresult_invalid_argument(L"Invalid shared color field");
-                    install(context.get(),bytes,fieldPixels,wanted);++synchronous;
-                }
-            }
+            auto wanted=layoutKey+L"/"+to_hstring(pixels)+L"/"+to_hstring(hueValue);if(hdr)wanted=wanted+state.Stringify();
+            if(fieldKey!=wanted)worker->submit(FieldRequest{wanted,uint32_t(pixels),hueValue,projection,rgbSpace,hdr,false,
+                hdr?to_string(O({{L"state",state},{L"rendition",object(model,L"rendition")}}).Stringify()):std::string{},epoch});
             com_ptr<ID2D1Factory> factory;context->GetFactory(factory.put());com_ptr<ID2D1Geometry> clip;
             if(projection==0){auto square=array(geometry,L"square");float x=float(square.GetNumberAt(0)),y=float(square.GetNumberAt(1)),w=float(square.GetNumberAt(2));
                 float radius=float(std::min(6.,size*.02)/size);com_ptr<ID2D1RoundedRectangleGeometry> rounded;
                 check_hresult(factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(D2D1::RectF(x,y,x+w,y+w),radius,radius),rounded.put()));clip=rounded;
             }else if(projection==2){com_ptr<ID2D1EllipseGeometry> ellipse;float radius=float(num(geometry,L"disc_radius"));
                 check_hresult(factory->CreateEllipseGeometry(D2D1::Ellipse(center,radius,radius),ellipse.put()));clip=ellipse;}
-            if(clip)context->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),clip.get()),nullptr);
-            context->DrawBitmap(field.get(),D2D1::RectF(0,0,1,1),1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-            if(clip)context->PopLayer();
+            if(field){
+                if(clip)context->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(),clip.get()),nullptr);
+                context->DrawBitmap(field.get(),D2D1::RectF(0,0,1,1),1,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+                if(clip)context->PopLayer();
+            }
             // Stroke one ellipse, as in the reference canvas, to keep both rims consistent.
-            context->DrawEllipse(D2D1::Ellipse(center,(inner+outer)/2,(inner+outer)/2),ring.get(),outer-inner);
+            if(ring)context->DrawEllipse(D2D1::Ellipse(center,(inner+outer)/2,(inner+outer)/2),ring.get(),outer-inner);
             float radius=float(std::clamp(size*.04,6.,10.)/size);
             com_ptr<ID2D1SolidColorBrush> brush;check_hresult(context->CreateSolidColorBrush(white,brush.put()));
             for(auto const& entry:{std::pair{L"wheel_hue_marker",L"wheel_hue_color"},std::pair{L"wheel_marker",L"marker_color"}}){
@@ -333,7 +328,7 @@ struct View:std::enable_shared_from_this<View>{
     explicit View(std::shared_ptr<WorkspaceData> source,bool fit):data(std::move(source)),fitHeight(fit){}
     ~View(){
         data->colorViews.erase(listener);
-        if(drawing.worker){drawing.worker->deliver=nullptr;drawing.worker->cancel();}
+        for(auto const& worker:{drawing.ringWorker,drawing.worker})if(worker){worker->deliver=nullptr;worker->cancel();}
     }
     std::shared_ptr<ColorEditor> editor;
     Flyout colorFlyout;
@@ -414,7 +409,9 @@ struct View:std::enable_shared_from_this<View>{
         contentsLost=CompositionTarget::SurfaceContentsLost(auto_revoke,[weak](auto&&,auto&&){if(auto self=weak.lock()){self->key=L"";self->drawing.surface=nullptr;self->refresh();}});
         listener=data->colorView([weak]{if(auto self=weak.lock())self->refresh();});
         drawing.worker=std::make_shared<FieldWorker>();
-        drawing.worker->deliver=[weak](FieldResult result){if(auto self=weak.lock()){self->drawing.ready=std::move(result);self->key=L"";self->refresh();}};
+        drawing.worker->deliver=[weak](FieldResult result){if(auto self=weak.lock()){self->drawing.ready=std::move(result);self->key=L"";self->data->queueColors();}};
+        drawing.ringWorker=std::make_shared<FieldWorker>();
+        drawing.ringWorker->deliver=[weak](FieldResult result){if(auto self=weak.lock()){self->drawing.ringReady=std::move(result);self->key=L"";self->data->queueColors();}};
         edit=control(data->caption(L"color",L"edit"),[weak]{if(auto self=weak.lock();self&&!self->transparentSlot())self->editColor(self->edit);});
         Grid editContent;auto pencil=icon(L"pencil",data->theme());pencil.HorizontalAlignment(HorizontalAlignment::Center);pencil.VerticalAlignment(VerticalAlignment::Center);
         editContent.Children().Append(editFill);editContent.Children().Append(pencil);edit.Content(editContent);
@@ -664,13 +661,15 @@ struct View:std::enable_shared_from_this<View>{
                 segment.SweepDirection(SweepDirection::Counterclockwise);figure.Segments().Append(segment);
                 PathGeometry track;track.Figures().Append(figure);arcTrack.Data(track);arcTrack.StrokeThickness(width);
                 auto path=array(start,L"path");
-                for(auto const& line:ramp){uint32_t at;if(arc.Children().IndexOf(line,at))arc.Children().RemoveAt(at);}
-                ramp.clear();
-                for(uint32_t i=1;i<path.Size();i++){
-                    Shapes::Line line;auto a=path.GetArrayAt(i-1),b=path.GetArrayAt(i);
-                    line.X1(a.GetNumberAt(0));line.Y1(a.GetNumberAt(1));line.X2(b.GetNumberAt(0));line.Y2(b.GetNumberAt(1));
-                    line.StrokeThickness(width);line.StrokeStartLineCap(PenLineCap::Round);line.StrokeEndLineCap(PenLineCap::Round);
+                size_t segments=path.Size()?path.Size()-1:0;
+                while(ramp.size()>segments){uint32_t at;if(arc.Children().IndexOf(ramp.back(),at))arc.Children().RemoveAt(at);ramp.pop_back();}
+                while(ramp.size()<segments){
+                    Shapes::Line line;line.StrokeStartLineCap(PenLineCap::Round);line.StrokeEndLineCap(PenLineCap::Round);
                     line.IsHitTestVisible(false);arc.Children().InsertAt(uint32_t(ramp.size()),line);ramp.push_back(line);
+                }
+                for(uint32_t i=1;i<path.Size();i++){
+                    auto const& line=ramp[i-1];auto a=path.GetArrayAt(i-1),b=path.GetArrayAt(i);
+                    line.X1(a.GetNumberAt(0));line.Y1(a.GetNumberAt(1));line.X2(b.GetNumberAt(0));line.Y2(b.GetNumberAt(1));line.StrokeThickness(width);
                 }
                 double markerRadius=num(shape,L"marker_radius");
                 markerShadow.Width(markerRadius*2+4);markerShadow.Height(markerRadius*2+4);
@@ -728,19 +727,17 @@ struct View:std::enable_shared_from_this<View>{
             swatchPaint[i].Fill(fill(rgba(array(swatch,L"rgba"))));
             AutomationProperties::SetName(swatches[i],str(swatch,L"label"));AutomationProperties::SetItemStatus(swatches[i],selected?data->caption(L"search",L"selected"):L"");
         }
-        bool preview=previewing();
-        auto nextKey=view.Stringify()+to_hstring(side)+L"/"+to_hstring(scale)+(preview?L"/preview":L"");
+        auto nextKey=view.Stringify()+to_hstring(side)+L"/"+to_hstring(scale);
         if(nextKey!=key){
             try{
-                auto colors=paintColors();auto rasters=drawing.synchronous;
-                struct Count{WheelImage const& drawing;uint64_t before;std::shared_ptr<WorkspaceData> const& data;
-                    ~Count(){data->colorFields+=drawing.synchronous-before;}} count{drawing,rasters,data};
-                try{drawing.draw(image,view,colors,side,scale,preview);}
+                auto colors=paintColors();
+                try{drawing.draw(image,view,colors,side,scale);}
                 catch(hresult_error const& exception){
                     auto code=exception.code();
                     if(code!=DXGI_ERROR_DEVICE_REMOVED&&code!=DXGI_ERROR_DEVICE_RESET&&code!=D2DERR_RECREATE_TARGET&&code!=E_SURFACE_CONTENTS_LOST)throw;
-                    drawing.draw(image,view,colors,side,scale,preview,true);
+                    drawing.draw(image,view,colors,side,scale,true);
                 }
+                data->colorFieldPixels=drawing.fieldPixels;
                 key=nextKey;drawError.Visibility(Visibility::Collapsed);AutomationProperties::SetItemStatus(image,data->caption(L"header",L"ready"));
             }catch(hresult_error const&){drawError.Visibility(Visibility::Visible);AutomationProperties::SetItemStatus(image,data->caption(L"color",L"wheel_failed"));}
         }

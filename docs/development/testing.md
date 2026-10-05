@@ -388,7 +388,7 @@ are your task, and remove an entry when you fix it.
   (Microsoft.UI.Xaml.Controls.dll), which reads released scroll-controller tracker
   references of a panel or drawer `ScrollView` that left the tree.
 - Windows fixtures that also fail on the unported upstream build: `exercise-color-picker.ps1`
-  ("Pen hover did not preview the paper"), `exercise-pen-buttons.ps1` (Transform is
+  ("Moving the held finger did not sample the stroke above it"), `exercise-pen-buttons.ps1` (Transform is
   enabled on the empty starting layer), `exercise-tab-drag.ps1` ("Attached native
   tab preview did not cross the shared insertion threshold"), `exercise-layer-pickup.ps1`
   ("Layer tab did not begin its native drag" with touch), `exercise-column-stacks.ps1`

@@ -11,7 +11,10 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/color-picker/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 function Center([string]$Id){$b=(Control $Id -Arranged).Current.BoundingRectangle;@{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}}
-function Presentation{$workspace=Find 'Drawing workspace' -Name;if($workspace){try{$workspace.Current.ItemStatus|ConvertFrom-Json}catch{}}}
+function Presentation{
+    $named=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing workspace')
+    foreach($workspace in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$named)){$status=$workspace.Current.ItemStatus;if($status){try{return $status|ConvertFrom-Json}catch{}}}
+}
 function Preview{(Presentation).color_preview}
 function Tool{(Model).state.layer_tools.tool}
 function Picking{(Tool) -like 'pick_*'}
@@ -68,6 +71,26 @@ function Switch-Workspace([string]$Name,[string]$Id){
     $switch.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Model).windows_workspace.id -eq $Id -and !(Model).windows_workspace.busy} "$Name did not open" 20
 }
+function Color-Resize{
+    $group=@((Model).layout.groups|Where-Object {$_.active -eq 'color'})[0]
+    if(!$group){throw 'Color is not docked in the starting workspace'}
+    $edges=@($group.bounds.x,($group.bounds.x+$group.bounds.width))
+    $distance={param($d)($edges|ForEach-Object {[Math]::Abs($d.bounds.x+$d.bounds.width*.5-$_)}|Measure-Object -Minimum).Minimum}
+    $divider=@((Model).layout.dividers|Where-Object {$_.axis -eq 'horizontal' -and !$_.fixed}|Sort-Object {& $distance $_})[0]
+    if(!$divider -or (& $distance $divider) -gt 8){throw 'Color has no column divider'}
+    $from=Center ('divider-'+$divider.id);$outward=if([Math]::Abs($divider.bounds.x-$edges[0]) -lt [Math]::Abs($divider.bounds.x-$edges[1])){-1}else{1}
+    $layout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
+    [CapyRowPointer]::Down('mouse',$from.x,$from.y)
+    for($i=1;$i -le 10;$i++){[CapyRowPointer]::Move($from.x+$outward*$i*3,$from.y);Start-Sleep -Milliseconds 16}
+    Start-Sleep -Milliseconds 120
+    $held=(Control 'color-wheel').Current.BoundingRectangle
+    [CapyRowPointer]::Up()
+    Wait-Until {$w=(Control 'color-wheel').Current.BoundingRectangle;[Math]::Abs((Presentation).color_field_pixels-$w.Width) -le 2} 'Released resize did not finish the final wheel raster' 15
+    $released=(Control 'color-wheel').Current.BoundingRectangle
+    if([Math]::Abs($released.Width-$held.Width) -gt 1 -or [Math]::Abs($released.X-$held.X) -gt 1 -or [Math]::Abs($released.Y-$held.Y) -gt 1){throw 'Releasing the resize moved or resized the color wheel'}
+    if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -eq $layout){throw 'Dragging the divider did not resize the Color column'}
+    Capture 'color-resized'
+}
 function Canvas-Points{
     $area=(Model).state.camera.work_area;$bounds=(Control 'drawing-canvas').Current.BoundingRectangle
     $script:center=@{x=[int]($bounds.X+$area[0]+$area[2]/2);y=[int]($bounds.Y+$area[1]+$area[3]/2)}
@@ -87,6 +110,7 @@ try {
     $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 
+    Color-Resize
     Switch-Workspace 'Sketch' 'builtin:workspace:painter'
     Fit-Canvas;Start-Sleep -Milliseconds 300;Canvas-Points
     $order=$null
@@ -205,7 +229,6 @@ try {
         $modelBefore|Set-Content (Join-Path $run 'sweep-before.json');Get-Content -LiteralPath (State-File) -Raw|Set-Content (Join-Path $run 'sweep-after.json')
         throw 'Hover rebuilt the retained workspace'
     }
-    if($after.color_fields -ne $before.color_fields){throw 'Hover rasterized the color field on the UI thread'}
     if($after.motion_updates -le $before.motion_updates){throw 'Hover did not deliver picker previews'}
     Capture 'wheel-preview'
     Escape-Picker
@@ -214,12 +237,12 @@ try {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if(!$review.WaitForExit(8000)){throw 'Color picker review did not close'}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Color picker review wrote to stderr'}
-    $counts={param($p)@{full=$p.full_updates;motion=$p.motion_updates;fields=$p.color_fields}}
-    @{tooltip=$tooltip;touch_lift_pixels=$lifted;sweep_before=(& $counts $before);sweep_after=(& $counts $after)}|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'result.json')
+    $counts={param($p)@{full=$p.full_updates;motion=$p.motion_updates}}
+    @{tooltip=$tooltip;touch_lift_pixels=$lifted;column_resize='retained wheel scaled during the drag; final raster at release without moving controls';sweep_before=(& $counts $before);sweep_after=(& $counts $after)}|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'result.json')
     Write-Output "Color picker acceptance passed: $run"
 }catch{
     try{Capture 'failure'}catch{}
-    try{@{presentation=(Presentation|Select-Object revision,model_revision,full_updates,motion_updates,color_fields,color_preview);picker=(Model).state.color_picker;tool=(Tool)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'failure-state.json')}catch{}
+    try{@{presentation=(Presentation|Select-Object revision,model_revision,full_updates,motion_updates,color_field_pixels,color_preview);picker=(Model).state.color_picker;tool=(Tool)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'failure-state.json')}catch{}
     Set-Content -LiteralPath (Join-Path $run 'failure.txt') -Value ($_|Out-String)
     throw
 }finally{

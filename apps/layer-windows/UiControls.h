@@ -174,8 +174,17 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
         return closed;
     }
     J colorPreview;
-    std::map<uint64_t,std::function<void()>> colorViews;uint64_t nextColorView=0,colorFields=0;bool colorQueued=false;
+    std::map<uint64_t,std::function<void()>> colorViews;uint64_t nextColorView=0,colorFieldPixels=0;bool colorQueued=false;
+    std::function<void()> colorsPresented;
     uint64_t colorView(std::function<void()> refresh){colorViews.emplace(++nextColorView,std::move(refresh));return nextColorView;}
+    void queueColors(){
+        if(std::exchange(colorQueued,true))return;
+        Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock()){
+            self->colorQueued=false;auto views=self->colorViews;
+            for(auto const& [id,refresh]:views)refresh();
+            if(self->colorsPresented)self->colorsPresented();
+        }});
+    }
     static bool previewing(J const& preview){
         return object(preview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue()).ValueType()!=JsonValueType::Null;
     }

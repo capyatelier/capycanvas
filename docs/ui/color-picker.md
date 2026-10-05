@@ -42,7 +42,12 @@ retaining and scaling compatible completed fields while newer sizes are pending.
 Its hue ring uses a native conic gradient. `test.mjs --color-wheel-resize` checks
 column and floating-panel resize in both themes with mouse and touch, including
 the absence of synchronous field raster calls. Android already uses background
-field rendering and retains its bitmap across size changes.
+field rendering and retains its bitmap across size changes. Windows prepares the
+hue ring and the committed and preview fields on two background workers, each
+with one running and one replaceable request. It draws the retained ring and
+field scaled to the current size, accepts completed older sizes for the same
+shape and rendition, and draws markers at the current geometry on every frame.
+The HDR intensity ramp moves its existing segments instead of rebuilding them.
 
 Every host places the selected paint circle above the other
 circle, including its border and pointer target. Hover leaves that order
@@ -238,7 +243,7 @@ the same one-running, one-pending policy. The Mac and iPad hosts send `cursor_le
 when hover ends (a pointer cancel would end picking) and arm the finger hold with
 UIKit's 0.5 s timing and 10 pt slop. Windows applies preview packets to its
 retained color views without a workspace rebuild, at most once per UI dispatch,
-and rasterizes preview fields on a background worker with the same policy. The loupe stays
+and rasterizes every field on a background worker with the same policy. The loupe stays
 on the canvas GPU path; preview work never mutates brush colors or history.
 Sampling uses artwork coordinates independent of canvas zoom, rotation, flips,
 selection boundaries and display/proof transforms. The zoomed interior is a

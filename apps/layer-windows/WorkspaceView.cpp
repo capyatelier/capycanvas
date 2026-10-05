@@ -121,6 +121,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void init(){
         data->strokes=std::make_shared<StrokeRecording>();data->strokes->data=data;data->strokes->start();
+        data->colorsPresented=[weak=weak_from_this()]{if(auto self=weak.lock())self->tracePresentation();};
         zoom->data=data;zoom->init();
         auto surface=cameraSurface;surface.Child(zoom->root);surface.Background(headerSurface(data));
         surface.SizeChanged([button=zoom->root](auto&& sender,SizeChangedEventArgs const& e){
@@ -267,14 +268,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             popup.ShowAt(anchor);
         }else for(auto const& bind:popupBindings)bind();
     }
-    void previewColors(){
-        if(std::exchange(data->colorQueued,true))return;
-        root.DispatcherQueue().TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock()){
-            self->data->colorQueued=false;auto views=self->data->colorViews;
-            for(auto const& [id,refresh]:views)refresh();
-            self->tracePresentation();
-        }});
-    }
     static uint64_t revision(J const& update,wchar_t const* field){
         double value=num(update,field,-1);
         if(!std::isfinite(value)||value<0||value>9007199254740991.||std::floor(value)!=value)
@@ -298,8 +291,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             return true;
         }
         if(!full){
-            if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");previewColors();}
-            else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};previewColors();}
+            if(snapshot.HasKey(L"color_preview")){data->colorPreview=object(snapshot,L"color_preview");data->queueColors();}
+            else if(WorkspaceData::previewing(data->colorPreview)){data->colorPreview=J{};data->queueColors();}
             if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));canvasBar->Dragging(object(update,L"drag").Size()!=0);}
             if(snapshot.HasKey(L"camera")){
                 auto cameraPatch=object(snapshot,L"camera");
@@ -488,7 +481,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto value=O({{L"revision",N(double(publication.Revision()))},
             {L"model_revision",N(double(publication.ModelRevision()))},
             {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
-            {L"color_fields",N(double(data->colorFields))},
+            {L"color_field_pixels",N(double(data->colorFieldPixels))},
             {L"color_preview",object(data->colorPreview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue())},
             {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},{L"elements",elements},
             {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
