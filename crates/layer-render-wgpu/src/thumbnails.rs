@@ -473,10 +473,12 @@ impl PreviewPipeline {
         if source.is_none() && generator.is_none() {
             coordinates.extend(page_coordinates(PixelRect::full(r.document_extent))); placed = true;
         }
+        let base = r.tiled_sources.get(&id).map(source_access::paint_base_bounds);
         if let Some(geometry) = geometry.filter(|_| placed) {
-            let mut local = coordinates.iter().fold(PixelRect::EMPTY, |bounds,c| bounds.union(page_rect(*c)));
-            if let Some(base) = r.tiled_sources.get(&id) { local = local.union(source_access::paint_base_bounds(base)); }
+            let local = coordinates.iter().fold(base.unwrap_or(PixelRect::EMPTY), |bounds,c| bounds.union(page_rect(*c)));
             coordinates = page_coordinates(pixel_rect(geometry.forward_bounds(local.to_rect()),r.document_extent)).collect();
+        } else if let Some(base) = base.filter(|_| mask.is_none() && generator.is_none()) {
+            coordinates.extend(page_coordinates(base.intersect(PixelRect::full(r.document_extent))));
         }
         let sources: Vec<_> = std::iter::once(None)
             .chain(coordinates.into_iter().map(Some))
