@@ -47,7 +47,8 @@ CAPY_DMG="$CAPY_APP/../../dist/capycanvas-$CAPY_VERSION-macos-arm64.dmg"
 hdiutil create -quiet -volname 'Capy Canvas' -srcfolder "$CAPY_OUT/dmg" -format UDZO -ov "$CAPY_DMG"
 [[ -n "${CAPY_APPLE_TEAM:-}" ]] || exit 0
 codesign --sign 'Developer ID Application' --timestamp "$CAPY_DMG"
-xcrun notarytool submit "$CAPY_DMG" --wait \
-  --key "$CAPY_APPLE_KEY" --key-id "$CAPY_APPLE_KEY_ID" --issuer "$CAPY_APPLE_ISSUER"
-xcrun stapler staple "$CAPY_DMG"
+CAPY_NOTARY=(--key "$CAPY_APPLE_KEY" --key-id "$CAPY_APPLE_KEY_ID" --issuer "$CAPY_APPLE_ISSUER")
+CAPY_SUBMISSION=$(xcrun notarytool submit "$CAPY_DMG" "${CAPY_NOTARY[@]}" --output-format json | jq -r .id)
+for _ in 1 2 3 4 5; do xcrun notarytool wait "$CAPY_SUBMISSION" "${CAPY_NOTARY[@]}" && break; sleep 60; done
+xcrun stapler staple "$CAPY_DMG" || { xcrun notarytool log "$CAPY_SUBMISSION" "${CAPY_NOTARY[@]}"; exit 1; }
 spctl --assess --type open --context context:primary-signature --verbose "$CAPY_DMG"
