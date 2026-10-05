@@ -25,7 +25,6 @@ pub(super) fn normalize(
         resolution: source
             .resolution
             .map(|r| if orientation >= 5 { r.swapped() } else { r }),
-        kind: source.kind,
         extent,
         interpretation: source.interpretation.clone(),
         tiles: BTreeMap::new(),

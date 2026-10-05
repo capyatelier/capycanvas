@@ -174,10 +174,10 @@ fn occurrence_at(document: &layer_core::Document, index: usize) -> &layer_core::
     document.scene().occurrence(document.scene().order()[index]).unwrap()
 }
 fn imported_occurrences(document: &layer_core::Document) -> impl Iterator<Item = layer_core::authored::OccurrenceHandle> + '_ {
-    document.scene().order().iter().copied().filter(|h| document.scene().paint_source(*h).is_some_and(|source| source.original.is_some()))
+    document.scene().order().iter().copied().filter(|h| document.scene().paint_source(*h).is_some_and(|source| source.base.is_some()))
 }
 fn first_original(document: &layer_core::Document) -> &layer_core::color::source::SourceImage {
-    document.scene().paint_source(imported_occurrences(document).next().unwrap()).unwrap().original.as_deref().unwrap()
+    document.scene().paint_source(imported_occurrences(document).next().unwrap()).unwrap().base.as_ref().map(|base|base.image.as_ref()).unwrap()
 }
 fn active_raster(document: &layer_core::Document) -> &layer_core::raster::RasterRevision {
     document.target_raster(document.working.target.unwrap()).unwrap()
@@ -186,8 +186,8 @@ fn source_samples(source: &layer_core::color::source::SourceImage) -> Vec<Vec<u8
     source.tiles.values().map(|tile| tile.decode().unwrap()).collect()
 }
 fn assert_source_samples(actual: &layer_core::color::source::SourceImage, expected: &layer_core::color::source::SourceImage) {
-    assert_eq!((actual.kind, actual.extent, actual.resolution, actual.interpretation.channels, actual.interpretation.depth, actual.interpretation.profile_assumed),
-        (expected.kind, expected.extent, expected.resolution, expected.interpretation.channels, expected.interpretation.depth, expected.interpretation.profile_assumed));
+    assert_eq!((actual.extent, actual.resolution, actual.interpretation.channels, actual.interpretation.depth, actual.interpretation.profile_assumed),
+        (expected.extent, expected.resolution, expected.interpretation.channels, expected.interpretation.depth, expected.interpretation.profile_assumed));
     assert_eq!(layer_color::profile_bytes(&actual.interpretation.profile).unwrap(), layer_color::profile_bytes(&expected.interpretation.profile).unwrap());
     assert!(actual.tiles.keys().eq(expected.tiles.keys()));
     assert_eq!(source_samples(actual), source_samples(expected));
@@ -203,8 +203,8 @@ fn assert_project_document(actual: &layer_core::Document, expected: &layer_core:
         let current = actual.artwork.paint.get(actual.artwork.paint.resolve(id).unwrap()).unwrap();
         assert!(current.operations.is_empty() && original.operations.is_empty());
         assert_eq!(raster_samples(&current.raster), raster_samples(&original.raster));
-        assert_eq!(current.original.is_some(), original.original.is_some());
-        if let (Some(current), Some(original)) = (&current.original, &original.original) { assert_source_samples(current, original); }
+        assert_eq!(current.base.is_some(), original.base.is_some());
+        if let (Some(current), Some(original)) = (&current.base, &original.base) { assert_source_samples(&current.image, &original.image); }
     }
     assert_eq!(actual.artwork.coverage.len(), expected.artwork.coverage.len());
     for (_, id, original) in expected.artwork.coverage.iter() {
@@ -1304,7 +1304,7 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
         let mask_handle = engine.document().scene().mask(selected).unwrap().0.source;
         let mask_id = engine.document().artwork.coverage.id(mask_handle).unwrap();
         let original = engine.capture_artwork(0).unwrap();
-        assert!(original.artwork.paint.iter().any(|(_, _, source)| source.original.is_some()),
+        assert!(original.artwork.paint.iter().any(|(_, _, source)| source.base.is_some()),
             "The imported original stays retained alongside edited raster pixels");
         let coverage = raster_samples(&original.artwork.coverage.get(mask_handle).unwrap().raster).0;
         assert!(!coverage.is_empty(), "Fixture must contain retained mask pixels");

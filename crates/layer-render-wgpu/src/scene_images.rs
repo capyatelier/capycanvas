@@ -19,15 +19,25 @@ struct CachedStage {
     time: f32,
     valid: bool,
     dependencies: Vec<OccurrenceHandle>,
+    input_gather: Option<InputGather>,
+}
+struct InputGather {
+    revision: u64,
+    time: Option<u32>,
+    blend_space: layer_core::BlendSpace,
+    moving: Option<OccurrenceHandle>,
+    preview: Option<SourceTarget>,
+    pages: std::collections::BTreeSet<[u32; 2]>,
 }
 #[derive(Default)]
 pub(super) struct ImageStages {
     extent: [u32; 2],
-    pub(super) bounds: PixelRect,
+    pub(super) doc_bounds: DocRect,
     stages: Vec<CachedStage>,
     scratch: Vec<Image>,
     metadata: std::collections::HashMap<OccurrenceHandle, Metadata>,
     preview_layer: Option<SourceTarget>,
+    object_moving: Option<OccurrenceHandle>,
     blend_space: layer_core::BlendSpace,
     pub input_updates: u64,
     pub pass_updates: u64,
@@ -69,9 +79,57 @@ impl ImageStages {
 }
 
 pub(super) fn visible(scene:SceneView<'_>,handle:OccurrenceHandle)->bool{scene.visible(handle)}
-pub(super) fn capture_window(scene:SceneView<'_>,region:PixelRect,extent:[u32;2])->PixelRect{
-    if matches!(scene.scope(),Some(layer_core::SceneScope::Raw(_))) {return region;}
-    stack::support(scene,0).map_or_else(||PixelRect::full(extent),|radius|region.expand(radius,extent))
+pub(super) fn capture_window(scene: SceneView<'_>, region: PixelRect, _extent: [u32; 2]) -> DocRect {
+    capture_window_cached(scene,region,None)
+}
+pub(super) fn capture_window_cached(scene:SceneView<'_>,region:PixelRect,objects:Option<&object_spatial::SpatialIndex>)->DocRect {
+    if matches!(scene.scope(), Some(layer_core::SceneScope::Raw(_) | layer_core::SceneScope::RawObjects(_))) { return region.into(); }
+    dependency_window(scene, region.into(), 0,objects)
+}
+
+fn content_support(scene: SceneView<'_>, handle: OccurrenceHandle, level:u32, objects:&mut object_spatial::SpatialIndex) -> DocRect {
+    if !scene.visible(handle) { return DocRect::default(); }
+    scene.source_target(handle).map_or_else(|| objects.content(scene,handle).map_or_else(DocRect::default,|content|content.bounds_at(level)), |target|
+        DocRect::from_rect(scene.target_geometry(target).forward_bounds(layer_core::Rect::from_extent(scene.target_extent(target)))))
+}
+
+fn support_map(scene: SceneView<'_>, level: u32, objects:&mut object_spatial::SpatialIndex) -> std::collections::HashMap<OccurrenceHandle, DocRect> {
+    let mut supports = std::collections::HashMap::<OccurrenceHandle, DocRect>::new();
+    for &handle in scene.order().iter().rev() {
+        let dependencies = layer_core::composite_input_layers(scene, handle);
+        let input = dependencies.iter().fold(content_support(scene, handle,level,objects), |support, dependency| support.union(supports.get(dependency).copied().unwrap_or_default()));
+        let output = if !scene.visible(handle) { DocRect::default() } else if let Some(effect) = scene.effect(handle) {
+            if effect.program.kind == layer_core::EffectKind::Generator {
+                let offset = scene.evaluation_offset64();
+                DocRect { min: offset.map(|n| n.floor() as i64), max: std::array::from_fn(|axis| (offset[axis] + f64::from(scene.composition().size[axis])).ceil() as i64) }
+            } else { effects::pass_input_support(effect, effect.program.passes.len(), input, level).unwrap_or(input) }
+        } else { input };
+        supports.insert(handle, output);
+    }
+    supports
+}
+
+pub(super) fn dependency_window(scene: SceneView<'_>, output: DocRect, level: u32, objects:Option<&object_spatial::SpatialIndex>) -> DocRect {
+    if stack::support(scene, level) == Some(0) { return output; }
+    let mut objects=objects.cloned().unwrap_or_default();
+    let supports = support_map(scene, level,&mut objects);
+    let mut required = std::collections::HashMap::<OccurrenceHandle, DocRect>::new();
+    let mut window = output;
+    for &handle in scene.order() {
+        if !scene.visible(handle) { continue; }
+        let region = required.get(&handle).copied().unwrap_or(output).union(output);
+        let dependencies = layer_core::composite_input_layers(scene, handle);
+        let input = dependencies.iter().fold(content_support(scene, handle,level,&mut objects), |support, dependency| support.union(supports.get(dependency).copied().unwrap_or_default()));
+        let region = if let Some(effect) = scene.effect(handle).filter(|effect| effect.program.image_boundary()) {
+            let regions = effects::document_pass_regions(effect, region, input, level);
+            for &region in &regions { window = window.union(region); }
+            regions[0]
+        } else { region };
+        for dependency in dependencies {
+            required.entry(dependency).and_modify(|required| *required = required.union(region)).or_insert(region);
+        }
+    }
+    window
 }
 
 impl Scene {
@@ -148,7 +206,7 @@ impl Scene {
         &mut self,
         r: &WgpuRasterizer,
         view: wgpu::TextureView,
-        bounds: PixelRect,
+        bounds: DocRect,
         tile: [u32; 2],
     ) -> usize {
         let out = self.reserve(r);
@@ -158,10 +216,10 @@ impl Scene {
             view,
             None,
             [
-                bounds.min_x() as f32 - (tile[0] * PAGE_SIZE) as f32,
-                bounds.min_y() as f32 - (tile[1] * PAGE_SIZE) as f32,
-                bounds.width() as f32,
-                bounds.height() as f32,
+                (bounds.min[0] - self.image_evaluation_origin[0]) as f32 - (tile[0] * PAGE_SIZE) as f32,
+                (bounds.min[1] - self.image_evaluation_origin[1]) as f32 - (tile[1] * PAGE_SIZE) as f32,
+                (bounds.max[0] - bounds.min[0]) as f32,
+                (bounds.max[1] - bounds.min[1]) as f32,
             ],
             [1., 1., 0., 0.],
             false,
@@ -238,7 +296,25 @@ impl Scene {
         dirty: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PixelRect, GpuRasterError> {
-        self.retire_images(|scene| scene.update_image_stages(r, packet, dirty, encoder))
+        if !packet.scene.order().iter().any(|handle| packet.scene.visible(*handle) && packet.scene.effect(*handle).is_some_and(|effect| effect.program.image_boundary())) {
+            self.retire_images(|scene| scene.images = ImageStages::default());
+            return Ok(dirty);
+        }
+        let doc_bounds = self.image_window.unwrap_or_else(|| capture_window_cached(packet.scene, PixelRect::full(packet.document_extent), Some(&self.object_spatial)));
+        let size = doc_bounds.size()?;
+        if size.into_iter().any(|side| side > r.device.limits().max_texture_dimension_2d) { return Err(GpuRasterError::ExtentUnsupported); }
+        let rebased = FramePacket { scene: packet.scene.with_offset64(doc_bounds.min.map(|value| -(value as f64))), document_extent: size, ..packet };
+        let local_dirty = doc_bounds.local(dirty);
+        let previous = std::mem::replace(&mut self.image_evaluation_origin, doc_bounds.min);
+        let damage = self.image_damage.take();
+        self.image_damage = damage.as_ref().map(|damage| damage.map(|region| doc_bounds.local(region)));
+        let result = self.retire_images(|scene| scene.update_image_stages(r, rebased, local_dirty, encoder));
+        self.image_evaluation_origin = previous;
+        self.image_damage = damage;
+        result.map(|local| {
+            let document = DocRect { min: [doc_bounds.min[0] + i64::from(local.min_x()), doc_bounds.min[1] + i64::from(local.min_y())], max: [doc_bounds.min[0] + i64::from(local.max_x()), doc_bounds.min[1] + i64::from(local.max_y())] };
+            document.in_frame(packet.document_extent)
+        })
     }
     fn update_image_stages(
         &mut self,
@@ -248,12 +324,13 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PixelRect, GpuRasterError> {
         let extent = packet.document_extent;
-        let bounds = self.image_window.unwrap_or(PixelRect::full(extent));
+        let bounds = PixelRect::full(extent);
+        let doc_bounds = self.image_window.unwrap_or(DocRect { min: self.image_evaluation_origin, max: [self.image_evaluation_origin[0] + i64::from(extent[0]), self.image_evaluation_origin[1] + i64::from(extent[1])] });
         let grid = display_mips::Plan::window(extent, 0, bounds);
-        if self.images.extent != extent || self.images.bounds != bounds {
+        if self.images.extent != extent || self.images.doc_bounds != doc_bounds {
             self.images = ImageStages {
                 extent,
-                bounds,
+                doc_bounds,
                 input_updates: self.images.input_updates,
                 pass_updates: self.images.pass_updates,
                 pass_pixels: self.images.pass_pixels,
@@ -264,9 +341,11 @@ impl Scene {
         let scene=packet.scene;let order=scene.order();
         if self.images.stages.is_empty() && !order.iter().any(|h|visible(scene,*h)&&scene.effect(*h).is_some_and(|e|e.program.image_boundary())){return Ok(dirty);}
         self.images.stages.retain(|s|visible(scene,s.id)&&scene.effect(s.id).is_some_and(|e|e.program.image_boundary()));
-        let metadata: std::collections::HashMap<_,_> = order.iter().map(|&h|(h,Metadata::new(scene,h))).collect();
-        let changed: std::collections::HashSet<_> = order.iter().copied().filter(|h|self.images.metadata.get(h).is_none_or(|old|old != &metadata[h])).collect();
-        let content_changed: std::collections::HashSet<_> = order.iter().copied().filter(|h|self.images.metadata.get(h).is_none_or(|old|!old.same_content(&metadata[h]))).collect();
+        let metadata: std::collections::HashMap<_,_> = order.iter().map(|&h|(h,Metadata::new_cached(scene,h,&mut self.object_spatial))).collect();
+        let object_moving = self.object_live.then_some(r.moving_layer).flatten().filter(|owner| scene.object_layer(*owner).is_some());
+        let quality_changed = |owner| self.images.object_moving != object_moving && (self.images.object_moving == Some(owner) || object_moving == Some(owner));
+        let changed: std::collections::HashSet<_> = order.iter().copied().filter(|h|quality_changed(*h)||self.images.metadata.get(h).is_none_or(|old|old != &metadata[h])).collect();
+        let content_changed: std::collections::HashSet<_> = order.iter().copied().filter(|h|quality_changed(*h)||self.images.metadata.get(h).is_none_or(|old|!old.same_content(&metadata[h]))).collect();
         let reset = packet.reset_layers || self.images.blend_space != packet.blend_space;
         let painting = !packet.dab_batches.is_empty()
             || !packet.dabs.is_empty()
@@ -292,6 +371,7 @@ impl Scene {
             }else{scale::Damage::default()};
             (h,damage)
         }).collect();
+        let supports = support_map(scene, 0,&mut self.object_spatial);
         let mut content_changes = changes.clone();
         for &h in order {
             if changed.contains(&h) && !content_changed.contains(&h) { content_changes.insert(h,scale::Damage::default()); }
@@ -332,6 +412,7 @@ impl Scene {
                         time: f32::NAN,
                         valid: false,
                         dependencies: Vec::new(),
+                        input_gather: None,
                     }
                 };
             if let Some(input) = alias {
@@ -341,6 +422,7 @@ impl Scene {
                 cached.input = Image::new(r, grid, "effect source cache");
                 cached.input_owned = true;
                 cached.valid = false;
+                cached.input_gather = None;
             }
             let time=r.effect_time(scene,handle,packet.time_seconds);
             let input_scope_changed = cached.dependencies != dependencies
@@ -362,11 +444,47 @@ impl Scene {
                         cached.input.view.clone(),
                         wgpu::Color::TRANSPARENT,
                     ));
-                } else {
+                } else if !dependencies.iter().any(|dependency| scene.object_layer(*dependency).is_some()) {
                     for tile in input_dirty.pages() {
                         let pixels = self.group(r, packet, layer_core::composite_input_scope(scene, handle), tile)?;
                         self.capture_tile(r, pixels, &cached.input, tile, input);
                     }
+                } else {
+                    let time = order.iter().any(|h| scene.visible(*h) && scene.effect(*h).is_some_and(|effect| effect.animated())).then_some(packet.time_seconds.to_bits());
+                    if cached.input_gather.as_ref().is_none_or(|gather| gather.revision != scene.revision() || gather.time != time
+                        || gather.blend_space != packet.blend_space || gather.moving != r.moving_layer || gather.preview != r.preview_layer_id)
+                        || !packet.dabs.is_empty() || !packet.dab_batches.is_empty() || !packet.restore_rasters.is_empty() || !r.transform_damage.is_empty() {
+                        cached.input_gather = Some(InputGather { revision: scene.revision(), time, blend_space: packet.blend_space,
+                            moving: r.moving_layer, preview: r.preview_layer_id, pages: input_dirty.pages().into_iter().collect() });
+                    }
+                    cached.valid = false;
+                    while let Some(tile) = cached.input_gather.as_ref().unwrap().pages.first().copied() {
+                        let result = (|| {
+                            let pixels = self.group(r, packet, layer_core::composite_input_scope(scene, handle), tile)?;
+                            self.capture_tile(r, pixels, &cached.input, tile, input);
+                            self.encode_jobs(r, encoder)
+                        })();
+                        if let Err(error) = result {
+                            self.stop_before = None;
+                            self.object_results.reset_used(); self.exact_object_results.reset_used();
+                            if matches!(error, GpuRasterError::DeferredObjectWork) {
+                                for stage in &mut self.images.stages {
+                                    if scene.position(stage.id).unwrap() < scene.position(handle).unwrap() { stage.valid = false; }
+                                }
+                                cached.dependencies = dependencies;
+                                self.images.stages.push(cached);
+                                self.images.metadata = metadata;
+                                self.images.blend_space = packet.blend_space;
+                                self.images.preview_layer = r.preview_layer_id;
+                                self.images.object_moving = object_moving;
+                            }
+                            return Err(error);
+                        }
+                        cached.input_gather.as_mut().unwrap().pages.remove(&tile);
+                        self.object_results.flush_retired(encoder); self.exact_object_results.flush_retired(encoder);
+                        self.clear_material_pages(); self.used.fill(false);
+                    }
+                    cached.input_gather = None;
                 }
                 self.stop_before = None;
                 self.encode_jobs(r, encoder)?;
@@ -414,7 +532,9 @@ impl Scene {
                 }
                 self.jobs.clear();
                 let count = effect.program.passes.len().max(1);
-                let regions: Vec<_> = output_dirty.regions.iter().map(|&region|effects::pass_regions(effect,region,grid)).collect();
+                let input_support = layer_core::composite_input_layers(scene, handle).iter().fold(DocRect::default(), |support, dependency| support.union(supports.get(dependency).copied().unwrap_or_default()));
+                let regions: Vec<Vec<_>> = output_dirty.regions.iter().map(|&region| effects::document_pass_regions(effect, region.into(), input_support, 0)
+                    .into_iter().map(|region| grid.doc_bounds.local(region)).collect()).collect();
                 while self.images.scratch.len() < count.saturating_sub(1).min(2) {
                     self.images
                         .scratch
@@ -431,7 +551,13 @@ impl Scene {
                     };
                     let region = regions[pass + 1];
                     let local = region.window_local(bounds);
-                    let mut data = effects::image_grid(grid, grid, cached.input.plan);
+                    let dependencies = layer_core::composite_input_layers(scene, handle);
+                    let mut front = grid;
+                    front.support = dependencies.iter().fold(DocRect::default(), |support, dependency| support.union(supports.get(dependency).copied().unwrap_or_default()));
+                    front.support = effects::pass_input_support(effect, pass, front.support, 0).unwrap_or(front.support);
+                    let mut original = cached.input.plan;
+                    original.support = dependencies.iter().fold(DocRect::default(), |support, dependency| support.union(supports.get(dependency).copied().unwrap_or_default()));
+                    let mut data = effects::image_grid(grid, front, original);
                     data[..4].copy_from_slice(&[
                         local.min_x() as f32,
                         local.min_y() as f32,
@@ -479,6 +605,7 @@ impl Scene {
         self.images.metadata = metadata;
         self.images.blend_space = packet.blend_space;
         self.images.preview_layer = r.preview_layer_id;
+        self.images.object_moving = object_moving;
         Ok(damage.bounds())
     }
 }

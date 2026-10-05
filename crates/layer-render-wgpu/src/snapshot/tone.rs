@@ -119,7 +119,7 @@ impl SnapshotRenderer {
                     self.check_cancelled().map_err(|e| e.to_string())?;
                     match self.capture_output_region_gpu(region, output, reserved, |_, texture, encoder| {
                         reduce(encoder, texture, [region[0], region[1]])
-                    }) {
+                    }).await {
                         Err(GpuRasterError::CaptureBudget { .. })
                             if region[2].max(region[3]) > 16 =>
                         {

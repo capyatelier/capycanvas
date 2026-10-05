@@ -63,6 +63,7 @@ impl RegionRequests {
     }
     /// Drop the request in progress; a readback already in flight is ignored.
     pub(super) fn cancel(&mut self) {
+        self.raw.cancel();
         self.waiting = None;
         self.running = None;
         if self.pending.take().is_some() {
@@ -145,7 +146,7 @@ impl RegionRequests {
             let modify = modify.clone();
             return self.start_modify(r, request, &modify);
         }
-        let extent = match request.source.raw_source() { layer_render::RegionSource::TransformedSelection {target,..} => r.target_extent(*target), _ => r.document_extent };
+        let extent = match request.source.raw_source() { layer_render::RegionSource::TransformedSelection {target,..} => r.target_extent(*target), _ => self.raw.extent().unwrap_or(r.document_extent) };
         let mapped = matches!(
             request.source,
             layer_render::RegionSource::TransformedSelection { .. }
@@ -178,6 +179,9 @@ impl RegionRequests {
         }
         if mapped || request.selection.is_some() {
             self.refiner(r);
+        }
+        if !mapped && !matches!(request.source, layer_render::RegionSource::Selection(_)) {
+            self.raw.begin(r, &request)?;
         }
         if let Some(startup) = &r.startup {
             startup.compiler.check()?;
@@ -248,7 +252,18 @@ impl RegionRequests {
                 bounds_offset: 0,
             }
         } else {
-            let classified = self.raw.encode(r, &request, &mut encoder)?;
+            let classified = match self.raw.encode(r, &request, &mut encoder) {
+                Err(GpuRasterError::DeferredObjectWork) => {
+                    r.uploads.finish(&encoder);
+                    encoder.submit(&r.queue);
+                    self.waiting = Some(request);
+                    return Ok(true);
+                },
+                result => match result {
+                    Ok(classified) => classified,
+                    Err(error) => { self.raw.cancel(); return Err(error); },
+                },
+            };
             if tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_)) {
                 flood::Region {
                     coverage: classified,
@@ -565,6 +580,7 @@ impl WgpuRasterizer {
             .take()
             .unwrap_or_else(|| RegionRequests::new(&self.device));
         let result = regions.start(self, request);
+        if result.is_err() { regions.cancel(); }
         self.regions = Some(regions);
         self.refresh_storage_metrics();
         result
@@ -574,6 +590,7 @@ impl WgpuRasterizer {
             let mut requests = self.regions.take().unwrap();
             let request = requests.waiting.take().unwrap();
             let result = requests.start(self, request);
+            if result.is_err() { requests.cancel(); }
             self.regions = Some(requests);
             if let Err(error) = result {
                 return Some(Err(error));

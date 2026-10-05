@@ -309,13 +309,6 @@ fn swaps_axes(affine: Affine) -> bool {
     a.abs() <= 1e-6 && d.abs() <= 1e-6 && b.abs() > 1e-6 && c.abs() > 1e-6
 }
 
-/// How much `affine` scales areas, as a length: the factor for distances
-/// declared in pixels.
-fn length_scale(affine: Affine) -> f32 {
-    let [a, b, c, d, ..] = affine.0;
-    (a * d - b * c).abs().sqrt()
-}
-
 fn is_translation(affine: Affine) -> bool {
     let [a, b, c, d, ..] = affine.0;
     [a - 1., b, c, d - 1.].iter().all(|v| v.abs() <= 1e-6)
@@ -420,8 +413,8 @@ impl Document {
         let canvas = self.composition().size;
         scene.order().iter().copied().all(|h| {
             let source = scene.paint_source(h);
-            let paint = scene.source_target(h).filter(|_| source.is_some_and(|p| p.original.is_none()));
-            let mask = scene.mask(h).filter(|_| source.is_none_or(|p| p.original.is_none())).map(|(m, _)| SourceTarget::Coverage(m.source));
+            let paint = scene.source_target(h).filter(|_| source.is_some_and(|p| p.base.is_none()));
+            let mask = scene.mask(h).filter(|_| source.is_none_or(|p| p.base.is_none())).map(|(m, _)| SourceTarget::Coverage(m.source));
             paint.into_iter().chain(mask).filter(|t| scene.target_geometry(*t).as_affine().is_some()).all(|t| {
                 let extent = scene.target_extent(t);
                 local_window(scene, t, canvas).is_ok_and(|w| {
@@ -441,6 +434,12 @@ impl Document {
             o.translation = shift(o.translation, origin);
             if let Some(mask) = &mut o.mask {
                 mask.translation = shift(mask.translation, origin);
+            }
+        }
+        let map = Affine64([1., 0., 0., 1., -origin.x as f64, -origin.y as f64]);
+        for (handle, _, application) in self.artwork.effects.iter() {
+            if let Some(spatial) = application.spatial {
+                candidate.artwork.effects.get_mut(handle).unwrap().spatial.as_mut().unwrap().mapping = map.compose(spatial.mapping);
             }
         }
         candidate
@@ -472,7 +471,7 @@ impl Document {
                     continue;
                 }
                 let extent = scene.target_extent(target);
-                if source.is_some_and(|p| p.original.is_some()) || scene.target_geometry(target).as_affine().is_none() {
+                if source.is_some_and(|p| p.base.is_some()) || scene.target_geometry(target).as_affine().is_none() {
                     continue;
                 }
                 let window = local_window(scene, target, geometry.rect.size)?;
@@ -591,7 +590,7 @@ impl Document {
                 selection.selection = selection.selection.transformed(map)?;
                 continue;
             }
-            if scene.paint_source(*h).is_some_and(|p| p.original.is_some()) || old.placement.as_affine().is_none() {
+            if scene.paint_source(*h).is_some_and(|p| p.base.is_some()) || old.placement.as_affine().is_none() {
                 let desired = self.retained_transform_edit(&[*h], Projective::from_affine(to_canvas))?;
                 let Edit::Batch(edits) = desired else { unreachable!() };
                 for edit in edits {
@@ -703,14 +702,10 @@ impl Document {
                 }
             }
         }
-        let factor = length_scale(geometry.linear);
-        if (factor - 1.).abs() > 1e-4 {
-            for (h, _, e) in self.artwork.effects.iter() {
-                if let Some(values) =
-                    self.artwork.definitions.get(e.definition).and_then(|d| EffectView::new(&d.program, &e.values).scaled_values(factor))
-                {
-                    candidate.artwork.effects.get_mut(h).unwrap().values = values;
-                }
+        let map = Affine64(geometry.to_canvas().0.map(f64::from));
+        for (handle, _, application) in self.artwork.effects.iter() {
+            if let Some(spatial) = application.spatial {
+                candidate.artwork.effects.get_mut(handle).unwrap().spatial.as_mut().unwrap().mapping = map.compose(spatial.mapping);
             }
         }
         candidate.check_raster_limits(&predicted, limits.project)?;
@@ -726,7 +721,7 @@ impl Document {
         let mut sources = BTreeSet::new();
         let color = self.composition().color;
         for (_, _, p) in self.artwork.paint.iter() {
-            if let Some(source) = p.original.as_ref().filter(|s| sources.insert(Arc::as_ptr(s) as usize)) {
+            if let Some(source) = p.base.as_ref().map(|b|b.image.storage()).filter(|s| sources.insert(Arc::as_ptr(s) as usize)) {
                 tiles = tiles.saturating_add(source.tiles.len());
             }
         }

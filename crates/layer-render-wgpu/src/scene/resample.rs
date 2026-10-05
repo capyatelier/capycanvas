@@ -103,7 +103,7 @@ impl Resample {
     }
     pub fn values(request: Request<'_>) -> Result<[u8; UNIFORM_BYTES as usize], GpuRasterError> {
         let Request { moved, kept, clip, extent, texels, display, target, source, max_lod, outside, keep_source, identity } = request;
-        let origin = [target.bounds.min_x(), target.bounds.min_y()].map(|n| n as f32 / display.side as f32);
+        let origin = target.doc_bounds.min.map(|n| n as f32 / display.side as f32);
         let local = |[x, y, z]: [f32; 3]| [x, y, z + x * origin[0] + y * origin[1]];
         let rows = |transform: &layer_core::ImageTransform| pixel_transform::inverse_rows(transform)
             .map(|rows| if transform.placement.mesh.is_some() { rows } else { rows.map(local) }).map_err(GpuRasterError::InvalidTransform);

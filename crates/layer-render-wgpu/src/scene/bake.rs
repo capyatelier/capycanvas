@@ -61,8 +61,8 @@ impl Scene {
             Some(native) => native.image_pixel_budget(r.scale_display.as_ref().map_or(0, |c| c.resident_bytes())).min(windows::DEFAULT_IMAGE_PIXEL_BYTES),
             None => windows::DEFAULT_IMAGE_PIXEL_BYTES,
         };
-        let plan = windows::Plan::new(scene, extent, budget)?;
-        let regions: Vec<_> = plan.map_or_else(|| vec![(damage, Self::capture_window(scene, damage, extent))], |plan| plan.regions(damage).collect());
+        let plan = windows::Plan::new(scene, extent, budget, r.device.limits().max_texture_dimension_2d)?;
+        let regions: Vec<_> = plan.map_or_else(|| vec![(damage, Self::capture_window(scene, damage, extent))], |plan| plan.regions(scene, damage).collect());
         let multiple = regions.len() > 1;
         let analysis = r.bake_analysis_entries(snapshot, scope, offset, extent)?;
         let prepared_masks = r.bake_mask_pages(snapshot, scope, offset, extent)?;
@@ -81,7 +81,7 @@ impl Scene {
                 }
                 self.retire_images(|scene| scene.images = images::ImageStages::default());
                 self.image_window = Some(window);
-                self.update_images(r, source, window, encoder)?;
+                self.update_images(r, source, output, encoder)?;
                 self.bake_pages(r, source, &pages, coverage, (target, operation), low, encoder)?;
                 if plan.is_some() {
                     r.metrics.image_window_peak_bytes = r.metrics.image_window_peak_bytes.max(self.images.storage_bytes());

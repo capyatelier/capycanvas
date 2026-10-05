@@ -7,7 +7,7 @@ mod gradient;
 pub use gradient::{GradientDestination,GradientEdit,GradientControls};
 pub use curves::{CurveAxis,CurveAxisView,CurveControls,CurveCoordinateControl,CurveDomain};
 pub(super) use curves::PropertyEditorState;
-use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, ResourceLabel, authored::{Definition, EffectApplication, EffectBaseline, EffectHandle, Occurrence, OccurrenceContent, OccurrenceHandle, RecordChange, SceneScope, SelectionHandle, SourceTarget}};
+use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, ResourceLabel, authored::{ EffectApplication, EffectBaseline, EffectHandle, Occurrence, OccurrenceContent, OccurrenceHandle, RecordChange, SceneScope, SelectionHandle, SourceTarget}};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -537,24 +537,19 @@ pub(super) fn effect_application(document: &Document, occurrence: OccurrenceHand
 }
 pub(super) fn effect_draft(document: &Document, occurrence: OccurrenceHandle) -> Result<EffectInstance, String> {
     let (_, application) = effect_application(document, occurrence).ok_or("Missing adjustment")?;
-    let definition = document.artwork.definitions.get(application.definition).ok_or("Missing adjustment definition")?;
-    Ok(EffectInstance {program: definition.program.clone(), values: application.values.clone()})
+    Ok(EffectInstance {program: application.program.clone(), values: application.values.clone()})
 }
 pub(super) fn effect_edit(document: &Document, occurrence: OccurrenceHandle, draft: EffectInstance) -> Result<Edit, String> {
     draft.validate().map_err(str::to_string)?;
-    let (handle, application) = effect_application(document, occurrence).ok_or("Missing adjustment")?;
-    let definition = document.artwork.definitions.get(application.definition).ok_or("Missing adjustment definition")?;
-    let mut edits = Vec::new();
-    if definition.program != draft.program {
-        let mut definition = definition.clone();
-        definition.program = draft.program;
-        edits.push(Edit::Definition(RecordChange::replace(&document.artwork.definitions, application.definition, Some(definition)).map_err(str::to_string)?));
+    let (handle, original) = effect_application(document, occurrence).ok_or("Missing adjustment")?;
+    let mut application = original.clone();
+    if application.program != draft.program {
+        application = EffectApplication::new(draft.program, draft.values, document.composition().size);
+    } else {
+        application.values = draft.values;
     }
-    if application.values != draft.values {
-        let application = EffectApplication {definition: application.definition, values: draft.values};
-        edits.push(Edit::Effect(RecordChange::replace(&document.artwork.effects, handle, Some(application)).map_err(str::to_string)?));
-    }
-    Ok(Edit::Batch(edits))
+    if application == *original { return Ok(Edit::Batch(Vec::new())); }
+    Ok(Edit::Effect(RecordChange::replace(&document.artwork.effects, handle, Some(application)).map_err(str::to_string)?))
 }
 fn property_effect(doc: &Document, handle: OccurrenceHandle) -> Option<layer_core::EffectView<'_>> {
     let scene = doc.scene();
@@ -576,6 +571,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     };
     let layer_type = match layer.kind() {
         LayerKind::Paint => l.text(MessageId::RESOURCES_LAYER_TYPE_PAINT),
+        LayerKind::Object => Arc::from(""),
         LayerKind::Group => l.text(MessageId::RESOURCES_LAYER_TYPE_GROUP),
         LayerKind::Selection => l.text(MessageId::RESOURCES_LAYER_TYPE_SELECTION),
         LayerKind::Effect => scene.effect(handle).map_or_else(|| Arc::from(""), |effect| resource_label(&effect.program.label, l)),
@@ -602,7 +598,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     let mut curve_white = None;
     let description = if let Some(effect) = property_effect(doc, handle) {
         let application = effect_application(doc, handle).unwrap().1;
-        let program = &doc.artwork.definitions.get(application.definition).unwrap().program;
+        let program = &application.program;
         controls.extend(
             program
                 .parameters
@@ -737,7 +733,7 @@ pub(super) fn effect_baseline(document: &Document, occurrence: OccurrenceHandle)
 }
 #[derive(Clone, PartialEq)]
 enum PropertyBaseline {
-    Effect {value: EffectBaseline, definition: Definition},
+    Effect {value: EffectBaseline},
     Occurrence {handle: OccurrenceHandle, value: Occurrence},
     SelectionDisplay {occurrence: OccurrenceHandle, handle: SelectionHandle, value: Option<layer_core::SelectionMaskProperties>},
 }
@@ -747,8 +743,7 @@ impl PropertyBaseline {
             let value = document.working.selection_overlays.properties.get(&selection).cloned();
             Ok(Self::SelectionDisplay {occurrence: handle, handle: selection, value})
         } else if let Ok(value) = effect_baseline(document, handle) {
-            let definition = document.artwork.definitions.get(value.application.definition).ok_or("Missing adjustment definition")?.clone();
-            Ok(Self::Effect {value, definition})
+            Ok(Self::Effect {value})
         } else {
             Ok(Self::Occurrence {handle, value: document.scene().occurrence(handle).ok_or("Unknown occurrence")?.clone()})
         }
@@ -759,10 +754,7 @@ impl PropertyBaseline {
     fn edit(&self, document: &Document) -> Result<Edit, String> {
         let art = &document.artwork;
         match self {
-            Self::Effect {value, definition} => Ok(Edit::Batch(vec![
-                Edit::Definition(RecordChange::replace(&art.definitions, value.application.definition, Some(definition.clone())).map_err(str::to_string)?),
-                Edit::Effect(RecordChange::replace(&art.effects, value.effect, Some(value.application.clone())).map_err(str::to_string)?),
-            ])),
+            Self::Effect {value} => Ok(Edit::Effect(RecordChange::replace(&art.effects, value.effect, Some(value.application.clone())).map_err(str::to_string)?)),
             Self::Occurrence {handle, value} => Ok(Edit::Occurrence(RecordChange::replace(&art.occurrences, *handle, Some(value.clone())).map_err(str::to_string)?)),
             Self::SelectionDisplay {handle, value, ..} => {
                 let mut working=document.working.clone();
@@ -944,13 +936,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
         }
         let mut edits = Vec::new();
-        let definition = if let Some((handle, _, _)) = doc.artwork.definitions.iter().find(|(_, _, definition)| definition.program == instance.program) {
-            handle
-        } else {
-            let change = RecordChange::insert(&doc.artwork.definitions, Definition {program: instance.program});
-            let handle = change.handle; edits.push(Edit::Definition(change)); handle
-        };
-        let application = EffectApplication {definition, values: instance.values};
+        let application = EffectApplication::new(instance.program, instance.values, doc.composition().size);
         let effect_handle = if replacing {
             let handle = scene.effect_handle(current.unwrap()).ok_or("Missing adjustment")?;
             edits.extend(doc.effect_edits(vec![RecordChange::replace(&doc.artwork.effects, handle, Some(application)).map_err(str::to_string)?]).map_err(|error|error.to_string())?);
@@ -1243,6 +1229,7 @@ mod resource_tests {
             assert_eq!(properties(&doc, Default::default(), &l).title, paper_title);
             for (kind, name, expected) in [
                 (LayerKind::Paint, "Paper", "Paper"),
+                (LayerKind::Object, "Photographs", "Photographs"),
                 (LayerKind::Effect, fill_type, fill_type),
                 (LayerKind::Group, group_type, group_type),
                 (LayerKind::Selection, selection_type, selection_type),
@@ -1251,6 +1238,7 @@ mod resource_tests {
             ] {
                 let mut selected = doc.clone();
                 let content = match kind {
+                    LayerKind::Object => OccurrenceContent::Objects(selected.artwork.object_layers.insert(layer_core::authored::PortableId::random(), Default::default()).unwrap()),
                     LayerKind::Effect => doc.scene().occurrence(fill).unwrap().content.clone(),
                     LayerKind::Paint => doc.scene().occurrence(occurrence_handle(1).unwrap()).unwrap().content.clone(),
                     LayerKind::Group => {
@@ -1270,6 +1258,7 @@ mod resource_tests {
                 assert_eq!(view.name, name);
                 assert_eq!(view.layer_type.as_str(), match kind {
                     LayerKind::Paint => if language == UiLanguage::English { "Paint layer" } else { "ペイントレイヤー" },
+                    LayerKind::Object => "",
                     LayerKind::Effect => fill_type,
                     LayerKind::Group => group_type,
                     LayerKind::Selection => selection_type,

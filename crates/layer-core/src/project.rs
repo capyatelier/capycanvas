@@ -113,6 +113,7 @@ impl Document {
         let mut sources=color::source::SourceAccounting::default();
         let mut resources=history_budget::Accounting::default();
         let mut asset_bytes=0u64;let mut source_tiles=0usize;let mut source_owners=BTreeSet::new();
+        for image in roots.images {asset_bytes=asset_bytes.saturating_add(sources.charge_image(image) as u64);}
         for source in roots.sources {
             if source.extent.iter().any(|v|*v>limits.dimension){return Err("Source image exceeds the dimension limit".into());}
             if source_owners.insert(Arc::as_ptr(source) as usize){source_tiles=source_tiles.saturating_add(source.tiles.len());}
@@ -120,9 +121,9 @@ impl Document {
         }
         for resource in roots.resources {asset_bytes=asset_bytes.saturating_add(resources.charge_resource(resource) as u64);}
         let mut byte_owners=BTreeSet::new();
-        for profile in roots.profiles {if let color::ColorProfile::Icc(bytes)=profile && byte_owners.insert(bytes.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(bytes.len() as u64);}}
+        for profile in roots.profiles {asset_bytes=asset_bytes.saturating_add(sources.charge_profile(profile) as u64);}
         for block in self.artwork.metadata.blocks().into_iter().flatten(){if byte_owners.insert(block.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(block.len() as u64);}}
-        for program in roots.programs {if let Ok(sources)=program.wgsl.sources(){for source in sources{if byte_owners.insert(source.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(source.len() as u64);}}}}
+        for program in roots.programs {for shader in std::iter::once(&program.wgsl).chain(program.lookups.iter().map(|lookup|&lookup.wgsl)) {if let Ok(sources)=shader.sources(){for source in sources{if byte_owners.insert(source.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(source.len() as u64);}}}}}
         if asset_bytes>limits.asset_bytes{return Err("Artwork resources exceed the memory limit".into());}
         let mut selection_bytes=0u64;
         for selection in roots.selections {
@@ -147,5 +148,31 @@ impl Document {
         if tiles>limits.tiles || raster_bytes>limits.raster_bytes{return Err("Artwork pixels exceed the memory limit".into());}
         crate::package::codec::admit_metadata(&self.artwork,limits)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn lookup_shader_assets_are_admitted_once_across_effect_applications() {
+        let program=crate::bundled_effect_catalog().get("gaussian_blur").unwrap().program();
+        let main=program.wgsl.sources().unwrap();
+        let lookup=program.lookups[0].wgsl.sources().unwrap();
+        assert!(lookup.iter().any(|code|!main.iter().any(|source|Arc::ptr_eq(source.storage(),code.storage()))));
+        let mut artwork=crate::Artwork::new([16,16]).unwrap();
+        for _ in 0..2 {
+            let instance=crate::EffectInstance::new(program.clone());
+            let effect=artwork.effects.insert(crate::PortableId::random(),crate::EffectApplication::new(instance.program,instance.values,[16,16])).unwrap();
+            let occurrence=artwork.occurrences.insert(crate::PortableId::random(),crate::Occurrence::new(crate::OccurrenceContent::Effect(effect),"Blur")).unwrap();
+            let stack=artwork.compositions.get(artwork.root).unwrap().result;
+            artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+        }
+        let document=Document::from_artwork(artwork).unwrap();
+        let mut code=BTreeMap::new();
+        for source in main.into_iter().chain(lookup) {code.insert(source.as_ptr() as usize,source.len() as u64);}
+        let bytes=code.values().sum();
+        document.admit(ProjectLimits {asset_bytes:bytes,..Default::default()}).unwrap();
+        assert!(document.admit(ProjectLimits {asset_bytes:bytes-1,..Default::default()}).is_err());
     }
 }

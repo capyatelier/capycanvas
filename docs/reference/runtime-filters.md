@@ -198,10 +198,13 @@ and metadata belong to the app and cannot be overridden by imported packages.
 Each parameter declares its semantic `dimension`: `scalar` (the default),
 `count`, `angle`, `time`, `source_pixels`, `composition_pixels` or `normalized`.
 Counts require whole bounds and values. Posterize Levels and Kaleidoscope Segments
-are counts. Denoise exposes Strength and uses an internal radius of two pixels;
-Domain Warp uses three internal noise octaves. Image resize scales pixel lengths
-without rounding to displayed decimal places or clamping to catalog bounds;
-displayed `unit` labels affect presentation only. The bundled catalog declares pixel lengths, degree angles and seconds explicitly.
+are counts. Denoise exposes Strength and uses an internal radius of two composition units;
+Domain Warp uses three internal noise octaves. Built-in pixel lengths are
+composition units when inserted, then follow the saved effect reference mapping.
+Image resize composes that mapping and keeps authored values and reference extent;
+explicit distances and implicit periods scale together. Displayed `unit` labels
+affect presentation only. The bundled catalog declares composition pixel lengths,
+degree angles and seconds explicitly.
 Custom packages retain their own declarations; built-in files omit the schema.
 Percentages keep their existing meanings: center coordinates use the composition
 frame's width/height, radial controls use the frame extents listed in
@@ -279,18 +282,33 @@ the shader parameter layout or ABI.
 
 `program.resolution` declares the input resolution permitted for interactive
 composition. The default, `"native"`, requires document-resolution evaluation.
-`"display"` permits evaluation on the compositor's reduced grid. Positions and
-`fx_extent()` remain in document pixels; the declaration never changes parameters,
+`"display"` permits evaluation on the compositor's reduced grid. Spatial effects
+receive positions in their authored reference coordinates and `fx_extent()`
+returns that reference extent. The finite F64 affine mapping places those
+coordinates in the composition. Crop translates the mapping once; Image Size
+and image orientation compose it with the accepted image transform, retaining
+reference extents and values. Explicit distances and implicit periods therefore
+transform together. Evaluation density never changes their document appearance,
 saved artwork, or exact queries and export. Nonlinear adjustments evaluated after
 reduction can differ from a reduced exact result, so display eligibility requires
 visual and numerical qualification. Reduced composition accepts pointwise and
 image-pass programs with this declaration. Each pass expands its input request
 by its declared footprint, including reduced-grid interpolation support;
 document-wide sampling requests the complete input. Reduced input grids use
-hardware linear sampling after document-coordinate and partial-edge correction.
-Sampling weights follow the device's subtexel precision; coordinate tests allow
-the [Vulkan core minimum of four fractional bits](https://docs.vulkan.org/spec/latest/chapters/limits.html#limits-subTexelPrecisionBits),
-while native-grid tests retain their Float32 tolerance. Native views and programs
+Float32 bilinear sampling after document-coordinate and partial-edge correction.
+Unit-density sampling keeps the fractional phase separate from integer window
+origins, so rebasing a capture cannot change interpolation weights.
+Generator cells crossing the composition edge use the center of their covered
+frame area. Reduced-grid request padding never expands the finite input support.
+Image-pass sampling clamps only at the declared finite input support. Pointwise
+programs read transparent coverage outside that support. Dependency windows
+and output allocations do not become source boundaries; samples beyond a
+temporary texture return transparent coverage. Each pass captures the complete
+upstream support required by its requested output. Original and intermediate
+supports remain separate, so later passes blend opacity and read `fx_original()`
+against the original input boundary. Encoded jobs retain immutable parameter
+and coordinate buffers; unchanged prepared lookup ranges copy between buffers
+without recomputing their tables. Native views and programs
 declaring native resolution retain exact evaluation.
 
 The current filter ABI is **5**. Curves and gradients each occupy 65 vec4
@@ -427,6 +445,17 @@ Previews of a `blending` filter run on an encoded copy of the preview source
 and decode their result. Effect pipelines are compiled per blend space, so the
 choice adds no per-pixel branch.
 
+Idle preview requests refresh document and brush readiness before admission.
+Rows require only their active render and preparation pipelines; unrelated
+optional shaders do not delay a ready row. Cancelling a request discards its
+unencoded preparation work and bindings while retaining compiled recipes.
+
+Picker previews crop larger documents around the selected content point. A
+document smaller than the preview row is centered on each smaller axis, with
+transparent padding outside its finite frame. Attached-filter previews read the
+owner before its outer opacity and clipping composition; replacement previews
+read the input immediately before the selected filter.
+
 | Space | Built-in filters |
 | --- | --- |
 | `blending` (retouching) | Gaussian Blur, Unsharp Mask, High Pass, Soft Focus, Edge-Preserving Smooth |
@@ -501,8 +530,8 @@ Kernels without effective side taps return the center sample unchanged. Coverage
 is clamped to its valid range after accumulation. Coefficients are prepared once, outside pixel evaluation. The
 standalone Tent Blur example demonstrates a different kernel using the same ABI.
 Radius edits sigma from 0 to 85 px, with a 0–21 px soft slider range and
-square-root mapping for finer low values. Saved and resized sigma can exceed
-those editor bounds. Preparation uses 256 lanes and 129 records through 85
+square-root mapping for finer low values. Saved sigma can exceed those editor bounds; image resizing changes its
+reference mapping. Preparation uses 256 lanes and 129 records through 85
 evaluation texels. Above that, the header retains sigma, support and texel size;
 the consumer evaluates the full kernel over source samples, with paired taps and
 error-function integrals for clamped edge tails. Work and storage do not grow
@@ -510,10 +539,16 @@ with off-image support. The independent Float64 kernel fixtures cover the
 transition and saved sigma through 65,536 pixels. Frequency Separation's dialog
 retains its 0–85 px range.
 
-`fx_sample_bounds()` returns the first and last source sample centers in document
-coordinates. Its bounds account for reduced-resolution edge cells. Built-in
-periods used as divisors use a numerical floor of 1/256 pixel; all other pixel
-lengths pass to shaders unchanged. The [package math contract](capy-package.md#evaluation-meaning)
+`fx_sample_bounds()` returns the bounds of the true finite input sample centers
+in the active effect reference coordinates. Its bounds account for transformed
+source support and reduced-resolution edge cells. `fx_sample()` and
+`fx_original()` map reference positions back into evaluation coordinates before
+reading captured inputs. The current composition frame remains separate from
+that reference: it limits frame-defined generators and defines global tone and
+Dehaze analysis. Denoise's two-unit neighborhood, VHS's seven-unit row bands and
+CRT's three-unit stripes use the same authored coordinate mapping as explicit
+lengths. Built-in periods used as divisors use a numerical floor of 1/256 unit;
+all other pixel lengths pass to shaders unchanged. The [package math contract](capy-package.md#evaluation-meaning)
 owns their lasting meaning.
 
 Every pass of an effect chain at one resolution shares a persistent

@@ -212,7 +212,7 @@ fn an_effect_applies_to_the_layer_below() {
             let original = image(&mut engine, 1_000_000_000);
             let fill = id(&engine, "Paper");
             let fill_application = engine.document().scene().effect_application(fill).unwrap().clone();
-            let fill_definition = engine.document().artwork.definitions.get(fill_application.definition).unwrap().clone();
+            let fill_program = fill_application.program.clone();
             engine.set_active_layer(id(&engine, "Effect")).unwrap();
             assert_eq!(engine.document().merge_down(), MergeDown::ApplyEffect);
             merge(&mut engine, MergeKind::Down);
@@ -220,7 +220,7 @@ fn an_effect_applies_to_the_layer_below() {
             let scene = engine.document().scene();
             assert!(scene.order().iter().all(|h| *h == fill || scene.effect(*h).is_none()));
             assert_eq!(scene.effect_application(fill), Some(&fill_application));
-            assert_eq!(engine.document().artwork.definitions.get(fill_application.definition), Some(&fill_definition));
+            assert_eq!(engine.document().scene().effect_application(fill).unwrap().program, fill_program);
         }
     }
 }
@@ -251,9 +251,9 @@ fn placed_photos_and_watercolor_become_plain_pixels() {
 fn placed_photos_and_watercolor_in(space: BlendSpace) {
     let mut doc = document(&["Wash", "Photo"], space);
     let photo = named_occurrence(&doc, "Photo");
-    paint_mut(&mut doc, photo).original = Some(color::source::rgba8_source([300, 200], |x, y| {
+    paint_mut(&mut doc, photo).base = Some(layer_core::authored::PaintBase::new((color::source::rgba8_source([300, 200], |x, y| {
         [(x * 5 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8, 255]
-    }));
+    })).into()));
     paint_mut(&mut doc, photo).domain = [300, 200];
     doc.artwork.occurrences.get_mut(photo).unwrap().placement = layer_core::LayerPlacement::from_affine(Affine([0.9, 0.2, -0.2, 0.9, 40., 10.]));
     let (mut engine, mut input) = engine(doc);
@@ -268,7 +268,7 @@ fn placed_photos_and_watercolor_in(space: BlendSpace) {
     image(&mut engine, 3_000_000_000).assert_near(&original, TOLERANCE, "merged photo and wash");
     let layer = engine.document().scene().occurrence(result).unwrap();
     let source = paint(engine.document(), result);
-    assert!(source.original.is_none() && layer.placement == layer_core::LayerPlacement::IDENTITY);
+    assert!(source.base.is_none() && layer.placement == layer_core::LayerPlacement::IDENTITY);
     let data = source.raster.wait_data().unwrap();
     assert!(data.watercolor.is_none() && data.tiles.keys().all(|k| k.plane == raster::RasterPlane::Color), "no wet state remains");
 }
@@ -283,10 +283,10 @@ fn bakes_of_blurs_save_and_reopen() {
             let mut doc = document(&["Blur", "Photo"], space);
             doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color.depth = depth;
             let photo = named_occurrence(&doc, "Photo");
-            paint_mut(&mut doc, photo).original = Some(color::source::rgba8_source(SIZE, |x, y| {
+            paint_mut(&mut doc, photo).base = Some(layer_core::authored::PaintBase::new((color::source::rgba8_source(SIZE, |x, y| {
                 let inside = (60..320).contains(&x) && (40..210).contains(&y);
                 [(x * 3 % 256) as u8, (y * 5 % 256) as u8, 200, if inside { 255 } else if (x + y) % 7 == 0 { 90 } else { 0 }]
-            }));
+            })).into()));
             let mut blur = EffectInstance::new(bundled_effect_catalog().get(SeparationFilters::BLUR).unwrap().program());
             blur.set("sigma", EffectValue::Number(6.)).unwrap();
             let edit = effect_edit(&doc, named_occurrence(&doc, "Blur"), blur);

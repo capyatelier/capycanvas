@@ -411,7 +411,7 @@ fn flipping_a_placement_stays_lossless_and_applies_as_one_step() {
     invoke(&mut s, CommandId::TransformRotateRight);
     invoke(&mut s, CommandId::ApplyTransform);
     let layer = s.engine.document().scene().occurrence(s.engine.document().working.occurrence.unwrap()).unwrap();
-    assert!(canvas_bar_paint(s.engine.document(), s.engine.document().working.occurrence.unwrap()).original.is_some(), "the retained photo is kept");
+    assert!(canvas_bar_paint(s.engine.document(), s.engine.document().working.occurrence.unwrap()).base.is_some(), "the retained photo is kept");
     let [a, b, c, d, _, _] = layer.placement.as_affine().unwrap().0;
     assert!(a.abs() < 1e-4 && d.abs() < 1e-4 && (b * c) > 0.9, "a mirrored quarter turn: {a} {b} {c} {d}");
     invoke(&mut s, CommandId::Undo);
@@ -634,11 +634,11 @@ fn perspective_mirrors_a_corner_drag_onto_its_neighbour() {
 #[test]
 fn photo_distort_and_warp_preserve_retained_source_and_geometry() {
     let mut s = placed_photo("retained photo geometry");
-    let source = canvas_bar_paint(s.engine.document(), s.engine.document().scene().order()[0]).original.clone();
+    let source = canvas_bar_paint(s.engine.document(), s.engine.document().scene().order()[0]).base.clone();
     for command in [CommandId::TransformDistort, CommandId::TransformWarp, CommandId::TransformFree] {
         assert!(s.command(command).enabled);
         invoke(&mut s, command);
-        assert_eq!(canvas_bar_paint(s.engine.document(), s.engine.document().scene().order()[0]).original, source);
+        assert_eq!(canvas_bar_paint(s.engine.document(), s.engine.document().scene().order()[0]).base, source);
     }
     invoke(&mut s, CommandId::CancelTransform);
 }
@@ -1431,7 +1431,7 @@ fn opening_and_switching_retained_modes_preserves_exact_geometry_and_redo() {
     let imported = placed_photo("retained modes");
     let mut doc = imported.engine.document().clone();
     let id = doc.working.occurrence.unwrap();
-    let frame = layer_core::Rect::from_extent(canvas_bar_paint(&doc, id).original.as_ref().unwrap().extent);
+    let frame = layer_core::Rect::from_extent(canvas_bar_paint(&doc, id).base.as_ref().unwrap().image.storage().extent);
     let mesh = std::sync::Arc::new(layer_core::MeshMap::identity(frame, [3, 3]).unwrap().move_node(5, Point { x: 1., y: -0.5 }).unwrap());
     let placement = layer_core::LayerPlacement {
         outer: layer_core::Projective([1., 0.1, 90., -0.05, 1., 70., 0.001, -0.002, 1.]),
@@ -1468,7 +1468,7 @@ fn transform_again_replays_only_the_last_accepted_outer_delta_once_and_atomicall
     let layer_core::authored::SourceTarget::Paint(paint) = doc.working.target.unwrap() else { panic!("paint") };
     let source = doc.artwork.paint.get_mut(paint).unwrap();
     source.domain = [200, 160];
-    source.original = Some(layer_core::color::source::rgba8_source([200, 160], |_, _| [180, 100, 40, 255]));
+    source.base = Some(layer_core::PaintBase::new(layer_core::Image::new(layer_core::color::source::rgba8_source([200, 160], |_, _| [180, 100, 40, 255]))));
     doc.artwork.occurrences.get_mut(id).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([1., 0.2, 0.3, 1., 90., 70.]));
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
@@ -1644,7 +1644,7 @@ fn mixed_retained_sampling_changes_together_in_one_undo_and_noop_preserves_each_
         assert_eq!(owner.placement.interpolation, layer_core::Interpolation::Bicubic);
         let source = canvas_bar_paint(s.engine.document(), id);
         let old = canvas_bar_paint(&original, id);
-        assert_eq!(source.original, old.original);
+        assert_eq!(source.base, old.base);
         assert_eq!(source.raster, old.raster);
     }
     assert!(s.engine.undo().unwrap());

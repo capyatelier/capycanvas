@@ -1,6 +1,6 @@
 use super::*;
 use crate::{authored::*, color::{DocumentColor, SampleDepth, RgbSpace, ColorProfile, f16,
-    source::{SourceImage, SourceKind, SourceInterpretation, SourceChannels}},
+    source::{SourceImage, SourceInterpretation, SourceChannels}},
     raster::{RasterData, RasterPlane, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey, TILE_SIZE},
     Selection, SelectionPixels, EffectInstance, EffectValue, Lut3d, Point, PhotoMetadata};
 use crate::package::{ByteSource, RangeState, transport::ChunkedBytes, MAX_RANGE_BYTES};
@@ -63,9 +63,9 @@ fn fixture(depth: SampleDepth) -> Artwork {
         profile:ColorProfile::Icc(Resource::from((0..256).map(|n|n as u8).collect::<Vec<_>>())),profile_assumed:false};
     let source_bytes=(0..256*256).flat_map(|n|(n as u16).to_le_bytes()).collect::<Vec<_>>();
     let tile=TileBlob::encode(interpretation.descriptor(),&source_bytes).unwrap();
-    let original=Arc::new(SourceImage {kind:SourceKind::Original,extent:[256;2],resolution:Some(crate::ImageResolution::ppi(300)),
+    let original=Arc::new(SourceImage {extent:[256;2],resolution:Some(crate::ImageResolution::ppi(300)),
         tiles:[([0,0],Arc::new(tile))].into(),interpretation});
-    let source=PaintSource { color_mode: Default::default(),domain:[256;2],raster,original:Some(original),operations:Default::default()};
+    let source=PaintSource {color_mode:Default::default(),domain:[256;2],raster,base:Some(PaintBase::new(Image::with_id(identity(70),original))),operations:Default::default()};
     let first=artwork.paint.insert(identity(10),source.clone()).unwrap();
     let second=artwork.paint.insert(identity(11),source).unwrap();
     let selection=Selection::pixels(Arc::new(SelectionPixels::bytes([5,2],[0,0,5,2],vec![0xff804020,0x7f,0x804020ff,1]).unwrap()));
@@ -83,8 +83,7 @@ fn fixture(depth: SampleDepth) -> Artwork {
     for (index,key) in ["color_lookup","domain_warp"].into_iter().enumerate() {
         let mut instance=EffectInstance::new(crate::bundled_effect_catalog().get(key).unwrap().program());
         if key=="color_lookup" {instance.set("resource",EffectValue::Lut3d(Some(lut.clone()))).unwrap();}
-        let definition=artwork.definitions.insert(identity(30+index as u128),Definition {program:instance.program.clone()}).unwrap();
-        let effect=artwork.effects.insert(identity(40+index as u128),EffectApplication {definition,values:instance.values}).unwrap();
+        let effect=artwork.effects.insert(identity(40+index as u128),EffectApplication::new(instance.program,instance.values,[256;2])).unwrap();
         let occurrence=artwork.occurrences.insert(identity(50+index as u128),Occurrence::new(OccurrenceContent::Effect(effect),key)).unwrap();
         artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
         Arc::make_mut(&mut artwork.outputs.get_mut(artwork.default_output).unwrap().context.phases).push((effect,2.125+index as f32));
@@ -125,9 +124,9 @@ fn full_archives_preserve_authored_graph_exact_samples_material_and_resource_byt
         assert_eq!(reopened.metadata,artwork.metadata);
         for (_,id,expected) in artwork.paint.iter() {
             let loaded=reopened.paint.get(reopened.paint.resolve(id).unwrap()).unwrap();
-            assert_eq!(loaded.domain,expected.domain); assert_eq!(loaded.original,expected.original);
-            let original_tile=&expected.original.as_ref().unwrap().tiles[&[0,0]];
-            let loaded_tile=&loaded.original.as_ref().unwrap().tiles[&[0,0]];
+            assert_eq!(loaded.domain,expected.domain); assert_eq!(loaded.base,expected.base);
+            let original_tile=&expected.base.as_ref().unwrap().image.tiles[&[0,0]];
+            let loaded_tile=&loaded.base.as_ref().unwrap().image.tiles[&[0,0]];
             assert_eq!(loaded_tile.resource_id(),original_tile.resource_id());
             let (original,loaded)=(expected.raster.wait_data().unwrap(),loaded.raster.wait_data().unwrap());
             assert_eq!(loaded.watercolor,original.watercolor);
@@ -200,6 +199,7 @@ fn unsupported_known_fields_future_objects_and_shared_sources_preserve_original_
     let variants=[rewrite(&bytes,|manifest|manifest["version"]=json!(2)),
         rewrite(&bytes,|manifest|manifest["objects"].as_array_mut().unwrap().push(json!({"id":identity(999),"type":"future.paint/1","data":{}}))),
         rewrite(&bytes,|manifest|manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["id"]==json!(identity(20))).unwrap()["data"]["future_behavior"]=json!(true)),
+        rewrite(&bytes,|manifest|manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["type"]=="capy.paint-source/2").unwrap()["data"]["color_mode"]=json!("future_color")),
         rewrite(&bytes,|manifest|manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["id"]==json!(identity(21))).unwrap()["data"]["content"]["paint"]=resources::reference(identity(10)))];
     for bytes in variants {
         let source=backing(bytes.clone());
@@ -216,8 +216,8 @@ fn unsupported_known_fields_future_objects_and_shared_sources_preserve_original_
 fn future_record_types_and_selection_descriptors_preserve_the_package() {
     let bytes=serialize(&prepare(&fixture(SampleDepth::U8),true));
     for (collection,kind) in [("objects","capy.composition/1"),("objects","capy.stack/1"),
-        ("objects","capy.occurrence/2"),("objects","capy.paint-source/1"),("objects","capy.coverage-source/1"),
-        ("objects","capy.effect-definition/1"),("objects","capy.effect/1"),("objects","capy.selection/1"),
+        ("objects","capy.occurrence/2"),("objects","capy.occurrence/3"),("objects","capy.image/1"),("objects","capy.paint-source/2"),("objects","capy.coverage-source/1"),
+        ("objects","capy.effect/2"),("objects","capy.selection/1"),
         ("objects","capy.guides/1"),("objects","capy.output/1"),("resources","capy.raster-tile/1"),
         ("resources","capy.selection-coverage/1"),("resources","capy.icc/1"),
         ("resources","capy.photo-metadata/1"),("resources","capy.lut3d/1")] {
@@ -319,10 +319,8 @@ fn reopened_animation_can_be_deleted_or_merged_and_undone() {
     let mut document=crate::Document::new(PortableId::random(),16,16,crate::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
     let occurrence=document.scene().order()[1];
     let effect=document.scene().effect_handle(occurrence).unwrap();
-    let definition=document.artwork.effects.get(effect).unwrap().definition;
     let program=crate::bundled_effect_catalog().get("domain_warp").unwrap().program();
-    document.artwork.effects.get_mut(effect).unwrap().values=EffectInstance::new(program.clone()).values;
-    document.artwork.definitions.get_mut(definition).unwrap().program=program;
+    *document.artwork.effects.get_mut(effect).unwrap()=EffectApplication::new(program.clone(),EffectInstance::new(program).values,[16;2]);
     let capture=crate::Editor::new(document).capture(0,EvaluationContext{elapsed:2.,phases:vec![(effect,0.75)].into()}).unwrap();
     let original=editable(serialize(&PreparedPackage::prepare(&capture,None,&AtomicBool::new(false)).unwrap()));
     let before=serialize(&prepare(&original,false));
@@ -330,47 +328,38 @@ fn reopened_animation_can_be_deleted_or_merged_and_undone() {
         let document=crate::Document::from_artwork(original.clone()).unwrap();
         let occurrence=document.scene().order()[1];
         let effect=document.scene().effect_handle(occurrence).unwrap();
-        let definition=document.artwork.effects.get(effect).unwrap().definition;
         let edit=if merge {crate::Edit::Batch(document.merge_plan(crate::MergeKind::Flatten).unwrap().edits)}
             else {document.delete_layers_edit(&[occurrence]).unwrap()};
         let mut editor=crate::Editor::new(document);editor.perform(edit).unwrap();
         assert!(editor.document().output().context.phases.is_empty());
-        assert!(editor.document().artwork.definitions.get(definition).is_none());
+        assert!(editor.document().artwork.effects.get(effect).is_none());
         assert!(editor.undo().unwrap());
         assert_eq!(serialize(&prepare(&editor.document().artwork,false)),before);
         assert!(editor.redo().unwrap());
         assert!(editor.document().output().context.phases.is_empty());
-        assert!(editor.document().artwork.definitions.get(definition).is_none());
+        assert!(editor.document().artwork.effects.get(effect).is_none());
     }
 }
 
 #[test]
-fn effect_removal_and_replacement_reclaim_only_newly_unused_definitions() {
-    let artwork=editable(serialize(&prepare(&fixture(SampleDepth::U8),false)));
-    let mut document=crate::Document::from_artwork(artwork).unwrap();
+fn effect_replacement_preserves_shared_program_and_undo() {
+    let mut document=crate::Document::from_artwork(editable(serialize(&prepare(&fixture(SampleDepth::U8),false)))).unwrap();
     let occurrence=document.artwork.occurrences.resolve(identity(51)).unwrap();
     let application=document.scene().effect_application(occurrence).unwrap().clone();
-    let unused=document.artwork.definitions.insert(identity(90),document.artwork.definitions.get(application.definition).unwrap().clone()).unwrap();
     let (edit,copies)=document.duplicate_layers_edit(&[occurrence]).unwrap();document.apply(edit).unwrap();
     document.apply(document.delete_layers_edit(&[occurrence]).unwrap()).unwrap();
-    assert!(document.artwork.definitions.get(application.definition).is_some());
+    assert!(Arc::ptr_eq(&document.scene().effect_application(copies[0]).unwrap().program,&application.program));
     let before=document.artwork.clone();
-    for target in [identity(30),identity(90)] {
-        let mut editor=crate::Editor::new(document.clone());
-        let effect=editor.document().scene().effect_handle(copies[0]).unwrap();
-        let definition=editor.document().artwork.definitions.resolve(target).unwrap();
-        let values=EffectInstance::new(editor.document().artwork.definitions.get(definition).unwrap().program.clone()).values;
-        let replacement=EffectApplication{definition,values};
-        let changes=editor.document().effect_edits(vec![RecordChange::replace(&editor.document().artwork.effects,effect,Some(replacement)).unwrap()]).unwrap();
-        editor.perform(crate::Edit::Batch(changes)).unwrap();
-        assert!(editor.document().artwork.definitions.get(application.definition).is_none());
-        assert!(editor.document().artwork.definitions.get(unused).is_some());
-        let reopened=editable(serialize(&prepare(&editor.document().artwork,false)));
-        assert!(reopened.definitions.resolve(identity(31)).is_none());
-        assert!(reopened.definitions.resolve(identity(90)).is_some());
-        assert!(editor.undo().unwrap());assert_eq!(editor.document().artwork,before);
-        assert!(editor.redo().unwrap());assert!(editor.document().artwork.definitions.get(application.definition).is_none());
-    }
+    let mut editor=crate::Editor::new(document);
+    let effect=editor.document().scene().effect_handle(copies[0]).unwrap();
+    let program=crate::bundled_effect_catalog().get("color_lookup").unwrap().program();
+    let replacement=EffectApplication::new(program.clone(),EffectInstance::new(program).values,[256;2]);
+    let changes=editor.document().effect_edits(vec![RecordChange::replace(&editor.document().artwork.effects,effect,Some(replacement)).unwrap()]).unwrap();
+    editor.perform(crate::Edit::Batch(changes)).unwrap();
+    let reopened=editable(serialize(&prepare(&editor.document().artwork,false)));
+    assert_eq!(reopened.effects.get(reopened.effects.resolve(editor.document().artwork.effects.id(effect).unwrap()).unwrap()).unwrap().program.id.as_ref(),"color_lookup");
+    assert!(editor.undo().unwrap());assert_eq!(editor.document().artwork,before);
+    assert!(editor.redo().unwrap());
 }
 
 #[test]
@@ -378,47 +367,49 @@ fn custom_filters_stay_out_of_portable_files() {
     let mut document=crate::Document::new(PortableId::random(),16,16,crate::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
     let bytes=serialize(&prepare(&document.artwork,false));
     let paper=document.scene().effect_handle(document.scene().order()[1]).unwrap();
-    let definition=document.artwork.effects.get(paper).unwrap().definition;
     let program=crate::effect_catalog::custom_program("solid_color");
-    document.artwork.definitions.get_mut(definition).unwrap().program=program.clone();
+    *document.artwork.effects.get_mut(paper).unwrap()=EffectApplication::new(program.clone(),EffectInstance::new(program.clone()).values,[16;2]);
     let error=PreparedPackage::prepare(&capture(&document.artwork),None,&AtomicBool::new(false)).unwrap_err();
-    assert_eq!(error,"Drawings with custom filters can't be saved yet");
+    assert_eq!(error,"Custom effects require private context");
     let mut inventory=resources::ResourceInventory::default();
-    let custom=super::super::effect_records::encode_definition(&Definition{program:program.clone()},&mut inventory).unwrap();
+    let custom=super::super::effect_records::encode_program(&program,&mut inventory).unwrap();
+    let values=super::super::effect_records::encode_values(&program,&document.artwork.effects.get(paper).unwrap().values,&mut inventory).unwrap();
     let sources=program.wgsl.sources().unwrap();
     let records:Vec<_>=sources.iter().map(|source|json!({"id":source.id(),"type":"capy.wgsl/1","data":{},"encoding":"utf8",
         "location":{"member":format!("data/{}",source.id())},"bytes":source.len().to_string(),"crc32":format!("{:08x}",crc32fast::hash(source.as_bytes()))})).collect();
     let members=sources.iter().map(|source|(format!("data/{}",source.id()),source.as_bytes().to_vec())).collect();
-    let id=json!(document.artwork.definitions.id(definition).unwrap());
+    let id=json!(document.artwork.effects.id(paper).unwrap());
+    let spatial=document.artwork.effects.get(paper).unwrap().spatial;
     let bytes=rewrite_with(&bytes,members,|manifest| {
-        manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["id"]==id).unwrap()["data"]=custom;
+        manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["id"]==id).unwrap()["data"]=json!({"program":custom,"values":values,"spatial":spatial});
+        if spatial.is_none() {manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["id"]==id).unwrap()["data"].as_object_mut().unwrap().remove("spatial");}
         manifest["resources"].as_array_mut().unwrap().extend(records);
     });
     let OpenOutcome::Preserved {reason,..}=open(backing(bytes),Default::default(),&AtomicBool::new(false)).unwrap() else {panic!("custom filters must open read-only")};
-    assert_eq!(reason,"Custom filters are unsupported");
+    assert!(reason.contains("context"));
 }
 #[test]
-fn effects_resize_by_declared_dimension_independently_of_display_units() {
+fn effect_reference_resize_preserves_authored_values_independently_of_display_units() {
     for dimension in [Dimension::Scalar,Dimension::Angle,Dimension::Time,Dimension::SourcePixels,Dimension::CompositionPixels,Dimension::Normalized] {
         for unit in ["","px"] {
             let mut document=crate::Document::new(PortableId::random(),16,16,crate::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
             let effect=document.scene().effect_handle(document.scene().order()[1]).unwrap();
-            let definition=document.artwork.effects.get(effect).unwrap().definition;
             let mut program=crate::effect_catalog::custom_program("gaussian_blur");
             let parameters=Arc::make_mut(&mut Arc::make_mut(&mut program).parameters);
             let sigma=parameters.iter().position(|p|p.key.as_ref()=="sigma").unwrap();
             parameters[sigma].dimension=dimension;
             let crate::EffectParameterKind::Number{unit:label,..}=&mut parameters[sigma].kind else {unreachable!()};*label=unit.into();
             let mut instance=EffectInstance::new(program.clone());instance.set("sigma",EffectValue::Number(3.)).unwrap();
-            document.artwork.definitions.get_mut(definition).unwrap().program=program;
-            document.artwork.effects.get_mut(effect).unwrap().values=instance.values;
+            *document.artwork.effects.get_mut(effect).unwrap()=EffectApplication::new(program,instance.values,[16;2]);
             let mut editor=crate::Editor::new(crate::Document::from_artwork(document.artwork).unwrap());
             let geometry=crate::CanvasGeometry::resize([16,16],[32,32],crate::Interpolation::Bicubic);
             let plan=editor.document().canvas_geometry_plan(&geometry,crate::GeometryLimits{project:Default::default(),device_dimension:8192}).unwrap();
             editor.perform(crate::Edit::Batch(plan.edits)).unwrap();
             let effect=editor.document().scene().effect(editor.document().scene().order()[1]).unwrap();
-            let expected=if matches!(dimension,Dimension::SourcePixels|Dimension::CompositionPixels){6.}else{3.};
-            assert_eq!(effect.value("sigma"),Some(&EffectValue::Number(expected)),"{dimension:?}, {unit}");
+            assert_eq!(effect.value("sigma"),Some(&EffectValue::Number(3.)),"{dimension:?}, {unit}");
+            let application=editor.document().scene().effect_application(editor.document().scene().order()[1]).unwrap();
+            assert_eq!(application.spatial.unwrap().mapping,Affine64([2.,0.,0.,2.,0.,0.]));
+            assert_eq!(application.spatial.unwrap().extent,[16.;2]);
             assert!(editor.undo().unwrap());
             assert_eq!(editor.document().scene().effect(editor.document().scene().order()[1]).unwrap().value("sigma"),Some(&EffectValue::Number(3.)));
         }

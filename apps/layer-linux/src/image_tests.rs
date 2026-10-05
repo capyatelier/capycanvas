@@ -286,7 +286,7 @@ fn time_image_size(w: &Rc<Workspace>, size: [u32; 2], label: &str) {
 fn native_image_size_timing_on_a_24_mp_photo() {
     let app = native_test_app("dev.layer.ImageSizeTiming");
     let mut photo = native_navigation::photo([6000, 4000]);
-    let keep: Vec<_> = photo.scene().order().iter().copied().filter(|h| photo.scene().constant_backdrop().contains(h) || photo.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).collect();
+    let keep: Vec<_> = photo.scene().order().iter().copied().filter(|h| photo.scene().constant_backdrop().contains(h) || photo.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).collect();
     let removed: Vec<_> = photo.scene().order().iter().copied().filter(|h| !keep.contains(h)).collect();
     let root = photo.composition().result;
     photo.artwork.stacks.get_mut(root).unwrap().entries = keep;
@@ -295,7 +295,7 @@ fn native_image_size_timing_on_a_24_mp_photo() {
         photo.artwork.occurrences.change(handle, id, None).unwrap();
     }
     let mut photo = layer_core::Document::from_artwork(photo.artwork).unwrap();
-    let active = photo.scene().order().iter().copied().find(|h| photo.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).unwrap();
+    let active = photo.scene().order().iter().copied().find(|h| photo.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).unwrap();
     photo.apply(photo.select_occurrence_edit(active).unwrap()).unwrap();
     for (project, name) in [(photo, "placed photo"), (painted_24_mp(), "16-bit paint layer")] {
         let w = Workspace::with_project(&app, Some((project, None)));

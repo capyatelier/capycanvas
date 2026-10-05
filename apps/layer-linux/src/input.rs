@@ -863,7 +863,7 @@ impl Input {
             {
                 let doc = gpu.session.engine().document();
                 if let Some(handle) = doc.working.occurrence
-                    && doc.scene().paint_source(handle).is_some_and(|source| source.original.is_some())
+                    && doc.scene().paint_source(handle).is_some_and(|source| source.base.is_some())
                     && let Some(occurrence) = doc.scene().occurrence(handle) {
                     gpu.session.engine().backend().stats.lock().unwrap().photo_inputs.push((
                         delivered_ns, layer_ui::occurrence_token(handle),

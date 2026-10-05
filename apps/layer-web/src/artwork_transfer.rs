@@ -20,7 +20,7 @@ pub(super) async fn wait_backing_cancellable(artwork:&Artwork,control:Option<&la
                 for tile in data.tiles.values(){match tile.try_backing(){None=>ready=false,Some(Err(e))=>return Err(js(e)),Some(Ok(blob))=>ready &=blob.compressed_ready().map_err(js)?,}}
             }}
         }
-        for (_,_,paint) in artwork.paint.iter(){if let Some(source)=&paint.original{for tile in source.tiles.values(){ready &=tile.compressed_ready().map_err(js)?;}}}
+        for image in artwork.images().map_err(js)?.values(){for tile in image.tiles.values(){ready &=tile.compressed_ready().map_err(js)?;}}
         if ready{return Ok(());}
         if js_sys::Date::now()-start>30_000.{return Err(js("Raster backing timed out"));}
         documents::yield_browser().await?;

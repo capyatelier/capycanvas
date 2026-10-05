@@ -42,8 +42,8 @@ impl SnapshotGpu {
         { renderer.analysis_backing_waiter = self.analysis_backing_waiter.clone(); }
         renderer.resize_surface(view.width_px, view.height_px)?;
         let mut programs = Vec::new();
-        for (_, _, definition) in document.artwork.definitions.iter() {
-            if !programs.contains(&definition.program) { programs.push(definition.program.clone()); }
+        for (_, _, application) in document.artwork.effects.iter() {
+            if !programs.contains(&application.program) { programs.push(application.program.clone()); }
         }
         let validating = !programs.is_empty();
         if validating {

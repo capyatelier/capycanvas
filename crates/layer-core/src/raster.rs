@@ -264,8 +264,9 @@ impl TileBlob {
     ) -> Result<Self, String> {
         if compressed.len() > MAX_COMPRESSED_TILE_BYTES { return Err("Oversized compressed raster tile".into()); }
         Self::decode_samples(descriptor, &compressed)?;
+        let encoded_fingerprint=Some(Self::descriptor_digest(descriptor,&compressed));
         Ok(Self { resource_id, owner_identity: next_tile_owner(), descriptor,
-            encoded_fingerprint: None, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(compressed.into()) })
+            encoded_fingerprint, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(compressed.into()) })
     }
     pub fn from_compressed(
         descriptor: PixelDescriptor,
@@ -302,11 +303,19 @@ impl TileBlob {
         descriptor: PixelDescriptor,
         bytes: Arc<[u8]>,
     ) -> Result<Self, String> {
+        Self::from_verified_resource_with_encoded_fingerprint(resource_id,descriptor,bytes,None)
+    }
+    pub fn from_verified_resource_with_encoded_fingerprint(
+        resource_id: crate::authored::PortableId,
+        descriptor: PixelDescriptor,
+        bytes: Arc<[u8]>,
+        encoded_fingerprint: Option<[u8;32]>,
+    ) -> Result<Self, String> {
         if bytes.is_empty() || bytes.len() > MAX_COMPRESSED_TILE_BYTES || descriptor.byte_len([TILE_SIZE; 2]).is_none() {
             return Err("Invalid raster worker blob".into());
         }
         Ok(Self { resource_id, owner_identity: next_tile_owner(), descriptor,
-            encoded_fingerprint: None, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(bytes.into()) })
+            encoded_fingerprint, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(bytes.into()) })
     }
 }
 
@@ -566,7 +575,7 @@ mod tests {
         assert_eq!(restored.decode().unwrap(), samples);
         let package = super::TileBlob::from_package(original.resource_id(), descriptor, encoded.clone()).unwrap();
         assert!(package.digest.get().is_none(), "package validation does not compute a content hash");
-        assert!(package.encoded_fingerprint().is_none());
+        assert_eq!(package.encoded_fingerprint(),original.encoded_fingerprint());
         let adopted = super::TileBlob::from_verified_resource(original.resource_id(), descriptor, encoded.clone()).unwrap();
         assert!(adopted.encoded_fingerprint().is_none());
         assert!(adopted.digest.get().is_none());

@@ -15,9 +15,11 @@ be tested without launching a window.
 
 `Document`, in `layer-core`, owns one typed `Artwork` and transient
 `WorkingState`. Artwork stores compositions, stacks, occurrences, paint and
-coverage sources, effect applications and definitions, saved selections, guides
+coverage sources, effect applications and immutable programs, saved selections, guides
 and outputs. Stacks own order; occurrences own placement and presentation;
-sources own pixels. Compact typed handles identify runtime records, while stable
+sources own editable pixels; image objects and paint bases share immutable
+ID-bearing images. Object collections own their child order and retain no
+writable raster cache. Compact typed handles identify runtime records, while stable
 portable IDs identify records in files. `Editor` applies atomic reversible record
 changes and retains immutable owners for undo/redo.
 

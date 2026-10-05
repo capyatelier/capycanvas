@@ -1,5 +1,5 @@
 use crate::{FluentArgs, Localizer, MessageId};
-use layer_core::{BlendSpace, color::{SampleDepth, source::{SourceChannels, SourceKind}}};
+use layer_core::{BlendSpace, authored::PaintBasePolicy, color::{SampleDepth, source::SourceChannels}};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -41,7 +41,7 @@ pub fn document_properties(info: &layer_color::InspectedDocumentInfo, localizer:
     }
     let sources = info.sources.iter().map(|source| {
         let channels = match source.channels { SourceChannels::Rgb | SourceChannels::Rgba => "RGB".into(), SourceChannels::Cmyk => "CMYK".into(), SourceChannels::Gray | SourceChannels::GrayAlpha => label(MessageId::COLOR_FEATURES_PROFILE_GRAYSCALE) };
-        let retained = if source.kind == SourceKind::Rasterized { MessageId::COLOR_PROPERTIES_RETAINED_RASTERIZED } else if source.embedded { MessageId::COLOR_PROPERTIES_RETAINED_ICC } else { MessageId::COLOR_PROPERTIES_RETAINED_ORIGINAL };
+        let retained = if source.policy == PaintBasePolicy::WorkingPixels { MessageId::COLOR_PROPERTIES_RETAINED_RASTERIZED } else if source.embedded { MessageId::COLOR_PROPERTIES_RETAINED_ICC } else { MessageId::COLOR_PROPERTIES_RETAINED_ORIGINAL };
         let mut args = FluentArgs::new(); args.set("width", source.extent[0]); args.set("height", source.extent[1]);
         args.set("bits", source.bits); args.set("channels", channels); args.set("profile", crate::profile_library::profile_description_name(source.profile_description.clone(), localizer));
         args.set("assumed", if source.profile_assumed {"yes"} else {"no"}); args.set("retained", label(retained));
@@ -57,8 +57,8 @@ mod tests {
         let context = Localizer::shared(crate::UiLanguage::English);
         let document = layer_core::Document::new(layer_core::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
         let mut info = layer_color::DocumentInfo::capture(&document).inspect().unwrap();
-        for (kind, embedded, retained) in [(SourceKind::Original, true, "Original samples and embedded ICC retained."), (SourceKind::Original, false, "Original samples and color interpretation retained."), (SourceKind::Rasterized, true, "Rasterized in document coordinates.")] {
-            info.sources = vec![layer_color::InspectedSourceInfo { name: "私の写真 · 내 사진".into(), extent: [10,20], kind, channels: SourceChannels::Gray, bits: 16, profile_description: Some("Embedded ICC profile".into()), profile_assumed: true, embedded }];
+        for (policy, embedded, retained) in [(PaintBasePolicy::SourceProfile, true, "Original samples and embedded ICC retained."), (PaintBasePolicy::SourceProfile, false, "Original samples and color interpretation retained."), (PaintBasePolicy::WorkingPixels, true, "Rasterized in document coordinates.")] {
+            info.sources = vec![layer_color::InspectedSourceInfo { name: "私の写真 · 내 사진".into(), extent: [10,20], policy, channels: SourceChannels::Gray, bits: 16, profile_description: Some("Embedded ICC profile".into()), profile_assumed: true, embedded }];
             let view = document_properties(&info, &context);
             assert_eq!(view.sources[0].0, "私の写真 · 내 사진");
             assert!(view.sources[0].1.contains("Profile assumed: Embedded ICC profile"));

@@ -16,6 +16,8 @@ const PLANNED_PIXEL_BYTES: u64 = 512 * 1024 * 1024;
 #[derive(Clone, Default)]
 pub struct CaptureControl {
     cancelled: Arc<AtomicBool>,
+    #[cfg(target_arch = "wasm32")]
+    decode_wake: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
     output_rows: Arc<AtomicU32>,
     allocation_peaks: Option<Arc<std::sync::Mutex<CaptureAllocationPeaks>>>,
 }
@@ -52,6 +54,11 @@ impl CaptureControl {
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
+        #[cfg(target_arch = "wasm32")]
+        {
+            let wake = self.decode_wake.lock().unwrap().take();
+            if let Some(waker) = wake { waker.wake(); }
+        }
     }
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
@@ -78,6 +85,10 @@ impl CaptureControl {
 pub struct SnapshotGpu {
     #[cfg(target_arch = "wasm32")]
     encoder: Option<raster::BrowserRasterEncoder>,
+    #[cfg(target_arch = "wasm32")]
+    image_decoder: Option<crate::BrowserImageDecoder>,
+    #[cfg(target_arch = "wasm32")]
+    nearest_coordinate_decoder: Option<crate::BrowserNearestCoordinateDecoder>,
     analyses: Vec<Arc<crate::effect_analysis::Prepared>>,
     #[cfg(target_arch = "wasm32")]
     analysis_backing_waiter: Option<crate::effect_analysis::BackingWaiter>,
@@ -105,6 +116,10 @@ impl WgpuRasterizer {
             scene_pipelines: self.scene_pipelines.clone(),
             #[cfg(target_arch = "wasm32")]
             encoder: self.browser_raster_encoder(),
+            #[cfg(target_arch = "wasm32")]
+            image_decoder: self.browser_image_decoder.clone(),
+            #[cfg(target_arch = "wasm32")]
+            nearest_coordinate_decoder: self.browser_nearest_coordinate_decoder.clone(),
             adapter: self.adapter.clone(),
             device: self.device.clone(),
             queue: self.queue.clone(),
@@ -121,6 +136,11 @@ impl SnapshotGpu {
     /// The largest canvas side the shared device can compose.
     pub fn max_document_dimension(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
+    }
+    pub fn preflight_image_object_affine(&self,scene:SceneView<'_>,object:layer_core::ImageObjectHandle,
+        affine:layer_core::Affine64,view:layer_render::ViewState,
+    )->Result<(),GpuRasterError> {
+        crate::object_sampling::preflight_object_affine(scene,object,affine,view,self.device.limits().max_storage_buffer_binding_size)
     }
 
     /// Run on the file/inspection worker. Cloned handles keep the device alive
@@ -202,6 +222,10 @@ impl SnapshotRenderer {
         }
         #[cfg(target_arch = "wasm32")]
         if let Some(encoder) = gpu.encoder.clone() { renderer.set_browser_raster_encoder(encoder); }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(decoder) = gpu.image_decoder.clone() { renderer.set_browser_image_decoder(decoder); }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(decoder) = gpu.nearest_coordinate_decoder.clone() { renderer.set_browser_nearest_coordinate_decoder(decoder); }
 
         for &handle in view.order() {
             let Some(effect) = view.effect(handle) else { continue; };
@@ -211,6 +235,9 @@ impl SnapshotRenderer {
         }
         renderer.submitted_context = Some(scene.context.clone());
         renderer.effect_analyses = gpu.analyses.clone();
+        renderer.snapshot_cancelled = Some(control.cancelled.clone());
+        #[cfg(target_arch = "wasm32")]
+        { renderer.snapshot_decode_wake = Some(control.decode_wake.clone()); }
         renderer.ensure_document_metadata(extent, view)?;
         let sdr_rendition = color.depth.is_float().then_some(view.output().sdr);
         let blend_space = composition.blend;
@@ -252,8 +279,9 @@ impl SnapshotRenderer {
             || scene.parent(handle).is_some() || occurrence.translation != layer_core::Point::default()
             || occurrence.placement != layer_core::LayerPlacement::IDENTITY || occurrence.blend != layer_core::LayerBlend::Normal
             || occurrence.attachment.is_clip() || occurrence.mask.as_ref().is_some_and(|m| m.enabled) || !self.backing[&source_target].tiles.is_empty() { return None; }
-        let source = scene.original(source_target)?;
-        (source.extent == self.extent
+        let base = scene.paint_base(source_target)?;
+        let source = base.image.storage();
+        (base.offset == [0;2] && source.extent == self.extent
             && source.interpretation.channels == target.channels
             && source.interpretation.depth == target.depth
             && source.interpretation.profile == target.profile)
@@ -375,40 +403,70 @@ impl SnapshotRenderer {
     /// Exact linear-premultiplied document RGB. No display conversion, proof,
     /// mask-area tint, checkerboard or UI overlays participate. Waits on this
     /// capture only; call from the owning file/inspection worker.
-    fn capture_region_gpu<T>(
+    async fn capture_region_gpu<T>(
         &mut self,
         [x, y, width, height]: [u32; 4],
         reserved_bytes: u64,
         consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
     ) -> Result<T, GpuRasterError> {
-        self.capture_output_region_gpu([x, y, width, height], scene::Output::Artwork(None), reserved_bytes, consume)
+        self.capture_output_region_gpu([x, y, width, height], scene::Output::Artwork(None), reserved_bytes, consume).await
     }
-    fn capture_output_region_gpu<T>(&mut self, [x,y,width,height]: [u32;4], output: scene::Output, reserved_bytes:u64,
+    async fn capture_output_region_gpu<T>(&mut self, [x,y,width,height]: [u32;4], output: scene::Output, reserved_bytes:u64,
         consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
     ) -> Result<T, GpuRasterError> {
         let output=match (&self.scope,output) {
-            (SceneScope::Raw(target),scene::Output::Artwork(None))=>scene::Output::Source(*target),_=>output,
+            (SceneScope::Raw(target),scene::Output::Artwork(None))=>scene::Output::Source(*target),
+            (SceneScope::RawObjects(handle),scene::Output::Artwork(None))=>scene::Output::Objects(*handle),_=>output,
         };
+        let mut consume=Some(consume);
         self.with_region_gpu([x, y, width, height], reserved_bytes, |r, packet, region, encoder| {
             let (target, _) = create_color_target(&r.device, [width, height], "snapshot region");
             let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
             let captured = scene.capture_region(r, packet, &target, region, output, encoder);
             r.scene = Some(scene);
             captured?;
-            Ok(consume(&r.device, &target, encoder))
-        })
+            Ok(consume.take().unwrap()(&r.device, &target, encoder))
+        }).await
     }
 
-    fn with_region_gpu<T>(
-        &mut self, [x, y, width, height]: [u32; 4], reserved_bytes: u64,
-        consume: impl FnOnce(&mut WgpuRasterizer, FramePacket<'_>, PixelRect, &mut submission::CommandEncoder) -> Result<T, GpuRasterError>,
+    async fn with_region_gpu<T>(
+        &mut self, region: [u32; 4], reserved_bytes: u64,
+        mut consume: impl FnMut(&mut WgpuRasterizer, FramePacket<'_>, PixelRect, &mut submission::CommandEncoder) -> Result<T, GpuRasterError>,
     ) -> Result<T, GpuRasterError> {
-        let (r, packet, region, mut encoder) = self.prepare_region_gpu([x,y,width,height], reserved_bytes)?;
-        let result = consume(r, packet, region, &mut encoder)?;
-        r.uploads.finish(&encoder);
-        encoder.submit(&r.queue);
-        self.control.observe_allocations(&self.renderer.device);
-        Ok(result)
+        loop {
+            let result={
+                let (r, packet, region, mut encoder)=self.prepare_region_gpu(region,reserved_bytes)?;
+                match consume(r,packet,region,&mut encoder) {
+                    Ok(result)=> {
+                        if let Some(scene)=r.scene.as_mut() {scene.release_exact_objects(&encoder);}
+                        r.uploads.finish(&encoder);
+                        encoder.submit(&r.queue);
+                        Ok(result)
+                    },
+                    Err(GpuRasterError::DeferredObjectWork)=> {
+                        r.uploads.finish(&encoder);
+                        encoder.submit(&r.queue);
+                        crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                        Err(GpuRasterError::DeferredObjectWork)
+                    },
+                    Err(error)=>Err(error),
+                }
+            };
+            match result {
+                Err(GpuRasterError::DeferredObjectWork)=> {
+                    let r=&mut self.renderer;
+                    let mut scene=r.scene.take().unwrap_or_else(||scene::Scene::new(r));
+                    let result=scene.drain_exact_objects_async(r).await;
+                    r.scene=Some(scene);
+                    result?;
+                    self.control.check()?;
+                },
+                result=> {
+                    self.control.observe_allocations(&self.renderer.device);
+                    return result;
+                },
+            }
+        }
     }
 
     fn prepare_region_gpu(&mut self, [x,y,width,height]:[u32;4], reserved_bytes:u64)
@@ -427,9 +485,7 @@ impl SnapshotRenderer {
         let window = scene::Scene::capture_window(view, region, self.extent);
         // Composition operates in page-sized tiles, including translated masks
         // and neighboring watercolor pigment. Restore their complete footprints.
-        let pages = page_coordinates(window)
-            .fold(PixelRect::EMPTY, |r, c| r.union(page_rect(c)))
-            .intersect(PixelRect::full(self.extent));
+        let pages = window.to_rect();
         let mut selected = HashMap::new();
         let mut masks = HashMap::new();
         let material_pages = if self.backing.values().any(|data| data.watercolor.is_some()) {
@@ -451,7 +507,7 @@ impl SnapshotRenderer {
                     _ => view.target_geometry(id),
                 };
                 let local = paint_transform::snapshot::source_region(&geometry,
-                    pages.to_rect().outset(halo), extent, self.renderer.scene.as_ref().and_then(|scene|scene.mesh_geometry(&geometry)))?.expand(if mask { 1 } else { PAGE_SIZE }, extent);
+                    pages.outset(halo), extent, self.renderer.scene.as_ref().and_then(|scene|scene.mesh_geometry(&geometry)))?.expand(if mask { 1 } else { PAGE_SIZE }, extent);
                 if mask {
                     masks.insert(id, local);
                     if matches!(id, SourceTarget::Coverage(h) if view.coverage(h).is_some_and(|m| m.initial.is_some())) {
@@ -603,7 +659,7 @@ impl SnapshotRenderer {
         control.check()
     }
 
-    fn prepare_region(&mut self, region: [u32; 4]) -> Result<RegionReadback, GpuRasterError> {
+    async fn prepare_region(&mut self, region: [u32; 4]) -> Result<RegionReadback, GpuRasterError> {
         let [_, _, width, height] = region;
         self.capture_region_gpu(region, 0, |device, target, encoder| {
             let stride = (width * 16).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
@@ -627,7 +683,7 @@ impl SnapshotRenderer {
                 target.size(),
             );
             RegionReadback { buffer, stride, width, height }
-        })
+        }).await
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -643,7 +699,7 @@ impl SnapshotRenderer {
         region: [u32; 4],
     ) -> Result<Vec<[f32; 4]>, GpuRasterError> {
         self.prepare_effect_analysis_async(scene::Output::Artwork(None)).await.map_err(GpuRasterError::Effect)?;
-        let readback = self.prepare_region(region)?;
+        let readback = self.prepare_region(region).await?;
         #[cfg(not(target_arch = "wasm32"))]
         let (tx, rx) = mpsc::channel();
         #[cfg(target_arch = "wasm32")]

@@ -50,7 +50,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     let layer_core::SourceTarget::Paint(handle) = project.working.target.unwrap() else { panic!("Paint source") };
     let paint = project.artwork.paint.get_mut(handle).unwrap();
     paint.domain = source.extent;
-    paint.original = Some(source.clone());
+    paint.base = Some(layer_core::PaintBase::new((source.clone()).into()));
     let mask = project.allocate_coverage_handle();
     let coverage = layer_core::CoverageSnapshot::reveal_all(mask, source.extent, layer_core::Point { x: 11., y: -5. });
     project.artwork.coverage.install(mask, coverage.source).unwrap();
@@ -72,7 +72,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     ready(&w);
     native_pen_path(&w, &[[100., 80.], [-160., 19.5], [-160., 19.5]]);
     ready(&w);
-    let offset = ui_session(&w).engine().document().scene().occurrence(id).unwrap().translation;
+    let offset = ui_session(&w).engine().document().target_geometry(layer_core::SourceTarget::Paint(handle)).map(layer_core::Point::default()).unwrap();
     assert!(
         (offset.x + 260.).abs() < 0.01 && (offset.y + 60.5).abs() < 0.01,
         "{offset:?}"
@@ -173,7 +173,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     ready(&w);
     native_pen_path(&w, &[[100., 80.], [360., 140.5], [360., 140.5]]);
     ready(&w);
-    let restored_offset = ui_session(&w).engine().document().scene().occurrence(id).unwrap().translation;
+    let restored_offset = ui_session(&w).engine().document().target_geometry(layer_core::SourceTarget::Paint(handle)).map(layer_core::Point::default()).unwrap();
     assert!(
         restored_offset.x.abs() < 0.01 && restored_offset.y.abs() < 0.01,
         "{restored_offset:?}"
@@ -183,7 +183,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     native_pen_path(&w, &[[35., 70.], [65., 70.], [100., 70.]]);
     ready(&w);
     assert_ne!(current(&w, id).raster, original.raster);
-    assert_source_samples(current(&w, id).original.as_ref().unwrap(), &expected);
+    assert_source_samples(current(&w, id).base.as_ref().unwrap().image.storage(), &expected);
     w.window.destroy();
     pump(100);
 }

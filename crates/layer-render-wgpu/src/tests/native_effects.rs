@@ -9,7 +9,7 @@ mod fills;
 #[path = "native_effects/color.rs"]
 mod color;
 
-use layer_core::authored::{Artwork, PortableId, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, Definition, EffectApplication};
+use layer_core::authored::{Artwork, PortableId, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, EffectApplication};
 use layer_core::Document;
 
 pub(crate) fn empty_document(extent: [u32;2], color: DocumentColor) -> Document {
@@ -24,15 +24,15 @@ pub(crate) fn refresh(document: &mut Document) {
 }
 pub(crate) fn insert_effect(document: &mut Document, effect: EffectInstance) -> OccurrenceHandle {
     let name = effect.program.id.clone();
-    let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program:effect.program}).unwrap();
-    let application = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values:effect.values}).unwrap();
+    let application = EffectApplication::new(effect.program, effect.values, document.composition().size);
+    let application = document.artwork.effects.insert(PortableId::random(), application).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.push(occurrence);
     refresh(document);
     occurrence
 }
 pub(crate) fn insert_source(document: &mut Document, name: &str, source: Arc<layer_core::color::source::SourceImage>) -> OccurrenceHandle {
-    let source = document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:source.extent,original:Some(source),raster:Default::default(),operations:Default::default()}).unwrap();
+    let source = document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:source.extent,base:Some(layer_core::authored::PaintBase::new((source).into())),raster:Default::default(),operations:Default::default()}).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.push(occurrence);
     refresh(document);
@@ -57,7 +57,7 @@ pub(crate) fn effect_document(effects: &[EffectInstance], extent: [u32;2], color
 }
 pub(crate) fn set_effect(document: &mut Document, occurrence: OccurrenceHandle, key: &str, value: EffectValue) {
     let view = document.scene().effect(occurrence).unwrap();
-    let mut draft = EffectInstance {program: document.artwork.definitions.get(document.scene().effect_application(occurrence).unwrap().definition).unwrap().program.clone(), values:view.values.to_vec()};
+    let mut draft = EffectInstance {program: document.scene().effect_application(occurrence).unwrap().program.clone(), values:view.values.to_vec()};
     draft.set(key,value).unwrap();
     let handle = document.scene().effect_handle(occurrence).unwrap();
     document.artwork.effects.get_mut(handle).unwrap().values = draft.values;
@@ -265,8 +265,8 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
             set_effect(&mut loaded,exposure,"exposure",EffectValue::Number(0.75));frame_document(&mut fresh,&loaded);
             assert_eq!(crate::layer_tests::page_bytes(&fresh,crate::test_support::document_texture(&fresh)),before);
             let source=loaded.scene().paint_source(*loaded.scene().order().last().unwrap()).unwrap();
-            assert_eq!(source.original.as_ref().unwrap().interpretation.profile,ColorProfile::Builtin(space));
-            assert_eq!(source.original.as_ref().unwrap().interpretation.depth,depth);assert!(source.raster.is_empty());
+            assert_eq!(source.base.as_ref().unwrap().image.storage().interpretation.profile,ColorProfile::Builtin(space));
+            assert_eq!(source.base.as_ref().unwrap().image.storage().interpretation.depth,depth);assert!(source.raster.is_empty());
         }
     }
 }

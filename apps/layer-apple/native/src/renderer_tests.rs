@@ -81,7 +81,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             file.rewind().unwrap();
             let saved = read_document(&mut file);
             assert_saved_document(&saved, &document);
-            assert!(saved.artwork.paint.iter().any(|(_, _, source)| source.original.is_some()));
+            assert!(saved.artwork.paint.iter().any(|(_, _, source)| source.base.is_some()));
 
             install(&app);
             app.draw_until_idle();

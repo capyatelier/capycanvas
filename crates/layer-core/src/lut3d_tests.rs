@@ -96,8 +96,7 @@ fn resource_document() -> Document {
         let mut json=serde_json::to_value(resource.as_ref()).unwrap();json["title"]=serde_json::json!(title);
         let alias:Lut3d=serde_json::from_value(json).unwrap();let alias=Arc::new(alias.with_shared_payload(&resource).unwrap());
         let mut effect=lookup_effect();effect.set("resource",EffectValue::Lut3d(Some(alias))).unwrap();
-        let definition=document.artwork.definitions.insert(PortableId::random(),Definition {program:effect.program}).unwrap();
-        let effect=document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values}).unwrap();
+        let effect=document.artwork.effects.insert(PortableId::random(),EffectApplication::new(effect.program,effect.values,document.composition().size)).unwrap();
         let occurrence=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),title)).unwrap();
         document.artwork.stacks.get_mut(stack).unwrap().entries.insert(0,occurrence);
     }
@@ -120,14 +119,14 @@ fn open_document(bytes:&[u8],limits:crate::ProjectLimits)->Result<Document,Strin
 }
 fn code_bytes(document:&Document)->u64 {
     let mut seen=std::collections::BTreeSet::new();let mut bytes=0;
-    for (_,_,definition) in document.artwork.definitions.iter() {for code in definition.program.wgsl.sources().unwrap() {if seen.insert(code.as_ptr() as usize){bytes+=code.len() as u64;}}}
+    for (_,_,definition) in document.artwork.effects.iter() {for code in definition.program.wgsl.sources().unwrap() {if seen.insert(code.as_ptr() as usize){bytes+=code.len() as u64;}}}
     bytes
 }
 fn effect(document:&Document,index:usize)->crate::EffectView<'_> {document.scene().effect(document.scene().order()[index]).unwrap()}
 fn application_edit(document:&Document,index:usize,value:EffectValue)->Edit {
     let handle=document.scene().effect_handle(document.scene().order()[index]).unwrap();
     let mut application=document.artwork.effects.get(handle).unwrap().clone();
-    let program=&document.artwork.definitions.get(application.definition).unwrap().program;
+    let program=&application.program;
     let index=program.parameters.iter().position(|p|p.key.as_ref()=="resource").unwrap();application.values[index]=value;
     Edit::Effect(RecordChange::replace(&document.artwork.effects,handle,Some(application)).unwrap())
 }
@@ -163,10 +162,10 @@ fn malformed_resource_bindings_are_rejected_before_editable_adoption() {
     for bad in 0..8 {
         let changed=rewrite_archive(&bytes,|m| {
             let lut=m["resources"].as_array().unwrap().iter().position(|r|r["type"]=="capy.lut3d/1").unwrap();
-            let application=m["objects"].as_array().unwrap().iter().position(|o|o["type"]=="capy.effect/1").unwrap();
+            let application=m["objects"].as_array().unwrap().iter().position(|o|o["type"]=="capy.effect/2").unwrap();
             match bad {
                 0=>{m["resources"][lut]["id"]=serde_json::json!(PortableId::random());}
-                1=>{m["objects"][application]["data"]["definition"]=serde_json::json!({"ref":PortableId::random()});}
+                1=>{m["objects"][application]["data"]["builtin"]=serde_json::json!("missing");}
                 2=>{m["objects"][application]["data"]["values"]["missing"]=serde_json::json!({"kind":"number","value":0});}
                 3=>{let duplicate=m["resources"][lut].clone();m["resources"].as_array_mut().unwrap().push(duplicate);}
                 4=>{m["resources"][lut]["data"]["domain"]=serde_json::json!([[0,0,0],[0,1,1]]);}
@@ -182,14 +181,12 @@ fn malformed_resource_bindings_are_rejected_before_editable_adoption() {
 #[test]
 fn undo_and_pending_operations_retain_and_charge_shared_resources_once() {
     let mut document=resource_document();
-    let extra=document.scene().order()[1];let extra_effect=document.scene().effect_handle(extra).unwrap();let extra_definition=document.artwork.effects.get(extra_effect).unwrap().definition;
+    let extra=document.scene().order()[1];let extra_effect=document.scene().effect_handle(extra).unwrap();
     let stack=document.composition().result;document.artwork.stacks.get_mut(stack).unwrap().entries.remove(1);
-    document.artwork.occurrences.remove(extra);document.artwork.effects.remove(extra_effect);document.artwork.definitions.remove(extra_definition);
+    document.artwork.occurrences.remove(extra);document.artwork.effects.remove(extra_effect);
     let working=document.working;let mut document=Document::from_artwork(document.artwork).unwrap();document.working=working;
     let weak=Arc::downgrade(effect(&document,0).lut3d().unwrap().storage().unwrap());let mut editor=Editor::new(document);
-    let effect_handle=editor.document().scene().effect_handle(editor.document().scene().order()[0]).unwrap();let definition_handle=editor.document().artwork.effects.get(effect_handle).unwrap().definition;
-    let mut definition=editor.document().artwork.definitions.get(definition_handle).unwrap().clone();Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters)[0].default=EffectValue::Lut3d(None);
-    let change=Edit::Batch(vec![application_edit(editor.document(),0,EffectValue::Lut3d(None)),Edit::Definition(RecordChange::replace(&editor.document().artwork.definitions,definition_handle,Some(definition)).unwrap())]);
+    let change=application_edit(editor.document(),0,EffectValue::Lut3d(None));
     editor.perform(change).unwrap();assert!(weak.upgrade().is_some());assert!(editor.undo().unwrap());assert_eq!(effect(editor.document(),0).lut3d().unwrap().storage().unwrap().as_ptr(),weak.upgrade().unwrap().as_ptr());assert!(editor.redo().unwrap());assert!(weak.upgrade().is_some());drop(editor);assert!(weak.upgrade().is_none());
     let captured=resource_document();let budget=code_bytes(&captured)+96;
     let mut pending=Document::new(PortableId::random(),64,48,DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
@@ -214,8 +211,8 @@ fn resource_ownership_edits_require_admission_but_intensity_and_title_aliases_do
 fn asset_budget_deduplicates_physical_resource_and_source_ownership() {
     let mut document=resource_document();let base=code_bytes(&document)+96;
     assert!(document.validate(crate::ProjectLimits {asset_bytes:base-1,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:base,..Default::default()}).unwrap();
-    let source=crate::color::source::rgba8_source([2,1],|_,_|[40,50,60,255]);let source_bytes=std::mem::size_of::<crate::color::source::SourceImage>()+source.tiles.len()*96+source.tiles.values().map(|t|t.compressed_len()).sum::<usize>();
-    for _ in 0..2 {document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[64,48],original:Some(source.clone()),raster:Default::default(),operations:Default::default()}).unwrap();}
+    let image:Image=crate::color::source::rgba8_source([2,1],|_,_|[40,50,60,255]).into();let source_bytes=image.owner_metadata_bytes()+std::mem::size_of::<crate::color::source::SourceImage>()+image.tiles.len()*96+image.tiles.values().map(|t|t.compressed_len()).sum::<usize>();
+    for _ in 0..2 {document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode:Default::default(),domain:[64,48],base:Some(PaintBase::new(image.clone())),raster:Default::default(),operations:Default::default()}).unwrap();}
     let total=base+source_bytes as u64;assert!(document.validate(crate::ProjectLimits {asset_bytes:total-1,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:total,..Default::default()}).unwrap();
     let independent=Arc::new(Lut3d::parse_cube(cube().as_bytes()).unwrap());document.apply(application_edit(&document,0,EffectValue::Lut3d(Some(independent)))).unwrap();
     assert!(document.validate(crate::ProjectLimits {asset_bytes:total+95,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:total+96,..Default::default()}).unwrap();

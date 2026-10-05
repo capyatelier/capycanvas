@@ -53,6 +53,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(o)=scene.occurrence(id) else {return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_A_LAYER_FIRST));};
         match o.kind() {
             LayerKind::Paint=>{},
+            LayerKind::Object=>return Some(l.text(MessageId::COMMANDS_SELECT_A_PAINT_LAYER)),
             LayerKind::Group=>return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group,l)),
             LayerKind::Effect=>return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_AN_EFFECT_LAYER_HAS_NO_PIXELS_OF_ITS_OWN)),
             LayerKind::Selection=>return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::SelectionLayer,l)),
@@ -80,7 +81,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             o.visible=true;o.opacity=1.;o.blend=layer_core::LayerBlend::Normal;o.attachment=layer_core::Attachment::None;
             if h!=source_id {o.mask=None;}
         }
-        let paint=RecordChange::insert(&doc.artwork.paint,PaintSource { color_mode: Default::default(),domain:extent,raster:Default::default(),original:None,operations:Arc::default()});
+        let paint=RecordChange::insert(&doc.artwork.paint,PaintSource { color_mode: Default::default(),domain:extent,raster:Default::default(),base:None,operations:Arc::default()});
         let target=SourceTarget::Paint(paint.handle);
         let mut copy=Occurrence::new(OccurrenceContent::Paint(paint.handle),format!("{} copy",source.name));
         copy.opacity=source.opacity;copy.visible=source.visible;copy.blend=source.blend;

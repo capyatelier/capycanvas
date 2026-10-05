@@ -61,10 +61,10 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
     for (selected, opacity) in [(false, 1.), (true, 0.71)] {
         let mut doc = document();
         add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
-        if patterned { paint_mut(&mut doc,0).original = Some(layer_core::color::source::rgba8_source(extent, |x, y|
+        if patterned { paint_mut(&mut doc,0).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent, |x, y|
             [if (x / 5 + y / 7) % 2 == 0 { 40 } else { 220 },
              if (x / 13 + y / 17) % 2 == 0 { 40 } else { 220 },
-             if (x / 2 + y / 3) % 2 == 0 { 40 } else { 220 }, 255])); }
+             if (x / 2 + y / 3) % 2 == 0 { 40 } else { 220 }, 255])).into())); }
         occurrence_mut(&mut doc,0).opacity = opacity;
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -380,7 +380,7 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
 fn retained_transform_detail_still_filters_the_current_output_footprint() {
     let extent = [65,33];
     let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    paint_mut(&mut doc,0).original = Some(rgba8_source(extent, |x, _| [if (x/3)%2 == 0 {255} else {0}, 0, 0, 255]));
+    paint_mut(&mut doc,0).base = Some(layer_core::authored::PaintBase::new((rgba8_source(extent, |x, _| [if (x/3)%2 == 0 {255} else {0}, 0, 0, 255])).into()));
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
@@ -433,7 +433,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
     let bounds = Rect { min: Point::default(), max: Point { x: 257., y: 129. } };
     let mut doc = document_at(extent);
     let id = source_at(&doc,0);
-    paint_mut(&mut doc,0).original = Some(rgba8_source(extent, |x, y| [128, (x/2) as u8, y as u8, (64+x/2) as u8]));
+    paint_mut(&mut doc,0).base = Some(layer_core::authored::PaintBase::new((rgba8_source(extent, |x, y| [128, (x/2) as u8, y as u8, (64+x/2) as u8])).into()));
     let part = Selection::polygon([[20.5,15.25],[210.,22.],[240.,110.5],[38.,117.]]
         .map(|[x,y]| Point {x,y}).to_vec()).unwrap();
     let projective = Projective::rect_to_quad(bounds,

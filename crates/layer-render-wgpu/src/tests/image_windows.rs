@@ -16,8 +16,8 @@ pub(crate) fn effect(doc: &mut Document, generator: bool, global: bool) -> Occur
     doc.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Stack(stack),"generated content")).unwrap()
 }
 pub(crate) fn add_effect(doc: &mut Document, instance: EffectInstance) -> OccurrenceHandle {
-    let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program }).unwrap();
-    let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: instance.values}).unwrap();
+    let size=doc.composition().size;
+    let application=doc.artwork.effects.insert(PortableId::random(),EffectApplication::new(instance.program,instance.values,size)).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "window fixture")).unwrap()
 }
 pub(crate) fn set_entries(doc: &mut Document, entries: Vec<OccurrenceHandle>) {
@@ -204,4 +204,32 @@ fn image_windows_keep_document_sampler_dependencies_complete() {
             &full[b..b + crop.width() as usize * 16]
         );
     }
+}
+
+#[test]
+fn retained_off_frame_source_blurs_into_frame_and_matches_larger_reference() {
+    let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 };
+    let source = crate::test_support::depth_source([64, 32], SampleDepth::F32, color.space, 1 << 20,
+        |x, y| if (20..32).contains(&x) && (7..25).contains(&y) { [0.7, 0.2, 0.1, 1.] } else { [0.; 4] });
+    let make = |extent, translation| {
+        let mut doc = crate::tests::native_effects::empty_document(extent, color);
+        let mut blur = EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
+        blur.set("sigma", layer_core::EffectValue::Number(4.)).unwrap();
+        crate::tests::native_effects::insert_effect(&mut doc, blur);
+        let paint = crate::tests::native_effects::insert_source(&mut doc, "retained source", source.clone());
+        doc.artwork.occurrences.get_mut(paint).unwrap().translation = translation;
+        crate::tests::native_effects::refresh(&mut doc);
+        doc
+    };
+    let document = make([32, 32], Point { x: -32., y: 0. });
+    let reference = make([96, 64], Point { x: 0., y: 16. });
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let mut scene = scene::Scene::new(&r);
+    let actual = capture(&mut r, &mut scene, crate::test_support::packet(document.scene(), [32, 32]), PixelRect::full([32, 32]));
+    assert!(scene::Scene::capture_window(document.scene(), PixelRect::full([32, 32]), [32, 32]).min[0] < 0);
+    let expected = capture(&mut r, &mut scene, crate::test_support::packet(reference.scene(), [96, 64]), PixelRect::new(32, 16, 64, 48));
+    let actual = crate::test_support::floats(&actual);
+    let expected = crate::test_support::floats(&expected);
+    assert!(actual.iter().any(|pixel| pixel[3] > 0.01), "retained marks outside the frame must contribute inside it");
+    assert!(crate::test_support::max_error(&actual, &expected) < 3e-5);
 }

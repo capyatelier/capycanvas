@@ -35,6 +35,12 @@ pub(super) struct RawRegions {
     mask: Option<wgpu::Buffer>,
     parameters: Vec<u8>,
     bindings: std::collections::VecDeque<Binding>,
+    progress: Option<Classification>,
+}
+struct Classification {
+    frame: Option<Arc<artwork::Frame>>,
+    extent: [u32; 2],
+    batch: usize,
 }
 // Full-precision luminance/alpha replace repeated color decoding/composition.
 // Opaque photos pack two luminances per texel, without storing redundant alpha.
@@ -168,6 +174,7 @@ impl RawRegions {
             mask: None,
             parameters: Vec::new(),
             bindings: Default::default(),
+            progress: None,
         }
     }
     pub fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
@@ -207,6 +214,33 @@ impl RawRegions {
     pub fn release_mask(&mut self) {
         self.bindings.clear();
         self.mask = None;
+    }
+    pub fn cancel(&mut self) {
+        if self.progress.take().is_some() {
+            self.invalidate_tonal();
+            self.capture = Default::default();
+        }
+    }
+    pub fn extent(&self) -> Option<[u32; 2]> { self.progress.as_ref().map(|progress| progress.extent) }
+    pub fn begin(&mut self, r: &WgpuRasterizer, request: &layer_render::RegionRequest) -> Result<(), GpuRasterError> {
+        if self.progress.is_some() { return Ok(()); }
+        let frame = match request.source.raw_source() {
+            layer_render::RegionSource::Composite => Some(r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?),
+            layer_render::RegionSource::Objects(handle) => {
+                let mut frame = (**r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?).clone();
+                frame.scope = SceneScope::RawObjects(*handle);
+                Some(Arc::new(frame))
+            },
+            layer_render::RegionSource::Scene {snapshot, scope} => {
+                let mut frame = (**r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?).clone();
+                frame.scene = snapshot.clone(); frame.scope = scope.clone();
+                Some(Arc::new(frame))
+            },
+            layer_render::RegionSource::Source(_) | layer_render::RegionSource::Coverage(_) => None,
+            _ => return Err(GpuRasterError::InvalidExtent),
+        };
+        self.progress = Some(Classification {frame, extent:r.document_extent, batch:0});
+        Ok(())
     }
     #[cfg(test)]
     pub fn tonal_cached(&self) -> bool {
@@ -268,7 +302,8 @@ impl RawRegions {
         request: &layer_render::RegionRequest,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<wgpu::Buffer, GpuRasterError> {
-        let [w,h] = r.document_extent;
+        self.begin(r, request)?;
+        let [w,h] = self.extent().unwrap();
         let mut layer = match request.source.raw_source() {
             layer_render::RegionSource::Source(id) | layer_render::RegionSource::Coverage(id) => {
                 Some(*id)
@@ -277,16 +312,7 @@ impl RawRegions {
         };
         let placed = layer.is_some_and(|id| r.artwork_frame.as_ref().is_none_or(|frame|
             !frame.scene.view().target_geometry(id).is_identity() || id.is_coverage()));
-        let frame = match request.source.raw_source() {
-            layer_render::RegionSource::Composite => Some(r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?),
-            layer_render::RegionSource::Scene {snapshot, scope} => {
-                let mut frame = (**r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?).clone();
-                frame.scene = snapshot.clone(); frame.scope = scope.clone();
-                Some(Arc::new(frame))
-            },
-            layer_render::RegionSource::Source(_) | layer_render::RegionSource::Coverage(_) => None,
-            _ => return Err(GpuRasterError::InvalidExtent),
-        };
+        let frame = self.progress.as_ref().unwrap().frame.clone();
         let tone = if let layer_render::RegionSource::Tonal(t) = &request.source {
             Some(t.as_ref())
         } else {
@@ -351,7 +377,7 @@ impl RawRegions {
         let cached = self.tonal_cache.as_ref().is_some_and(|c| c.ready);
         let coverage =
             tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_));
-        if let Some(t) = tone {
+        if let Some(t) = tone.filter(|_| self.progress.as_ref().unwrap().batch == 0) {
             let mut data = [0u32; TONAL_PARAMETER_WORDS];
             data[84..88].copy_from_slice(&[
                 self.tonal_cache.as_ref().map_or(0, |c| c.chunk_pixels),
@@ -442,6 +468,7 @@ impl RawRegions {
         }
         if cached {
             self.encode_cached(&r.device, encoder, &mask, [w, h]);
+            self.progress = None;
             return Ok(mask);
         }
         let fallback = layer.and_then(|target| r.layer_masks.definitions.get(&target)).map_or([0.;4], |mask| [mask.default_coverage;4]);
@@ -460,7 +487,7 @@ impl RawRegions {
             r.paint_layers.iter().find(|l| l.id == id).is_some_and(|l| l.pages.iter().any(|p| p.coordinate == coordinate))
                 || r.native_backing(id).is_some_and(|data| data.tiles.contains_key(&layer_core::raster::TileKey {
                     plane:layer_core::raster::RasterPlane::Color,coordinate }))
-                || r.tiled_sources.get(&id).is_some_and(|source| coordinate[0]*PAGE_SIZE<source.extent[0] && coordinate[1]*PAGE_SIZE<source.extent[1]));
+                || r.tiled_sources.get(&id).is_some_and(|base| source_access::paint_base_contains(base, coordinate)));
         for (batch, tiles) in batches.iter().enumerate() {
             for (i, coordinate) in tiles.iter().enumerate() {
                 let [x, y] = coordinate.map(|v| v * PAGE_SIZE);
@@ -528,9 +555,10 @@ impl RawRegions {
                 })
                 .collect()
         };
-        for (i, tiles) in batches.into_iter().enumerate() {
+        for (i, tiles) in batches.into_iter().enumerate().skip(self.progress.as_ref().unwrap().batch) {
             let mut views: [wgpu::TextureView; BATCH_TILES] =
                 std::array::from_fn(|_| r.empty_view.clone());
+            let mut leases = Vec::with_capacity(tiles.len());
             for (slot, coordinate) in tiles.iter().enumerate() {
                 let source = if let Some(layer) = layer {
                     if opaque {
@@ -539,7 +567,7 @@ impl RawRegions {
                             .get(&layer)
                             .cloned()
                             .ok_or(GpuRasterError::InvalidExtent)?;
-                        Some(self.capture.source_tile(r, &source, *coordinate, encoder)?)
+                        r.paint_base_tile(&source, *coordinate, encoder)?
                     } else {
                         if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,encoder)? }
                     }
@@ -553,6 +581,7 @@ impl RawRegions {
                         encoder,
                     )?)
                 };
+                if let Some(source) = &source { leases.extend(r.source_tiles.borrow().lease(&source.view)); }
                 views[slot] = source.map_or_else(|| r.empty_view.clone(), |t| t.view);
             }
             let hit = self
@@ -637,6 +666,7 @@ impl RawRegions {
                 self.bindings.pop_front();
             }
             self.bindings.push_back(binding);
+            self.progress.as_mut().unwrap().batch = i + 1;
         }
         if let Some(cache) = &mut self.tonal_cache {
             cache.ready = true;
@@ -644,6 +674,7 @@ impl RawRegions {
             self.bindings.clear();
             self.capture = Default::default();
         }
+        self.progress = None;
         Ok(mask)
     }
 }
@@ -676,12 +707,13 @@ fn opaque_photo(r: &WgpuRasterizer, frame: &artwork::Frame, extent: [u32; 2]) ->
     let mut visible = scene.order().iter().copied().filter(|&h| scene.visible(h)
         && scene.occurrence(h).is_some_and(|o| !matches!(o.content, OccurrenceContent::Selection(_))));
     let handle = visible.next()?; let occurrence = scene.occurrence(handle)?; let target = scene.source_target(handle)?;
-    let source = scene.original(target)?;
+    let base = scene.paint_base(target)?;
+    let source = &base.image;
     if visible.next().is_some() || occurrence.opacity != 1. || occurrence.mask.is_some() || scene.parent(handle).is_some()
         || occurrence.translation != layer_core::Point::default() || occurrence.placement != layer_core::LayerPlacement::IDENTITY
         || occurrence.attachment.is_clip() || occurrence.blend != layer_core::LayerBlend::Normal
         || source.interpretation.channels != layer_core::color::source::SourceChannels::Rgb
-        || source.extent[0] < extent[0] || source.extent[1] < extent[1]
+        || base.offset != [0;2] || source.extent[0] < extent[0] || source.extent[1] < extent[1]
         || r.native_backing(target).is_some_and(|d| !d.tiles.is_empty())
         || r.paint_layers.iter().any(|l| l.id == target && !l.pages.is_empty()) { return None; }
     Some(target)

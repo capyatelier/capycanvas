@@ -86,10 +86,10 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
         let doc = session.engine.document();
         let occurrence = doc.scene().occurrence(*handle).unwrap();
         let source = doc.scene().paint_source(*handle).unwrap();
-        assert_eq!(source.original, sources[i].original);
+        assert_eq!(source.base, sources[i].base);
         assert_eq!(occurrence.placement.as_affine().unwrap().map(Point {
-            x: source.original.as_ref().unwrap().extent[0] as f32 / 2.,
-            y: source.original.as_ref().unwrap().extent[1] as f32 / 2.,
+            x: source.base.as_ref().unwrap().image.storage().extent[0] as f32 / 2.,
+            y: source.base.as_ref().unwrap().image.storage().extent[1] as f32 / 2.,
         }), Point { x: 95., y: 55. });
         assert!((occurrence.placement.as_affine().unwrap().0[0] - before[i].placement.as_affine().unwrap().0[0] * 2.).abs() < 0.00001);
         assert!(source.raster.is_empty());
@@ -141,7 +141,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     group.translation = Point { x: 40., y: -10. };
     let group_id = doc.artwork.occurrences.insert(PortableId::random(), group).unwrap();
     let canvas = doc.composition().size;
-    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: canvas, raster: Default::default(), original: None, operations: Arc::default() }).unwrap();
+    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: canvas, raster: Default::default(), base: None, operations: Arc::default() }).unwrap();
     let mut clipped = Occurrence::new(OccurrenceContent::Paint(paint), "Clipped"); clipped.attachment = layer_core::Attachment::Clip;
     let clipped_id = doc.artwork.occurrences.insert(PortableId::random(), clipped).unwrap();
     doc.artwork.stacks.get_mut(nested).unwrap().entries.insert(0, clipped_id);
@@ -201,7 +201,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
 fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
     let mut doc = Document::new(layer_core::authored::PortableId::random(), 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let layer_core::authored::SourceTarget::Paint(paint) = doc.working.target.unwrap() else { panic!("paint") };
-    let source = doc.artwork.paint.get_mut(paint).unwrap(); source.domain = [2, 1]; source.original = Some(rgba8_source([2, 1], |_, _| [255; 4]));
+    let source = doc.artwork.paint.get_mut(paint).unwrap(); source.domain = [2, 1]; source.base = Some(layer_core::PaintBase::new(layer_core::Image::new(rgba8_source([2, 1], |_, _| [255; 4]))));
     doc.artwork.occurrences.get_mut(doc.working.occurrence.unwrap()).unwrap().locked = true;
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
     let before = session.engine.document().clone();
@@ -263,7 +263,7 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
     let layer = reopened.engine.document().scene().occurrence(id2).unwrap();
     assert_eq!(&layer.placement.as_affine().unwrap().0[..4], &Affine::IDENTITY.0[..4]);
     let paint = reopened.engine.document().scene().paint_source(id2).unwrap();
-    assert_eq!(paint.original.as_deref(), Some(&source));
+    assert_eq!(paint.base.as_ref().map(|base|base.image.as_ref()), Some(&source));
     assert!(paint.raster.is_empty());
     assert!(paint.operations.is_empty());
     assert!(reopened.engine.transform_preview().is_none(), "whole photo placement bypasses raster transforms");
@@ -310,7 +310,7 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
     let check = |session: &UiSession<Recorder>| {
         assert_eq!(session.engine.document().composition().color, Default::default());
         let paint = session.engine.document().scene().paint_source(id).unwrap();
-        assert_eq!(paint.original.as_deref(), Some(&source));
+        assert_eq!(paint.base.as_ref().map(|base|base.image.as_ref()), Some(&source));
         assert!(paint.raster.is_empty());
     };
     check(&session);
@@ -332,7 +332,7 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
             .document()
             .scene().paint_source(id)
             .unwrap()
-            .original
+            .base
             .is_none()
     );
     invoke(&mut session, CommandId::Undo);
@@ -344,7 +344,7 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
             .document()
             .scene().paint_source(id)
             .unwrap()
-            .original
+            .base
             .is_none()
     );
     invoke(&mut session, CommandId::Undo);
@@ -356,7 +356,7 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
     let portable = session.engine.document().artwork.occurrences.id(id).unwrap();
     let restored = reopen_capture(&session.capture_artwork().unwrap());
     let handle = restored.artwork.occurrences.resolve(portable).unwrap();
-    assert_eq!(restored.scene().paint_source(handle).unwrap().original.as_deref(), Some(&source));
+    assert_eq!(restored.scene().paint_source(handle).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(&source));
 }
 
 #[test]
@@ -374,7 +374,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     assert_ne!(change.regions & regions::HOST, 0, "native dialog must be serviced");
     let request_id = session.state.requests.last().unwrap().id;
     session.complete_document_request(request_id, Ok(false)).unwrap();
-    let original = session.engine.document().artwork.paint.get(paint).unwrap().original.clone().unwrap();
+    let original = session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage().clone();
     let mut corrected = (*original).clone();
     corrected.interpretation.profile = ColorProfile::Builtin(RgbSpace::DisplayP3);
     corrected.interpretation.profile_assumed = false;
@@ -382,19 +382,29 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     let mut invalid = corrected.clone(); invalid.extent[0] += 1;
     assert!(session.repair_layer_source(id, &original, invalid).is_err());
     assert_eq!(session.engine.document(), &before);
-    let preview = session.preview_layer_source(id, &original, corrected.clone()).unwrap();
+    let mut preview = session.preview_layer_source(id, &original, corrected.clone()).unwrap();
     assert_eq!(session.engine.document(), &before, "preview does not mutate live content or IDs");
+    let original_image = before.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id();
+    assert_ne!(preview.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id(), original_image);
     let original_preview_revision = session.state.layers.iter().find(|layer| layer.id == token).unwrap().paint_revision;
     assert_eq!(session.repair_layer_source(id, &original, corrected.clone()).unwrap(), id);
-    assert_eq!(&preview, session.engine.document(), "preview and Apply use the same complete edit");
+    let accepted_image = session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id();
+    assert_ne!(accepted_image, original_image);
+    let base = preview.artwork.paint.get_mut(paint).unwrap().base.as_mut().unwrap();
+    base.image = layer_core::Image::with_id(accepted_image, base.image.storage().clone());
+    assert_eq!(preview.artwork, session.engine.document().artwork, "detached previews preserve every authored property except the newly allocated image identity");
+    assert_eq!(preview.working, session.engine.document().working);
     let corrected_preview_revision = session.state.layers.iter().find(|layer| layer.id == token).unwrap().paint_revision;
     assert_ne!(corrected_preview_revision, original_preview_revision, "repair must refresh the Layers image even when source samples and raster history are unchanged");
-    let after = session.engine.document().artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
+    let after = session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
     assert_eq!(after.interpretation, corrected.interpretation);
     assert!(Arc::ptr_eq(after.tiles.values().next().unwrap(), original.tiles.values().next().unwrap()));
     assert!(session.repair_layer_source(id, &original, corrected.clone()).unwrap_err().contains("source changed"));
     invoke(&mut session, CommandId::Undo);
-    assert!(Arc::ptr_eq(session.engine.document().artwork.paint.get(paint).unwrap().original.as_ref().unwrap(), &original));
+    assert!(Arc::ptr_eq(session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage(), &original));
+    invoke(&mut session, CommandId::Redo);
+    assert_eq!(session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id(), accepted_image);
+    invoke(&mut session, CommandId::Undo);
     assert_ne!(session.state.layers.iter().find(|layer| layer.id == token).unwrap().paint_revision, corrected_preview_revision, "Undo must refresh the restored source interpretation");
     let document = session.engine.document();
     let mut occurrence = document.scene().occurrence(id).unwrap().clone();
@@ -421,7 +431,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     let next = doc.scene().occurrence(next_id).unwrap();
     let next_paint = match next.content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
     assert_eq!(next.translation, occurrence.translation);
-    assert_eq!(doc.artwork.paint.get(next_paint).unwrap().original.as_deref(), Some(&corrected));
+    assert_eq!(doc.artwork.paint.get(next_paint).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(&corrected));
     assert!(doc.artwork.paint.get(next_paint).unwrap().raster.is_empty());
     assert!(next.mask.is_none());
     assert_eq!(doc.working.occurrence, Some(next_id));
@@ -430,8 +440,8 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     let reopened = reopen_capture(&session.capture_artwork().unwrap());
     let old_paint = reopened.artwork.paint.resolve(old_identity).unwrap();
     let new_paint = reopened.artwork.paint.resolve(new_identity).unwrap();
-    assert_eq!(reopened.artwork.paint.get(old_paint).unwrap().original.as_deref(), Some(original.as_ref()));
-    assert_eq!(reopened.artwork.paint.get(new_paint).unwrap().original.as_deref(), Some(&corrected));
+    assert_eq!(reopened.artwork.paint.get(old_paint).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(original.as_ref()));
+    assert_eq!(reopened.artwork.paint.get(new_paint).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(&corrected));
     assert_eq!(reopened.artwork.paint.get(old_paint).unwrap().raster.wait_data().unwrap().tiles[&key].wait_backing().unwrap().decode().unwrap(), bytes);
     invoke(&mut session, CommandId::Undo);
     assert!(session.engine.document().scene().occurrence(next_id).is_none());
@@ -441,7 +451,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     invoke(&mut session, CommandId::Redo);
     assert_eq!(session.engine.document().scene().occurrence(id).unwrap(), &occurrence);
     assert_eq!(session.engine.document().artwork.paint.get(paint).unwrap(), &source);
-    assert_eq!(session.engine.document().artwork.paint.get(next_paint).unwrap().original.as_deref(), Some(&corrected));
+    assert_eq!(session.engine.document().artwork.paint.get(next_paint).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(&corrected));
 }
 
 #[test]
@@ -455,7 +465,7 @@ fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
     let id = document.working.occurrence.unwrap();
     let mut occurrence = document.scene().occurrence(id).unwrap().clone();
     let paint = match occurrence.content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
-    let original = document.artwork.paint.get(paint).unwrap().original.clone().unwrap();
+    let original = document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage().clone();
     occurrence.translation = Point { x: -550., y: 3.5 };
     let coverage = RecordChange::insert(&document.artwork.coverage, CoverageSource { domain: original.extent, raster: Default::default(), initial: None, default_coverage: 1., operations: Default::default() });
     occurrence.mask = Some(MaskUse { source: coverage.handle, enabled: true, linked: true, inverted: false, translation: Point { x: 17., y: 3. }, placement: layer_core::Projective::IDENTITY });
@@ -465,7 +475,7 @@ fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
     let edit = Edit::Batch(vec![Edit::Coverage(coverage), Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, id, Some(occurrence.clone())).unwrap()), Edit::Paint(RecordChange::replace(&document.artwork.paint, paint, Some(source.clone())).unwrap())]);
     session.engine.apply_edit(edit).unwrap();
     let before = session.engine.document().clone();
-    let mut converted = (*original).clone(); converted.kind = SourceKind::Rasterized; converted.interpretation.profile_assumed = false;
+    let mut converted = (*original).clone(); converted.interpretation.profile_assumed = false;
     let converted = Arc::new(converted);
     let mut invalid = (*converted).clone(); invalid.extent[0] = 1499;
     assert!(session.apply_rasterized_source(id, &original, Arc::new(invalid)).is_err());
@@ -473,11 +483,18 @@ fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
     let change = session.dispatch(UiAction::Layer { action: LayerAction::RasterizeSource { id: occurrence_token(id) } }).unwrap();
     assert_ne!(change.regions & regions::HOST, 0);
     let request = session.state.requests.last().unwrap().id; session.complete_document_request(request, Ok(false)).unwrap();
-    let preview = session.preview_rasterized_source(id, &original, converted.clone()).unwrap();
+    let mut preview = session.preview_rasterized_source(id, &original, converted.clone()).unwrap();
     assert_eq!(session.engine.document(), &before);
+    let original_image = before.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id();
+    assert_ne!(preview.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id(), original_image);
     session.apply_rasterized_source(id, &original, converted.clone()).unwrap();
-    assert_eq!(&preview, session.engine.document());
-    let mut expected = source.clone(); expected.original = Some(converted.clone());
+    let accepted_image = session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id();
+    assert_ne!(accepted_image, original_image);
+    let base = preview.artwork.paint.get_mut(paint).unwrap().base.as_mut().unwrap();
+    base.image = layer_core::Image::with_id(accepted_image, base.image.storage().clone());
+    assert_eq!(preview.artwork, session.engine.document().artwork);
+    assert_eq!(preview.working, session.engine.document().working);
+    let mut expected = source.clone(); expected.base = Some(layer_core::PaintBase {image:layer_core::Image::with_id(accepted_image, converted.clone()),offset:[0;2],policy:layer_core::PaintBasePolicy::WorkingPixels});
     assert_eq!(session.engine.document().artwork.paint.get(paint).unwrap(), &expected);
     assert_eq!(session.engine.document().scene().occurrence(id).unwrap(), &occurrence);
     assert!(!session.command(CommandId::RepairSourceProfile).enabled); assert!(!session.command(CommandId::RasterizeSource).enabled);
@@ -486,7 +503,8 @@ fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
     let restored = reopen_capture(&session.capture_artwork().unwrap());
     let restored_paint = restored.artwork.paint.resolve(paint_identity).unwrap();
     let restored_occurrence = restored.artwork.occurrences.resolve(occurrence_identity).unwrap();
-    assert_eq!(restored.artwork.paint.get(restored_paint).unwrap().original.as_deref(), Some(converted.as_ref()));
+    assert_eq!(restored.artwork.paint.get(restored_paint).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(converted.as_ref()));
+    assert_eq!(restored.artwork.paint.get(restored_paint).unwrap().base.as_ref().unwrap().image.id(), accepted_image);
     let mask = restored.scene().occurrence(restored_occurrence).unwrap().mask.as_ref().unwrap();
     let expected_mask = occurrence.mask.as_ref().unwrap();
     assert_eq!(mask.enabled, expected_mask.enabled); assert_eq!(mask.linked, expected_mask.linked); assert_eq!(mask.inverted, expected_mask.inverted);
@@ -547,9 +565,9 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
     let handle = before.working.occurrence.unwrap();
     let paint = match before.scene().occurrence(handle).unwrap().content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
     let mut repaired = before.artwork.paint.get(paint).unwrap().clone();
-    let mut source = repaired.original.as_ref().unwrap().as_ref().clone();
+    let mut source = repaired.base.as_ref().unwrap().image.storage().as_ref().clone();
     source.interpretation.profile = ColorProfile::Icc(vec![19; 16384].into());
-    repaired.original = Some(Arc::new(source));
+    repaired.base = Some(layer_core::PaintBase::new(layer_core::Image::new(Arc::new(source))));
     let edit = Edit::Paint(layer_core::RecordChange::replace(&before.artwork.paint, paint, Some(repaired)).unwrap());
     let error = session.source_edit_candidates(&edit, limits).unwrap_err();
     assert!(error.contains("memory limit"), "{error}");
@@ -565,7 +583,7 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
     let mut document = Document::new(layer_core::PortableId::random(), 20, 20, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let paint = match document.scene().occurrence(document.working.occurrence.unwrap()).unwrap().content { layer_core::OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
     document.artwork.paint.get_mut(paint).unwrap().domain = source.extent;
-    document.artwork.paint.get_mut(paint).unwrap().original = Some(source.clone());
+    document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::PaintBase::new(layer_core::Image::new(source.clone())));
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
     invoke(&mut s, CommandId::RepairSourceProfile);
@@ -586,12 +604,12 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
     workflow.commit(&mut s, false, true).unwrap();
     assert!(workflow.commit(&mut s, false, true).is_err());
     s.complete_document_request(id, Ok(true)).unwrap();
-    let repaired = s.engine.document().artwork.paint.get(paint).unwrap().original.clone().unwrap();
+    let repaired = s.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage().clone();
     assert!(!repaired.interpretation.profile_assumed);
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(s.engine.document().artwork.paint.get(paint).unwrap().original.as_ref().unwrap(), &source);
+    assert_eq!(s.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage(), &source);
     invoke(&mut s, CommandId::Redo);
-    assert_eq!(s.engine.document().artwork.paint.get(paint).unwrap().original.as_ref().unwrap(), &repaired);
+    assert_eq!(s.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage(), &repaired);
     s.frame(2, 2).unwrap();
     invoke(&mut s, CommandId::RasterizeSource);
     let id = s.state.requests.first().unwrap().id;
@@ -611,7 +629,7 @@ fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
     let mut document = Document::new(layer_core::PortableId::random(), 20, 20, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let paint = match document.scene().occurrence(document.working.occurrence.unwrap()).unwrap().content { layer_core::OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
     document.artwork.paint.get_mut(paint).unwrap().domain = source.extent;
-    document.artwork.paint.get_mut(paint).unwrap().original = Some(source);
+    document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::PaintBase::new(layer_core::Image::new(source)));
     let descriptor = document.composition().color.paint_descriptor();
     let tile = RasterTile::backed(TileBlob::encode(descriptor,
         &vec![55; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap());
@@ -655,4 +673,62 @@ fn skewed_photo_placements_reopen_with_their_skew() {
     assert!(session.operation.placing(), "a skewed placement can be edited again");
     assert!((skew(&session) - 0.4).abs() < 1e-4);
     invoke(&mut session, CommandId::CancelTransform);
+}
+
+#[test]
+fn source_workflow_interns_verified_worker_tiles_shared_with_objects() {
+    use layer_core::{authored::*,Editor,package::transfer::{PreparedTransfer,TransferReceiver},raster::*};
+    use std::sync::atomic::AtomicBool;
+    let cancelled=AtomicBool::new(false);
+    let roundtrip=|document:Document| {
+        let capture=Editor::new(document).capture(0,Default::default()).unwrap();
+        let prepared=PreparedTransfer::capture(&capture,&cancelled).unwrap();
+        let descriptor=serde_json::from_slice(&serde_json::to_vec(prepared.descriptor()).unwrap()).unwrap();
+        let mut receiver=TransferReceiver::new(descriptor,Default::default()).unwrap();
+        for index in 0..prepared.payload_count() {
+            let mut offset=0;let length=prepared.payload_len(index).unwrap();
+            while offset<length {
+                let size=(length-offset).min(layer_core::package::MAX_RANGE_BYTES as u64) as usize;
+                receiver.push_chunk(index,&prepared.read_chunk(index,offset,size).unwrap()).unwrap();offset+=size as u64;
+            }
+        }
+        receiver.finish().unwrap().adopt_verified(Default::default(),&cancelled).unwrap().artwork.as_ref().clone()
+    };
+    let source=rgba8_source([2,1],|_,_|[17,29,81,255]);let image=Image::new(source.clone());
+    let mut document=Document::new(PortableId::random(),40,40,layer_core::DocumentNames {paint:"Photo".into(),paper:"Paper".into()});
+    let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {panic!()};
+    document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase {image:image.clone(),offset:[7,11],policy:PaintBasePolicy::SourceProfile});
+    let (layer,edit)=document.create_object_layer_edit("Objects",None,0).unwrap();document.apply(edit).unwrap();
+    let (object,edit)=document.add_image_object_edit(layer,ImageObject::new(image.clone(),"Shared"),0).unwrap();document.apply(edit).unwrap();
+    let mut session=UiSession::new(Recorder {tiled_sources:true,..Default::default()},document,[800,600],Platform::Gtk).unwrap();
+    session.frame(1,1).unwrap();invoke(&mut session,CommandId::RasterizeSource);
+    let request=session.state.requests.first().unwrap().id;
+    let mut workflow=crate::SourceWorkflow::begin(&session,request).unwrap();
+    let mut worker=Document::new(PortableId::random(),2,1,layer_core::DocumentNames {paint:"".into(),paper:"".into()});
+    let layer_core::SourceTarget::Paint(worker_paint)=worker.working.target.unwrap() else {panic!()};
+    worker.artwork.paint.get_mut(worker_paint).unwrap().base=Some(PaintBase::new(Image::new(source.clone())));
+    worker.artwork=roundtrip(worker.clone());
+    let input=worker.artwork.paint.get(worker_paint).unwrap().base.as_ref().unwrap().image.storage();
+    let (converted,_)=layer_color::rasterize_source(input,worker.composition().color,1024*1024,||false).unwrap();
+    worker.artwork.paint.get_mut(worker_paint).unwrap().base.as_mut().unwrap().image=Image::new(Arc::new(converted));
+    let returned=roundtrip(worker);
+    let converted=returned.paint.get(worker_paint).unwrap().base.as_ref().unwrap().image.storage().clone();
+    assert!(!Arc::ptr_eq(&converted.tiles[&[0,0]],&source.tiles[&[0,0]]));
+    let mut conflict=(*converted).clone();
+    let bad=TileBlob::encode(converted.interpretation.descriptor(),&[255;4].repeat((TILE_SIZE*TILE_SIZE) as usize)).unwrap();
+    conflict.tiles.insert([0,0],Arc::new(TileBlob::from_package(source.tiles[&[0,0]].resource_id(),bad.descriptor,bad.compressed().unwrap()).unwrap()));
+    let before=session.engine.document().clone();let checkpoint=session.engine.checkpoint();
+    assert!(workflow.preview(&session,Arc::new(conflict),false,true).is_err());
+    assert_eq!(session.engine.document(),&before);assert_eq!(session.engine.checkpoint(),checkpoint);
+    let candidate=workflow.preview(&session,converted,false,true).unwrap();
+    let base=candidate.artwork.paint.get(paint).unwrap().base.as_ref().unwrap();
+    assert_eq!(base.offset,[7,11]);assert_eq!(base.policy,PaintBasePolicy::WorkingPixels);assert_ne!(base.image.id(),image.id());
+    assert!(Arc::ptr_eq(&base.image.tiles[&[0,0]],&source.tiles[&[0,0]]));
+    assert!(candidate.artwork.objects.get(object).unwrap().image.same_owner(&image));
+    PreparedTransfer::capture(&Editor::new(candidate).capture(0,Default::default()).unwrap(),&cancelled).unwrap();
+    workflow.comparison_completed().unwrap();workflow.commit(&mut session,false,true).unwrap();
+    session.complete_document_request(request,Ok(true)).unwrap();
+    invoke(&mut session,CommandId::Undo);assert!(session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.same_owner(&image));
+    invoke(&mut session,CommandId::Redo);
+    let capture=Editor::new(session.engine.document().clone()).capture(0,Default::default()).unwrap();PreparedTransfer::capture(&capture,&cancelled).unwrap();
 }

@@ -19,7 +19,8 @@ pub(super) trait Compositor {
 pub(super) fn has_content(r: &WgpuRasterizer, scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> bool {
     let occurrence = scene.occurrence(handle).unwrap();
     matches!(occurrence.kind(), LayerKind::Group | LayerKind::Effect)
-        || scene.paint_source(handle).is_some_and(|paint| paint.original.is_some())
+        || scene.object_layer(handle).is_some()
+        || scene.paint_source(handle).is_some_and(|paint| paint.base.is_some())
         || scene.source_target(handle).is_some_and(|target| {
             r.native_color_coordinates(target).next().is_some()
                 || r.paint_layers.iter().any(|stored| stored.id == target && !stored.pages.is_empty())
@@ -205,7 +206,7 @@ impl Compositor for Tile<'_> {
                 && self.scene.images.output(*handle).is_some()
         })?;
         let pixels = self.scene.images.output(handle)?;
-        let bounds = self.scene.images.bounds;
+        let bounds = self.scene.images.doc_bounds;
         let output = self.scene.image_tile(self.r, pixels, bounds, self.coordinate);
         Some((handle, output))
     }

@@ -273,7 +273,7 @@ fn aliased_archive_sources_remain_independently_editable_and_resave_exactly() {
     let stack=artwork.compositions.get(artwork.root).unwrap().result;
     let tiles=[tile(42),tile(42)];let tile_ids=tiles.each_ref().map(|tile|tile.resource_id());
     let sources=tiles.map(|tile| {
-        let source=artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[TILE_SIZE;2],raster:revision(tile),original:None,operations:Default::default()}).unwrap();
+        let source=artwork.paint.insert(PortableId::random(),PaintSource {color_mode:Default::default(),domain:[TILE_SIZE;2],raster:revision(tile),base:None,operations:Default::default()}).unwrap();
         let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),"Independent paint")).unwrap();
         artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);artwork.paint.id(source).unwrap()
     });
@@ -346,43 +346,42 @@ fn cached_alias_preparation_does_not_read_cold_tiles_but_writing_still_checks_ba
 }
 
 #[test]
-fn reopened_catalog_shader_ids_reconcile_reinsertion_and_other_shared_definitions() {
-    use crate::authored::Definition;
-    use super::super::effect_records::{encode_definition,decode_definition};
+fn reopened_catalog_shader_ids_reconcile_reinsertion_and_other_shared_programs() {
+    use super::super::effect_records::{encode_program,decode_program};
     let cancelled=AtomicBool::new(false);
     let catalog=crate::bundled_effect_catalog();
-    let first=Definition {program:crate::effect_catalog::custom_program("color_lookup")};
-    let shared=Definition {program:crate::effect_catalog::custom_program("hue_saturation")};
-    let mut inventory=ResourceInventory::default();let record=encode_definition(&first,&mut inventory).unwrap();
-    let shared_record=encode_definition(&shared,&mut inventory).unwrap();
+    let first=crate::effect_catalog::custom_program("color_lookup");
+    let shared=crate::effect_catalog::custom_program("hue_saturation");
+    let mut inventory=ResourceInventory::default();let record=encode_program(&first,&mut inventory).unwrap();
+    let shared_record=encode_program(&shared,&mut inventory).unwrap();
     let prepared=inventory.prepare(&cancelled).unwrap();let mut packed=Vec::new();prepared.reader(&cancelled).read_to_end(&mut packed).unwrap();
     let (manifest,backing)=loaded(&prepared,packed.clone().into());let mut reader=ResourceReader::new(&manifest,&backing,&cancelled,Default::default());
-    let reopened=decode_definition(&record,&mut reader).unwrap();
-    let reopened_shared=decode_definition(&shared_record,&mut reader).unwrap();
-    for (original,loaded) in first.program.wgsl.sources().unwrap().iter().zip(reopened.program.wgsl.sources().unwrap()) {
+    let reopened=decode_program(&record,&mut reader).unwrap();
+    let reopened_shared=decode_program(&shared_record,&mut reader).unwrap();
+    for (original,loaded) in first.wgsl.sources().unwrap().iter().zip(reopened.wgsl.sources().unwrap()) {
         assert_eq!(original.id(),loaded.id());assert!(!original.same_owner(loaded));assert_eq!(original.as_ref(),loaded.as_ref());
     }
     let mut reused=ResourceInventory::default();
-    assert_eq!(encode_definition(&reopened,&mut reused).unwrap(),record);
-    assert_eq!(encode_definition(&reopened_shared,&mut reused).unwrap(),shared_record);
-    assert_eq!(encode_definition(&first,&mut reused).unwrap(),record);
+    assert_eq!(encode_program(&reopened,&mut reused).unwrap(),record);
+    assert_eq!(encode_program(&reopened_shared,&mut reused).unwrap(),shared_record);
+    assert_eq!(encode_program(&first,&mut reused).unwrap(),record);
     let saved=reused.prepare(&cancelled).unwrap();let mut saved_bytes=Vec::new();saved.reader(&cancelled).read_to_end(&mut saved_bytes).unwrap();
     assert_eq!(saved_bytes,packed);
     assert_eq!(saved.entries.iter().map(|entry|&entry.record).collect::<Vec<_>>(),prepared.entries.iter().map(|entry|&entry.record).collect::<Vec<_>>());
     let ids:std::collections::BTreeSet<_>=inventory.entries.keys().copied().collect();
     let other=catalog.filters().iter().filter(|filter|filter.id()!="color_lookup"&&filter.id()!="hue_saturation").find(|filter| {
         filter.program().wgsl.sources().unwrap().iter().any(|source|ids.contains(&source.id()))
-    }).expect("another bundled definition shares shader helpers");
-    let second=Definition {program:crate::effect_catalog::custom_program(other.id())};
-    encode_definition(&second,&mut reused).unwrap();
+    }).expect("another bundled program shares shader helpers");
+    let second=crate::effect_catalog::custom_program(other.id());
+    encode_program(&second,&mut reused).unwrap();
     let mut transfer=ResourceInventory::for_transfer();
-    encode_definition(&reopened,&mut transfer).unwrap();encode_definition(&reopened_shared,&mut transfer).unwrap();
-    encode_definition(&first,&mut transfer).unwrap();encode_definition(&second,&mut transfer).unwrap();
-    for source in reopened.program.wgsl.sources().unwrap().iter().chain(reopened_shared.program.wgsl.sources().unwrap()) {
+    encode_program(&reopened,&mut transfer).unwrap();encode_program(&reopened_shared,&mut transfer).unwrap();
+    encode_program(&first,&mut transfer).unwrap();encode_program(&second,&mut transfer).unwrap();
+    for source in reopened.wgsl.sources().unwrap().iter().chain(reopened_shared.wgsl.sources().unwrap()) {
         let Payload::Code(saved)=&reused.entries[&source.id()].payload else {panic!()};
         assert!(saved.same_owner(source),"the reopened encoded owner remains authoritative");
     }
-    let source=&first.program.wgsl.sources().unwrap()[0];
+    let source=&first.wgsl.sources().unwrap()[0];
     let changed=Resource::<str>::with_id(source.id(),format!("{}\n// different module",source.as_ref()).into());
     let error=reused.code(&changed).unwrap_err();
     assert!(error.contains(&source.id().to_string()));assert!(error.contains("capy.wgsl/1"));assert!(error.contains("shader bytes differ"));

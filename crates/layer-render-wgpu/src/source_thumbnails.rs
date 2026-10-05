@@ -21,6 +21,7 @@ struct Contribution {
 
 struct Overview {
     source: Weak<SourceImage>,
+    offset: [u32; 2],
     extent: [u32; 2],
     pixels: wgpu::Buffer,
     contributions: wgpu::Buffer,
@@ -33,6 +34,7 @@ struct Prepared {
     layer: SourceTarget,
     revision: u64,
     source: Weak<SourceImage>,
+    offset: [u32; 2],
     extent: [u32; 2],
     pixels: wgpu::Buffer,
     remaining: VecDeque<[u32; 2]>,
@@ -186,23 +188,24 @@ impl SourceThumbnails {
         encoder: &mut crate::submission::CommandEncoder,
         mut tile_limit: usize,
     ) -> Result<bool, GpuRasterError> {
-        let source = r.tiled_sources[&layer].clone();
+        let base = r.tiled_sources[&layer].clone();
+        let source = base.image.storage();
         // The layer's finite local backing, including original pixels beyond
         // the canvas. Placement changes only the display pass.
         let extent = r.target_extent(layer);
-        let weak = Arc::downgrade(&source);
+        let weak = Arc::downgrade(source);
         self.cache.retain(|c| {
             c.source.strong_count() > 0 && c.valid.load(std::sync::atomic::Ordering::Acquire)
         });
         let cached = self
             .cache
             .iter()
-            .position(|c| c.source.ptr_eq(&weak) && c.extent == extent);
+            .position(|c| c.source.ptr_eq(&weak) && c.offset == base.offset && c.extent == extent);
         let mut overview = if let Some(index) = cached {
             self.cache.remove(index).unwrap()
         } else {
             let pixels = overview_buffer(&r.device);
-            let (tiles, bytes) = contribution_layout(&source, extent)?;
+            let (tiles, bytes) = contribution_layout(&base, extent)?;
             let contributions = r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("compact original tile thumbnail contributions"),
                 size: bytes.max(16),
@@ -211,6 +214,7 @@ impl SourceThumbnails {
             });
             Overview {
                 source: weak,
+                offset: base.offset,
                 extent,
                 pixels,
                 contributions,
@@ -227,7 +231,7 @@ impl SourceThumbnails {
                 };
                 tile_limit -= 1;
                 let tile = r
-                    .original_source_tile(&source, coordinate, encoder)?
+                    .paint_base_tile(&base, coordinate, encoder)?
                     .unwrap();
                 self.integrate(
                     r,
@@ -263,7 +267,7 @@ impl SourceThumbnails {
         self.prepared.retain(|p| p.revision == r.artwork_revision && p.source.strong_count() > 0
             && p.valid.load(std::sync::atomic::Ordering::Acquire));
         let cached = self.prepared.iter().position(|p| p.layer == layer
-            && p.source.ptr_eq(&overview.source) && p.extent == overview.extent);
+            && p.source.ptr_eq(&overview.source) && p.offset == overview.offset && p.extent == overview.extent);
         let write = crate::submission::CacheWrite::new();
         let mut prepared = if let Some(index) = cached {
             self.prepared.remove(index).unwrap()
@@ -273,7 +277,7 @@ impl SourceThumbnails {
             let mut coordinates: std::collections::BTreeSet<_> = r.paint_layers.iter()
                 .find(|l| l.id == layer).into_iter().flat_map(|l| l.pages.iter().map(|p| p.coordinate)).collect();
             coordinates.extend(r.native_color_coordinates(layer));
-            Prepared { layer, revision: r.artwork_revision, source: overview.source.clone(), extent: overview.extent,
+            Prepared { layer, revision: r.artwork_revision, source: overview.source.clone(), offset: overview.offset, extent: overview.extent,
                 pixels, remaining: coordinates.into_iter().filter(|c| !page_rect(*c)
                     .intersect(PixelRect::full(overview.extent)).is_empty()).collect(), valid: write.validity() }
         };
@@ -413,7 +417,7 @@ fn overview_mapping(extent: [u32; 2], placement: layer_core::Affine) -> [f32; 4]
     [d, -b, -c, a].map(|v| (v * factor).clamp(-limit, limit) as f32)
 }
 fn contribution_layout(
-    source: &SourceImage,
+    base: &layer_core::authored::PaintBase,
     extent: [u32; 2],
 ) -> Result<(BTreeMap<[u32; 2], Contribution>, u64), GpuRasterError> {
     let side = f64::from(extent[0].max(extent[1]));
@@ -421,7 +425,7 @@ fn contribution_layout(
     let origin = extent.map(|v| (f64::from(v) - side) * 0.5);
     let mut count = 0;
     let mut tiles = BTreeMap::new();
-    for coordinate in source.tiles.keys().copied() {
+    for coordinate in page_coordinates(source_access::paint_base_bounds(base)) {
         let region = page_rect(coordinate).intersect(PixelRect::full(extent));
         if region.is_empty() {
             continue;

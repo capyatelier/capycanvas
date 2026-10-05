@@ -73,10 +73,11 @@ pub fn references(value: &Value, limit: usize) -> DecodeResult<Vec<PortableId>> 
                     result.push(reference.as_str().ok_or("Invalid reference identity")?.parse()?);
                 } else {
                     if fields.len() > limit.saturating_sub(visited + pending.len()) { return Err(DecodeError::Unsupported("Reference traversal exceeds limit".into())); }
+                    let ignored = fields.get("type").and_then(Value::as_str).and_then(super::registry::descriptor)
+                        .map_or(&[][..], |record| record.ignored_reference_fields);
                     for (key,value) in fields {
-                        if key == "data" && fields.get("type").and_then(Value::as_str) == Some("capy.output/1")
-                            && let Some(data) = value.as_object() {
-                            pending.extend(data.iter().filter(|(key,_)|key.as_str()!="representation").map(|(_,value)|(value,depth+2)));
+                        if key == "data" && !ignored.is_empty() && let Some(data) = value.as_object() {
+                            pending.extend(data.iter().filter(|(key,_)|!ignored.contains(&key.as_str())).map(|(_,value)|(value,depth+2)));
                         } else { pending.push((value,depth+1)); }
                     }
                 }
@@ -108,4 +109,28 @@ pub fn remap_references(value: &mut Value, identities: &BTreeMap<PortableId, Por
     }
     remap(value, identities);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finite_double_values_round_trip_bitwise() {
+        let mut bits = 0x4a5f_038c_9172_db69u64;
+        for _ in 0..100_000 {
+            bits ^= bits << 13;
+            bits ^= bits >> 7;
+            bits ^= bits << 17;
+            let value = f64::from_bits(bits);
+            if !value.is_finite() { continue; }
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let restored = parse_json(&bytes, 128).unwrap().as_f64().unwrap();
+            assert_eq!(restored.to_bits(), value.to_bits());
+        }
+        for value in [-0., f64::MIN_POSITIVE, f64::from_bits(1), f64::MAX, 16_777_217.125] {
+            let bytes = serde_json::to_vec(&value).unwrap();
+            assert_eq!(parse_json(&bytes, 128).unwrap().as_f64().unwrap().to_bits(), value.to_bits());
+        }
+    }
 }

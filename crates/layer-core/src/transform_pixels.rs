@@ -160,7 +160,7 @@ impl Document {
         if let Some(h) = paint {
             let mut p = self.artwork.paint.get(h).unwrap().clone();
             p.domain = extent;
-            p.original = None;
+            p.base = None;
             p.raster = Default::default();
             p.operations = Arc::default();
             o.translation = Point { x: origin.x - parents.x, y: origin.y - parents.y };

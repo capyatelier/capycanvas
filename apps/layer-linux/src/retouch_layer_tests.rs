@@ -176,7 +176,7 @@ fn native_retouch_layers_timing() {
     w.window.present();
     pump(1500);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
-    let photo = { let doc = document(&w); doc.scene().order().iter().copied().find(|h| doc.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).unwrap() };
+    let photo = { let doc = document(&w); doc.scene().order().iter().copied().find(|h| doc.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).unwrap() };
     w.dispatch(UiAction::Layer { action: LayerAction::Select { id: layer_ui::occurrence_token(photo), mask: false } });
     let idle = |w: &Workspace| {
         let gpu = w.gpu.borrow();

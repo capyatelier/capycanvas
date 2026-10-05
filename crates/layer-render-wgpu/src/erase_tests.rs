@@ -305,7 +305,7 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
         };
         let damage = operation.bounds(EXTENT);
         let (handle, target) = placement::append_paint(&mut document, name, layer_core::PaintSource { color_mode: Default::default(),
-            domain: EXTENT, raster: RasterRevision::pending(), original: None, operations: Arc::new(vec![operation]),
+            domain: EXTENT, raster: RasterRevision::pending(), base: None, operations: Arc::new(vec![operation]),
         });
         outputs.push((handle, target));
         batches.push(DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0, damage, ..batch(target) });

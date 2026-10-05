@@ -440,6 +440,7 @@ pub struct ColorSample {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RegionSource {
     Composite,
+    Objects(OccurrenceHandle),
     /// Placed raw paint, in document coordinates.
     Source(SourceTarget),
     /// Placed raw content alpha or mask coverage, in document coordinates.
@@ -490,7 +491,7 @@ pub struct TonalSample {
 }
 impl TonalRequest {
     pub fn valid(&self, extent: [u32; 2]) -> bool {
-        matches!(self.source, RegionSource::Composite | RegionSource::Source(_) | RegionSource::Scene { .. })
+        matches!(self.source, RegionSource::Composite | RegionSource::Source(_) | RegionSource::Objects(_) | RegionSource::Scene { .. })
             && self.bands.len() <= layer_core::tonal::MAX_BANDS
             && self.bands.iter().all(|b| b.validate().is_ok())
             && self.probe.is_none_or(|p| {
@@ -715,6 +716,10 @@ pub trait CanvasRenderer {
     fn max_document_dimension(&self) -> u32 {
         u32::MAX
     }
+    fn preflight_image_object_affine(
+        &self, _scene:SceneView<'_>, _object:layer_core::authored::ImageObjectHandle,
+        _affine:layer_core::authored::Affine64, _view:ViewState,
+    )->Result<(),Self::Error> {Ok(())}
     fn evaluation_context(&self)->EvaluationContext {EvaluationContext::default()}
     fn seed_evaluation_context(&mut self,_context:EvaluationContext) {}
     fn poll_pending(&mut self, _view: ViewState) -> Result<(), Self::Error> { Ok(()) }

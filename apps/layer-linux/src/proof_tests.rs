@@ -610,7 +610,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    paint_at_mut(&mut project, 0).original = Some(Arc::new(super::place_source::source()));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((Arc::new(super::place_source::source())).into()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);

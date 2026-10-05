@@ -22,24 +22,13 @@ impl Document {
             if old.color_mode != new.color_mode || old.domain != new.domain || old.operations != new.operations || !new.operations.is_empty() {
                 return Err(invalid("Color changes must preserve source properties and completed edits"));
             }
-            if old.original.as_ref().is_some_and(|s| s.is_original())
-                && !old.original.as_ref().zip(new.original.as_ref()).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
-            {
-                return Err(invalid("Document color changes must preserve retained originals"));
+            if old.base.as_ref().is_some_and(PaintBase::is_original)
+                && !old.base.as_ref().zip(new.base.as_ref()).is_some_and(|(a,b)|a.image.id()==b.image.id() && a.image.same_owner(&b.image)) {
+                return Err(invalid("Document color changes must preserve source-profile bases"));
             }
-            if old.original.as_ref().map(|s| (s.kind, s.extent)) != new.original.as_ref().map(|s| (s.kind, s.extent)) {
-                return Err(invalid("Color changes must preserve image roles and full extents"));
-            }
-            validate_color_root(&old.raster, &new.raster, new.domain, false, color, new.color_mode)?;
-            if let Some(source) = &new.original {
-                if !source.is_original()
-                    && (source.interpretation.depth != color.depth
-                        || source.interpretation.profile != color::ColorProfile::Builtin(color.space))
-                {
-                    return Err(invalid("Rasterized image interpretation differs from the document"));
-                }
-                source.validate().map_err(|_| invalid("Invalid tiled source"))?;
-            }
+            if old.base.as_ref().map(|b|(b.policy,b.offset,b.image.extent))!=new.base.as_ref().map(|b|(b.policy,b.offset,b.image.extent)) {return Err(invalid("Color changes must preserve paint base roles, offsets and full extents"));}
+            validate_color_root(&old.raster,&new.raster,new.domain,false,color,new.color_mode)?;
+            if let Some(base)=&new.base {base.validate(new.domain,color).map_err(DocumentError::InvalidArtwork)?;}
         }
         let mut seen = BTreeSet::new();
         for change in &coverage {

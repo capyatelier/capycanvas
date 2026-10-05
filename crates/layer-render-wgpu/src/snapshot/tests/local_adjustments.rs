@@ -55,7 +55,7 @@ fn constant_document(space:RgbSpace,alpha:f32)->Document {
     let mut source=SourceBuilder::new(extent,interpretation,1024*1024).unwrap();
     let row=(0..extent[0]).flat_map(|_|[0.01125_f32,0.01125,0.01125,alpha]).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
     for _ in 0..extent[1]{source.push_row(&row).unwrap();}
-    paint_mut(&mut document).original=Some(Arc::new(source.finish().unwrap()));
+    paint_mut(&mut document).base=Some(layer_core::authored::PaintBase::new((Arc::new(source.finish().unwrap())).into()));
     hide_paper(&mut document);
     let original=paint_occurrence(&document);
     let lower=named_effect(&mut document,"Lower",adjustment("shadows_highlights","shadows",50.),0);
@@ -326,7 +326,7 @@ fn cold_clone_reference_prepares_local_guides_without_a_settled_preview() {
 #[test]
 fn dropping_a_pending_cold_merge_releases_members_without_publishing_a_partial_raster() {
     let mut document=constant_document(RgbSpace::Srgb,0.5);document.working.occurrence=Some(occurrence(&document,"Upper"));
-    let source=Arc::downgrade(document.scene().paint(paint_id(&document)).unwrap().original.as_ref().unwrap());
+    let source=Arc::downgrade(document.scene().paint(paint_id(&document)).unwrap().base.as_ref().unwrap().image.storage());
     let mut engine=engine(document);let result=merge(&mut engine);
     engine.render_frame_at(0).unwrap();assert_eq!(engine.backend().bake_analyses.len(),1);
     assert!(engine.has_pending_document_edits());
@@ -349,7 +349,7 @@ fn scoped_worker_transfer_keeps_required_geometry_phases_and_handles_without_unr
     let (pending,pending_target)=crate::test_support::add_paint(&mut document.artwork,"Above pending",[33,17]);
     let (hidden,hidden_target)=crate::test_support::add_paint(&mut document.artwork,"Hidden failed",[33,17]);
     let hidden_group=add_group(&mut document,vec![hidden],0);document.artwork.occurrences.get_mut(hidden_group).unwrap().visible=false;
-    let library=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[33,17],raster:Default::default(),original:None,operations:Arc::default()}).unwrap();
+    let library=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[33,17],raster:Default::default(),base: None,operations:Arc::default()}).unwrap();
     let root=document.composition().result;let entries=&mut document.artwork.stacks.get_mut(root).unwrap().entries;
     entries.retain(|h|*h!=above&&*h!=pending);entries.splice(0..0,[above,pending]);refresh(&mut document);
     for (source,error) in [(above_target,"above source failed"),(hidden_target,"hidden source failed"),(SourceTarget::Paint(library),"unplaced source failed")] {
@@ -367,7 +367,7 @@ fn scoped_worker_transfer_keeps_required_geometry_phases_and_handles_without_unr
     }
     let SourceTarget::Paint(paint)=target else {unreachable!()};
     assert_eq!(artwork.paint.get(paint).unwrap().raster,document.target_raster(target).unwrap().clone());
-    assert!(Arc::ptr_eq(artwork.paint.get(paint).unwrap().original.as_ref().unwrap(),document.scene().original(target).unwrap()));
+    assert!(Arc::ptr_eq(artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage(),document.scene().original(target).unwrap()));
     let checkpoint=CaptureCheckpoint {document:artwork.id,owner:scene.owner,session_generation:0,artwork_generation:scene.revision,working_generation:0,edit_checkpoint:0};
     let cancel=std::sync::atomic::AtomicBool::new(false);
     let capture=artwork.capture(checkpoint).unwrap();
@@ -474,7 +474,7 @@ fn registered_dehaze_nonconstant_material_matches_scalar_reconstruction() {
     let mut source=SourceBuilder::new(extent,interpretation,1024*1024).unwrap();
     let row=pixels.into_iter().flatten().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
     source.push_row(&row).unwrap();
-    paint_mut(&mut document).original=Some(Arc::new(source.finish().unwrap()));hide_paper(&mut document);
+    paint_mut(&mut document).base=Some(layer_core::authored::PaintBase::new((Arc::new(source.finish().unwrap())).into()));hide_paper(&mut document);
     let target=insert_effect(&mut document,adjustment("dehaze","amount",0.),0);
     for amount in [0_f32,50.,100.,-100.] {
         set(&mut document,target,"amount",amount);

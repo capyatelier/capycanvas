@@ -84,10 +84,10 @@ fn grouped_adjustment() -> layer_core::Document {
     let remove: Vec<_> = document.scene().order().iter().copied().filter(|h| document.scene().paint_source(*h).is_none() && !document.scene().constant_backdrop().contains(h)).collect();
     if !remove.is_empty() { document.apply(document.delete_layers_edit(&remove).unwrap()).unwrap(); }
     let draft = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("black_white").unwrap().program());
-    let definition = RecordChange::insert(&document.artwork.definitions, Definition { program: draft.program });
-    let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values});
+
+    let effect = RecordChange::insert(&document.artwork.effects, EffectApplication::new(draft.program, draft.values, document.composition().size));
     let adjustment = RecordChange::insert(&document.artwork.occurrences, Occurrence::new(OccurrenceContent::Effect(effect.handle), "Black & White"));
-    document.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Definition(definition), layer_core::Edit::Effect(effect), layer_core::Edit::Occurrence(adjustment.clone())])).unwrap();
+    document.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Effect(effect), layer_core::Edit::Occurrence(adjustment.clone())])).unwrap();
     let children = RecordChange::insert(&document.artwork.stacks, Stack { entries: vec![adjustment.handle] });
     let group = RecordChange::insert(&document.artwork.occurrences, Occurrence::new(OccurrenceContent::Stack(children.handle), "Adjustments"));
     let root = document.composition().result;
@@ -112,7 +112,7 @@ fn native_pass_through_group_and_new_group_preference() {
     new_photo::ready(&w);
     let group = document(&w).working.occurrence.unwrap();
     let doc = document(&w);
-    let photo = doc.scene().order().iter().copied().find(|h| doc.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).unwrap();
+    let photo = doc.scene().order().iter().copied().find(|h| doc.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).unwrap();
     let context = glib::MainContext::default();
     let mut readback = 9800;
     let mut saturation = |w: &Rc<Workspace>| {

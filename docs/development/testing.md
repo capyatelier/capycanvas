@@ -333,6 +333,16 @@ are your task, and remove an entry when you fix it.
 - Renderer `scene::scale::tests::refinement::global_filters_evict_optional_levels_before_rejecting_the_document`
   rejects the document during submission after its initial budget assertions
   pass. The same image-pixel limit failure occurs on the unmodified baseline.
+- Renderer failures reproduced on unmodified `5c76e202f`:
+  `the_crop_shield_dims_outside_the_crop_and_shows_added_canvas_as_transparency`
+  changes an interior blue channel from 123 to 124 because the crop shield
+  disables presentation quantization; `oversized_photo_preview_uses_admitted_memory_across_scale_boundary`
+  replaces a 384-square cache with a 512-square cache and increases updates from
+  9 to 14; `placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod`
+  retains a placement cache where the fixture expects borrowed native tiles;
+  `accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen`
+  repairs 70 pages where the fixture expects fewer than 64. Keep these assertions
+  when checking renderer changes.
 - GTK `native_selection_pen_input`, `native_toolbar_components_narrow_input`,
   `native_workspace_motion_input`, and `native_workspace_switcher_input`
   (intermittent). `native_workspace_resize_input` presents below its rate

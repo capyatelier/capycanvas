@@ -19,7 +19,7 @@ fn same_backing(actual: &Document, expected: &Document) {
     assert_eq!(actual.artwork.occurrences, expected.artwork.occurrences);
     assert_eq!(actual.artwork.effects, expected.artwork.effects);
     for ((_, _, a), (_, _, b)) in actual.artwork.paint.iter().zip(expected.artwork.paint.iter()) {
-        assert_eq!(a.original, b.original);
+        assert_eq!(a.base, b.base);
     }
     for (a, b) in actual.scene().targets().filter_map(|target| actual.target_raster(target)).zip(expected.scene().targets().filter_map(|target| expected.target_raster(target))) {
         let a = a.wait_data().unwrap();
@@ -84,15 +84,16 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     let original = std::sync::Arc::new(source());
     let layer_core::SourceTarget::Paint(handle) = project.working.target.unwrap() else { panic!("Paint source") };
     let source = project.artwork.paint.get_mut(handle).unwrap();
-    source.domain = original.extent;
-    source.original = Some(original.clone());
+    source.domain = [256, 128];
+    source.base = Some(layer_core::PaintBase::new((original.clone()).into()));
     let mask = project.allocate_coverage_handle();
-    let coverage = layer_core::CoverageSnapshot::reveal_all(mask, original.extent, Point::default());
+    let coverage = layer_core::CoverageSnapshot::reveal_all(mask, [256, 128], Point::default());
     project.artwork.coverage.install(mask, coverage.source).unwrap();
     let mut occurrence = project.scene().occurrence(paint).unwrap().clone();
     occurrence.mask = Some(coverage.use_);
     project.apply(layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&project.artwork.occurrences, paint, Some(occurrence)).unwrap())).unwrap();
     let w = Workspace::with_project(&app, Some((project, None)));
+    apply_fixture_theme(&w);
     let created = Rc::new(RefCell::new(None));
     *w.open_document.borrow_mut() = Some({
         let created = created.clone();
@@ -211,7 +212,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         let changed = document(&w);
         same_backing(&changed, &expected.document);
         assert!(std::sync::Arc::ptr_eq(
-            changed.scene().paint_source(paint).unwrap().original.as_ref().unwrap(),
+            changed.scene().paint_source(paint).unwrap().base.as_ref().unwrap().image.storage(),
             &original
         ));
         invoke(&w, CommandId::Undo);

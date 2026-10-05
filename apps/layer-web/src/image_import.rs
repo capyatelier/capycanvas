@@ -124,7 +124,7 @@ impl WebApp {
                 output::cancelled(&control)?;
                 let scene=project.scene();
                 let (occurrence,source)=scene.order().iter().find_map(|&handle| {
-                    let source=scene.paint_source(handle)?.original.as_ref()?;
+                    let source=scene.paint_source(handle)?.base.as_ref()?.image.storage();
                     Some((scene.occurrence(handle)?,source))
                 }).ok_or_else(|| js("The selected file is not a photo"))?;
                 let name=occurrence.name.to_string();

@@ -33,7 +33,12 @@ same checked rows and Solo toggle. Row navigation does not add an undo step.
 The [`private codec`](../../crates/layer-core/src/package/session.rs) shares the
 portable artwork record and resource adapters. It retains typed record identities,
 tombstones and checkpoint identities across history. Object versions, raster index
-chunks and immutable resource payloads are shared across historical states. The
+chunks and immutable resource payloads are shared across historical states.
+Immutable images are interned by portable ID across all states. Changed-record
+transfers carry each value’s image dependency closure, including images retained
+only by undo. Conflicting descriptors for one image ID reject the session;
+foreign imports remap identities. Portable saves retain authored image uses,
+while private history retains deleted uses until their undo owners are released. The
 last export's embedded ICC profile uses the same resource inventory and worker
 transfer. Session stamps and metadata carry its stable identity; camera-only
 checkpoints reuse its payload. Typed metadata keeps those resource owners attached
@@ -62,10 +67,71 @@ arms, ignored decode errors or default values for missing private records.
 
 Stored records are strict and bounded. Invalid checkpoint identities, unresolved
 references, unsupported records, conflicting immutable resources and invalid
-history fail before adoption. The editor's existing history limits apply to
+history fail before adoption. Incremental worker decoding validates each restored
+artwork graph and editing target before accepting its history entry. The editor's
+existing history limits apply to
 restored history; a reader does not silently trim history to make it fit. These
 checks enforce known invariants; they are not a proof against every possible
 hardware or implementation failure.
+
+## Private custom programs
+
+Private `capy.effect/2` has two exclusive alternatives: the portable inline
+built-in descriptor and all `values`, or `{program,values}` with an embedded
+validated custom program. Each application owns its optional consumed spatial
+reference; neither alternative creates a definition identity. Built-ins resolve
+through the catalog; decoded custom descriptors and their code/table resources
+are interned across current artwork, history and worker transfers.
+
+Custom filters are not yet part of the portable format. A writer refuses to save
+artwork that uses one, and a reader opens a package containing one as preserved.
+The private session and worker formats keep them with the grammar below until a
+portable custom filter contract is designed. Custom programs have a stable
+`key`, evaluation `contract`, `kind`, `code`, `entry`, keyed `parameters`,
+ordered `slots` and literal labels, and execute independently of built-in shader
+fusion. Their `slots` fixes the shader layout.
+Their parameter dimensions use `scalar`, `count`, `angle`, `time`, or `length` with a
+`source_pixels`, `composition_pixels` or `normalized` reference. Built-in dimensions
+come from the current catalog; a displayed unit never controls resizing.
+Counts require whole bounds and values. A pixel length accepts any value from zero
+to 65,536 pixels (or the declared bounds when wider, keeping a negative minimum's
+sign), independently of its declared `min`/`max`. Canvas resizing composes the application’s authored spatial mapping without
+rewriting its values or reference extent. Values remain finite and within the
+accepted data range. Positive periods
+used as divisors have a numerical floor of 1/256 pixel; this prevents undefined
+zero-period patterns and overflowing integer noise coordinates. The floor affects
+evaluation only, and never rewrites the authored value.
+The custom evaluation contract `capy.filter/1` fixes shader ABI `5`; artwork has
+no separate `abi` field. This contract is independent of built-in parameter
+versions. Unknown custom contracts remain preserved.
+
+Custom program parameters are a map keyed by stable keys, with required `kind`,
+`default`, `label`, optional `opaque` (default false, color only) and dimensional
+declarations. Parameter `kind` is an object tagged by `kind`. Number adds required
+finite `min`,`max` and optional semantic `unit` (default empty); `min<=max`.
+Count parameters require whole bounds and values. Choice adds required
+`options`, a nonempty array of unique stable literal strings or `{value,label}`
+objects (at most 256). Other kinds add no kind fields. Values satisfy their kind:
+number within bounds, choice one declared option, curves/gradients 2–32 strictly
+increasing points/stops in `[0,1]` with endpoints zero and one. Curve ordinates
+are within `[0,1]`. LUT resource type and declared working-color binding are
+validated together. Custom labels are literal strings. Built-in translation keys
+are never saved. Pages, sections, conditional visibility, slider bounds/mapping,
+steps and decimal places belong to runtime editor presentation. Custom artwork
+opens with plain controls; count controls use whole-number steps.
+
+Custom program `passes` retain `entry` and `sampling` (`neighborhood` with `radius`,
+`parameter` with `key`,`scale`,`padding`, or `document`). `lookups` retain code
+resource refs, `entry`, ordered parameter `dependencies`, `values`,
+`workgroup_size`, `workgroups`. `auxiliary` is `lut3d` with local `resource` and
+`color_space` keys, or `analysis` with kind `local_illumination` or `dehaze`.
+`constraints` retain kind `ordered_numbers`, `lower`, `upper`,
+`gap`. These local strings are not cross-object references. Missing lists are
+empty, missing auxiliary is absent. Required scalar fields are not silently
+replaced from a newer catalog. Type and dimensional additions are unsupported
+until explicitly interpreted by the reader. Runtime `resolution` and
+`constant_color` optimization declarations are omitted; reopened custom programs
+evaluate at native resolution through their retained code.
 
 ## Durable publication and ownership
 

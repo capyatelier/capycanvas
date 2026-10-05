@@ -31,7 +31,7 @@ fn change_mask(document: &mut Document, handle: OccurrenceHandle, value: f32) {
 fn set_effect_values(document: &mut Document, handle: OccurrenceHandle, values: &[(&str, crate::EffectValue)]) {
     let effect = document.scene().effect_handle(handle).unwrap();
     let mut application = document.artwork.effects.get(effect).unwrap().clone();
-    let program = document.artwork.definitions.get(application.definition).unwrap().program.clone();
+    let program = application.program.clone();
     let mut instance = crate::EffectInstance::new(program);
     instance.values = application.values;
     for (key, value) in values { instance.set(key, value.clone()).unwrap(); }
@@ -163,11 +163,11 @@ fn artwork_sample_identity_rejects_unpublished_pixel_commands() {
 fn artwork_sample_identity_freezes_source_backing_and_raster_roots() {
     let mut doc = document();
     let SourceTarget::Paint(target) = fixture::target(&doc, "Ink") else { panic!() };
-    change_paint(&mut doc, target, |p| p.original = Some(crate::color::source::rgba8_source([128, 96], |_, _| [32, 64, 128, 255])));
+    change_paint(&mut doc, target, |p| p.base = Some(PaintBase::new(crate::color::source::rgba8_source([128, 96], |_, _| [32, 64, 128, 255]).into())));
     let request = ArtworkSampleRequest::new(&doc, ArtworkSource::Visible, [0.; 2], 5);
     assert!(request.matches_artwork(&doc));
     let mut replacement = doc.clone();
-    change_paint(&mut replacement, target, |p| p.original = Some(Arc::new((**p.original.as_ref().unwrap()).clone())));
+    change_paint(&mut replacement, target, |p| p.base = Some(PaintBase::new(Arc::new(p.base.as_ref().unwrap().image.as_ref().clone()).into())));
     assert!(!request.matches_artwork(&replacement));
     let mut changed = doc.clone();
     let descriptor = doc.composition().color.paint_descriptor();
@@ -293,7 +293,7 @@ fn raw_source_snapshot_identity_ignores_unrelated_effect_phases() {
     assert!(query.matches_snapshot(&doc.snapshot_with_context(EvaluationContext{elapsed:20.,phases:vec![].into()})));
     assert!(query.matches_snapshot(&doc.snapshot_with_context(EvaluationContext{elapsed:20.,phases:vec![(effect,73.)].into()})));
     let SourceTarget::Paint(paint)=target else {panic!()};
-    change_paint(&mut doc,paint,|source|source.original=Some(crate::color::source::rgba8_source([128,96],|_,_|[0,0,0,255])));
+    change_paint(&mut doc,paint,|source|source.base=Some(PaintBase::new(crate::color::source::rgba8_source([128,96],|_,_|[0,0,0,255]).into())));
     assert!(!query.matches_snapshot(&doc.snapshot_with_context(EvaluationContext{elapsed:1.,phases:vec![].into()})),"Raw source pixel dependencies remain strict");
 }
 #[test]
@@ -480,4 +480,91 @@ fn scoped_effect_dependencies_ignore_excluded_ancestors_and_release_missing_clip
     let missing=SceneScope::Members(vec![target,backdrop].into());let scene=doc.scene().with_scope(&missing);
     assert!(!scene.effective_clipped(target));assert_eq!(crate::composite_input_scope(scene,target),Some(child));
     assert!(crate::composite_input_layers(scene,target).is_empty());
+}
+
+#[test]
+fn spatial_reference_edits_invalidate_effect_outputs_and_downstream_inputs() {
+    let mut doc=fixture::document([128,96],&["Target","Spatial","Ink"]);
+    fixture::effect(&mut doc,"Target","exposure");
+    fixture::effect(&mut doc,"Spatial","motion_blur");
+    let target=fixture::id(&doc,"Target");
+    let spatial=fixture::id(&doc,"Spatial");
+    let output=crate::ArtworkQuery::new(&doc,ArtworkSource::Visible);
+    let downstream=crate::ArtworkQuery::new(&doc,ArtworkSource::EffectInput(target));
+    let handle=doc.scene().effect_handle(spatial).unwrap();
+    let mut application=doc.artwork.effects.get(handle).unwrap().clone();
+    application.spatial.as_mut().unwrap().mapping=Affine64([0.,1.,-1.,0.,96.,0.]);
+    doc.apply(Edit::Effect(RecordChange::replace(&doc.artwork.effects,handle,Some(application)).unwrap())).unwrap();
+    assert!(!output.matches_artwork(&doc));
+    assert!(!downstream.matches_artwork(&doc));
+}
+
+#[test]
+fn raw_object_queries_track_owner_and_ancestor_placement_without_layer_appearance() {
+    let mut doc=fixture::document([128,96],&["Group"]);
+    let (layer,edit)=doc.create_object_layer_edit("Objects",None,0).unwrap();doc.apply(edit).unwrap();
+    let image=Image::new(crate::color::source::rgba8_source([4;2],|_,_|[255,0,0,255]));
+    let (_,edit)=doc.add_image_object_edit(layer,ImageObject::new(image,"Image"),0).unwrap();doc.apply(edit).unwrap();
+    let group=fixture::nest(&mut doc,"Group",&["Objects"]);
+    let assert_current=|query:&crate::ArtworkQuery,doc:&Document,current:bool| {
+        assert_eq!(query.matches_artwork(doc),current);
+        assert_eq!(query.matches_source(doc),current);
+        assert_eq!(query.matches_source_identity(doc),current);
+        assert_eq!(query.matches_snapshot(&doc.snapshot()),current);
+    };
+    let query=crate::ArtworkQuery::new(&doc,ArtworkSource::Objects(layer));
+    change_occurrence(&mut doc,layer,|o|{o.opacity=0.2;o.visible=false;});
+    change_occurrence(&mut doc,group,|o|{o.opacity=0.3;o.visible=false;});
+    assert_current(&query,&doc,true);
+    change_occurrence(&mut doc,layer,|o|o.translation=Point{x:3.,y:-7.});
+    assert_current(&query,&doc,false);
+    let query=crate::ArtworkQuery::new(&doc,ArtworkSource::Objects(layer));
+    change_occurrence(&mut doc,group,|o|o.translation=Point{x:-11.,y:5.});
+    assert_current(&query,&doc,false);
+}
+
+#[test]
+fn object_query_identity_reuses_shared_roots_but_tracks_rebound_owners_and_changed_content() {
+    let mut doc=document();
+    let image=Image::new(crate::color::source::rgba8_source([4;2],|_,_|[255,0,0,255]));
+    let (first,edit)=doc.create_object_layer_edit("First",None,0).unwrap();doc.apply(edit).unwrap();
+    let (child,edit)=doc.add_image_object_edit(first,ImageObject::new(image.clone(),"First image"),0).unwrap();doc.apply(edit).unwrap();
+    let (second,edit)=doc.create_object_layer_edit("Second",None,0).unwrap();doc.apply(edit).unwrap();
+    let mut moved=ImageObject::new(image,"Second image");moved.affine.0[4]=8.;
+    let (_,edit)=doc.add_image_object_edit(second,moved,0).unwrap();doc.apply(edit).unwrap();
+    let query=crate::ArtworkQuery::new(&doc,ArtworkSource::Objects(first));
+    let paint=doc.artwork.paint.iter().next().unwrap().0;
+    change_paint(&mut doc,paint,|source|source.domain=[129,96]);
+    assert!(query.snapshot.view().artwork().objects.same_root(&doc.artwork.objects));
+    assert!(query.snapshot.view().artwork().object_layers.same_root(&doc.artwork.object_layers));
+    assert!(query.matches_source(&doc));
+    let mut a=doc.scene().occurrence(first).unwrap().clone();
+    let mut b=doc.scene().occurrence(second).unwrap().clone();
+    std::mem::swap(&mut a.content,&mut b.content);
+    doc.apply(Edit::Batch(vec![
+        Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,first,Some(a)).unwrap()),
+        Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,second,Some(b)).unwrap()),
+    ])).unwrap();
+    assert!(query.snapshot.view().artwork().objects.same_root(&doc.artwork.objects));
+    assert!(query.snapshot.view().artwork().object_layers.same_root(&doc.artwork.object_layers));
+    assert!(!query.matches_source(&doc),"Shared object stores cannot hide an owner rebound to different content");
+    let query=crate::ArtworkQuery::new(&doc,ArtworkSource::Objects(second));
+    let mut renamed=doc.artwork.objects.get(child).unwrap().clone();renamed.name="Renamed".into();
+    doc.apply(Edit::ImageObject(RecordChange::replace(&doc.artwork.objects,child,Some(renamed)).unwrap())).unwrap();
+    assert!(!query.snapshot.view().artwork().objects.same_root(&doc.artwork.objects));
+    assert!(query.matches_source(&doc),"Image names do not change sampled content");
+    doc.apply(doc.set_image_object_affine_edit(child,Affine64([1.,0.,0.,1.,16.,0.])).unwrap()).unwrap();
+    assert!(!query.matches_source(&doc));
+}
+
+#[test]
+fn frozen_queries_detect_paint_color_mode_changes_without_raster_changes() {
+    let doc=document();
+    let target=fixture::target(&doc,"Ink");
+    let SourceTarget::Paint(handle)=target else {panic!("paint")};
+    let requests=[ArtworkSource::Visible,ArtworkSource::Source(target)].map(|source|ArtworkSampleRequest::new(&doc,source,[7.5,9.5],5));
+    for mode in [crate::color::LayerColorMode::Grayscale,crate::color::LayerColorMode::TwoTone] {
+        let mut changed=doc.clone();change_paint(&mut changed,handle,|paint|paint.color_mode=mode);
+        for request in &requests {assert!(!request.matches_artwork(&changed));}
+    }
 }

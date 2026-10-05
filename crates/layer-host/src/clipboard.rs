@@ -69,7 +69,7 @@ mod tests {
         Point, Selection,
         color::{
             ColorProfile, SampleDepth,
-            source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation, SourceKind},
+            source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation},
         },
     };
     use layer_render_wgpu::WgpuRasterizer;
@@ -100,7 +100,7 @@ mod tests {
     fn photo_host(selection: Option<Selection>) -> NativeHost {
         let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         crate::test_support::hide_paper(&mut document);
-        crate::test_support::active_source_mut(&mut document).original = Some(photo([64, 48], |x, y| [(x * 4) as u8, (y * 5) as u8, 200, 255]));
+        crate::test_support::active_source_mut(&mut document).base = Some(layer_core::authored::PaintBase::new(photo([64, 48], |x, y| [(x * 4) as u8, (y * 5) as u8, 200, 255]).into()));
         document.working.selection = selection;
         let mut host = host(document);
         host.session.frame(0, 0).unwrap();
@@ -139,7 +139,7 @@ mod tests {
         let mut host = photo_host(None);
         host.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
         let whole = copy(&mut host, CommandId::Copy);
-        let photo = host.session.engine().document().artwork.paint.iter().find_map(|(_, _, source)| source.original.clone()).unwrap();
+        let photo = host.session.engine().document().artwork.paint.iter().find_map(|(_, _, source)| source.base.as_ref().map(|base|base.image.storage().clone())).unwrap();
         assert!(Arc::ptr_eq(&whole.source, &photo), "an untouched photo keeps its original samples");
         assert_eq!(whole.origin, [0, 0]);
         let png = layer_color::photo::read_photo(std::io::Cursor::new(whole.png.to_vec()), Default::default()).unwrap();
@@ -155,7 +155,7 @@ mod tests {
         drop(host);
         let mut host = photo_host(Some(selection));
         let clip = copy(&mut host, CommandId::Copy);
-        assert_eq!((clip.origin, clip.source.extent, clip.source.kind), ([10, 8], [20, 12], SourceKind::Rasterized));
+        assert_eq!((clip.origin, clip.source.extent, clip.policy), ([10, 8], [20, 12], layer_core::authored::PaintBasePolicy::WorkingPixels));
         let copied = rows(&clip.source);
         for (y, row) in copied.iter().enumerate() {
             for (x, pixel) in row.chunks_exact(4).enumerate() {
@@ -171,7 +171,7 @@ mod tests {
         other.session.paste_clip(&clip, PasteMode::InPlace).unwrap();
         let document = other.session.engine().document();
         let pasted = crate::test_support::active_source(document);
-        assert_eq!(pasted.original.as_ref().unwrap().kind, SourceKind::Original, "another colour mode converts");
+        assert_eq!(pasted.base.as_ref().unwrap().policy, layer_core::authored::PaintBasePolicy::SourceProfile, "another colour mode converts");
         assert_eq!(document.target_geometry(document.working.target.unwrap()).as_affine().unwrap().0[4..], [10., 8.]);
         drop((host, other));
         layer_render_wgpu::finish_shader_compiler_shutdown();

@@ -15,7 +15,6 @@ pub(super) struct Accounting {
     meshes: HashSet<usize>,
     mesh_arrays: HashSet<usize>,
     resources: HashSet<usize>,
-    profiles: HashSet<usize>,
     programs: HashSet<usize>,
     codes: HashSet<usize>,
     extensions: HashSet<usize>,
@@ -37,6 +36,7 @@ impl Accounting {
         for selection in roots.selections { result.charge_selection(selection); }
         for resource in roots.resources { result.charge_resource(resource); }
         for mesh in roots.meshes { result.charge_mesh(mesh); }
+        for image in roots.images {result.sources.charge_image(image);}
         for source in roots.sources { result.sources.charge(source); }
         for profile in roots.profiles { result.charge_profile(profile); }
         for program in roots.programs { result.seed_program(program); }
@@ -56,6 +56,7 @@ impl Accounting {
         for resource in inventory.resources { bytes=bytes.saturating_add(self.charge_resource(resource)); }
         for mesh in inventory.meshes { bytes=bytes.saturating_add(self.charge_mesh(mesh)); }
         for selection in inventory.selections { bytes=bytes.saturating_add(self.charge_selection(selection)); }
+        for image in inventory.images {bytes=bytes.saturating_add(self.sources.charge_image(image));}
         for source in inventory.sources { bytes=bytes.saturating_add(self.sources.charge(source)); }
         for profile in inventory.profiles { bytes=bytes.saturating_add(self.charge_profile(profile)); }
         for program in inventory.programs { bytes=bytes.saturating_add(self.charge_program(program)); }
@@ -100,9 +101,7 @@ impl Accounting {
         })
     }
     pub(super) fn charge_profile(&mut self, profile: &color::ColorProfile) -> usize {
-        if let color::ColorProfile::Icc(bytes)=profile {
-            if self.profiles.insert(bytes.as_ptr() as usize) {bytes.len()} else {0}
-        } else {0}
+        self.sources.charge_profile(profile)
     }
     fn seed_program(&mut self, program:&Arc<EffectProgram>) {
         self.programs.insert(Arc::as_ptr(program) as usize);

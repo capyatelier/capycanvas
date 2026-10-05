@@ -55,7 +55,7 @@ fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
     let source = Arc::new(builder.finish().unwrap());
     let mut document = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let photo = document.working.occurrence.unwrap();
-    support::paint_mut(&mut document, photo).original = Some(source.clone());
+    support::paint_mut(&mut document, photo).base = Some(layer_core::authored::PaintBase::new((source.clone()).into()));
     let project = document;
     let (mut live, mut input) = engine_at_scale(&project, 0.125);
     let original = image(&mut live, 0);
@@ -65,7 +65,7 @@ fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
     let archive = support::package_bytes(live.document());
     let loaded = support::reopen(&archive);
     let reopened_photo = support::named_occurrence(&loaded, "Current ink");
-    assert_eq!(support::paint(&loaded, reopened_photo).original.as_ref().unwrap(), &source);
+    assert_eq!(support::paint(&loaded, reopened_photo).base.as_ref().unwrap().image.storage(), &source);
     let (mut reopened, _) = engine(&loaded);
     let actual = image(&mut reopened, 0);
     assert_eq!(actual.iter().zip(&painted).enumerate().find(|(_, (a,b))| a != b), None);
@@ -116,14 +116,14 @@ fn fixture() -> Document {
     let paper = support::named_occurrence(&doc, "Paper");
     doc.artwork.occurrences.get_mut(paper).unwrap().visible = false;
     let ink = doc.working.occurrence.unwrap();
-    support::paint_mut(&mut doc, ink).original = Some(color::source::rgba8_source(SIZE, |x, y| {
+    support::paint_mut(&mut doc, ink).base = Some(layer_core::authored::PaintBase::new((color::source::rgba8_source(SIZE, |x, y| {
         [
             (x % 256) as u8,
             (y % 256) as u8,
             118,
             if x < 16 || y < 16 { 0 } else { 140 },
         ]
-    }));
+    })).into()));
     doc
 }
 

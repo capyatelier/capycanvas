@@ -352,7 +352,7 @@ fn cold_native_overrides_keep_the_original_photo_and_its_thumbnail_contributions
             .push_row(&[31, 201, 133].repeat(EXTENT[0] as usize))
             .unwrap();
     }
-    paint_mut(&mut p).original = Some(Arc::new(source.finish().unwrap()));
+    paint_mut(&mut p).base = Some(layer_core::authored::PaintBase::new((Arc::new(source.finish().unwrap())).into()));
     let id = target(&p);
     let mut resident = renderer(&p, u64::MAX);
     let mut cold = renderer(&p, 0);

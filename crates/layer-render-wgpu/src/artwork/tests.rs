@@ -224,3 +224,63 @@ fn filtered_query_crops_match_full_resolution_and_reject_excessive_dependencies(
             .all(|v| f32::from_le_bytes(v.try_into().unwrap()) == 1.)
     );
 }
+
+#[test]
+fn cold_object_thumbnails_and_retouch_reads_retry_until_exact_pixels_are_ready() {
+    use layer_core::authored::{Affine64,Image,ImageObject};
+    use layer_render::{RetouchPreparation,ThumbnailTarget};
+    let extent=[256;2];
+    let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let ink=doc.scene().order()[0];let paper=doc.scene().order()[1];
+    doc.artwork.occurrences.get_mut(paper).unwrap().visible=false;
+    let (owner,edit)=doc.create_object_layer_edit("Reference",None,1).unwrap();doc.apply(edit).unwrap();
+    let mut object=ImageObject::new(Image::new(layer_core::color::source::rgba8_source([512;2],|_,_|[255,0,0,255])),"Photo");
+    object.affine=Affine64([1./7.,0.,0.,1./7.,0.,0.]);
+    let (_,edit)=doc.add_image_object_edit(owner,object,0).unwrap();doc.apply(edit).unwrap();
+    for thumbnail in [false,true] {
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();r.document_extent=extent;
+        let packet=crate::test_support::packet(doc.scene(),extent);
+        let frame=Arc::new(Frame::new(packet,r.frame_context(packet)));r.artwork_frame=Some(frame.clone());
+        if !thumbnail {
+            r.prepare_retouch_sources(Some(&RetouchPreparation {target:doc.scene().source_target(ink).unwrap(),
+                retouch:layer_core::Retouch {source:layer_core::RetouchSource::References,references:Arc::new([owner].into()),..Default::default()},
+                points:vec![Point {x:32.,y:32.}]}));
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            r.prefetch_retouch(&frame,false,&mut encoder).unwrap();
+            r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));
+        }
+        let before=r.device.source_samples.stats();
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let ready=if thumbnail {r.prepare_thumbnail_batch(ThumbnailTarget::Occurrence(owner)).unwrap()}
+            else {r.prefetch_retouch(&frame,false,&mut encoder).unwrap();!r.retouch.as_ref().unwrap().pending()};
+        assert!(!ready,"a cold exact read remains pending");
+        assert_eq!(r.device.source_samples.stats(),before,"the initiating UI query cannot decompress source pixels");
+        r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));r.wait_idle().unwrap();
+        let mut ready=false;
+        for _ in 0..500 {
+            if thumbnail {ready=r.prepare_thumbnail_batch(ThumbnailTarget::Occurrence(owner)).unwrap();}
+            else {
+                let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+                r.prefetch_retouch(&frame,false,&mut encoder).unwrap();
+                ready = !r.retouch.as_ref().unwrap().pending();
+                r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));
+            }
+            r.wait_idle().unwrap();if ready {break;}std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(ready,"prepared object pixels must eventually publish");
+        if thumbnail {
+            r.request_thumbnail(91,ThumbnailTarget::Occurrence(owner)).unwrap();crate::test_support::complete(&r);
+            let thumbnail=r.take_thumbnail().unwrap().unwrap();assert_eq!(thumbnail.request_id,91);
+            let offset=(16*thumbnail.stride+16*4) as usize;
+            assert_eq!(&thumbnail.bytes[offset..offset+4],&[255,0,0,255]);
+        } else {
+            let (target,view)=create_color_target(&r.device,extent,"prepared retouch read regression");
+            assert!(r.draw_retouch_source(&view,[0;2],extent,[1.;2],[0.;2]).unwrap());r.wait_idle().unwrap();
+            let pixels=crate::test_support::floats(&crate::layer_tests::page_bytes(&r,&target));
+            close(pixels[32*256+32],[1.,0.,0.,1.]);
+            assert_eq!(r.retouch.as_ref().unwrap().cached_pages(),1);
+        }
+        drop(r);
+    }
+    crate::startup::finish_shader_compiler_shutdown();
+}

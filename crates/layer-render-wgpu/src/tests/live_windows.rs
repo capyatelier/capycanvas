@@ -271,9 +271,8 @@ fn native_live_animated_windows_refresh_with_empty_paint_damage_and_keep_frozen_
     .unwrap();
     close(&pixels(&r), &animated);
     let OccurrenceContent::Effect(application) = document.artwork.occurrences.get(generator).unwrap().content else { unreachable!() };
-    let definition = document.artwork.effects.get(application).unwrap().definition;
     for (key, value) in [("animate", layer_core::EffectValue::Toggle(false)), ("time", layer_core::EffectValue::Number(3.))] {
-        let index = document.artwork.definitions.get(definition).unwrap().program.parameters.iter().position(|p|p.key.as_ref()==key).unwrap();
+        let index = document.artwork.effects.get(application).unwrap().program.parameters.iter().position(|p|p.key.as_ref()==key).unwrap();
         document.artwork.effects.get_mut(application).unwrap().values[index] = value;
     }
     r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(CAP);
@@ -311,9 +310,9 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
             composition.blend = space;
             let photo = doc.scene().order()[0];
             let SourceTarget::Paint(paint) = doc.scene().source_target(photo).unwrap() else { unreachable!() };
-            doc.artwork.paint.get_mut(paint).unwrap().original = Some(layer_core::color::source::rgba8_source(extent, |x, y| {
+            doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent, |x, y| {
                 [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) % 256) as u8, if (x / 97 + y / 61) % 3 == 0 { 140 } else { 255 }]
-            }));
+            })).into()));
             let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
             effect.set("sigma", EffectValue::Number(9.)).unwrap();
             let blur = insert_effect(&mut doc, effect);
@@ -365,7 +364,12 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
                 assert_eq!(windowed.len(), full.len(), "{what}");
                 for (tile, (a, b)) in windowed.iter().zip(&full).enumerate() {
                     let differ = a.iter().zip(b).filter(|(a, b)| a != b).count();
-                    assert_eq!(differ, 0, "{what}: tile {tile} differs in {differ} bytes");
+                    let first = a.iter().zip(b).position(|(a, b)| a != b).unwrap_or(0);
+                    let pixel_bytes = if depth == SampleDepth::U8 { 4 } else { 8 };
+                    let start = first / pixel_bytes * pixel_bytes;
+                    assert_eq!(differ, 0, "{what}: tile {tile} differs in {differ} bytes, first pixel {:?}: {:?} != {:?}",
+                        [start / pixel_bytes % PAGE_SIZE as usize, start / pixel_bytes / PAGE_SIZE as usize],
+                        &a[start..start + pixel_bytes], &b[start..start + pixel_bytes]);
                 }
             }
         }
@@ -388,9 +392,9 @@ fn frequency_separation_at_sigma_85_bakes_discrete_gaussian_and_survives_history
     let paper=document.scene().order()[1];
     document.artwork.occurrences.get_mut(paper).unwrap().visible=false;
     let SourceTarget::Paint(paint)=document.scene().source_target(original).unwrap() else {unreachable!()};
-    document.artwork.paint.get_mut(paint).unwrap().original=Some(layer_core::color::source::rgba8_source(extent,|x,_|{
+    document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent,|x,_|{
         let v=if x<32 {64}else{192};[v,v,v,255]
-    }));
+    })).into()));
     let gpu=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     let (_,consumer)=input_queue(8);
     let mut engine=CanvasEngine::new(gpu,document,consumer,crate::test_support::view(extent),ViewTransform::IDENTITY).unwrap();

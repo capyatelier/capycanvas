@@ -63,6 +63,7 @@ import { launchChrome } from "../../tools/cdp.mjs";
 import { checkRaster } from "./raster.test.mjs";
 import { checkPhotoPaint } from "./photo-paint.test.mjs";
 import { checkImagePlacement } from "./image-placement.test.mjs";
+import {checkImageObjectFixture} from "./image-object-journey.test.mjs";
 import { checkCanvasBar } from "./canvas-bar-journey.test.mjs";
 import { checkNotices } from "./notice-journey.test.mjs";
 import { checkZoomReadout } from "./zoom-readout-journey.test.mjs";
@@ -116,7 +117,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.some(x=>['--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients'].includes(x))?300000:process.argv.some(x=>["--enclose-fill","--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--package-view","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.some(x=>['--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients'].includes(x))?300000:process.argv.some(x=>["--enclose-fill","--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--package-view","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -199,6 +200,15 @@ try {
   );
   await settle();
   await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
+  if (process.env.LAYER_TEST_THEME) {
+    assert.ok(['light','dark'].includes(process.env.LAYER_TEST_THEME));
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(process.env.LAYER_TEST_THEME)}})`);
+    await settle();
+  }
+  const gpuAdapter = await evaluate(`(async()=>{const adapter=await navigator.gpu.requestAdapter();return {...adapter.info,fallback:adapter.isFallbackAdapter??adapter.info.isFallbackAdapter??false,vendor:adapter.info.vendor,architecture:adapter.info.architecture,description:adapter.info.description}})()`);
+  assert.equal(gpuAdapter.fallback,false,'Browser journeys require a hardware WebGPU adapter');
+  assert.doesNotMatch(gpuAdapter.description,/swiftshader|llvmpipe|software/i);
+  console.log('WebGPU hardware:',JSON.stringify(gpuAdapter));
   const checkErrors = () => assert.deepEqual(errors, []);
   if (!await runJourney([
     [process.argv.includes("--filter-investigation"), async () => {
@@ -217,6 +227,7 @@ try {
     [process.argv.includes("--hdr-performance"), () => measureHdr({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--hdr"), () => checkHdr({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--image-placement"), () => checkImagePlacement({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--image-object-fixture"), () => checkImageObjectFixture({call,evaluate,settle,canvasPixels}), checkRasterErrors],
     [process.argv.includes("--canvas-bar"), () => checkCanvasBar({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--screen-status"), () => checkScreenStatus({call,evaluate,settle}), checkErrors],

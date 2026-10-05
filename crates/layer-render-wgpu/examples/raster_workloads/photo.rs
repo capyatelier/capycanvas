@@ -73,14 +73,9 @@ fn change(effect: &mut EffectInstance, key: &str, value: f32) -> Result<()> {
     Ok(())
 }
 fn insert_effect(doc: &Document, name: &str, draft: EffectInstance, mask: Option<CoverageSnapshot>) -> (EffectHandle, Edit) {
-    let definition = RecordChange::insert(&doc.artwork.definitions, Definition {
-        program: draft.program,
-    });
-    let effect = RecordChange::insert(&doc.artwork.effects, EffectApplication {
-        definition: definition.handle, values: draft.values,
-    });
+    let effect = RecordChange::insert(&doc.artwork.effects, EffectApplication::new(draft.program,draft.values,doc.composition().size));
     let handle = effect.handle;
-    let mut edits = vec![Edit::Definition(definition), Edit::Effect(effect)];
+    let mut edits = vec![Edit::Effect(effect)];
     let mut occurrence = Occurrence::new(OccurrenceContent::Effect(handle), name);
     if let Some(mut mask) = mask {
         let coverage = RecordChange::insert(&doc.artwork.coverage, mask.source);
@@ -203,7 +198,7 @@ fn pace(start: Instant) {
 }
 fn sliders(canvas: &mut Canvas, observations: &mut Observations, exposure: EffectHandle) -> Result<()> {
     let original = canvas.engine.document().artwork.effects.get(exposure).unwrap().clone();
-    let program = canvas.engine.document().artwork.definitions.get(original.definition).unwrap().program.clone();
+    let program = original.program.clone();
     for i in 0..64 {
         let mut draft = EffectInstance { program: program.clone(), values: original.values.clone() };
         change(&mut draft, "exposure", i as f32 / 64. - 0.5)?;

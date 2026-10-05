@@ -1,4 +1,4 @@
-use super::{archive::{Directory, Member}, parse_json, references};
+use super::{archive::{Directory, Member}, parse_json, references, registry::{self, RecordContext, RecordKind, RecordRole}};
 use crate::authored::{Content, GraphLimits, GraphShape, PortableId, Shape, Support};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -75,53 +75,80 @@ fn kind(record: &Value) -> Result<&str, String> {
     if name.is_empty() { return Err("Empty record type".into()); }
     Ok(name)
 }
-pub(crate) fn known_object(name: &str) -> bool { matches!(name,
-    "capy.composition/1" | "capy.stack/1" | "capy.occurrence/2" | "capy.paint-source/1" | "capy.coverage-source/1" |
-    "capy.effect/1" | "capy.effect-definition/1" | "capy.selection/1" | "capy.guides/1" | "capy.output/1") }
-fn shape(record: &Value, refs: &[PortableId], reasons: &mut BTreeSet<&'static str>) -> Result<Shape, String> {
+pub(crate) fn known_object(name: &str) -> bool { registry::descriptor(name).is_some_and(|record| record.role == RecordRole::Object) }
+fn shape(record: &Value, refs: &[PortableId], context: RecordContext, reasons: &mut BTreeSet<&'static str>) -> Result<Shape, String> {
     let fields = object(record)?;
     let data = object(required(fields, "data")?)?;
     let ancillary = boolean(fields, "ancillary")?;
     let copy_safe = boolean(fields, "copy_safe")?;
     let name = kind(record)?;
-    if copy_safe && !ancillary || known_object(name) && (ancillary || copy_safe) { return Err("Invalid ancillary flags".into()); }
+    let descriptor = registry::descriptor(name).filter(|record| record.role == RecordRole::Object);
+    if copy_safe && !ancillary || descriptor.is_some() && (ancillary || copy_safe) { return Err("Invalid ancillary flags".into()); }
     if extras(fields, &["id", "type", "data", "ancillary", "copy_safe"]) && !ancillary { reasons.insert("Unknown object record field"); }
     let unknown = || Shape::Unknown { ancillary, references: refs.to_vec() };
-    Ok(match name {
-        "capy.composition/1" => Shape::Composition { result: endpoint(required(data, "result")?, &["color"], reasons)? },
-        "capy.stack/1" => Shape::Stack { entries: data.get("entries").map_or(Ok(Vec::new()), |v| array(v)?.iter().map(reference).collect())? },
-        "capy.occurrence/2" => {
+    let Some(descriptor) = descriptor else { return Ok(unknown()); };
+    if extras(data, descriptor.data_fields) { reasons.insert("Unknown object data field"); }
+    match registry::validate_context(record, context) {
+        Err(DecodeError::Unsupported(_)) => { reasons.insert("Unsupported authored record context"); },
+        Err(DecodeError::Invalid(reason)) => return Err(reason),
+        Ok(()) => {},
+    }
+    Ok(match descriptor.kind {
+        RecordKind::Composition => Shape::Composition { result: endpoint(required(data, "result")?, &["color"], reasons)? },
+        RecordKind::Stack => Shape::Stack { entries: data.get("entries").map_or(Ok(Vec::new()), |v| array(v)?.iter().map(reference).collect())? },
+        RecordKind::OccurrenceLegacy | RecordKind::Occurrence => {
             let content = object(required(data, "content")?)?;
-            let recognized: Vec<_> = ["paint", "stack", "effect", "selection"].into_iter().filter(|key| content.contains_key(*key)).collect();
+            let alternatives: &[&str] = if descriptor.kind == RecordKind::Occurrence { &["paint", "stack", "effect", "selection", "objects"] } else { &["paint", "stack", "effect", "selection"] };
+            let recognized: Vec<_> = alternatives.iter().copied().filter(|key| content.contains_key(*key)).collect();
             if content.is_empty() || recognized.len() > 1 { return Err("Invalid occurrence content".into()); }
-            if extras(content, &["paint", "stack", "effect", "selection"]) { reasons.insert("Unknown occurrence content"); }
+            if extras(content, alternatives) { reasons.insert("Unknown occurrence content"); }
             let content = match recognized.first().copied() {
                 Some("paint") => Some(Content::Paint(reference(&content["paint"])?)),
                 Some("stack") => Some(Content::Group(reference(&content["stack"])?)),
                 Some("effect") => Some(Content::Effect(reference(&content["effect"])?)),
                 Some("selection") => Some(Content::Selection(reference(&content["selection"])?)),
+                Some("objects") => Some(Content::Objects(reference(&content["objects"])?)),
                 _ => None,
             };
+            if descriptor.kind == RecordKind::Occurrence {
+                if let Some(offset) = data.get("offset") { integer_offset(offset)?; }
+                if let Some(mask) = data.get("mask") {
+                    let mask = object(mask)?;
+                    if extras(mask, &["source", "enabled", "linked", "inverted", "offset"]) { reasons.insert("Unknown mask data field"); }
+                    if let Some(offset) = mask.get("offset") { integer_offset(offset)?; }
+                }
+            }
             let mask = data.get("mask").map(|m| reference(required(object(m)?, "source")?)).transpose()?;
             match content { Some(content) => Shape::Occurrence { content, mask }, None => unknown() }
         },
-        "capy.paint-source/1" => Shape::Paint,
-        "capy.coverage-source/1" => Shape::Coverage,
-        "capy.effect/1" => Shape::Effect {
-            definition: reference(required(data, "definition")?)?,
-            inputs: data.get("inputs").map_or(Ok(Vec::new()), |inputs| object(inputs)?.values()
-                .map(|value| endpoint(value, &["color", "coverage"], reasons)).collect())?,
-        },
-        "capy.effect-definition/1" => Shape::Definition { dependencies: data.get("dependencies").map_or(Ok(Vec::new()), |v| array(v)?.iter().map(reference).collect())? },
-        "capy.selection/1" => Shape::Selection,
-        "capy.guides/1" => Shape::Guides,
-        "capy.output/1" => Shape::Output { composition: endpoint(required(data, "source")?, &["color"], reasons)? },
-        _ => unknown(),
+        RecordKind::PaintSource => Shape::Paint { image: data.get("base").map(|base| reference(required(object(base)?, "image")?)).transpose()? },
+        RecordKind::Image => Shape::Image,
+        RecordKind::ObjectLayer => Shape::ObjectLayer { children: array(required(data, "children")?)?.iter().map(reference).collect::<Result<_,_>>()? },
+        RecordKind::ImageObject => Shape::ImageObject { image: reference(required(data, "image")?)? },
+        RecordKind::CoverageSource => Shape::Coverage,
+        RecordKind::Effect => Shape::Effect,
+        RecordKind::Selection => Shape::Selection,
+        RecordKind::Guides => Shape::Guides,
+        RecordKind::Output => Shape::Output { composition: endpoint(required(data, "source")?, &["color"], reasons)? },
+        _ => unreachable!(),
     })
 }
-pub(crate) fn known_resource(name: &str) -> bool { matches!(name,
-    "capy.raster-tile/1" | "capy.selection-coverage/1" | "capy.icc/1" |
-    "capy.wgsl/1" | "capy.photo-metadata/1" | "capy.lut3d/1") }
+fn integer_offset(value: &Value) -> Result<(), String> {
+    let pair = array(value)?;
+    if pair.len() != 2 { return Err("Expected an integer offset pair".into()); }
+    for value in pair { decimal_i64(value)?; }
+    Ok(())
+}
+pub fn decimal_i64(value: &Value) -> Result<i64, String> {
+    let value = string(value)?;
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    if digits.is_empty() || digits.len() > 19 || digits.len() > 1 && digits.starts_with('0')
+        || value == "-0" || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("Noncanonical signed decimal integer".into());
+    }
+    value.parse().map_err(|_| "Signed decimal integer overflow".into())
+}
+pub(crate) fn known_resource(name: &str) -> bool { registry::descriptor(name).is_some_and(|record| record.role == RecordRole::Resource) }
 pub(crate) fn resource_supported(record: &Value) -> Result<bool, String> {
     let fields = object(record)?;
     let data = object(required(fields, "data")?)?;
@@ -132,24 +159,26 @@ pub(crate) fn resource_supported(record: &Value) -> Result<bool, String> {
     else if matches!(encoding, "raw" | "utf8" | "capy.rgb-f32/1" | "capy.lz4-tile/1" | "capy.lz4-coverage/1") && data.contains_key("decoded_bytes") {
         return Err("Decoded length on an unwrapped resource".into());
     }
-    let (encoding_supported, keys): (bool, &[&str]) = match name {
-        "capy.raster-tile/1" => (encoding == "capy.lz4-tile/1", &["channels", "depth", "transfer", "alpha", "profile"]),
-        "capy.selection-coverage/1" => (encoding == "capy.lz4-coverage/1", &["depth", "extent", "bounds", "chunk"]),
-        "capy.icc/1" | "capy.wgsl/1" => (compressed || encoding == if name == "capy.icc/1" { "raw" } else { "utf8" }, &["decoded_bytes"]),
-        "capy.photo-metadata/1" => (compressed || encoding == "raw", &["kind", "decoded_bytes"]),
-        "capy.lut3d/1" => (compressed || encoding == "capy.rgb-f32/1", &["size", "domain", "title", "decoded_bytes"]),
-        _ => return Ok(false),
+    let Some(descriptor) = registry::descriptor(name).filter(|record| record.role == RecordRole::Resource) else { return Ok(false); };
+    let encoding_supported = match descriptor.kind {
+        RecordKind::RasterTile => encoding == "capy.lz4-tile/1",
+        RecordKind::SelectionCoverage => encoding == "capy.lz4-coverage/1",
+        RecordKind::Icc => compressed || encoding == "raw",
+        RecordKind::Wgsl => compressed || encoding == "utf8",
+        RecordKind::PhotoMetadata => compressed || encoding == "raw",
+        RecordKind::Lut3d => compressed || encoding == "capy.rgb-f32/1",
+        _ => unreachable!(),
     };
     let mut values_supported = true;
-    let enums: &[(&str, &[&str])] = match name {
-        "capy.raster-tile/1" => &[("channels", &["coverage", "gray", "gray_alpha", "rgb", "rgba", "cmyk"]),
+    let enums: &[(&str, &[&str])] = match descriptor.kind {
+        RecordKind::RasterTile => &[("channels", &["coverage", "gray", "gray_alpha", "rgb", "rgba", "cmyk"]),
             ("depth", &["u8", "u16", "f16", "f32"]), ("transfer", &["linear", "srgb", "profile"]), ("alpha", &["none", "straight", "premultiplied_linear"])],
-        "capy.selection-coverage/1" => &[("depth", &["u4", "u8"])],
-        "capy.photo-metadata/1" => &[("kind", &["exif", "xmp", "iptc"])],
+        RecordKind::SelectionCoverage => &[("depth", &["u4", "u8"])],
+        RecordKind::PhotoMetadata => &[("kind", &["exif", "xmp", "iptc"])],
         _ => &[],
     };
     for (key, options) in enums { if let Some(value) = data.get(*key) { values_supported &= options.contains(&string(value)?); } }
-    Ok(values_supported && encoding_supported && !extras(fields, &["id", "type", "data", "encoding", "location", "bytes", "crc32"]) && !extras(data, keys))
+    Ok(values_supported && encoding_supported && !extras(fields, &["id", "type", "data", "encoding", "location", "bytes", "crc32"]) && !extras(data, descriptor.data_fields))
 }
 pub(crate) fn resource(record: Value, id: PortableId, directory: &Directory, members: &BTreeMap<&str, (usize, &Member)>) -> Result<ResourceRecord, String> {
     let fields = object(&record)?;
@@ -201,11 +230,14 @@ pub(crate) fn overlaps(resources: &BTreeMap<PortableId, ResourceRecord>) -> Resu
 impl Manifest {
     pub fn parse(bytes: &[u8], directory: &Directory, limits: ManifestLimits) -> DecodeResult<ManifestRead> {
         let value = parse_json(bytes, limits.metadata_bytes)?;
-        Self::from_value(value,Some(directory),limits)
+        Self::from_value(value,Some(directory),limits,RecordContext::Portable)
+    }
+    pub(crate) fn parse_private(bytes: &[u8], directory: &Directory, limits: ManifestLimits) -> DecodeResult<ManifestRead> {
+        Self::from_value(parse_json(bytes, limits.metadata_bytes)?, Some(directory), limits, RecordContext::Private)
     }
     pub(crate) fn transfer(value:&Value,limits:ManifestLimits)->Result<ManifestRead,String> {
         if crate::json_len(value)>limits.metadata_bytes {return Err("Transfer metadata exceeds admission".into());}
-        Self::from_value(value.clone(),None,limits).map_err(String::from)
+        Self::from_value(value.clone(),None,limits,RecordContext::Private).map_err(String::from)
     }
     pub(crate) fn admit(value: &Value, limits: ManifestLimits) -> DecodeResult<()> {
         let fields = object(value)?;
@@ -216,7 +248,7 @@ impl Manifest {
         references(value, limits.traversal_nodes)?;
         Ok(())
     }
-    fn from_value(value:Value,directory:Option<&Directory>,limits:ManifestLimits)->DecodeResult<ManifestRead> {
+    fn from_value(value:Value,directory:Option<&Directory>,limits:ManifestLimits,context:RecordContext)->DecodeResult<ManifestRead> {
         let fields = object(&value)?;
         let format = string(required(fields, "format")?)?;
         let version = required(fields, "version")?.as_u64().filter(|v| *v <= u32::MAX as u64).ok_or("Invalid envelope version")?;
@@ -270,7 +302,7 @@ impl Manifest {
         let mut ancillary_resources = BTreeSet::new();
         for (id, record) in &objects {
             let refs = references(record, limits.traversal_nodes)?;
-            let shape = shape(record, &refs, &mut reasons)?;
+            let shape = shape(record, &refs, context, &mut reasons)?;
             let ancillary = matches!(shape, Shape::Unknown { ancillary: true, .. });
             let targets = if ancillary { &mut ancillary_resources } else { &mut required_resources };
             targets.extend(refs.iter().filter(|id| resources.contains_key(id)).copied());

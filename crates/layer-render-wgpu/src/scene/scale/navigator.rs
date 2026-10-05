@@ -39,6 +39,7 @@ impl Navigator {
             .flat_map(|c| c.pixels.root().into_iter().chain(c.pixels.next()))
             .filter(|i| i.plan.level <= base.level || i.plan.size.iter().all(|n| *n <= display_mips::MAX_SIDE))
             .min_by_key(|i| i.plan.level.abs_diff(base.level)).cloned();
+        if source.is_none() && packet.scene.order().iter().any(|&owner| packet.scene.object_layer(owner).is_some()) { return Ok(()); }
         let plan = display_mips::Plan::at(base.extent, base.level.max(source.as_ref().map_or(display.plan.level, |i| i.plan.level)));
         if self.cache.as_ref().is_none_or(|c| c.plan != plan) {
             self.cache = Some(Cache::new(r, Request { plan, evaluation: Evaluation::Display }, packet.scene.order().len()));
@@ -97,8 +98,8 @@ mod tests {
     fn document() -> Document {
         let mut doc = Document::new(layer_core::authored::PortableId::random(), 1025, 513, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let SourceTarget::Paint(paint) = doc.working.target.unwrap() else { unreachable!() };
-        doc.artwork.paint.get_mut(paint).unwrap().original = Some(layer_core::color::source::rgba8_source([1025, 513], |x, y|
-            [(x / 5) as u8, (y / 3) as u8, 40, 255]));
+        doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source([1025, 513], |x, y|
+            [(x / 5) as u8, (y / 3) as u8, 40, 255])).into()));
         doc
     }
     fn pixels(r: &WgpuRasterizer) -> Vec<[f32; 4]> {
@@ -243,7 +244,7 @@ mod tests {
         assert_eq!(pixels(&r), original);
         let mut replacement_doc = doc.clone();
         let SourceTarget::Paint(paint) = replacement_doc.working.target.unwrap() else { unreachable!() };
-        replacement_doc.artwork.paint.get_mut(paint).unwrap().original = Some(layer_core::color::source::rgba8_source([1025, 513], |_, _| [0, 0, 255, 255]));
+        replacement_doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source([1025, 513], |_, _| [0, 0, 255, 255])).into()));
         let replacement = FramePacket { reset_layers: true, scene: replacement_doc.scene(), ..frame };
         r.submit(replacement).unwrap();
         let changed = pixels(&r);

@@ -62,7 +62,7 @@ impl Builder {
         id
     }
     fn paint(&mut self, name: &str, parent: Option<OccurrenceHandle>, blend: LayerBlend, seed: u32, alpha: impl Fn(u32, u32) -> u16) -> OccurrenceHandle {
-        let paint = RecordChange::insert(&self.0.artwork.paint, PaintSource { color_mode: Default::default(), domain: EXTENT, original: Some(source(seed, alpha)), raster: Default::default(), operations: Arc::default() });
+        let paint = RecordChange::insert(&self.0.artwork.paint, PaintSource { color_mode: Default::default(), domain: EXTENT, base: Some(layer_core::authored::PaintBase::new((source(seed, alpha)).into())), raster: Default::default(), operations: Arc::default() });
         let id = self.push(OccurrenceContent::Paint(paint.handle), name, parent, vec![Edit::Paint(paint)]);
         self.layer(id).blend = blend;
         id
@@ -75,9 +75,8 @@ impl Builder {
     }
     fn effect(&mut self, name: &str, parent: Option<OccurrenceHandle>, filter: &str) -> OccurrenceHandle {
         let draft = EffectInstance::new(fixture(filter).program());
-        let definition = RecordChange::insert(&self.0.artwork.definitions, Definition { program: draft.program });
-        let effect = RecordChange::insert(&self.0.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values});
-        self.push(OccurrenceContent::Effect(effect.handle), name, parent, vec![Edit::Definition(definition), Edit::Effect(effect)])
+        let effect = RecordChange::insert(&self.0.artwork.effects, EffectApplication::new(draft.program,draft.values,self.0.composition().size));
+        self.push(OccurrenceContent::Effect(effect.handle), name, parent, vec![Edit::Effect(effect)])
     }
     fn layer(&mut self, id: OccurrenceHandle) -> &mut Occurrence {
         self.0.artwork.occurrences.get_mut(id).unwrap()

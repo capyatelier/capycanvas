@@ -9,11 +9,13 @@ pub struct SceneIndex {
     parents:Vec<Option<OccurrenceHandle>>,
     containing:Vec<Option<StackHandle>>,
     paint_uses:Vec<Option<OccurrenceHandle>>,
+    object_uses:Vec<Option<OccurrenceHandle>>,
     coverage_uses:Vec<Option<OccurrenceHandle>>,
     selection_uses:Vec<Option<OccurrenceHandle>>,
     effect_owners:Vec<Option<OccurrenceHandle>>,
     attached_effects:Vec<Vec<OccurrenceHandle>>,
     clipping_bases:Vec<Option<OccurrenceHandle>>,
+    authored_ids:BTreeSet<PortableId>,
 }
 impl SceneIndex {
     pub fn build(artwork:&Artwork)->Result<Self,String> {
@@ -22,7 +24,8 @@ impl SceneIndex {
         if !matches!(shape.validate(root,Default::default())?,Support::Editable){return Err("Artwork is outside the editable subset".into());}
         let n=artwork.occurrences.capacity();
         let mut index=Self {order:Vec::with_capacity(artwork.occurrences.len()),positions:vec![None;n],parents:vec![None;n],containing:vec![None;n],
-            paint_uses:vec![None;artwork.paint.capacity()],coverage_uses:vec![None;artwork.coverage.capacity()],selection_uses:vec![None;artwork.selections.capacity()],effect_owners:vec![None;n],attached_effects:vec![Vec::new();n],clipping_bases:vec![None;n]};
+            paint_uses:vec![None;artwork.paint.capacity()],object_uses:vec![None;artwork.objects.capacity()],coverage_uses:vec![None;artwork.coverage.capacity()],selection_uses:vec![None;artwork.selections.capacity()],effect_owners:vec![None;n],attached_effects:vec![Vec::new();n],clipping_bases:vec![None;n],
+            authored_ids:shape.objects.keys().chain(artwork.extensions.records.keys()).copied().chain(std::iter::once(artwork.id)).collect()};
         fn visit(a:&Artwork,index:&mut SceneIndex,stack:StackHandle,parent:Option<OccurrenceHandle>)->Result<(),String>{
             for &h in &a.stacks.get(stack).ok_or("Missing stack")?.entries {
                 let at=h.index() as usize;
@@ -38,8 +41,8 @@ impl SceneIndex {
             for &h in stack.entries.iter().rev() {
                 let o=artwork.occurrences.get(h).ok_or("Missing occurrence")?;
                 if !o.is_artwork(){if o.attachment!=Attachment::None{return Err("Selection Layers cannot attach".into());}owner=None;continue;}
-                let adjustment=match o.content {OccurrenceContent::Effect(e)=>artwork.effects.get(e).and_then(|e|artwork.definitions.get(e.definition)).is_some_and(|d|d.program.kind==crate::EffectKind::Adjustment),_=>false};
-                let eligible=matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Stack(_))&&!o.passes_through();
+                let adjustment=match o.content {OccurrenceContent::Effect(e)=>artwork.effects.get(e).is_some_and(|d|d.program.kind==crate::EffectKind::Adjustment),_=>false};
+                let eligible=matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Stack(_))&&!o.passes_through();
                 match o.attachment {
                     Attachment::Effect=>{
                         if !adjustment{return Err("Only adjustments can attach effects".into());}
@@ -66,12 +69,14 @@ impl SceneIndex {
             let o=artwork.occurrences.get(h).ok_or("Missing placed occurrence")?;
             match o.content {
                 OccurrenceContent::Paint(p)=>index.paint_uses[p.index() as usize]=Some(h),
+                OccurrenceContent::Objects(p)=>{for &child in &artwork.object_layers.get(p).ok_or("Missing object layer")?.children {index.object_uses[child.index() as usize]=Some(h);}},
                 OccurrenceContent::Selection(p)=>index.selection_uses[p.index() as usize]=Some(h),_=>(),
             }
             if let Some(mask)=&o.mask {index.coverage_uses[mask.source.index() as usize]=Some(h);}
         }
         Ok(index)
     }
+    pub(crate) fn has_authored_id(&self,id:PortableId)->bool {self.authored_ids.contains(&id)}
 }
 
 #[derive(Clone,Debug,Default,PartialEq)]
@@ -79,6 +84,7 @@ pub enum SceneScope {
     #[default] All,
     Members(Arc<[OccurrenceHandle]>),
     Raw(SourceTarget),
+    RawObjects(OccurrenceHandle),
     EffectInput(OccurrenceHandle),
 }
 #[derive(Clone,Debug,PartialEq)]
@@ -89,20 +95,20 @@ pub struct SceneSnapshot {
     pub revision:u64,
     pub context:EvaluationContext,
     pub scope:SceneScope,
-    pub offset:Point,
+    pub offset:[f64;2],
 }
 impl SceneSnapshot {
     pub fn new(artwork:Artwork,index:Arc<SceneIndex>,owner:u64,revision:u64,context:EvaluationContext)->Self {
-        Self {artwork,index,owner,revision,context,scope:SceneScope::All,offset:Point::default()}
+        Self {artwork,index,owner,revision,context,scope:SceneScope::All,offset:[0.;2]}
     }
-    pub fn view(&self)->SceneView<'_>{SceneView::new(&self.artwork,&self.index).with_owner(self.owner,self.revision).with_scope(&self.scope).with_offset(self.offset).with_context(&self.context)}
+    pub fn view(&self)->SceneView<'_>{SceneView::new(&self.artwork,&self.index).with_owner(self.owner,self.revision).with_scope(&self.scope).with_offset64(self.offset).with_context(&self.context)}
     pub fn with_scope(mut self,scope:SceneScope)->Self{self.scope=scope;self}
     pub fn scoped_transfer_artwork(&self,required:&[SourceTarget])->Artwork {
         let mut artwork=self.artwork.clone();
         let paint:Vec<_>=artwork.paint.iter().map(|(h,_,_)|h).filter(|h|!required.contains(&SourceTarget::Paint(*h))).collect();
         for handle in paint {
             let source=artwork.paint.get_mut(handle).unwrap();
-            source.raster=Default::default();source.original=None;source.operations=Arc::default();
+            source.raster=Default::default();source.base=None;source.operations=Arc::default();
         }
         let coverage:Vec<_>=artwork.coverage.iter().map(|(h,_,_)|h).filter(|h|!required.contains(&SourceTarget::Coverage(*h))).collect();
         for handle in coverage {
@@ -119,18 +125,19 @@ pub struct SceneView<'a> {
     scope:Option<&'a SceneScope>,
     owner:u64,
     revision:u64,
-    offset:Point,
+    offset:[f64;2],
     context:Option<&'a EvaluationContext>,
 }
 impl<'a> SceneView<'a> {
     #[inline]
-    pub fn new(artwork:&'a Artwork,index:&'a Arc<SceneIndex>)->Self{Self {artwork,index,scope:None,owner:0,revision:0,offset:Point::default(),context:None}}
+    pub fn new(artwork:&'a Artwork,index:&'a Arc<SceneIndex>)->Self{Self {artwork,index,scope:None,owner:0,revision:0,offset:[0.;2],context:None}}
     #[inline]
     pub fn with_context(mut self,context:&'a EvaluationContext)->Self{self.context=Some(context);self}
     #[inline]
     pub fn evaluation_context(self)->Option<&'a EvaluationContext>{self.context}
     #[inline]
-    pub fn with_offset(mut self,offset:Point)->Self{self.offset.x+=offset.x;self.offset.y+=offset.y;self}
+    pub fn with_offset(self,offset:Point)->Self{self.with_offset64([f64::from(offset.x),f64::from(offset.y)])}
+    pub fn with_offset64(mut self,offset:[f64;2])->Self{self.offset[0]+=offset[0];self.offset[1]+=offset[1];self}
     #[inline]
     pub fn with_owner(mut self,owner:u64,revision:u64)->Self{self.owner=owner;self.revision=revision;self}
     #[inline]
@@ -143,8 +150,22 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn scope(self)->Option<&'a SceneScope>{self.scope}
     #[inline]
-    pub fn original(self,t:SourceTarget)->Option<&'a Arc<crate::color::source::SourceImage>>{match t{SourceTarget::Paint(h)=>self.paint(h)?.original.as_ref(),_=>None}}
+    pub fn original(self,t:SourceTarget)->Option<&'a Arc<crate::color::source::SourceImage>>{match t{SourceTarget::Paint(h)=>Some(self.paint(h)?.base.as_ref()?.image.storage()),_=>None}}
     #[inline]
+    pub fn paint_base(self,t:SourceTarget)->Option<&'a PaintBase>{match t{SourceTarget::Paint(h)=>self.paint(h)?.base.as_ref(),_=>None}}
+    pub fn object_layer(self,h:OccurrenceHandle)->Option<&'a ObjectLayer>{match self.occurrence(h)?.content{OccurrenceContent::Objects(h)=>self.artwork.object_layers.get(h),_=>None}}
+    pub fn object_geometry_supported(self,h:OccurrenceHandle)->bool {
+        if self.object_layer(h).is_none() {return false;}
+        let mut current=Some(h);
+        while let Some(h)=current {
+            let Some(o)=self.occurrence(h) else{return false;};
+            if !o.translation.x.is_finite() || !o.translation.y.is_finite() || o.translation.x.fract()!=0. || o.translation.y.fract()!=0. || o.placement.as_affine()!=Some(Affine::IDENTITY) {return false;}
+            current=self.parent(h);
+        }
+        true
+    }
+    pub fn object_owner(self,h:ImageObjectHandle)->Option<OccurrenceHandle>{self.index.object_uses.get(h.index() as usize).copied().flatten()}
+    pub fn object(self,h:ImageObjectHandle)->Option<&'a ImageObject>{self.artwork.objects.get(h)}
     pub fn artwork(self)->&'a Artwork{self.artwork}
     #[inline]
     pub fn composition(self)->&'a Composition{self.artwork.compositions.get(self.artwork.root).expect("Admitted composition")}
@@ -178,7 +199,7 @@ impl<'a> SceneView<'a> {
     }
     #[inline]
     pub fn members(self,parent:Option<OccurrenceHandle>)->SceneChildren<'a>{
-        if matches!(self.scope,Some(SceneScope::Members(_))|Some(SceneScope::Raw(_))){SceneChildren::Scoped{order:self.order().iter(),scene:self,parent}}
+        if matches!(self.scope,Some(SceneScope::Members(_))|Some(SceneScope::Raw(_))|Some(SceneScope::RawObjects(_))){SceneChildren::Scoped{order:self.order().iter(),scene:self,parent}}
         else{SceneChildren::Stack(self.children(parent).iter())}
     }
     #[inline]
@@ -190,7 +211,7 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn attachment_target(self,h:OccurrenceHandle)->Option<OccurrenceHandle>{self.effect_owner(h).or_else(||self.clipping_base(h))}
     #[inline]
-    pub fn eligible_target(self,h:OccurrenceHandle)->bool{self.occurrence(h).is_some_and(|o|matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Stack(_))&&!o.passes_through())}
+    pub fn eligible_target(self,h:OccurrenceHandle)->bool{self.occurrence(h).is_some_and(|o|matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Stack(_))&&!o.passes_through())}
     #[inline]
     pub fn effective_clipped(self,h:OccurrenceHandle)->bool{self.occurrence(h).is_some_and(|o|o.attachment.is_clip())&&self.clipping_base(h).is_some_and(|base|self.includes(base))}
     #[inline]
@@ -200,13 +221,16 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn paint_source(self,h:OccurrenceHandle)->Option<&'a PaintSource>{match self.occurrence(h)?.content{OccurrenceContent::Paint(p)=>self.paint(p),_=>None}}
     #[inline]
+    pub fn evaluation_offset(self)->Point {Point {x:self.offset[0] as f32,y:self.offset[1] as f32}}
+    pub fn evaluation_offset64(self)->[f64;2] {self.offset}
+    #[inline]
     pub fn effect_handle(self,h:OccurrenceHandle)->Option<EffectHandle>{match self.occurrence(h)?.content{OccurrenceContent::Effect(e)=>Some(e),_=>None}}
     #[inline]
     pub fn effect_application(self,h:OccurrenceHandle)->Option<&'a EffectApplication>{self.artwork.effects.get(self.effect_handle(h)?)}
     #[inline]
     pub fn effect_by_handle(self,h:EffectHandle)->Option<EffectView<'a>>{
-        let application=self.artwork.effects.get(h)?;let definition=self.artwork.definitions.get(application.definition)?;
-        Some(EffectView::new(&definition.program,&application.values))
+        let application=self.artwork.effects.get(h)?;
+        Some(EffectView::new(&application.program,&application.values).with_spatial(application.spatial.as_ref()))
     }
     #[inline]
     pub fn effect(self,h:OccurrenceHandle)->Option<EffectView<'a>>{self.effect_by_handle(self.effect_handle(h)?)}
@@ -234,7 +258,7 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn local_extent(self,h:OccurrenceHandle)->[u32;2]{self.source_target(h).map(|t|self.target_extent(t)).unwrap_or(self.composition().size)}
     #[inline]
-    pub fn includes(self,h:OccurrenceHandle)->bool{match self.scope{None|Some(SceneScope::All)|Some(SceneScope::EffectInput(_))=>true,Some(SceneScope::Members(m))=>m.contains(&h),Some(SceneScope::Raw(t))=>self.source_owner(*t)==Some(h)}}
+    pub fn includes(self,h:OccurrenceHandle)->bool{match self.scope{None|Some(SceneScope::All)|Some(SceneScope::EffectInput(_))=>true,Some(SceneScope::Members(m))=>m.contains(&h),Some(SceneScope::Raw(t))=>self.source_owner(*t)==Some(h),Some(SceneScope::RawObjects(owner))=>*owner==h}}
     #[inline]
     pub fn visible(self,h:OccurrenceHandle)->bool{
         if !self.includes(h){return false;}
@@ -244,15 +268,18 @@ impl<'a> SceneView<'a> {
             if !required{return false;}
         }
         if let Some(owner)=self.effect_owner(h) && !self.visible(owner){return false;}
-        if matches!(self.scope,Some(SceneScope::Raw(_))){return true;}let mut current=Some(h);
+        if matches!(self.scope,Some(SceneScope::Raw(_))|Some(SceneScope::RawObjects(_))){return true;}let mut current=Some(h);
         while let Some(h)=current {if self.occurrence(h).is_none_or(|o|!o.visible){return false;}current=self.evaluation_parent(h);}true
     }
     #[inline]
     pub fn effect_input(self)->Option<OccurrenceHandle>{match self.scope{Some(SceneScope::EffectInput(h))=>Some(*h),_=>None}}
     #[inline]
     pub fn occurrence_offset(self,h:OccurrenceHandle)->Point {
+        let offset=self.occurrence_offset64(h);Point {x:offset[0] as f32,y:offset[1] as f32}
+    }
+    pub fn occurrence_offset64(self,h:OccurrenceHandle)->[f64;2] {
         let mut offset=self.offset;let mut current=Some(h);
-        while let Some(h)=current {let Some(o)=self.occurrence(h) else{break;};offset.x+=o.translation.x;offset.y+=o.translation.y;current=self.parent(h);}offset
+        while let Some(h)=current {let Some(o)=self.occurrence(h) else{break;};offset[0]+=f64::from(o.translation.x);offset[1]+=f64::from(o.translation.y);current=self.parent(h);}offset
     }
     pub fn target_geometry(self,t:SourceTarget)->ImageTransform {
         let Some(h)=self.source_owner(t) else{return ImageTransform::default();};let owner=self.occurrence(h).unwrap();let world=self.occurrence_offset(h);
@@ -270,7 +297,7 @@ impl<'a> SceneView<'a> {
 }
 impl Occurrence {
     #[inline]
-    pub fn kind(&self)->LayerKind {match self.content{OccurrenceContent::Paint(_)=>LayerKind::Paint,OccurrenceContent::Stack(_)=>LayerKind::Group,OccurrenceContent::Effect(_)=>LayerKind::Effect,OccurrenceContent::Selection(_)=>LayerKind::Selection}}
+    pub fn kind(&self)->LayerKind {match self.content{OccurrenceContent::Paint(_)=>LayerKind::Paint,OccurrenceContent::Objects(_)=>LayerKind::Object,OccurrenceContent::Stack(_)=>LayerKind::Group,OccurrenceContent::Effect(_)=>LayerKind::Effect,OccurrenceContent::Selection(_)=>LayerKind::Selection}}
     #[inline]
     pub fn is_artwork(&self)->bool{!matches!(self.content,OccurrenceContent::Selection(_))}
     #[inline]
@@ -358,7 +385,7 @@ mod tests {
     #[test]
     fn unplaced_occurrences_retain_sources_without_entering_the_evaluation_index() {
         let mut artwork=Artwork::new([16,16]).unwrap();
-        let paint=artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[16,16],raster:Default::default(),original:None,operations:Arc::default()}).unwrap();
+        let paint=artwork.paint.insert(PortableId::random(),PaintSource { color_mode:Default::default(),domain:[16,16],raster:Default::default(),base:None,operations:Arc::default()}).unwrap();
         let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(paint),"Retained content")).unwrap();
         let index=Arc::new(SceneIndex::build(&artwork).unwrap());let scene=SceneView::new(&artwork,&index);
         assert!(scene.targets().any(|t|t==SourceTarget::Paint(paint)));

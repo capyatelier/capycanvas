@@ -49,6 +49,7 @@ struct DocumentKey {
     mask: bool,
     locked: bool,
     source: bool,
+    objects: bool,
     operations: bool,
     transform: bool,
     mesh: bool,
@@ -60,11 +61,13 @@ impl DocumentKey {
     fn new(document: &Document) -> Self {
         let scene = document.scene();
         let operations = || scene.targets().filter_map(|t| scene.operations(t)).flatten();
+        let objects=scene.order().iter().any(|&h|scene.object_layer(h).is_some_and(|layer|!layer.children.is_empty()));
         Self {
             extent: document.composition().size, color: document.composition().color,
             selection: document.working.selection.is_some(), mask: document.working.target.is_some_and(SourceTarget::is_coverage),
             locked: document.working.occurrence.and_then(|h| scene.occurrence(h)).is_some_and(|o| o.alpha_locked),
-            source: scene.targets().any(|t| scene.original(t).is_some()),
+            source: objects || scene.targets().any(|t| scene.original(t).is_some()),
+            objects,
             operations: scene.order().iter().any(|&h| scene.mask(h).is_some()) || operations().next().is_some(),
             transform: operations().any(|op| matches!(op.kind, layer_core::RasterOperationKind::Transform(_))),
             mesh: scene.order().iter().any(|&h| scene.occurrence(h).is_some_and(|o| o.placement.mesh.is_some()))
@@ -74,7 +77,7 @@ impl DocumentKey {
             chains: scene::startup_effect_chains(scene).into_iter().map(|(handles, execution)| {
                 (handles.into_iter().filter_map(|h| {
                     let application = scene.effect_application(h)?;
-                    Some(scene.artwork().definitions.get(application.definition)?.program.clone())
+                    Some(application.program.clone())
                 }).collect(), execution)
             }).collect(),
         }
@@ -341,6 +344,10 @@ impl WgpuRasterizer {
             if shader.key.source {
                 required.render.push(self.scene_pipelines.source.pipeline.clone());
             }
+            if shader.key.objects {
+                required.compute.extend(self.scene_pipelines.objects.pipelines().map(Clone::clone));
+                required.compute.extend(self.moving_images.pipelines(&self.device).map(Clone::clone));
+            }
             if shader.key.operations {
                 required.render.push(self.layer_masks.initialize.clone());
                 required.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
@@ -530,8 +537,47 @@ impl WgpuRasterizer {
 }
 
 #[cfg(test)]
+fn object_document(icc:bool)->Document {
+    use layer_core::authored::*;
+    let mut source=(*layer_core::color::source::rgba8_source([8;2],|_,_|[255,0,0,255])).clone();
+    if icc {source.interpretation.profile=layer_core::color::ColorProfile::Icc(
+        layer_color::profile_bytes(&layer_core::color::ColorProfile::default()).unwrap().into());}
+    let mut artwork=Artwork::new([16;2]).unwrap();
+    let object=artwork.objects.insert(PortableId::random(),ImageObject::new(layer_core::authored::Image::new(Arc::new(source)),"Image")).unwrap();
+    let objects=artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![object]}).unwrap();
+    let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(objects),"Images")).unwrap();
+    let stack=artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+    Document::from_artwork(artwork).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shader_document_tracks_object_dependencies_without_tracking_geometry_or_profiles() {
+        let mut document=object_document(false);
+        let key=ShaderDocument::new(&document);
+        assert!(key.key.source && key.key.objects);
+        assert!(document.scene().targets().next().is_none());
+        let handle=document.artwork.objects.iter().next().unwrap().0;
+        let object=document.artwork.objects.get_mut(handle).unwrap();
+        object.affine.0[4]=8.;object.visible=false;
+        document.revision+=1;
+        assert!(key.matches(&document));
+        document.artwork.objects.get_mut(handle).unwrap().image=object_document(true).artwork.objects.iter().next().unwrap().2.image.clone();
+        document.revision+=1;
+        assert!(key.matches(&document));
+        let layer=document.artwork.object_layers.iter().next().unwrap().0;
+        document.artwork.object_layers.get_mut(layer).unwrap().children.clear();
+        document.revision+=1;
+        assert!(!key.matches(&document));
+        let key=ShaderDocument::new(&document);
+        assert!(!key.key.source && !key.key.objects);
+        document.artwork.object_layers.get_mut(layer).unwrap().children.push(handle);
+        document.revision+=1;
+        assert!(!key.matches(&document));
+    }
     #[test]
     fn brush_shader_key_ignores_color_and_size_but_tracks_pipeline_changes() {
         let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
@@ -567,8 +613,8 @@ mod tests {
         use layer_core::authored::*;
         let program = layer_core::bundled_effect_catalog().get("curves").unwrap().program();
         let values = layer_core::EffectInstance::new(program.clone()).values;
-        let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program }).unwrap();
-        let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values}).unwrap();
+        let size=doc.composition().size;
+        let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication::new(program,values,size)).unwrap();
         let occurrence = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "curves")).unwrap();
         let stack=doc.composition().result;
         doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, occurrence);
@@ -619,6 +665,36 @@ mod tests {
 #[cfg(test)]
 mod gpu_tests {
     use super::*;
+    #[test]
+    fn object_only_startup_prepares_sampling_and_source_recipes_before_canvas_readiness() {
+        let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        for icc in [false,true] {
+            let document=object_document(icc);
+            let mut renderer=crate::test_support::staged_renderer(&reference,document.composition().color);
+            assert!(!renderer.scene_pipelines.source.pipeline.ready());
+            assert!(renderer.scene_pipelines.objects.pipelines().into_iter().all(|p|!p.ready()));
+            assert!(renderer.moving_images.pipelines(&renderer.device).into_iter().all(|p|!p.ready()));
+            renderer.prepare_startup(&document,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
+            let deadline=std::time::Instant::now()+Duration::from_secs(30);
+            crate::test_support::wait_startup(&mut renderer,deadline,|progress|progress.canvas_ready,
+                format_args!("object-only startup timed out, ICC={icc}"));
+            assert!(renderer.scene_pipelines.source.pipeline.ready());
+            assert!(renderer.scene_pipelines.objects.pipelines().into_iter().all(Deferred::ready));
+            assert!(renderer.moving_images.pipelines(&renderer.device).into_iter().all(Deferred::ready));
+            let mut encoder=crate::submission::CommandEncoder::new(&renderer.device,&Default::default());
+            let source=document.artwork.objects.iter().next().unwrap().2.image.clone();
+            let request=crate::object_image_mips::MovingRequest {id:source.id(),source:source.storage().clone(),level:1};
+            let mut images=std::mem::take(&mut renderer.moving_images);
+            let plan=images.plan(&renderer,std::slice::from_ref(&request),u64::MAX,&mut encoder);
+            assert!(plan.is_ok());
+            assert!(images.pipelines(&renderer.device).into_iter().all(Deferred::ready),
+                "first source context keeps the startup-prepared reduction recipes");
+            renderer.moving_images=images;
+            encoder.submit(&renderer.queue);
+        }
+        drop(reference);
+        finish_shader_compiler_shutdown();
+    }
     #[test]
     fn native_publication_pipelines_follow_canvas_and_gate_brush() {
         let color = layer_core::color::DocumentColor::default();

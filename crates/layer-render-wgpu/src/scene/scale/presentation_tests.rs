@@ -40,7 +40,7 @@ fn document(extent: [u32; 2]) -> layer_core::Document {
         }
         builder.push_row(&row).unwrap();
     }
-    paint_mut(&mut doc,0).original = Some(Arc::new(builder.finish().unwrap()));
+    paint_mut(&mut doc,0).base = Some(layer_core::authored::PaintBase::new((Arc::new(builder.finish().unwrap())).into()));
     doc
 }
 
@@ -117,8 +117,8 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
         close(&before, &present(&r, &mut presenter, v));
     }
     let mut abandoned = doc.clone();
-    paint_mut(&mut abandoned,0).original = Some(layer_core::color::source::rgba8_source(doc.composition().size, |x, y|
-        [if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }, 128, 70, 255]));
+    paint_mut(&mut abandoned,0).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(doc.composition().size, |x, y|
+        [if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }, 128, 70, 255])).into()));
     let overlay=copy_paint(&mut abandoned,0);
     let occurrence=abandoned.artwork.occurrences.get_mut(overlay).unwrap();occurrence.opacity=0.7;occurrence.blend=layer_core::LayerBlend::Multiply;
     insert_occurrence(&mut abandoned,overlay,0);
@@ -153,7 +153,7 @@ fn filter_images_share_the_display_composition_budget() {
         let images = native.image_pixel_budget(0);
         let floor = CACHE_BYTES + scene::windows::DEFAULT_IMAGE_PIXEL_BYTES;
         assert_eq!(display + images, native.composition_bytes.max(floor));
-        let plan = scene::windows::Plan::new(scene, extent, images).unwrap();
+        let plan = scene::windows::Plan::new(scene, extent, images, r.device.limits().max_texture_dimension_2d).unwrap();
         assert_eq!(plan.is_none(), allowance == 1536 << 20);
         if plan.is_none() { assert!(image_bytes + display <= native.composition_bytes); }
     }
@@ -232,7 +232,7 @@ fn visible_detail_matches_dense_composition_through_pan_wrap_rotation_and_resize
 fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_display() {
     use layer_core::{Point, Selection};
     let mut doc = document([777, 533]);
-    let source = paint_at(&doc,0).original.clone().unwrap();
+    let source = paint_at(&doc,0).base.as_ref().unwrap().image.storage().clone();
     let owner=doc.scene().order()[0];
     let initial=Selection::polygon(vec![Point{x:0.,y:0.},Point{x:760.,y:99.},Point{x:440.,y:533.}]).unwrap();
     let mask=coverage_mask(&mut doc,owner,Point{x:7.,y:-9.},Some(initial));doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.;
@@ -273,7 +273,7 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
                 "step {step} must change visible artwork"
             );
         }
-        assert!(Arc::ptr_eq(paint_at(&doc,2).original.as_ref().unwrap(), &source));
+        assert!(Arc::ptr_eq(paint_at(&doc,2).base.as_ref().unwrap().image.storage(), &source));
     }
     // Recreating the GPU cache reconstructs the same pixels from retained source.
     let mut recovered = bounded_renderer(doc.composition().color).unwrap();

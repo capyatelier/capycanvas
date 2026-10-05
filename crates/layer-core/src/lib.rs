@@ -251,6 +251,7 @@ impl Rect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LayerKind {
     Paint,
+    Object,
     Group,
     Effect,
     /// Named reusable coverage; never participates in artwork composition.
@@ -1260,8 +1261,9 @@ impl Stroke {
 }
 
 pub use authored::{
+    Affine64, Affine64Error, Image, ImageInterpolation, ImageObject, ImageObjectHandle, ObjectLayer, ObjectLayerHandle, PaintBase, PaintBasePolicy,
     Attachment, Artwork, ArtworkCapture, CaptureCheckpoint, Composition, CompositionHandle, CoverageHandle,
-    CoverageSource, Definition, DefinitionHandle, EffectApplication, EffectHandle,
+    CoverageSource, EffectApplication, EffectHandle,
     EvaluationContext, Guides, Handle, MaskUse, Occurrence, OccurrenceContent, OccurrenceDropPlan, OccurrenceDropPosition, OccurrenceHandle,
     Output, OutputHandle, PaintHandle, PaintSource, PortableId, RecordChange, SavedSelection,
     SceneIndex, SceneScope, SceneSnapshot, SceneView, SelectionHandle, SourceTarget, Stack,
@@ -1295,7 +1297,7 @@ impl Document {
                 PaintSource { color_mode: Default::default(),
                     domain: [width, height],
                     raster: Default::default(),
-                    original: None,
+                    base: None,
                     operations: Default::default(),
                 },
             )
@@ -1309,12 +1311,7 @@ impl Document {
             .expect("new occurrence store");
         let mut fill = EffectInstance::new(bundled_effect_catalog().get("solid_color").unwrap().program());
         fill.set("color", EffectValue::Color(color::RgbColor::WHITE)).expect("valid fill color");
-        let definition = artwork.definitions.insert(PortableId::random(), Definition {
-            program: fill.program,
-        }).expect("new definition store");
-        let effect = artwork.effects.insert(PortableId::random(), EffectApplication {
-            definition, values: fill.values,
-        }).expect("new effect store");
+        let effect = artwork.effects.insert(PortableId::random(), EffectApplication::new(fill.program, fill.values, [width, height])).expect("new effect store");
         let paper = artwork
             .occurrences
             .insert(
@@ -1354,6 +1351,7 @@ impl Document {
             next_stroke_id: 1,
         };
         document.validate_payloads()?;
+        let mut roots=RootInventory::default();roots.document(&document);roots.validate_resources().map_err(DocumentError::InvalidArtwork)?;
         Ok(document)
     }
     pub fn composition(&self) -> &Composition {
@@ -1436,6 +1434,11 @@ impl Document {
                     self.composition().color, self.scene().color_mode(*target),
                 )
                 .map_err(DocumentError::InvalidArtwork)?;
+                if data.tiles.values().any(|tile|tile.try_backing().is_some_and(|tile|tile.is_ok_and(|tile|self.scene_index.has_authored_id(tile.resource_id())))) {
+                    return Err(DocumentError::InvalidArtwork("Object and resource identities overlap".into()));
+                }
+                let mut roots=RootInventory::default();roots.document(self);roots.rasters.push(revision);
+                roots.validate_resources().map_err(DocumentError::InvalidArtwork)?;
             }
             let raster = self
                 .target_raster_mut(*target)
@@ -1447,16 +1450,22 @@ impl Document {
             self.revision = next_revision;
             return Ok(inverse);
         }
+        let resources=edit.requires_history_admission(self);
         let mut candidate = self.clone();
         let relationships = edit.changes_relationships(self);
         let before_working = self.working.clone();
         let mut inverse = candidate.apply_records(edit)?;
+        let previous_images=self.artwork.images().map_err(DocumentError::InvalidArtwork)?;
+        for (id,image) in candidate.artwork.images().map_err(DocumentError::InvalidArtwork)? {
+            if previous_images.get(&id).is_some_and(|previous|!previous.identity_matches(image)) {return Err(DocumentError::InvalidArtwork("Immutable image identity changed its descriptor".into()));}
+        }
         if relationships {
             candidate.scene_index = Arc::new(
                 SceneIndex::build(&candidate.artwork).map_err(DocumentError::InvalidArtwork)?,
             );
         }
         candidate.validate_payloads()?;
+        if resources {let mut roots=RootInventory::default();roots.document(&candidate);roots.validate_resources().map_err(DocumentError::InvalidArtwork)?;}
         if inverse.contains_working()
             && let Some(h) = candidate.working.occurrence
             && candidate.scene().occurrence(h).is_none()
@@ -1497,9 +1506,10 @@ impl Document {
             Edit::Stack(c) => change!(stacks, Stack, c),
             Edit::Occurrence(c) => change!(occurrences, Occurrence, c),
             Edit::Paint(c) => change!(paint, Paint, c),
+            Edit::ObjectLayer(c) => change!(object_layers, ObjectLayer, c),
+            Edit::ImageObject(c) => change!(objects, ImageObject, c),
             Edit::Coverage(c) => change!(coverage, Coverage, c),
             Edit::Effect(c) => change!(effects, Effect, c),
-            Edit::Definition(c) => change!(definitions, Definition, c),
             Edit::SavedSelection(c) => change!(selections, SavedSelection, c),
             Edit::Guides(c) => change!(guides, Guides, c),
             Edit::Output(c) => change!(outputs, Output, c),
@@ -1604,22 +1614,13 @@ impl Document {
             .metadata
             .validate()
             .map_err(DocumentError::InvalidArtwork)?;
+        self.artwork.images().map_err(DocumentError::InvalidArtwork)?;
+        let mut roots=RootInventory::default();roots.artwork(&self.artwork);
+        if roots.resource_ids().into_iter().any(|id|self.scene_index.has_authored_id(id)) {return Err(DocumentError::InvalidArtwork("Object and resource identities overlap".into()));}
         let color = self.composition().color;
         for (_, _, s) in self.artwork.paint.iter() {
             extent(s.domain)?;
-            if let Some(original) = &s.original {
-                original.validate().map_err(DocumentError::InvalidArtwork)?;
-                if !original.is_original()
-                    && (original.interpretation.profile_assumed
-                        || original.interpretation.depth != color.depth
-                        || original.interpretation.profile
-                            != color::ColorProfile::Builtin(color.space))
-                {
-                    return Err(invalid(
-                        "Rasterized image interpretation differs from the document",
-                    ));
-                }
-            }
+            if let Some(base) = &s.base {base.validate(s.domain,color).map_err(DocumentError::InvalidArtwork)?;}
             if let Some(Ok(data)) = s.raster.try_data() {
                 data.validate_index_mode(s.domain, false, color, s.color_mode)
                     .map_err(DocumentError::InvalidArtwork)?;
@@ -1628,6 +1629,7 @@ impl Document {
                 operation.validate()?;
             }
         }
+        for (_,_,object) in self.artwork.objects.iter() {object.validate().map_err(DocumentError::InvalidArtwork)?;}
         for (_, _, s) in self.artwork.coverage.iter() {
             extent(s.domain)?;
             s.validate()?;
@@ -1655,6 +1657,7 @@ impl Document {
             }
             o.placement
                 .validate_for(Rect::from_extent(self.scene().local_extent(h)))?;
+            if matches!(o.content,OccurrenceContent::Objects(_)) && !self.scene().object_geometry_supported(h) {return Err(invalid("Object layers and their parent groups require integer offsets"));}
             if o.blend == LayerBlend::PassThrough
                 && !matches!(o.content, OccurrenceContent::Stack(_))
             {
@@ -1686,19 +1689,7 @@ impl Document {
             }
         }
         for (_, _, e) in self.artwork.effects.iter() {
-            let definition = self
-                .artwork
-                .definitions
-                .get(e.definition)
-                .ok_or(invalid("Missing effect definition"))?;
-            EffectView::new(&definition.program, &e.values)
-                .validate()
-                .map_err(invalid)?;
-        }
-        for (_, _, d) in self.artwork.definitions.iter() {
-            EffectInstance::new(d.program.clone())
-                .validate()
-                .map_err(invalid)?;
+            e.validate().map_err(invalid)?;
         }
         for (_, _, s) in self.artwork.selections.iter() {
             s.selection.validate()?;
@@ -1731,9 +1722,10 @@ pub enum Edit {
     Stack(RecordChange<Stack>),
     Occurrence(RecordChange<Occurrence>),
     Paint(RecordChange<PaintSource>),
+    ObjectLayer(RecordChange<ObjectLayer>),
+    ImageObject(RecordChange<ImageObject>),
     Coverage(RecordChange<CoverageSource>),
     Effect(RecordChange<EffectApplication>),
-    Definition(RecordChange<Definition>),
     SavedSelection(RecordChange<SavedSelection>),
     Guides(RecordChange<Guides>),
     Output(RecordChange<Output>),
@@ -1827,7 +1819,9 @@ impl Edit {
                         || a.passes_through() != b.passes_through()
                         || a.mask.as_ref().map(|m| m.source) != b.mask.as_ref().map(|m| m.source)
                 }),
-            Self::Paint(c) => c.value.is_none() || document.artwork.paint.get(c.handle).is_none(),
+            Self::Paint(c) => c.value.is_none() || document.artwork.paint.get(c.handle).is_none() || c.value.as_ref().and_then(|s|s.base.as_ref().map(|b|b.image.id()))!=document.artwork.paint.get(c.handle).and_then(|s|s.base.as_ref().map(|b|b.image.id())),
+            Self::ObjectLayer(_)=>true,
+            Self::ImageObject(c)=>c.value.as_ref().zip(document.artwork.objects.get(c.handle)).is_none_or(|(a,b)|a.image.id()!=b.image.id()),
             Self::Coverage(c) => {
                 c.value.is_none() || document.artwork.coverage.get(c.handle).is_none()
             }
@@ -1835,8 +1829,7 @@ impl Edit {
                 .value
                 .as_ref()
                 .zip(document.artwork.effects.get(c.handle))
-                .is_none_or(|(a, b)| a.definition != b.definition),
-            Self::Definition(c) => c.value.as_ref().zip(document.artwork.definitions.get(c.handle)).is_none_or(|(a,b)|a.program.kind!=b.program.kind),
+                .is_none_or(|(a, b)| a.program.kind != b.program.kind),
             Self::SavedSelection(c) => {
                 c.value.is_none() || document.artwork.selections.get(c.handle).is_none()
             }
@@ -1858,7 +1851,7 @@ impl Edit {
             }};
         }
         let previous=match self {
-            Self::SetRaster {..}=>return false,
+            Self::SetRaster {revision,..}=>return revision.try_data().is_some_and(|data|data.is_ok_and(|data|data.tiles.values().any(|tile|tile.try_backing().is_some_and(|tile|tile.is_ok())))),
             Self::Batch(edits)=>{
                 let mut candidate=document.clone();
                 for edit in edits {
@@ -1868,9 +1861,10 @@ impl Edit {
                 return false;
             },
             Self::Paint(c)=>previous!(paint,Paint,c),
+            Self::ImageObject(c)=>previous!(objects,ImageObject,c),
+            Self::ObjectLayer(_)=>return false,
             Self::Coverage(c)=>previous!(coverage,Coverage,c),
             Self::Effect(c)=>previous!(effects,Effect,c),
-            Self::Definition(c)=>previous!(definitions,Definition,c),
             Self::Occurrence(c)=>previous!(occurrences,Occurrence,c),
             Self::SavedSelection(c)=>previous!(selections,SavedSelection,c),
             Self::Output(c)=>previous!(outputs,Output,c),
@@ -1883,32 +1877,38 @@ impl Edit {
     }
     pub(crate) fn roots<'a>(&'a self, out: &mut RootInventory<'a>) {
         match self {
+            Self::Composition(c)=>out.record_ids.push(c.id),
+            Self::Stack(c)=>out.record_ids.push(c.id),
+            Self::ObjectLayer(c)=>out.record_ids.push(c.id),
+            Self::Guides(c)=>out.record_ids.push(c.id),
             Self::Paint(c) => {
+                out.record_ids.push(c.id);
                 if let Some(s) = &c.value {
                     out.paint(s);
                 }
             }
+            Self::ImageObject(c)=> {out.record_ids.push(c.id);if let Some(object)=&c.value {out.image(&object.image);}},
             Self::Coverage(c) => {
+                out.record_ids.push(c.id);
                 if let Some(s) = &c.value {
                     out.coverage(s);
                 }
             }
             Self::Effect(c) => {
+                out.record_ids.push(c.id);
                 if let Some(e) = &c.value {
                     out.values(&e.values);
-                }
-            }
-            Self::Definition(c) => {
-                if let Some(d) = &c.value {
-                    out.program(&d.program);
+                    out.program(&e.program);
                 }
             }
             Self::Occurrence(c) => {
+                out.record_ids.push(c.id);
                 if let Some(o) = &c.value {
                     out.meshes.extend(o.placement.mesh.iter());
                 }
             }
             Self::SavedSelection(c) => {
+                out.record_ids.push(c.id);
                 if let Some(s) = &c.value {
                     out.selections.push(&s.selection);
                 }
@@ -1916,6 +1916,7 @@ impl Edit {
             Self::Working(w) => out.selections.extend(w.selection.iter()),
             Self::SetRaster { revision, .. } => out.rasters.push(revision),
             Self::Output(c) => {
+                out.record_ids.push(c.id);
                 if let Some(o) = &c.value {
                     out.proof(o.proof.as_ref());
                 }
@@ -1925,7 +1926,6 @@ impl Edit {
                     e.roots(out);
                 }
             }
-            _ => (),
         }
     }
     fn raster_roots<'a>(&'a self, out: &mut Vec<&'a raster::RasterRevision>) {
@@ -1943,8 +1943,12 @@ impl Edit {
 
 #[derive(Default)]
 pub(crate) struct RootInventory<'a> {
+    record_ids:Vec<PortableId>,
+    indices:Vec<&'a SceneIndex>,
     pub rasters: Vec<&'a raster::RasterRevision>,
+    pub images:Vec<&'a Image>,
     pub sources: Vec<&'a Arc<color::source::SourceImage>>,
+    pub metadata:Vec<&'a PhotoMetadata>,
     pub selections: Vec<&'a Selection>,
     pub resources: Vec<&'a Arc<Lut3d>>,
     pub meshes: Vec<&'a Arc<MeshMap>>,
@@ -1955,12 +1959,91 @@ pub(crate) struct RootInventory<'a> {
     authored_only: bool,
 }
 impl<'a> RootInventory<'a> {
+    fn has_authored_id(&self,id:PortableId)->bool {self.record_ids.contains(&id) || self.images.iter().any(|image|image.id()==id) || self.indices.iter().any(|index|index.has_authored_id(id))}
+    fn resource_ids(&self)->std::collections::BTreeSet<PortableId> {
+        let mut ids=std::collections::BTreeSet::new();
+        let mut profile=|profile:&color::ColorProfile| {if let color::ColorProfile::Icc(resource)=profile {ids.insert(resource.id());}};
+        for source in &self.sources {profile(&source.interpretation.profile);}
+        for value in &self.profiles {profile(value);}
+        for metadata in &self.metadata {ids.extend(metadata.blocks().into_iter().flatten().map(authored::Resource::id));}
+        for source in &self.sources {ids.extend(source.tiles.values().map(|tile|tile.resource_id()));}
+        for raster in &self.rasters {
+            if let Some(Ok(data))=raster.try_data() {ids.extend(data.tiles.values().filter_map(|tile|tile.try_backing()?.ok().map(|tile|tile.resource_id())));}
+        }
+        ids.extend(self.resources.iter().filter_map(|lut|lut.resource().map(|resource|resource.id())));
+        for program in &self.programs {
+            if bundled_effect_catalog().get(&program.id).is_some_and(|builtin|*program==&builtin.program()) {continue;}
+            for shader in std::iter::once(&program.wgsl).chain(program.lookups.iter().map(|lookup|&lookup.wgsl)) {
+                if let Ok(sources)=shader.sources() {ids.extend(sources.iter().map(authored::Resource::id));}
+            }
+        }
+        for selection in &self.selections {
+            if let SelectionShape::Pixels(pixels)=&selection.shape {ids.extend(pixels.transfer_chunk_ids());}
+        }
+        for extension in &self.extensions {ids.extend(extension.resources.keys().copied());}
+        ids
+    }
+    fn validate_resources(&self)->Result<(),String> {
+        use package::effect_records::ResourceWriter;
+        use package::selection_records::SelectionResourceWriter;
+        let mut resources=package::resources::ResourceInventory::default();
+        let mut sources=BTreeSet::new();let mut rasters=BTreeSet::new();let mut programs=BTreeSet::new();
+        for source in &self.sources {
+            if !sources.insert(Arc::as_ptr(source) as usize) {continue;}
+            for tile in source.tiles.values() {resources.tile(tile.clone())?;}
+            resources.profile(&source.interpretation.profile)?;
+        }
+        for raster in &self.rasters {
+            if !rasters.insert(raster.identity()) {continue;}
+            if let Some(Ok(data))=raster.try_data() {for tile in data.tiles.values() {if let Some(Ok(tile))=tile.try_backing() {resources.tile(tile)?;}}}
+        }
+        for profile in &self.profiles {resources.profile(profile)?;}
+        for metadata in &self.metadata {
+            for (kind,value) in ["exif","xmp","iptc"].into_iter().zip(metadata.blocks()) {
+                if let Some(value)=value {resources.bytes("capy.photo-metadata/1",value,serde_json::json!({"kind":kind}))?;}
+            }
+        }
+        for lut in &self.resources {if lut.resource().is_some() {resources.lut(lut)?;}}
+        for program in &self.programs {
+            if !programs.insert(Arc::as_ptr(program) as usize) {continue;}
+            if bundled_effect_catalog().get(&program.id).is_some_and(|builtin|*program==&builtin.program()) {continue;}
+            for shader in std::iter::once(&program.wgsl).chain(program.lookups.iter().map(|lookup|&lookup.wgsl)) {
+                for source in shader.sources()? {resources.code(&source)?;}
+            }
+        }
+        let mut selections=BTreeMap::new();
+        for selection in &self.selections {
+            if let SelectionShape::Pixels(pixels)=&selection.shape {
+                let owner=pixels.transfer_words().as_ptr() as usize;
+                for (index,id) in pixels.transfer_chunk_ids().iter().enumerate() {
+                    let data=package::selection_records::chunk_descriptor(pixels.extent(),pixels.bounds(),pixels.coverage_format()==2,index);
+                    if let Some(previous)=selections.insert(*id,(owner,data.clone())) && previous!=(owner,data.clone()) {return Err("Conflicting immutable selection identity".into());}
+                    if let Some(chunks)=pixels.transfer_chunks() {resources.chunk(&chunks[index],data)?;}
+                }
+            }
+        }
+        for (id,(_,data)) in &selections {
+            if resources.entries.get(id).is_some_and(|resource|resource.kind!="capy.selection-coverage/1" || resource.data!=*data) {return Err("Conflicting immutable selection resource kind".into());}
+        }
+        let mut opaque=BTreeMap::new();
+        for extension in &self.extensions {
+            for (id,resource) in &extension.resources {
+                if !resources.validate_opaque_alias(resource)? && selections.contains_key(id) {return Err("Conflicting immutable preserved resource identity".into());}
+                if let Some(previous)=opaque.insert(*id,resource) && previous!=resource {return Err("Conflicting immutable preserved resource identity".into());}
+            }
+        }
+        if resources.entries.keys().chain(selections.keys()).chain(opaque.keys()).any(|id|self.has_authored_id(*id)) {return Err("Object and resource identities overlap".into());}
+        let mut images=BTreeMap::new();
+        for image in &self.images {if images.insert(image.id(),*image).is_some_and(|previous|!previous.identity_matches(image)) {return Err("Conflicting immutable image identity".into());}}
+        Ok(())
+    }
     fn ownership(&self)->std::collections::BTreeSet<(u8,u64)> {
         let mut owners=std::collections::BTreeSet::new();
         owners.extend(self.rasters.iter().filter(|r|!r.is_empty()).map(|r|(0,r.identity())));
         owners.extend(self.extensions.iter().map(|e|(9,Arc::as_ptr(e) as usize as u64)));
         owners.extend(self.operations.iter().map(|ops|(8,Arc::as_ptr(ops) as usize as u64)));
         owners.extend(self.sources.iter().map(|s|(1,Arc::as_ptr(s) as usize as u64)));
+        owners.extend(self.images.iter().map(|image|(10,image.owner_identity() as u64)));
         owners.extend(self.resources.iter().filter_map(|r|r.storage().map(|s|(2,s.as_ptr() as usize as u64))));
         owners.extend(self.meshes.iter().map(|m|(3,Arc::as_ptr(m) as usize as u64)));
         owners.extend(self.programs.iter().map(|p|(4,Arc::as_ptr(p) as usize as u64)));
@@ -1975,14 +2058,17 @@ impl<'a> RootInventory<'a> {
     }
 
     pub fn document(&mut self, document: &'a Document) {
+        self.indices.push(&document.scene_index);
         self.artwork(&document.artwork);
         self.selections.extend(document.working.selection.iter());
     }
     pub fn artwork(&mut self, artwork: &'a Artwork) {
+        if !artwork.metadata.is_empty() {self.metadata.push(&artwork.metadata);}
         if !artwork.extensions.records.is_empty() || !artwork.extensions.resources.is_empty() { self.extensions.push(&artwork.extensions); }
         for (_, _, s) in artwork.paint.iter() {
             self.paint(s);
         }
+        for (_,_,object) in artwork.objects.iter() {self.image(&object.image);}
         for (_, _, s) in artwork.coverage.iter() {
             self.coverage(s);
         }
@@ -1991,9 +2077,7 @@ impl<'a> RootInventory<'a> {
         }
         for (_, _, e) in artwork.effects.iter() {
             self.values(&e.values);
-        }
-        for (_, _, d) in artwork.definitions.iter() {
-            self.program(&d.program);
+            self.program(&e.program);
         }
         for (_, _, s) in artwork.selections.iter() {
             self.selections.push(&s.selection);
@@ -2002,9 +2086,10 @@ impl<'a> RootInventory<'a> {
             self.proof(o.proof.as_ref());
         }
     }
+    fn image(&mut self,image: &'a Image) {self.images.push(image);self.sources.push(image.storage());}
     fn paint(&mut self, s: &'a PaintSource) {
         self.rasters.push(&s.raster);
-        self.sources.extend(s.original.iter());
+        if let Some(base)=&s.base {self.image(&base.image);}
         if !s.operations.is_empty() {self.operations.push(&s.operations);}
         for op in s.operations.iter() {
             self.operation(op);
@@ -2044,7 +2129,7 @@ impl<'a> RootInventory<'a> {
         match &operation.kind {
             RasterOperationKind::Transform(t) => self.meshes.extend(t.placement.mesh.iter()),
             RasterOperationKind::Bake { scene, .. }
-            | RasterOperationKind::FrequencyDetail { scene, .. } => self.artwork(&scene.artwork),
+            | RasterOperationKind::FrequencyDetail { scene, .. } => {self.indices.push(&scene.index);self.artwork(&scene.artwork);},
             _ => (),
         }
     }
@@ -2112,6 +2197,8 @@ fn edit_metadata(edit: &Edit) -> usize {
                 .map(|(_, g)| json_len(g).saturating_mul(4))
                 .sum()
         }),
+        Edit::ObjectLayer(c)=>c.value.as_ref().map_or(0,|o|o.children.len()*std::mem::size_of::<ImageObjectHandle>()),
+        Edit::ImageObject(c)=>c.value.as_ref().map_or(0,|o|o.name.len()),
         Edit::Output(c) => c.value.as_ref().map_or(0, |o| {
             o.name.len()
                 + o.proof.as_ref().map_or(0, |p| p.name.len())
@@ -2199,6 +2286,27 @@ impl Editor {
         edit: Edit,
         budget: usize,
     ) -> Result<(Document, HistoryEntry), DocumentError> {
+        let mut incoming=RootInventory::default();edit.roots(&mut incoming);
+        let resources=incoming.resource_ids();
+        let mut retained=RootInventory::default();
+        if !resources.is_empty() || !incoming.images.is_empty() || incoming.record_ids.iter().any(|id|!self.document.scene_index.has_authored_id(*id)) {
+            for entry in self.undo.iter().chain(&self.redo) {entry.edit.roots(&mut retained);}
+            if resources.iter().any(|id|self.document.scene_index.has_authored_id(*id) || retained.has_authored_id(*id)) {return Err(DocumentError::InvalidArtwork("Object and resource identities overlap with retained history".into()));}
+            let resources=retained.resource_ids();
+            if incoming.record_ids.iter().any(|id|resources.contains(id)) || incoming.images.iter().any(|image|resources.contains(&image.id())) {return Err(DocumentError::InvalidArtwork("Object and resource identities overlap with retained history".into()));}
+        }
+        if !incoming.images.is_empty() {
+            let mut images=BTreeMap::new();
+            for image in incoming.images {
+                if images.insert(image.id(),image).is_some_and(|previous|!previous.identity_matches(image)) {return Err(DocumentError::InvalidArtwork("Conflicting immutable image identity".into()));}
+            }
+            retained.document(&self.document);
+            for image in &retained.images {
+                if images.get(&image.id()).is_some_and(|incoming|!incoming.identity_matches(image)) {return Err(DocumentError::InvalidArtwork("Immutable image identity conflicts with retained history".into()));}
+            }
+        }
+        retained.document(&self.document);edit.roots(&mut retained);
+        retained.validate_resources().map_err(DocumentError::InvalidArtwork)?;
         let mut candidate = self.document.clone();
         let inverse = HistoryEntry::new(candidate.apply(edit)?, self.checkpoint);
         let mut restored = candidate.clone();
@@ -2464,13 +2572,18 @@ impl Editor {
                 .ok_or(DocumentError::InvalidLayerOperation(
                     "Document history exhausted",
                 ))?;
-        self.document.apply(Edit::SetRaster { target, revision })?;
+        let edit=Edit::SetRaster {target,revision};
+        if edit.requires_history_admission(&self.document) {
+            self.document=self.prepare_history_edit(edit,history_budget::BYTE_BUDGET)?.0;
+        }else {self.document.apply(edit)?;}
         self.checkpoint = self.next_checkpoint;
         self.next_checkpoint = next;
         Ok(())
     }
     pub fn preview(&mut self, edit: Edit) -> Result<(), DocumentError> {
-        self.document.apply(edit).map(|_| ())
+        if edit.requires_history_admission(&self.document) {
+            self.document=self.prepare_history_edit(edit,history_budget::BYTE_BUDGET)?.0;Ok(())
+        }else {self.document.apply(edit).map(|_| ())}
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -13,7 +13,7 @@ fn fixture() -> layer_core::Document {
     }, 1024 * 1024).unwrap();
     let row = [150, 175, 200, 255].repeat(256);
     for _ in 0..256 { source.push_row(&row).unwrap(); }
-    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(source.finish().unwrap())).into()));
     project
 }
 

@@ -390,7 +390,7 @@ fn native_photo_document(layered: bool) -> layer_core::Document {
         let (backdrop, backdrop_target) = crate::test_support::add_paint(&mut document.artwork, "backdrop", EXTENT);
         for (target, source) in [(stroke_target, strokes_source), (backdrop_target, backdrop_source)] {
             let SourceTarget::Paint(handle) = target else { unreachable!() };
-            document.artwork.paint.get_mut(handle).unwrap().original = Some(source);
+            document.artwork.paint.get_mut(handle).unwrap().base = Some(layer_core::authored::PaintBase::new((source).into()));
         }
         let root = document.composition().result;
         document.artwork.stacks.get_mut(root).unwrap().entries = vec![strokes, roots[0], backdrop, roots[1]];

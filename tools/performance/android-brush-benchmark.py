@@ -49,13 +49,19 @@ def main():
     p.add_argument("--horizon", type=int, default=16, help="Engine prediction lookahead in ms")
     p.add_argument("--radius-x", type=float, default=520, help="Ellipse radius in surface pixels")
     p.add_argument("--radius-y", type=float, default=299, help="Ellipse radius in surface pixels")
-    p.add_argument("--photo", default="/data/local/tmp/capy-brush-photo.jpg")
+    p.add_argument("--photo", default="/data/local/tmp/capy-brush-photo.jpg", help="Tier JPEG or authored .capy fixture")
+    p.add_argument("--canvas-width", type=int)
+    p.add_argument("--canvas-height", type=int)
+    p.add_argument("--navigation-between-strokes", action="store_true")
+    p.add_argument("--navigation-settle-ms", type=int, default=750)
     p.add_argument("--zoom", type=float, help="Absolute view scale; default fits the canvas")
     p.add_argument("--blending", choices=["linear", "perceptual"], help="Document blend space; default uses the imported document")
     p.add_argument("--photo-layers", type=int, default=1, help="Photo layer count, with translucent duplicates")
     p.add_argument("--paint-layer-index", type=int, default=0, help="Paint layer index from the top, above the opaque base photo")
     p.add_argument("--color-mode", choices=["full_color", "grayscale", "two_tone"], default="full_color")
-    p.add_argument("--workload", choices=["ordinary", "clipped", "blurred-base"], default="ordinary")
+    p.add_argument("--workload", choices=["ordinary", "clipped", "blurred-base", "objects", "objects-effects"], default="ordinary")
+    p.add_argument("--image-count", type=int, default=4)
+    p.add_argument("--image-sources", choices=["shared", "unshared"], default="shared")
     p.add_argument("--effect-radius", type=float, default=8, help="Gaussian sigma in document pixels for blurred-base")
     tracing = p.add_mutually_exclusive_group()
     tracing.add_argument("--trace", action="store_true", help="Full CPU/GPU phase attribution")
@@ -66,14 +72,28 @@ def main():
     p.add_argument("--stats", action="store_true", help="Open Stats and enable GPU timing; omit for the default workspace")
     p.add_argument("--prefix", default="screen")
     args = p.parse_args()
+    if (args.canvas_width is None) != (args.canvas_height is None):
+        p.error("specify both --canvas-width and --canvas-height")
+    if args.photo.endswith(".capy") and args.canvas_width is None:
+        p.error("authored fixtures require --canvas-width and --canvas-height")
+    if args.canvas_width is not None and min(args.canvas_width, args.canvas_height) <= 0:
+        p.error("canvas dimensions must be positive")
+    if not 0 <= args.navigation_settle_ms <= 5000:
+        p.error("--navigation-settle-ms must be between 0 and 5000")
+    if not 1 <= args.image_count <= 32:
+        p.error("--image-count must be between 1 and 32")
     if args.paint_load is not None and not 0 <= args.paint_load <= 1:
         p.error("--paint-load must be between 0 and 1")
     if not 0 <= args.paint_layer_index < args.photo_layers:
         p.error("--paint-layer-index must be between 0 and --photo-layers minus 1")
     if not 0 < args.effect_radius <= 85:
         p.error("--effect-radius must be greater than 0 and at most 85")
-    if args.workload != "ordinary" and (args.photo_layers != 1 or args.paint_layer_index != 0 or args.mode == "pinch"):
+    if args.workload in ("clipped", "blurred-base") and (args.photo_layers != 1 or args.paint_layer_index != 0 or args.mode == "pinch"):
         p.error("attachment workloads require one photo, top paint and a brush motion")
+    if args.workload.startswith("objects") and (not args.photo.endswith(".capy") or args.photo_layers != 2):
+        p.error("object workloads require an authored fixture and --photo-layers 2")
+    if args.mode == "object-affine" and not args.workload.startswith("objects"):
+        p.error("object-affine motion requires an object workload")
     args.output.mkdir(parents=True, exist_ok=True)
     adb = [args.adb, "-s", args.serial]
     remote = f"/sdcard/Android/data/{args.package}/files/brush-benchmark"
@@ -93,6 +113,12 @@ def main():
                          paint_layer_index=args.paint_layer_index,
                          horizon=args.horizon, zoom=args.zoom, blending=args.blending, stats_panel=args.stats)
         requested.update(workload=args.workload, effect_radius=args.effect_radius, color_mode=args.color_mode)
+        if args.workload.startswith("objects"):
+            requested.update(image_count=args.image_count, image_sources=args.image_sources)
+        if args.canvas_width is not None:
+            requested["canvas"] = [args.canvas_width, args.canvas_height]
+        if args.navigation_between_strokes:
+            requested.update(navigation_between_strokes=True, navigation_settle_ms=args.navigation_settle_ms)
         if args.mode == "pauses":
             requested["pause_ms"] = args.pause_ms
             requested["contact_ms"] = args.contact_ms
@@ -115,8 +141,11 @@ def main():
                                radiusX=args.radius_x, radiusY=args.radius_y, photo=args.photo,
                                photoLayers=args.photo_layers, paintLayerIndex=args.paint_layer_index,
                                workload=args.workload, effectRadius=args.effect_radius,
+                               imageCount=args.image_count, imageSources=args.image_sources,
                                pauseMs=args.pause_ms, contactMs=args.contact_ms,
                                settleDelayMs=args.settle_delay_ms,
+                               navigationBetweenStrokes=str(args.navigation_between_strokes).lower(),
+                               navigationSettleMs=args.navigation_settle_ms,
                                memorySnapshots=str(args.memory).lower(), statsPanel=str(args.stats).lower(),
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]
@@ -127,6 +156,8 @@ def main():
             cmd += ["-e", "zoom", str(args.zoom)]
         if args.blending is not None:
             cmd += ["-e", "blending", args.blending]
+        if args.canvas_width is not None:
+            cmd += ["-e", "width", str(args.canvas_width), "-e", "height", str(args.canvas_height)]
         cmd += [f"{args.package}/art.capycanvas.BrushBenchmarkInstrumentation"]
         trace = None
         profile = None
@@ -138,6 +169,7 @@ def main():
                 if check.returncode == 0:
                     break
                 if time.monotonic() > deadline:
+                    run("pull", remote, str(args.output / "failed-setup"))
                     raise RuntimeError(f"Runner setup timed out: {label}")
                 time.sleep(1)
             if process.poll() is not None:
@@ -204,7 +236,7 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
             # Preserve its evidence and continue the remaining preset matrix.
             for suffix in ["-info.json", "-error.txt", "-failed-state.json", "-failure-state.json",
                     "-failure-measurements.json", "-failure-gpu.json", "-memory.jsonl"] + [suffix for i in range(args.repeats)
-                    for suffix in (f"-{i}.json", f"-{i}-diagnostic.json")]:
+                    for suffix in (f"-{i}.json", f"-{i}-diagnostic.json")] + (["-cold-setup.json", "-prime.json"] if args.workload.startswith("objects") else []):
                 subprocess.run(adb + ["pull", f"{remote}/{label}{suffix}",
                     str(args.output / f"{label}{suffix}")], capture_output=True)
             with (args.output / f"{label}-crash-logcat.txt").open("w") as out:
@@ -221,6 +253,8 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
         suffixes = (["-info.json", "-before.png", "-after.png", "-measurements.json", "-complete.json"]
                     if args.mode == "pinch" else ["-info.json", ".png"]
                     + (["-detail.png"] if args.mode == "visual" else []) + [f"-{i}.json" for i in range(args.repeats)])
+        if args.workload.startswith("objects"):
+            suffixes += ["-cold-setup.json", "-prime.json"]
         for suffix in suffixes:
             run("pull", f"{remote}/{label}{suffix}", str(args.output / f"{label}{suffix}"), stdout=subprocess.DEVNULL)
         info_path = args.output / f"{label}-info.json"

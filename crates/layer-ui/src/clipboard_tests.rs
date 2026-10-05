@@ -4,7 +4,7 @@ mod clipboard_checks {
         Edit, LayerBlend, RasterOperationKind,
         color::{
             DocumentColor, RgbSpace, SampleDepth,
-            source::{SourceKind, rgba8_source},
+            source::rgba8_source,
         },
     };
     use std::sync::Arc;
@@ -33,12 +33,12 @@ mod clipboard_checks {
     }
 
     fn clip(extent: [u32; 2], origin: [u32; 2], color: DocumentColor) -> PixelClip {
-        let mut source = Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [90, 120, 200, 255]));
-        source.kind = SourceKind::Rasterized;
+        let source = Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [90, 120, 200, 255]));
         PixelClip {
             nonce: "clip".into(),
             name: "Ink".into(),
             source: Arc::new(source),
+            policy: layer_core::PaintBasePolicy::WorkingPixels,
             origin,
             color,
             png: Arc::from(&b"png"[..]),
@@ -127,7 +127,7 @@ mod clipboard_checks {
         assert!(capture.coverage.is_none(), "Select All needs no coverage");
         assert!(capture.large == (400 * 300 > LARGE_CLIP_PIXELS));
         let original = capture.original.expect("the photo's own source");
-        assert_eq!(*original, *s.engine.document().scene().paint_source(s.engine.document().working.occurrence.unwrap()).unwrap().original.clone().unwrap());
+        assert_eq!(*original, *s.engine.document().scene().paint_source(s.engine.document().working.occurrence.unwrap()).unwrap().base.as_ref().unwrap().image.storage().clone());
         s.complete_document_request(id, Ok(true)).unwrap();
 
         select(&mut s, Some(rectangle([10., 10., 50., 50.])));
@@ -178,20 +178,18 @@ mod clipboard_checks {
     fn a_clip_is_document_pixels_only_where_the_colour_settings_match() {
         let color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
         let clip = clip([4, 4], [0, 0], color);
-        assert_eq!(clip.source_for(color).kind, SourceKind::Rasterized);
+        assert_eq!(clip.source_for(color).policy, layer_core::PaintBasePolicy::WorkingPixels);
         for other in [
             DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 },
             DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U8 },
         ] {
             let source = clip.source_for(other);
-            assert_eq!(source.kind, SourceKind::Original);
-            assert_eq!(source.interpretation, clip.source.interpretation, "an explicit profile");
+            assert_eq!(source.policy, layer_core::PaintBasePolicy::SourceProfile);
+            assert_eq!(source.image.interpretation, clip.source.interpretation, "an explicit profile");
         }
         let mut original = clip.clone();
-        let mut photo = (*original.source).clone();
-        photo.kind = SourceKind::Original;
-        original.source = Arc::new(photo);
-        assert_eq!(original.source_for(color).kind, SourceKind::Original, "a copied photo keeps its original");
+        original.policy = layer_core::PaintBasePolicy::SourceProfile;
+        assert_eq!(original.source_for(color).policy, layer_core::PaintBasePolicy::SourceProfile, "a copied photo keeps its original");
     }
 
     #[test]
@@ -207,8 +205,8 @@ mod clipboard_checks {
         let layer = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap();
         assert_eq!(layer.name.as_ref(), "Ink");
         assert_eq!(doc.target_extent(doc.working.target.unwrap()), [400, 300]);
-        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().original.as_ref().unwrap().extent, [20, 10]);
-        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().original.as_ref().unwrap().kind, SourceKind::Rasterized);
+        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().base.as_ref().unwrap().image.extent, [20, 10]);
+        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().base.as_ref().unwrap().policy, layer_core::PaintBasePolicy::WorkingPixels);
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.engine.document().scene().order().len(), before, "one undo step");
 
@@ -225,7 +223,7 @@ mod clipboard_checks {
         s.paste_clip(&wide, PasteMode::InPlace).unwrap();
         let doc = s.engine.document();
         assert_eq!(doc.target_extent(doc.working.target.unwrap()), [600, 300]);
-        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().original.as_ref().unwrap().extent, [600, 10]);
+        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().base.as_ref().unwrap().image.extent, [600, 10]);
     }
 
     #[test]
@@ -238,7 +236,7 @@ mod clipboard_checks {
         s.paste_clip(&clip, PasteMode::Into).unwrap();
         let doc = s.engine.document();
         let layer = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap();
-        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().original.as_ref().unwrap().kind, SourceKind::Original, "another colour mode");
+        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().base.as_ref().unwrap().policy, layer_core::PaintBasePolicy::SourceProfile, "another colour mode");
         let mask = layer.mask.as_ref().expect("a mask from the selection");
         let mask = doc.artwork.coverage.get(mask.source).unwrap();
         assert_eq!(mask.initial.as_ref().unwrap().shape, selection.shape);

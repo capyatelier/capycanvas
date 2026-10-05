@@ -321,7 +321,11 @@ class AndroidColorPanelTest {
             fullCapture("edit-color-strip-$theme")
             val touch = tool
             tool = MotionEvent.TOOL_TYPE_MOUSE
-            event(MotionEvent.ACTION_HOVER_MOVE, area.center)
+            val sample = canvasPoint()
+            assertTrue("the sample lies inside the canvas work area", area.contains(sample))
+            assertFalse("the floating Color panel leaves the sample visible", bounds("color-panel").contains(sample))
+            assertFalse("the picking strip leaves the sample visible", strip.contains(sample))
+            event(MotionEvent.ACTION_HOVER_MOVE, sample)
             waitFor("the canvas sample follows the mouse") { picker().optJSONArray("sample_point") != null }
             event(MotionEvent.ACTION_HOVER_MOVE, Offset(strip.left - 4f, strip.center.y))
             waitFor("the strip moves away from the sample") { findTag("color-strip")!!.second.boundsInRoot.topLeft != strip.topLeft }

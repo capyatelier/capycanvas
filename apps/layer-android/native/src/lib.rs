@@ -32,6 +32,8 @@ mod scopes;
 mod color_edit;
 #[cfg(target_os = "android")]
 mod source_edit;
+#[cfg(target_os = "android")]
+mod image_objects;
 
 #[cfg(target_os = "android")]
 mod color_preferences;

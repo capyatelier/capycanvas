@@ -2,17 +2,19 @@ use super::PortableId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Content { Paint(PortableId), Group(PortableId), Effect(PortableId), Selection(PortableId) }
+pub enum Content { Paint(PortableId), Objects(PortableId), Group(PortableId), Effect(PortableId), Selection(PortableId) }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Shape {
     Composition { result: PortableId },
     Stack { entries: Vec<PortableId> },
     Occurrence { content: Content, mask: Option<PortableId> },
-    Paint,
+    Paint { image: Option<PortableId> },
+    ObjectLayer { children: Vec<PortableId> },
+    ImageObject { image: PortableId },
+    Image,
     Coverage,
-    Effect { definition: PortableId, inputs: Vec<PortableId> },
-    Definition { dependencies: Vec<PortableId> },
+    Effect,
     Selection,
     Guides,
     Output { composition: PortableId },
@@ -23,9 +25,10 @@ impl Shape {
         match self {
             Self::Composition { .. } | Self::Output { .. } => 1,
             Self::Stack { entries } => entries.len(),
+            Self::ObjectLayer { children } => children.len(),
+            Self::Paint { image } => usize::from(image.is_some()),
+            Self::ImageObject { .. } => 1,
             Self::Occurrence { mask, .. } => 1 + usize::from(mask.is_some()),
-            Self::Effect { inputs, .. } => inputs.len().saturating_add(1),
-            Self::Definition { dependencies } => dependencies.len(),
             Self::Unknown { references, .. } => references.len(),
             _ => 0,
         }
@@ -34,12 +37,13 @@ impl Shape {
         match self {
             Self::Composition { result } => vec![*result],
             Self::Stack { entries } => entries.clone(),
+            Self::ObjectLayer { children } => children.clone(),
+            Self::Paint { image } => image.iter().copied().collect(),
+            Self::ImageObject { image } => vec![*image],
             Self::Occurrence { content, mask } => match content {
-                Content::Paint(id) | Content::Group(id) | Content::Effect(id) | Content::Selection(id) =>
+                Content::Paint(id) | Content::Objects(id) | Content::Group(id) | Content::Effect(id) | Content::Selection(id) =>
                     std::iter::once(*id).chain(*mask).collect(),
             },
-            Self::Effect { definition, inputs } => std::iter::once(*definition).chain(inputs.iter().copied()).collect(),
-            Self::Definition { dependencies } => dependencies.clone(),
             Self::Output { composition } => vec![*composition],
             Self::Unknown { references, .. } => references.clone(),
             _ => Vec::new(),
@@ -98,7 +102,6 @@ impl GraphShape {
         let mut uses = BTreeMap::<PortableId, usize>::new();
         let mut edges = 0usize;
         let mut evaluation = BTreeMap::<PortableId, Vec<PortableId>>::new();
-        let mut expansion = BTreeMap::<PortableId, Vec<PortableId>>::new();
         for (id, shape) in &self.objects {
             edges = edges.checked_add(shape.reference_count()).ok_or("Authored edge count overflow")?;
             if edges > limits.edges { return Err(GraphError::Unsupported("Authored edge limit exceeded")); }
@@ -132,9 +135,10 @@ impl GraphShape {
                 }
                 Shape::Occurrence { content, mask } => {
                     let target = match content {
-                        Content::Paint(id) => { expect(*id, |s| matches!(s, Shape::Paint))?; *id },
+                        Content::Paint(id) => { expect(*id, |s| matches!(s, Shape::Paint { .. }))?; *id },
+                        Content::Objects(id) => { expect(*id, |s| matches!(s, Shape::ObjectLayer { .. }))?; *id },
                         Content::Group(id) => { expect(*id, |s| matches!(s, Shape::Stack { .. }))?; *id },
-                        Content::Effect(id) => { expect(*id, |s| matches!(s, Shape::Effect { .. }))?; *id },
+                        Content::Effect(id) => { expect(*id, |s| matches!(s, Shape::Effect))?; *id },
                         Content::Selection(id) => { expect(*id, |s| matches!(s, Shape::Selection))?; *id },
                     };
                     if let Some(mask) = mask {
@@ -145,22 +149,16 @@ impl GraphShape {
                         dependencies.push(target);
                     }
                 }
-                Shape::Effect { definition, inputs } => {
-                    expect(*definition, |s| matches!(s, Shape::Definition { .. }))?;
-                    for input in inputs {
-                        expect(*input, |s| matches!(s, Shape::Paint | Shape::Coverage | Shape::Effect { .. } | Shape::Composition { .. } | Shape::Stack { .. }))?;
-                        *uses.entry(*input).or_default() += 1;
+                Shape::ObjectLayer { children } => {
+                    for child in children {
+                        expect(*child, |s|matches!(s,Shape::ImageObject { .. }))?;
+                        if *memberships.entry(*child).or_default()!=0 {return Err("Drawable belongs to multiple collection slots".into());}
+                        *memberships.get_mut(child).unwrap()+=1;
                     }
-                    dependencies.extend(inputs);
-                    if !inputs.is_empty() { reasons.insert("Explicit effect inputs require graph editing"); }
+                    dependencies.extend(children);
                 }
-                Shape::Definition { dependencies } => {
-                    for dependency in dependencies {
-                        expect(*dependency, |s| matches!(s, Shape::Definition { .. }))?;
-                    }
-                    expansion.insert(*id, dependencies.clone());
-                    if !dependencies.is_empty() { reasons.insert("Reusable definition requires graph editing"); }
-                }
+                Shape::Paint { image:Some(image) } => {expect(*image,|s|matches!(s,Shape::Image))?;dependencies.push(*image);}
+                Shape::ImageObject { image } => {expect(*image,|s|matches!(s,Shape::Image))?;dependencies.push(*image);}
                 Shape::Output { composition } => {
                     expect(*composition, |s| matches!(s, Shape::Composition { .. }))?;
                     if *composition != root { reasons.insert("Output has an independent composition"); }
@@ -176,7 +174,6 @@ impl GraphShape {
             }
         }
         acyclic(&evaluation, limits.depth)?;
-        acyclic(&expansion, limits.depth)?;
         if self.objects.values().filter(|s| matches!(s, Shape::Composition { .. })).count() != 1
             || self.outputs.len() != 1
             || self.objects.values().filter(|s| matches!(s, Shape::Output { .. })).count() != 1 {

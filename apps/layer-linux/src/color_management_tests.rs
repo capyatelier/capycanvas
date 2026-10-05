@@ -354,7 +354,7 @@ fn native_sdr_document_modes() {
                 builder.push_row(&row).unwrap();
             }
             let source = Arc::new(builder.finish().unwrap());
-            paint_at_mut(&mut project, 0).original = Some(source.clone());
+            paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((source.clone()).into()));
             let w = Workspace::with_project(&app, Some((project, None)));
             w.window.present();
             sdr_ready(&w);
@@ -406,7 +406,7 @@ fn native_sdr_document_modes() {
             let capture = ui_session(&w).capture_artwork().unwrap();
             let project = capture_document(&capture);
             assert!(Arc::ptr_eq(
-                paint_at(&project, 0).original.as_ref().unwrap(),
+                paint_at(&project, 0).base.as_ref().unwrap().image.storage(),
                 &source
             ));
             let mut bytes = Vec::new();
@@ -414,7 +414,7 @@ fn native_sdr_document_modes() {
             let reopened =
                 open_native_document(std::io::Cursor::new(bytes));
             assert_eq!(reopened.composition().color, color);
-            assert_source_samples(paint_at(&reopened, 0).original.as_ref().unwrap(), &source);
+            assert_source_samples(paint_at(&reopened, 0).base.as_ref().unwrap().image.storage(), &source);
             let restored = paint_at(&reopened, 0).raster.wait_data().unwrap();
             for (key, tile) in &backing.tiles {
                 assert_eq!(

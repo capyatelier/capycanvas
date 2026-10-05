@@ -73,6 +73,47 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
         if control.is_cancelled() { return Err("Analysis cancelled".into()); }
         Ok(())
     })));
+    renderer.set_browser_image_decoder(Rc::new(|source, coordinate, destination| Box::pin(async move {
+        documents::yield_browser().await.map_err(|e|format!("{e:?}"))?;
+        let tile=source.tiles.get(&coordinate).ok_or("Missing immutable image tile")?;
+        let start=js_sys::Date::now();
+        while !tile.compressed_ready()? {
+            if js_sys::Date::now()-start>30_000. {return Err("Image backing timed out".into());}
+            documents::yield_browser().await.map_err(|e|format!("{e:?}"))?;
+        }
+        let mut profiles=Vec::new();
+        let profile=layer_core::color::ProfileReference::detach(&source.interpretation.profile,&mut profiles);
+        let interpretation=source.interpretation.clone().with_profile(profile);
+        let buffers=js_sys::Array::new();
+        buffers.push(&js_sys::Uint8Array::from(tile.compressed()?.as_ref()));
+        let mut chunks=Vec::new();
+        for profile in profiles {
+            let mut count=0;
+            for block in profile.chunks(layer_core::package::MAX_RANGE_BYTES) {
+                buffers.push(&js_sys::Uint8Array::from(block));count+=1;
+                documents::yield_browser().await.map_err(|e|format!("{e:?}"))?;
+            }
+            chunks.push(count);
+        }
+        let metadata=serde_json::to_string(&ImageDecode {interpretation,destination,extent:source.extent,coordinate,profiles:chunks}).map_err(|e|e.to_string())?;
+        let result=JsFuture::from(call("image-decode",&metadata,&buffers).map_err(|e|format!("{e:?}"))?).await.map_err(|e|format!("{e:?}"))?;
+        let bytes=result.dyn_into::<js_sys::Uint8Array>().map_err(|_|"Missing prepared image pixels")?.to_vec();
+        if matches!(source.interpretation.profile,layer_core::color::ColorProfile::Builtin(_)) {
+            if bytes.len()!=(TILE_SIZE*TILE_SIZE) as usize*4*source.interpretation.depth.bytes() {return Err("Invalid prepared source tile extent".into());}
+            Ok(layer_render_wgpu::PreparedImagePixels::NativeSamples(std::sync::Arc::new(bytes)))
+        } else {
+            if bytes.len()!=(TILE_SIZE*TILE_SIZE) as usize*16 {return Err("Invalid prepared working tile extent".into());}
+            Ok(layer_render_wgpu::PreparedImagePixels::PremultipliedWorkingPixels(std::sync::Arc::new(bytes)))
+        }
+    })));
+    renderer.set_browser_nearest_coordinate_decoder(Rc::new(|inverse,size,first,count| Box::pin(async move {
+        if count>65536 {return Err("Oversized Nearest coordinate request".into());}
+        let metadata=serde_json::to_string(&NearestCoordinates {inverse,size,first,count}).map_err(|e|e.to_string())?;
+        let result=JsFuture::from(call("nearest-coordinates",&metadata,&js_sys::Array::new()).map_err(|e|format!("{e:?}"))?).await.map_err(|e|format!("{e:?}"))?;
+        let bytes=result.dyn_into::<js_sys::Uint8Array>().map_err(|_|"Missing Nearest coordinates")?;
+        if bytes.length() as usize!=count as usize*8 {return Err("Invalid prepared Nearest coordinate extent".into());}
+        Ok(std::sync::Arc::new(bytes.to_vec()))
+    })));
     renderer.set_snapshot_worker(Rc::new(|request, control| Box::pin(async move {
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         let mut transform = None;
@@ -151,12 +192,14 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
                     .ok_or("Incomplete raster worker result")?;
                 let size = u32::from_le_bytes(header.try_into().unwrap()) as usize;
                 offset += 4;
+                let fingerprint=bytes.get(offset..offset+32).ok_or("Incomplete raster worker fingerprint")?.try_into().unwrap();
+                offset+=32;
                 let end = offset.checked_add(size).ok_or("Raster worker size overflow")?;
                 let encoded = bytes
                     .get(offset..end)
                     .ok_or("Incomplete raster worker tile")?;
-                blobs.push(TileBlob::from_verified_resource(
-                    layer_core::PortableId::random(), descriptor, encoded.into(),
+                blobs.push(TileBlob::from_verified_resource_with_encoded_fingerprint(
+                    layer_core::PortableId::random(), descriptor, encoded.into(),Some(fingerprint),
                 )?);
                 offset = end;
             }
@@ -168,12 +211,61 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
     }));
 }
 
+#[derive(Serialize,Deserialize)]
+struct ImageDecode {
+    interpretation:layer_core::color::source::SourceInterpretation<layer_core::color::ProfileReference>,
+    destination:layer_core::color::RgbSpace,
+    extent:[u32;2],
+    coordinate:[u32;2],
+    profiles:Vec<usize>,
+}
+#[derive(Serialize,Deserialize)]
+struct NearestCoordinates {inverse:[f64;6],size:[u32;2],first:u32,count:u32}
+#[wasm_bindgen]
+pub fn raster_worker_nearest_coordinates(metadata:&str)->Result<Vec<u8>,JsValue> {
+    if metadata.len()>4096 {return Err(js("Oversized Nearest coordinate metadata"));}
+    let request:NearestCoordinates=serde_json::from_str(metadata).map_err(js)?;
+    layer_render_wgpu::prepare_nearest_coordinates(request.inverse,request.size,request.first,request.count)
+        .map(|bytes|bytes.as_ref().clone()).map_err(js)
+}
+#[wasm_bindgen]
+pub fn raster_worker_image_decode(metadata:&str,buffers:js_sys::Array)->Result<Vec<u8>,JsValue> {
+    use layer_core::color::source::SourceImage;
+    use std::sync::Arc;
+    if metadata.len()>16*1024 {return Err(js("Oversized image preparation metadata"));}
+    let request:ImageDecode=serde_json::from_str(metadata).map_err(js)?;
+    if request.profiles.len()>1 || buffers.length()==0 {return Err(js("Invalid image preparation payloads"));}
+    let expected=request.profiles.iter().try_fold(1usize,|sum,count|sum.checked_add(*count)).ok_or_else(||js("Image preparation chunk overflow"))?;
+    if expected!=buffers.length() as usize {return Err(js("Incomplete image preparation payloads"));}
+    let mut profiles=Vec::<Arc<[u8]>>::new();let mut at=1;
+    for count in request.profiles {
+        let mut bytes=Vec::new();
+        for _ in 0..count {
+            let block=buffers.get(at).dyn_into::<js_sys::Uint8Array>()?;at+=1;
+            if block.length() as usize>layer_core::package::MAX_RANGE_BYTES || bytes.len()+block.length() as usize>layer_core::color::source::MAX_PROFILE_BYTES {return Err(js("Oversized image profile payload"));}
+            bytes.extend_from_slice(&block.to_vec());
+        }
+        profiles.push(bytes.into());
+    }
+    let interpretation=request.interpretation.clone().with_profile(request.interpretation.profile.resolve(&profiles).map_err(js)?);
+    let compressed=buffers.get(0).dyn_into::<js_sys::Uint8Array>()?;
+    if compressed.length() as usize>layer_core::package::MAX_RANGE_BYTES {return Err(js("Oversized image tile payload"));}
+    let tile=Arc::new(TileBlob::from_verified_resource(layer_core::PortableId::random(),interpretation.descriptor(),compressed.to_vec().into()).map_err(js)?);
+    let source=SourceImage {extent:request.extent,resolution:None,interpretation,tiles:[(request.coordinate,tile)].into()};
+    let pixels=layer_render_wgpu::prepare_image_tile(&source,request.coordinate,request.destination,
+        &layer_core::raster::DecodedTileCache::new(4*1024*1024),None).map_err(js)?;
+    match pixels {
+        layer_render_wgpu::PreparedImagePixels::NativeSamples(bytes)|layer_render_wgpu::PreparedImagePixels::PremultipliedWorkingPixels(bytes)=>Ok(bytes.as_ref().clone()),
+    }
+}
+
 #[wasm_bindgen]
 pub fn raster_worker_encode(metadata: &str, bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     let descriptors: Vec<PixelDescriptor> = serde_json::from_str(metadata).map_err(js)?;
     let mut result = Vec::new();
     for tile in encode_tiles(bytes, descriptors).map_err(js)? {
         result.extend_from_slice(&(tile.compressed_len() as u32).to_le_bytes());
+        result.extend_from_slice(&tile.encoded_fingerprint().ok_or_else(||js("Missing encoded raster fingerprint"))?);
         result.extend_from_slice(&tile.compressed().map_err(js)?);
     }
     Ok(result)
@@ -203,6 +295,7 @@ fn query_scene(query: &layer_core::ArtworkQuery) -> Result<(std::sync::Arc<layer
     Ok(match query.source {
         Visible => (normalized,SnapshotSource::Visible),
         Source(target) => (normalized,SnapshotSource::Source(target)),
+        Objects(target) => (normalized,SnapshotSource::Objects(target)),
         EffectInput(target) => (normalized,SnapshotSource::EffectInput(target)),
         EffectChannels(target) => (std::sync::Arc::new((*query.snapshot).clone().with_scope(normalized.scope.clone())),SnapshotSource::EffectChannels(target)),
         Reference | EffectBaseline(_) => (normalized,SnapshotSource::Visible),
@@ -213,6 +306,7 @@ enum SnapshotScope {
     All,
     Members(Vec<layer_core::OccurrenceHandle>),
     Raw(layer_core::SourceTarget),
+    RawObjects(layer_core::OccurrenceHandle),
     EffectInput(layer_core::OccurrenceHandle),
 }
 #[derive(Serialize, Deserialize)]
@@ -222,7 +316,7 @@ struct FrozenScene {
     elapsed:f32,
     phases:Vec<(layer_core::EffectHandle,f32)>,
     scope:SnapshotScope,
-    offset:layer_core::Point,
+    offset:[f64;2],
 }
 impl FrozenScene {
     fn new(scene:&layer_core::SceneSnapshot) -> Self {
@@ -231,6 +325,7 @@ impl FrozenScene {
             All => SnapshotScope::All,
             Members(handles) => SnapshotScope::Members(handles.to_vec()),
             Raw(target) => SnapshotScope::Raw(*target),
+            RawObjects(target) => SnapshotScope::RawObjects(*target),
             EffectInput(target) => SnapshotScope::EffectInput(*target),
         };
         Self {owner:scene.owner,revision:scene.revision,elapsed:scene.context.elapsed,phases:scene.context.phases.as_ref().clone(),scope,offset:scene.offset}
@@ -241,6 +336,7 @@ impl FrozenScene {
             SnapshotScope::All => All,
             SnapshotScope::Members(handles) => Members(handles.into()),
             SnapshotScope::Raw(target) => Raw(target),
+            SnapshotScope::RawObjects(target) => RawObjects(target),
             SnapshotScope::EffectInput(target) => EffectInput(target),
         };
         let index = std::sync::Arc::new(layer_core::SceneIndex::build(&artwork)?);

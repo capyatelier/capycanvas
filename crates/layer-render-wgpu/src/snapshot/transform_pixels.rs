@@ -36,7 +36,7 @@ impl SnapshotGpu {
                     let result = scene.capture_raw_tile(r, packet, coordinate, &plan, encoder);
                     r.scene = Some(scene);
                     result
-                }).map_err(|e| e.to_string())?;
+                }).await.map_err(|e| e.to_string())?;
             #[cfg(not(target_arch = "wasm32"))]
             capture.finish()?;
             #[cfg(target_arch = "wasm32")]

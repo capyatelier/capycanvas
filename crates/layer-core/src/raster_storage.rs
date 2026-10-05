@@ -225,6 +225,10 @@ impl Editor {
             metadata_bytes=metadata_bytes.saturating_add(tiles.saturating_mul(192));
         }
         seen.clear();
+        for image in roots.images {
+            if seen.insert(image.owner_identity() as u64) {metadata_bytes=metadata_bytes.saturating_add(image.owner_metadata_bytes());}
+        }
+        seen.clear();
         let mut profiles=HashSet::new();
         for source in &roots.sources {
             if seen.insert(Arc::as_ptr(source) as usize as u64) {

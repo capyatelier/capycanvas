@@ -4,7 +4,7 @@ use layer_core::{
     BlendSpace, Document, ImageResolution,
     color::{
         ColorProfile, DocumentColor,
-        source::{SourceInterpretation, SourceKind},
+        source::SourceInterpretation,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub struct DocumentInfo {
 struct SourceInfo {
     name: String,
     extent: [u32; 2],
-    kind: SourceKind,
+    policy: layer_core::authored::PaintBasePolicy,
     interpretation: SourceInterpretation,
 }
 impl DocumentInfo {
@@ -34,10 +34,14 @@ impl DocumentInfo {
             color: composition.color,
             blend_space: composition.blend,
             resolution: composition.resolution,
-            sources: scene.order().iter().filter_map(|handle| {
-                let occurrence = scene.occurrence(*handle)?;
-                let source = scene.paint_source(*handle)?.original.as_ref()?;
-                Some(SourceInfo {name:occurrence.name.to_string(), extent:source.extent, kind:source.kind, interpretation:source.interpretation.clone()})
+            sources: scene.order().iter().flat_map(|handle| {
+                let occurrence=scene.occurrence(*handle).unwrap();
+                if let Some(base)=scene.paint_source(*handle).and_then(|paint|paint.base.as_ref()) {
+                    return vec![SourceInfo {name:occurrence.name.to_string(),extent:base.image.extent,policy:base.policy,interpretation:base.image.interpretation.clone()}];
+                }
+                scene.object_layer(*handle).into_iter().flat_map(|layer|layer.children.iter()).filter_map(|handle|scene.object(*handle)).map(|object|SourceInfo {
+                    name:object.name.to_string(),extent:object.image.extent,policy:layer_core::authored::PaintBasePolicy::SourceProfile,interpretation:object.image.interpretation.clone(),
+                }).collect()
             }).collect(),
         }
     }
@@ -51,7 +55,7 @@ impl DocumentInfo {
             sources: self.sources.iter().map(|source| Ok(InspectedSourceInfo {
                 name: source.name.clone(),
                 extent: source.extent,
-                kind: source.kind,
+                policy: source.policy,
                 channels: source.interpretation.channels,
                 bits: source.interpretation.depth.bits(),
                 profile_description: crate::profile_description_optional(&source.interpretation.profile)?,
@@ -75,7 +79,7 @@ pub struct InspectedDocumentInfo {
 pub struct InspectedSourceInfo {
     pub name: String,
     pub extent: [u32; 2],
-    pub kind: SourceKind,
+    pub policy: layer_core::authored::PaintBasePolicy,
     pub channels: layer_core::color::source::SourceChannels,
     pub bits: u8,
     pub profile_description: Option<String>,

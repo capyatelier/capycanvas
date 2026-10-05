@@ -289,7 +289,7 @@ impl WebApp {
             let project = imported.project;
             if placing {
                 hdr::admit_document(&project)?;
-                let source=project.artwork.paint.iter().find_map(|(_,_,p)|p.original.clone()).ok_or_else(||js("The selected file is not a photo"))?;
+                let source=project.artwork.paint.iter().find_map(|(_,_,p)|p.base.as_ref().map(|base| base.image.storage().clone())).ok_or_else(||js("The selected file is not a photo"))?;
                 return Ok(WebProject {
                     session: None,
                     request: id,
@@ -429,7 +429,7 @@ pub(super) async fn prepare_session(
     )
     .map_err(js)?;
     raster_worker::install(&mut renderer);
-    let programs=project.artwork.definitions.iter().map(|(_,_,d)|d.program.clone()).collect::<Vec<_>>();
+    let programs=project.artwork.effects.iter().map(|(_,_,d)|d.program.clone()).collect::<Vec<_>>();
     let mut validating = !programs.is_empty();
     if validating {
         renderer

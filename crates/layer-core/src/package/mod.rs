@@ -14,6 +14,7 @@ pub mod archive;
 pub mod transport;
 
 pub mod manifest;
+pub mod registry;
 pub mod values;
 pub mod effect_records;
 pub mod selection_records;

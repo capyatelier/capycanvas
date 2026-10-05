@@ -44,7 +44,8 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
       const profiles=transfer.manifest.resources.filter(r=>r.type==='capy.icc/1');check(profiles.length===1);
       const profile=profiles[0].id;
       const proof=objects.find(o=>o.type==='capy.output/1').data.proof;
-      const original=objects.find(o=>o.type==='capy.paint-source/1').data.original;
+      const base=objects.find(o=>o.type==='capy.paint-source/2').data.base;
+      const original=objects.find(o=>o.id===base.image.ref).data;
       check(proof.profile.resource.ref===profile && original.interpretation.profile.resource.ref===profile);
       const resource=transfer.resources[profile];check(resource.kind==='bytes');
       let code=0;

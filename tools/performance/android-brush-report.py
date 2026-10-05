@@ -8,7 +8,7 @@ import pathlib
 import statistics
 import subprocess
 import sys
-from android_brush_metrics import completion_window, contact_latencies, input_completions
+from android_brush_metrics import completion_window, contact_latencies, input_completions, object_completions
 
 
 def distribution(values):
@@ -52,12 +52,21 @@ def main():
             rows_before = {r["label"]: r["value"] for r in data["renderer_before"]["rows"]}
             rows_after = {r["label"]: r["value"] for r in data["renderer_after"]["rows"]}
             progress = completion_window(data)
+            completion_gaps = distribution(progress.pop("completion_gaps_ms"))
             input_updates = input_completions(data)
             submitted = progress["submitted"]
             stamps = int(rows_after["Dabs"]) - int(rows_before["Dabs"])
             times = [f["start_ns"] for f in frames]
             contacts = contact_latencies(data)
+            object_edits = motion.get("object_edits", [])
+            posed = object_completions(data)
             runs.append({"run": i, **progress, "cpu_update_count": len(frames),
+                "completion_gap_ms": completion_gaps,
+                "object_edits": len(object_edits),
+                "object_completed_per_s": len(posed) / progress["active_input_seconds"],
+                "object_completion_gap_ms": distribution([(b[0][2] - a[0][2]) / 1e6 for a,b in zip(posed,posed[1:])]),
+                "object_edit_gpu_ms": distribution([(row[2] - edit[0]) / 1e6 for row,edit in posed]),
+                "object_edit_call_ms": distribution([(edit[1] - edit[0]) / 1e6 for edit in object_edits]),
                 "input_completed_per_s": sum(map(len, input_updates)) / progress["active_input_seconds"],
                 "input_completion_gap_ms": distribution([(b[2] - a[2]) / 1e6 for interval in input_updates for a, b in zip(interval, interval[1:])]),
                 "callback_count": len(callbacks), "cpu_ms": cpu,
@@ -110,16 +119,23 @@ def main():
             summary["trace_actions"] = trace_data["actions"]
         summaries.append(summary)
         summary["input_completed_per_s_median"] = statistics.median(r["input_completed_per_s"] for r in runs)
+        if info["mode"] == "object-affine":
+            summary["object_completed_per_s_median"] = statistics.median(r["object_completed_per_s"] for r in runs)
+            summary["object_completed_per_s_range"] = [min(r["object_completed_per_s"] for r in runs), max(r["object_completed_per_s"] for r in runs)]
         gpu = [r["rolling_gpu_ms"]["p50"] for r in runs if r["rolling_gpu_ms"].get("n")]
         gpu_time = f"{statistics.median(gpu):.2f}ms" if gpu else "not sampled"
-        print(f"{label:48} input updates/s={summary['input_completed_per_s_median']:.1f} canvas updates/s={summary['completed_per_s_median']:.1f} "
-              f"CPU={statistics.median(r['cpu_ms']['cpu_callback']['p50'] for r in runs):.2f}ms "
+        cpu = [r["cpu_ms"]["cpu_callback"]["p50"] for r in runs if r["cpu_ms"]["cpu_callback"].get("n")]
+        cpu_time = f"{statistics.median(cpu):.2f}ms" if cpu else "not sampled"
+        fresh = f"fresh object poses/s={summary['object_completed_per_s_median']:.1f}" if info["mode"] == "object-affine" else f"input updates/s={summary['input_completed_per_s_median']:.1f}"
+        print(f"{label:48} {fresh} canvas updates/s={summary['completed_per_s_median']:.1f} "
+              f"CPU={cpu_time} "
               f"rolling GPU={gpu_time} "
               f"dabs/update={statistics.median(r['dabs_per_submitted_update'] for r in runs):.1f}")
     (args.directory / "summary.json").write_text(json.dumps(summaries, indent=2))
     with (args.directory / "summary.csv").open("w", newline="") as out:
         columns = ["label", "preset", "size", "mode", "prediction", "trace", "speed", "completed_updates_per_s",
-                   "input_updates_per_s", "input_completion_gap_p99_ms",
+                   "input_updates_per_s", "input_completion_gap_p99_ms", "completion_gap_p99_ms",
+                   "fresh_object_poses_per_s", "fresh_object_gap_p99_ms", "object_edit_gpu_p99_ms", "object_edit_call_p99_ms",
                    "minimum_run_updates_per_s", "maximum_run_updates_per_s", "cpu_callback_p50_ms",
                    "update_start_gap_p95_ms", "update_start_gap_p99_ms", "input_queue_p95_ms",
                    "rolling_gpu_p50_ms", "viewport_gpu_p50_ms", "dabs_per_update", "resident_mib", "stats_panel"]
@@ -130,16 +146,25 @@ def main():
             def observed_median(field):
                 values = [r[field]["p50"] for r in s["runs"] if r[field].get("n")]
                 return statistics.median(values) if values else ""
+            def observed_quantile(field, quantile):
+                values = [r[field][quantile] for r in s["runs"] if r[field].get("n")]
+                return statistics.median(values) if values else ""
+            cpu = [r["cpu_ms"]["cpu_callback"]["p50"] for r in s["runs"] if r["cpu_ms"]["cpu_callback"].get("n")]
             writer.writerow({**{k: s[k] for k in columns[:7]},
                 "completed_updates_per_s": s["completed_per_s_median"],
-                "input_updates_per_s": s["input_completed_per_s_median"],
-                "input_completion_gap_p99_ms": median(lambda r: r["input_completion_gap_ms"].get("p99", 0)),
+                "input_updates_per_s": s["input_completed_per_s_median"] if s["mode"] != "object-affine" else "",
+                "input_completion_gap_p99_ms": median(lambda r: r["input_completion_gap_ms"].get("p99", 0)) if s["mode"] != "object-affine" else "",
+                "completion_gap_p99_ms": median(lambda r: r["completion_gap_ms"].get("p99", 0)),
+                "fresh_object_poses_per_s": s.get("object_completed_per_s_median", ""),
+                "fresh_object_gap_p99_ms": observed_quantile("object_completion_gap_ms", "p99"),
+                "object_edit_gpu_p99_ms": observed_quantile("object_edit_gpu_ms", "p99"),
+                "object_edit_call_p99_ms": observed_quantile("object_edit_call_ms", "p99"),
                 "minimum_run_updates_per_s": s["completed_per_s_range"][0],
                 "maximum_run_updates_per_s": s["completed_per_s_range"][1],
-                "cpu_callback_p50_ms": median(lambda r: r["cpu_ms"]["cpu_callback"]["p50"]),
-                "update_start_gap_p95_ms": median(lambda r: r["update_start_gap_ms"]["p95"]),
-                "update_start_gap_p99_ms": median(lambda r: r["update_start_gap_ms"]["p99"]),
-                "input_queue_p95_ms": median(lambda r: r["input_queue_ms"]["p95"]),
+                "cpu_callback_p50_ms": statistics.median(cpu) if cpu else "",
+                "update_start_gap_p95_ms": observed_quantile("update_start_gap_ms", "p95"),
+                "update_start_gap_p99_ms": observed_quantile("update_start_gap_ms", "p99"),
+                "input_queue_p95_ms": median(lambda r: r["input_queue_ms"].get("p95", 0)) if s["mode"] != "object-affine" else "",
                 "rolling_gpu_p50_ms": observed_median("rolling_gpu_ms"),
                 "viewport_gpu_p50_ms": observed_median("viewport_gpu_ms"),
                 "dabs_per_update": median(lambda r: r["dabs_per_submitted_update"]),

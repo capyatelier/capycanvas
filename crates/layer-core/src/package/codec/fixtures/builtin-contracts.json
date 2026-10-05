@@ -11,7 +11,7 @@
   }},
   "bloom": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":false,"constraints":[],"parameters": {
     "amount":{"dimension":"scalar","kind":{"kind":"number","max":200.0,"min":0.0},"opaque":false},
-    "sigma":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "sigma":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "threshold":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false}
   }},
   "brightness_contrast": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
@@ -39,7 +39,7 @@
   }},
   "chromatic_aberration": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":false,"constraints":[],"parameters": {
     "angle":{"dimension":"angle","kind":{"kind":"number","max":180.0,"min":-180.0},"opaque":false},
-    "distance":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "distance":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "clarity": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "amount":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":-100.0},"opaque":false}
@@ -65,15 +65,15 @@
     "angle":{"dimension":"angle","kind":{"kind":"number","max":180.0,"min":-180.0},"opaque":false},
     "ink":{"dimension":"scalar","kind":{"kind":"color"},"opaque":true},
     "paper":{"dimension":"scalar","kind":{"kind":"color"},"opaque":true},
-    "spacing":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
-    "width":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "spacing":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "width":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "crt": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":true,"constraints":[],"parameters": {
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
     "curvature":{"dimension":"scalar","kind":{"kind":"number","max":30.0,"min":0.0},"opaque":false},
     "lines":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "mask":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
-    "separation":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "separation":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false}
   }},
   "curves": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
@@ -94,19 +94,19 @@
   }},
   "domain_warp": {"version":2,"kind":"adjustment","alpha":"filter","space":"linear","time":true,"constraints":[],"parameters": {
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
-    "distance":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
-    "scale":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "distance":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "scale":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "speed":{"dimension":"scalar","kind":{"kind":"number","max":4.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false}
   }},
   "edge_detect": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "invert":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
-    "radius":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "radius":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "strength":{"dimension":"scalar","kind":{"kind":"number","max":400.0,"min":0.0},"opaque":false}
   }},
   "emboss": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "angle":{"dimension":"angle","kind":{"kind":"number","max":180.0,"min":-180.0},"opaque":false},
-    "radius":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "radius":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "strength":{"dimension":"scalar","kind":{"kind":"number","max":400.0,"min":0.0},"opaque":false}
   }},
   "exposure": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
@@ -118,17 +118,17 @@
     "amount":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
     "color":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
-    "size":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "size":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "speed":{"dimension":"scalar","kind":{"kind":"number","max":4.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false}
   }},
   "gaussian_blur": {"version":1,"kind":"adjustment","alpha":"filter","space":"blending","time":false,"constraints":[],"parameters": {
-    "sigma":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "sigma":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "glass": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":false,"constraints":[],"parameters": {
-    "distance":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "distance":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "roughness":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
-    "scale":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "scale":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "gradient_fill": {"version":2,"kind":"generator","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "angle":{"dimension":"angle","kind":{"kind":"number","max":180.0,"min":-180.0},"opaque":false},
@@ -147,19 +147,19 @@
     "contrast":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "ink":{"dimension":"scalar","kind":{"kind":"color"},"opaque":true},
     "paper":{"dimension":"scalar","kind":{"kind":"color"},"opaque":true},
-    "size":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "size":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "heat_haze": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":true,"constraints":[],"parameters": {
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
     "detail":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
-    "distance":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
-    "scale":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "distance":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "scale":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "speed":{"dimension":"scalar","kind":{"kind":"number","max":4.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false}
   }},
   "high_pass": {"version":1,"kind":"adjustment","alpha":"preserve","space":"blending","time":false,"constraints":[],"parameters": {
     "amount":{"dimension":"scalar","kind":{"kind":"number","max":300.0,"min":0.0},"opaque":false},
-    "sigma":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "sigma":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "hue_saturation": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "blues_center":{"dimension":"angle","kind":{"kind":"number","max":360.0,"min":0.0},"opaque":false},
@@ -209,7 +209,7 @@
   }},
   "iridescence": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":true,"constraints":[],"parameters": {
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
-    "scale":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "scale":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "speed":{"dimension":"scalar","kind":{"kind":"number","max":4.0,"min":0.0},"opaque":false},
     "strength":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false}
@@ -246,17 +246,17 @@
   }},
   "motion_blur": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":false,"constraints":[],"parameters": {
     "angle":{"dimension":"angle","kind":{"kind":"number","max":180.0,"min":-180.0},"opaque":false},
-    "distance":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "distance":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "painterly": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
-    "radius":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "radius":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "strength":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false}
   }},
   "pencil": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "contrast":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "ink":{"dimension":"scalar","kind":{"kind":"color"},"opaque":true},
     "paper":{"dimension":"scalar","kind":{"kind":"color"},"opaque":true},
-    "sigma":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "sigma":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "photo_filter": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "color":{"dimension":"scalar","kind":{"kind":"color"},"opaque":false},
@@ -264,7 +264,7 @@
     "preserve_luminance":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false}
   }},
   "pixel_mosaic": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":false,"constraints":[],"parameters": {
-    "size":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "size":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "posterize": {"version":2,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "levels":{"dimension":"count","kind":{"kind":"number","max":256.0,"min":2.0},"opaque":false}
@@ -272,8 +272,8 @@
   "rainy_glass": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":true,"constraints":[],"parameters": {
     "amount":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
-    "distance":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
-    "scale":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "distance":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "scale":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "speed":{"dimension":"scalar","kind":{"kind":"number","max":4.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false}
   }},
@@ -281,10 +281,10 @@
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
     "center_x":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "center_y":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
-    "distance":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "distance":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "speed":{"dimension":"scalar","kind":{"kind":"number","max":4.0,"min":0.0},"opaque":false},
     "time":{"dimension":"time","kind":{"kind":"number","max":3600.0,"min":0.0},"opaque":false},
-    "wavelength":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "wavelength":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "selective_color": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "blacks_black":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":-100.0},"opaque":false},
@@ -331,7 +331,7 @@
   }},
   "soft_focus": {"version":1,"kind":"adjustment","alpha":"preserve","space":"blending","time":false,"constraints":[],"parameters": {
     "amount":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
-    "sigma":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
+    "sigma":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false}
   }},
   "solarize": {"version":1,"kind":"adjustment","alpha":"preserve","space":"linear","time":false,"constraints":[],"parameters": {
     "strength":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
@@ -357,12 +357,12 @@
   }},
   "unsharp_mask": {"version":1,"kind":"adjustment","alpha":"preserve","space":"blending","time":false,"constraints":[],"parameters": {
     "amount":{"dimension":"scalar","kind":{"kind":"number","max":300.0,"min":0.0},"opaque":false},
-    "sigma":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "sigma":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "threshold":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false}
   }},
   "vhs": {"version":1,"kind":"adjustment","alpha":"filter","space":"linear","time":true,"constraints":[],"parameters": {
     "animate":{"dimension":"scalar","kind":{"kind":"toggle"},"opaque":false},
-    "distance":{"dimension":"source_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
+    "distance":{"dimension":"composition_pixels","kind":{"kind":"number","max":65536.0,"min":0.0},"opaque":false},
     "lines":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "noise":{"dimension":"scalar","kind":{"kind":"number","max":100.0,"min":0.0},"opaque":false},
     "speed":{"dimension":"scalar","kind":{"kind":"number","max":4.0,"min":0.0},"opaque":false},

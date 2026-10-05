@@ -131,7 +131,6 @@ struct ReferenceCache {
     pages: BTreeMap<[u32; 2], usize>,
     slots: Vec<Slot>,
     clock: u64,
-    failed: BTreeSet<[u32; 2]>,
     analysis_job: Option<crate::effect_analysis::Job>,
     analyses: Option<Result<crate::effect_analysis::Candidate, String>>,
 }
@@ -147,7 +146,6 @@ impl ReferenceCache {
         self.key = Some(ReferenceKey::new(frame, members, extent));
         self.frame = Some(Arc::new(reference_frame(frame, members)));
         self.pages.clear();
-        self.failed.clear();
         for slot in &mut self.slots {
             slot.coordinate = None;
         }
@@ -421,9 +419,7 @@ impl RetouchSources {
             .find(|l| l.id == layer)
             .and_then(|l| l.pages.iter().find(|p| p.coordinate == coordinate));
         let original = r.native_color_tile(layer, coordinate).is_ok_and(|tile| tile.is_some())
-            || r.tiled_sources.get(&layer).is_some_and(|s| {
-                coordinate[0] * PAGE_SIZE < s.extent[0] && coordinate[1] * PAGE_SIZE < s.extent[1]
-            });
+            || r.tiled_sources.get(&layer).is_some_and(|base| source_access::paint_base_contains(base, coordinate));
         let copy = page.filter(|page| !page.primary_needs_clear || original).map(|page| {
             let slot = self.pool_page(r);
             let source = &page.active().texture;
@@ -466,7 +462,7 @@ impl RetouchSources {
         if let Some(previous) = previous { r.effect_analyses = previous; }
         if let Err(error) = result {
             self.cache.release(slot);
-            return Err(error);
+            return match error { GpuRasterError::DeferredObjectWork => {self.pending=true;Ok(None)}, error => Err(error) };
         }
         self.counts.captures += 1;
         self.counts.blocking += u64::from(blocking);
@@ -608,9 +604,7 @@ impl RetouchSources {
             }
         }
         let slot = self.capture_reference(r, coordinate, self.live.is_none(), encoder)?;
-        if slot.is_none() && self.live.is_some() {
-            self.miss();
-        }
+        if slot.is_none() { self.miss(); }
         Ok(slot.map(|slot| self.cache.slots[slot].page.view.clone()))
     }
 
@@ -751,38 +745,33 @@ impl RetouchSources {
         frame: &artwork::Frame,
         quiet: bool,
         encoder: &mut crate::submission::CommandEncoder,
-    ) {
+    ) -> Result<(),GpuRasterError> {
         self.pending = false;
         let Some(prepared) = self.prepared.as_ref().filter(|p| {
             p.retouch.source == layer_core::RetouchSource::References && !p.retouch.references.is_empty()
         }) else {
-            return;
+            return Ok(());
         };
         if self.live.is_some() {
-            return;
+            return Ok(());
         }
         let members = prepared.retouch.references.clone();
         self.cache.validate(frame, &members, r.document_extent);
-        match self.cache.analysis_ready(r) {
-            Ok(false) => { self.pending = true; return; },
-            Err(_) => return,
-            Ok(true) => {},
-        }
+        if !self.cache.analysis_ready(r)? { self.pending = true; return Ok(()); }
         let wanted: Vec<_> = rings(&prepared.points, r.document_extent)
             .into_iter()
-            .filter(|c| !self.cache.pages.contains_key(c) && !self.cache.failed.contains(c))
+            .filter(|c| !self.cache.pages.contains_key(c))
             .collect();
         for &coordinate in wanted.iter().take(if quiet { PREFETCH_PAGES } else { 0 }) {
-            if !matches!(self.capture_reference(r, coordinate, true, encoder), Ok(Some(_))) {
-                self.cache.failed.insert(coordinate);
-            }
+            if self.capture_reference(r, coordinate, true, encoder)?.is_none() { break; }
         }
         self.pending = wanted
             .iter()
-            .any(|c| !self.cache.pages.contains_key(c) && !self.cache.failed.contains(c));
+            .any(|c| !self.cache.pages.contains_key(c));
         if !self.pending {
             self.capture = artwork::Capture::default();
         }
+        Ok(())
     }
 }
 
@@ -824,10 +813,9 @@ fn raw_prepared_view(r: &WgpuRasterizer, layer: SourceTarget, coordinate: [u32; 
         Ok(None) => {}
     }
     match r.tiled_sources.get(&layer) {
-        Some(source)
-            if coordinate[0] * PAGE_SIZE < source.extent[0] && coordinate[1] * PAGE_SIZE < source.extent[1] =>
+        Some(source) if source_access::paint_base_contains(source, coordinate) =>
         {
-            sources.prepared_view(source, coordinate)
+            sources.prepared_base_view(source, coordinate)
                 .map_or(Prepared::Decode, |view| Prepared::View(view.clone()))
         }
         _ => Prepared::Absent,
@@ -940,14 +928,15 @@ impl WgpuRasterizer {
         frame: &artwork::Frame,
         moving: bool,
         encoder: &mut crate::submission::CommandEncoder,
-    ) {
+    ) -> Result<(),GpuRasterError> {
         let Some(mut retouch) = self.retouch.take() else {
-            return;
+            return Ok(());
         };
         let quiet = !moving && retouch.view == Some(frame.view);
         retouch.view = Some(frame.view);
-        retouch.prefetch(self, frame, quiet, encoder);
+        let result = retouch.prefetch(self, frame, quiet, encoder);
         self.retouch = Some(retouch);
+        result
     }
 
     /// Map what the retouching batch copies onto the `local` part of page

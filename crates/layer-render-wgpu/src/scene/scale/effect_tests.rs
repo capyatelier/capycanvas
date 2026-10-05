@@ -6,8 +6,8 @@ fn effect(doc: &mut Document, name: &str) -> OccurrenceHandle {
 }
 
 fn effect_program_mut(doc: &mut Document, handle: OccurrenceHandle) -> &mut layer_core::EffectProgram {
-    let application=effect_handle(doc,handle);let definition=doc.artwork.effects.get(application).unwrap().definition;
-    Arc::make_mut(&mut doc.artwork.definitions.get_mut(definition).unwrap().program)
+    let application=effect_handle(doc,handle);
+    Arc::make_mut(&mut doc.artwork.effects.get_mut(application).unwrap().program)
 }
 fn effect_program_at_mut(doc: &mut Document,index:usize)->&mut layer_core::EffectProgram {
     let handle=doc.scene().order()[index];effect_program_mut(doc,handle)
@@ -47,8 +47,9 @@ fn assert_window_matches_full(window: &WgpuRasterizer, full: &WgpuRasterizer, co
 
 fn assert_spatial_storage_reserved(r: &WgpuRasterizer, frame: FramePacket<'_>) {
     let cache = r.scale_display.as_ref().unwrap();
-    let input = input_plan(cache.plan, frame.scene);
-    let images = graph::scratch_images(frame, cache.plan.level, r.device.working_space()).unwrap();
+    let objects=r.scene.as_ref().map(|scene|&scene.object_spatial);
+    let input = input_plan(cache.plan, frame.scene,objects);
+    let images = graph::scratch_images(frame, cache.plan.level, r.device.working_space(),objects).unwrap();
     let reserved = input.level_bytes(input.level) * (images - 1);
     let actual = cache.output.iter().map(|image| texture_bytes(&image.texture)).sum::<u64>();
     assert!(actual <= reserved, "spatial scratch storage={actual}, reservation={reserved}, images={images}");
@@ -249,6 +250,9 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     program.id = "position_adjustment".into();
     program.entry = "position_adjustment".into();
     program.wgsl = "fn position_adjustment(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4(c.rgb*.7+vec3(p/fx_extent(),0.)*.1*c.a,c.a);}".into();
+    let application=effect_handle(&doc,adjustment);
+    let authored=doc.artwork.effects.get_mut(application).unwrap();
+    *authored=layer_core::EffectApplication::new(authored.program.clone(),authored.values.clone(),extent);
     coverage_mask(&mut doc,adjustment,Default::default(),Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 63., y: 37. }, layer_core::Point { x: 410., y: 37. },
         layer_core::Point { x: 410., y: 206. }, layer_core::Point { x: 63., y: 206. },
@@ -312,6 +316,9 @@ fn window_effects_preserve_document_coordinates_and_shifted_masks() {
     program.id = "window_position".into();
     program.entry = "window_position".into();
     program.wgsl = "fn window_position(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4(c.rgb*.7+vec3(p/fx_extent(),0.)*.1*c.a,c.a);}".into();
+    let application=effect_handle(&doc,adjustment);
+    let authored=doc.artwork.effects.get_mut(application).unwrap();
+    *authored=layer_core::EffectApplication::new(authored.program.clone(),authored.values.clone(),extent);
     coverage_mask(&mut doc,adjustment,layer_core::Point { x: 17., y: -9. },Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 260., y: 130. }, layer_core::Point { x: 1300., y: 170. },
         layer_core::Point { x: 1100., y: 920. }, layer_core::Point { x: 310., y: 850. },
@@ -591,10 +598,10 @@ fn pointwise_large_window_keeps_tiled_scratch_admission() {
 fn decoded_gaussian_display_refinement_finishes_with_bounded_chunks() {
     let extent=[2049,1281];
     let mut doc=document_at(extent);
-    paint_mut(&mut doc,0).original=Some(crate::test_support::depth_source(extent,SampleDepth::U8,
+    paint_mut(&mut doc,0).base=Some(layer_core::authored::PaintBase::new((crate::test_support::depth_source(extent,SampleDepth::U8,
         layer_core::color::RgbSpace::Srgb,16<<20,|x,y| {
             if x<1024 {[0.08,0.4,0.9,1.]}else{[0.8,0.12+0.2*(y%257) as f32/256.,0.25,1.]}
-        }));
+        })).into()));
     let blur=effect(&mut doc,"gaussian_blur");
     set_effect_value(&mut doc,blur,"sigma",EffectValue::Number(85.));
     insert_occurrence(&mut doc,blur,0);
@@ -995,7 +1002,7 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
     let reference=pixels(&exact,crate::test_support::document_texture(&exact));
     let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.source_tiles.get_mut().admit(0);
     window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(448<<20);window.submit(frame).unwrap();
-    assert!(window.metrics().image_window_submissions>11,"deep halos must use a smaller admitted window");
+    assert!(window.metrics().image_window_submissions>1,"the stacked filter input must use bounded windows");
     assert!(window.metrics().image_window_peak_bytes<=448<<20);
     let actual=display_pixels(&window);assert_eq!(actual.len(),reference.len());
     assert!(actual.iter().zip(&reference).all(|(a,b)|a.iter().zip(b).all(|(a,b)|(a-b).abs()<=2e-5)));

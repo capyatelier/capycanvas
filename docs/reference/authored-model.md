@@ -12,7 +12,7 @@ transport rules; this guide owns runtime state and resource lifetime.
 ## Objects and identity
 
 An artwork owns typed stores for compositions, stacks, occurrences, paint
-sources, coverage sources, effects, immutable effect definitions, saved
+sources, object layers, image objects, coverage sources, effects, saved
 selections, guides and outputs. Every authored record has an opaque 128-bit
 portable ID. A decoded ID maps once to a typed `u32` handle. Each store allocates
 handles monotonically and never reuses a slot during its lifetime; exhaustion
@@ -27,14 +27,15 @@ that same slot. A missing slot is an error, never an implicit empty source. Stor
 slots, indexes, allocator cursors, revisions and process addresses are not portable
 identity. Reopening resolves portable references into a fresh set of handles.
 
-Deletion, merge and effect replacement use `Document::effect_edits` to include
-dependent records in the undoable edit. Removing an application removes its
-saved output phases; removing or replacing the last application of a definition
-releases that definition. Shared definitions and already unplaced definitions
-remain authored content; undo restores the removed identities and phases.
+Deletion, merge and effect replacement use `Document::effect_edits` to remove
+saved output phases alongside the application. Each application retains its
+immutable program directly. Undo retains the application ID, values, spatial
+reference and program owners; equal programs share storage without an authored
+definition identity.
 
-Stacks alone own front-to-back order. An occurrence has at most one containing
-stack. Groups refer to nested stacks; there is no second authoritative parent
+Stacks own front-to-back layer order; object layers own their child order.
+An occurrence has at most one containing stack. Groups refer to nested stacks;
+there is no second authoritative parent
 field or flat layer order. Parent, sibling, clipping, ancestry and target indexes
 are derived at structural publication. Ordinary painting resolves its destination
 once and uses compact source handles without portable-ID or linear parent lookup
@@ -55,7 +56,7 @@ per frame. `authored::Store` supplies the stable typed slots.
 
 ## Records and working state
 
-[`Artwork`](../../crates/layer-core/src/authored/artwork.rs) holds the ten typed
+[`Artwork`](../../crates/layer-core/src/authored/artwork.rs) holds the typed
 stores, root composition, default output, photo metadata and retained ancillary
 extensions. [`Store<T>`](../../crates/layer-core/src/authored/store.rs) shares its
 slot inventory and immutable record owners; a changed record replaces only that
@@ -113,20 +114,20 @@ shared session or workspace owners.
 
 | Field | Meaning, default and units | Required assertion |
 | --- | --- | --- |
-| `Occurrence.content` | Paint-source use, nested stack, effect application or saved selection. | Groups, effects and selections do not acquire fake paint sources. |
+| `Occurrence.content` | Paint-source use, object-layer use, nested stack, effect application or saved selection. | Groups, effects and selections do not acquire fake paint sources. |
 | `Occurrence.name` | Literal UTF-8 name supplied at creation. | Rename preserves identity and does not invalidate pixels. |
 | `Occurrence.visible` | Artwork contribution visibility, initially true; fixed true for saved selections. | Hiding artwork contribution does not disable a source demanded by an explicit input. Selection overlay visibility belongs to working state. |
 | `Occurrence.opacity` | Finite contribution factor `[0,1]`, initially 1. | Affect only this occurrence and retain pass-through interpolation. |
 | `Occurrence.blend` | Actual blend operation, initially Normal. | Pass Through is an explicit mode; isolating a Pass Through group makes it Normal. |
 | `Occurrence.attachment` | `None`, `Clip` or `Effect`, initially None. | Publication resolves a common clipping base or an effect owner from sibling order, independent of visibility. |
 | `Occurrence.translation` | Translation in enclosing-stack pixels, initially zero. | Preserve inherited group offsets, including mask placement. |
-| `Occurrence.placement` | Local retained projective placement, optional cubic mesh and interpolation; initially identity, no mesh, Linear. | Retain analytic geometry; omit generated tessellation and GPU buffers. |
+| `Occurrence.placement` | Retained paint/group projective placement, optional cubic mesh and interpolation; initially identity, no mesh, Linear. | Object-layer occurrences require identity placement and integer translation; their image children own affine geometry. Paint/container integer cutover remains separate. |
 | `Occurrence.locked`, `alpha_locked` | Editing locks, initially false. | Derive ancestor locks; valid undo restores records without changing source sample identity. |
 | `Occurrence.reference` | Authored reference designation, initially false. | Preserve independently of visibility and rebuild reference scopes after grouping or reorder. |
 | `Occurrence.mask` | Optional `MaskUse` in the occurrence's mask slot. | Source edits differ from use enablement, linkage, inversion and placement edits. |
 | `PaintSource.domain` | Explicit local pixel domain. | Canvas shrink does not shrink the source; domains and occurrence placement remain independent. |
 | `PaintSource.raster` | Immutable sparse revision, initially empty, with color and material planes. | Preserve tile codes and unchanged compressed bytes; missing overrides reveal the imported base. |
-| `PaintSource.original` | Optional immutable imported base, absent for new paint. | Preserve Original/Rasterized role, extent, density, profile, assumed-profile flag and samples separately from overrides. |
+| `PaintSource.base` | Optional immutable image binding, absent for new paint. | Retain the shared image ID, nonnegative integer paint-local offset and `SourceProfile` or `WorkingPixels` policy. The entire image rectangle must fit the paint domain. Shared color-job capture omits source-profile paint bindings; adoption restores them by paint ID and interns matching image, raster tile and proof profile owners before validation. Source job preview and adoption use the same strict resource pool for returned immutable samples. |
 | `PaintSource.color_mode` | Full color (default), Grayscale, or Two-tone. | Store full color as RGB + alpha and reduced modes as gray + alpha at the document precision. Changes convert existing pixels in one undo step; subsequent edits obey the selected mode. |
 | `PaintSource.operations` | Accepted transient raster commands and immutable inputs. | Package preparation refuses unfinished commands; represented pending revision promises may be retained. |
 
@@ -164,15 +165,61 @@ changes do not alter saved coverage or portable records.
 
 ### Source and material resources
 
-A paint source retains `SourceImage.kind`, `extent`, `resolution`,
-`interpretation.{channels,depth,profile,profile_assumed}` and `tiles` together.
-Original images keep independent Gray, GrayAlpha, RGB, RGBA or CMYK interpretation.
-Rasterized images retain explicit working RGBA interpretation, matching committed
-depth and profile with `profile_assumed` false. ICC bytes are
-immutable resources; equal profiles may share bytes without merging source IDs.
-Physical resolution is optional and retains exact rational units. Future imported
-per-source descriptive metadata belongs to the source, not the drawing's photo
-metadata envelope.
+An `Image` is an immutable portable-ID-bearing owner around the existing shared
+`Resource<SourceImage>` mechanism. Paint bases and image objects retain it directly;
+there is no editable image store, image handle or image undo edit. Replacement
+paint/object records retain previous images for undo. Image equality includes its
+portable identity. One image ID must retain the same descriptor and immutable
+profile/tile payloads across current records, Undo, Redo and operation captures.
+Admission compares shared owners or verified encoded tile fingerprints without
+decoding samples. Foreign imports reject IDs shared across image, tile and profile
+kinds before assigning fresh IDs to the immutable dependency closure while
+preserving shared backing.
+
+Images retain `extent`, `resolution`,
+`interpretation.{channels,depth,profile,profile_assumed}` and complete tiled samples.
+Gray, GrayAlpha, RGB, RGBA and CMYK images preserve their own color interpretation.
+The paint binding controls document-color edits: `SourceProfile` preserves that
+interpretation; `WorkingPixels` requires explicit working RGBA, matching document
+depth and built-in profile, with `profile_assumed` false. A working-color change
+replaces the selected paint binding's image without changing other image users.
+ICC bytes and tiles remain immutable resources. Physical resolution retains exact
+rational units.
+
+Base offsets may cross tile boundaries. The renderer gathers each paint-local
+256-square window from at most four decoded image tiles and clears the area
+outside the finite image rectangle to transparent. Painted override tiles replace
+the base, including authored transparent samples. Unedited Gray/RGB bases have
+known content bounds at their paint-local offset; pending operations require
+evaluated bounds even while their raster backing remains empty.
+
+### Object layers and image objects
+
+Object layers own front-to-back `children` lists of typed image-object handles.
+A drawable ID cannot appear in multiple collection slots. Each object-layer
+occurrence owns the layer presentation, mask and effects; the collection adds no
+second name, blend, opacity or writable pixel target. Object layers are isolated,
+can serve as clipping bases and can own attached effects.
+
+An `ImageObject` retains an `Image`, authored name and visibility, one `Affine64`
+placement and `Nearest` or `Linear` interpolation. Linear is the insertion default.
+The six finite F64 coefficients map source image coordinates into the layer frame
+as `[xx,yx,xy,yy,tx,ty]`; validation requires an invertible map and finite image
+bounds. Nonfinite and singular mappings are invalid; finite mappings beyond the
+implemented numerical support are refused as unsupported. Object layers currently
+require integer offsets and identity placement on every ancestor group. Duplication allocates new object and collection IDs while sharing immutable
+images. Foreign image-object import assigns new image, tile and profile IDs to the
+whole dependency batch while retaining shared immutable payloads. Object-only
+documents require no paint source. Opening or replacing the renderer still
+requires tiled-image support whenever paint bases or image objects are retained.
+
+Shared `Document` planners create object layers, insert image objects and replace
+affine placements with atomic reversible record edits. They respect ancestor locks
+and validate before publication. The shared session asks the renderer to preflight
+the candidate affine against the current scene and view before committing history.
+A rejected sampling request preserves the document, checkpoint and both history
+directions. These planners do not expose object-authoring UI;
+working object selection and tool routing belong to that later feature.
 
 `RasterData.tiles` retains plane, local tile coordinate, pixel descriptor and
 immutable publication. Color, Wetness and WatercolorWetness are paint-source
@@ -196,11 +243,14 @@ strong deduplication remain separate from editable source identity.
 
 | Field | Authoritative owner and defaults | Required assertion |
 | --- | --- | --- |
-| `EffectApplication.definition` | Typed reference to an immutable authored definition. | Capture/undo preserves one definition owner; application and definition identities remain distinct. |
+| `EffectApplication.program` | Shared immutable runtime program. | Built-ins resolve catalog programs; private custom programs retain code and literal metadata without definition IDs. |
 | `EffectApplication.values` | Values in validated compact ABI slots, addressed externally by stable parameter keys. | Wire decode maps keys once; control rename/reorder never retargets values. |
-| `Definition.program` | Shared immutable runtime program. Built-in wire records store only stable ID and parameter-data version; custom records embed their definition. | Built-ins resolve the current catalog on open; custom code and literal labels retain their owners. |
-| `EffectParameter.dimension` | Catalog-owned dimension for built-ins; embedded schema for custom filters. | Resize scales explicit source/composition pixel lengths without UI precision rounding; count bounds and values are whole numbers. UI unit labels never decide scaling. |
+| `EffectApplication.spatial` | Optional F64 reference-to-composition affine mapping and positive reference extent. | Required for coordinate-dependent built-ins and private custom programs; absent for built-in pointwise programs. Crop translates once, image orientation and size compose the mapping and preserve extent and parameter values. |
+| `EffectParameter.dimension` | Catalog-owned dimension for built-ins; embedded schema for custom filters. | Pixel lengths use the authored reference coordinates; image resize composes its scale into the mapping. Count bounds and values are whole numbers. |
 | `EffectParameter.opaque` | Color-control capability, default false. | RGB-only controls author opaque colors; stored alpha remains intact even when the filter ignores it. |
+
+Built-in pointwise programs omit the spatial reference. Private custom programs
+retain it because their shader contract can consume reference coordinates.
 
 Built-in shader ABI, code, passes, preparation, labels, page layout and slider
 presentation are runtime details. They are absent from artwork records. Rendering
@@ -208,8 +258,8 @@ may change slightly with bug fixes; authored values must remain readable and
 editable. No shader generations or retained historical built-in implementations
 are required.
 
-Portable saves refuse custom definitions until custom filters ship; recovery and
-worker captures keep them. Custom definitions retain code, ordered slots, kind, alpha/space policy,
+Portable saves refuse custom programs; recovery and worker captures keep them.
+Custom programs retain code, ordered slots, kind, alpha/space policy,
 passes, time input, lookup declarations, auxiliary bindings, literal labels,
 parameters and constraints. They execute separately from built-in fusion. Their
 schema includes accepted numeric bounds, units and dimensions. The fixed
@@ -244,17 +294,26 @@ verified preview through color and renderer preparation. Unsupported execution
 returns Preserved; invalid required data returns Recovered view or Failure.
 Cancellation remains cancellation and cannot publish either an editor or a view.
 
+Native construction and resource-changing edits check the complete immutable
+resource closure, including accepted command inputs and undo/redo roots. A resource
+ID in the live closure identifies one kind, descriptor and backing owner; it
+cannot overlap an authored record ID. Verified worker adoption interns equivalent
+resources before admission.
+Affine-only object edits retain their owners and skip resource-closure admission.
+Final occurrence offsets whose linked mask sum exceeds the interim runtime's
+integer range or exact precision preserve the package instead of rounding.
+
 1. Check unique IDs, reference existence, relation types, finite numbers, domains,
    resource descriptors and required parameter/port keys. Resource references do
    not become evaluation edges. Malformed references remain invalid even inside
    otherwise unsupported records whose visible reference structure is known.
-2. Reject instantaneous evaluation cycles, stack containment cycles and recursive
-   definition expansion. Bound object/edge counts, nesting and expansion work;
+2. Reject instantaneous evaluation and stack containment cycles. Bound object/edge
+   counts and nesting;
    do not apply the evaluation DAG rule to arbitrary ancillary/resource links.
 3. The editable subset has one composition, one root stack and one canvas output.
    Every occurrence has at most one containing stack, every nested stack at most
    one group owner, every effect application at most one occurrence, and every
-   editable paint/coverage/selection source at most one use. Immutable definitions
+   editable paint/coverage/selection source at most one use. Immutable programs
    and binary resources may have any admitted number of uses.
 4. Count uses through reused stacks as well as direct source references. Two group
    occurrences using one nested stack are unsupported even when its paint source
@@ -335,7 +394,7 @@ license to clone content whose copy contract is unknown.
 Undo/redo restores the same handles and immutable roots, with admission in both
 directions. It does not reconstruct a picture or allocate replacement identities.
 [`RootInventory`](../../crates/layer-core/src/lib.rs) traverses immutable rasters,
-originals, selections, LUTs, meshes, profiles, programs and ancillary package
+images, selections, LUTs, meshes, profiles, programs and ancillary package
 backing, including retained command inputs. Ancillary descriptors and resident
 package owners are counted once across shared resources and retained inventories.
 The package byte source reports resident ownership without reading ranges; file
@@ -367,7 +426,12 @@ A worker that missed its baseline or recreated its device requests a full snapsh
 default output context; `snapshot_with_context` supplies an explicit captured
 context. `SceneSnapshot` retains artwork, index, owner, revision, context, scope
 and evaluation offset, excluding working selection and mask inspection.
-`SceneScope` selects All, Raw source, Members or EffectInput for an occurrence.
+`SceneScope` selects All, Raw source, RawObjects, Members or EffectInput for an occurrence.
+RawObjects and `ArtworkSource::Objects` expose an object layer's internal content
+without creating a writable `SourceTarget`; their query dependencies track child
+order, image identity, affine placement, visibility, interpolation and the owner
+and ancestor placement in document coordinates. Layer opacity, masks and attached
+effects remain outside the raw content scope.
 Member scopes preserve original placement ancestry while evaluating the selected
 contributors through their scoped parents; they do not copy or mutate occurrences.
 EffectInput resolves the owner content, descendants and preceding local effects
@@ -384,7 +448,7 @@ retains the prior evaluated scope and source roots through
 destination publication, even after source occurrences leave the live stack.
 
 `ArtworkQuery` and source-analysis keys identify typed effect input scope,
-contributing source generations, topology, definition/parameter dependencies,
+contributing source generations, topology, program/parameter dependencies,
 ancestor placement and captured phases. Occurrence names and control presentation
 order do not invalidate pixels; authored stack order remains an evaluation
 dependency. A changed upstream source or effective phase invalidates analysis. Captured phases
@@ -422,7 +486,7 @@ edit/stroke identities at this same ordered boundary. The private
 checkpoint metadata and one resource inventory on a worker without extending the
 portable manifest. Historical states share identical record versions and
 immutable payload owners. Sparse tile indexes reuse 64-entry metadata chunks,
-and original-image descriptors are interned once across changed paint records;
+and immutable image descriptors are interned once across paint and object records;
 small strokes do not repeat the whole canvas/photo index in every history entry.
 Expansion checks the projected metadata size before cloning shared chunks, then
 uses the portable artwork adapters and admission limits. The captured checkpoint

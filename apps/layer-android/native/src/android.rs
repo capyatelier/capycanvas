@@ -48,7 +48,7 @@ pub(crate) struct Surface {
     trace_timings: bool,
     // One surface-owned completion source for startup and update admission.
     completed_frames: Arc<AtomicU64>,
-    completion_observer: Option<Arc<Mutex<Vec<[u64; 5]>>>>,
+    completion_observer: Option<Arc<Mutex<Vec<[u64; 6]>>>>,
     logical_extent: [u32; 2],
     quarter_turns: u32,
     last_view: Option<layer_render::ViewState>,
@@ -191,8 +191,8 @@ pub extern "system" fn Java_art_capycanvas_Native_rendererMemory(
 ) -> jstring {
     let a = unsafe { app(handle) };
     let report = a.host.session.engine().backend().0.as_ref()
-        .and_then(|gpu| gpu.device().generate_allocator_report())
-        .map(|report| {
+        .and_then(|gpu| gpu.device().generate_allocator_report().map(|report| (report, gpu.metrics())))
+        .map(|(report, metrics)| {
             let mut labels = std::collections::BTreeMap::<String, (u64, u64)>::new();
             for allocation in report.allocations {
                 let entry = labels.entry(allocation.name).or_default();
@@ -203,6 +203,13 @@ pub extern "system" fn Java_art_capycanvas_Native_rendererMemory(
                 "allocated_bytes": report.total_allocated_bytes,
                 "reserved_bytes": report.total_reserved_bytes,
                 "allocations": labels,
+                "source_tile_hits": metrics.source_tile_hits,
+                "source_tile_misses": metrics.source_tile_misses,
+                "source_tile_evictions": metrics.source_tile_evictions,
+                "moving_image_evictions": metrics.moving_image_evictions,
+                "source_upload_peak_bytes": metrics.source_upload_peak_bytes,
+                "source_upload_submissions": metrics.source_upload_submissions,
+                "composite_storage_bytes": metrics.composite_storage_bytes,
             })
         });
     string(&mut env, Ok(serde_json::to_string(&report).unwrap()))
@@ -660,12 +667,16 @@ impl App {
             let frame = surface.submitted_frames;
             let observer = surface.completion_observer.clone();
             let raster_frame = observer.as_ref().map_or(0, |_| gpu.submitted_updates());
+            let object_revision = observer.as_ref().and_then(|_| gpu.evaluated_object_revision()).unwrap_or(u64::MAX);
+            if object_revision != u64::MAX {
+                unsafe { ndk_sys::ATrace_setCounter(c"Capy object evaluated revision".as_ptr(), object_revision as i64); }
+            }
             gpu.queue().on_submitted_work_done(move || {
                 complete.fetch_max(frame, Ordering::Release);
                 if let Some(observer) = observer {
                     let completed_ns = monotonic_ns();
                     let mut rows = observer.lock().unwrap();
-                    if rows.len() < 32768 { rows.push([frame, submitted_ns, completed_ns, raster_frame, consumed_paint_ns]); }
+                    if rows.len() < 32768 { rows.push([frame, submitted_ns, completed_ns, raster_frame, consumed_paint_ns, object_revision]); }
                 }
                 // Callback service time is an upper bound on GPU completion,
                 // not scanout or physical pen-to-photon latency.

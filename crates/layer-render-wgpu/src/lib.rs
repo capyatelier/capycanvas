@@ -19,7 +19,7 @@ mod target_geometry;
 mod pixel_rect;
 mod submission;
 use submission::ColorPass;
-use pixel_rect::{PixelRect, page_coordinates, page_rect, pixel_rect};
+use pixel_rect::{DocRect, PixelRect, page_coordinates, page_rect, pixel_rect};
 
 use layer_core::{
     AssetId, BrushAccumulation, BrushBlendMode, BrushExecution,
@@ -58,6 +58,19 @@ mod raster;
 mod deferred;
 mod paint_transform;
 mod pixel_transform;
+mod object_sampling;
+mod object_image_mips;
+mod moving_projection;
+use moving_projection::MovingProjection;
+pub use scene::sources::PreparedSourcePixels as PreparedImagePixels;
+pub use object_image_mips::prepare_image_tile;
+pub use object_sampling::prepare_nearest_coordinates;
+#[cfg(target_arch = "wasm32")]
+pub type BrowserImageDecoder = std::rc::Rc<dyn Fn(Arc<layer_core::color::source::SourceImage>, [u32; 2], layer_core::color::RgbSpace)
+    -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PreparedImagePixels, String>>>>>;
+#[cfg(target_arch="wasm32")]
+pub type BrowserNearestCoordinateDecoder = std::rc::Rc<dyn Fn([f64;6],[u32;2],u32,u32)
+    -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<Arc<Vec<u8>>,String>>>>>;
 use builtin_masks::builtin_masks;
 use deferred::{Compilation, CompileMode, Deferred};
 mod pipeline_device;
@@ -222,6 +235,16 @@ impl Uploads {
     }
 }
 
+struct DisplayRetirement {
+    bytes:u64,
+    charge:Arc<std::sync::atomic::AtomicU64>,
+    #[cfg(not(target_arch="wasm32"))]
+    _backup:scene::scale::DisplayBackup,
+}
+impl Drop for DisplayRetirement {
+    fn drop(&mut self) {self.charge.fetch_sub(self.bytes,std::sync::atomic::Ordering::AcqRel);}
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GpuRasterMetrics {
     pub submissions: u64,
@@ -248,6 +271,9 @@ pub struct GpuRasterMetrics {
     pub source_upload_submissions: u64,
     pub source_tile_hits: u64,
     pub source_tile_misses: u64,
+    pub source_tile_evictions: u64,
+    pub moving_image_evictions: u64,
+    pub moving_image_request_bytes: u64,
     /// Cumulative output-page gathers/passes for distant material samples.
     /// Storage counts the reusable Float32 fields and both metadata buffers,
     /// excluding source-cache tiles, staging and driver memory.
@@ -295,6 +321,7 @@ pub enum GpuRasterError {
     Color(String),
     CaptureBudget { required: u64, limit: u64 },
     SourceWorkingSetExceeded,
+    DeferredObjectWork,
     AdapterUnavailable,
     HardwareAdapterRequired,
     DeviceRequest(String),
@@ -319,6 +346,7 @@ impl fmt::Display for GpuRasterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Color(message) => write!(formatter, "color: {message}"),
+            Self::DeferredObjectWork => formatter.write_str("Canonical image sampling is pending"),
             Self::SourceWorkingSetExceeded => formatter.write_str("Source working set exceeds the decoded tile budget"),
             Self::CaptureBudget { required, limit } => write!(formatter,
                 "Snapshot dependency plan requires {required} bytes; limit is {limit}"),
@@ -807,14 +835,13 @@ enum Initialization {
 /// Headless-capable wgpu brush renderer. A platform presenter can sample the
 /// same composite texture rather than requesting readback.
 pub struct WgpuRasterizer {
-    #[cfg(not(target_arch = "wasm32"))]
     snapshot_worker: bool,
+    snapshot_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     startup: Option<startup::Startup>,
     adapter: wgpu::Adapter,
     device: PipelineDevice,
     queue: wgpu::Queue,
     document_extent: [u32; 2],
-    capture_frame: Option<([f32; 2], [u32; 2])>,
     target_geometry: target_geometry::TargetGeometry,
     paint_layers: Vec<PaintLayer>,
     raster: Option<raster::RasterRuntime>,
@@ -839,6 +866,21 @@ pub struct WgpuRasterizer {
     unclipped: wgpu::Buffer,
     scene: Option<scene::Scene>,
     source_tiles: std::cell::RefCell<scene::sources::DecodedTiles>,
+    moving_images: object_image_mips::MovingImages,
+    moving_projection: Option<MovingProjection>,
+    moving_images_waiting: bool,
+    moving_decode: Option<(layer_core::color::RgbSpace, object_image_mips::MipDecodeQueue)>,
+    failed_image_tiles: Vec<moving_projection::FailedImageTile>,
+    #[cfg(target_arch = "wasm32")]
+    browser_image_decoder: Option<BrowserImageDecoder>,
+    #[cfg(target_arch = "wasm32")]
+    browser_nearest_coordinate_decoder: Option<BrowserNearestCoordinateDecoder>,
+    #[cfg(target_arch = "wasm32")]
+    browser_image_result: std::rc::Rc<std::cell::RefCell<Option<object_image_mips::PreparedImageWork>>>,
+    #[cfg(target_arch = "wasm32")]
+    browser_image_wake: std::rc::Rc<std::cell::RefCell<Option<std::task::Waker>>>,
+    #[cfg(target_arch = "wasm32")]
+    snapshot_decode_wake: Option<Arc<std::sync::Mutex<Option<std::task::Waker>>>>,
     transforms: Option<paint_transform::PaintTransforms>,
     transform_preview: Option<layer_render::TransformPreview>,
     transform_damage: Vec<(SourceTarget, PixelRect)>,
@@ -859,10 +901,14 @@ pub struct WgpuRasterizer {
     ui_preview_pipeline: Option<wgpu::RenderPipeline>,
     display_pipelines: Option<display_mips::Pipelines>,
     scale_display: Option<scene::scale::Cache>,
+    display_backup: Option<scene::scale::DisplayBackup>,
+    retired_display_bytes: Arc<std::sync::atomic::AtomicU64>,
+    object_deferred: bool,
     navigator: scene::scale::Navigator,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     artwork_revision: u64,
+    evaluated_object_revision: Option<u64>,
     composite_damage: PixelRect,
     /// The composite's blend space, from the latest frame.
     blend_space: layer_core::BlendSpace,
@@ -882,7 +928,7 @@ pub struct WgpuRasterizer {
     #[cfg(target_arch = "wasm32")]
     analysis_backing_waiter: Option<effect_analysis::BackingWaiter>,
     filter_source_epoch: u64,
-    tiled_sources: std::collections::BTreeMap<SourceTarget, Arc<layer_core::color::source::SourceImage>>,
+    tiled_sources: std::collections::BTreeMap<SourceTarget, layer_core::authored::PaintBase>,
     preview_pages: Vec<LayerPage>,
     preview_coverage_pages: Vec<StrokeCoveragePage>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
@@ -1148,15 +1194,14 @@ impl WgpuRasterizer {
         let portable_blend = portable_blend::Renderer::new(&device);
         let transforms = Some(paint_transform::PaintTransforms::new(&device));
         let mut renderer = Self {
-            #[cfg(not(target_arch = "wasm32"))]
             snapshot_worker: initialization == Initialization::Snapshot,
+            snapshot_cancelled: None,
             startup: None,
             telemetry,
             adapter,
             device,
             queue,
             document_extent: [0, 0],
-            capture_frame: None,
             target_geometry: Default::default(),
             layer_masks,
             selection_clip,
@@ -1174,6 +1219,21 @@ impl WgpuRasterizer {
             unclipped,
             scene: None,
             source_tiles: Default::default(),
+            moving_images: Default::default(),
+            moving_projection: None,
+            moving_images_waiting: false,
+            moving_decode: None,
+            failed_image_tiles: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            browser_image_decoder: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_nearest_coordinate_decoder: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_image_result: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            browser_image_wake: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            snapshot_decode_wake: None,
             transforms,
             transform_preview: None,
             transform_damage: Vec::with_capacity(2),
@@ -1203,10 +1263,14 @@ impl WgpuRasterizer {
             filter_source_epoch: 0,
             display_pipelines: None,
             scale_display: None,
+            display_backup: None,
+            retired_display_bytes: Default::default(),
+            object_deferred: false,
             navigator: Default::default(),
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             artwork_revision: 0,
+            evaluated_object_revision: None,
             composite_damage: PixelRect::EMPTY,
             thumbnails: thumbnails::Thumbnails::new(),
             ui_preview_space: layer_core::color::RgbSpace::Srgb,
@@ -1298,6 +1362,9 @@ impl WgpuRasterizer {
         let mut metrics = self.metrics.clone();
         metrics.raster_backing_reserved_bytes = self.raster_staging_bytes();
         [metrics.source_tile_hits, metrics.source_tile_misses] = self.source_cache_work();
+        metrics.source_tile_evictions = self.source_tiles.borrow().evictions;
+        metrics.moving_image_evictions = self.moving_images.evictions;
+        metrics.moving_image_request_bytes = self.moving_projection.as_ref().map_or(0, MovingProjection::storage_bytes);
         metrics
     }
 
@@ -1308,6 +1375,25 @@ impl WgpuRasterizer {
     /// Changes only when document composition changes, never for camera motion.
     pub fn canvas_preview_revision(&self) -> u64 {
         self.artwork_revision
+    }
+
+    pub fn evaluated_object_revision(&self) -> Option<u64> {
+        self.evaluated_object_revision
+    }
+
+    pub(crate) fn display_views(&self)->Option<[&wgpu::TextureView;3]> {
+        if let Some(backup)=&self.display_backup {return Some([&backup.views[0],&backup.views[2],&backup.views[1]]);}
+        if self.object_deferred {return None;}
+        self.scale_display.as_ref().map(|cache|[cache.view(),cache.coarse_view(),cache.next_view()])
+    }
+    pub(crate) fn display_geometry(&self)->Option<&wgpu::Buffer> {
+        self.display_backup.as_ref().map(|backup|&backup.geometry).or_else(||self.scale_display.as_ref().map(|cache|&cache.geometry))
+    }
+    pub(crate) fn display_placement(&self)->[f32;20] {
+        self.display_backup.as_ref().map_or_else(||self.scale_display.as_ref().unwrap().placement_values(),|backup|backup.placement)
+    }
+    pub(crate) fn display_resample(&self)->[u8;scene::resample::UNIFORM_BYTES as usize] {
+        self.display_backup.as_ref().map_or_else(||self.scale_display.as_ref().unwrap().resample_values(),|backup|backup.resample)
     }
 
     /// Benchmark/export synchronization only. Live drawing never calls this.
@@ -1527,8 +1613,8 @@ impl WgpuRasterizer {
                 scene.occurrence(handle).is_none_or(|new| {
                     let old_scene = frame.scene.view();
                     let old = old_scene.occurrence(handle).unwrap();
-                    old.content != new.content || match (old_scene.paint_source(handle).and_then(|p| p.original.as_ref()), scene.paint_source(handle).and_then(|p| p.original.as_ref())) {
-                        (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
+                    old.content != new.content || match (old_scene.paint_source(handle).and_then(|p| p.base.as_ref()), scene.paint_source(handle).and_then(|p| p.base.as_ref())) {
+                        (Some(a), Some(b)) => !a.image.same_owner(&b.image) || a.offset != b.offset || a.policy != b.policy,
                         (None, None) => false,
                         _ => true,
                     }
@@ -1558,14 +1644,14 @@ impl WgpuRasterizer {
         }
         self.update_target_geometry(scene, resized)?;
         self.thumbnails.source_placements = scene.order().iter().filter_map(|&h| {
-            let source = scene.paint_source(h)?; source.original.as_ref()?;
+            let source = scene.paint_source(h)?; source.base.as_ref()?;
             Some((scene.source_target(h)?, scene.occurrence(h)?.placement.clone()))
         }).collect();
-        self.tiled_sources.retain(|target, _| source_access::placed_targets(scene).any(|t| t == *target));
+        self.tiled_sources.retain(|target, _| scene.paint_base(*target).is_some() && source_access::placed_targets(scene).any(|t|t==*target));
         for &handle in scene.order() {
-            let Some(source) = scene.paint_source(handle).and_then(|p| p.original.as_ref()) else { continue; };
+            let Some(source) = scene.paint_source(handle).and_then(|p| p.base.as_ref()) else { continue; };
             let target = scene.source_target(handle).unwrap();
-            if self.tiled_sources.get(&target).is_none_or(|current| !Arc::ptr_eq(current, source)) {
+            if self.tiled_sources.get(&target).is_none_or(|current| !current.image.same_owner(&source.image) || current.offset != source.offset || current.policy != source.policy) {
                 self.tiled_sources.insert(target, source.clone());
             }
         }
@@ -2054,7 +2140,9 @@ impl WgpuRasterizer {
         self.metrics.retouch_storage_bytes =
             self.retouch.as_ref().map_or(0, |retouch| retouch.storage_bytes());
         self.metrics.composite_storage_bytes =
-            self.scale_display.as_ref().map_or(0, scene::scale::Cache::storage_bytes) + self.navigator.storage_bytes();
+            self.scale_display.as_ref().map_or(0, scene::scale::Cache::storage_bytes) + self.navigator.storage_bytes()
+                + self.display_backup.as_ref().map_or(0,|backup|backup.bytes);
+        self.metrics.composite_storage_bytes+=self.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire);
     }
 
     fn ensure_upload_capacity(&mut self, dabs: usize, styles: usize) -> Result<(), GpuRasterError> {
@@ -2984,7 +3072,176 @@ fn outline_damage(a: Option<&layer_core::Selection>, b: Option<&layer_core::Sele
         damage.union(pixel_rect(bounds, extent))
     })
 }
+pub(crate) struct PreparedImageUpload {
+    id: layer_core::authored::PortableId,
+    source: Arc<layer_core::color::source::SourceImage>,
+    coordinate: [u32; 2],
+    tile: source_access::RawTile,
+}
 impl WgpuRasterizer {
+    pub(crate) fn image_decode_waiting(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        if self.browser_image_result.borrow().is_some() { return false; }
+        self.moving_decode.as_ref().is_some_and(|(_,queue)| queue.pending() && !queue.ready())
+    }
+    pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<PreparedImageUpload>, GpuRasterError> {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(result) = self.browser_image_result.borrow_mut().take() {
+            if let Some((_,queue)) = &mut self.moving_decode { queue.complete_external(result); }
+        }
+        let Some(prepared) = self.moving_decode.as_mut().and_then(|(_,queue)| queue.poll()) else { return Ok(None); };
+        let prepared = match prepared {
+            object_image_mips::PreparedImageWork::Image(prepared) => prepared,
+            object_image_mips::PreparedImageWork::Coordinates {destination,pixels} => {
+                if let Some(destination) = destination.upgrade() { *destination.lock().unwrap() = Some(pixels); }
+                return Ok(None);
+            },
+        };
+        let pixels = match prepared.pixels {
+            Ok(pixels) => pixels,
+            Err(error) => {
+                self.failed_image_tiles.push((prepared.id, Arc::downgrade(&prepared.source), prepared.coordinate, self.device.working_space(), error.clone()));
+                return Err(GpuRasterError::Color(error));
+            }
+        };
+        let tile = scene::Scene::decode_prepared(self, encoder, &prepared.source, prepared.coordinate, pixels)?;
+        Ok(Some(PreparedImageUpload {id:prepared.id, source:prepared.source, coordinate:prepared.coordinate, tile}))
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) async fn await_image_decode(&self) -> Result<(), GpuRasterError> {
+        std::future::poll_fn(|cx| {
+            if self.snapshot_cancelled.as_ref().is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
+                return std::task::Poll::Ready(Err(GpuRasterError::Color("Snapshot capture cancelled".into())));
+            }
+            if !self.image_decode_waiting() { return std::task::Poll::Ready(Ok(())); }
+            *self.browser_image_wake.borrow_mut() = Some(cx.waker().clone());
+            if let Some(wake) = &self.snapshot_decode_wake { *wake.lock().unwrap() = Some(cx.waker().clone()); }
+            std::task::Poll::Pending
+        }).await
+    }
+    pub(crate) fn request_image_decode(&mut self, id: layer_core::authored::PortableId, source: Arc<layer_core::color::source::SourceImage>, coordinate: [u32; 2]) -> Result<bool, GpuRasterError> {
+        #[cfg(target_arch="wasm32")]
+        if self.browser_image_decoder.is_none() { return Err(GpuRasterError::Color("Image preparation worker unavailable".into())); }
+        let space = self.device.working_space();
+        let weak = Arc::downgrade(&source);
+        if let Some((_,_,_,_,error)) = self.failed_image_tiles.iter().find(|(owner,stored,tile,context,_)| *owner == id && stored.ptr_eq(&weak) && *tile == coordinate && *context == space) {
+            return Err(GpuRasterError::Color(error.clone()));
+        }
+        if self.moving_decode.as_ref().is_some_and(|(context,_)| *context != space) {
+            self.moving_decode = None;
+            #[cfg(target_arch = "wasm32")]
+            { self.browser_image_result = Default::default(); self.browser_image_wake = Default::default(); }
+        }
+        let requested = self.moving_decode.get_or_insert_with(|| (space, object_image_mips::MipDecodeQueue::new(&self.device))).1.request(id, source, coordinate);
+        #[cfg(target_arch = "wasm32")]
+        self.dispatch_browser_image_decode()?;
+        Ok(requested)
+    }
+    pub(crate) fn request_nearest_coordinates(&mut self,inverse:[f64;6],size:[u32;2],first:u32,count:u32,destination:object_image_mips::CoordinateDestination)->Result<bool,GpuRasterError> {
+        #[cfg(target_arch="wasm32")]
+        if self.browser_nearest_coordinate_decoder.is_none() && (!self.snapshot_worker || self.browser_image_decoder.is_some()) {
+            return Err(GpuRasterError::Color("Coordinate preparation worker unavailable".into()));
+        }
+        let space = self.device.working_space();
+        if self.moving_decode.as_ref().is_some_and(|(context,_)| *context != space) {
+            self.moving_decode = None;
+            #[cfg(target_arch = "wasm32")]
+            { self.browser_image_result = Default::default(); self.browser_image_wake = Default::default(); }
+        }
+        let requested = self.moving_decode.get_or_insert_with(|| (space,object_image_mips::MipDecodeQueue::new(&self.device))).1
+            .request_coordinates(inverse,size,first,count,destination);
+        #[cfg(target_arch = "wasm32")]
+        self.dispatch_browser_image_decode()?;
+        Ok(requested)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn dispatch_browser_image_decode(&mut self) -> Result<(), GpuRasterError> {
+        if let Some(request) = self.moving_decode.as_mut().and_then(|(_,queue)| queue.take_external()) {
+            let result = self.browser_image_result.clone();
+            let wake = self.browser_image_wake.clone();
+            let future: std::pin::Pin<Box<dyn std::future::Future<Output=object_image_mips::PreparedImageWork>>> = match request {
+                object_image_mips::MipDecodeRequest::Image(request) => {
+                    let callback = self.browser_image_decoder.clone().ok_or_else(|| GpuRasterError::Color("Image preparation worker unavailable".into()))?;
+                    let space = self.device.working_space();
+                    Box::pin(async move {
+                        let pixels = callback(request.source.clone(),request.coordinate,space).await;
+                        object_image_mips::PreparedImageWork::Image(object_image_mips::PreparedMipTile {id:request.id,source:request.source,coordinate:request.coordinate,pixels})
+                    })
+                },
+                object_image_mips::MipDecodeRequest::Coordinates(request) => {
+                    let callback = self.browser_nearest_coordinate_decoder.clone();
+                    if callback.is_none() && (!self.snapshot_worker || self.browser_image_decoder.is_some()) {
+                        return Err(GpuRasterError::Color("Coordinate preparation worker unavailable".into()));
+                    }
+                    Box::pin(async move {
+                        let pixels = if let Some(callback) = callback {callback(request.inverse,request.size,request.first,request.count).await}
+                            else {object_sampling::prepare_nearest_coordinates(request.inverse,request.size,request.first,request.count)};
+                        object_image_mips::PreparedImageWork::Coordinates {destination:request.destination,pixels}
+                    })
+                },
+            };
+            wasm_bindgen_futures::spawn_local(async move {
+                *result.borrow_mut() = Some(future.await);
+                let signal = wake.borrow_mut().take();
+                if let Some(waker) = signal { waker.wake(); }
+            });
+        }
+        Ok(())
+    }
+    fn moving_images_pending(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        if self.image_decode_waiting() {
+            return self.moving_images_waiting;
+        }
+        self.moving_images_waiting || self.moving_images.pending()
+    }
+    fn prepare_moving_projection(&mut self, packet:FramePacket<'_>) -> Result<(),GpuRasterError> {
+        let available = !self.snapshot_worker;
+        #[cfg(target_arch = "wasm32")]
+        let available = available && self.browser_image_decoder.is_some();
+        MovingProjection::update(&mut self.moving_projection, packet.scene, packet.view.document_to_surface,
+            self.device.working_space(), available, &mut self.failed_image_tiles)
+    }
+    fn prepare_moving_images(&mut self, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
+        self.prepare_moving_projection(packet)?;
+        let mut images = std::mem::take(&mut self.moving_images);
+        let completed = images.completed_images;
+        let result = (|| {
+            let budget = self.source_tiles.borrow().mip_budget();
+            let plan = images.plan(self, &self.moving_projection.as_ref().unwrap().requests, budget, encoder)?;
+            self.moving_images_waiting = plan.waiting;
+            if !self.source_tiles.borrow_mut().reserve_mips(plan.bytes, encoder)? {
+                self.moving_images_waiting = true;
+                return Ok(false);
+            }
+            images.allocate(self, plan);
+            let mut built = false;
+            if self.moving_decode.as_ref().is_some_and(|(space,_)| *space != self.device.working_space()) {
+                self.moving_decode = None;
+                #[cfg(target_arch = "wasm32")]
+                { self.browser_image_result = Default::default(); self.browser_image_wake = Default::default(); }
+            }
+            if let Some(prepared) = self.drain_image_decode(encoder)? {
+                if images.accepts_tile(prepared.id, &prepared.source, prepared.coordinate) {
+                    images.write_tile(self, encoder, prepared.id, &prepared.source, prepared.coordinate, &prepared.tile.texture)?;
+                }
+                built = true;
+            }
+            if !built && let Some((id, source, coordinate)) = images.next_build() {
+                let cached = self.source_tiles.borrow().prepared_view(&source, coordinate).map(|view| view.texture().clone());
+                if let Some(texture) = cached {
+                    images.write_tile(self, encoder, id, &source, coordinate, &texture)?;
+                } else if self.metrics.submissions.is_multiple_of(2) {
+                    self.request_image_decode(id, source, coordinate)?;
+                }
+            } else if !built {
+                images.advance_coarse(self, encoder);
+            }
+            Ok(images.completed_images != completed)
+        })();
+        self.moving_images = images;
+        result
+    }
     fn hold_background(&mut self, refinement: bool) {
         self.background_refinement = refinement;
         self.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3071,13 +3328,24 @@ impl CanvasRenderer for WgpuRasterizer {
             self.artwork_frame = None;
         }
     }
+    fn preflight_image_object_affine(&self, scene: SceneView<'_>, object: layer_core::authored::ImageObjectHandle,
+        affine: layer_core::authored::Affine64, view: layer_render::ViewState,
+    ) -> Result<(), Self::Error> {
+        object_sampling::preflight_object_affine(scene, object, affine, view, self.device.limits().max_storage_buffer_binding_size)
+    }
+
     fn prepare_moving_pixels(&mut self, pixels: Option<(SourceTarget, layer_core::Selection)>) {
         if self.moving_pixels != pixels { self.transforms.as_mut().unwrap().release_standby(); }
         self.moving_pixels = pixels;
     }
     fn has_pending_work(&self) -> bool {
-        self.analysis_dirty || self.settling.is_some() || self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending())
+        self.analysis_dirty || self.settling.is_some() || self.awaiting_meshes || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting()))
             || self.navigator.pending()
+            || self.moving_images_pending()
+            || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending())
+                && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
+            || (self.object_deferred || self.scene.as_ref().is_some_and(|scene| scene.objects_pending()))
+                && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
             || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
     }
     fn prepare_retouch(&mut self, retouch: Option<&layer_render::RetouchPreparation>) {
@@ -3152,6 +3420,7 @@ impl CanvasRenderer for WgpuRasterizer {
         t.dirty_pixels = m.composited_pixels;
         t.resident_bytes = self.raster_staging_bytes()
             + self.source_tiles.borrow().gpu_bytes()
+            + self.moving_images.storage_bytes()
             + m.paint_storage_bytes
             + m.preview_storage_bytes
             + m.destination_storage_bytes
@@ -3159,6 +3428,7 @@ impl CanvasRenderer for WgpuRasterizer {
             + m.composite_storage_bytes
             + self.thumbnails.storage_bytes()
             + self.portable_blend.byte_len()
+            + self.scene_pipelines.objects.transient_bytes()
             + 160 + self.dry_records.storage_bytes()
             + self.material_gather.as_ref().map_or(0, material_sources::Gather::storage_bytes)
             + self.device.effect_resources.lock().unwrap().bytes()
@@ -3242,16 +3512,14 @@ impl CanvasRenderer for WgpuRasterizer {
         self.start_color_sample(request)
     }
     fn take_color_sample(&mut self) -> Option<Result<layer_render::ColorSample, Self::Error>> {
-        self.color_sampler.take()
+        self.poll_color_sample()
     }
     fn request_filter_previews(
         &mut self,
         request: layer_render::FilterPreviewRequest,
     ) -> Result<bool, Self::Error> {
-        if self
-            .startup
-            .as_ref()
-            .is_some_and(|s| !s.finished || self.effect_validation.is_some())
+        if self.startup.is_some()
+            && (!self.poll_startup()?.brush_ready || self.effect_validation.is_some())
         {
             // Preview rows retry later; they must not synchronously compile the
             // catalog on the canvas thread while startup work is prioritized.
@@ -3368,12 +3636,15 @@ impl WgpuRasterizer {
     }
 
     fn submit_frame_inner(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
-        let packet = FramePacket {composite_all: packet.composite_all || std::mem::take(&mut self.analysis_dirty), ..packet};
+        let analysis_dirty = std::mem::take(&mut self.analysis_dirty);
+        let packet = FramePacket {composite_all: packet.composite_all || analysis_dirty, ..packet};
         let packet = FramePacket { inspect_mask: if self.clipping_preview.iter().any(|enabled| *enabled) { None } else { packet.inspect_mask }, ..packet };
         if packet.document_extent.iter().any(|n| *n > self.max_document_dimension()) {
             return Err(GpuRasterError::ExtentUnsupported);
         }
         if !self.background_ready.load(std::sync::atomic::Ordering::Acquire) && !self.navigator.pending()
+            && !self.moving_images_pending()
+            && !self.object_deferred && !self.scene.as_ref().is_some_and(|scene| scene.objects_pending())
             && packet.commit_rasters && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty()
             && packet.dabs.is_empty() && packet.dab_batches.is_empty()
             && native_commit.is_none() && self.transform_preview.is_none()
@@ -3387,19 +3658,27 @@ impl WgpuRasterizer {
             // Reject unsupported global dependencies before clearing/restoring
             // paint, allocating the composite, or submitting any part of a frame.
             let resident = self.scale_display.as_ref().map_or(0, |c| c.resident_bytes());
-            let admitted = scene::windows::Plan::new(packet.scene, packet.document_extent, native.image_pixel_budget(resident));
+            let admitted = scene::Scene::window_plan(packet.scene, packet.document_extent, native.image_pixel_budget(resident), self.device.limits().max_texture_dimension_2d,self.scene.as_ref());
             if resident > 0 && admitted.is_err() {
-                scene::windows::Plan::new(packet.scene, packet.document_extent, native.image_pixel_budget(0))?;
+                scene::Scene::window_plan(packet.scene, packet.document_extent, native.image_pixel_budget(0), self.device.limits().max_texture_dimension_2d,self.scene.as_ref())?;
                 self.scale_display = None;
             } else { admitted?; }
         }
-        if source_access::placed_targets(packet.scene).any(|t| packet.scene.original(t).is_some()) {
+        if source_access::placed_targets(packet.scene).any(|t| packet.scene.paint_base(t).is_some()) {
             // Source-backed photos own no paint initially. Prepare their bounded
             // capture spare pool during loading, before the first stroke needs it.
             self.prepare_source_backing()?;
         }
         self.transform_damage.clear();
         self.document_damage.clear();
+        let object_damage = (!analysis_dirty && !packet.reset_layers && packet.restore_rasters.is_empty()
+            && packet.dabs.is_empty() && packet.dab_batches.is_empty()).then(|| {
+            let old = self.artwork_frame.as_ref()?;
+            if old.blend_space != packet.blend_space || old.time != packet.time_seconds { return None; }
+            scene::Scene::object_edit_damage(old.scene.view().with_scope(&old.scope), packet.scene, packet.document_extent)
+        }).flatten();
+        if let Some(damage) = &object_damage { self.document_damage.extend(damage.regions.iter().copied()); }
+        let packet = FramePacket { composite_all: packet.composite_all && object_damage.is_none(), ..packet };
         self.metrics.frame_composited_pages.clear();
         if let Some(t) = &mut self.transforms {
             t.begin_frame();
@@ -3454,6 +3733,20 @@ impl WgpuRasterizer {
         let blending_changed = std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space;
         let unchanged = self.artwork_frame.as_ref().is_some_and(|frame|
             frame.same_artwork(packet));
+        if packet.commit_rasters && (!unchanged || packet.composite_all || packet.reset_layers || self.object_deferred
+            || self.scene.as_ref().is_some_and(|scene|scene.objects_pending())
+            || self.artwork_frame.as_ref().is_none_or(|frame|frame.view!=packet.view)) {
+            let mut scene=self.scene.take().unwrap_or_else(||scene::Scene::new(self));
+            let bounds=scene.cached_capture_window(packet.scene,display_request.plan.bounds);
+            let side=if display_request.evaluation==scene::scale::Evaluation::Native {1.} else {f64::from(1u32<<display_request.plan.level)};
+            let cold=scene.live_objects_cold(self,packet.scene,bounds,side);
+            self.scene=Some(scene);
+            if cold? && self.display_backup.is_none() && !self.object_deferred {
+                let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
+                self.display_backup=self.scale_display.as_ref().and_then(|cache|cache.backup(self,&mut encoder));
+                if self.display_backup.is_some() {encoder.submit(&self.queue);}
+            }
+        }
         let resized = self.ensure_document_metadata(packet.document_extent, packet.scene)?;
         let display_rebuilt = if packet.commit_rasters {
             let previous = self.scale_display.take();
@@ -3499,6 +3792,10 @@ impl WgpuRasterizer {
             },
         );
         self.telemetry.begin(&self.device, &self.queue, &mut encoder, self.metrics.submissions + 1);
+        let moving_images_changed = self.prepare_moving_images(packet, &mut encoder)?;
+        if moving_images_changed && let Some(scene) = &mut self.scene {
+            scene.invalidate_object_previews(packet.document_extent);
+        }
         let committed_preview = if self.transform_preview.is_none() {
             self.transforms.as_mut().unwrap().consume_commit(packet)
         } else {
@@ -3537,6 +3834,7 @@ impl WgpuRasterizer {
         let old_preview_layer = self.preview_layer_id;
         let watercolor_style_dirty = self.update_watercolor_layer_styles(packet.dab_batches);
         let mut dirty = old_preview_damage.union(watercolor_style_dirty);
+        if moving_images_changed { dirty = PixelRect::full(packet.document_extent); }
         let mut new_preview_damage = PixelRect::EMPTY;
         let mut new_preview_layer = None;
         let mut new_preview_requires_base = false;
@@ -3670,7 +3968,7 @@ impl WgpuRasterizer {
                         | layer_core::RasterOperationKind::Figure(_)
                         | layer_core::RasterOperationKind::Bake { .. }
                         | layer_core::RasterOperationKind::FrequencyDetail { .. }
-                ) || (masking && (packet.scene.original(target).is_some() || self.native_backing(target).is_some()))
+                ) || (masking && (packet.scene.paint_base(target).is_some() || self.native_backing(target).is_some()))
                 {
                     // Coverage may be translated or inverted: its source mask
                     // pages are not necessarily the destination paint pages.
@@ -3683,9 +3981,7 @@ impl WgpuRasterizer {
                                     coordinate: c,
                                 })
                             })
-                            && !packet.scene.original(target).is_some_and(|s| {
-                                c[0] * PAGE_SIZE < s.extent[0] && c[1] * PAGE_SIZE < s.extent[1]
-                            })
+                            && !packet.scene.paint_base(target).is_some_and(|base| source_access::paint_base_contains(base, c))
                         {
                             continue;
                         }
@@ -3737,7 +4033,7 @@ impl WgpuRasterizer {
                 }
             }
         }
-        if source_access::placed_targets(packet.scene).any(|t| packet.scene.original(t).is_some() || self.native_backing(t).is_some()) {
+        if source_access::placed_targets(packet.scene).any(|t| packet.scene.paint_base(t).is_some() || self.native_backing(t).is_some()) {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             scene.initialize_source_paint(self, packet.scene, &mut encoder)?;
             self.scene = Some(scene);
@@ -3958,7 +4254,7 @@ impl WgpuRasterizer {
                 }
             }
             if new_preview_requires_base && !new_preview_from_persistent
-                && (packet.scene.original(layer_id).is_some() || self.native_backing(layer_id).is_some()) {
+                && (packet.scene.paint_base(layer_id).is_some() || self.native_backing(layer_id).is_some()) {
                 let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
                 scene.initialize_source_preview(self, packet.scene, layer_id, copied, &mut encoder)?;
                 self.scene = Some(scene);
@@ -4180,8 +4476,8 @@ impl WgpuRasterizer {
         let animated = packet.scene.order().iter().any(|&h| packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated()));
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).
-        if !dirty.is_empty() || animated || display_rebuilt || !unchanged {
-            self.composite_revision = self.composite_revision.wrapping_add(1);
+        let mut evaluated_objects = false;
+        if !dirty.is_empty() || animated || display_rebuilt || !unchanged || self.object_deferred || self.scene.as_ref().is_some_and(|scene| scene.objects_pending()) {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             // A moved target's damage is stored in image coordinates. Round to
             // scene tiles after applying the target's document translation.
@@ -4196,9 +4492,30 @@ impl WgpuRasterizer {
                     dirty = dirty.union(pixel_rect(rect, packet.document_extent));
                 }
             }
-            let published = scene.compose(self, packet, &batch_tiles, dirty, &mut encoder, composite_tiles.as_ref())?;
+            let result = scene.compose(self, packet, &batch_tiles, dirty, &mut encoder, composite_tiles.as_ref());
             self.scene = Some(scene);
+            let published=match result {
+                Err(GpuRasterError::DeferredObjectWork)=> {
+                    self.object_deferred=true;
+                    self.document_damage.push(PixelRect::full(packet.document_extent));
+                    self.uploads.finish(&encoder);
+                    self.telemetry.phase_end(2,&mut encoder);self.telemetry.end(&mut encoder);
+                    self.metrics.command_passes+=encoder.pass_count();
+                    self.last_submission=Some(encoder.submit(&self.queue));
+                    self.telemetry.submitted(&self.queue);
+                    if let Some(commit)=native_commit {self.finish_native_rasters(commit,true)?;}
+                    self.artwork_frame=Some(Arc::new(artwork::Frame::new(packet,context.clone())));
+                    self.submitted_context=Some(context);
+                    self.metrics.submissions=self.metrics.submissions.saturating_add(1);
+                    self.refresh_storage_metrics();
+                    return Ok(());
+                },
+                result=>result?,
+            };
+            self.composite_revision=self.composite_revision.wrapping_add(1);
+            self.object_deferred=false;
             self.composite_damage = published;
+            evaluated_objects = packet.scene.order().iter().any(|&owner| packet.scene.object_layer(owner).is_some());
         }
         let mut navigator = std::mem::take(&mut self.navigator);
         let navigator_revision = navigator.revision;
@@ -4239,16 +4556,26 @@ impl WgpuRasterizer {
             || animated
             || self.transform_preview.is_some()
             || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet));
-        self.prefetch_retouch(&frame, moving, &mut encoder);
+        self.prefetch_retouch(&frame, moving, &mut encoder)?;
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
         trace_phase.next(c"capy.publication");
         self.telemetry.phase_end(2, &mut encoder);
         self.telemetry.end(&mut encoder);
         self.metrics.command_passes += encoder.pass_count();
+        if let Some(backup)=self.display_backup.take() {
+            let bytes=backup.bytes;
+            self.retired_display_bytes.fetch_add(bytes,std::sync::atomic::Ordering::AcqRel);
+            let charge=DisplayRetirement {bytes,charge:self.retired_display_bytes.clone(),
+                #[cfg(not(target_arch="wasm32"))] _backup:backup};
+            #[cfg(target_arch="wasm32")] drop(backup);
+            encoder.on_submitted_work_done(move||drop(charge));
+        }
         let submission = encoder.submit(&self.queue);
         self.telemetry.submitted(&self.queue);
         self.last_submission = Some(submission.clone());
+        if evaluated_objects { self.evaluated_object_revision = Some(packet.scene.revision()); }
+        else if !packet.scene.order().iter().any(|&owner| packet.scene.object_layer(owner).is_some()) { self.evaluated_object_revision = None; }
         if refined {
             self.hold_background(true);
         }
@@ -5838,7 +6165,7 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
             crate::test_support::add_paint(&mut artwork, format!("Layer {id}"), [4096, 4096]);
         }
         let unused=layer_core::raster::RasterRevision::pending();unused.publish(Err("unused library source failed".into())).unwrap();
-        artwork.paint.insert(layer_core::authored::PortableId::random(),layer_core::authored::PaintSource { color_mode: Default::default(),domain:[4096;2],raster:unused,original:None,operations:Arc::default()}).unwrap();
+        artwork.paint.insert(layer_core::authored::PortableId::random(),layer_core::authored::PaintSource { color_mode: Default::default(),domain:[4096;2],raster:unused,base: None,operations:Arc::default()}).unwrap();
         let index = Arc::new(layer_core::authored::SceneIndex::build(&artwork).unwrap());
         renderer
             .submit(FramePacket {
@@ -5917,6 +6244,9 @@ mod lut3d_tests;
 #[cfg(target_arch = "wasm32")]
 impl WgpuRasterizer {
     pub fn set_snapshot_worker(&mut self, worker: snapshot::BrowserSnapshot) { self.snapshot_worker_callback = Some(worker); }
+    pub fn set_browser_image_decoder(&mut self, worker: BrowserImageDecoder) { self.browser_image_decoder = Some(worker); }
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_browser_nearest_coordinate_decoder(&mut self, worker: BrowserNearestCoordinateDecoder) { self.browser_nearest_coordinate_decoder = Some(worker); }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

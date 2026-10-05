@@ -7,6 +7,7 @@ use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth};
 use layer_core::*;
 use std::sync::Arc;
 use support::*;
+use support::Image;
 
 const DEPTHS: [(SampleDepth, f64); 2] = [(SampleDepth::U8, 255.), (SampleDepth::U16, 65535.)];
 
@@ -42,7 +43,7 @@ fn document(depth: SampleDepth, space: BlendSpace) -> Document {
     doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color = DocumentColor { space: RgbSpace::Srgb, depth };
     let folder = named_occurrence(&doc, "Folder");
     let photo_use = named_occurrence(&doc, "Photo");
-    paint_mut(&mut doc, photo_use).original = Some(photo(depth));
+    paint_mut(&mut doc, photo_use).base = Some(layer_core::authored::PaintBase::new((photo(depth)).into()));
     let group = convert_group(&doc, folder, &[photo_use]);
     doc.apply(group).unwrap();
     doc.artwork.occurrences.get_mut(folder).unwrap().translation = Point { x: 20., y: -12. };
@@ -53,14 +54,9 @@ fn document(depth: SampleDepth, space: BlendSpace) -> Document {
 }
 
 fn insert_effect(doc: &Document, above: OccurrenceHandle, effect: &EffectInstance, name: &str) -> (Edit, OccurrenceHandle) {
-    let definition = RecordChange::insert(&doc.artwork.definitions, Definition {
-        program: effect.program.clone(),
-    });
-    let application = RecordChange::insert(&doc.artwork.effects, EffectApplication {
-        definition: definition.handle, values: effect.values.clone(),
-    });
+    let application = RecordChange::insert(&doc.artwork.effects, EffectApplication::new(effect.program.clone(), effect.values.clone(), doc.composition().size));
     let mut occurrence = Occurrence::new(OccurrenceContent::Effect(application.handle), name);
-    occurrence.attachment = layer_core::Attachment::Clip;
+    occurrence.attachment = layer_core::Attachment::Effect;
     let occurrence = RecordChange::insert(&doc.artwork.occurrences, occurrence);
     let handle = occurrence.handle;
     let containing = doc.scene().stack(above).unwrap();
@@ -68,7 +64,7 @@ fn insert_effect(doc: &Document, above: OccurrenceHandle, effect: &EffectInstanc
     let index = stack.entries.iter().position(|h| *h == above).unwrap();
     stack.entries.insert(index, handle);
     let stack = RecordChange::replace(&doc.artwork.stacks, containing, Some(stack)).unwrap();
-    (Edit::Batch(vec![Edit::Definition(definition), Edit::Effect(application), Edit::Occurrence(occurrence), Edit::Stack(stack)]), handle)
+    (Edit::Batch(vec![Edit::Effect(application), Edit::Occurrence(occurrence), Edit::Stack(stack)]), handle)
 }
 
 fn separation_preview(engine: &Engine, above: OccurrenceHandle, effect: &EffectInstance) -> layer_engine::ScenePreview {
@@ -179,9 +175,9 @@ fn a_large_separation_yields_without_publishing_partial_rasters() {
     let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.artwork.compositions.get_mut(document.artwork.root).unwrap().blend = BlendSpace::Perceptual;
     let photo = document.working.occurrence.unwrap();
-    paint_mut(&mut document, photo).original = Some(color::source::rgba8_source(extent, |x, y| {
+    paint_mut(&mut document, photo).base = Some(layer_core::authored::PaintBase::new((color::source::rgba8_source(extent, |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
-    }));
+    })).into()));
     let (mut engine, _input) = engine(document);
     let before = image(&mut engine, 0);
     let photo = engine.document().working.occurrence.unwrap();
@@ -252,9 +248,9 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend = BlendSpace::Perceptual;
     let photo = doc.working.occurrence.unwrap();
-    paint_mut(&mut doc, photo).original = Some(color::source::rgba8_source(extent, |x, y| {
+    paint_mut(&mut doc, photo).base = Some(layer_core::authored::PaintBase::new((color::source::rgba8_source(extent, |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
-    }));
+    })).into()));
 
     let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(doc.composition().color).expect("physical GPU required");
     let (_producer, consumer) = input_queue(64);

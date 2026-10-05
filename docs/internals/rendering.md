@@ -131,6 +131,85 @@ zoom and rotation. The shared
 composed image into the platform's target. Panning the view does not, by itself,
 require repainting committed raster tiles.
 
+### Image object layers
+
+Object layers compose ordered immutable images over transparency before applying
+the layer mask, attached effects, opacity and clipping. Both the native tile
+compositor and the display graph evaluate this content directly; an object result
+has no writable `SourceTarget`. `SceneScope::RawObjects`, `ArtworkSource::Objects`
+and `RegionSource::Objects` select its internal pixels independently of the
+owner's visibility, mask and presentation properties.
+
+Object affines are composed and inverted in binary64 before projecting into a
+nearby output window. The image reader accepts explicit output origin and pixel
+density, including densities above native resolution. Source decoding precedes
+premultiplied working-linear interpolation. Ordered composition converts each
+sample into the document's blend domain at the composition boundary.
+
+Nearest prepares exact binary64 floor coordinates on a worker in chunks of at
+most 65,536 output pixels. Geometry is keyed by output mapping and window
+independently of source identity, retained across source-tile contributions and
+uploaded for GPU level-zero gathers. Linear evaluates
+the scale-adapted tent over its complete lattice support, including transparent
+samples beyond the image rectangle in the normalization. Decoded immutable source
+tiles share the bounded source cache across objects and paint bases; affine edits
+keep those source entries. Object metadata includes ordered children, image
+identity and interpretation, visibility, affine and interpolation. Edits damage
+the old and new bounds with sampling and declared effect support.
+
+Moving smooth display can use a temporary bilinear result from shared immutable
+image mip levels. The source cache reserves their storage from its byte budget;
+native source preparation runs on a worker and builds bounded tiles between
+frames. Image identity and source interpretation select the pyramid independently
+of object placement. Nearest continues reading level zero.
+
+Canonical object collections accumulate privately across frames, consuming children
+in their authored order. A window retains one child's sampling state and three
+rotating surfaces for the sampled child, its converted color and the isolated
+collection prefix. Each child enters the selected composition color space before
+source-over. Only the complete collection becomes a reusable result. This bounds
+working storage independently of the number of overlapping children.
+Ready mip previews admit at most 64 dispatches across the complete collection
+window and share one queue-ordered transient sampling workspace. A private batch
+records at most eight sampling/composition steps and waits for GPU completion
+before another batch is recorded. Each private cache admits buffers, output
+textures, prepared geometry and queued metadata within 64 MiB. Live display and
+exact snapshot queries use separate caches, so concurrent evaluators can retain
+up to two such allowances. Resources retired by an edit remain charged through
+GPU completion. Completed results remain reusable across deferred frame retries
+until their copies are encoded. Hidden owners cancel display work; raw object
+queries retain their independent visibility semantics.
+Replacing an affine retires its unfinished result. Direct coarse completion damages
+its evaluated density; native completion also invalidates consumers of native image
+inputs. Main and overview refinement preserve each other's completed pixels. Canonical
+captures use the authored kernel, submit bounded worker chunks and check capture
+cancellation between chunks. Display approximations never become capture inputs.
+Snapshot region planning defers pending object work to a separate exact-result
+cache. Each drain records at most eight sampling steps, submits and awaits GPU
+completion, then checks cancellation before resuming. Successful source commands
+remain in queue order during retries; histogram consumers and final readback run
+only after the requested pixels are complete. The live compose context follows
+filter input captures so those captures retain the display scheduler. Quiet retouch
+and thumbnail reads use the prepared-source worker and private scheduler with the
+canonical kernel. A pending read preserves its request and resumes after submitted
+work; it cannot decode image pixels on the initiating thread. Object captures
+encode and release completed results one native page at a time.
+Native filter input gathers retain completed pages across these retries; a
+partial input never marks its filter output valid. Authored edits, new contacts
+and changes to input interpretation discard that unfinished gather.
+Before a cold live object can interrupt composition, the renderer copies the
+accepted viewport inputs on the GPU and retains their geometry. Source uploads,
+paint and private sampling can submit while later filter windows await prepared
+image tiles. The viewport uses those retained inputs until a complete composition
+publishes; its evaluated object revision advances with that publication. Completed
+internal regions remain valid through submitted retries and release copied
+private results. Discarded submissions still invalidate their cache writes. Jobs
+that defer release their abandoned native scratch slots and material-page
+bindings before the next attempt. Completed GPU commands retain their resources;
+the reusable scratch pool does not grow with the number of cold retries.
+Retained pixels remain charged through GPU completion. Web worker completion wakes the
+host when a tile is available; native hosts retain paced pending-work polling.
+
 Eight-bit canvas surfaces use deterministic triangular dithering after resampling
 and display color mapping. The noise uses logical screen coordinates and the
 encoded attachment domain. Noisy values are rounded to byte code centers before
@@ -617,12 +696,25 @@ order or scope of the layer operations.
 Filters that sample neighboring pixels need a different path. The
 [image-stage implementation](../../crates/layer-render-wgpu/src/scene_images.rs)
 retains reusable GPU images, tracks input changes and reuses compatible preceding
-results where possible. Each image has document-coordinate bounds independent of
-its texture size. Region capture expands its window by the accumulated declared
-filter support, and applies the existing group, clipping, mask and effect logic
-inside that window. Shaders keep document coordinates for their calculations.
-Output, current-pass input and original input each carry their own bounds and
-texel footprint through the shared image-grid descriptor. Reduced inputs use
+results where possible. Signed document regions retain dependencies before zero
+and beyond the composition frame. Unsigned texture rectangles describe only
+bounded allocations. Region capture walks upstream pass dependencies, expands
+the requested region by each pass footprint, and clamps reads at that pass's true
+finite support. Directional Gaussian passes retain their mapped axis footprints;
+large saved kernels can reuse finite edge tails without allocating empty halos. Native
+captures rebase their signed window into local tile coordinates with an exact
+64-bit scene offset; the display graph carries signed regions through source
+requests, sampling and damage expansion. Retained paint bases remain readable
+when a capture's source has no live mutable layer pages. Identity paint sources
+clip the signed request to their finite domain before adding the existing mip halo and page
+alignment; interpolation padding applies only to transformed sources.
+
+The composition frame, bake destination and temporary image edge do not limit
+source reads. Global filters request the finite retained input domain, subject to
+the same allocation allowance and GPU dimension checks. Output, current-pass
+input and original input carry their own region and texel footprint through the
+shared image-grid descriptor. Filter sampling clamps at the declared finite input
+support; samples beyond an allocated dependency window are transparent. Reduced inputs use
 the centers of their actual covered cells, including partial boundary cells.
 Native composition batches up to sixteen source tiles even when a full display
 pyramid is not admitted. A bounded horizontal strip replaces the single-tile
@@ -658,8 +750,12 @@ The native [snapshot renderer](../../crates/layer-render-wgpu/src/snapshot.rs)
 prepares document metadata independently of the live display cache. A file or
 inspection worker owns an immutable `ArtworkCapture` or scoped `SceneSnapshot`
 and a native Float32
-renderer. Region requests restore only the translated paint, material and mask
-pages needed by composition and its halos. Compressed backing remains shared;
+renderer. Content-bounds capture rebases the signed scene offset while retaining
+the original composition frame and authored effect mapping; its output allocation
+may include retained off-frame images and filter support. Bounds remain signed
+integers until the legacy `Rect` result rounds outward, so distant finite images
+retain conservative nonempty hulls without claiming Float32 pixel precision. Region requests restore
+only the translated paint, material and mask pages needed by composition and its halos. Compressed backing remains shared;
 restoration uses the same integer decoder as live editing. Initial masks use the
 existing GPU crossing/coverage and affine-resampling shaders, with bounded
 output rectangles and row slices of immutable packed selection coverage.
@@ -747,6 +843,12 @@ canvas readback. The exposed host export still requests a full image; the native
 snapshot API streams bounded strips. Thumbnails and color sampling use separate
 bounded requests. Source bytes and immutable compressed
 tile backing are shared with save snapshots. See the [artwork capture and package contract](../reference/project-format.md).
+
+Live composite color samples and region classification retain their frame while
+cold image-object captures prepare on workers. Polling advances prepared GPU
+sampling without inline source decoding or GPU waits. Region classification
+retains completed batches across deferred captures; cancellation discards the
+unfinished request before a replacement can publish.
 
 Layer-thumbnail preparation shares a four-page budget across original
 photo tiles, painted overrides, alpha-bounds scans and thumbnail drawing.

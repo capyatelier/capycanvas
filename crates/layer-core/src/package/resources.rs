@@ -59,12 +59,15 @@ pub struct ResourceEntry { pub kind: &'static str, pub data: Value, pub raw_enco
 pub struct ResourceInventory {
     pub entries: BTreeMap<PortableId, ResourceEntry>,
     pub(crate) transfer: bool,
+    pub(crate) private: bool,
+    pub(crate) images: BTreeMap<PortableId, Value>,
     pub(crate) transfer_selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>,
 }
 impl ResourceInventory {
-    pub(crate) fn for_transfer() -> Self { Self { transfer: true, ..Default::default() } }
+    pub(crate) fn for_transfer() -> Self { Self { transfer: true, private: true, ..Default::default() } }
     pub fn insert(&mut self, entry: ResourceEntry) -> Result<Value, String> {
         let id = entry.payload.id();
+        if self.images.contains_key(&id) {return Err("Object and resource identities overlap".into());}
         if let Some(previous) = self.entries.get(&id) {
             let conflict=|reason:&str|format!("Conflicting immutable resource identity {id} ({}): {reason}",entry.kind);
             if previous.kind != entry.kind || previous.data != entry.data || previous.raw_encoding != entry.raw_encoding {
@@ -82,6 +85,13 @@ impl ResourceInventory {
         } else { self.entries.insert(id, entry); }
         Ok(reference(id))
     }
+    pub(crate) fn image(&mut self,id:PortableId,record:Value)->Result<Value,String> {
+        if self.entries.contains_key(&id) {return Err("Object and resource identities overlap".into());}
+        if let Some(previous)=self.images.get(&id) {
+            if previous!=&record {return Err("Conflicting immutable image identity".into());}
+        } else {self.images.insert(id,record);}
+        Ok(reference(id))
+    }
     pub fn bytes(&mut self, kind: &'static str, bytes: &Resource<[u8]>, data: Value) -> Result<Value, String> {
         self.insert(ResourceEntry { kind, data, raw_encoding:"raw", payload:Payload::Bytes(bytes.clone()) })
     }
@@ -92,6 +102,14 @@ impl ResourceInventory {
     pub fn tile(&mut self, tile: Arc<TileBlob>) -> Result<Value, String> {
         let data = encode_descriptor(tile.descriptor)?;
         self.insert(ResourceEntry { kind:"capy.raster-tile/1", data, raw_encoding:"capy.lz4-tile/1", payload:Payload::Tile(tile) })
+    }
+    pub(crate) fn validate_opaque_alias(&self,resource:&crate::authored::OpaqueResource)->Result<bool,String> {
+        let Some(entry)=self.entries.get(&resource.id) else {return Ok(false)};
+        let mut data=resource.data.clone();
+        if resource.encoding.as_ref()=="capy.lz4-bytes/1" {data.as_object_mut().ok_or("Invalid wrapped resource descriptor")?.remove("decoded_bytes");}
+        if resource.kind.as_ref()!=entry.kind || data!=entry.data || !resource.extra_fields.is_empty()
+            || (resource.encoding.as_ref()!=entry.raw_encoding && resource.encoding.as_ref()!="capy.lz4-bytes/1") {return Err("Opaque resource conflicts with authored resource".into());}
+        Ok(true)
     }
     pub fn prepare(&self, cancelled: &AtomicBool) -> Result<PreparedResources, String> {
         if self.transfer { return Err("Worker transfer inventory cannot be written as a package".into()); }
@@ -213,32 +231,35 @@ pub(crate) type SelectionKey = ([u32; 2], [u32; 4], bool, Vec<PortableId>);
 pub struct ResourceReader<'a> {
     pub manifest: &'a Manifest, pub backing: &'a ImmutableBacking, pub cancelled: &'a AtomicBool,
     pub limits: crate::ProjectLimits,
+    pub(crate) private: bool,
     pub(crate) bytes: BTreeMap<PortableId, Resource<[u8]>>, pub(crate) texts: BTreeMap<PortableId, Resource<str>>,
     pub(crate) tiles: BTreeMap<PortableId, Arc<TileBlob>>, pub(crate) luts: BTreeMap<PortableId, Arc<Lut3d>>, decoded: u64,
     verified: bool,
     aliases: BTreeMap<(usize,u64,u64), (PortableId,Value)>,
     rasters: BTreeMap<PortableId, crate::raster::RasterTile>,
     pub(crate) selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>,
-    pub(crate) originals: BTreeMap<String, Arc<crate::color::source::SourceImage>>,
+    pub(crate) images: BTreeMap<PortableId, (Value, crate::authored::Image)>,
+    pub(crate) programs: BTreeMap<Vec<u8>, Arc<crate::EffectProgram>>,
 }
 #[derive(Default)]
 pub(crate) struct ResourceCache {
     bytes: BTreeMap<PortableId, Resource<[u8]>>, texts: BTreeMap<PortableId, Resource<str>>,
     tiles: BTreeMap<PortableId, Arc<TileBlob>>, luts: BTreeMap<PortableId, Arc<Lut3d>>, decoded: u64,
     aliases: BTreeMap<(usize,u64,u64), (PortableId,Value)>, rasters: BTreeMap<PortableId, crate::raster::RasterTile>,
-    selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>, originals: BTreeMap<String, Arc<crate::color::source::SourceImage>>,
+    selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>, images: BTreeMap<PortableId, (Value, crate::authored::Image)>,
+    programs: BTreeMap<Vec<u8>, Arc<crate::EffectProgram>>,
 }
 impl<'a> ResourceReader<'a> {
     pub fn new(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits) -> Self {
-        Self {manifest,backing,cancelled,limits,bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),originals:BTreeMap::new()}
+        Self {manifest,backing,cancelled,limits,private:false,bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new()}
     }
     pub(crate) fn install_cache(&mut self, cache: ResourceCache) {
         self.bytes=cache.bytes;self.texts=cache.texts;self.tiles=cache.tiles;self.luts=cache.luts;self.decoded=cache.decoded;
-        self.aliases=cache.aliases;self.rasters=cache.rasters;self.selections=cache.selections;self.originals=cache.originals;
+        self.aliases=cache.aliases;self.rasters=cache.rasters;self.selections=cache.selections;self.images=cache.images;self.programs=cache.programs;
     }
     pub(crate) fn into_cache(self)->ResourceCache {
         ResourceCache {bytes:self.bytes,texts:self.texts,tiles:self.tiles,luts:self.luts,decoded:self.decoded,
-            aliases:self.aliases,rasters:self.rasters,selections:self.selections,originals:self.originals}
+            aliases:self.aliases,rasters:self.rasters,selections:self.selections,images:self.images,programs:self.programs}
     }
     pub(crate) fn require_verified(&mut self) { self.verified = true; }
     fn alias(&self, id:PortableId) -> DecodeResult<Option<PortableId>> {

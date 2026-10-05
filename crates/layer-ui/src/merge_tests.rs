@@ -80,7 +80,7 @@ mod merge_checks {
         assert_eq!(s.command(CommandId::MergeDown).label.as_ref(), "Merge Down");
         let upper = s.engine.document().working.occurrence.unwrap();
         let doc = s.engine.document();
-        let paint = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), original: None, operations: Default::default() });
+        let paint = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), base: None, operations: Default::default() });
         let mut clip = Occurrence::new(OccurrenceContent::Paint(paint.handle), "Shade");
         clip.attachment = layer_core::Attachment::Clip;
         let clip = RecordChange::insert(&doc.artwork.occurrences, clip);
@@ -92,15 +92,15 @@ mod merge_checks {
         assert_eq!(s.command(CommandId::MergeDown).label.as_ref(), "Merge Clipped Layers");
         let instance = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("levels").unwrap().program());
         let doc = s.engine.document();
-        let definition = RecordChange::insert(&doc.artwork.definitions, Definition { program: instance.program });
-        let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: instance.values});
+
+        let application = RecordChange::insert(&doc.artwork.effects, EffectApplication::new(instance.program, instance.values, doc.composition().size));
         let mut effect = doc.scene().occurrence(upper).unwrap().clone();
         effect.content = OccurrenceContent::Effect(application.handle);
         let effect = RecordChange::insert(&doc.artwork.occurrences, effect);
         let id = effect.handle;
         let mut stack = doc.artwork.stacks.get(root).unwrap().clone(); stack.entries.insert(0, id);
         let membership = RecordChange::replace(&doc.artwork.stacks, root, Some(stack)).unwrap();
-        s.layer_edit(Edit::Batch(vec![Edit::Definition(definition), Edit::Effect(application), Edit::Occurrence(effect), Edit::Stack(membership)])).unwrap();
+        s.layer_edit(Edit::Batch(vec![Edit::Effect(application), Edit::Occurrence(effect), Edit::Stack(membership)])).unwrap();
         s.layer_edit(s.engine.document().select_occurrence_edit(id).unwrap()).unwrap();
         s.frame(4, 4).unwrap();
         let state = s.state.commands.iter().find(|c| c.id == CommandId::MergeDown).unwrap();

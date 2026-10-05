@@ -44,6 +44,8 @@ pub(super) fn view_bounds(view: layer_render::ViewState, extent: [u32; 2], paddi
 pub(super) struct Plan {
     pub extent: [u32; 2],
     pub bounds: PixelRect,
+    pub doc_bounds: DocRect,
+    pub support: DocRect,
     pub size: [u32; 2],
     pub level: u32,
 }
@@ -66,7 +68,7 @@ impl Plan {
     }
     pub fn window(extent: [u32; 2], level: u32, bounds: PixelRect) -> Self {
         let size = [bounds.width(), bounds.height()].map(|v| v.div_ceil(1 << level));
-        Self { extent, bounds, size, level }
+        Self { extent, bounds, doc_bounds: bounds.into(), support: PixelRect::full(extent).into(), size, level }
     }
     pub fn level_size(self, level: u32) -> [u32; 2] {
         [self.bounds.width(), self.bounds.height()].map(|v| v.div_ceil(1 << level))

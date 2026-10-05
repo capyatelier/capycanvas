@@ -9,18 +9,18 @@ use std::{collections::{BTreeMap, BTreeSet}, mem::MaybeUninit, sync::{Arc, atomi
 pub struct TransferLayout {
     compositions: Vec<PortableId>, stacks: Vec<PortableId>, occurrences: Vec<PortableId>,
     paint: Vec<PortableId>, coverage: Vec<PortableId>, effects: Vec<PortableId>,
-    definitions: Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
+    object_layers:Vec<PortableId>, objects:Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
 }
 impl TransferLayout {
     pub(crate) fn capture(art: &Artwork)->Self {
         fn slots<T>(store:&Store<T>)->Vec<PortableId>{(0..store.capacity()).map(|i|store.id(Handle::from_index(i as u32)).unwrap()).collect()}
-        Self {compositions:slots(&art.compositions),stacks:slots(&art.stacks),occurrences:slots(&art.occurrences),paint:slots(&art.paint),coverage:slots(&art.coverage),effects:slots(&art.effects),definitions:slots(&art.definitions),selections:slots(&art.selections),guides:slots(&art.guides),outputs:slots(&art.outputs)}
+        Self {compositions:slots(&art.compositions),stacks:slots(&art.stacks),occurrences:slots(&art.occurrences),paint:slots(&art.paint),coverage:slots(&art.coverage),effects:slots(&art.effects),object_layers:slots(&art.object_layers),objects:slots(&art.objects),selections:slots(&art.selections),guides:slots(&art.guides),outputs:slots(&art.outputs)}
     }
     pub(crate) fn install(&self,art:&mut Artwork)->super::values::DecodeResult<()> {
         fn slots<T>(store:&mut Store<T>,ids:&[PortableId])->super::values::DecodeResult<()>{for id in ids {store.reserve(*id)?;}Ok(())}
         slots(&mut art.compositions,&self.compositions)?;slots(&mut art.stacks,&self.stacks)?;slots(&mut art.occurrences,&self.occurrences)?;
         slots(&mut art.paint,&self.paint)?;slots(&mut art.coverage,&self.coverage)?;slots(&mut art.effects,&self.effects)?;
-        slots(&mut art.definitions,&self.definitions)?;slots(&mut art.selections,&self.selections)?;slots(&mut art.guides,&self.guides)?;slots(&mut art.outputs,&self.outputs)
+        slots(&mut art.object_layers,&self.object_layers)?;slots(&mut art.objects,&self.objects)?;slots(&mut art.selections,&self.selections)?;slots(&mut art.guides,&self.guides)?;slots(&mut art.outputs,&self.outputs)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ struct EncodedPayload {encoding:ResourceEncoding,payload:usize}
 enum VerifiedResource {
     Bytes {payload:usize,encoded:Option<EncodedPayload>},
     Code {payload:usize,encoded:Option<EncodedPayload>},
-    Tile {payload:usize},
+    Tile {payload:usize,fingerprint:Option<[u8;32]>},
     Lut {payload:usize,encoded:Option<EncodedPayload>,digest:[u8;32],spaces:u8},
     Coverage {payload:Option<usize>},
     Opaque {payload:usize},
@@ -95,7 +95,7 @@ impl PreparedTransfer {
         for (id,entry) in &inventory.entries {
             active(cancel)?;
             let state=match &entry.payload {
-                Payload::Tile(tile)=>VerifiedResource::Tile{payload:push(&mut payloads,TransferPayload::Tile(tile.clone()))},
+                Payload::Tile(tile)=>VerifiedResource::Tile{payload:push(&mut payloads,TransferPayload::Tile(tile.clone())),fingerprint:tile.encoded_fingerprint()},
                 Payload::Bytes(bytes) if entry.kind=="capy.lut3d/1"=>{let lut=luts.get(id).ok_or("Missing verified lookup owner")?;
                     VerifiedResource::Lut {payload:push(&mut payloads,TransferPayload::Bytes(bytes.storage().clone())),encoded:encoded(&mut payloads,bytes.encoded_if_ready()),digest:lut.digest(),spaces:lut.admitted_spaces()}},
                 Payload::Bytes(bytes)=>VerifiedResource::Bytes{payload:push(&mut payloads,TransferPayload::Bytes(bytes.storage().clone())),encoded:encoded(&mut payloads,bytes.encoded_if_ready())},
@@ -105,25 +105,21 @@ impl PreparedTransfer {
             };
             let length=match &state {
                 VerifiedResource::Coverage {payload:None}=>0,
-                VerifiedResource::Coverage {payload:Some(payload)}|VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload}|VerifiedResource::Lut{payload,..}|VerifiedResource::Opaque{payload}=>payloads[*payload].len(),
+                VerifiedResource::Coverage {payload:Some(payload)}|VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload,..}|VerifiedResource::Lut{payload,..}|VerifiedResource::Opaque{payload}=>payloads[*payload].len(),
             };
             records.push(json!({"id":id,"type":entry.kind,"data":entry.data,"encoding":entry.raw_encoding,"location":{"member":format!("data/{id}")},"bytes":length.to_string(),"crc32":"00000000"}));
             verification.insert(*id,state);
         }
         let mut retained_resources=BTreeMap::new();
         for resource in opaque {
-            if let Some(entry)=inventory.entries.get(&resource.id) {
-                let mut data=resource.data.clone();
-                if resource.encoding.as_ref()=="capy.lz4-bytes/1" {data.as_object_mut().ok_or("Invalid wrapped resource descriptor")?.remove("decoded_bytes");}
-                if resource.kind.as_ref()!=entry.kind||data!=entry.data||!resource.extra_fields.is_empty()
-                    ||(resource.encoding.as_ref()!=entry.raw_encoding&&resource.encoding.as_ref()!="capy.lz4-bytes/1") {return Err("Opaque resource conflicts with authored resource".into());}
+            if inventory.validate_opaque_alias(&resource)? {
                 let record=records.iter_mut().find(|record|record["id"]==json!(resource.id)).unwrap();
                 *record=resource.record(json!({"member":format!("data/{}",resource.id)}));
                 let shared=match &verification[&resource.id] {
                     VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}|VerifiedResource::Lut{payload,encoded,digest:_,spaces:_}=>{
                         if resource.encoding.as_ref()=="capy.lz4-bytes/1" {encoded.as_ref().filter(|e|e.encoding==ResourceEncoding::Lz4).map(|e|e.payload)}else{Some(*payload)}
                     },
-                    VerifiedResource::Tile{payload}|VerifiedResource::Coverage{payload:Some(payload)}=>Some(*payload),
+                    VerifiedResource::Tile{payload,..}|VerifiedResource::Coverage{payload:Some(payload)}=>Some(*payload),
                     _=>None,
                 }.filter(|payload|payloads[*payload].len()==resource.length);
                 let payload=shared.unwrap_or_else(||push(&mut payloads,TransferPayload::Opaque(resource.clone())));
@@ -139,6 +135,7 @@ impl PreparedTransfer {
         let metadata:serde_json::Map<_,_>=["exif","xmp","iptc"].into_iter().zip(art.metadata.blocks()).filter_map(|(kind,bytes)|bytes.as_ref().map(|b|(kind.to_string(),resources::reference(b.id())))).collect();
         if !metadata.is_empty(){value["metadata"]=Value::Object(metadata);}
         let descriptor=TransferDescriptor {manifest:value,layout:TransferLayout::capture(art),checkpoint:capture.checkpoint,working_selection,lengths:payloads.iter().map(TransferPayload::len).collect(),resources:verification,selections,retained_resources,private_resources:BTreeMap::new()};
+        manifest(&descriptor,ProjectLimits::default())?;
         Ok(Self {descriptor,payloads})
     }
     pub(crate) fn append_private_resource(&mut self,resource:Arc<OpaqueResource>)->Result<(),String>{
@@ -172,7 +169,8 @@ impl PreparedTransfer {
         for (id,state) in &self.descriptor.resources {match state {
             VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}=>{add(*id,"raw",*payload,Value::Null)?;if let Some(encoded)=encoded {add(*id,"encoded",encoded.payload,json!(encoded.encoding))?;}},
             VerifiedResource::Lut{payload,encoded,digest,spaces}=>{add(*id,"raw",*payload,json!([digest,spaces]))?;if let Some(encoded)=encoded {add(*id,"encoded",encoded.payload,json!([encoded.encoding,digest,spaces]))?;}},
-            VerifiedResource::Coverage{payload:Some(payload)}|VerifiedResource::Tile{payload}|VerifiedResource::Opaque{payload}=>add(*id,"raw",*payload,Value::Null)?,
+            VerifiedResource::Tile{payload,fingerprint}=>add(*id,"raw",*payload,json!(fingerprint))?,
+            VerifiedResource::Coverage{payload:Some(payload)}|VerifiedResource::Opaque{payload}=>add(*id,"raw",*payload,Value::Null)?,
             VerifiedResource::Coverage{payload:None}=>(),
         }}
         for (id,payload) in &self.descriptor.retained_resources {add(*id,"retained",*payload,Value::Null)?;}
@@ -211,7 +209,7 @@ impl PreparedTransfer {
     fn adopt_verified_with_retention<T>(&self,limits:ProjectLimits,cancel:&AtomicBool,retained:bool,additional:impl FnOnce(&Artwork,&mut ResourceReader<'_>)->Result<T,String>)->Result<(ArtworkCapture,Option<crate::Selection>,T),String>{
         active(cancel)?;let manifest=manifest(&self.descriptor,limits)?;
         let empty:Arc<[u8]>=Arc::from([]);let backing=ImmutableBacking::new(Arc::new(empty)).map_err(str::to_string)?;
-        let mut reader=ResourceReader::new(&manifest,&backing,cancel,limits);reader.require_verified();
+        let mut reader=ResourceReader::new(&manifest,&backing,cancel,limits);reader.private=true;reader.require_verified();
         if manifest.resources.len()!=self.descriptor.resources.len()||self.descriptor.checkpoint.document!=manifest.document{return Err("Transfer identity inventory mismatch".into());}
         let mut decoded=0u64;
         for (id,state) in &self.descriptor.resources {
@@ -226,12 +224,12 @@ impl PreparedTransfer {
                 VerifiedResource::Tile{..}|VerifiedResource::Opaque{..}=>(),
             }
         }
-        for (id,state) in &self.descriptor.resources {if let VerifiedResource::Tile{payload}=state {
+        for (id,state) in &self.descriptor.resources {if let VerifiedResource::Tile{payload,fingerprint}=state {
             let record=&manifest.resources[id].value;if record["type"]!="capy.raster-tile/1"{return Err("Transfer tile type mismatch".into());}
             let descriptor=resources::parse_descriptor(&record["data"]).map_err(|e|e.to_string())?;
             let raw=descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid verified tile descriptor")? as u64;
             decoded=decoded.saturating_add(if retained {self.payload_len(*payload)?}else{raw});
-            reader.tiles.insert(*id,Arc::new(crate::raster::TileBlob::from_verified_resource(*id,descriptor,self.bytes(*payload)?)?));
+            reader.tiles.insert(*id,Arc::new(crate::raster::TileBlob::from_verified_resource_with_encoded_fingerprint(*id,descriptor,self.bytes(*payload)?,*fingerprint)?));
         }}
         for selection in &self.descriptor.selections {
             let words=match self.payloads.get(selection.payload){Some(TransferPayload::Words(words))=>words.clone(),_=>return Err("Missing decoded selection words".into())};decoded=decoded.saturating_add(words.len() as u64*4);
@@ -276,7 +274,7 @@ impl TransferReceiver {
         let mut bytes=BTreeSet::new();let mut words=BTreeSet::new();
         for resource in descriptor.resources.values() {match resource {
             VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}|VerifiedResource::Lut{payload,encoded,..}=>{bytes.insert(*payload);if let Some(encoded)=encoded {bytes.insert(encoded.payload);}},
-            VerifiedResource::Tile{payload}|VerifiedResource::Opaque{payload}|VerifiedResource::Coverage{payload:Some(payload)}=>{bytes.insert(*payload);},
+            VerifiedResource::Tile{payload,..}|VerifiedResource::Opaque{payload}|VerifiedResource::Coverage{payload:Some(payload)}=>{bytes.insert(*payload);},
             VerifiedResource::Coverage{payload:None}=>(),
         }}
         bytes.extend(descriptor.retained_resources.values().copied());bytes.extend(descriptor.private_resources.values().map(|(_,index)|*index));
@@ -335,7 +333,7 @@ mod tests {
         document.artwork.paint.reserve(PortableId::random()).unwrap();
         document.artwork.occurrences.reserve(PortableId::random()).unwrap();
         let source=document.working.target.unwrap();let SourceTarget::Paint(handle)=source else{unreachable!()};
-        document.artwork.paint.get_mut(handle).unwrap().original=Some(crate::color::source::rgba8_source([19,11],|x,y|[x as u8,y as u8,80,255]));
+        document.artwork.paint.get_mut(handle).unwrap().base=Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|x,y|[x as u8,y as u8,80,255]))));
         document.artwork.metadata=Arc::new(crate::PhotoMetadata{xmp:Some(Resource::from(b"<x:xmpmeta/>".to_vec())),..Default::default()});
         let mut output=document.artwork.outputs.get(document.artwork.default_output).unwrap().clone();
         output.proof=Some(crate::color::ProofRecipe {name:"proof".into(),profile:crate::color::ColorProfile::Icc(Resource::from(vec![1,2,3,4])),conversion:Default::default(),simulate_paper:false,simulate_black_ink:false});
@@ -351,6 +349,14 @@ mod tests {
         }}receiver.finish().unwrap()
     }
     #[test]
+    fn capture_rejects_image_resource_identity_collisions_before_publication() {
+        let mut capture=capture();let art=Arc::make_mut(&mut capture.artwork);
+        let (_,_,paint)=art.paint.iter().next().unwrap();let samples=paint.base.as_ref().unwrap().image.storage().clone();
+        let collision=samples.tiles.values().next().unwrap().resource_id();
+        let paint=art.paint.iter().next().unwrap().0;art.paint.get_mut(paint).unwrap().base.as_mut().unwrap().image=Image::with_id(collision,samples);
+        assert!(PreparedTransfer::capture(&capture,&AtomicBool::new(false)).is_err());
+    }
+    #[test]
     fn verified_transfer_preserves_final_records_resources_and_runtime_tombstone_slots(){
         let cancel=AtomicBool::new(false);let original=capture();let prepared=PreparedTransfer::capture(&original,&cancel).unwrap();
         let received=receive(&prepared);let reopened=received.adopt_verified(ProjectLimits::default(),&cancel).unwrap();
@@ -361,8 +367,8 @@ mod tests {
         for (h,id,paint) in original.artwork.paint.iter(){
             let loaded=reopened.artwork.paint.get(reopened.artwork.paint.resolve(id).unwrap()).unwrap();
             assert_eq!(reopened.artwork.paint.resolve(id),Some(h));
-            for (coordinate,tile) in &paint.original.as_ref().unwrap().tiles {
-                let restored=&loaded.original.as_ref().unwrap().tiles[coordinate];
+            for (coordinate,tile) in &paint.base.as_ref().unwrap().image.tiles {
+                let restored=&loaded.base.as_ref().unwrap().image.tiles[coordinate];
                 assert_eq!(tile.resource_id(),restored.resource_id());
                 assert_eq!(tile.compressed().unwrap(),restored.compressed().unwrap());
             }
@@ -403,7 +409,7 @@ mod tests {
         let weak_chunk=Arc::downgrade(&chunk);
         spill.commit(chunk.clone()).unwrap();
         let prepared=PreparedTransfer::capture(&original,&cancel).unwrap();
-        let VerifiedResource::Tile {payload} = prepared.descriptor.resources[&id] else {panic!("tile payload")};
+        let VerifiedResource::Tile {payload,..} = prepared.descriptor.resources[&id] else {panic!("tile payload")};
         assert_eq!(prepared.payload_len(payload).unwrap(),expected.len() as u64);
         assert_eq!(reads.load(Ordering::Relaxed),0,"capture and length enumeration must not poll cold backing");
         drop(original);drop(editor);drop(retained);drop(chunk);
@@ -421,7 +427,7 @@ mod tests {
         assert_eq!(copied.as_slice(),expected.as_ref());
         for transfer in [&prepared,&receive(&prepared)] {
             let loaded=transfer.adopt_verified(ProjectLimits::default(),&cancel).unwrap();
-            let restored=loaded.artwork.paint.iter().next().unwrap().2.original.as_ref().unwrap().tiles.values().next().unwrap();
+            let restored=loaded.artwork.paint.iter().next().unwrap().2.base.as_ref().unwrap().image.tiles.values().next().unwrap();
             assert_eq!(restored.resource_id(),id);
             assert_eq!(restored.compressed().unwrap(),expected);
         }
@@ -462,9 +468,9 @@ mod tests {
         let lut=Arc::new(Lut3d::from_samples(2,[[0.;3],[1.;3]],Arc::from("first"),vec![[0.25;3];8].into()).unwrap());
         let alias=Arc::new(lut.with_title(Arc::from("second")).unwrap());let mut occurrences=Vec::new();
         let program=crate::bundled_effect_catalog().get("color_lookup").unwrap().program();
-        let definition=art.definitions.insert(PortableId::random(),Definition{program:program.clone()}).unwrap();
+
         for lookup in [lut.clone(),alias.clone()]{let mut effect=EffectInstance::new(program.clone());effect.set("resource",EffectValue::Lut3d(Some(lookup))).unwrap();
-            let application=art.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values}).unwrap();
+            let application=art.effects.insert(PortableId::random(),EffectApplication::new(program.clone(),effect.values,[19,11])).unwrap();
             occurrences.push(art.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"lookup")).unwrap());
         }
         let stack=art.compositions.get(art.root).unwrap().result;art.stacks.get_mut(stack).unwrap().entries.splice(0..0,occurrences);
@@ -532,7 +538,7 @@ mod tests {
         assert!(TransferReceiver::new(descriptor,ProjectLimits::default()).is_err());
         let mut descriptor=prepared.descriptor().clone();
         let payload=match descriptor.resources.values().next().unwrap() {
-            VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload}|VerifiedResource::Lut{payload,..}|VerifiedResource::Opaque{payload}=>*payload,
+            VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload,..}|VerifiedResource::Lut{payload,..}|VerifiedResource::Opaque{payload}=>*payload,
             VerifiedResource::Coverage{payload}=>payload.unwrap(),
         };
         descriptor.selections.push(SelectionTransfer {extent:[8,1],bounds:[0,0,8,1],bytes:false,chunks:vec![PortableId::random()],payload});

@@ -33,6 +33,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
   const keyPress=()=>key('Enter',13);
   const capture=async name=>{await evaluate('layerApp.app.wait_for_canvas()');await settle();const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(shot.data,'base64'));};
   const canvasPixel=async([docX,docY]=[64,192])=>{
+    await evaluate('layerApp.app.wait_for_canvas()');await settle();
     const point=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${docX}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${docY}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
     const shot=await call('Page.captureScreenshot',{format:'png',clip:{...point,width:1,height:1,scale:1}});
     const pixel=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return Array.from(context.getImageData(0,0,1,1).data)})()`);
@@ -273,7 +274,7 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   const key=async(name,code)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,windowsVirtualKeyCode:code});await settle();};
   const select=async index=>{await click('[data-property-resource]');await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);await key('Enter',13);await idle();};
   const originalArchive=await save(),originalSources=sourceIdentity(originalArchive);
-  const lookupIndex=packageOccurrences(originalArchive).findIndex(occurrence=>{const application=occurrence.data.content.effect&&packageObject(originalArchive,occurrence.data.content.effect);return application&&packageObject(originalArchive,application.data.definition).data.builtin==='color_lookup'});assert.ok(lookupIndex>=0);
+  const lookupIndex=packageOccurrences(originalArchive).findIndex(occurrence=>{const application=occurrence.data.content.effect&&packageObject(originalArchive,occurrence.data.content.effect);return application&&application.data.builtin==='color_lookup'});assert.ok(lookupIndex>=0);
   const lookupOccurrence=packageOccurrences(originalArchive)[lookupIndex].id;
   const selectLookup=async manifest=>{
     const index=packageOccurrences(manifest).findIndex(occurrence=>occurrence.id===lookupOccurrence);assert.ok(index>=0,'Reopened archive retains the lookup occurrence');
@@ -326,13 +327,7 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   const lookup=packageResources(expected,'capy.lut3d/1')[0];assert.equal(Number(lookup.data.decoded_bytes??lookup.bytes),lookup.data.size**3*12);
   const compare=async()=>{
     const actual=await save();assert.deepEqual(packageResourceIdentity(actual),packageResourceIdentity(expected),'Worker packages retain LUT resource identities, descriptors and checksums');
-    const objects=structuredClone(actual.objects);
-    for(const output of objects.filter(object=>object.type==='capy.output/1')) {
-      const saved=packageObject(expected,output.id);
-      assert.ok(Number.isFinite(output.data.context.elapsed)&&output.data.context.elapsed>=saved.data.context.elapsed,'Each new capture preserves the running output clock');
-      output.data.context.elapsed=saved.data.context.elapsed;
-    }
-    assert.deepEqual(objects,expected.objects);assert.deepEqual(sourceIdentity(actual),sourceIdentity(expected));
+    assert.deepEqual(actual.objects,expected.objects);assert.deepEqual(sourceIdentity(actual),sourceIdentity(expected));
   };
   const samples=[];
   for(const theme of ['light','dark']) {

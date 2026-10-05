@@ -1,16 +1,18 @@
-use super::{Handle, PortableId, Store};
+use super::{Handle, PortableId, Store, Image, ImageObject, ObjectLayer, PaintBase};
 use crate::{BlendSpace, EffectProgram, EffectValue, ImageResolution, LayerBlend, LayerPlacement,
     PhotoMetadata, Point, Projective, RulerGeometry, Selection, SelectionMaskProperties,
-    color::{DocumentColor, ProofRecipe, hdr::SdrRendition, source::SourceImage}, raster::RasterRevision};
+    color::{DocumentColor, ProofRecipe, hdr::SdrRendition}, raster::RasterRevision};
 use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
 
 pub type CompositionHandle = Handle<Composition>;
 pub type StackHandle = Handle<Stack>;
 pub type OccurrenceHandle = Handle<Occurrence>;
 pub type PaintHandle = Handle<PaintSource>;
+pub type ObjectLayerHandle = Handle<ObjectLayer>;
+pub type ImageObjectHandle = Handle<ImageObject>;
+
 pub type CoverageHandle = Handle<CoverageSource>;
 pub type EffectHandle = Handle<EffectApplication>;
-pub type DefinitionHandle = Handle<Definition>;
 pub type SelectionHandle = Handle<SavedSelection>;
 pub type OutputHandle = Handle<Output>;
 
@@ -22,9 +24,10 @@ pub struct Artwork {
     pub stacks: Store<Stack>,
     pub occurrences: Store<Occurrence>,
     pub paint: Store<PaintSource>,
+    pub object_layers: Store<ObjectLayer>,
+    pub objects: Store<ImageObject>,
     pub coverage: Store<CoverageSource>,
     pub effects: Store<EffectApplication>,
-    pub definitions: Store<Definition>,
     pub selections: Store<SavedSelection>,
     pub guides: Store<Guides>,
     pub outputs: Store<Output>,
@@ -45,7 +48,7 @@ pub struct Composition {
 pub struct Stack { pub entries: Vec<OccurrenceHandle> }
 #[derive(Clone, Debug, PartialEq)]
 pub enum OccurrenceContent {
-    Paint(PaintHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle),
+    Paint(PaintHandle), Objects(ObjectLayerHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle),
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Attachment { #[default] None, Clip, Effect }
@@ -79,7 +82,7 @@ pub struct PaintSource {
     pub color_mode: crate::color::LayerColorMode,
     pub domain: [u32; 2],
     pub raster: RasterRevision,
-    pub original: Option<Arc<SourceImage>>,
+    pub base: Option<PaintBase>,
     pub operations: Arc<Vec<crate::RasterOperation>>,
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -101,16 +104,45 @@ pub struct MaskUse {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectApplication {
-    pub definition: DefinitionHandle,
+    pub program: Arc<EffectProgram>,
     pub values: Vec<EffectValue>,
+    pub spatial: Option<EffectSpatialReference>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectSpatialReference {
+    pub mapping: super::Affine64,
+    pub extent: [f64; 2],
+}
+impl EffectSpatialReference {
+    pub fn inverse(self) -> Option<super::Affine64> { self.mapping.inverse() }
+    pub fn map(self, point: [f64; 2]) -> [f64; 2] { self.mapping.map(point) }
+    pub fn validate(self) -> Result<(), &'static str> {
+        self.mapping.validate().map_err(|_| "Invalid effect spatial mapping")?;
+        if self.extent.iter().any(|v| !v.is_finite() || *v <= 0. || *v > crate::MAX_EXTENT as f64) {
+            return Err("Invalid effect reference extent");
+        }
+        Ok(())
+    }
+}
+impl EffectApplication {
+    pub fn new(program: Arc<EffectProgram>, values: Vec<EffectValue>, size: [u32; 2]) -> Self {
+        let spatial = program.uses_spatial_reference().then_some(EffectSpatialReference {
+            mapping: super::Affine64::default(),
+            extent: size.map(f64::from),
+        });
+        Self { program, values, spatial }
+    }
+    pub fn validate(&self) -> Result<(), &'static str> {
+        crate::EffectView::new(&self.program, &self.values).validate()?;
+        if self.program.uses_spatial_reference() != self.spatial.is_some() { return Err("Missing or unexpected effect spatial reference"); }
+        if let Some(spatial) = self.spatial { spatial.validate()?; }
+        Ok(())
+    }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Dimension { #[default] Scalar, Count, Angle, Time, SourcePixels, CompositionPixels, Normalized }
-#[derive(Clone, Debug, PartialEq)]
-pub struct Definition {
-    pub program: Arc<EffectProgram>,
-}
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedSelection { pub selection: Selection }
 #[derive(Clone, Debug, PartialEq)]
@@ -184,8 +216,8 @@ impl Artwork {
         let default_output = outputs.insert(PortableId::random(), Output { composition:root, name:Arc::from(""), context:EvaluationContext::default(),
             frame:None, scale:[1.;2], sdr:SdrRendition::default(), proof:None })?;
         Ok(Self { id:PortableId::random(), root, compositions, stacks, outputs, default_output,
-            occurrences:Store::default(), paint:Store::default(), coverage:Store::default(), effects:Store::default(),
-            definitions:Store::default(), selections:Store::default(), guides:Store::default(), metadata:Arc::new(PhotoMetadata::default()), extensions:Arc::default() })
+            occurrences:Store::default(), paint:Store::default(), object_layers:Store::default(), objects:Store::default(), coverage:Store::default(), effects:Store::default(),
+            selections:Store::default(), guides:Store::default(), metadata:Arc::new(PhotoMetadata::default()), extensions:Arc::default() })
     }
     pub fn capture(&self, checkpoint: CaptureCheckpoint) -> Result<ArtworkCapture, &'static str> {
         if checkpoint.document != self.id { return Err("Capture belongs to a different drawing"); }
@@ -194,6 +226,12 @@ impl Artwork {
 }
 
 impl Artwork {
+    pub fn images(&self) -> Result<BTreeMap<PortableId, &Image>, String> {
+        let mut images = BTreeMap::new();
+        let mut roots=crate::RootInventory::default();roots.artwork(self);
+        for image in roots.images {collect_image(&mut images,image)?;}
+        Ok(images)
+    }
     pub fn topology(&self) -> Result<super::GraphShape, String> {
         use super::{Shape, Content, GraphShape};
         fn id<T>(store:&Store<T>,handle:Handle<T>) -> Result<PortableId,String> {
@@ -210,20 +248,30 @@ impl Artwork {
         for (_,identity,occurrence) in self.occurrences.iter() {
             let content=match occurrence.content {
                 OccurrenceContent::Paint(handle)=>Content::Paint(id(&self.paint,handle)?),
+                OccurrenceContent::Objects(handle)=>Content::Objects(id(&self.object_layers,handle)?),
                 OccurrenceContent::Stack(handle)=>Content::Group(id(&self.stacks,handle)?),
                 OccurrenceContent::Effect(handle)=>Content::Effect(id(&self.effects,handle)?),
                 OccurrenceContent::Selection(handle)=>Content::Selection(id(&self.selections,handle)?),
             };
             insert(identity,Shape::Occurrence {content,mask:occurrence.mask.as_ref().map(|mask|id(&self.coverage,mask.source)).transpose()?})?;
         }
-        for (_,identity,_) in self.paint.iter() {insert(identity,Shape::Paint)?;}
+        let mut images = BTreeMap::<PortableId, &Image>::new();
+        for (_,identity,paint) in self.paint.iter() {
+            if let Some(base) = &paint.base { collect_image(&mut images, &base.image)?; }
+            insert(identity,Shape::Paint { image:paint.base.as_ref().map(|base|base.image.id()) })?;
+        }
+        for (_,identity,layer) in self.object_layers.iter() { insert(identity,Shape::ObjectLayer { children:layer.children.iter().map(|h|id(&self.objects,*h)).collect::<Result<_,_>>()? })?; }
+        for (_,identity,object) in self.objects.iter() { collect_image(&mut images,&object.image)?; insert(identity,Shape::ImageObject { image:object.image.id() })?; }
+        for identity in images.keys() { insert(*identity,Shape::Image)?; }
         for (_,identity,_) in self.coverage.iter() {insert(identity,Shape::Coverage)?;}
-        for (_,identity,effect) in self.effects.iter() {insert(identity,Shape::Effect {definition:id(&self.definitions,effect.definition)?,inputs:Vec::new()})?;}
-        for (_,identity,_) in self.definitions.iter() {insert(identity,Shape::Definition {dependencies:Vec::new()})?;}
+        for (_,identity,_) in self.effects.iter() {insert(identity,Shape::Effect)?;}
         for (_,identity,_) in self.selections.iter() {insert(identity,Shape::Selection)?;}
         for (_,identity,_) in self.guides.iter() {insert(identity,Shape::Guides)?;}
         for (_,identity,output) in self.outputs.iter() {insert(identity,Shape::Output {composition:id(&self.compositions,output.composition)?})?;}
         shape.outputs=self.outputs.iter().map(|(_,identity,_)|identity).collect();
+        let mut roots=crate::RootInventory {authored_only:true,..Default::default()};roots.artwork(self);
+        shape.resources=roots.resource_ids();
+        if shape.resources.contains(&self.id) || self.extensions.records.keys().any(|id|shape.resources.contains(id)) {return Err("Object and resource identities overlap".into());}
         shape.validate(id(&self.compositions,self.root)?,Default::default())?;
         Ok(shape)
     }
@@ -233,4 +281,9 @@ impl ArtworkCapture {
     pub fn composition(&self)->&Composition{self.artwork.compositions.get(self.artwork.root).expect("Captured composition")}
     pub fn output(&self)->&Output{self.artwork.outputs.get(self.artwork.default_output).expect("Captured output")}
     pub fn metadata(&self)->&PhotoMetadata{&self.artwork.metadata}
+}
+
+fn collect_image<'a>(images:&mut BTreeMap<PortableId,&'a Image>,image:&'a Image)->Result<(),String> {
+    if let Some(previous)=images.insert(image.id(),image) && !previous.identity_matches(image) { return Err("Conflicting immutable image identity".into()); }
+    Ok(())
 }

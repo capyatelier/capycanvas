@@ -100,12 +100,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(draft) = &self.frequency_separation {
             let doc = self.engine.document();
             let mut artwork = doc.artwork.clone();
-            let definition = artwork.definitions.insert(PortableId::random(), Definition {
-                program: draft.filters.blur.program.clone(),
-            })?;
-            let effect = artwork.effects.insert(PortableId::random(), EffectApplication {
-                definition, values: draft.filters.blur.values.clone(),
-            })?;
+            let effect = artwork.effects.insert(PortableId::random(), EffectApplication::new(
+                draft.filters.blur.program.clone(), draft.filters.blur.values.clone(), doc.composition().size))?;
             let name = effects::resource_label(&draft.filters.blur.program.label, self.localization());
             let mut occurrence = Occurrence::new(OccurrenceContent::Effect(effect), name);
             occurrence.attachment = layer_core::Attachment::Effect;

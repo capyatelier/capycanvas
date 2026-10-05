@@ -31,7 +31,7 @@ fn native_color_editor_rows_sheet_and_canvas_pick() {
     let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
     let app = native_test_app("art.capycanvas.ColorEditorJourney");
     let mut project = new_drawing_at(96, 96, SampleDepth::U8);
-    paint_at_mut(&mut project, 0).original = Some(layer_core::color::source::rgba8_source([96, 96], |_, _| [RED[0], RED[1], RED[2], 255]));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new(layer_core::color::source::rgba8_source([96, 96], |_, _| [RED[0], RED[1], RED[2], 255]).into()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
     w.window.present();
@@ -209,7 +209,7 @@ fn native_color_editor_visual_audit() {
     let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
     let app = native_test_app("art.capycanvas.ColorEditorAudit");
     let mut project = new_drawing_at(96, 96, SampleDepth::F16);
-    paint_at_mut(&mut project, 0).original = Some(layer_core::color::source::rgba8_source([96, 96], |_, _| [RED[0], RED[1], RED[2], 255]));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new(layer_core::color::source::rgba8_source([96, 96], |_, _| [RED[0], RED[1], RED[2], 255]).into()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
     w.window.present();
@@ -294,7 +294,7 @@ fn native_color_editor_visual_audit() {
         response(&w, "cancel");
     }
     let mut project = new_drawing_at(96, 96, SampleDepth::U8);
-    paint_at_mut(&mut project, 0).original = Some(layer_core::color::source::rgba8_source([96, 96], |_, _| [RED[0], RED[1], RED[2], 255]));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new(layer_core::color::source::rgba8_source([96, 96], |_, _| [RED[0], RED[1], RED[2], 255]).into()));
     let sdr = Workspace::with_project(&app, Some((project, None)));
     sdr.window.maximize();
     sdr.window.present();
@@ -320,6 +320,7 @@ fn native_fill_thumbnail_edits_its_color() {
     let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
     let app = native_test_app("art.capycanvas.FillThumbnail");
     let w = Workspace::with_project(&app, Some((new_drawing_at(96, 64, SampleDepth::U8), None)));
+    apply_fixture_theme(&w);
     w.window.maximize();
     w.window.present();
     ready(&w);

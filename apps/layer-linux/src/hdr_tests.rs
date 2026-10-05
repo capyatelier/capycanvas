@@ -17,7 +17,7 @@ fn hide_paper(document: &mut layer_core::Document) {
 fn set_original(document: &mut layer_core::Document, original: std::sync::Arc<layer_core::color::source::SourceImage>) {
     let paint = active_paint_mut(document);
     paint.domain = original.extent;
-    paint.original = Some(original);
+    paint.base = Some(layer_core::PaintBase::new((original).into()));
 }
 fn project(w: &Rc<Workspace>) -> layer_core::Document {
     open_native_document(std::io::Cursor::new(snapshot(w)))

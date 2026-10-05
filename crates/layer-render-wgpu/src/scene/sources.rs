@@ -21,6 +21,7 @@ pub(super) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 1
 // Retain neighboring source tiles independently of staging memory. Immutable
 // owners and equal generated tile contents share decoded pixels across revisions.
 const DECODED_SLOTS: usize = 64;
+const MIN_DECODED_SLOTS: usize = SOURCE_SLOTS + 4;
 const DECODERS: usize = 4;
 use crate::native_tiles::transfer;
 
@@ -54,6 +55,7 @@ enum RasterIdentity {
 }
 enum Key {
     Image(Weak<SourceImage>, [u32; 2]),
+    PaintBase(Weak<SourceImage>, [u32; 2], [u32; 2]),
     Raster(RasterIdentity, RgbSpace, RgbSpace),
 }
 impl Key {
@@ -65,6 +67,7 @@ impl Key {
     fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Image(a, x), Self::Image(b, y)) => a.ptr_eq(b) && x == y,
+            (Self::PaintBase(a, x, p), Self::PaintBase(b, y, q)) => a.ptr_eq(b) && x == y && p == q,
             (Self::Raster(a, x, d), Self::Raster(b, y, e)) => a == b && x == y && d == e,
             _ => false,
         }
@@ -78,16 +81,27 @@ struct Slot {
     valid: Arc<std::sync::atomic::AtomicBool>,
     lease: Arc<()>,
 }
+struct RetiredSlot { _slot: Slot, retired: Arc<AtomicU64>, bytes: u64, completed: Arc<std::sync::atomic::AtomicBool> }
+impl Drop for RetiredSlot {
+    fn drop(&mut self) { self.retired.fetch_sub(self.bytes, Ordering::Release); }
+}
+struct RetirementCompletion(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for RetirementCompletion {
+    fn drop(&mut self) { self.0.store(true, Ordering::Release); }
+}
 enum Pixels {
     Image(Arc<SourceImage>, [u32; 2]),
     Raster(Arc<TileBlob>, RgbSpace),
 }
-pub(super) struct PendingTile {
+pub enum PreparedSourcePixels { NativeSamples(Arc<Vec<u8>>), PremultipliedWorkingPixels(Arc<Vec<u8>>) }
+
+pub(crate) struct PendingTile {
     pixels: Pixels,
     pub texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
     pub data: Option<[f32; 24]>,
     write: crate::submission::CacheWrite,
+    pub prepared_pixels: Option<PreparedSourcePixels>,
 }
 struct NativeSamples<'a> {
     tile: &'a Arc<TileBlob>,
@@ -155,6 +169,10 @@ pub(crate) struct DecodedTiles {
     in_flight: Arc<InFlight>,
     pub hits: u64,
     pub misses: u64,
+    pub evictions: u64,
+    mip_reservation: u64,
+    retired_bytes: Arc<AtomicU64>,
+    retired_slots: std::cell::RefCell<Vec<RetiredSlot>>,
 }
 impl DecodedTiles {
     pub fn new(destination: RgbSpace) -> Self {
@@ -170,8 +188,37 @@ impl DecodedTiles {
     pub fn admitted_bytes(&self) -> [u64; 2] {
         [self.limits.slots as u64 * self.tile_bytes(), self.limits.upload_bytes]
     }
+    pub fn mip_budget(&self) -> u64 {
+        (self.limits.slots.saturating_sub(MIN_DECODED_SLOTS) as u64) * self.tile_bytes()
+    }
+    fn slot_limit(&self) -> usize {
+        self.limits.slots - self.mip_reservation.div_ceil(self.tile_bytes()) as usize
+    }
+    pub fn reserve_mips(&mut self, bytes: u64, encoder: &crate::submission::CommandEncoder) -> Result<bool, GpuRasterError> {
+        self.reap_retired();
+        if bytes > self.mip_budget() { return Err(GpuRasterError::SourceWorkingSetExceeded); }
+        self.mip_reservation = bytes;
+        while self.slots.len() > self.slot_limit() {
+            let Some(index) = self.slots.iter().enumerate().filter(|(_,slot)| Arc::strong_count(&slot.lease)==1)
+                .min_by_key(|(_,slot)|slot.used).map(|(index,_)|index) else { return Ok(false); };
+            let slot = self.slots.swap_remove(index);
+            if slot.key.is_some() { self.evictions += 1; }
+            let retired = self.retired_bytes.clone();
+            let tile_bytes = self.tile_bytes();
+            retired.fetch_add(tile_bytes, Ordering::Relaxed);
+            let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            self.retired_slots.get_mut().push(RetiredSlot { _slot:slot, retired, bytes:tile_bytes, completed:completed.clone() });
+            let completion = RetirementCompletion(completed);
+            encoder.on_submitted_work_done(move || drop(completion));
+        }
+        Ok(self.slots.len() as u64 * self.tile_bytes() + self.retired_bytes.load(Ordering::Acquire) + bytes
+            <= self.limits.slots as u64 * self.tile_bytes())
+    }
     fn tile_bytes(&self) -> u64 {
         FLOAT_TILE_BYTES
+    }
+    fn reap_retired(&self) {
+        self.retired_slots.borrow_mut().retain(|slot| !slot.completed.load(Ordering::Acquire));
     }
     pub fn prepare_transfer(
         &mut self,
@@ -193,6 +240,17 @@ impl DecodedTiles {
             })
             .map(|s| &s.view)
     }
+    pub fn prepared_base_view(&self, base: &layer_core::authored::PaintBase, coordinate: [u32; 2]) -> Option<&wgpu::TextureView> {
+        if !crate::source_access::paint_base_contains(base, coordinate) { return None; }
+        if base.offset.iter().all(|v| v % PAGE_SIZE == 0) {
+            return self.prepared_view(base.image.storage(), std::array::from_fn(|i| coordinate[i] - base.offset[i] / PAGE_SIZE));
+        }
+        let key = Key::PaintBase(Arc::downgrade(base.image.storage()), base.offset, coordinate);
+        self.slots.iter().find(|s| s.key.as_ref().is_some_and(|k| k.matches(&key)) && s.valid.load(Ordering::Acquire)).map(|s| &s.view)
+    }
+    pub(crate) fn plan_base(&mut self, r: &WgpuRasterizer, base: &layer_core::authored::PaintBase, coordinate: [u32; 2]) -> Result<(RawTile, Option<crate::submission::CacheWrite>), GpuRasterError> {
+        self.plan_key(r, Key::PaintBase(Arc::downgrade(base.image.storage()), base.offset, coordinate))
+    }
     pub fn uploads_full(&self) -> bool {
         // Reserve room for one Float32 tile within the bounded staging window.
         // U8/U16 inputs consume less; charge their actual encoded byte size.
@@ -212,7 +270,9 @@ impl DecodedTiles {
         total
     }
     pub fn gpu_bytes(&self) -> u64 {
+        self.reap_retired();
         self.slots.len() as u64 * self.tile_bytes()
+            + self.retired_bytes.load(Ordering::Acquire)
             + self.transfer.gpu_bytes()
             + self
                 .inputs
@@ -226,7 +286,7 @@ impl DecodedTiles {
                 .sum::<u64>()
     }
 
-    pub(super) fn plan(
+    pub(crate) fn plan(
         &mut self,
         r: &WgpuRasterizer,
         source: &Arc<SourceImage>,
@@ -239,6 +299,7 @@ impl DecodedTiles {
             view: tile.view.clone(),
             data: builtin_settings(source, coordinate, self.destination),
             write,
+            prepared_pixels: None,
         });
         Ok((tile, pending))
     }
@@ -265,6 +326,7 @@ impl DecodedTiles {
             view: tile.view.clone(),
             data: Some(data),
             write,
+            prepared_pixels: None,
         });
         Ok((tile, pending))
     }
@@ -293,7 +355,7 @@ impl DecodedTiles {
             ));
         }
         self.misses += 1;
-        let index = if self.slots.len() < self.limits.slots {
+        let index = if self.slots.len() < self.slot_limit() {
             let texture = r.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("bounded source tile"),
                 size: wgpu::Extent3d {
@@ -332,6 +394,7 @@ impl DecodedTiles {
                 .0
         };
         let slot = &mut self.slots[index];
+        if slot.key.is_some() { self.evictions += 1; }
         slot.key = Some(key);
         slot.used = self.clock;
         let write = crate::submission::CacheWrite::new();
@@ -392,11 +455,20 @@ impl DecodedTiles {
                     "Source tile has the wrong sample representation".into(),
                 ));
             }
-            let decoded = device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?;
+            let decoded = match &pending.prepared_pixels {
+                Some(PreparedSourcePixels::NativeSamples(samples)) => samples.clone(),
+                Some(PreparedSourcePixels::PremultipliedWorkingPixels(_)) => return Err(GpuRasterError::Color("Working source pixels have native decode settings".into())),
+                None => device.source_samples.decode(samples.tile).map_err(GpuRasterError::Color)?,
+            };
             let step = samples.depth.bytes();
+            let prepared = pending.prepared_pixels.is_some();
+            let channels = if prepared { 4 } else { samples.channels.count() };
+            if decoded.len() != (PAGE_SIZE * PAGE_SIZE) as usize * channels * step {
+                return Err(GpuRasterError::Color("Prepared source samples have the wrong size".into()));
+            }
             let bytes = (PAGE_SIZE * PAGE_SIZE) as usize * 4 * step;
             uploads.write_texture(encoder, &input.texture, PAGE_SIZE * 4 * step as u32, |mapped| {
-                if samples.channels == SourceChannels::Rgba {
+                if prepared || samples.channels == SourceChannels::Rgba {
                     mapped.copy_from_slice(&decoded);
                 } else {
                     // Expand channels in one row of scratch. Alpha is coverage;
@@ -426,7 +498,14 @@ impl DecodedTiles {
             let Pixels::Image(source, coordinate) = &pending.pixels else {
                 unreachable!()
             };
-            self.upload_icc(device, uploads, source, *coordinate, encoder, &pending.texture)?;
+            match &pending.prepared_pixels {
+                Some(PreparedSourcePixels::PremultipliedWorkingPixels(bytes)) => {
+                    if bytes.len() as u64 != FLOAT_TILE_BYTES { return Err(GpuRasterError::InvalidExtent); }
+                    uploads.write_texture(encoder, &pending.texture, PAGE_SIZE * 16, |mapped| mapped.copy_from_slice(bytes))?;
+                }
+                Some(PreparedSourcePixels::NativeSamples(_)) => return Err(GpuRasterError::Color("Native source samples require decode settings".into())),
+                None => self.upload_icc(device, uploads, source, *coordinate, encoder, &pending.texture)?,
+            }
             FLOAT_TILE_BYTES
         };
         pending.write.track(encoder);
@@ -467,9 +546,17 @@ impl DecodedTiles {
             .decode_tile_cached(source, coordinate, &mut self.pixels, &device.source_samples)
             .map_err(GpuRasterError::Color)?;
         self.decoders.push_back(decoder);
+        upload_working_pixels(uploads, encoder, texture, &self.pixels)
+    }
+}
+
+fn upload_working_pixels(uploads: &mut crate::Uploads, encoder: &mut crate::submission::CommandEncoder,
+    texture: &wgpu::Texture, pixels: &[[f32; 4]],
+) -> Result<(), GpuRasterError> {
+    if pixels.len() != (PAGE_SIZE * PAGE_SIZE) as usize { return Err(GpuRasterError::InvalidExtent); }
         uploads.write_texture(encoder, texture, PAGE_SIZE * 16, |mapped| {
             let mut row = [0u8; PAGE_SIZE as usize * 16];
-            for (y, pixels) in self.pixels.chunks_exact(PAGE_SIZE as usize).enumerate() {
+            for (y, pixels) in pixels.chunks_exact(PAGE_SIZE as usize).enumerate() {
                 for (bytes, pixel) in row.chunks_exact_mut(16).zip(pixels) {
                     for (channel, bytes) in bytes.chunks_exact_mut(4).enumerate() {
                         let value = if channel == 3 {
@@ -485,7 +572,6 @@ impl DecodedTiles {
                     .copy_from_slice(&row);
             }
         })
-    }
 }
 
 pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), GpuRasterError> {
@@ -512,7 +598,7 @@ pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), Gp
 
 /// Expand integer source channels without changing their codes or byte order.
 /// Fixed pixel widths keep the hot upload path out of per-channel dynamic copies.
-fn expand_source_row(input: &[u8], output: &mut [u8], channels: SourceChannels, depth: SampleDepth) {
+pub(crate) fn expand_source_row(input: &[u8], output: &mut [u8], channels: SourceChannels, depth: SampleDepth) {
     match (depth, channels) {
         (SampleDepth::U8, SourceChannels::Rgb) => {
             for (p, o) in input.chunks_exact(3).zip(output.chunks_exact_mut(4)) {

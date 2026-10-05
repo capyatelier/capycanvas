@@ -4,6 +4,20 @@ use crate::test_support::{dab_batch, packet};
 use layer_core::color::{SampleDepth, source::*};
 use layer_core::{DefaultBrushPreset, Document, CoverageSnapshot};
 use layer_core::authored::*;
+use super::Image;
+
+#[test]
+fn identity_source_window_clips_signed_bounds_without_interpolation_padding() {
+    let extent = [2048; 2];
+    let mut output = display_mips::Plan::window(extent, 2, PixelRect::full([579, 190]));
+    output.doc_bounds = DocRect { min: [-100, 289], max: [479, 479] };
+    let identity = layer_core::ImageTransform::default();
+    let plan = source_plan(None, output, &identity, extent, false).unwrap();
+    assert_eq!(plan.level, 2);
+    assert_eq!(plan.bounds, PixelRect::new(0, 256, 512, 512));
+    output.doc_bounds = DocRect { min: [-400, 289], max: [-100, 479] };
+    assert!(source_plan(None, output, &identity, extent, false).unwrap().bounds.is_empty());
+}
 
 #[path = "presentation_tests.rs"]
 mod presentation;
@@ -51,7 +65,7 @@ pub(super) fn document_at(extent: [u32; 2]) -> Document {
     let ink = doc.scene().order()[0];
     set_root_entries(&mut doc, vec![ink]);
     let paint = primary_paint(&doc);
-    doc.artwork.paint.get_mut(paint).unwrap().original = Some(rgba8_source(extent, |x, y| [(x / 3) as u8, (y / 2) as u8, 80, 255]));
+    doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((rgba8_source(extent, |x, y| [(x / 3) as u8, (y / 2) as u8, 80, 255])).into()));
     doc
 }
 
@@ -81,7 +95,7 @@ fn copy_paint(doc: &mut Document, index: usize) -> OccurrenceHandle {
     doc.artwork.occurrences.insert(PortableId::random(), occurrence).unwrap()
 }
 fn paint_occurrence(doc: &mut Document, name: &str, original: Option<Arc<SourceImage>>) -> OccurrenceHandle {
-    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), original, operations: Arc::default() }).unwrap();
+    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), base: original.map(|source| layer_core::authored::PaintBase::new(source.into())), operations: Arc::default() }).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(paint), name)).unwrap()
 }
 fn stack_occurrence(doc: &mut Document, name: &str, entries: Vec<OccurrenceHandle>) -> OccurrenceHandle {
@@ -107,11 +121,12 @@ fn insert_occurrence(doc: &mut Document, handle: OccurrenceHandle, position: usi
 fn remove_occurrence(doc: &mut Document, handle: OccurrenceHandle) {
     let stack = doc.composition().result;
     doc.artwork.stacks.get_mut(stack).unwrap().entries.retain(|entry| *entry != handle);
+    doc.artwork.occurrences.remove(handle).unwrap();
     reindex(doc);
 }
 fn effect_occurrence(doc: &mut Document, effect: layer_core::EffectInstance, name: &str) -> OccurrenceHandle {
-    let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: effect.program }).unwrap();
-    let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values}).unwrap();
+    let size=doc.composition().size;
+    let application=doc.artwork.effects.insert(PortableId::random(),EffectApplication::new(effect.program,effect.values,size)).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), name)).unwrap()
 }
 pub(super) fn add_fill(doc: &mut Document, color: layer_core::color::RgbColor) -> OccurrenceHandle {
@@ -129,7 +144,7 @@ fn effect_handle(doc: &Document, handle: OccurrenceHandle) -> EffectHandle {
 pub(super) fn set_effect_value(doc: &mut Document, handle: OccurrenceHandle, key: &str, value: layer_core::EffectValue) {
     let effect = effect_handle(doc, handle);
     let application = doc.artwork.effects.get(effect).unwrap();
-    let program = &doc.artwork.definitions.get(application.definition).unwrap().program;
+    let program = &application.program;
     let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == key).unwrap();
     doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = value;
 }
@@ -176,8 +191,8 @@ fn idle_display_converges_to_exact_composition_after_edits() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc = document();
         let extent = doc.composition().size;
-        paint_mut(&mut doc,0).original = Some(layer_core::color::source::rgba8_source(extent, |x, y|
-            [if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }, 128, 70, 255]));
+        paint_mut(&mut doc,0).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent, |x, y|
+            [if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }, 128, 70, 255])).into()));
         let top = paint_occurrence(&mut doc, "correlated coverage", Some(layer_core::color::source::rgba8_source(extent, |x, y|
             [180, 20, 100, if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }])));
         insert_occurrence(&mut doc, top, 0);
@@ -1072,11 +1087,12 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
     let base=paint_occurrence(&mut doc,"solid",Some(rgba8_source(extent,|_,_|[50,170,80,117])));
     doc.artwork.occurrences.get_mut(base).unwrap().opacity=0.81;
     let clipped=paint_occurrence(&mut doc,"solid",Some(rgba8_source(extent,|_,_|[230,30,120,193])));
-    let occurrence=doc.artwork.occurrences.get_mut(clipped).unwrap(); set_attachment(occurrence, true); occurrence.opacity=0.54;
+    doc.artwork.occurrences.get_mut(clipped).unwrap().opacity=0.54;
     let clip_mask=coverage_mask(&mut doc,clipped,Default::default(),None);
     doc.artwork.coverage.get_mut(clip_mask).unwrap().default_coverage=0.42;
     doc.artwork.occurrences.get_mut(clipped).unwrap().mask.as_mut().unwrap().inverted=true;
     let inner=stack_occurrence(&mut doc,"inner",vec![clipped,base]);
+    set_attachment(doc.artwork.occurrences.get_mut(clipped).unwrap(),true);
     let occurrence=doc.artwork.occurrences.get_mut(inner).unwrap(); occurrence.opacity=0.71; occurrence.blend=layer_core::LayerBlend::Multiply;
     let outer=stack_occurrence(&mut doc,"outer",vec![inner]);
     doc.artwork.occurrences.get_mut(outer).unwrap().opacity=0.63;
@@ -1116,7 +1132,7 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
 #[test]
 fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
     let mut doc = document();
-    let photo_source=paint_at(&doc,0).original.as_ref().unwrap().clone();
+    let photo_source=paint_at(&doc,0).base.as_ref().unwrap().image.storage().clone();
     let paper=*doc.scene().order().last().unwrap();
     let mut entries:Vec<_>=(0..32).map(|i| { let handle=copy_paint(&mut doc,0); doc.artwork.occurrences.get_mut(handle).unwrap().opacity=0.17+i as f32*0.02; handle }).collect();
     entries.push(paper);
@@ -1160,7 +1176,7 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
             0 => occurrence_mut(&mut doc,15).opacity = 0.91,
             1 => occurrence_mut(&mut doc,0).visible = false,
             2 => swap_entries(&mut doc,15,31),
-            _ => paint_mut(&mut doc,15).original = Some(Arc::new((*photo_source).clone())),
+            _ => paint_mut(&mut doc,15).base = Some(layer_core::authored::PaintBase::new((Arc::new((*photo_source).clone())).into())),
         }
         r.submit(frame(doc.scene(), extent)).unwrap();
         exact.submit(frame(doc.scene(), extent)).unwrap();
@@ -1183,7 +1199,7 @@ fn layer_edits_reuse_balanced_branches_across_the_stack() {
         }
     }
     let mut doc = document();
-    let photo_source=paint_at(&doc,0).original.clone();
+    let photo_source=paint_at(&doc,0).base.as_ref().map(|base|base.image.storage().clone());
     let extent = doc.composition().size;
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -1472,7 +1488,7 @@ fn quality_linear(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::P
 fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
     let mut doc = document();
     let paint = copy_paint(&mut doc,0);
-    let OccurrenceContent::Paint(source)=doc.artwork.occurrences.get(paint).unwrap().content else {unreachable!()}; doc.artwork.paint.get_mut(source).unwrap().original=None;
+    let OccurrenceContent::Paint(source)=doc.artwork.occurrences.get(paint).unwrap().content else {unreachable!()}; doc.artwork.paint.get_mut(source).unwrap().base=None;
     insert_occurrence(&mut doc, paint, 0);
     let extent = doc.composition().size;
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -1662,8 +1678,8 @@ fn scaled_layer_cache_tracks_stack_changes_and_odd_edges_at_each_level() {
             match change {
                 1 => occurrence_mut(&mut doc,0).opacity = 0.12,
                 2 => swap_entries(&mut doc,0,1),
-                3 => paint_mut(&mut doc,0).original = None,
-                4 => paint_mut(&mut doc,0).original = paint_at(&doc,1).original.clone(),
+                3 => paint_mut(&mut doc,0).base = None,
+                4 => paint_mut(&mut doc,0).base = paint_at(&doc,1).base.clone(),
                 _ => (),
             }
             let mut p = packet(doc.scene(), extent);
@@ -1695,10 +1711,9 @@ fn display_and_native_evaluation_share_the_display_cache() {
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     for filtered in [true, false, true, false] {
-        remove_occurrence(&mut doc,effect);
-        if filtered {
-            insert_occurrence(&mut doc,effect,0);
-        }
+        let mut entries=doc.scene().children(None).iter().copied().filter(|handle|*handle!=effect).collect::<Vec<_>>();
+        if filtered {entries.insert(0,effect);}
+        set_root_entries(&mut doc,entries);
         let mut p = packet(doc.scene(), extent);
         p.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         r.submit(p).unwrap();
@@ -1740,7 +1755,7 @@ fn photographic_preview_and_committed_display_quality() {
     }
     let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let photo = copy_paint(&mut doc,0);
-    let OccurrenceContent::Paint(source)=doc.artwork.occurrences.get(photo).unwrap().content else {unreachable!()}; doc.artwork.paint.get_mut(source).unwrap().original=Some(Arc::new(builder.finish().unwrap()));
+    let OccurrenceContent::Paint(source)=doc.artwork.occurrences.get(photo).unwrap().content else {unreachable!()}; doc.artwork.paint.get_mut(source).unwrap().base=Some(layer_core::authored::PaintBase::new((Arc::new(builder.finish().unwrap())).into()));
     insert_occurrence(&mut doc, photo, 1);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -1923,8 +1938,8 @@ fn retained_outer_mesh_display_refines_to_exact_after_geometry_and_mask_changes(
     let extent = [513,387];
     let mut doc = document_at(extent);
     let id = source_at(&doc,0);
-    paint_mut(&mut doc,0).original = Some(rgba8_source(extent,|x,y|
-        if (x/7+y/5)%2==0 {[220,31,90,255]} else {[25,180,210,128]}));
+    paint_mut(&mut doc,0).base = Some(layer_core::authored::PaintBase::new((rgba8_source(extent,|x,y|
+        if (x/7+y/5)%2==0 {[220,31,90,255]} else {[25,180,210,128]})).into()));
     let domain = Rect::from_extent(extent);
     let mesh = Arc::new(MeshMap::from_affine(domain,[2,2],Affine([0.7,0.02,-0.03,0.8,57.,21.])).unwrap()
         .move_node(4,Point {x:31.,y:-23.}).unwrap());

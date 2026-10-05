@@ -4,6 +4,7 @@ mod support;
 use layer_core::*;
 use layer_engine::{InputProducer, PenEvent};
 use support::*;
+use support::Image;
 
 fn geometry(origin: [i32; 2], size: [u32; 2]) -> CanvasGeometry {
     CanvasGeometry::crop(CanvasRect { origin, size })
@@ -101,9 +102,9 @@ fn painting_reaches_a_new_strip_on_the_left_and_top() {
 fn a_placed_photo_crops_as_metadata_and_never_rebases() {
     let mut doc = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let photo = doc.scene().order()[0];
-    paint_mut(&mut doc, photo).original = Some(color::source::rgba8_source(SIZE, |x, y| {
+    paint_mut(&mut doc, photo).base = Some(layer_core::authored::PaintBase::new((color::source::rgba8_source(SIZE, |x, y| {
         [(x * 5 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8, 255]
-    }));
+    })).into()));
     let (mut engine, _input) = engine(doc);
     let original = image(&mut engine, 0);
     engine.apply_canvas_geometry(&geometry([100, 60], [200, 120])).unwrap();
@@ -256,16 +257,16 @@ fn straightening_matches_a_cpu_rotation_and_keeps_the_hidden_corners() {
 fn straightening_turns_a_placed_photo_without_resampling_its_pixels() {
     let mut doc = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let photo = doc.scene().order()[0];
-    paint_mut(&mut doc, photo).original = Some(color::source::rgba8_source(SIZE, |x, y| {
+    paint_mut(&mut doc, photo).base = Some(layer_core::authored::PaintBase::new((color::source::rgba8_source(SIZE, |x, y| {
         [(60 + x / 3) as u8, (40 + y / 2) as u8, (200 - (x + y) / 6) as u8, 255]
-    }));
+    })).into()));
     let (mut engine, _input) = engine(doc);
     let original = image(&mut engine, 0);
-    let source = paint(engine.document(), photo).original.clone().unwrap();
+    let source = paint(engine.document(), photo).base.clone().unwrap();
     let geometry = straightened(-0.15, false);
     engine.apply_canvas_geometry(&geometry).unwrap();
     let layer = paint(engine.document(), photo);
-    assert!(std::sync::Arc::ptr_eq(layer.original.as_ref().unwrap(), &source), "the original is kept");
+    assert!(std::sync::Arc::ptr_eq(layer.base.as_ref().unwrap().image.storage(), source.image.storage()), "the original is kept");
     assert!(layer.operations.is_empty(), "no pixel work");
     let straight = image(&mut engine, 1_000_000_000);
     assert_rotation(&straight, &original, geometry.to_canvas(), 2., "placed photo");

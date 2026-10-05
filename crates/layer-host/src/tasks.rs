@@ -524,7 +524,7 @@ mod tests {
         let layer_core::SourceTarget::Paint(handle) = layer else { panic!("paint target"); };
         let repaired = host.session.engine().document().artwork.paint.get(handle).unwrap();
         assert_eq!(
-            repaired.original.as_ref().unwrap().interpretation.profile,
+            repaired.base.as_ref().unwrap().image.interpretation.profile,
             ColorProfile::Builtin(RgbSpace::DisplayP3)
         );
         assert!(host.session.state().requests.is_empty());

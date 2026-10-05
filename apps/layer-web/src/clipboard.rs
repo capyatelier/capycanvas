@@ -95,7 +95,10 @@ async fn copy(
     let result = result?;
     let parts: js_sys::Array = js_sys::Reflect::get(&result, &js("buffers"))?.dyn_into()?;
     let png_index = js_sys::Reflect::get(&result, &js("png"))?.as_f64().ok_or_else(|| js("Missing clipboard PNG"))?;
-    let png = js_sys::Uint8Array::new(&parts.get(png_index as u32)).to_vec();
+    if parts.length().checked_sub(1).map(f64::from) != Some(png_index) {
+        return Err(js("Invalid clipboard PNG index"));
+    }
+    let png = js_sys::Uint8Array::new(&parts.pop()).to_vec();
     let source = match &capture.original {
         Some(original) => original.clone(),
         None => {
@@ -106,7 +109,7 @@ async fn copy(
                 .await?
                 .paint
                 .iter()
-                .find_map(|(_,_,paint)| paint.original.clone())
+                .find_map(|(_,_,paint)| paint.base.as_ref().map(|base| base.image.storage().clone()))
                 .ok_or_else(|| js("Missing clipboard source"))?
         }
     };

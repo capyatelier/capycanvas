@@ -23,7 +23,7 @@ fn render(r:&mut WgpuRasterizer,effects:&[EffectInstance])->Vec<[f32;4]> {
     let document=effect_document(effects,[256;2],r.document_color);render_document(r,&document)
 }
 fn program_mut(document:&mut Document,h:OccurrenceHandle)->&mut layer_core::EffectProgram {
-    let definition=document.scene().effect_application(h).unwrap().definition;Arc::make_mut(&mut document.artwork.definitions.get_mut(definition).unwrap().program)
+    let application=document.scene().effect_handle(h).unwrap();Arc::make_mut(&mut document.artwork.effects.get_mut(application).unwrap().program)
 }
 fn transfer(v:f64,space:usize,decode:bool)->f64 {
     let x=v.abs();let y=match (space,decode) {
@@ -191,7 +191,7 @@ fn hundred_intensity_edits_aliases_and_resource_removal_keep_uploads_bounded() {
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let cache=r.device.effect_resources.clone();
     let source=pattern(&[[0.24,0.41,0.69,0.37]]);let layer=lookup(resource.clone(),0,100.);
     let mut document=effect_document(&[layer,source],[256;2],r.document_color);
-    let handles=document.scene().order().to_vec();let target=handles[0];let source=handles[1];let stack=document.composition().result;
+    let handles=document.scene().children(None).to_vec();let target=handles[0];let source=handles[1];let stack=document.composition().result;
     document.artwork.stacks.get_mut(stack).unwrap().entries=vec![source];crate::tests::native_effects::refresh(&mut document);
     render_document(&mut r,&document);let baseline=residency(&r);assert_eq!(baseline,(0,16));
     document.artwork.stacks.get_mut(stack).unwrap().entries=handles;crate::tests::native_effects::refresh(&mut document);

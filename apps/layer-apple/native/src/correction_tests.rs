@@ -179,7 +179,7 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
             let original = document(&app);
             let original_occurrence = original.working.occurrence.unwrap();
             let original_id = original.artwork.occurrences.id(original_occurrence).unwrap();
-            let source = original.scene().paint_source(original_occurrence).unwrap().original.as_ref().unwrap();
+            let source = original.scene().paint_source(original_occurrence).unwrap().base.as_ref().unwrap().image.storage();
             let mut ids = Vec::new();
             for (index, (effect, key, _, page)) in CORRECTIONS.into_iter().enumerate() {
                 let before = samples(&app);
@@ -313,7 +313,7 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
             let after = document(&fresh);
             let original_occurrence = after.artwork.occurrences.resolve(original_id).unwrap();
             let paint = after.scene().paint_source(original_occurrence).unwrap();
-            let retained = paint.original.as_ref().unwrap();
+            let retained = paint.base.as_ref().unwrap().image.storage();
             assert_source_samples(retained, source);
             assert!(paint.raster.is_empty(), "Corrections must not bake the retained photo");
         }

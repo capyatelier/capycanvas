@@ -33,7 +33,7 @@ impl Thumbnails {
         let paint = self.gpu.as_ref().map_or(0, |gpu| gpu.prepared.iter()
             .map(|p| p.records.size() + 16 + texture_bytes(&p.result.texture)
                 + p.generated.iter().map(|(texture, _)| texture_bytes(texture)).sum::<u64>()).sum::<u64>()
-            + gpu.generators.as_ref().map_or(0, scene::Scene::scratch_bytes));
+            + gpu.generators.as_ref().map_or(0, scene::Scene::scratch_bytes) + gpu.capture.storage_bytes());
         #[cfg(not(target_arch = "wasm32"))]
         return paint + self.sources.as_ref().map_or(0, |s| s.storage_bytes());
         #[cfg(target_arch = "wasm32")]
@@ -475,7 +475,7 @@ impl PreviewPipeline {
         }
         if let Some(geometry) = geometry.filter(|_| placed) {
             let mut local = coordinates.iter().fold(PixelRect::EMPTY, |bounds,c| bounds.union(page_rect(*c)));
-            if let Some(source) = r.tiled_sources.get(&id) { local = local.union(PixelRect::full(source.extent)); }
+            if let Some(base) = r.tiled_sources.get(&id) { local = local.union(source_access::paint_base_bounds(base)); }
             coordinates = page_coordinates(pixel_rect(geometry.forward_bounds(local.to_rect()),r.document_extent)).collect();
         }
         let sources: Vec<_> = std::iter::once(None)
@@ -575,6 +575,7 @@ impl PreviewPipeline {
                 })
                 .collect()
         };
+        let work = (|| -> Result<(),GpuRasterError> {
         while limit > 0 && prepared.measure < prepared.sources.len() {
             let end = (prepared.measure + limit.min(if prepared.placed { 1 } else { SOURCE_SLOTS })).min(prepared.sources.len());
             let chunk = &prepared.sources[prepared.measure..end];
@@ -625,9 +626,12 @@ impl PreviewPipeline {
             limit -= end - prepared.draw;
             prepared.draw = end;
         }
+        Ok(())
+        })();
+        let pending = match work { Ok(()) => false, Err(GpuRasterError::DeferredObjectWork) => true, Err(error) => return Err(error) };
         write.track(encoder);
         prepared.valid = write.validity();
-        let ready = prepared.draw == prepared.sources.len();
+        let ready = !pending && prepared.draw == prepared.sources.len();
         self.prepared.push_back(prepared);
         while self.prepared.len() > 8 { self.prepared.pop_front(); }
         Ok(ready)

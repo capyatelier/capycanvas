@@ -3,7 +3,7 @@
 use super::metadata::PreviewMetadata;
 use super::*;
 use layer_core::{SceneSnapshot,SceneScope,SceneView};
-use layer_core::authored::{Artwork,SceneIndex,PortableId,Occurrence,OccurrenceContent,Definition,EffectApplication};
+use layer_core::authored::{SceneIndex,PortableId,Occurrence,OccurrenceContent,EffectApplication};
 use layer_render::{FilterPreviewImage, FilterPreviewRequest, FilterPreviewSource};
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
@@ -153,8 +153,9 @@ impl FilterPreviews {
             let previous=self.program_snapshot.as_ref().and_then(|snapshot|self.programs.get(&id).and_then(|h|snapshot.view().effect(*h)));
             analyses_changed|=previous.map(|e|e.program.analysis())!=Some(effect.program.analysis());
             if previous.is_none_or(|old|old.program!=effect.program.as_ref()||old.values!=effect.values){self.rows.remove(&id);}
-            let definition=artwork.definitions.insert(PortableId::random(),Definition{program:effect.program.clone()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
-            let application=artwork.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values.clone()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let size=artwork.compositions.get(artwork.root).unwrap().size;
+            let effect=EffectApplication::new(effect.program.clone(),effect.values.clone(),size);
+            let application=artwork.effects.insert(PortableId::random(),effect).map_err(|e|GpuRasterError::Effect(e.into()))?;
             let handle=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"")).map_err(|e|GpuRasterError::Effect(e.into()))?;
             programs.insert(id,handle);
         }
@@ -172,8 +173,8 @@ impl FilterPreviews {
             for (layers,execution) in scene::startup_effect_chains(source.view()){
                 self.source_scene.effects.prepare(r,source.view(),&layers,execution,source.context.elapsed,0,request.snapshot.view().composition().blend)?;
             }
-            let mut ready = self.scene.effects.enqueue(&startup.compiler, startup::OTHER);
-            ready &= self.source_scene.effects.enqueue(&startup.compiler, startup::OTHER);
+            let mut ready = self.scene.effects.enqueue_active(&startup.compiler, startup::OTHER);
+            ready &= self.source_scene.effects.enqueue_active(&startup.compiler, startup::OTHER);
             startup.compiler.pipeline(&self.probe, startup::OTHER);
             // Preview readback uses the same conversion as document export.
             ready &= r.ui_readback_ready() && self.probe.ready();
@@ -451,9 +452,8 @@ impl FilterPreviews {
         };
         let center = self.point.unwrap_or([width / 2, height / 2]);
         let origin = std::array::from_fn::<_, 2, _>(|i| {
-            center[i]
-                .saturating_sub(request.size[i] / 2)
-                .min(extent[i].saturating_sub(request.size[i]))
+            if request.size[i]>extent[i] { -(i64::from(request.size[i])-i64::from(extent[i]))/2 }
+            else { i64::from(center[i].saturating_sub(request.size[i]/2).min(extent[i]-request.size[i])) }
         });
         let fallback;
         let fallback_source = if self.point.is_some() {
@@ -483,12 +483,7 @@ impl FilterPreviews {
             Some(pad.max(self.program_snapshot.as_ref()?.view().effect(self.programs[id])?.damage_radius()?))
         });
         let source_bounds = pad.map_or(PixelRect::full(extent), |pad| {
-            PixelRect::new(
-                origin[0],
-                origin[1],
-                (origin[0] + width).min(extent[0]),
-                (origin[1] + height).min(extent[1]),
-            )
+            DocRect {min:origin,max:std::array::from_fn(|i|origin[i]+i64::from(request.size[i]))}.in_frame(extent)
             .expand(pad, extent)
         });
         let source_grid = display_mips::Plan::window(extent, 0,
@@ -564,13 +559,11 @@ impl FilterPreviews {
             let crop = if whole {
                 [0, 0]
             } else {
-                [origin[0].saturating_sub(pad), origin[1].saturating_sub(pad)]
+                origin.map(|v| if v<0 {v} else {(v-i64::from(pad)).max(0)})
             };
             let size = if whole {
                 extent
             } else {
-                // Declared support can cover the entire document. Replicated
-                // edge samples need no allocation beyond that input extent.
                 [
                     width
                         .saturating_add(pad.saturating_mul(2))
@@ -595,8 +588,8 @@ impl FilterPreviews {
                     "reused preview crop",
                 ));
             }
-            let grid = display_mips::Plan::window(extent, 0,
-                PixelRect::new(crop[0], crop[1], crop[0] + size[0], crop[1] + size[1]));
+            let mut grid = display_mips::Plan::window(extent, 0,PixelRect::full(size));
+            grid.doc_bounds=DocRect {min:crop,max:std::array::from_fn(|i|crop[i]+i64::from(size[i]))};
             let previous = self.scene.preview_passes(r, prepared, grid, (source, source_grid), &self.scratch, count);
             let mut data = [0.; 32];
             data[..6].copy_from_slice(&[
@@ -615,12 +608,17 @@ impl FilterPreviews {
                 width as f32,
                 height as f32,
             ]);
+            let visible=DocRect {min:origin,max:std::array::from_fn(|i|origin[i]+i64::from(request.size[i]))}.in_frame(extent);
             self.scene.jobs.push(Job::Draw {
                 target: atlas.1.clone(),
                 sources: [previous, self.mask.1.clone(), r.empty_view.clone()],
                 data,
                 over: false,
-                clip: None,
+                clip: Some(PixelRect::new(
+                    (i64::from(visible.min_x())-origin[0]) as u32,
+                    row as u32*height+(i64::from(visible.min_y())-origin[1]) as u32,
+                    (i64::from(visible.max_x())-origin[0]) as u32,
+                    row as u32*height+(i64::from(visible.max_y())-origin[1]) as u32)),
             });
         }
         self.scene.encode_jobs(r, &mut encoder)?;
@@ -872,8 +870,7 @@ impl FilterPreviews {
     fn clear_analysis(&mut self) {
         self.analysis = None;self.analysis_queries.clear();self.analyses.clear();self.preparing = false;
         self.scene.jobs.clear();self.source_scene.jobs.clear();
-        let artwork=Artwork::new([1;2]).expect("empty preview artwork");let index=Arc::new(SceneIndex::build(&artwork).expect("empty preview index"));let scene=SceneView::new(&artwork,&index);
-        self.scene.effects.retain(scene);self.source_scene.effects.retain(scene);
+        self.scene.effects.discard_instances();self.source_scene.effects.discard_instances();
     }
     fn missing_rows(&self) -> bool {
         self.request.as_ref().is_some_and(|r| r.filters.iter().any(|f| !self.rows.contains_key(&f.program.id)))
@@ -904,20 +901,18 @@ mod tests {
         }
     }
     use layer_core::{Document, Edit, RecordChange};
-    use layer_core::authored::Stack;
+    use layer_core::authored::{Artwork,Stack};
 
     fn paint(artwork: &mut Artwork, original: Option<Arc<layer_core::color::source::SourceImage>>) -> OccurrenceHandle {
         let extent=artwork.compositions.get(artwork.root).unwrap().size;
         let (handle,target)=crate::test_support::add_paint(artwork,"paint",extent);
         let SourceTarget::Paint(source)=target else {unreachable!()};
-        artwork.paint.get_mut(source).unwrap().original=original;
+        artwork.paint.get_mut(source).unwrap().base=original.map(|source| layer_core::authored::PaintBase::new(source.into()));
         handle
     }
     fn effect(artwork: &mut Artwork, effect: layer_core::EffectInstance) -> OccurrenceHandle {
-        let definition = artwork.definitions.insert(PortableId::random(), Definition { program: effect.program }).unwrap();
-        let application = artwork.effects.insert(PortableId::random(), EffectApplication {
-            definition, values: effect.values,
-        }).unwrap();
+        let size=artwork.compositions.get(artwork.root).unwrap().size;
+        let application=artwork.effects.insert(PortableId::random(),EffectApplication::new(effect.program,effect.values,size)).unwrap();
         artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "effect")).unwrap()
     }
     fn generated(artwork: &mut Artwork, code: &str) -> OccurrenceHandle {
@@ -958,6 +953,127 @@ mod tests {
     fn occurrence_edit(document: &mut Document, handle: OccurrenceHandle, f: impl FnOnce(&mut Occurrence)) {
         let mut value=document.artwork.occurrences.get(handle).unwrap().clone();f(&mut value);
         document.apply(Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences,handle,Some(value)).unwrap())).unwrap();
+    }
+    #[test]
+    fn idle_filter_preview_requests_refresh_completed_startup_work() {
+        let extent=[64;2];let mut artwork=Artwork::new(extent).unwrap();
+        let owner=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|_,_|[230,40,20,128])));
+        artwork.occurrences.get_mut(owner).unwrap().attachment=layer_core::Attachment::Clip;
+        artwork.occurrences.get_mut(owner).unwrap().opacity=0.35;
+        let base=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|_,_|[20,240,30,255])));
+        let target=effect(&mut artwork,fixture("motion_blur").preview().unwrap());
+        artwork.occurrences.get_mut(target).unwrap().attachment=layer_core::Attachment::Effect;
+        let doc=document(artwork,vec![target,owner,base]);
+        let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut r=crate::test_support::staged_renderer(&reference,doc.composition().color);
+        r.prepare_startup(&doc,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
+        crate::test_support::wait_startup(&mut r,std::time::Instant::now()+Duration::from_secs(30),|p|p.complete,format_args!("Preview startup"));
+        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();r.shader_idle(false);
+        for (id,source) in [(1,FilterPreviewSource::OwnerContent(owner)),(2,FilterPreviewSource::EffectInput(target))] {
+            let mut candidate=request(&doc,owner,id,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("curves").preview().unwrap())]);candidate.source=source;
+            if id==1 {
+                assert!(!r.request_filter_previews(candidate.clone()).unwrap());
+                assert!(r.startup.as_ref().unwrap().compiler.pending()>0);
+                assert!(!r.poll_startup().unwrap().complete);
+                r.shader_idle(true);
+            }
+            let deadline=std::time::Instant::now()+Duration::from_secs(5);
+            while !r.request_filter_previews(candidate.clone()).unwrap() {
+                assert!(std::time::Instant::now()<deadline,"Idle preview admission eventually succeeds");
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            let image=finish(&mut r).image;
+            assert_eq!(image.request_id,id);
+            let alpha=image.bytes[((68/2*414+414/2)*4+3) as usize];
+            assert!((f32::from(alpha)/255.-128./255.).abs()<0.02,"{source:?} keeps its owner-local alpha");
+            r.cancel_filter_previews();
+        }
+    }
+    #[test]
+    fn cancelled_preview_categories_do_not_block_ready_rows() {
+        let extent=[64;2];let mut artwork=Artwork::new(extent).unwrap();
+        let owner=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|_,_|[20,40,230,128])));
+        let doc=document(artwork,vec![owner]);
+        let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut r=crate::test_support::staged_renderer(&reference,doc.composition().color);
+        r.prepare_startup(&doc,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
+        crate::test_support::wait_startup(&mut r,std::time::Instant::now()+Duration::from_secs(30),|p|p.complete,format_args!("Preview startup"));
+        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();r.shader_idle(true);
+        let curves=request(&doc,owner,1,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("curves").preview().unwrap())]);
+        let deadline=std::time::Instant::now()+Duration::from_secs(5);
+        while !r.request_filter_previews(curves.clone()).unwrap() {
+            assert!(std::time::Instant::now()<deadline);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let original=finish(&mut r).image;
+        let preparations=r.filter_previews.as_ref().unwrap().scene.effects.preparation_count();
+        r.cancel_filter_previews();r.shader_idle(false);
+        let other=request(&doc,owner,2,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("gaussian_blur").preview().unwrap())]);
+        assert!(!r.request_filter_previews(other).unwrap());
+        assert!(r.startup.as_ref().unwrap().compiler.pending()>0);
+        let progress=r.poll_startup().unwrap();
+        assert!(progress.brush_ready);assert!(!progress.complete);
+        r.cancel_filter_previews();
+        let mut reopened=curves;reopened.request_id=3;
+        let deadline=std::time::Instant::now()+Duration::from_secs(5);
+        while !r.request_filter_previews(reopened.clone()).unwrap() {
+            assert!(std::time::Instant::now()<deadline,"A ready row does not wait for a cancelled category");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let completed=finish(&mut r).image;
+        assert_eq!(completed.request_id,3);
+        assert_eq!(completed.bytes,original.bytes);
+        assert!(r.startup.as_ref().unwrap().compiler.pending()>0,"Unrelated optional shaders remain unready");
+        assert_eq!(r.filter_previews.as_ref().unwrap().scene.effects.preparation_count(),preparations,"Cancelled lookup dispatches never run");
+        r.shader_idle(true);
+    }
+    #[test]
+    fn attached_curves_preview_retains_owner_alpha_when_the_row_exceeds_the_document() {
+        let extent=[64;2];
+        let mut artwork=Artwork::new(extent).unwrap();
+        let owner=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|x,_|
+            if (30..34).contains(&x) {[20,40,230,128]} else {[230,40,20,128]})));
+        let occurrence=artwork.occurrences.get_mut(owner).unwrap();
+        occurrence.attachment=layer_core::Attachment::Clip;occurrence.opacity=0.35;
+        let base=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|_,_|[20,240,30,255])));
+        let target=effect(&mut artwork,fixture("motion_blur").preview().unwrap());
+        artwork.occurrences.get_mut(target).unwrap().attachment=layer_core::Attachment::Effect;
+        let doc=document(artwork,vec![target,owner,base]);
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();
+        let curves=Arc::new(fixture("curves").preview().unwrap());
+        let mut whole=(*fixture("exposure").program()).clone();
+        whole.id="document_preview_probe".into();whole.entry="preview_copy".into();
+        whole.wgsl="fn preview_copy(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return c;}".into();
+        whole.passes=vec![layer_core::EffectPass {entry:"preview_copy".into(),sampling:layer_core::EffectSampling::Neighborhood {radius:0}},
+            layer_core::EffectPass {entry:"preview_copy".into(),sampling:layer_core::EffectSampling::Document}].into();
+        let whole=Arc::new(layer_core::EffectInstance::new(Arc::new(whole)));
+        let mut request_id=0;
+        for filter in [curves,whole] {
+        for size in [[64,40],[206,46],[384,80]] {
+            for source in [FilterPreviewSource::OwnerContent(owner),FilterPreviewSource::EffectInput(target)] {
+                request_id+=1;
+                let mut request=request(&doc,owner,request_id,size,crate::test_support::view(extent),vec![filter.clone()]);
+                request.source=source;
+                r.request_filter_previews(request).unwrap();
+                let image=finish(&mut r);
+                let index=((size[1]/2*size[0]+size[0]/2)*4) as usize;
+                let pixel=&image.image.bytes[index..index+4];
+                assert!((f32::from(pixel[3])/255.-128./255.).abs()<0.02,"{source:?} {size:?} center={pixel:?}");
+                assert!(pixel[2]>pixel[0].max(pixel[1]),"The unblurred blue stripe remains centered without the clipping base");
+                for y in 0..size[1] {
+                    for x in 0..size[0] {
+                        let position=[x,y];
+                        let outside=(0..2).any(|axis|size[axis]>extent[axis]&&{
+                            let start=(size[axis]-extent[axis])/2;
+                            position[axis]<start||position[axis]>=start+extent[axis]
+                        });
+                        if outside {assert_eq!(image.image.bytes[((y*size[0]+x)*4+3) as usize],0,"{} {size:?}: finite owner padding stays transparent at {position:?}",filter.program.id);}
+                    }
+                }
+            }
+        }
+        }
     }
     #[test]
     fn attached_motion_blur_preview_reads_its_clipped_owner_before_outer_composition() {
@@ -1099,9 +1215,7 @@ mod tests {
             let replacement=effect(&mut authored,definition.preview().unwrap());
             let content=authored.occurrences.get(replacement).unwrap().content.clone();
             let OccurrenceContent::Effect(application)=content else {unreachable!()};
-            let definition_handle=authored.effects.get(application).unwrap().definition;
             doc.apply(Edit::Batch(vec![
-                Edit::Definition(RecordChange::replace(&authored.definitions,definition_handle,authored.definitions.get(definition_handle).cloned()).unwrap()),
                 Edit::Effect(RecordChange::replace(&authored.effects,application,authored.effects.get(application).cloned()).unwrap()),
                 Edit::Occurrence({let mut value=doc.artwork.occurrences.get(target).unwrap().clone();value.content=content;RecordChange::replace(&doc.artwork.occurrences,target,Some(value)).unwrap()}),
             ])).unwrap();
@@ -1303,7 +1417,7 @@ mod tests {
         assert!(std::sync::Weak::ptr_eq(&resource,&Arc::downgrade(current)),"same full source reuses immutable guide");
         let OccurrenceContent::Paint(paint)=doc.artwork.occurrences.get(source).unwrap().content else {unreachable!()};
         let mut value=doc.artwork.paint.get(paint).unwrap().clone();
-        value.original=Some(layer_core::color::source::rgba8_source(extent,|x,y|[20+(x%101) as u8,35+(y%113) as u8,25,255]));
+        value.base=Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent,|x,y|[20+(x%101) as u8,35+(y%113) as u8,25,255])).into()));
         doc.apply(Edit::Paint(RecordChange::replace(&doc.artwork.paint,paint,Some(value)).unwrap())).unwrap();
         frame(&mut r,&doc);
         assert!(r.request_filter_previews(preview_request(&doc,3,false)).unwrap());

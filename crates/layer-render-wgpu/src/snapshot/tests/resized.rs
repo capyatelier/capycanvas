@@ -162,7 +162,7 @@ fn snapshot_enlarged_jpeg_matches_profiled_png_and_reset_restores_exact_identity
         },
         [33, 17],
     );
-    let source = project.scene().paint(paint_id(&project)).unwrap().original.as_ref().unwrap().clone();
+    let source = project.scene().paint(paint_id(&project)).unwrap().base.as_ref().unwrap().image.storage().clone();
     let mut renderer = capture(project).unwrap();
     let extent = [97, 50];
     renderer.set_output_extent(extent).unwrap();
@@ -356,9 +356,9 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
     renderer.control().cancel();
     assert!(renderer.preview_document([73, 41], RgbSpace::Srgb).is_err());
     let target = original.scene().paint(paint_id(&original)).unwrap()
-        .original
+        .base
         .as_ref()
-        .unwrap()
+        .unwrap().image.storage()
         .interpretation
         .clone();
     assert!(

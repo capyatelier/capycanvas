@@ -45,18 +45,18 @@ pub(super) fn refresh(doc: &mut Document) {
     indexed.owner=doc.owner;indexed.revision=doc.revision;indexed.working=doc.working.clone();*doc=indexed;
 }
 pub(super) fn insert_effect(doc: &mut Document, effect: layer_core::EffectInstance, index: usize) -> OccurrenceHandle {
-    let definition=doc.artwork.definitions.insert(PortableId::random(),Definition {program:effect.program}).unwrap();
-    let application=doc.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values}).unwrap();
+    let size=doc.composition().size;
+    let application=doc.artwork.effects.insert(PortableId::random(),EffectApplication::new(effect.program,effect.values,size)).unwrap();
     let h=doc.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"Effect")).unwrap();
     let stack=doc.composition().result;doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(index,h);refresh(doc);h
 }
 pub(super) fn effect_draft(doc: &Document, occurrence: OccurrenceHandle) -> layer_core::EffectInstance {
     let view=doc.scene().effect(occurrence).unwrap();let application=doc.scene().effect_application(occurrence).unwrap();
-    layer_core::EffectInstance {program:doc.artwork.definitions.get(application.definition).unwrap().program.clone(),values:view.values.to_vec()}
+    layer_core::EffectInstance {program:application.program.clone(),values:view.values.to_vec()}
 }
 pub(super) fn set_effect(doc: &mut Document, occurrence: OccurrenceHandle, draft: layer_core::EffectInstance) {
-    let h=doc.scene().effect_handle(occurrence).unwrap();let definition=doc.artwork.effects.get(h).unwrap().definition;
-    doc.artwork.definitions.get_mut(definition).unwrap().program=draft.program;doc.artwork.effects.get_mut(h).unwrap().values=draft.values;
+    let h=doc.scene().effect_handle(occurrence).unwrap();
+    doc.artwork.effects.get_mut(h).unwrap().program=draft.program;doc.artwork.effects.get_mut(h).unwrap().values=draft.values;
 }
 pub(super) fn add_group(doc: &mut Document, children: Vec<OccurrenceHandle>, index: usize) -> OccurrenceHandle {
     let root=doc.composition().result;doc.artwork.stacks.get_mut(root).unwrap().entries.retain(|h|!children.contains(h));
@@ -161,7 +161,7 @@ fn artwork_sample_effect_input_excludes_active_and_upper_adjustments_and_baselin
     let active=insert_effect(&mut doc,doubled_effect(),0);
     let effect=doc.scene().effect_handle(active).unwrap();let mut original=doc.artwork.effects.get(effect).unwrap().clone();
     let mut program=(*crate::tests::fixture("exposure").program()).clone();program.wgsl="fn identity_color(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return c;}".into();program.entry="identity_color".into();program.passes=Arc::new([]);
-    original.definition=doc.artwork.definitions.insert(PortableId::random(),Definition {program:Arc::new(program)}).unwrap();
+    original.program=Arc::new(program);
     insert_effect(&mut doc,doubled_effect(),0);
     close(sample(&doc,ArtworkSource::Visible,[8.;2],1).unwrap(),[1.,2.,4.,1.]);
     close(sample(&doc,ArtworkSource::EffectInput(active),[8.;2],1).unwrap(),[0.25,0.5,1.,1.]);

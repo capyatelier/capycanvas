@@ -113,7 +113,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     for _ in 0..24 {
         source.push_row(&[230, 45, 20, 180].repeat(32)).unwrap();
     }
-    paint_mut(&mut project,0).original = Some(Arc::new(source.finish().unwrap()));
+    paint_mut(&mut project,0).base = Some(layer_core::PaintBase::new((Arc::new(source.finish().unwrap())).into()));
     let mut host = NativeHost::new(Platform::Windows).unwrap();
     host.session = UiSession::from_project(Renderer(Some(gpu.into())), project, None, [96, 72], Platform::Windows).unwrap();
     host.resize(96, 72, 1.).unwrap();

@@ -3,7 +3,7 @@ fn transformed_document(linked: bool) -> Document {
     let owner = fixture::id(&doc, "Ink");
     let color = doc.composition().color;
     let p = fixture::paint_mut(&mut doc, "Ink");
-    p.original = Some(Arc::new(photo_source([24, 12])));
+    p.base = Some(PaintBase::new(Arc::new(photo_source([24, 12])).into()));
     p.domain = [768, 512];
     let mut data = raster(RasterPlane::Color, color, &[[0, 0], [1, 0]]).wait_data().unwrap().as_ref().clone();
     for plane in [RasterPlane::WatercolorWetness] {
@@ -37,7 +37,7 @@ fn transform_pixels_plan_freezes_raw_planes_and_preserves_unlinked_mask_identity
         assert_eq!(matches!(plan.scope, TransformPixelsScope::Paint { linked_mask: true }), linked);
         assert_eq!(plan.geometry.placement.interpolation, Interpolation::Linear);
         let frozen = plan.scene.view().paint_source(owner).unwrap();
-        assert!(Arc::ptr_eq(frozen.original.as_ref().unwrap(), fixture::paint(&doc, "Ink").original.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(frozen.base.as_ref().unwrap().image.storage(), fixture::paint(&doc, "Ink").base.as_ref().unwrap().image.storage()));
         assert_eq!(frozen.raster, fixture::paint(&doc, "Ink").raster);
         assert_eq!(plan.scene.artwork.coverage.get(mask.source).unwrap().raster, doc.artwork.coverage.get(mask.source).unwrap().raster);
         let mut after = doc.clone();
@@ -45,7 +45,7 @@ fn transform_pixels_plan_freezes_raw_planes_and_preserves_unlinked_mask_identity
         let output = fixture::occurrence(&after, "Ink");
         let p = fixture::paint(&after, "Ink");
         assert_eq!(output.placement, LayerPlacement::IDENTITY);
-        assert!(p.original.is_none());
+        assert!(p.base.is_none());
         assert!(p.raster.wait_data().unwrap().tiles.is_empty());
         if linked {
             let mask = output.mask.as_ref().unwrap();

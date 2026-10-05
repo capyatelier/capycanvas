@@ -11,11 +11,15 @@ pub const MAX_PROFILE_BYTES: usize = 16 * 1024 * 1024;
 /// digests in independently allocated sources still occupy separate memory.
 #[derive(Default)]
 pub(crate) struct SourceAccounting {
+    images:std::collections::HashSet<usize>,
     sources: std::collections::HashSet<usize>,
-    tiles: std::collections::HashSet<usize>,
+    tiles: std::collections::HashSet<u64>,
     profiles: std::collections::HashSet<usize>,
 }
 impl SourceAccounting {
+    pub(crate) fn charge_image(&mut self,image:&crate::Image)->usize {
+        self.charge(image.storage()).saturating_add(if self.images.insert(image.owner_identity()) {image.owner_metadata_bytes()}else {0})
+    }
     pub(crate) fn charge(&mut self, source: &Arc<SourceImage>) -> usize {
         if !self.sources.insert(Arc::as_ptr(source) as usize) {
             return 0;
@@ -23,16 +27,15 @@ impl SourceAccounting {
         let mut bytes = std::mem::size_of::<SourceImage>()
             .saturating_add(source.tiles.len().saturating_mul(96));
         for tile in source.tiles.values() {
-            if self.tiles.insert(Arc::as_ptr(tile) as usize) {
+            if self.tiles.insert(tile.owner_identity()) {
                 bytes = bytes.saturating_add(tile.compressed_len());
             }
         }
-        if let ColorProfile::Icc(profile) = &source.interpretation.profile
-            && self.profiles.insert(profile.as_ptr() as usize)
-        {
-            bytes = bytes.saturating_add(profile.len());
-        }
+        bytes = bytes.saturating_add(self.charge_profile(&source.interpretation.profile));
         bytes
+    }
+    pub(crate) fn charge_profile(&mut self,profile:&ColorProfile)->usize {
+        match profile {ColorProfile::Icc(bytes) if self.profiles.insert(bytes.as_ptr() as usize)=>bytes.len(),_=>0}
     }
 }
 
@@ -90,17 +93,8 @@ impl SourceInterpretation {
     }
 }
 
-/// Original files retain their independent interpretation. Explicit rasterization
-/// replaces them with a document-space tiled image while preserving its extent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SourceKind {
-    Original,
-    Rasterized,
-}
-
 #[derive(Clone, Debug)]
 pub struct SourceImage {
-    pub kind: SourceKind,
     pub extent: [u32; 2],
     pub resolution: Option<crate::ImageResolution>,
     pub interpretation: SourceInterpretation,
@@ -108,8 +102,7 @@ pub struct SourceImage {
 }
 impl PartialEq for SourceImage {
     fn eq(&self, other: &Self) -> bool {
-        self.kind == other.kind
-            && self.extent == other.extent
+        self.extent == other.extent
             && self.resolution == other.resolution
             && self.interpretation.channels == other.interpretation.channels
             && self.interpretation.depth == other.interpretation.depth
@@ -127,9 +120,6 @@ impl PartialEq for SourceImage {
 }
 impl Eq for SourceImage {}
 impl SourceImage {
-    pub fn is_original(&self) -> bool {
-        self.kind == SourceKind::Original
-    }
     pub fn resident_bytes(&self) -> usize {
         self.tiles.values().map(|t| t.resident_bytes()).sum()
     }
@@ -148,13 +138,6 @@ impl SourceImage {
             return Err("HDR sources require explicit linear RGB primaries".into());
         }
         if let Some(resolution) = self.resolution { resolution.validate()?; }
-        if self.kind == SourceKind::Rasterized
-            && (self.interpretation.channels != SourceChannels::Rgba
-                || !matches!(self.interpretation.profile, ColorProfile::Builtin(_))
-                || self.interpretation.profile_assumed)
-        {
-            return Err("Rasterized images require explicit working RGBA interpretation".into());
-        }
         let [w, h] = self.extent;
         if w == 0 || h == 0 || w > 32768 || h > 32768 {
             return Err("Unsupported source dimensions".into());
@@ -263,7 +246,6 @@ impl SourceBuilder {
         Ok(Self {
             image: SourceImage {
                 resolution: None,
-                kind: SourceKind::Original,
                 extent,
                 interpretation,
                 tiles: BTreeMap::new(),
@@ -339,6 +321,9 @@ mod tests {
         let shared_tiles = Arc::new((*source).clone());
         let index_bytes = accounting.charge(&shared_tiles);
         assert!(index_bytes > 0 && index_bytes < total);
+        let mut aliases=(*source).clone();
+        for tile in aliases.tiles.values_mut() {*tile=Arc::new(tile.alias(crate::PortableId::random()));}
+        let aliases=Arc::new(aliases);assert_eq!(accounting.charge(&aliases),index_bytes);
         let mut separate = (*source).clone();
         for tile in separate.tiles.values_mut() {
             *tile = Arc::new(

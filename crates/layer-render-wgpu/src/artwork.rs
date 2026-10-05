@@ -81,7 +81,7 @@ impl Frame {
 pub(super) struct Capture {
     scene: Option<scene::Scene>,
     target: Option<(wgpu::Texture, wgpu::TextureView)>,
-    window: Option<PixelRect>,
+    window: Option<DocRect>,
     pub peak_image_bytes: u64,
     pub image_limit: Option<u64>,
 }
@@ -106,20 +106,7 @@ impl Capture {
         };
         let packet = FramePacket {scene:view.with_scope(&scope),..frame.packet(r.document_extent)};
         let region = page_rect(coordinate).intersect(PixelRect::full(r.document_extent));
-        let (texture, view) = create_color_target(&r.device, [PAGE_SIZE;2], "occurrence thumbnail page");
-        self.scene.get_or_insert_with(|| scene::Scene::new(r)).capture_region(r, packet, &texture, region, scene::Output::Artwork(None), encoder)?;
-        Ok(source_access::RawTile {texture,view})
-    }
-    pub fn source_tile(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        source: &Arc<layer_core::color::source::SourceImage>,
-        coordinate: [u32; 2],
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<source_access::RawTile, GpuRasterError> {
-        self.scene
-            .get_or_insert_with(|| scene::Scene::new(r))
-            .source_tile_for_query(r, source, coordinate, encoder)
+        self.region(r, packet, region, [PAGE_SIZE;2], encoder)
     }
     pub fn storage_bytes(&self) -> u64 {
         self.target.as_ref().map_or(0, |(t, _)| texture_bytes(t))
@@ -181,14 +168,15 @@ impl Capture {
             }
         }
         let scene = self.scene.get_or_insert_with(|| scene::Scene::new(r));
-        scene.capture_region(r, packet, destination, region, scene::Output::Artwork(None), encoder)?;
+        let output = match packet.scene.scope() { Some(SceneScope::RawObjects(handle)) => scene::Output::Objects(*handle), _ => scene::Output::Artwork(None) };
+        scene.capture_region_prepared(r, packet, destination, region, output, encoder)?;
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);
         Ok(())
     }
     /// The window capturing `region` reads and the filter images it needs,
     /// refused above the image limit before anything is allocated.
-    fn image_bytes(&self, packet: FramePacket<'_>, region: PixelRect) -> Result<(PixelRect, u64), GpuRasterError> {
+    fn image_bytes(&self, packet: FramePacket<'_>, region: PixelRect) -> Result<(DocRect, u64), GpuRasterError> {
         let window = scene::Scene::capture_window(packet.scene, region, packet.document_extent);
         let bytes = scene::Scene::capture_image_bound(packet.scene, window);
         let limit = self.image_limit.unwrap_or(256 * 1024 * 1024);
@@ -199,7 +187,7 @@ impl Capture {
         }
         Ok((window, bytes))
     }
-    fn retires_window(&self, window: PixelRect) -> bool {
+    fn retires_window(&self, window: DocRect) -> bool {
         self.window.is_some_and(|old| old != window) && self.peak_image_bytes > 0
     }
     /// Whether capturing `region` now could wait for the GPU or upload source
@@ -218,11 +206,12 @@ impl Capture {
         };
         sources.uploads_full() || scene.order().iter().any(|&h| {
             if !scene.visible(h) { return false; }
+            if scene.object_layer(h).is_some_and(|layer| !layer.children.is_empty()) { return true; }
             let Some(target) = scene.source_target(h) else { return false; };
             let placed = !scene.target_geometry(target).is_identity();
-            let source = scene.paint_source(h).and_then(|p| p.original.as_ref()).is_some_and(|source| placed
-                || (tile[0] * PAGE_SIZE < source.extent[0] && tile[1] * PAGE_SIZE < source.extent[1]
-                    && !resident(target) && sources.prepared_view(source, tile).is_none()));
+            let source = scene.paint_base(target).is_some_and(|base| placed
+                || (source_access::paint_base_contains(base, tile)
+                    && !resident(target) && sources.prepared_base_view(base, tile).is_none()));
             let native = r.native_backing(target).is_some() || scene.mask(h).is_some_and(|(use_, _)| r.native_backing(SourceTarget::Coverage(use_.source)).is_some());
             source || native && (placed || scene.mask(h).is_some() || (!resident(target)
                 && r.native_color_tile(target, tile).map_or(true, |blob| blob.is_some_and(|blob| sources.prepared_raster_view(&blob, space).is_none()))))

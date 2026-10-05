@@ -63,7 +63,7 @@ class AndroidHostTest {
             assertTrue(compose.activity.resources.configuration.screenWidthDp > 640)
         }
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
-        host.awaitReady()
+        host.awaitReady(compose = compose)
         val expected = JSONObject(defaultWorkspace)
         compose.runOnIdle {
             host.dispatch(obj("type" to "close_settings"))
@@ -1071,13 +1071,15 @@ class AndroidHostTest {
             val (index, bytes) = saved
             val paint = JSONArray(index.paintRecords().objects().filter {
                 val data = it.getJSONObject("data")
-                data.optJSONArray("tiles")?.length()?.let { it > 0 } == true || data.has("material") || data.has("original")
+                data.optJSONArray("tiles")?.length()?.let { it > 0 } == true || data.has("material") || data.has("base")
             })
             val resourceIndex = index.getJSONArray("resources").objects().associateBy { it.getString("id") }
+            val objectIndex = index.getJSONArray("objects").objects().associateBy { it.getString("id") }
             val referenced = mutableSetOf<String>()
             fun visit(value: Any?) {
                 when (value) {
                     is JSONObject -> {
+                        value.optString("ref").takeIf { it in objectIndex }?.let { id -> visit(objectIndex.getValue(id).getJSONObject("data")) }
                         value.optString("ref").takeIf { it in resourceIndex }?.let { id ->
                             if (referenced.add(id)) visit(resourceIndex.getValue(id))
                         }
@@ -1111,7 +1113,7 @@ class AndroidHostTest {
         fun savedEffect(saved: Pair<JSONObject, ByteArray>, layer: Long = curvesLayer): Any? {
             val index = saved.first
             val application = index.getJSONArray("objects").objects().single {
-                it.getString("type") == "capy.effect/1" && index.packageData(it.getJSONObject("data").getJSONObject("definition").getString("ref")).getString("key") == effectKeys.getValue(layer)
+                it.getString("type") == "capy.effect/2" && it.getJSONObject("data").optString("builtin") == effectKeys.getValue(layer)
             }
             return jsonValue(application)
         }

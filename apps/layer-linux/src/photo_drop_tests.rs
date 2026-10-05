@@ -21,9 +21,9 @@ fn native_photo_transform_pixels_workflow() {
     let mut project = new_drawing(200, 150, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let id = project.working.occurrence.unwrap();
     active_paint_mut(&mut project).domain = [320, 240];
-    active_paint_mut(&mut project).original = Some(layer_core::color::source::rgba8_source([320, 240], |x, y| {
+    active_paint_mut(&mut project).base = Some(layer_core::PaintBase::new((layer_core::color::source::rgba8_source([320, 240], |x, y| {
         if (x / 16 + y / 16) % 2 == 0 { [230, 40, 80, 255] } else { [20, 160, 220, 255] }
-    }));
+    })).into()));
     project.artwork.occurrences.get_mut(id).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.5, 0., 0., 0.5, 20., 15.]));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
@@ -101,7 +101,7 @@ fn native_photo_transform_pixels_workflow() {
     invoke(&w,CommandId::ApplyTransform);ready(&w);
     assert!(active_occurrence(&current()).placement.mesh.is_some());
     assert_eq!(active_paint(&current()).raster,active_paint(&raw).raster,"retained geometry keeps raw material immutable");
-    assert_eq!(active_paint(&current()).original,active_paint(&raw).original,"retained geometry keeps the original photo");
+    assert_eq!(active_paint(&current()).base,active_paint(&raw).base,"retained geometry keeps the original photo");
     let retained = current();
     let material = active_paint(&retained).raster.wait_data().unwrap();
     let planes = |data: &layer_core::raster::RasterData| data.tiles.keys().map(|key| key.plane)
@@ -117,7 +117,7 @@ fn native_photo_transform_pixels_workflow() {
     assert_live_artwork_eq(&current(), &retained);
     w.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels });
     capture("applying.png");
-    until(|| active_paint(&current()).original.is_none(), "bake worker publishes native pixels");
+    until(|| active_paint(&current()).base.is_none(), "bake worker publishes native pixels");
     ready(&w);
     let baked = current();
     assert_eq!(active_occurrence(&baked).placement, layer_core::LayerPlacement::IDENTITY);
@@ -182,7 +182,7 @@ fn native_photo_transform_pixels_workflow() {
     let restored_layer = reopened.scene().occurrence(restored).unwrap();
     let restored_source = reopened.scene().paint_source(restored).unwrap();
     assert_eq!(restored_layer, active_occurrence(&baked));
-    assert!(restored_source.original.is_none());
+    assert!(restored_source.base.is_none());
     let digests = |source: &layer_core::authored::PaintSource| source.raster.wait_data().unwrap().tiles.iter()
         .map(|(key, tile)| (*key, tile.wait_backing().unwrap().content_digest().unwrap())).collect::<Vec<_>>();
     assert_eq!(digests(restored_source), digests(active_paint(&baked)));
@@ -437,6 +437,7 @@ fn native_multiple_photo_import_chooser() {
     }
     let app = native_test_app("art.capycanvas.MultiplePhotoImport");
     let w = Workspace::with_project(&app, Some((new_drawing(200, 150, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
+    apply_fixture_theme(&w);
     w.window.maximize();
     w.window.present();
     ready(&w);
@@ -450,7 +451,15 @@ fn native_multiple_photo_import_chooser() {
     for path in &paths {
         layer_color::photo::write_png(std::fs::File::create(path).unwrap(), &source).unwrap();
     }
+    invoke(&w, CommandId::Pen);
+    w.dispatch(UiAction::SetBrushSize { value: 17. });
+    w.dispatch(UiAction::SetColor { rgba: [0., 0., 1., 1.] });
+    ready(&w);
+    native_pen_path(&w, &[[65., 75.], [100., 75.], [135., 75.]]);
+    ready(&w);
     let before = ui_session(&w).engine().document().clone();
+    let below = before.working.occurrence.unwrap();
+    assert!(!before.scene().paint_source(below).unwrap().raster.is_empty());
     for apply in [false, true] {
         invoke(&w, CommandId::ImportImage);
         let chooser = super::new_photo::chooser();
@@ -474,13 +483,13 @@ fn native_multiple_photo_import_chooser() {
         finish(&w);
         ready(&w);
         let imported = ui_session(&w).engine().document().clone();
-        let photos: Vec<_> = imported.scene().order().iter().copied().filter(|h| imported.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).collect();
+        let photos: Vec<_> = imported.scene().order().iter().copied().filter(|h| imported.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).collect();
         assert_eq!(imported.scene().order().len(), before.scene().order().len() + 2);
         assert_eq!(photos.iter().map(|h| imported.scene().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(),
             ["First photo", "Second photo"]);
         for h in photos {
             let paint = imported.scene().paint_source(h).unwrap();
-            assert_source_samples(paint.original.as_deref().unwrap(), &source);
+            assert_source_samples(paint.base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
             assert!(paint.raster.is_empty());
         }
         driver.click_placement(&w, if apply { "canvas-bar-ApplyTransform" } else { "canvas-bar-CancelTransform" });
@@ -489,6 +498,22 @@ fn native_multiple_photo_import_chooser() {
             let saved = super::place_source::snapshot(&w);
             let reopened = open_native_document(std::io::Cursor::new(saved));
             assert_eq!(artwork_manifest(&reopened), artwork_manifest(&imported));
+            let pixel = super::photo_edit::shown(&w, [100., 75.]);
+            assert!(pixel[0] > 180 && pixel[2] < 100, "photos cover the paint below: {pixel:?}");
+            invoke(&w, CommandId::AddLayer);
+            invoke(&w, CommandId::Pen);
+            ready(&w);
+            native_pen_path(&w, &[[65., 75.], [100., 75.], [135., 75.]]);
+            ready(&w);
+            let above = ui_session(&w).engine().document().working.occurrence.unwrap();
+            assert!(!ui_session(&w).engine().document().scene().paint_source(above).unwrap().raster.is_empty());
+            let pixel = super::photo_edit::shown(&w, [100., 75.]);
+            assert!(pixel[2] > 180 && pixel[0] < 100, "paint covers the photos above: {pixel:?}");
+            let saved = super::place_source::snapshot(&w);
+            let reopened = open_native_document(std::io::Cursor::new(saved));
+            assert_live_artwork_eq(&reopened, ui_session(&w).engine().document());
+            invoke(&w, CommandId::Undo);
+            invoke(&w, CommandId::Undo);
             invoke(&w, CommandId::Undo);
             ready(&w);
         }
@@ -514,6 +539,7 @@ fn native_photo_file_drops() {
     let working = project.working.clone();
     let mut project = layer_core::Document::from_artwork(project.artwork).unwrap(); project.working = working;
     let w = Workspace::with_project(&app, Some((project, None)));
+    apply_fixture_theme(&w);
     w.window.maximize();
     w.window.present();
     ready(&w);
@@ -581,14 +607,14 @@ fn native_photo_file_drops() {
             .document()
             .clone();
         assert_eq!(doc.scene().order().len(), original.scene().order().len() + 2);
-        let photos: Vec<_> = doc.scene().order().iter().copied().filter(|h| doc.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).collect();
+        let photos: Vec<_> = doc.scene().order().iter().copied().filter(|h| doc.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).collect();
         assert_eq!(
             photos.iter().map(|h| doc.scene().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(),
             ["First photo", "Second – photo"]
         );
         for photo in photos {
             let paint = doc.scene().paint_source(photo).unwrap();
-            assert_source_samples(paint.original.as_deref().unwrap(), &source);
+            assert_source_samples(paint.base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
             let actual = doc
                 .target_geometry(doc.scene().source_target(photo).unwrap())
                 .map(Point { x: 600., y: 400. }).unwrap();
@@ -810,24 +836,16 @@ fn native_photo_file_drops() {
     assert_live_artwork_eq(ui_session(&w)
             .engine()
             .document(), &original);
-    let opened = Rc::new(RefCell::new(None));
-    *w.open_document.borrow_mut() = Some(Rc::new(glib::clone!(
-        #[strong]
-        opened,
-        move |project, location| {
-            opened.replace(Some((project, location)));
-        }
-    )));
+    let previous_tab = w.documents.selected();
+    let previous_tabs = w.documents.len();
     driver.hover(&[native], point, false);
     assert_eq!(w.image_drop_label.label(), "Open drawing");
     driver.release(false);
     finish(&w);
-    let (project, location) = opened
-        .borrow_mut()
-        .take()
-        .expect("native project drop invokes Open");
-    assert_eq!(artwork_manifest(&project), artwork_manifest(&original));
-    assert!(location.is_some());
+    until(|| w.documents.len() == previous_tabs + 1 && !w.documents.changing.get(), "native project drop opens a document tab");
+    ready(&w);
+    assert_ne!(w.documents.selected(), previous_tab);
+    assert!(state(&w).document_file.location.is_some());
     assert_live_artwork_eq(ui_session(&w)
             .engine()
             .document(), &original);
@@ -845,10 +863,10 @@ fn native_photo_transform_reference_pivot_snap_and_nudge() {
     let app = native_test_app("art.capycanvas.TransformReference");
     let mut project = new_drawing(300, 220, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let id = project.working.occurrence.unwrap();
-    active_paint_mut(&mut project).original = Some(layer_core::color::source::rgba8_source([120, 80], |_, _| [40, 120, 200, 255]));
+    active_paint_mut(&mut project).base = Some(layer_core::PaintBase::new((layer_core::color::source::rgba8_source([120, 80], |_, _| [40, 120, 200, 255])).into()));
     project.artwork.occurrences.get_mut(id).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x: 40., y: 50. }));
     let domain = project.composition().size;
-    let paint = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource { color_mode: Default::default(), domain, raster: Default::default(), original: Some(layer_core::color::source::rgba8_source([20, 80], |_, _| [200, 80, 40, 255])), operations: Default::default() }).unwrap();
+    let paint = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource { color_mode: Default::default(), domain, raster: Default::default(), base: Some(layer_core::PaintBase::new((layer_core::color::source::rgba8_source([20, 80], |_, _| [200, 80, 40, 255])).into())), operations: Default::default() }).unwrap();
     let mut neighbor = layer_core::Occurrence::new(layer_core::OccurrenceContent::Paint(paint), "Snap reference");
     neighbor.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x: 180., y: 50. }));
     let neighbor = project.artwork.occurrences.insert(layer_core::PortableId::random(), neighbor).unwrap();

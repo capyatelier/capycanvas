@@ -56,7 +56,7 @@ fn levels_statistics_reads_real_integer_and_float_source_codecs_at_every_profile
     let pixels=[[0.,0.,0.,1.],[1.;4],[1.,0.,0.,1.],[0.,1.,0.,1.],[0.,0.,1.,1.],[0.;4]];
     for space in RgbSpace::ALL {for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
         let mut doc=fixture(space,depth,&pixels);let generator=doc.scene().children(None)[1];let root=doc.composition().result;doc.artwork.stacks.get_mut(root).unwrap().entries.retain(|h|*h!=generator);refresh(&mut doc);
-        paint_mut(&mut doc).raster=Default::default();paint_mut(&mut doc).original=Some(crate::test_support::depth_source([6,1],depth,space,8*1024*1024,|x,_|pixels[x as usize]));
+        paint_mut(&mut doc).raster=Default::default();paint_mut(&mut doc).base=Some(layer_core::authored::PaintBase::new((crate::test_support::depth_source([6,1],depth,space,8*1024*1024,|x,_|pixels[x as usize])).into()));
         let result=stats(&doc,false).unwrap();assert_eq!(result.pixels,5);
         for c in 0..3 {
             close(result.minimum[c],0.,1e-6);close(result.maximum[c],1.,1e-6);

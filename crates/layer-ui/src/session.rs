@@ -363,7 +363,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn new_localized(renderer: R, document: Document, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
-        if document.artwork.paint.iter().any(|(_, _, source)| source.original.is_some()) && !renderer.supports_tiled_sources() {
+        if (!document.artwork.objects.is_empty() || document.artwork.paint.iter().any(|(_, _, source)| source.base.is_some())) && !renderer.supports_tiled_sources() {
             return Err("This renderer does not support tiled photo documents".into());
         }
         let camera = Camera::new([document.composition().size[0], document.composition().size[1]], viewport);
@@ -5918,6 +5918,10 @@ fn pen_phase(phase: ContactPhase) -> PenPhase {
 pub(crate) mod test_support;
 
 #[cfg(test)]
+#[path = "image_object_edit_tests.rs"]
+mod image_object_edit_tests;
+
+#[cfg(test)]
 mod tests {
     use super::test_support::*;
     use super::*;
@@ -6345,9 +6349,24 @@ mod tests {
         source.push_row(&[0; 8]).unwrap();
         let target = document.working.target.unwrap();
         let SourceTarget::Paint(paint) = target else { unreachable!() };
-        document.artwork.paint.get_mut(paint).unwrap().original = Some(std::sync::Arc::new(source.finish().unwrap()));
-        let result = UiSession::from_project(Recorder::default(), document, None, [256, 256], Platform::Gtk);
-        assert!(matches!(result, Err(message) if message.contains("does not support tiled photo")));
+        document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new(std::sync::Arc::new(source.finish().unwrap()).into()));
+        let image=document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.clone();
+        let mut objects=Document::from_artwork(layer_core::Artwork::new([1,1]).unwrap()).unwrap();
+        let (layer,edit)=objects.create_object_layer_edit("Images",None,0).unwrap();objects.apply(edit).unwrap();
+        let (_,edit)=objects.add_image_object_edit(layer,layer_core::ImageObject::new(image,"Photo"),0).unwrap();objects.apply(edit).unwrap();
+        assert!(objects.artwork.paint.is_empty());
+        for document in [document,objects] {
+            let result = UiSession::from_project(Recorder::default(), document.clone(), None, [256, 256], Platform::Gtk);
+            assert!(matches!(result, Err(message) if message.contains("does not support tiled photo")));
+            let mut session=UiSession::from_project(Recorder {tiled_sources:true,..Default::default()},document,None,[256,256],Platform::Gtk).unwrap();
+            session.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).unwrap();let accepted=session.engine.document().clone();
+            session.engine.undo().unwrap();let before=session.engine.document().clone();let checkpoint=session.engine.checkpoint();
+            let history=(session.engine.can_undo(),session.engine.can_redo());assert!(history.1);
+            assert!(session.replace_renderer(Recorder::default()).is_err());
+            assert_eq!(session.engine.document(),&before);assert_eq!(session.engine.checkpoint(),checkpoint);
+            assert_eq!((session.engine.can_undo(),session.engine.can_redo()),history);assert!(session.engine.backend().tiled_sources);
+            session.engine.redo().unwrap();assert_live_artwork_eq(session.engine.document(),&accepted);
+        }
     }
 
     #[test]
@@ -7419,7 +7438,7 @@ mod tests {
         let occurrence = s.engine.document().working.occurrence.unwrap();
         let image = match s.engine.document().scene().occurrence(occurrence).unwrap().content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
         let identity = s.engine.document().artwork.paint.id(image).unwrap();
-        let retained = |artwork: &layer_core::Artwork| artwork.paint.get(artwork.paint.resolve(identity).unwrap()).unwrap().original.clone().unwrap();
+        let retained = |artwork: &layer_core::Artwork| artwork.paint.get(artwork.paint.resolve(identity).unwrap()).unwrap().base.as_ref().unwrap().image.storage().clone();
         assert!(s.state.document_file.modified);
         invoke(&mut s, CommandId::SaveDocument);
         let id = s.files.pending.as_ref().unwrap().0;
@@ -9593,7 +9612,7 @@ mod tests {
         let document = s.engine.document().clone();
         let handle=document.working.occurrence.unwrap();
         let (_,application)=effects::effect_application(&document,handle).unwrap();
-        let original=document.artwork.definitions.get(application.definition).unwrap().program.clone();
+        let original=application.program.clone();
         let checkpoint = s.engine.checkpoint();
         let mut definition = custom_filter("unsharp_mask");
         Arc::make_mut(&mut definition.program).label = "New library version".into();
@@ -10170,7 +10189,7 @@ mod tests {
         assert_eq!(s.engine.document().drawing_target(), Some(mask));
         let document = s.engine.document();
         let paint = layer_core::authored::RecordChange::insert(&document.artwork.paint, layer_core::authored::PaintSource { color_mode: Default::default(),
-            domain: document.composition().size, original: None, raster: Default::default(), operations: Default::default(),
+            domain: document.composition().size, base: None, raster: Default::default(), operations: Default::default(),
         });
         let occurrence = layer_core::authored::RecordChange::insert(&document.artwork.occurrences,
             layer_core::authored::Occurrence::new(layer_core::authored::OccurrenceContent::Paint(paint.handle), "Bottom"));

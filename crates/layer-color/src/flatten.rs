@@ -3,7 +3,7 @@ use layer_core::{
     BlendSpace, Document, ImageResolution, authored::{Artwork,PortableId,PaintSource,Occurrence,OccurrenceContent,SourceTarget},
     color::{
         ColorProfile, DocumentColor,
-        source::{SourceBuilder, SourceChannels, SourceInterpretation, SourceKind},
+        source::{SourceBuilder, SourceChannels, SourceInterpretation},
     },
 };
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub fn flattened_document(
         builder.push_row(&row)?;
     }
     let mut source = builder.finish()?;
-    source.kind = SourceKind::Rasterized;
+
     source.resolution = resolution;
     let mut artwork = Artwork::new(extent)?;
     let composition = artwork.compositions.get_mut(artwork.root).unwrap();
@@ -39,7 +39,7 @@ pub fn flattened_document(
     composition.blend = BlendSpace::Perceptual.for_depth(color.depth);
     composition.resolution = resolution;
     let stack = composition.result;
-    let paint = artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),domain:extent, raster:Default::default(), original:Some(Arc::new(source)), operations:Default::default()})?;
+    let paint = artwork.paint.insert(PortableId::random(), PaintSource { color_mode:Default::default(),domain:extent, raster:Default::default(), base:Some(layer_core::authored::PaintBase {image:Arc::new(source).into(),offset:[0;2],policy:layer_core::authored::PaintBasePolicy::WorkingPixels}), operations:Default::default()})?;
     let occurrence = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(paint), "Converted image"))?;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
     let mut document = Document::from_artwork(artwork).map_err(|error| error.to_string())?;

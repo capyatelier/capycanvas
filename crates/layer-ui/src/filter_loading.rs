@@ -78,7 +78,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, false));
         }
         let mut retained_programs: Vec<_> = candidate.filters().iter().map(|f| f.program()).collect();
-        for (_, _, definition) in self.engine.document().artwork.definitions.iter() {
+        for (_, _, definition) in self.engine.document().artwork.effects.iter() {
             if !retained_programs.contains(&definition.program) { retained_programs.push(definition.program.clone()); }
         }
         let request_id = self.state.filter_load.request_id.wrapping_add(1);

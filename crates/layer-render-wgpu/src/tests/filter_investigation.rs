@@ -319,7 +319,7 @@ fn photo_filter_frame_time() {
         start.elapsed().as_secs_f64() * 1000.
     );
     let mut base = if let Some(project) = project {
-        let h=project.scene().order().iter().copied().find(|h|project.scene().paint_source(*h).is_some_and(|p|p.original.is_some())).unwrap();
+        let h=project.scene().order().iter().copied().find(|h|project.scene().paint_source(*h).is_some_and(|p|p.base.is_some())).unwrap();
         let source=project.scene().paint_source(h).unwrap().clone();let mut occurrence=project.scene().occurrence(h).unwrap().clone();
         let mut document=empty_document(extent,Default::default());
         let paint=document.artwork.paint.insert(layer_core::PortableId::random(),source).unwrap();occurrence.content=layer_core::OccurrenceContent::Paint(paint);
@@ -337,13 +337,14 @@ fn photo_filter_frame_time() {
     if let Ok(path)=std::env::var("CAPY_FILTER_SOURCE_JPEG") {
         let source=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()),Default::default()).unwrap();
         let imported=layer_color::photo_project(source,Default::default(),layer_core::DocumentNames {paint:"Water".into(),paper:"Paper".into()},SampleDepth::U8).unwrap();
-        let h=imported.working.occurrence.unwrap();let paint=imported.scene().paint_source(h).unwrap();let original=paint.original.as_ref().unwrap();
+        let h=imported.working.occurrence.unwrap();let paint=imported.scene().paint_source(h).unwrap();let original=paint.base.as_ref().unwrap().image.storage();
         eprintln!("decoded_source_channels={:?} embedded_icc={} pose={:?}",original.interpretation.channels,matches!(original.interpretation.profile,layer_core::color::ColorProfile::Icc(_)),imported.scene().occurrence(h).unwrap().placement);
         base=empty_document(extent,Default::default());let target=insert_source(&mut base,"Water",original.clone());
         base.artwork.occurrences.get_mut(target).unwrap().placement=imported.scene().occurrence(h).unwrap().placement.clone();
         if std::env::var_os("CAPY_FILTER_ASSUME_SRGB").is_some() {
             let layer_core::OccurrenceContent::Paint(p)=base.scene().occurrence(target).unwrap().content else {unreachable!()};
-            Arc::make_mut(base.artwork.paint.get_mut(p).unwrap().original.as_mut().unwrap()).interpretation.profile=Default::default();
+            let binding=base.artwork.paint.get_mut(p).unwrap().base.as_mut().unwrap();
+            let mut source=(**binding.image.storage()).clone();source.interpretation.profile=Default::default();binding.image=Arc::new(source).into();
         }
     }
     let start = Instant::now();

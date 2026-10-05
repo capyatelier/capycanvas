@@ -24,7 +24,7 @@ pub(crate) fn paint_mut(doc: &mut Document) -> &mut PaintSource {
     doc.artwork.paint.get_mut(h).unwrap()
 }
 pub(crate) fn set_source(doc: &mut Document, image: Arc<SourceImage>) {
-    let source = paint_mut(doc); source.domain = image.extent; source.original = Some(image);
+    let source = paint_mut(doc); source.domain = image.extent; source.base = Some(layer_core::authored::PaintBase::new((image).into()));
 }
 pub(crate) fn set_mask(doc: &mut Document, mut mask: CoverageSnapshot) {
     let source = RecordChange::insert(&doc.artwork.coverage, mask.source);
@@ -467,7 +467,7 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
         assert_eq!(work, updates, "pose changes do not reread source tiles");
     }
     let (second, second_target) = append_paint(&mut layer, "second photo needs a finer preview", PaintSource { color_mode: Default::default(),
-        domain: size, original: Some(rgba8_source(size, |_, _| [0, 255, 0, 255])),
+        domain: size, base: Some(layer_core::authored::PaintBase::new((rgba8_source(size, |_, _| [0, 255, 0, 255])).into())),
         raster: Default::default(), operations: Arc::default(),
     });
     layer.artwork.occurrences.get_mut(second).unwrap().placement = layer_core::LayerPlacement::from_affine(Affine([0.3, 0., 0., 0.3, 0., 0.]));
@@ -588,7 +588,7 @@ fn placed_photo_mask_linking_preserves_pose_and_apply_preserves_pixels() {
         before_apply,
         "applying a placed mask does not change the visible result"
     );
-    assert_eq!(paint(&layer).original.as_ref().unwrap().extent, size);
+    assert_eq!(paint(&layer).base.as_ref().unwrap().image.storage().extent, size);
 }
 
 #[test]
@@ -908,7 +908,7 @@ pub(crate) fn watercolor_prediction_and_commit_with_renderer(mut r: WgpuRasteriz
     for plane in [layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::WatercolorWetness] {
         assert!(data.tiles.contains_key(&layer_core::raster::TileKey { plane, coordinate: [1, 0] }));
     }
-    assert!(std::sync::Arc::ptr_eq(paint(&layer).original.as_ref().unwrap(), &source));
+    assert!(std::sync::Arc::ptr_eq(paint(&layer).base.as_ref().unwrap().image.storage(), &source));
     send(&mut r, &layer, &[], &[], true);
     assert_eq!(read(&mut r), accepted, "backing restore preserves pigment and wetness");
 }

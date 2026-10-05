@@ -52,6 +52,7 @@ impl Hierarchy {
     }
     pub fn fits(&self, r: &WgpuRasterizer) -> bool { self.bytes <= Self::budget(r, self.bytes) }
     fn new(r: &mut WgpuRasterizer, cache: &Cache, encoder: &mut crate::submission::CommandEncoder) -> Option<Self> {
+        if r.artwork_frame.as_ref().is_some_and(|frame| frame.scene.view().order().iter().any(|h| frame.scene.view().object_layer(*h).is_some())) { return None; }
         #[cfg(not(target_arch = "wasm32"))]
         if r.snapshot_worker { return None; }
         let budget = Self::budget(r, 0);
@@ -151,7 +152,7 @@ impl Cache {
             self.valid.clone_from(&hierarchy.refined);
             self.refined.clone_from(&hierarchy.refined);
             self.ready = hierarchy.missing().is_none();
-            self.reuse_output = self.ready && self.unchanged;
+            self.reuse_output = self.unchanged && self.output_complete();
         }
         if let Some(overview) = &mut self.overview {
             overview.unchanged = self.unchanged;

@@ -25,7 +25,7 @@ fn source(space: RgbSpace, codes: [u16; 4]) -> Document {
         builder.push_row(&row).unwrap();
     }
     let mut layer = document("profiled photo");
-    paint_mut(&mut layer).original = Some(Arc::new(builder.finish().unwrap()));
+    paint_mut(&mut layer).base = Some(layer_core::authored::PaintBase::new((Arc::new(builder.finish().unwrap())).into()));
     layer
 }
 fn view() -> ViewState {
@@ -550,7 +550,7 @@ fn hdr_paint_and_photo_thumbnails_follow_the_sdr_rendition_without_clipping() {
                 profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
             }, 4 * 1024 * 1024).unwrap();
             for row in raw.chunks_exact(256 * 8) { builder.push_row(row).unwrap(); }
-            paint_mut(&mut layer).original = Some(Arc::new(builder.finish().unwrap()));
+            paint_mut(&mut layer).base = Some(layer_core::authored::PaintBase::new((Arc::new(builder.finish().unwrap())).into()));
         } else {
             paint_mut(&mut layer).raster = RasterRevision::backed(RasterData {
                 tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] },
@@ -730,7 +730,7 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
             let mut builder=SourceBuilder::new([256;2],SourceInterpretation{channels:SourceChannels::Rgba,depth,profile:ColorProfile::Builtin(space),profile_assumed:false},8*1024*1024).unwrap();
             let row=if depth == SampleDepth::F16 { bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>() } else { p.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>() }.repeat(256);
             for _ in 0..256 {builder.push_row(&row).unwrap();}
-            let mut layer=document("HDR reference");paint_mut(&mut layer).original=Some(Arc::new(builder.finish().unwrap()));
+            let mut layer=document("HDR reference");paint_mut(&mut layer).base=Some(layer_core::authored::PaintBase::new((Arc::new(builder.finish().unwrap())).into()));
             frame(&mut r,&mut layer);
             let original=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
             for surface in [SdrSurfaceColor::ExtendedLinearSrgb, SdrSurfaceColor::ExtendedSrgb, SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
@@ -842,7 +842,7 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
         }
         let guide = Arc::new(analysis.finish(|| false).unwrap());
         let mut layer = document("Local tone reference");
-        paint_mut(&mut layer).original = Some(Arc::new(source.finish().unwrap()));
+        paint_mut(&mut layer).base = Some(layer_core::authored::PaintBase::new((Arc::new(source.finish().unwrap())).into()));
         frame(&mut r, &mut layer);
         let original = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         let lut = Arc::new(

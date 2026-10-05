@@ -1,8 +1,10 @@
 use super::*;
 
 #[test]
-fn display_level_updates_share_one_compute_pass() {
-    let doc = document();
+fn display_level_updates_and_dirty_regions_batch_compute_passes() {
+    let mut doc = document_at([2048; 2]);
+    occurrence_mut(&mut doc, 0).opacity = 0.5;
+    add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.set_complete_display_allowance(1024 << 20);
     let mut frame = packet(doc.scene(), doc.composition().size);
@@ -19,6 +21,28 @@ fn display_level_updates_share_one_compute_pass() {
     encoder.submit(&r.queue);
     r.scale_display = Some(cache);
     assert_presentation_mip(&r);
+    let expected = display_pixels(&r);
+    let mut cache = r.scale_display.take().unwrap();
+    let mut scene = r.scene.take().unwrap();
+    let frame = FramePacket { composite_all: false, ..frame };
+    scene.scale_sources.prepare(&r, frame, &[]);
+    assert!(cache.graph.root.as_ref().unwrap().damage(&scene.scale_sources, cache.plan).is_empty());
+    assert_eq!(cache.plan.level, 2);
+    assert!(cache.valid.remove(&[0, 0]));
+    assert!(cache.valid.remove(&[7, 7]));
+    cache.reuse_output = false;
+    r.metrics.frame_composited_pages.clear();
+    let mut commands = Commands::new(&r);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let mut encoding = Encoding { encoder: &mut encoder, commands: &mut commands };
+    cache.render_graph(&mut scene, &mut r, frame, PixelRect::EMPTY, &mut encoding, Destination::View, None).unwrap();
+    assert_eq!(r.metrics.frame_composited_pages, vec![(2, [0, 0]), (2, [7, 7])]);
+    assert_eq!(encoder.pass_count(), 2, "distant dirty pages share composition and display reduction passes");
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    r.scene = Some(scene);
+    r.scale_display = Some(cache);
+    assert!(crate::test_support::max_error(&display_pixels(&r), &expected) < 2e-5);
 }
 
 #[test]
@@ -380,8 +404,8 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     let effect=effect_occurrence(&mut doc,EffectInstance::new(Arc::new(program)),"effect");
     insert_occurrence(&mut doc,effect,0);
     let budget = r.native_edit.as_ref().unwrap();
-    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(resident)).is_err());
-    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(0)).is_ok());
+    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(resident), r.device.limits().max_texture_dimension_2d).is_err());
+    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(0), r.device.limits().max_texture_dimension_2d).is_ok());
     frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     r.submit(frame).unwrap();

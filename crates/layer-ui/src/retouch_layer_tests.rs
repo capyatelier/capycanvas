@@ -124,7 +124,7 @@ mod retouch_layer_checks {
         let mut composition = doc.composition().clone(); composition.size = [1280, 768];
         let SourceTarget::Paint(handle) = doc.working.target.unwrap() else { panic!("paint") };
         let mut source = doc.artwork.paint.get(handle).unwrap().clone();
-        source.domain = [1280, 768]; source.original = Some(layer_core::color::source::rgba8_source([1280, 768], |_, _| [80, 120, 160, 255]));
+        source.domain = [1280, 768]; source.base = Some(layer_core::PaintBase::new(layer_core::Image::new(layer_core::color::source::rgba8_source([1280, 768], |_, _| [80, 120, 160, 255]))));
         let edit = Edit::Batch(vec![Edit::Composition(RecordChange::replace(&doc.artwork.compositions, doc.artwork.root, Some(composition)).unwrap()), Edit::Paint(RecordChange::replace(&doc.artwork.paint, handle, Some(source)).unwrap())]);
         s.engine.apply_edit(edit).unwrap();
         s.frame(1, 1).unwrap();

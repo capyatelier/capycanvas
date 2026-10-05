@@ -76,6 +76,8 @@ impl<T: ?Sized> Resource<T> {
     }
     pub fn storage(&self) -> &Arc<T> { &self.owner.value }
     pub fn same_owner(&self, other: &Self) -> bool { Arc::ptr_eq(&self.owner, &other.owner) }
+    pub(crate) fn owner_identity(&self)->usize {Arc::as_ptr(&self.owner) as usize}
+    pub(crate) fn owner_metadata_bytes(&self)->usize {std::mem::size_of::<Owner<T>>()}
     pub fn encoded_if_ready(&self) -> Option<&EncodedBytes> { self.owner.encoded.get() }
     pub fn encoded(&self, encode: impl FnOnce(&T) -> EncodedBytes) -> &EncodedBytes {
         self.owner.encoded.get_or_init(|| encode(&self.owner.value))

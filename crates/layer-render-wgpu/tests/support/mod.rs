@@ -143,7 +143,7 @@ pub fn named_occurrence(doc: &Document, name: &str) -> OccurrenceHandle {
 
 pub fn add_paint(doc: &mut Document, name: &str, index: usize) -> OccurrenceHandle {
     let source = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(),
-        domain: doc.composition().size, raster: Default::default(), original: None, operations: Default::default(),
+        domain: doc.composition().size, raster: Default::default(), base: None, operations: Default::default(),
     });
     let occurrence = RecordChange::insert(&doc.artwork.occurrences,
         Occurrence::new(OccurrenceContent::Paint(source.handle), name));
@@ -192,14 +192,9 @@ pub fn convert_group(doc: &Document, handle: OccurrenceHandle, children: &[Occur
 }
 
 pub fn effect_edit(doc: &Document, handle: OccurrenceHandle, effect: EffectInstance) -> Edit {
-    let definition = RecordChange::insert(&doc.artwork.definitions, Definition {
-        program: effect.program,
-    });
-    let application = RecordChange::insert(&doc.artwork.effects, EffectApplication {
-        definition: definition.handle, values: effect.values,
-    });
+    let application = RecordChange::insert(&doc.artwork.effects, EffectApplication::new(effect.program, effect.values, doc.composition().size));
     Edit::Batch(vec![occurrence_edit(doc, handle, |o| o.content = OccurrenceContent::Effect(application.handle)),
-        Edit::Definition(definition), Edit::Effect(application)])
+        Edit::Effect(application)])
 }
 
 pub fn capture(doc: &Document) -> ArtworkCapture {

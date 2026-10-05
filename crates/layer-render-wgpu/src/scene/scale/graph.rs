@@ -6,6 +6,7 @@ pub(super) type Node = Arc<Expression>;
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum Expression {
     Color([u32; 4]),
+    Objects {content:object_spatial::Content,preview:bool},
     Source { id: SourceTarget, placement: pixel_transform::GeometryKey, extent: [u32; 2], outside: u32 },
     Opacity { input: Node, opacity: u32 },
     Combine { front: Node, back: Node, blend: u32, flags: u32 },
@@ -30,9 +31,28 @@ impl Expression {
         if let Self::Color(c) = input.as_ref() { return Self::color(c.map(|v| f32::from_bits(v) * opacity)); }
         if opacity == 1. { input } else { Arc::new(Self::Opacity { input, opacity: opacity.to_bits() }) }
     }
+    pub(super) fn support(&self, scene: SceneView<'_>, extent: [u32; 2], level:u32) -> DocRect {
+        match self {
+            Self::Color(color) => if color[3] == 0 { DocRect::default() } else { PixelRect::full(extent).into() },
+            Self::Source { placement, extent, .. } => DocRect::from_rect(placement.0.forward_bounds(layer_core::Rect::from_extent(*extent))),
+            Self::Objects {content,..} => content.bounds_at(level),
+            Self::Opacity { input, .. } => input.support(scene, extent,level),
+            Self::Combine { front, back, flags, .. } => {
+                if flags & 32 != 0 { front.support(scene, extent,level) }
+                else if flags & 16 != 0 { back.support(scene, extent,level) }
+                else { front.support(scene, extent,level).union(back.support(scene, extent,level)) }
+            },
+            Self::Effect { input, chain, .. } => chain.iter().fold(input.support(scene, extent,level), |support, (handle, _, _)| {
+                let effect = scene.effect(*handle).unwrap();
+                if effect.program.kind == layer_core::EffectKind::Generator { PixelRect::full(extent).into() }
+                else { crate::effects::pass_input_support(effect, effect.program.passes.len(), support, level).unwrap_or(support) }
+            }),
+        }
+    }
     fn cost(&self) -> (u32, u32) {
         match self {
             Self::Color(_) => (0, 0),
+            Self::Objects {content,..} => (content.len() as u32*2, 3),
             Self::Source { placement, .. } => {
                 let work = u32::from(!placement.0.is_identity());
                 (work, work)
@@ -54,26 +74,34 @@ impl Expression {
         }
     }
     pub(super) fn damage(&self, sources: &Sources, plan: display_mips::Plan) -> Damage {
+        Damage::from_regions(self.document_damage(sources, plan).into_iter().map(|region| region.in_frame(plan.extent)))
+    }
+    fn document_damage(&self, sources: &Sources, plan: display_mips::Plan) -> Vec<DocRect> {
         match self {
-            Self::Color(_) => Damage::EMPTY,
-            Self::Source { id, placement, .. } => sources.entries.get(id).map_or_else(|| plan.bounds.into(), |source| {
-                if source.damage.is_empty() { return Damage::EMPTY; }
-                let placement = placement.0.clone();
-                if placement.is_identity() { return source.damage.clone(); }
-                let local = source.damage.expand(1 << source_level(plan.level, &placement, source.extent), source.extent);
-                local.map(|local| pixel_rect(placement.forward_bounds(local.to_rect()), plan.extent).expand(
-                    source.watercolor.map_or(0, |w| w.radius()), plan.extent))
+            Self::Color(_) => Vec::new(),
+            Self::Objects {..} => sources.object_damage.regions.iter().chain(sources.object_refinements.get(&plan.level).into_iter().flat_map(|damage| damage.regions.iter())).copied().map(DocRect::from).collect(),
+            Self::Source { id, placement, .. } => sources.entries.get(id).map_or_else(|| vec![plan.doc_bounds], |source| {
+                let placement = &placement.0;
+                let local = if placement.is_identity() { source.damage.clone() } else {
+                    source.damage.expand(1 << source_level(plan.level, placement, source.extent), source.extent)
+                };
+                local.regions.iter().map(|region| DocRect::from_rect(placement.forward_bounds(region.to_rect()))
+                    .expand(source.watercolor.map_or(0, |w| w.radius()))).collect()
             }),
-            Self::Opacity { input, .. } => input.damage(sources, plan),
-            Self::Combine { front, back, .. } => front.damage(sources, plan).union(back.damage(sources, plan)),
-            Self::Effect { input, masks, radius, .. } => masks.iter().flatten().fold(
-                input.damage(sources, plan).dependency(*radius, display_mips::Plan::at(plan.extent, plan.level)),
-                |r, n| r.union(n.damage(sources, plan))),
+            Self::Opacity { input, .. } => input.document_damage(sources, plan),
+            Self::Combine { front, back, .. } => front.document_damage(sources, plan).into_iter().chain(back.document_damage(sources, plan)).collect(),
+            Self::Effect { input, masks, radius, .. } => {
+                let input = input.document_damage(sources, plan);
+                let mut damage = if input.is_empty() { Vec::new() } else { radius.map_or_else(|| vec![plan.doc_bounds], |radius| input.into_iter().map(|region| region.expand(radius)).collect()) };
+                for mask in masks.iter().flatten() { damage.extend(mask.document_damage(sources, plan)); }
+                damage
+            }
         }
     }
     pub(super) fn required(&self, region: Damage, plan: display_mips::Plan) -> Damage {
         match self {
             Self::Color(_) => Damage::EMPTY,
+            Self::Objects {..} => region,
             Self::Source { .. } => region,
             Self::Opacity { input, .. } => input.required(region, plan),
             Self::Combine { front, back, .. } => front.required(region.clone(), plan).union(back.required(region, plan)),
@@ -129,13 +157,16 @@ pub(super) struct Graph {
     effects: HashMap<OccurrenceHandle, (metadata::Metadata, u64)>,
     revision: u64,
     blend_space: layer_core::BlendSpace,
+    objects:object_spatial::SpatialIndex,
 }
 impl Graph {
+    pub fn objects(&self)->&object_spatial::SpatialIndex {&self.objects}
     pub fn without_pixels(&self) -> Self {
         Self { root: self.root.clone(), branches: HashMap::new(), effects: self.effects.clone(),
-            revision: self.revision, blend_space: self.blend_space }
+            revision: self.revision, blend_space: self.blend_space, objects:self.objects.clone() }
     }
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, budget: u64) -> Result<(), GpuRasterError> {
+        self.objects.prepare(packet.scene);
         if std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space { self.branches.clear(); }
         self.effects.retain(|id, _| packet.scene.effect(*id).is_some());
         for &handle in packet.scene.order().iter().filter(|handle| packet.scene.effect(**handle).is_some()) {
@@ -145,11 +176,11 @@ impl Graph {
                 self.effects.insert(handle, (metadata, self.revision));
             }
         }
-        let root = compose(packet, Some(sources), Some(&self.effects), plan.level, r.device.working_space())?;
+        let root = compose(packet, Some(sources), Some(&self.effects), plan.level, r.device.working_space(), Some(&mut self.objects))?;
         let mut all = HashSet::new();
         Expression::visit(&root, &mut all);
         let mut eligible: Vec<_> = all.into_iter().filter(|n| !Arc::ptr_eq(n, &root)
-            && matches!(n.as_ref(), Expression::Combine { .. } | Expression::Effect { .. })).collect();
+            && matches!(n.as_ref(), Expression::Objects {..} | Expression::Combine { .. } | Expression::Effect { .. })).collect();
         eligible.sort_by_cached_key(|n| (n.damage(sources, plan).area(), std::cmp::Reverse(n.cost().0), n.clone()));
         eligible.truncate((budget / plan.level_bytes(plan.level)) as usize);
         let wanted: HashSet<_> = eligible.into_iter().collect();
@@ -166,19 +197,20 @@ impl Graph {
     }
     pub fn reserved_bytes(&self, plan: display_mips::Plan) -> u64 { self.branches.len() as u64 * plan.level_bytes(plan.level) }
     pub fn storage_bytes(&self) -> u64 {
-        self.branches.values().filter_map(|b| b.image.as_ref()).map(|i| texture_bytes(&i.texture)).sum()
+        self.branches.values().filter_map(|b| b.image.as_ref()).map(|i| texture_bytes(&i.texture)).sum::<u64>() + self.objects.storage_bytes()
     }
 }
 
-pub(super) fn scratch_images(packet: FramePacket<'_>, level: u32, space: layer_core::color::RgbSpace) -> Result<u64, GpuRasterError> {
-    Ok(u64::from(compose(packet, None, None, level, space)?.cost().1) + 1)
+pub(super) fn scratch_images(packet: FramePacket<'_>, level: u32, space: layer_core::color::RgbSpace, objects:Option<&object_spatial::SpatialIndex>) -> Result<u64, GpuRasterError> {
+    let mut objects=objects.cloned().unwrap_or_default();
+    Ok(u64::from(compose(packet, None, None, level, space, Some(&mut objects))?.cost().1) + 1)
 }
 
 fn compose(
     packet: FramePacket<'_>, sources: Option<&Sources>, effects: Option<&HashMap<OccurrenceHandle, (metadata::Metadata, u64)>>,
-    level: u32, space: layer_core::color::RgbSpace,
+    level: u32, space: layer_core::color::RgbSpace, objects:Option<&mut object_spatial::SpatialIndex>,
 ) -> Result<Node, GpuRasterError> {
-    let mut builder = Builder { packet, sources, effects, level, space };
+    let mut builder = Builder { packet, sources, effects, level, space, objects };
     let output = stack::compose(&mut builder, packet.scene, None, packet.scene.effect_input())?;
     let mut root = Expression::over(&output);
     if let Some(handle) = packet.inspect_mask
@@ -194,6 +226,7 @@ struct Builder<'a> {
     effects: Option<&'a HashMap<OccurrenceHandle, (metadata::Metadata, u64)>>,
     level: u32,
     space: layer_core::color::RgbSpace,
+    objects:Option<&'a mut object_spatial::SpatialIndex>,
 }
 impl Builder<'_> {
     fn source(&self, handle: OccurrenceHandle, mask: bool) -> Node {
@@ -226,12 +259,16 @@ impl stack::Compositor for Builder<'_> {
         let layer = self.packet.scene.occurrence(index).unwrap();
         let output = if layer.kind() == LayerKind::Group {
             stack::compose(self, self.packet.scene, Some(index), None)?
-        } else if let Some(color) = self.packet.scene.effect(index).and_then(|effect| effect.constant_color()) {
+        } else if let Some(color) = self.packet.scene.effect(index).filter(|_| bounded(self.packet.scene)).and_then(|effect| effect.constant_color()) {
             let [r, g, b, a] = color.linear_in(self.space).map_err(GpuRasterError::Color)?;
             if a == 0. { Vec::new() }
             else { vec![Expression::color(self.packet.blend_space.composite(self.space, [r * a, g * a, b * a, a]))] }
         } else if layer.kind() == LayerKind::Effect {
             self.effect(&[index], Vec::new())?
+        } else if self.packet.scene.object_layer(index).is_some() {
+            let content=if let Some(cache)=&mut self.objects {cache.content(self.packet.scene,index)}
+                else {object_spatial::SpatialIndex::default().content(self.packet.scene,index)}.unwrap();
+            vec![Arc::new(Expression::Objects {content,preview:self.sources.is_some_and(|sources|sources.object_moving==Some(index))})]
         } else { vec![self.source(index, false)] };
         if layer.mask.as_ref().is_some_and(|m| m.enabled) {
             Ok(vec![Expression::combine(Expression::over(&output), self.source(index, true), layer_core::LayerBlend::Normal, 32)])
@@ -263,7 +300,7 @@ impl stack::Compositor for Builder<'_> {
     }
     fn has_content(&self, index: OccurrenceHandle) -> bool {
         let layer = self.packet.scene.occurrence(index).unwrap();
-        matches!(layer.kind(), LayerKind::Group | LayerKind::Paint | LayerKind::Effect)
+        matches!(layer.kind(), LayerKind::Group | LayerKind::Paint | LayerKind::Effect) || self.packet.scene.object_layer(index).is_some()
     }
 }
 
@@ -282,8 +319,9 @@ impl Evaluator<'_> {
         self.evaluate_into(node, None)
     }
     fn evaluate_into(&mut self, node: &Node, output: Option<Target>) -> Result<Value, GpuRasterError> {
-        let region = self.region;
+        let region = self.region.in_frame(self.cache.plan.extent);
         if let Some(branch) = self.cache.graph.branches.get(node)
+            && self.region.min.iter().all(|n| *n >= 0) && self.region.max.iter().zip(self.cache.plan.extent).all(|(n, e)| *n <= i64::from(e))
             && page_coordinates(region).all(|c| branch.valid.contains(&c))
             && let Some(image) = &branch.image {
                 return Ok(Value::Image { view: image.view.clone(), slot: None, opacity: 1., plan: image.plan, preview: None, encode: false });
@@ -294,6 +332,7 @@ impl Evaluator<'_> {
         } else { output };
         let result = match node.as_ref() {
             Expression::Color(c) => Value::Color(c.map(f32::from_bits)),
+            Expression::Objects {content,preview} => self.objects(content,*preview,output)?,
             Expression::Source { id, placement, extent, outside } => self.source(*id, placement.0.clone(), *extent, f32::from_bits(*outside))?,
             Expression::Opacity { input, opacity } => self.evaluate(input)?.with_opacity(f32::from_bits(*opacity)),
             Expression::Combine { front, back, blend, flags } => {
@@ -309,7 +348,7 @@ impl Evaluator<'_> {
             Expression::Effect { input, chain, masks, .. } => self.effect(input, chain, masks, output)?,
         };
         if let Some(branch) = self.cache.graph.branches.get_mut(node) {
-            let bounds = branch.image.as_ref().unwrap().plan.bounds;
+            let bounds = branch.image.as_ref().unwrap().plan.doc_bounds.in_frame(self.cache.plan.extent);
             branch.valid.extend(page_coordinates(region).filter(|c| page_rect(*c).intersect(bounds).intersect(region) == page_rect(*c).intersect(bounds)));
         }
         Ok(result)
@@ -366,5 +405,44 @@ mod reuse_tests {
             previous_pixels = Some(actual);
             previous_textures = textures;
         }
+    }
+}
+
+#[cfg(test)]
+mod object_reuse_tests {
+    use super::*;
+    use layer_core::{Edit, authored::*};
+    fn collection(root:&Node)->Node {
+        let mut nodes=HashSet::new();Expression::visit(root,&mut nodes);
+        assert!(nodes.len()<8,"A collection remains one cached expression regardless of child count");
+        nodes.into_iter().find(|node|matches!(node.as_ref(),Expression::Objects {..})).unwrap()
+    }
+    #[test]
+    fn paint_only_edits_reuse_the_object_collection_branch_and_object_edits_replace_it() {
+        let (mut doc,owner,handles)=object_spatial::tests::document();
+        let mut cache=object_spatial::SpatialIndex::default();
+        let build=|doc:&layer_core::Document,cache:&mut object_spatial::SpatialIndex| {
+            collection(&compose(crate::test_support::packet(doc.scene(),doc.composition().size),None,None,0,doc.composition().color.space,Some(cache)).unwrap())
+        };
+        let before=build(&doc,&mut cache);
+        let paint=doc.artwork.paint.iter().next().unwrap().0;
+        let mut source=doc.artwork.paint.get(paint).unwrap().clone();source.domain=[257,256];
+        doc.apply(Edit::Paint(RecordChange::replace(&doc.artwork.paint,paint,Some(source)).unwrap())).unwrap();
+        let painted=build(&doc,&mut cache);
+        assert!(before==painted);
+        let packet=crate::test_support::packet(doc.scene(),doc.composition().size);
+        assert!(scratch_images(packet,2,doc.composition().color.space,Some(&cache)).unwrap()>=4);
+        let mut planning=cache.clone();
+        let planned=collection(&compose(packet,None,None,2,doc.composition().color.space,Some(&mut planning)).unwrap());
+        assert!(before==planned,"scratch planning and display retain the same collection index after a paint edit");
+        if let (Expression::Objects {content:a,..},Expression::Objects {content:b,..})=(before.as_ref(),painted.as_ref()) {
+            assert!(Arc::ptr_eq(&a.keys(),&b.keys()));
+            assert_eq!(b.query_at(DocRect {min:[-4,-4],max:[12,12]},0).len(),1);
+        } else {unreachable!()}
+        doc.apply(doc.set_image_object_affine_edit(handles[1],Affine64([1.,0.,0.,1.,128.,0.])).unwrap()).unwrap();
+        assert!(before!=build(&doc,&mut cache));
+        let mut occurrence=doc.scene().occurrence(owner).unwrap().clone();occurrence.translation.x=256.;
+        doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,owner,Some(occurrence)).unwrap())).unwrap();
+        let moved=build(&doc,&mut cache);assert!(before!=moved);
     }
 }

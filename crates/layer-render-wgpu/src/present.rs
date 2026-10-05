@@ -746,13 +746,14 @@ impl ViewportPresenter {
     }
 
     pub fn needs_present(&self, renderer: &WgpuRasterizer, view: ViewState, surround_linear: [f32; 4]) -> bool {
-        let Some(cache) = &renderer.scale_display else { return false; };
+        let Some([composite,coarse,next]) = renderer.display_views() else { return false; };
+        let geometry=renderer.display_geometry().unwrap();
         let previous = &self.history;
         !previous.valid
             || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
             || self.presented_selection_overlay != renderer.selection_overlay
             || (previous.revision != renderer.composite_revision
-                && (previous.artwork_revision != renderer.artwork_revision || !cache.has_pending_work(renderer)))
+                && (previous.artwork_revision != renderer.artwork_revision || renderer.scale_display.as_ref().is_none_or(|cache|!cache.has_pending_work(renderer))))
             || previous.selection_revision != renderer.selection_paint_revision
             || previous.outline_revision != renderer.display_selection_revision
             || previous.hdr != self.hdr_options
@@ -766,10 +767,10 @@ impl ViewportPresenter {
             || self.backdrop.as_ref().is_some_and(|b| b.needs_refresh())
             || self.bind_group.is_none()
             || self.document_extent != renderer.document_extent
-            || self.composite_view.as_ref() != Some(cache.view())
-            || self.coarse_view.as_ref() != Some(cache.coarse_view())
-            || self.next_view.as_ref() != Some(cache.next_view())
-            || self.display_geometry.as_ref() != Some(&cache.geometry)
+            || self.composite_view.as_ref() != Some(composite)
+            || self.coarse_view.as_ref() != Some(coarse)
+            || self.next_view.as_ref() != Some(next)
+            || self.display_geometry.as_ref() != Some(geometry)
             || self.selection_buffer.as_ref() != Some(renderer.display_selection.as_ref().map_or(&renderer.unclipped, |(_, b)| b))
             || self.saved_selection_buffer.as_ref() != Some(renderer.selection_previews.texture.as_ref().unwrap_or(&self.empty_saved_selection))
     }
@@ -857,12 +858,9 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
-        let Some(cache) = &renderer.scale_display else { return Ok(()); };
+        let Some([composite,coarse,next]) = renderer.display_views() else { return Ok(()); };
         let navigator = renderer.navigator.view().unwrap_or(&renderer.empty_view);
-        let composite = cache.view();
-        let coarse = cache.coarse_view();
-        let next = cache.next_view();
-        let geometry = &cache.geometry;
+        let geometry = renderer.display_geometry().unwrap();
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
         let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);
@@ -953,8 +951,8 @@ impl ViewportPresenter {
             ca, cb, cc, cd,
             cx, cy, crop.map_or(0., |c| c.dim.clamp(0., 1.)), f32::from(crop.is_some()),
         ]);
-        data[40..60].copy_from_slice(&cache.placement_values());
-        for (value, bytes) in data[64..].iter_mut().zip(cache.resample_values().chunks_exact(4)) {
+        data[40..60].copy_from_slice(&renderer.display_placement());
+        for (value, bytes) in data[64..].iter_mut().zip(renderer.display_resample().chunks_exact(4)) {
             *value = f32::from_le_bytes(bytes.try_into().unwrap());
         }
         data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
@@ -1294,10 +1292,59 @@ pub(crate) fn surface_pipeline(
 mod tests {
     use super::*;
     #[test]
+    fn deferred_objects_replace_empty_backdrop_and_survive_native_readback() {
+        use layer_core::{authored::OccurrenceContent, package::{ImmutableBacking, codec::{open, OpenOutcome}}};
+        use std::{sync::{Arc, atomic::AtomicBool}, time::{Duration, Instant}};
+        let bytes=include_bytes!("../../../apps/layer-web/fixtures/shared-image-f64-nearest.capy");
+        let backing=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes.as_slice()))).unwrap();
+        let OpenOutcome::Candidate {artwork,..}=open(backing,Default::default(),&AtomicBool::new(false)).unwrap() else {panic!("Editable object fixture")};
+        let mut document=layer_core::Document::from_artwork(artwork).unwrap();
+        let helpers=document.scene().order().iter().copied().filter(|h|
+            !matches!(document.scene().occurrence(*h).unwrap().content,OccurrenceContent::Objects(_))).collect::<Vec<_>>();
+        document.apply(document.delete_layers_edit(&helpers).unwrap()).unwrap();
+        let view=ViewState {width_px:1200,height_px:900,document_to_surface:[1.1192982,0.,0.,1.1192982,327.9,348.17017]};
+        let mut renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let frame=layer_render::FramePacket {view,..crate::test_support::packet(document.scene(),document.composition().size)};
+        let backdrop=layer_core::SceneScope::Members(Arc::from(document.scene().constant_backdrop()));
+        let empty=layer_render::FramePacket {scene:document.scene().with_scope(&backdrop),reset_layers:true,composite_all:true,..frame};
+        let settle=|renderer:&mut WgpuRasterizer, packet:layer_render::FramePacket<'_>| {
+            renderer.submit(packet).unwrap();
+            let deadline=Instant::now()+Duration::from_secs(30);
+            loop {
+                renderer.wait_idle().unwrap();
+                if !renderer.has_pending_work() {break;}
+                assert!(Instant::now()<deadline,"Object-only display settles");
+                std::thread::sleep(Duration::from_millis(1));
+                renderer.submit(layer_render::FramePacket {composite_all:false,reset_layers:false,..packet}).unwrap();
+            }
+        };
+        settle(&mut renderer,empty);
+        settle(&mut renderer,frame);
+        let capture=|renderer:&WgpuRasterizer| {
+            let (texture,target)=crate::create_target(renderer.device(),[1200,900],wgpu::TextureFormat::Rgba8UnormSrgb,"object-only viewport capture");
+            let mut presenter=ViewportPresenter::for_surface(renderer,wgpu::TextureFormat::Rgba8UnormSrgb,SdrSurfaceColor::Srgb).unwrap();
+            presenter.present(renderer,&target,view,[1.;4]).unwrap();
+            crate::layer_tests::page_bytes(renderer,&texture)
+        };
+        let before=capture(&renderer);
+        let native=renderer.readback_srgb_rgba8().unwrap();
+        let after=capture(&renderer);
+        let native_at=(128*513+200)*4;
+        let surface_at=(492*1200+551)*4;
+        assert_eq!(&native[native_at..native_at+4],&[0,159,121,89]);
+        assert_eq!(before,after,"Exact readback preserves the accepted displayed frame");
+        assert!(before[surface_at+1].abs_diff(before[surface_at])>10,"Visible green objects replace the neutral checkerboard");
+        settle(&mut renderer,empty);
+        let hidden=capture(&renderer);
+        assert_eq!(hidden[surface_at],hidden[surface_at+1],"Empty backdrop restores the neutral checkerboard");
+        settle(&mut renderer,frame);
+        assert_eq!(capture(&renderer),before,"Objects return after the backdrop is replaced again");
+    }
+    #[test]
     fn selection_overlay_changes_present_without_artwork_or_coverage_changes() {
         use layer_render::SelectionOverlay;
         let mut document = crate::layer_tests::placement::paint_document([128; 2], "white artwork");
-        crate::layer_tests::placement::paint_mut(&mut document).original = Some(layer_core::color::source::rgba8_source([128; 2], |_, _| [255; 4]));
+        crate::layer_tests::placement::paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source([128; 2], |_, _| [255; 4])).into()));
         let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let packet = crate::test_support::packet(document.scene(), [128; 2]);
         renderer.submit(packet).unwrap();
@@ -1342,7 +1389,7 @@ mod tests {
         ]).unwrap());
         for extent in [[48, 48], [128, 96]] {
             let mut document = crate::layer_tests::placement::paint_document(extent, "white artwork");
-            crate::layer_tests::placement::paint_mut(&mut document).original = Some(layer_core::color::source::rgba8_source(extent, |_, _| [255; 4]));
+            crate::layer_tests::placement::paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source(extent, |_, _| [255; 4])).into()));
             renderer.set_selection_outline(Some(&selection)).unwrap();
             let packet = crate::test_support::packet(document.scene(), extent);
             renderer.submit(packet).unwrap();

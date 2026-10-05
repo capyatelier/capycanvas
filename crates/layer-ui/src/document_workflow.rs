@@ -280,7 +280,7 @@ impl SourceWorkflow {
         let occurrence = project.scene().occurrence(layer).ok_or_else(|| WorkflowFailure::MissingSourceLayer.message(s.localization()))?;
         let OccurrenceContent::Paint(paint) = occurrence.content else { return Err(WorkflowFailure::MissingSource.message(s.localization())); };
         let source = project.artwork.paint.get(paint).ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
-        let original = source.original.clone().ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
+        let original = source.base.as_ref().map(|base| base.image.storage().clone()).ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
         let adds_layer = !rasterize && crate::session::source_edit::baked(source);
         Ok(Self {
             localization: s.localization().clone(),

@@ -16,7 +16,7 @@ impl SnapshotPage {
 }
 pub(super) struct TileSnapshot {
     pub pages: BTreeMap<[u32; 2], SnapshotPage>,
-    pub original: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
+    pub base: Option<layer_core::authored::PaintBase>,
     pub backing: Option<(
         std::sync::Arc<layer_core::raster::RasterData>,
         layer_core::color::RgbSpace,
@@ -42,9 +42,7 @@ impl TileSnapshot {
                     coordinate,
                 })
             })
-            || self.original.as_ref().is_some_and(|s| {
-                coordinate[0] * PAGE_SIZE < s.extent[0] && coordinate[1] * PAGE_SIZE < s.extent[1]
-            })
+            || self.base.as_ref().is_some_and(|base| source_access::paint_base_contains(base, coordinate))
     }
     pub fn aliases(&self, coordinate: [u32; 2], texture: &wgpu::Texture) -> bool {
         self.pages
@@ -68,8 +66,10 @@ impl TileSnapshot {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<TransformSource, GpuRasterError> {
         let mut tiles = Vec::with_capacity(sources.len());
+        let mut leases = Vec::with_capacity(sources.len());
         for c in sources {
             if let Some(tile) = self.original_page(r, *c, encoder)? {
+                leases.extend(r.source_tiles.borrow().lease(&tile.view));
                 tiles.push((*c, tile));
             }
         }
@@ -117,8 +117,8 @@ impl TileSnapshot {
             let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
             return r.backed_raster_tile(&blob, *space, encoder).map(Some);
         }
-        match &self.original {
-            Some(original) => r.original_source_tile(original, coordinate, encoder),
+        match &self.base {
+            Some(original) => r.paint_base_tile(original, coordinate, encoder),
             None => Ok(None),
         }
     }

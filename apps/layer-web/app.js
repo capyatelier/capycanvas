@@ -1759,7 +1759,10 @@ try {
   // Let the browser start the worker while the main thread builds controls.
   await new Promise(resolve => setTimeout(resolve, 0));
   const fileWorker = createRasterWorker(),documentStorage=createDocumentStorage();
-  const rasterWorker = request=>request.operation.startsWith('tab-')?documentStorage(request):fileWorker(request);
+  const rasterWorker = async request=>{
+    try{return await(request.operation.startsWith('tab-')?documentStorage(request):fileWorker(request));}
+    finally{if(request.operation==='image-decode'||request.operation==='nearest-coordinates')wake();}
+  };
   configure_raster_worker(rasterWorker);
   canvas.width = 800;
   canvas.height = 600;

@@ -67,7 +67,7 @@ fn photo_document(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 4]) -> Docu
     let mut doc = Document::new(PortableId::random(), extent[0], extent[1],
         layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let paint = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(),
-        domain: extent, original: Some(rgba8_source(extent, pixel)),
+        domain: extent, base: Some(layer_core::authored::PaintBase::new((rgba8_source(extent, pixel)).into())),
         raster: Default::default(), operations: Default::default(),
     });
     assert_eq!(SourceTarget::Paint(paint.handle), PHOTO);
@@ -391,7 +391,7 @@ fn the_reference_cache_follows_its_frame_and_evicts_the_least_recent_page() {
 
     let SourceTarget::Paint(photo) = PHOTO else { unreachable!() };
     let mut source = doc.artwork.paint.get(photo).unwrap().clone();
-    source.original = Some(rgba8_source([2560, 2560], |x, y| pattern(y, x)));
+    source.base = Some(layer_core::authored::PaintBase::new((rgba8_source([2560, 2560], |x, y| pattern(y, x))).into()));
     let change = RecordChange::replace(&doc.artwork.paint, photo, Some(source)).unwrap();
     doc.apply(Edit::Paint(change)).unwrap();
     settle(&mut r, &doc);
@@ -501,4 +501,25 @@ fn stroke_start_pages_survive_estimated_samples_and_corrections() {
         results.push(target_pages(engine.backend()));
     }
     assert_eq!(results[0], results[1], "corrections replay to the direct stroke");
+}
+
+#[test]
+fn retouch_reference_reads_arbitrary_base_offset_and_transparent_tile_override() {
+    use layer_core::authored::{PaintBase, PaintBasePolicy};
+    use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
+    let extent=[600,520];let mut doc=document(extent);
+    let SourceTarget::Paint(photo)=PHOTO else {unreachable!()};
+    let paint=doc.artwork.paint.get_mut(photo).unwrap();
+    paint.base=Some(PaintBase {image:rgba8_source([300,270],pattern).into(),offset:[17,31],policy:PaintBasePolicy::SourceProfile});
+    paint.raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[1,1]},RasterTile::backed(TileBlob::encode(layer_core::color::DocumentColor::default().paint_descriptor(),&vec![0;256*256*4]).unwrap()))].into(),..Default::default()});
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.prepare_retouch(Some(&RetouchPreparation {target:TARGET,retouch:Retouch {source:RetouchSource::References,references:Arc::new([PHOTO_USE].into()),..Default::default()},points:vec![Point {x:250.,y:250.}]}));
+    for _ in 0..100 {r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();if !r.has_pending_work(){break;}}
+    let (pixels,complete)=sample(&mut r,[0,0],[0.;2]);assert!(complete);
+    for (x,y) in [(0,0),(17,31),(250,250),(255,255)] {
+        let expected=if x>=17&&y>=31 {reference(x-17,y-31)}else{[0.;4]};
+        assert!(close(pixels[(y*256+x) as usize],expected),"{x},{y}");
+    }
+    let (pixels,complete)=sample(&mut r,[1,1],[0.;2]);assert!(complete);
+    assert!(pixels.iter().all(|p|*p==[0.;4]));
 }

@@ -20,8 +20,9 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     let layer_core::SourceTarget::Paint(handle) = target else { panic!("Paint source") };
     let paint = project.artwork.paint.get_mut(handle).unwrap();
     paint.domain = original.extent;
-    paint.original = Some(original);
+    paint.base = Some(layer_core::PaintBase::new((original).into()));
     let w = Workspace::with_project(&app, Some((project, None)));
+    apply_fixture_theme(&w);
     w.window.present();
     ready(&w);
     let directory = std::path::Path::new("../../artifacts/color-m2/color-preview-ui").join(std::process::id().to_string());

@@ -118,15 +118,15 @@ fn color_adjustment_edits_and_archive_keep_source_identity_and_hidden_values() {
         let mut document=session(Platform::Gtk).engine.document().clone();
         let source=layer_core::color::source::rgba8_source([2,1],|x,_|if x==0 {[255,20,80,128]}else{[30,200,90,255]});
         let source_layer=document.working.occurrence.unwrap();let layer_core::SourceTarget::Paint(source_handle)=document.working.target.unwrap() else {unreachable!()};
-        document.artwork.paint.get_mut(source_handle).unwrap().original=Some(source.clone());
+        document.artwork.paint.get_mut(source_handle).unwrap().base=Some(layer_core::PaintBase::new(layer_core::Image::new(source.clone())));
         let mut s=UiSession::new(Recorder {tiled_sources:true,..Recorder::default()},document,[800,800],Platform::Gtk).unwrap();
         s.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:id.into()}}).unwrap();
         if id=="selective_color" {color_adjustment_set(&mut s,"neutrals_magenta",EffectValue::Number(-44.));color_adjustment_set(&mut s,"mode",EffectValue::Choice(1));}
         else {color_adjustment_set(&mut s,"green_blue",EffectValue::Number(173.));color_adjustment_set(&mut s,"monochrome",EffectValue::Toggle(true));}
-        assert!(std::sync::Arc::ptr_eq(s.engine.document().scene().paint_source(source_layer).unwrap().original.as_ref().unwrap(),&source));
+        assert!(std::sync::Arc::ptr_eq(s.engine.document().scene().paint_source(source_layer).unwrap().base.as_ref().unwrap().image.storage(),&source));
         let document=s.engine.document().clone();let reopened=package_roundtrip(&document);
         assert_effect_semantics(reopened.scene().effect(reopened.scene().order()[0]).unwrap(),document.scene().effect(document.scene().order()[0]).unwrap());
-        let saved_source=reopened.artwork.paint.iter().find_map(|(_,_,paint)|paint.original.as_deref()).unwrap();
+        let saved_source=reopened.artwork.paint.iter().find_map(|(_,_,paint)|paint.base.as_ref().map(|base|base.image.as_ref())).unwrap();
         assert_eq!(saved_source,source.as_ref());
     }
 }

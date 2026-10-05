@@ -52,7 +52,7 @@ fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
         let layer_core::authored::OccurrenceContent::Paint(paint) = doc.scene().occurrence(placed).unwrap().content else { unreachable!() };
         let center = doc.target_geometry(layer_core::authored::SourceTarget::Paint(paint)).map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
         assert!((center.x - expected.x).abs() < 0.0001 && (center.y - expected.y).abs() < 0.0001);
-        assert_eq!(source_samples(doc.scene().paint_source(placed).unwrap().original.as_ref().unwrap()), source_samples(&original));
+        assert_eq!(source_samples(doc.scene().paint_source(placed).unwrap().base.as_ref().unwrap().image.storage()), source_samples(&original));
         app.invoke("apply_transform"); app.draw_until_idle();
         let pixels = app.pixels();
         app.invoke("undo"); app.draw_until_idle();
@@ -72,7 +72,7 @@ fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
             read_bytes(&job, "Row drop.tiff", &bytes); adopt(&app, &job, false);
             let doc = unsafe { &*app.0 }.host.session.engine().document();
             let inserted = doc.scene().order()[index];
-            assert!(doc.scene().paint_source(inserted).is_some_and(|paint| paint.original.is_some()), "{position} insertion order");
+            assert!(doc.scene().paint_source(inserted).is_some_and(|paint| paint.base.is_some()), "{position} insertion order");
             assert_eq!(doc.scene().parent(inserted), (position == "into").then_some(group));
             app.invoke("cancel_transform"); app.draw_until_idle();
             assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
@@ -378,7 +378,7 @@ fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
                 let occurrence = document.scene().occurrence(*handle).unwrap();
                 let paint = document.scene().paint_source(*handle).unwrap();
                 assert_eq!(occurrence.name.as_ref(), format!("Photo-{}", index + 1));
-                assert_source_samples(paint.original.as_deref().unwrap(), &images[index].1);
+                assert_source_samples(paint.base.as_ref().map(|base|base.image.as_ref()).unwrap(), &images[index].1);
                 assert!((occurrence.placement.as_affine().unwrap().0[0] - 7. / 13.).abs() < 0.00001);
                 let center = occurrence.placement.map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
                 assert!((center.x - 3.5).abs() < 0.00001 && (center.y - 2.5).abs() < 0.00001);

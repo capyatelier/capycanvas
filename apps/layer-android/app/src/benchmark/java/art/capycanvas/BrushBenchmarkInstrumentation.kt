@@ -40,7 +40,11 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
         val samplingMemory = java.util.concurrent.atomic.AtomicBoolean(true)
         var memorySampler: Thread? = null
         try {
-            fun stage(name: String) = sendStatus(0, Bundle().apply { putString("stream", "BRUSH_STAGE $name\n") })
+            val setupStages = JSONArray()
+            fun stage(name: String) {
+                setupStages.put(obj("stage" to name, "ns" to System.nanoTime(), "boot_ns" to SystemClock.elapsedRealtimeNanos()))
+                sendStatus(0, Bundle().apply { putString("stream", "BRUSH_STAGE $name\n") })
+            }
             stage("starting")
             check(arguments.getString("brushBenchmark") == "true") { "Opt in with -e brushBenchmark true" }
             check(!BuildConfig.DEBUG) { "Use the benchmark build" }
@@ -57,14 +61,16 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             check(colorMode in listOf("full_color", "grayscale", "two_tone"))
             val workload = arguments.getString("workload", "ordinary")!!
             val effectRadius = arguments.getString("effectRadius", "8")!!.toDouble()
-            check(workload in listOf("ordinary", "clipped", "blurred-base"))
+            check(workload in listOf("ordinary", "clipped", "blurred-base", "objects", "objects-effects"))
+            val objectWorkload = workload.startsWith("objects")
             check(effectRadius > 0 && effectRadius <= 85)
             val colorBeforeStrokes = arguments.getString("colorBeforeStrokes", "false") == "true"
             val speed = arguments.getString("speed", "1")!!.toDouble()
             val blending = arguments.getString("blending")
             check(blending == null || blending in listOf("linear", "perceptual"))
             check(duration in 1000..60000 && repeats in 1..10)
-            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch", "settle"))
+            check(mode in listOf("constant", "pressure", "tilt", "stationary", "lifts", "pauses", "visual", "pinch", "settle", "object-affine"))
+            check(mode != "object-affine" || objectWorkload)
             val pauseMs = arguments.getString("pauseMs", "100")!!.toInt()
             val contactMs = arguments.getString("contactMs", "100")!!.toInt()
             val settleDelayMs = arguments.getString("settleDelayMs", "0")!!.toInt()
@@ -79,15 +85,20 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             AppStorage.directoryForTest = root
             DocumentController.nativeFileJobsForTest = true
             val source = arguments.getString("photo", "/data/local/tmp/capy-brush-photo.jpg")!!
-            check(source.matches(Regex("/data/local/tmp/[a-zA-Z0-9_.-]+\\.jpg")))
-            val photo = (if (mode == "pinch") File(targetContext.getExternalFilesDir(null), "photo.capy").takeIf { it.isFile } else null)
-                ?: File(targetContext.filesDir, "brush-benchmark-${File(source).name}")
-            if (!photo.isFile) ParcelFileDescriptor.AutoCloseInputStream(
+            check(source.matches(Regex("/data/local/tmp/[a-zA-Z0-9_.-]+\\.(jpg|capy)")))
+            val authoredFixture = source.endsWith(".capy")
+            check(!authoredFixture || (arguments.containsKey("width") && arguments.containsKey("height")))
+            val pinchPhoto = if (mode == "pinch" && !objectWorkload) File(targetContext.getExternalFilesDir(null), "photo.capy").takeIf { it.isFile } else null
+            val photo = pinchPhoto ?: File(targetContext.filesDir, "brush-benchmark-${File(source).name}")
+            if (pinchPhoto == null) ParcelFileDescriptor.AutoCloseInputStream(
                 uiAutomation.executeShellCommand("cat $source")
             ).use { input -> photo.outputStream().use { input.copyTo(it) } }
-            check(photo.length() > 1_000_000)
-            val photoWidth = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                .also { BitmapFactory.decodeFile(photo.path, it) }.outWidth.takeIf { it > 0 } ?: 9504
+            check(photo.length() > if (authoredFixture) 0 else 1_000_000)
+            val photoDimensions = if (authoredFixture) null else BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                .also { BitmapFactory.decodeFile(photo.path, it) }
+            val photoWidth = arguments.getString("width")?.toInt() ?: photoDimensions!!.outWidth
+            val photoHeight = arguments.getString("height")?.toInt() ?: photoDimensions!!.outHeight
+            check(photoWidth > 0 && photoHeight > 0)
             stage("photo-staged")
             activity = startActivitySync(Intent(targetContext, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)) as MainActivity
@@ -150,6 +161,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "gpu" to native { org.json.JSONTokener(Native.rendererMemory(it)).nextValue() },
                 "meminfo" to File("/proc/meminfo").readText(),
                 "process_status" to File("/proc/self/status").readText(),
+                "process_pss_kib" to android.os.Debug.getPss(),
                 "process_mappings" to File("/proc/self/maps").useLines { it.count() })
             captureFailure = {
                 File(output, "$label-failure-state.json").writeText(obj(
@@ -173,6 +185,11 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
                 host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             stage("workspace-ready")
+            val coldSetupBegin = System.nanoTime()
+            if (objectWorkload) {
+                report(true)
+                native { Native.completionTimings(it, true) }
+            }
             if (arguments.getString("memorySnapshots") == "true") {
                 val memoryFile = File(output, "$label-memory.jsonl")
                 memorySampler = Thread {
@@ -198,7 +215,9 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             stage("photo-adopted")
             runOnMainSync { host.documentChanged() }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
-                host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == photoWidth } == true }
+                host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any {
+                    it.optBoolean("active") && it.optInt("width") == photoWidth && it.optInt("height") == photoHeight
+                } == true }
             stage("photo-ready")
             blending?.let {
                 val command = "blend_$blending"
@@ -220,7 +239,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to false))
             val photoLayers = arguments.getString("photoLayers", "1")!!.toInt()
             check(photoLayers in 1..32)
-            if (photoLayers > 1) {
+            check(!objectWorkload || (authoredFixture && photoLayers == 2))
+            if (photoLayers > 1 && !objectWorkload) {
                 val id = state().array("layers").objects().first { it.optString("label") == "Photo" }.getLong("id")
                 action(obj("type" to "select_layer", "id" to id))
                 repeat(photoLayers - 1) {
@@ -237,9 +257,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             }
             val paintLayerIndex = arguments.getString("paintLayerIndex", "0")!!.toInt()
             check(paintLayerIndex in 0 until photoLayers)
-            repeat(paintLayerIndex) { invoke("lower_layer") }
+            val insertedPaintIndex = state().array("layers").objects().indexOfFirst { it.getBoolean("selected") }
+            check(insertedPaintIndex >= 0)
+            repeat((insertedPaintIndex - paintLayerIndex).coerceAtLeast(0)) { invoke("raise_layer") }
+            repeat((paintLayerIndex - insertedPaintIndex).coerceAtLeast(0)) { invoke("lower_layer") }
             var attachmentFixture: JSONObject? = null
-            if (workload != "ordinary") {
+            if (workload in listOf("clipped", "blurred-base")) {
                 check(photoLayers == 1 && paintLayerIndex == 0 && mode != "pinch")
                 val paint = state().getJSONObject("layer_properties").getLong("layer")
                 val base = state().array("layers").objects().single { it.optString("label") == "Photo" }.getLong("id")
@@ -259,6 +282,27 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 action(obj("type" to "layer", "action" to obj("op" to "clip", "id" to paint, "value" to true)))
                 attachmentFixture = obj("paint" to paint, "base" to base, "effect" to effect,
                     "effect_id" to if (effect == null) null else "gaussian_blur", "sigma" to radius)
+            }
+            var objectFixture: JSONArray? = null
+            if (objectWorkload) {
+                objectFixture = native { JSONArray(Native.imageObjects(it)) }
+                val imageCount = arguments.getString("imageCount", "4")!!.toInt()
+                val sharedImages = arguments.getString("imageSources", "shared") == "shared"
+                check(objectFixture.length() == imageCount)
+                check(objectFixture.objects().map { it.getString("image") }.toSet().size == if (sharedImages) 1 else imageCount)
+                check(objectFixture.objects().map { it.getInt("source_owner") }.toSet().size == if (sharedImages) 1 else imageCount)
+                check(objectFixture.objects().all { it.getBoolean("paint_base_image_shared") == sharedImages && it.getBoolean("paint_base_source_shared") == sharedImages })
+                if (workload == "objects-effects") {
+                    val paint = state().getJSONObject("layer_properties").getLong("layer")
+                    val owner = state().array("layers").objects().single { it.optString("label") == "Images" }.getLong("id")
+                    action(obj("type" to "select_layer", "id" to owner))
+                    action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "gaussian_blur")))
+                    val effect = state().getJSONObject("layer_properties").getLong("layer")
+                    action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to effect,
+                        "key" to "sigma", "value" to obj("kind" to "number", "value" to effectRadius))))
+                    action(obj("type" to "layer", "action" to obj("op" to "attach_effect", "id" to effect, "owner" to owner)))
+                    action(obj("type" to "select_layer", "id" to paint))
+                }
             }
             invoke("fit_canvas")
             arguments.getString("zoom")?.toDouble()?.let { requested ->
@@ -313,6 +357,43 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 var down = SystemClock.uptimeMillis()
                 val delivered = JSONArray()
                 val active = JSONArray()
+                if (kind == "object-affine") {
+                    val objectValue = checkNotNull(objectFixture).getJSONObject(0)
+                    val original = objectValue.getJSONArray("affine")
+                    val edits = JSONArray()
+                    native { Native.setImageObjectMotion(it, objectValue.getString("id"), true) }
+                    var due = begun
+                    while (System.nanoTime() - begun < milliseconds * 1_000_000L) {
+                        val delay = due - System.nanoTime()
+                        if (delay > 0) LockSupport.parkNanos(delay)
+                        val sent = System.nanoTime()
+                        val angle = (sent - begun) / 1e9 * speed * 2 * PI
+                        val rotation = .12 * sin(angle)
+                        val scale = 1 + .12 * cos(angle)
+                        val c = scale * cos(rotation)
+                        val s = scale * sin(rotation)
+                        val a = original.getDouble(0) * c + original.getDouble(2) * s
+                        val b = original.getDouble(1) * c + original.getDouble(3) * s
+                        val d = original.getDouble(3) * c - original.getDouble(1) * s
+                        val e = original.getDouble(2) * c - original.getDouble(0) * s
+                        val extent = objectValue.getJSONArray("extent")
+                        val px = extent.getDouble(0) / 2
+                        val py = extent.getDouble(1) / 2
+                        val tx = original.getDouble(4) + (original.getDouble(0) - a) * px + (original.getDouble(2) - e) * py + photoWidth * .05 * sin(angle)
+                        val ty = original.getDouble(5) + (original.getDouble(1) - b) * px + (original.getDouble(3) - d) * py + photoHeight * .05 * cos(angle)
+                        val affine = JSONArray(listOf(a,b,e,d,tx,ty))
+                        val revision = native { Native.setImageObjectAffine(it, objectValue.getString("id"), affine.toString()) }
+                        host.documentChanged()
+                        edits.put(JSONArray(listOf(sent, System.nanoTime(), revision)))
+                        due = maxOf(due + sampleInterval, System.nanoTime() + sampleInterval)
+                    }
+                    val ended = System.nanoTime()
+                    val endedBoot = SystemClock.elapsedRealtimeNanos()
+                    native { Native.setImageObjectMotion(it, objectValue.getString("id"), false) }
+                    host.documentChanged()
+                    return obj("begin_ns" to begun, "begin_boot_ns" to boot, "end_ns" to ended,
+                        "end_boot_ns" to endedBoot, "injected" to delivered, "object_edits" to edits)
+                }
                 var contactBegin = 0L
                 val count = milliseconds / 5
                 for (i in 0..count) {
@@ -372,18 +453,44 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "memory_snapshots" to (arguments.getString("memorySnapshots") == "true"),
                 "stats_panel" to statsPanel,
                 "color_mode" to colorMode, "workload" to workload, "attachment_fixture" to attachmentFixture,
+                "object_fixture" to objectFixture,
                 "color_before_strokes" to colorBeforeStrokes,
+                "navigation_between_strokes" to (arguments.getString("navigationBetweenStrokes") == "true"),
+                "navigation_settle_ms" to arguments.getString("navigationSettleMs", "750")!!.toInt(),
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
                 "pause_ms" to pauseMs,
                 "contact_ms" to contactMs,
                 "settle_delay_ms" to settleDelayMs,
-                "state" to state(), "display" to displayInfo, "resources" to resources(),
+                "state" to state(), "display" to displayInfo, "resources" to resources(), "renderer" to stats(),
+                "setup_stages" to setupStages,
                 "center" to JSONArray(listOf(cx, cy)), "radii" to JSONArray(listOf(rx, ry))).toString(2))
             val unprimed = state().getJSONObject("document_file").getLong("revision")
-            stroke(1500, "constant")
+            if (objectWorkload) {
+                File(output, "$label-cold-setup.json").writeText(report(false)
+                    .put("begin_ns", coldSetupBegin).put("end_ns", System.nanoTime())
+                    .put("setup_stages", setupStages).put("renderer", stats())
+                    .put("pending_composition", native { Native.renderingPending(it) })
+                    .put("completions", native { JSONArray(Native.completionTimings(it, false)) }).toString())
+            }
+            val primeBefore = if (objectWorkload) stats() else null
+            val primeDisplay = if (objectWorkload) display() else null
+            if (objectWorkload) {
+                report(true)
+                native { Native.completionTimings(it, true) }
+            }
+            val primeMotion = stroke(1500, if (mode == "object-affine") mode else "constant")
+            val primeAfterInput = if (objectWorkload) display() else null
             SystemClock.sleep(1500)
             waitFor { state().getJSONObject("document_file").getLong("revision") > unprimed }
             waitFor { !native { Native.renderingPending(it) } }
+            if (objectWorkload) {
+                File(output, "$label-prime.json").writeText(report(false)
+                    .put("motion", primeMotion).put("renderer_before", primeBefore)
+                    .put("renderer_after", stats()).put("display_before", primeDisplay)
+                    .put("display_after_input", primeAfterInput).put("settled_ns", System.nanoTime())
+                    .put("resources_after", resources())
+                    .put("completions", native { JSONArray(Native.completionTimings(it, false)) }).toString())
+            }
             invoke("undo")
             SystemClock.sleep(1500)
             File(output, "$label-ready").writeText("ready")
@@ -454,7 +561,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     motion.put("settle_probe", probe)
                 }
                 val displayAfterInput = display()
-                if (mode != "settle") {
+                if (mode !in listOf("settle", "object-affine")) {
                     check(displayAfterInput.getString("present_mode") == "SharedDemandRefresh")
                     check(displayAfterInput.getBoolean("retained_target"))
                 }

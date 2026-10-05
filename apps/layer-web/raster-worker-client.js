@@ -83,6 +83,6 @@ export function createRasterWorker() {
         return result;
       } catch(error){state.fail(error);throw error;}
     }
-    return send(owner(op==='color-field'?'color-preview':op==='encode'?'codec':'files'),request,cancelled);
+    return send(owner(op==='color-field'?'color-preview':op==='encode'?'codec':(op==='image-decode'||op==='nearest-coordinates')?'image-preparation':'files'),request,cancelled);
   };
 }

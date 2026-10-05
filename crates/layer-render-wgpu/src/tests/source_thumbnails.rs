@@ -52,7 +52,7 @@ fn tiny_portrait_photo_thumbnail_has_color_and_checkered_letterbox() {
     let source = photo([24, 48]);
     let mut artwork = Artwork::new([24, 48]).unwrap();
     let (_, SourceTarget::Paint(target)) = crate::test_support::add_paint(&mut artwork, "tiny photo", [24, 48]) else { unreachable!() };
-    artwork.paint.get_mut(target).unwrap().original = Some(source);
+    artwork.paint.get_mut(target).unwrap().base = Some(layer_core::authored::PaintBase::new((source).into()));
     let document = Document::from_artwork(artwork).unwrap();
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     r.submit(crate::test_support::packet(document.scene(), [24, 48])).unwrap();
@@ -81,7 +81,7 @@ fn photo_thumbnail_batches_survive_interleaved_layers_edits_and_discarded_comman
             data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [x, 0] },
                 RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &pixels.repeat(256 * 256)).unwrap()));
         }
-        PaintSource { color_mode: Default::default(), domain: extent, original: Some(source.clone()), raster: RasterRevision::backed(data), operations: Arc::default() }
+        PaintSource { color_mode: Default::default(), domain: extent, base: Some(layer_core::authored::PaintBase::new((source.clone()).into())), raster: RasterRevision::backed(data), operations: Arc::default() }
     };
     let mut artwork = Artwork::new(extent).unwrap();
     artwork.compositions.get_mut(artwork.root).unwrap().color = color;

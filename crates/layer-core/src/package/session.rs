@@ -1,3 +1,4 @@
+use super::registry::{self,RecordKind};
 use super::{archive::{self, Directory, InputMember, Member}, artwork_records, manifest::{Manifest, ManifestLimits, ManifestRead}, resources::{self, ResourceInventory, ResourceReader, PreparedResources}, selection_records, transfer::TransferLayout, transport::BackingReader, ImmutableBacking};
 use crate::{authored::{Artwork, ArtworkCapture, CaptureCheckpoint, Handle, OccurrenceHandle, PortableId, SourceTarget, Support, WorkingState}, Document, Edit, Editor, HistoryEntry, ProjectLimits};
 use serde::{Deserialize, Serialize};
@@ -85,10 +86,10 @@ impl WorkingRecord {
 const RASTER_INDEX_CHUNK:usize=64;
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ObjectVersion {pub(crate) record:Value,tiles:Option<Vec<usize>>,original:Option<usize>}
+pub(crate) struct ObjectVersion {pub(crate) record:Value,tiles:Option<Vec<usize>>,}
 impl ObjectVersion {
     pub(crate) fn capture(mut record:Value,chunks:&mut Vec<Vec<Value>>,versions:&mut BTreeMap<Vec<u8>,usize>)->Result<Self,String> {
-        let tiles=if matches!(record["type"].as_str(),Some("capy.paint-source/1"|"capy.coverage-source/1")) {
+        let tiles=if matches!(record["type"].as_str().and_then(registry::descriptor).map(|record|record.kind),Some(RecordKind::PaintSource|RecordKind::CoverageSource|RecordKind::Image)) {
             record["data"].as_object_mut().ok_or("Invalid session object data")?.remove("tiles").map(|value| {
                 let tiles=value.as_array().ok_or("Invalid captured raster index")?;
                 tiles.chunks(RASTER_INDEX_CHUNK).map(|chunk| {
@@ -97,19 +98,13 @@ impl ObjectVersion {
                 }).collect::<Result<Vec<_>,String>>()
             }).transpose()?
         }else{None};
-        let original=if record["type"]=="capy.paint-source/1" {
-            record["data"].as_object_mut().ok_or("Invalid session paint data")?.remove("original").map(|original| {
-                let chunk=vec![original];let key=serde_json::to_vec(&chunk).map_err(|e|e.to_string())?;
-                Ok::<_,String>(if let Some(index)=versions.get(&key) {*index}else {let index=chunks.len();versions.insert(key,index);chunks.push(chunk);index})
-            }).transpose()?
-        }else{None};
-        Ok(Self {record,tiles,original})
+        Ok(Self {record,tiles})
     }
     pub(crate) fn expanded_size(&self,chunks:&[Vec<Value>],limits:ProjectLimits)->Result<usize,String> {
         if !self.record.is_object() || !self.record["data"].is_object() {return Err("Invalid session object data".into());}
         let mut size=crate::json_len(&self.record).saturating_add(32);
         if let Some(indices)=&self.tiles {
-            if !matches!(self.record["type"].as_str(),Some("capy.paint-source/1"|"capy.coverage-source/1")) || self.record["data"].get("tiles").is_some() || indices.is_empty()
+            if !matches!(self.record["type"].as_str().and_then(registry::descriptor).map(|record|record.kind),Some(RecordKind::PaintSource|RecordKind::CoverageSource|RecordKind::Image)) || self.record["data"].get("tiles").is_some() || indices.is_empty()
                 || indices.len()>limits.tiles.div_ceil(RASTER_INDEX_CHUNK) {return Err("Invalid session raster index".into());}
             let mut tiles=0usize;
             for (index,chunk) in indices.iter().enumerate() {
@@ -118,20 +113,13 @@ impl ObjectVersion {
                 tiles=tiles.saturating_add(chunk.len());size=size.saturating_add(crate::json_len(chunk));
             }
             if tiles>limits.tiles {return Err("Session raster index exceeds admission".into());}
-        } else if matches!(self.record["type"].as_str(),Some("capy.paint-source/1"|"capy.coverage-source/1")) && self.record["data"].get("tiles").is_some() {return Err("Unexpected session raster index".into());}
-        if let Some(index)=self.original {
-            if self.record["type"]!="capy.paint-source/1" || self.record["data"].get("original").is_some() {return Err("Invalid session original image".into());}
-            let chunk=chunks.get(index).ok_or("Unknown session original image")?;
-            if chunk.len()!=1 {return Err("Invalid session original image chunk".into());}
-            size=size.saturating_add(crate::json_len(chunk));
-        } else if self.record["type"]=="capy.paint-source/1" && self.record["data"].get("original").is_some() {return Err("Unexpected session original image".into());}
-        if size as u64>limits.metadata_bytes {return Err("Expanded session record exceeds admission".into());}
+        } else if matches!(self.record["type"].as_str().and_then(registry::descriptor).map(|record|record.kind),Some(RecordKind::PaintSource|RecordKind::CoverageSource|RecordKind::Image)) && self.record["data"].get("tiles").is_some() {return Err("Unexpected session raster index".into());}
+        if size as u64>limits.metadata_bytes {return Err("Expanded session object exceeds admission".into());}
         Ok(size)
     }
     pub(crate) fn expand(&self,chunks:&[Vec<Value>],limits:ProjectLimits)->Result<Value,String> {
         self.expanded_size(chunks,limits)?;let mut record=self.record.clone();
         if let Some(indices)=&self.tiles {record["data"]["tiles"]=Value::Array(indices.iter().flat_map(|index|chunks[*index].iter().cloned()).collect());}
-        if let Some(index)=self.original {record["data"]["original"]=chunks[index][0].clone();}
         Ok(record)
     }
 }
@@ -168,7 +156,7 @@ impl SessionRecord {
             "objects":objects,"resources":resource_records,"outputs":state.outputs,"default_output":self.default_output});
         if let Some(metadata)=&self.artwork_metadata {value["metadata"]=metadata.clone();}
         let bytes=serde_json::to_vec(&value).map_err(|e|e.to_string())?;
-        match Manifest::parse(&bytes,directory,ManifestLimits {metadata_bytes:limits.metadata_bytes.min(usize::MAX as u64) as usize,..Default::default()})? {
+        match Manifest::parse_private(&bytes,directory,ManifestLimits {metadata_bytes:limits.metadata_bytes.min(usize::MAX as u64) as usize,..Default::default()})? {
             ManifestRead::Known(manifest) if matches!(manifest.support,Support::Editable)=>Ok(manifest),
             _=>Err("Unsupported session artwork".into()),
         }
@@ -211,7 +199,7 @@ pub(crate) fn decode_profiles(profiles:&[Value],reader:&mut ResourceReader<'_>)-
 pub struct PreparedSession {metadata:Arc<[u8]>,resources:PreparedResources}
 impl PreparedSession {
     pub fn prepare(capture:&EditorCapture,metadata:impl Into<SessionMetadata>,cancel:&AtomicBool)->Result<Self,String> {
-        let (current,undo,redo)=capture.documents(cancel)?;let mut encoder=StateEncoder::default();
+        let (current,undo,redo)=capture.documents(cancel)?;let mut encoder=StateEncoder::default();encoder.inventory.private=true;
         let opaque=current.artwork.extensions.resources.clone();
         let current_state=encoder.capture(&current,capture.artwork.checkpoint.edit_checkpoint,cancel)?;
         let mut undo_states=Vec::with_capacity(undo.len());let mut redo_states=Vec::with_capacity(redo.len());
@@ -261,7 +249,7 @@ pub(crate) fn validate_history_checkpoints(current:u64,next:u64,undo:impl IntoIt
 
 fn difference(before:&Document,after:&Document)->Result<Edit,String> {
     for artwork in [&before.artwork,&after.artwork] {
-        let Artwork {id:_,root:_,compositions:_,stacks:_,occurrences:_,paint:_,coverage:_,effects:_,definitions:_,selections:_,guides:_,outputs:_,default_output:_,metadata:_,extensions:_}=artwork;
+        let Artwork {id:_,root:_,compositions:_,stacks:_,occurrences:_,paint:_,coverage:_,effects:_,object_layers:_,objects:_,selections:_,guides:_,outputs:_,default_output:_,metadata:_,extensions:_}=artwork;
     }
     if before.artwork.id!=after.artwork.id || before.artwork.root!=after.artwork.root || before.artwork.default_output!=after.artwork.default_output
         || before.artwork.metadata!=after.artwork.metadata || before.artwork.extensions!=after.artwork.extensions {return Err("Inconsistent session history roots".into());}
@@ -278,7 +266,7 @@ fn difference(before:&Document,after:&Document)->Result<Edit,String> {
         }};
     }
     store!(compositions,Composition);store!(stacks,Stack);store!(occurrences,Occurrence);store!(paint,Paint);store!(coverage,Coverage);
-    store!(effects,Effect);store!(definitions,Definition);store!(selections,SavedSelection);store!(guides,Guides);store!(outputs,Output);
+    store!(effects,Effect);store!(object_layers,ObjectLayer);store!(objects,ImageObject);store!(selections,SavedSelection);store!(guides,Guides);store!(outputs,Output);
     let mut working=after.working.clone();working.generation=before.working.generation;
     if before.working!=working {edits.push(Edit::Working(after.working.clone()));}
     Ok(Edit::Batch(edits))
@@ -294,10 +282,11 @@ fn intern_artwork(art:&mut Artwork,state:&StateRecord,objects:&[ObjectVersion],d
                     let value=previous.$store.get(previous.$store.resolve(id).ok_or("Missing previous session record")?).ok_or("Missing previous session record")?.clone();
                     *art.$store.get_mut(h).ok_or("Missing session record")?=value;}};
             }
-            match object["type"].as_str().ok_or("Missing session object type")? {
-                "capy.composition/1"=>reuse!(compositions),"capy.stack/1"=>reuse!(stacks),"capy.occurrence/2"=>reuse!(occurrences),
-                "capy.paint-source/1"=>reuse!(paint),"capy.coverage-source/1"=>reuse!(coverage),"capy.effect/1"=>reuse!(effects),
-                "capy.effect-definition/1"=>reuse!(definitions),"capy.selection/1"=>reuse!(selections),"capy.guides/1"=>reuse!(guides),"capy.output/1"=>reuse!(outputs),_=>return Err("Unsupported interned session record".into()),
+            match object["type"].as_str().and_then(registry::descriptor).map(|record|record.kind) {
+                Some(RecordKind::Composition)=>reuse!(compositions),Some(RecordKind::Stack)=>reuse!(stacks),Some(RecordKind::OccurrenceLegacy|RecordKind::Occurrence)=>reuse!(occurrences),
+                Some(RecordKind::PaintSource)=>reuse!(paint),Some(RecordKind::CoverageSource)=>reuse!(coverage),Some(RecordKind::Effect)=>reuse!(effects),
+                Some(RecordKind::ObjectLayer)=>reuse!(object_layers),Some(RecordKind::ImageObject)=>reuse!(objects),Some(RecordKind::Image)=>{},
+                Some(RecordKind::Selection)=>reuse!(selections),Some(RecordKind::Guides)=>reuse!(guides),Some(RecordKind::Output)=>reuse!(outputs),_=>return Err("Unsupported interned session record".into()),
             }
         }else {owners[*index]=Some(documents.len());}
     }
@@ -330,7 +319,6 @@ pub fn open_parts(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLi
     for object in &record.objects {
         references.extend(super::references(&object.record,ManifestLimits::default().traversal_nodes)?);
         if let Some(chunks)=&object.tiles {used_chunks.extend(chunks.iter().copied());}
-        used_chunks.extend(object.original);
     }
     if used_chunks.len()!=record.tile_chunks.len() || used_chunks.iter().any(|index|*index>=record.tile_chunks.len()) {return Err("Unindexed session raster chunks".into());}
     for chunk in &record.tile_chunks {references.extend(super::references(&Value::Array(chunk.clone()),ManifestLimits::default().traversal_nodes)?);}
@@ -389,7 +377,7 @@ pub fn open_parts(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLi
     let mut resource_limits=limits;resource_limits.raster_bytes=resource_limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_add(crate::history_budget::BYTE_BUDGET as u64);
     for state in std::iter::once(&record.current).chain(&record.undo).chain(&record.redo) {
         active(cancel)?;let manifest=record.manifest(state,&directory,limits)?;
-        let mut reader=ResourceReader::new(&manifest,&resource_pack,cancel,resource_limits);reader.install_cache(cache);
+        let mut reader=ResourceReader::new(&manifest,&resource_pack,cancel,resource_limits);reader.private=true;reader.install_cache(cache);
         if documents.is_empty() {profiles=decode_profiles(&record.metadata_profiles,&mut reader)?;}
         let mut artwork=artwork_records::decode_with_layout(&manifest,&mut reader,Some(&record.layout)).map_err(|e|e.to_string())?;
         artwork.extensions=extensions.clone();
@@ -446,6 +434,7 @@ pub fn open(source:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool)->Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{PaintBase,Image};
     use crate::{DocumentNames, RecordChange, Selection, SelectionPixels};
     fn editor()->Editor {Editor::new(Document::new(PortableId::random(),19,11,DocumentNames{paint:"ink".into(),paper:"paper".into()}))}
     fn rename(editor:&mut Editor,name:&str) {
@@ -487,13 +476,13 @@ mod tests {
         let mut original=editor();let paint=match original.document.working.target.unwrap(){SourceTarget::Paint(h)=>h,_=>unreachable!()};
         let paper=original.document.artwork.occurrences.iter().find(|(handle,_,_)|Some(*handle)!=original.document.working.occurrence).unwrap().0;
         original.document.artwork.occurrences.get_mut(paper).unwrap().placement.mesh=Some(Arc::new(crate::MeshMap::fit(crate::Rect::from_extent([19,11]),[1,1],Some).unwrap()));
-        original.document.artwork.paint.get_mut(paint).unwrap().original=Some(crate::color::source::rgba8_source([19,11],|x,y|[x as u8,y as u8,80,255]));
+        original.document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|x,y|[x as u8,y as u8,80,255]))));
         for i in 0..20 {rename(&mut original,&format!("name {i}"));}
         let capture=prepared(&original);let value:Value=serde_json::from_slice(capture.metadata()).unwrap();
-        assert_eq!(value["objects"].as_array().unwrap().iter().filter(|v|v["record"]["type"]=="capy.paint-source/1").count(),1);
-        let mut restored=reopen(&capture).editor;let first=restored.document.artwork.paint.get(paint).unwrap().original.clone().unwrap();
+        assert_eq!(value["objects"].as_array().unwrap().iter().filter(|v|v["record"]["type"]=="capy.paint-source/2").count(),1);
+        let mut restored=reopen(&capture).editor;let first=restored.document.artwork.paint.get(paint).unwrap().base.clone().unwrap();
         let mesh=restored.document.artwork.occurrences.get(paper).unwrap().placement.mesh.clone().unwrap();
-        for _ in 0..20 {restored.undo().unwrap();assert!(Arc::ptr_eq(&first,restored.document.artwork.paint.get(paint).unwrap().original.as_ref().unwrap()));
+        for _ in 0..20 {restored.undo().unwrap();assert!(first.image.same_owner(&restored.document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image));
             assert!(Arc::ptr_eq(&mesh,restored.document.artwork.occurrences.get(paper).unwrap().placement.mesh.as_ref().unwrap()));}
         prepared(&restored);
     }
@@ -523,9 +512,33 @@ mod tests {
         let mut value=original.clone();value["unexpected"]=json!(true);assert!(test(value));
     }
     #[test]
+    fn image_ids_cannot_overlap_resources_in_a_disjoint_history_state() {
+        let mut original=editor();let SourceTarget::Paint(handle)=original.document.working.target.unwrap() else {panic!()};
+        let old=Image::new(crate::color::source::rgba8_source([19,11],|_,_|[17,29,81,255]));
+        original.document.artwork.paint.get_mut(handle).unwrap().base=Some(PaintBase::new(old.clone()));
+        let current=Image::new(crate::color::source::rgba8_source([19,11],|_,_|[81,29,17,255]));
+        let mut paint=original.document.artwork.paint.get(handle).unwrap().clone();paint.base=Some(PaintBase::new(current.clone()));
+        original.perform(Edit::Paint(RecordChange::replace(&original.document.artwork.paint,handle,Some(paint)).unwrap())).unwrap();
+        let prepared=prepared(&original);reopen(&prepared);
+        let mut value:Value=serde_json::from_slice(prepared.metadata()).unwrap();
+        fn replace(value:&mut Value,before:&str,after:&str) {
+            match value {
+                Value::String(text) if text==before=>*text=after.into(),
+                Value::Array(values)=>for value in values {replace(value,before,after);},
+                Value::Object(values)=>for value in values.values_mut() {replace(value,before,after);},
+                _=>{},
+            }
+        }
+        let current_tile=current.tiles[&[0,0]].resource_id();
+        replace(&mut value["objects"],&old.id().to_string(),&current_tile.to_string());
+        let mut pack=Vec::new();std::io::Read::read_to_end(&mut prepared.resources.reader(&AtomicBool::new(false)),&mut pack).unwrap();
+        let error=open_parts(&serde_json::to_vec(&value).unwrap(),ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(),ProjectLimits::default(),&AtomicBool::new(false)).err().expect("history namespace collision");
+        assert!(error.contains("identity"),"{error}");
+    }
+    #[test]
     fn corrupted_or_missing_resources_never_adopt_a_partial_drawing() {
         let mut original=editor();let paint=match original.document.working.target.unwrap(){SourceTarget::Paint(h)=>h,_=>unreachable!()};
-        original.document.artwork.paint.get_mut(paint).unwrap().original=Some(crate::color::source::rgba8_source([19,11],|_,_|[120,80,20,255]));
+        original.document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|_,_|[120,80,20,255]))));
         let prepared=prepared(&original);let mut pack=Vec::new();std::io::Read::read_to_end(&mut prepared.resources.reader(&AtomicBool::new(false)),&mut pack).unwrap();
         pack[0]^=1;
         assert!(open_parts(prepared.metadata(),ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(pack))).unwrap(),ProjectLimits::default(),&AtomicBool::new(false)).is_err());
@@ -534,14 +547,14 @@ mod tests {
     #[test]
     fn aliased_payload_owners_survive_disjoint_resource_sets_in_history() {
         let mut original=editor();let h=match original.document.working.target.unwrap(){SourceTarget::Paint(h)=>h,_=>unreachable!()};
-        original.document.artwork.paint.get_mut(h).unwrap().original=Some(crate::color::source::rgba8_source([19,11],|_,_|[120,80,20,255]));
-        let before=original.document.artwork.paint.get(h).unwrap().original.clone().unwrap();
-        let mut paint=original.document.artwork.paint.get(h).unwrap().clone();paint.original=Some(crate::color::source::rgba8_source([19,11],|_,_|[120,80,20,255]));
-        let after=paint.original.clone().unwrap();let before_id=before.tiles.values().next().unwrap().resource_id();let after_id=after.tiles.values().next().unwrap().resource_id();assert_ne!(before_id,after_id);
+        original.document.artwork.paint.get_mut(h).unwrap().base=Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|_,_|[120,80,20,255]))));
+        let before=original.document.artwork.paint.get(h).unwrap().base.clone().unwrap();
+        let mut paint=original.document.artwork.paint.get(h).unwrap().clone();paint.base=Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|_,_|[120,80,20,255]))));
+        let after=paint.base.clone().unwrap();let before_id=before.image.tiles.values().next().unwrap().resource_id();let after_id=after.image.tiles.values().next().unwrap().resource_id();assert_ne!(before_id,after_id);
         original.perform(Edit::Paint(RecordChange::replace(&original.document.artwork.paint,h,Some(paint)).unwrap())).unwrap();
         let mut restored=reopen(&prepared(&original)).editor;
-        assert_eq!(restored.document.artwork.paint.get(h).unwrap().original.as_ref().unwrap().tiles.values().next().unwrap().resource_id(),after_id);
-        restored.undo().unwrap();assert_eq!(restored.document.artwork.paint.get(h).unwrap().original.as_ref().unwrap().tiles.values().next().unwrap().resource_id(),before_id);
+        assert_eq!(restored.document.artwork.paint.get(h).unwrap().base.as_ref().unwrap().image.tiles.values().next().unwrap().resource_id(),after_id);
+        restored.undo().unwrap();assert_eq!(restored.document.artwork.paint.get(h).unwrap().base.as_ref().unwrap().image.tiles.values().next().unwrap().resource_id(),before_id);
         restored.redo().unwrap();prepared(&restored);
     }
     #[test]
@@ -571,7 +584,7 @@ mod tests {
         let mut data=RasterData::default();
         for y in 0..48 {for x in 0..48 {data.tiles.insert(TileKey{coordinate:[x,y],plane:RasterPlane::Color},tile.clone());}}
         document.artwork.paint.get_mut(h).unwrap().raster=RasterRevision::backed(data.clone());
-        document.artwork.paint.get_mut(h).unwrap().original=Some(crate::color::source::rgba8_source([19,11],|_,_|[120,80,20,255]));
+        document.artwork.paint.get_mut(h).unwrap().base=Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|_,_|[120,80,20,255]))));
         let mut editor=Editor::new(document);let mut expected=Vec::new();
         for index in 0..96 {
             let tile=RasterTile::backed(TileBlob::encode(descriptor,&vec![index as u8+20;bytes]).unwrap());
@@ -582,7 +595,7 @@ mod tests {
         let prepared=prepared(&editor);let metadata:Value=serde_json::from_slice(prepared.metadata()).unwrap();
         assert!(prepared.metadata().len()<2*1024*1024,"small strokes must not repeat the full canvas index in every history entry");
         assert!(metadata["tile_chunks"].as_array().unwrap().len()<150);
-        let original_descriptors=metadata["tile_chunks"].as_array().unwrap().iter().filter(|chunk|chunk.as_array().is_some_and(|chunk|chunk.len()==1 && chunk[0].get("extent").is_some())).count();
+        let original_descriptors=metadata["objects"].as_array().unwrap().iter().filter(|object|object["record"]["type"]=="capy.image/1").count();
         assert_eq!(original_descriptors,1,"immutable photo indexes must remain shared while painting");
         let mut restored=reopen(&prepared).editor;
         for (key,id) in expected.iter().rev() {
@@ -596,13 +609,13 @@ mod tests {
     #[test]
     fn chunk_expansion_refuses_metadata_amplification_before_adoption() {
         for data in [Value::Null,json!(true),json!(3),json!([])] {
-            for (tiles,original) in [(Some(vec![0]),None),(None,Some(0))] {
-                let object=ObjectVersion {record:json!({"type":"capy.paint-source/1","data":data}),tiles,original};
+            for tiles in [Some(vec![0]),None] {
+                let object=ObjectVersion {record:json!({"type":"capy.paint-source/2","data":data}),tiles};
                 assert!(object.expand(&[vec![json!({})]],ProjectLimits::default()).is_err());
             }
         }
         let chunk=(0..RASTER_INDEX_CHUNK).map(|index|json!({"coordinate":[index,0],"resource":resources::reference(PortableId::random()),"data":"x".repeat(256)})).collect::<Vec<_>>();
-        let object=ObjectVersion {record:json!({"id":PortableId::random(),"type":"capy.paint-source/1","data":{}}),tiles:Some(vec![0;256]),original:None};
+        let object=ObjectVersion {record:json!({"id":PortableId::random(),"type":"capy.paint-source/2","data":{}}),tiles:Some(vec![0;256])};
         let limits=ProjectLimits {metadata_bytes:32*1024,..Default::default()};
         assert!(crate::json_len(&chunk)<limits.metadata_bytes as usize);
         assert!(object.expand(&[chunk],limits).unwrap_err().contains("exceeds admission"));
@@ -610,7 +623,7 @@ mod tests {
         let original=json!({"extent":[1,1],"interpretation":{"data":"x".repeat(4096)}});record.tile_chunks=vec![vec![original]];
         let mut current=Vec::new();
         for _ in 0..100 {
-            let index=record.objects.len();record.objects.push(ObjectVersion {record:json!({"id":PortableId::random(),"type":"capy.paint-source/1","data":{}}),tiles:None,original:Some(0)});current.push(index);
+            let index=record.objects.len();record.objects.push(ObjectVersion {record:json!({"id":PortableId::random(),"type":"capy.paint-source/2","data":{}}),tiles:Some(vec![0])});current.push(index);
         }
         record.current.objects=current;
         assert!(crate::json_len(&record)<limits.metadata_bytes as usize);

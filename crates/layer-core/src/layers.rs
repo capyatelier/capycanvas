@@ -608,7 +608,7 @@ impl Document {
                 self.validate_content_write(target)?;
                 Ok(target)
             }
-            LayerKind::Group => Err(DrawingRefusal::Group),
+            LayerKind::Group | LayerKind::Object => Err(DrawingRefusal::Group),
             LayerKind::Selection => Err(DrawingRefusal::SelectionLayer),
             LayerKind::Effect => Err(DrawingRefusal::EffectWithoutBase),
         }
@@ -1038,15 +1038,9 @@ impl Document {
         for change in &changes {
             effects.change(change.handle, change.id, change.value.clone()).map_err(DocumentError::InvalidLayerOperation)?;
         }
-        let retained: BTreeSet<_> = effects.iter().map(|(_, _, effect)| effect.definition).collect();
-        let removed: BTreeSet<_> = self.artwork.effects.iter().map(|(_, _, effect)| effect.definition)
-            .filter(|definition| !retained.contains(definition) && self.artwork.definitions.get(*definition).is_some()).collect();
         let removed_effects: BTreeSet<_> = self.artwork.effects.iter().map(|(handle, _, _)| handle)
             .filter(|handle| effects.get(*handle).is_none()).collect();
         let mut edits: Vec<_> = changes.into_iter().map(Edit::Effect).collect();
-        for definition in removed {
-            edits.push(Edit::Definition(RecordChange::remove(&self.artwork.definitions, definition)?));
-        }
         for (handle, _, output) in self.artwork.outputs.iter() {
             if output.context.phases.iter().any(|(effect, _)| removed_effects.contains(effect)) {
                 let mut changed = output.clone();
@@ -1059,6 +1053,7 @@ impl Document {
 
     pub(crate) fn removal_edits(&self, ids: &BTreeSet<OccurrenceHandle>) -> Result<Vec<Edit>, DocumentError> {
         let mut paints = BTreeSet::new();
+        let mut object_layers=BTreeSet::new();
         let mut coverage = BTreeSet::new();
         let mut stacks = BTreeSet::new();
         let mut effects = BTreeSet::new();
@@ -1069,6 +1064,7 @@ impl Document {
                 OccurrenceContent::Paint(h) => {
                     paints.insert(h);
                 }
+                OccurrenceContent::Objects(h)=>{object_layers.insert(h);},
                 OccurrenceContent::Stack(h) => {
                     stacks.insert(h);
                 }
@@ -1089,6 +1085,7 @@ impl Document {
                 OccurrenceContent::Paint(h) => {
                     paints.remove(&h);
                 }
+                OccurrenceContent::Objects(h)=>{object_layers.remove(&h);},
                 OccurrenceContent::Stack(h) => {
                     stacks.remove(&h);
                 }
@@ -1110,6 +1107,11 @@ impl Document {
         for h in paints {
             edits.push(Edit::Paint(RecordChange::remove(&self.artwork.paint, h)?));
         }
+        let mut objects=BTreeSet::new();
+        for &h in &object_layers {objects.extend(self.artwork.object_layers.get(h).ok_or(DocumentError::InvalidLayerOperation("Missing object layer"))?.children.iter().copied());}
+        for (h,_,layer) in self.artwork.object_layers.iter() {if !object_layers.contains(&h) {for object in &layer.children {objects.remove(object);}}}
+        for h in objects {edits.push(Edit::ImageObject(RecordChange::remove(&self.artwork.objects,h)?));}
+        for h in object_layers {edits.push(Edit::ObjectLayer(RecordChange::remove(&self.artwork.object_layers,h)?));}
         for h in coverage {
             edits.push(Edit::Coverage(RecordChange::remove(&self.artwork.coverage, h)?));
         }
@@ -1517,7 +1519,7 @@ mod organization_tests {
             .paint
             .insert(
                 PortableId::random(),
-                PaintSource { color_mode: Default::default(), domain: [64; 2], raster: Default::default(), original: None, operations: Arc::default() },
+                PaintSource { color_mode:Default::default(), domain: [64; 2], raster: Default::default(), base: None, operations: Arc::default() },
             )
             .unwrap();
         let before = doc.clone();

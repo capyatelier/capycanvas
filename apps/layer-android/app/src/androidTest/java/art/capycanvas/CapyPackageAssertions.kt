@@ -39,11 +39,12 @@ internal fun JSONObject.occurrenceRecords(): JSONArray {
 }
 internal fun JSONObject.paintData(occurrence: String): JSONObject = packageData(packageData(occurrence).getJSONObject("content").getJSONObject("paint").getString("ref"))
 internal fun JSONObject.artworkRecords(): JSONArray = JSONArray(getJSONArray("objects").objects().filter {it.getString("type") !in listOf("capy.composition/1","capy.output/1")})
-internal fun JSONObject.paintRecords(): JSONArray = JSONArray(getJSONArray("objects").objects().filter { it.getString("type") == "capy.paint-source/1" })
-internal fun JSONObject.originalImages(): JSONArray = JSONArray(occurrenceRecords().objects().mapNotNull {
+internal fun JSONObject.paintRecords(): JSONArray = JSONArray(getJSONArray("objects").objects().filter { it.getString("type") == "capy.paint-source/2" })
+internal fun JSONObject.paintBaseBindings(): JSONArray = JSONArray(occurrenceRecords().objects().mapNotNull {
     val source = it.getJSONObject("data").getJSONObject("content").optJSONObject("paint") ?: return@mapNotNull null
-    packageData(source.getString("ref")).optJSONObject("original")
+    packageData(source.getString("ref")).optJSONObject("base")
 })
+internal fun JSONObject.originalImages(): JSONArray = JSONArray(paintBaseBindings().objects().map { packageData(it.getJSONObject("image").getString("ref")) })
 internal fun JSONObject.resourcesOf(type: String): JSONArray = JSONArray(getJSONArray("resources").objects().filter { it.getString("type") == type })
 internal fun JSONObject.rasterResources(): JSONArray = JSONArray(resourcesOf("capy.raster-tile/1").objects().map { JSONObject(it.toString()).apply { remove("location") } })
 internal fun JSONObject.profileIdentity(): String = resourcesOf("capy.icc/1").objects().map {
@@ -71,7 +72,7 @@ internal fun JSONObject.authoredAffine(): JSONArray {
     check(placement.isNull("mesh"))
     val outer = placement.optJSONArray("projective") ?: JSONArray(listOf(1,0,0,0,1,0,0,0,1))
     check(outer.getDouble(6) == 0.0 && outer.getDouble(7) == 0.0 && outer.getDouble(8) == 1.0)
-    val translation = placement.optJSONArray("translation") ?: JSONArray(listOf(0,0))
+    val translation = optJSONArray("offset") ?: placement.optJSONArray("translation") ?: JSONArray(listOf(0,0))
     return JSONArray(listOf(outer.getDouble(0),outer.getDouble(3),outer.getDouble(1),outer.getDouble(4),
         outer.getDouble(2)+translation.getDouble(0),outer.getDouble(5)+translation.getDouble(1)))
 }

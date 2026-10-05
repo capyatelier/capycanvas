@@ -8,7 +8,7 @@ fn graph() -> GraphShape {
             (id(1), Shape::Composition { result: id(2) }),
             (id(2), Shape::Stack { entries: vec![id(3)] }),
             (id(3), Shape::Occurrence { content: Content::Paint(id(4)), mask: None }),
-            (id(4), Shape::Paint),
+            (id(4), Shape::Paint {image:None}),
             (id(5), Shape::Output { composition: id(1) }),
         ].into(),
         outputs: vec![id(5)], default_output: Some(id(5)), ..Default::default()
@@ -49,7 +49,7 @@ fn undo_retains_identity_and_deleted_handles_never_alias_new_content() {
 #[test]
 fn retained_unplaced_content_is_validated_without_being_collected() {
     let mut g = graph();
-    g.objects.insert(id(6), Shape::Paint);
+    g.objects.insert(id(6), Shape::Paint {image:None});
     assert_eq!(validate(&g), Ok(Support::Editable));
     g.objects.insert(id(7), Shape::Unknown { ancillary: false, references: vec![id(6)] });
     assert!(matches!(validate(&g), Ok(Support::Preserved(_))));
@@ -75,7 +75,7 @@ fn sharing_through_reused_groups_is_preserved_even_with_one_direct_source_use() 
 fn independent_duplicate_can_share_binary_resources_but_linked_sources_are_preserved() {
     let mut g = graph();
     g.resources.insert(id(100));
-    g.objects.insert(id(6), Shape::Paint);
+    g.objects.insert(id(6), Shape::Paint {image:None});
     g.objects.insert(id(7), Shape::Occurrence { content: Content::Paint(id(6)), mask: None });
     assert_eq!(validate(&g), Ok(Support::Editable));
     g.objects.insert(id(7), Shape::Occurrence { content: Content::Paint(id(4)), mask: None });
@@ -83,15 +83,11 @@ fn independent_duplicate_can_share_binary_resources_but_linked_sources_are_prese
 }
 
 #[test]
-fn shared_matte_is_not_an_image_alpha_or_a_visibility_dependency() {
+fn direct_effects_have_no_definition_or_input_edges() {
     let mut g = graph();
-    g.objects.insert(id(6), Shape::Coverage);
-    g.objects.insert(id(7), Shape::Definition { dependencies: vec![] });
-    g.objects.insert(id(8), Shape::Effect { definition: id(7), inputs: vec![id(6)] });
-    g.objects.insert(id(9), Shape::Effect { definition: id(7), inputs: vec![id(6)] });
-    assert!(matches!(validate(&g), Ok(Support::Preserved(_))));
-    g.objects.insert(id(3), Shape::Occurrence { content: Content::Paint(id(6)), mask: None });
-    assert_eq!(validate(&g), Err("Invalid authored relationship".into()));
+    g.objects.insert(id(6), Shape::Effect);
+    g.objects.insert(id(7), Shape::Occurrence { content: Content::Effect(id(6)), mask: None });
+    assert_eq!(validate(&g), Ok(Support::Editable));
 }
 
 #[test]
@@ -112,9 +108,6 @@ fn membership_and_evaluation_cycles_are_not_resource_references() {
     g.objects.insert(id(3), Shape::Occurrence { content: Content::Group(id(2)), mask: None });
     assert_eq!(validate(&g), Err("Cyclic authored dependency".into()));
     let mut g = graph();
-    g.objects.insert(id(6), Shape::Definition { dependencies: vec![id(7)] });
-    g.objects.insert(id(7), Shape::Definition { dependencies: vec![id(6)] });
-    assert_eq!(validate(&g), Err("Cyclic authored dependency".into()));
     g.objects.insert(id(6), Shape::Unknown { ancillary: false, references: vec![id(7)] });
     g.objects.insert(id(7), Shape::Unknown { ancillary: false, references: vec![id(6)] });
     assert!(matches!(validate(&g), Ok(Support::Preserved(_))), "unknown reference semantics do not imply execution");
@@ -179,7 +172,7 @@ fn permanent_schema_fixtures_keep_structural_classification_and_visible_referenc
                         else { Content::Group(reference(&content["stack"])) };
                     Shape::Occurrence { content, mask: data.get("mask").map(|m| reference(&m["source"])) }
                 }
-                "capy.paint-source/1" => Shape::Paint,
+                "capy.paint-source/2" => Shape::Paint {image:None},
                 "capy.coverage-source/1" => Shape::Coverage,
                 "capy.output/1" => Shape::Output { composition: reference(&data["source"]["object"]) },
                 _ => Shape::Unknown { ancillary: object["ancillary"].as_bool().unwrap_or(false), references: crate::package::references(data, 1000).unwrap() },
@@ -216,7 +209,7 @@ fn animation_activity_follows_attached_owner_and_ancestor_visibility() {
     fixture::effect(&mut doc,"FX","domain_warp");
     let fx=fixture::id(&doc,"FX");let owner=fixture::id(&doc,"Owner");
     let effect=doc.scene().effect_handle(fx).unwrap();
-    let mut draft=EffectInstance::new(doc.artwork.definitions.get(doc.artwork.effects.get(effect).unwrap().definition).unwrap().program.clone());
+    let mut draft=EffectInstance::new(doc.artwork.effects.get(effect).unwrap().program.clone());
     draft.set("animate",EffectValue::Toggle(true)).unwrap();doc.artwork.effects.get_mut(effect).unwrap().values=draft.values;
     doc.artwork.occurrences.get_mut(fx).unwrap().attachment=Attachment::Effect;
     let group=fixture::nest(&mut doc,"Group",&["FX","Owner"]);

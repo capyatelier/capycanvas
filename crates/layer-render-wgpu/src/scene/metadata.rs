@@ -23,9 +23,11 @@ pub(super) struct Metadata {
     pub occurrence: Occurrence,
     pub effect: Option<Weak<EffectApplication>>,
     pub effect_contract: Option<(layer_core::EffectKind, layer_core::EffectSpace, bool)>,
-    definition: Option<Weak<layer_core::authored::Definition>>,
+    program: Option<Weak<layer_core::EffectProgram>>,
     pub mask: Option<MaskMetadata>,
     source: Option<Weak<layer_core::color::source::SourceImage>>,
+    base: Option<([u32; 2], layer_core::authored::PaintBasePolicy)>,
+    objects: Arc<[objects::ObjectKey]>,
 }
 impl PartialEq for Metadata {
     fn eq(&self, other: &Self) -> bool {
@@ -33,16 +35,24 @@ impl PartialEq for Metadata {
             && match (&self.effect, &other.effect) {
                 (None, None) => true, (Some(a), Some(b)) => Weak::ptr_eq(a, b), _ => false,
             } && self.effect_contract == other.effect_contract
-            && match (&self.definition, &other.definition) { (None, None) => true, (Some(a), Some(b)) => Weak::ptr_eq(a, b), _ => false }
+            && match (&self.program, &other.program) { (None, None) => true, (Some(a), Some(b)) => Weak::ptr_eq(a, b), _ => false }
             && self.mask == other.mask
             && match (&self.source, &other.source) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Weak::ptr_eq(a, b),
                 _ => false,
-            }
+            } && self.base == other.base && self.objects == other.objects
     }
 }
 impl Metadata {
+    pub(super) fn same_object_layer(&self, other: &Self) -> bool {
+        let normalize = |metadata: &Self| {
+            let mut metadata = metadata.clone();
+            metadata.objects = Arc::default();
+            metadata
+        };
+        normalize(self) == normalize(other)
+    }
     pub(super) fn same_content(&self, other: &Self) -> bool {
         let normalize = |metadata: &Self| {
             let mut metadata = metadata.clone();
@@ -54,6 +64,14 @@ impl Metadata {
         normalize(self) == normalize(other)
     }
     pub(super) fn new(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> Self {
+        let keys=scene.object_layer(handle).map_or_else(Vec::new,|layer|layer.children.iter().copied()
+            .filter(|h|scene.object(*h).is_some_and(|object|object.visible)).map(|h|objects::ObjectKey::new(scene,handle,h)).collect());
+        Self::with_objects(scene,handle,keys.into())
+    }
+    pub(super) fn new_cached(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle, cache:&mut object_spatial::SpatialIndex) -> Self {
+        Self::with_objects(scene,handle,cache.content(scene,handle).map_or_else(Arc::default,|content|content.keys()))
+    }
+    fn with_objects(scene:layer_core::SceneView<'_>,handle:OccurrenceHandle,objects:Arc<[objects::ObjectKey]>)->Self {
         let mut occurrence = scene.occurrence(handle).unwrap().clone();
         occurrence.name = Arc::from("");
         occurrence.locked = false;
@@ -67,8 +85,10 @@ impl Metadata {
         Self {
             id: handle, parent: scene.evaluation_parent(handle), evaluation_offset: scene.occurrence_offset(handle), occurrence, effect,
             effect_contract: scene.effect(handle).map(|effect| (effect.program.kind, effect.program.space, effect.program.image_boundary())),
-            definition: scene.effect_application(handle).and_then(|application| scene.artwork().definitions.shared(application.definition)).map(Arc::downgrade),
-            mask: mask_metadata(scene, handle), source: scene.paint_source(handle).and_then(|paint| paint.original.as_ref()).map(Arc::downgrade),
+            program: scene.effect_application(handle).map(|application| Arc::downgrade(&application.program)),
+            mask: mask_metadata(scene, handle), source: scene.paint_source(handle).and_then(|paint| paint.base.as_ref()).map(|base| Arc::downgrade(base.image.storage())),
+            base: scene.paint_source(handle).and_then(|paint| paint.base.as_ref()).map(|base| (base.offset, base.policy)),
+            objects,
         }
     }
 }
@@ -94,6 +114,21 @@ mod tests {
     use layer_core::color::{SampleDepth, source::*};
 
     #[test]
+    fn paint_edits_reuse_object_metadata_without_enumerating_its_children() {
+        let (mut doc,owner,handles)=object_spatial::tests::document();
+        let mut cache=object_spatial::SpatialIndex::default();
+        let before=Metadata::new_cached(doc.scene(),owner,&mut cache);
+        let paint=doc.artwork.paint.iter().next().unwrap().0;
+        let mut source=doc.artwork.paint.get(paint).unwrap().clone();source.domain=[257,256];
+        doc.apply(layer_core::Edit::Paint(layer_core::RecordChange::replace(&doc.artwork.paint,paint,Some(source)).unwrap())).unwrap();
+        let painted=Metadata::new_cached(doc.scene(),owner,&mut cache);
+        assert!(before==painted);assert!(Arc::ptr_eq(&before.objects,&painted.objects));
+        doc.apply(doc.set_image_object_affine_edit(handles[1],layer_core::Affine64([1.,0.,0.,1.,128.,0.])).unwrap()).unwrap();
+        let moved=Metadata::new_cached(doc.scene(),owner,&mut cache);
+        assert!(before!=moved);assert!(!Arc::ptr_eq(&before.objects,&moved.objects));
+    }
+
+    #[test]
     fn cache_keys_release_source_and_raster_backing_and_track_replacement() {
         let mut builder = SourceBuilder::new(
             [1, 1],
@@ -109,23 +144,23 @@ mod tests {
         builder.push_row(&[255; 8]).unwrap();
         let mut artwork = layer_core::authored::Artwork::new([1, 1]).unwrap();
         let paint = artwork.paint.insert(layer_core::authored::PortableId::random(), layer_core::authored::PaintSource { color_mode: Default::default(),
-            domain: [1, 1], raster: Default::default(), original: Some(Arc::new(builder.finish().unwrap())), operations: Arc::default(),
+            domain: [1, 1], raster: Default::default(), base: Some(layer_core::authored::PaintBase::new(layer_core::authored::Image::new(Arc::new(builder.finish().unwrap())))), operations: Arc::default(),
         }).unwrap();
         let handle = artwork.occurrences.insert(layer_core::authored::PortableId::random(), layer_core::authored::Occurrence::new(
             layer_core::authored::OccurrenceContent::Paint(paint), "original")).unwrap();
         let stack = artwork.compositions.get(artwork.root).unwrap().result;
         artwork.stacks.get_mut(stack).unwrap().entries.push(handle);
         let index = Arc::new(layer_core::SceneIndex::build(&artwork).unwrap());
-        let source = Arc::downgrade(artwork.paint.get(paint).unwrap().original.as_ref().unwrap());
+        let source = Arc::downgrade(artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage());
         let raster = Arc::downgrade(&artwork.paint.get(paint).unwrap().raster.wait_data().unwrap());
         let key = Metadata::new(SceneView::new(&artwork, &index), handle);
         let preview = PreviewMetadata::new(SceneView::new(&artwork, &index), handle);
         assert!(key == Metadata::new(SceneView::new(&artwork, &index), handle));
         assert!(preview == PreviewMetadata::new(SceneView::new(&artwork, &index), handle));
         assert_eq!(source.strong_count(), 1);
-        let original = artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
+        let original = artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
         let replacement = Arc::new((**original).clone());
-        artwork.paint.get_mut(paint).unwrap().original = Some(replacement);
+        artwork.paint.get_mut(paint).unwrap().base.as_mut().unwrap().image = layer_core::authored::Image::new(replacement);
         assert!(key != Metadata::new(SceneView::new(&artwork, &index), handle), "new source interpretation invalidates pixels");
         assert!(preview != PreviewMetadata::new(SceneView::new(&artwork, &index), handle));
         assert_eq!(source.strong_count(), 0);

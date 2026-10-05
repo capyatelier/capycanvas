@@ -92,7 +92,7 @@ impl ImportedDocument {
     }
     pub fn interpretation_required(&self, policy: PhotoOpenPolicy) -> Option<&SourceImage> {
         if self.source != ImportSource::Photo { return None; }
-        self.project.artwork.paint.iter().find_map(|(_, _, p)| p.original.as_deref())
+        self.project.artwork.paint.iter().find_map(|(_, _, p)| p.base.as_ref().map(|base| base.image.as_ref()))
             .filter(|s| policy.needs_interpretation(s))
     }
     pub fn interpret(&mut self, profile: ColorProfile) -> Result<(), String> {
@@ -100,7 +100,7 @@ impl ImportedDocument {
         let scene = self.project.scene();
         let handle = scene.order().first().copied().ok_or("Photo source unavailable")?;
         let occurrence = scene.occurrence(handle).ok_or("Photo source unavailable")?;
-        let source = scene.paint_source(handle).and_then(|p| p.original.as_ref()).ok_or("Photo source unavailable")?;
+        let source = scene.paint_source(handle).and_then(|p| p.base.as_ref().map(|base| base.image.storage())).ok_or("Photo source unavailable")?;
         let source = layer_color::assume_source_profile((**source).clone(), profile)?;
         let names = DocumentNames {
             paint: occurrence.name.clone(),
@@ -344,7 +344,7 @@ mod tests {
     use super::*;
     use crate::session::test_support::{package_bytes, package_roundtrip};
     fn photo_source(document: &Document) -> &SourceImage {
-        document.artwork.paint.iter().find_map(|(_, _, p)| p.original.as_deref()).expect("photo source")
+        document.artwork.paint.iter().find_map(|(_, _, p)| p.base.as_ref().map(|base| base.image.as_ref())).expect("photo source")
     }
     fn native_bytes(document: &Document) -> Vec<u8> {
         layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
@@ -405,7 +405,7 @@ mod tests {
         let mut original = std::io::Cursor::new(&bytes);
         let directory = Directory::read(&mut original, 262_144, ProjectLimits::default().metadata_bytes).unwrap();
         let mut manifest: serde_json::Value = serde_json::from_slice(&directory.read_member(&mut original, directory.member("manifest.json").unwrap(), ProjectLimits::default().metadata_bytes as usize).unwrap()).unwrap();
-        let occurrence = manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record| record["type"] == "capy.occurrence/2").unwrap();
+        let occurrence = manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record| matches!(record["type"].as_str(), Some("capy.occurrence/2" | "capy.occurrence/3"))).unwrap();
         occurrence["data"]["opacity"] = "invalid required value".into();
         let manifest = serde_json::to_vec(&manifest).unwrap();
         let checksum = |bytes: &[u8]| { let mut crc = flate2::Crc::new(); crc.update(bytes); crc.sum() };

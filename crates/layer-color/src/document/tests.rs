@@ -82,7 +82,6 @@ fn fixture(color: DocumentColor) -> Document {
     let mask = MaskUse {source:coverage, enabled:true, linked:true, inverted:true, translation:Point{x:2.5,y:-1.}, placement:layer_core::Projective::IDENTITY};
     let rasterized = Arc::new(SourceImage {
         resolution: None,
-        kind: SourceKind::Rasterized,
         // Includes a complete tile outside the document, shared with paint.
         extent: [512, 256],
         interpretation: SourceInterpretation {
@@ -95,16 +94,15 @@ fn fixture(color: DocumentColor) -> Document {
     });
     artwork.paint.get_mut(ink_source).unwrap().raster = root;
     let occurrence = artwork.occurrences.get_mut(ink).unwrap(); occurrence.mask=Some(mask); occurrence.opacity=0.75;
-    let base_source = artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),domain:[512,256],raster:Default::default(),original:Some(rasterized.clone()),operations:Default::default()}).unwrap();
+    let base_source = artwork.paint.insert(PortableId::random(), PaintSource { color_mode:Default::default(),domain:[512,256],raster:Default::default(),base:Some(PaintBase {image:rasterized.clone().into(),offset:[0;2],policy:PaintBasePolicy::WorkingPixels}),operations:Default::default()}).unwrap();
     let base = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(base_source),"Rasterized full image")).unwrap();
     let mut original = rasterized.as_ref().clone();
-    original.kind = SourceKind::Original;
     original.interpretation.profile = ColorProfile::Icc(
         crate::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3))
             .unwrap()
             .into(),
     );
-    let original_source=artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[512,256],raster:Default::default(),original:Some(Arc::new(original)),operations:Default::default()}).unwrap();
+    let original_source=artwork.paint.insert(PortableId::random(),PaintSource { color_mode:Default::default(),domain:[512,256],raster:Default::default(),base:Some(PaintBase::new(Arc::new(original).into())),operations:Default::default()}).unwrap();
     let original=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(original_source),"Independent original")).unwrap();
     let mut entries=vec![ink,base,original];
     use layer_core::{EffectInstance, EffectValue, GradientStop, color::RgbColor};
@@ -118,8 +116,8 @@ fn fixture(color: DocumentColor) -> Document {
     ] {
         let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program());
         effect.set(key, value).unwrap();
-        let definition=artwork.definitions.insert(PortableId::random(),Definition {program:effect.program}).unwrap();
-        let application=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values}).unwrap();
+
+        let application=artwork.effects.insert(PortableId::random(),EffectApplication::new(effect.program, effect.values, document.composition().size)).unwrap();
         entries.push(artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),id)).unwrap());
     }
     entries.push(paper); artwork.stacks.get_mut(stack).unwrap().entries=entries;
@@ -138,12 +136,11 @@ fn assert_original_and_properties(a: &Document, b: &Document) {
     assert_eq!(a.artwork.occurrences,b.artwork.occurrences);
     assert_eq!(a.artwork.stacks,b.artwork.stacks);
     assert_eq!(a.artwork.effects,b.artwork.effects);
-    assert_eq!(a.artwork.definitions,b.artwork.definitions);
-    assert!(Arc::ptr_eq(paint(a,2).original.as_ref().unwrap(),paint(b,2).original.as_ref().unwrap()));
-    assert_eq!(paint(a,1).original.as_ref().unwrap().extent,paint(b,1).original.as_ref().unwrap().extent);
+    assert!(Arc::ptr_eq(paint(a,2).base.as_ref().unwrap().image.storage(),paint(b,2).base.as_ref().unwrap().image.storage()));
+    assert_eq!(paint(a,1).base.as_ref().unwrap().image.storage().extent,paint(b,1).base.as_ref().unwrap().image.storage().extent);
     for (handle,id,old) in a.artwork.paint.iter() {
         assert_eq!(b.artwork.paint.id(handle),Some(id));
-        let mut metadata=b.artwork.paint.get(handle).unwrap().clone(); metadata.raster=old.raster.clone();metadata.original=old.original.clone();assert_eq!(*old,metadata);
+        let mut metadata=b.artwork.paint.get(handle).unwrap().clone(); metadata.raster=old.raster.clone();metadata.base=old.base.clone();assert_eq!(*old,metadata);
     }
     for (handle,id,old) in a.artwork.coverage.iter() {
         assert_eq!(b.artwork.coverage.id(handle),Some(id));
@@ -180,9 +177,9 @@ fn assignment_preserves_every_code_and_shared_backing_in_all_eight_modes() {
                     coverage(a,0).raster.identity(),
                     coverage(b,0).raster.identity()
                 );
-                let source = paint(b,1).original.as_ref().unwrap();
+                let source = paint(b,1).base.as_ref().unwrap().image.storage();
                 assert_eq!(source.interpretation.profile, ColorProfile::Builtin(target));
-                for (coordinate, blob) in &paint(a,1).original.as_ref().unwrap().tiles {
+                for (coordinate, blob) in &paint(a,1).base.as_ref().unwrap().image.storage().tiles {
                     assert!(Arc::ptr_eq(blob, &source.tiles[coordinate]));
                 }
             }
@@ -247,7 +244,7 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
                 }
             }
             let rgba = backing(&paint(document,0).raster, RasterPlane::Color);
-            let source = paint(document,1).original.as_ref().unwrap();
+            let source = paint(document,1).base.as_ref().unwrap().image.storage();
             assert_eq!(source.interpretation.depth, target);
             assert!(source.tiles.values().all(|blob| Arc::ptr_eq(blob, &rgba)));
             let wetness = backing(&paint(document,0).raster, RasterPlane::WatercolorWetness);
@@ -333,11 +330,10 @@ fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
     };
     let a = prepare_document_color(&project, change, LIMIT, || false).unwrap();
     let b = prepare_document_color(&project, change, LIMIT, || false).unwrap();
-    let source_a = paint(&a.document,1).original.as_ref().unwrap();
-    let source_b = paint(&b.document,1).original.as_ref().unwrap();
+    let source_a = paint(&a.document,1).base.as_ref().unwrap().image.storage();
+    let source_b = paint(&b.document,1).base.as_ref().unwrap().image.storage();
     assert_eq!(source_a.extent,source_b.extent);
     assert_eq!(source_a.resolution,source_b.resolution);
-    assert_eq!(source_a.kind,source_b.kind);
     assert_eq!(source_a.interpretation,source_b.interpretation);
     assert_eq!(source_a.tiles.keys().collect::<Vec<_>>(),source_b.tiles.keys().collect::<Vec<_>>());
     for (coordinate,a) in &source_a.tiles {
@@ -535,7 +531,7 @@ fn cancellation_limits_and_invalid_candidates_leave_document_and_history_intact(
                     data.watercolor = None;
                     value.raster = RasterRevision::backed(data);
                 }
-                6 => paint_changes[2].value.as_mut().unwrap().original = paint_changes[1].value.as_ref().unwrap().original.clone(),
+                6 => paint_changes[2].value.as_mut().unwrap().base = paint_changes[1].value.as_ref().unwrap().base.clone(),
                 _ => unreachable!(),
             }
             project.color_edit(prepared.document.composition().color,paint_changes,coverage_changes).map(|_| ())
@@ -621,13 +617,15 @@ fn converting_to_float_blends_in_linear_light_in_the_same_step() {
 #[test]
 fn editable_color_admission_rejects_invalid_original_profiles_without_mutation() {
     let mut document=fixture(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U8});
-    let source=paint_mut(&mut document,2).original.as_mut().unwrap();
-    Arc::make_mut(source).interpretation.profile=ColorProfile::Icc(vec![0;128].into());
+    let base=paint_mut(&mut document,2).base.as_mut().unwrap();
+    let mut source=base.image.as_ref().clone();
+    source.interpretation.profile=ColorProfile::Icc(vec![0;128].into());
+    base.image=Arc::new(source).into();
     let before=document.clone();
     assert!(validate_document_color(&document).is_err());
     assert!(prepare_document_color(&document,DocumentColorChange::Assign(RgbSpace::DisplayP3),LIMIT,||false).is_err());
     assert_eq!(document,before);
-    assert!(Arc::ptr_eq(paint(&document,2).original.as_ref().unwrap(),paint(&before,2).original.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(paint(&document,2).base.as_ref().unwrap().image.storage(),paint(&before,2).base.as_ref().unwrap().image.storage()));
 }
 
 #[test]
@@ -636,8 +634,8 @@ fn conversion_uses_unplaced_source_domain_outside_the_composition() {
     let color=document.composition().color;
     let coordinate=[2,0];
     let blob=Arc::new(TileBlob::encode(color.paint_descriptor(),&samples(SampleDepth::U8,4)).unwrap());
-    let handle=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),
-        domain:[768,256], original:None, operations:Default::default(),
+    let handle=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode:Default::default(),
+        domain:[768,256], base:None, operations:Default::default(),
         raster:RasterRevision::backed(RasterData {watercolor:None,tiles:[(TileKey {plane:RasterPlane::Color,coordinate},RasterTile::backed_shared(blob))].into()}),
     }).unwrap();
     let result=prepare_document_color(&document,DocumentColorChange::Depth {depth:SampleDepth::U16,dither:OutputDither::None},LIMIT,||false).unwrap();
@@ -669,5 +667,113 @@ fn fixed_reduced_color_layers_preserve_modes_and_alpha_through_document_depth_ch
             if depth == SampleDepth::U8 { assert_eq!(&data[..2], if after.color_mode == LayerColorMode::TwoTone { &[255,255] } else { &[64,128] }); }
             else { let values = hdr::decode_samples(depth, &data[..2 * depth.bytes()]).unwrap(); assert_eq!(values[0], values[1]); assert!((values[3] - if after.color_mode == LayerColorMode::TwoTone { 1. } else { 32768. / 65535. }).abs() < 0.001); }
         }
+    }
+}
+
+#[test]
+fn working_base_conversion_preserves_shared_object_image_and_base_dither_phase() {
+    let mut document=fixture(DocumentColor {space:RgbSpace::ProPhoto,depth:SampleDepth::U16});
+    let shared=paint(&document,1).base.as_ref().unwrap().image.clone();
+    let object=document.artwork.objects.insert(PortableId::random(),ImageObject::new(shared.clone(),"Shared photo")).unwrap();
+    let layer=document.artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![object]}).unwrap();
+    let occurrence=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(layer),"Object")).unwrap();
+    let stack=document.composition().result;
+    document.artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+    let shifted=PaintSource { color_mode:Default::default(),domain:[544,272],raster:Default::default(),base:Some(PaintBase {image:shared.clone(),offset:[17,9],policy:PaintBasePolicy::WorkingPixels}),operations:Default::default()};
+    let shifted=document.artwork.paint.insert(PortableId::random(),shifted).unwrap();
+    let occurrence=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(shifted),"Shifted base")).unwrap();
+    document.artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+    let document=Document::from_artwork(document.artwork).unwrap();
+    for change in [
+        DocumentColorChange::Assign(RgbSpace::Srgb),
+        DocumentColorChange::Convert {space:RgbSpace::Srgb,options:Default::default()},
+        DocumentColorChange::Depth {depth:SampleDepth::U8,dither:OutputDither::Stochastic8},
+    ] {
+        let prepared=prepare_document_color(&document,change,LIMIT,||false).unwrap();
+        let artwork=&prepared.document.artwork;
+        let original=&artwork.objects.get(object).unwrap().image;
+        assert_eq!(original.id(),shared.id());
+        assert!(original.same_owner(&shared));
+        let base=paint(&prepared.document,1).base.as_ref().unwrap();
+        let shifted=artwork.paint.get(shifted).unwrap().base.as_ref().unwrap();
+        assert_eq!(shifted.offset,[17,9]);
+        assert_ne!(base.image.id(),shared.id());
+        if matches!(change,DocumentColorChange::Depth {dither:OutputDither::Stochastic8,..}) {
+            assert_ne!(base.image.id(),shifted.image.id());
+            assert_ne!(base.image.tiles[&[0,0]].decode().unwrap(),shifted.image.tiles[&[0,0]].decode().unwrap());
+            let old=shared.tiles[&[0,0]].decode().unwrap();
+            let mut expected=vec![0;prepared.document.composition().color.paint_descriptor().byte_len([TILE_SIZE;2]).unwrap()];
+            let decoder=WorkingDecoder::new(&shared.interpretation,document.composition().color.space,Default::default()).unwrap();
+            let destination=&shifted.image.interpretation;
+            let encoder=WorkingEncoder::new(document.composition().color.space,destination,change.encoding()).unwrap();
+            let mut linear=vec![[0.;4];TILE_SIZE as usize];
+            let old_stride=TILE_SIZE as usize*shared.interpretation.pixel_bytes();
+            for y in 0..TILE_SIZE as usize {
+                decoder.decode_pixels(&old[y*old_stride..(y+1)*old_stride],&mut linear).unwrap();
+                encoder.encode_straight(&linear,&mut expected[y*TILE_SIZE as usize*4..(y+1)*TILE_SIZE as usize*4],None,[17,9+y as u32]).unwrap();
+            }
+            assert_eq!(shifted.image.tiles[&[0,0]].decode().unwrap(),expected);
+        } else {
+            assert_eq!(base.image.id(),shifted.image.id());
+            assert!(base.image.same_owner(&shifted.image));
+        }
+    }
+}
+
+#[test]
+fn worker_color_roundtrip_interns_mixed_immutable_image_closure() {
+    use layer_core::package::transfer::{PreparedTransfer,TransferReceiver};
+    use std::sync::atomic::AtomicBool;
+    let cancelled=AtomicBool::new(false);
+    let source=|value:u8| {
+        let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
+        let bytes=[value,29,81,255].repeat((TILE_SIZE*TILE_SIZE) as usize);
+        Arc::new(SourceImage {extent:[19,11],resolution:None,tiles:[([0,0],Arc::new(TileBlob::encode(interpretation.descriptor(),&bytes).unwrap()))].into(),interpretation})
+    };
+    let roundtrip=|artwork:layer_core::Artwork| {
+        let capture=Editor::new(Document::from_artwork(artwork).unwrap()).capture(0,Default::default()).unwrap();
+        let prepared=PreparedTransfer::capture(&capture,&cancelled).unwrap();
+        let descriptor=serde_json::from_slice(&serde_json::to_vec(prepared.descriptor()).unwrap()).unwrap();
+        let mut receiver=TransferReceiver::new(descriptor,Default::default()).unwrap();
+        for index in 0..prepared.payload_count() {
+            let mut offset=0;let length=prepared.payload_len(index).unwrap();
+            while offset<length {
+                let size=(length-offset).min(layer_core::package::MAX_RANGE_BYTES as u64) as usize;
+                receiver.push_chunk(index,&prepared.read_chunk(index,offset,size).unwrap()).unwrap();offset+=size as u64;
+            }
+        }
+        receiver.finish().unwrap().adopt_verified(Default::default(),&cancelled).unwrap().artwork.as_ref().clone()
+    };
+    let mut original=Document::new(PortableId::random(),19,11,layer_core::DocumentNames {paint:"paint".into(),paper:"paper".into()});
+    let layer_core::SourceTarget::Paint(paint)=original.working.target.unwrap() else {panic!("paint")};
+    let image=Image::new(source(17));
+    original.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(image.clone()));
+    let (layer,edit)=original.create_object_layer_edit("objects",None,0).unwrap();original.apply(edit).unwrap();
+    for index in 0..2 {let (_,edit)=original.add_image_object_edit(layer,ImageObject::new(image.clone(),"shared"),index).unwrap();original.apply(edit).unwrap();}
+    original.artwork=roundtrip(original.artwork.clone());
+    let image=original.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.clone();
+    for policy in [PaintBasePolicy::SourceProfile,PaintBasePolicy::WorkingPixels] {
+      let mut original=original.clone();original.artwork.paint.get_mut(paint).unwrap().base.as_mut().unwrap().policy=policy;
+      for change in [DocumentColorChange::Assign(RgbSpace::Srgb),DocumentColorChange::Assign(RgbSpace::DisplayP3),DocumentColorChange::Convert {space:RgbSpace::DisplayP3,options:Default::default()}] {
+        let outgoing=color_job_artwork(&original.artwork);
+        assert_eq!(outgoing.paint.get(paint).unwrap().base.is_none(),policy==PaintBasePolicy::SourceProfile);
+        let worker=Document::from_artwork(roundtrip(outgoing)).unwrap();
+        let converted=prepare_document_color(&worker,change,LIMIT,||false).unwrap();
+        let candidate=adopt_color_job_artwork(&original,roundtrip(converted.document.artwork)).unwrap();
+        assert_eq!(candidate.owner,original.owner);assert_eq!(candidate.revision,original.revision);assert_eq!(candidate.working,original.working);
+        let incoming=candidate.artwork.clone();
+        for (_,_,object) in incoming.objects.iter() {assert!(object.image.same_owner(&image));}
+        let base=&incoming.paint.get(paint).unwrap().base.as_ref().unwrap().image;
+        if policy==PaintBasePolicy::SourceProfile || candidate.composition().color==original.composition().color {assert!(base.same_owner(&image));assert_eq!(incoming.images().unwrap().len(),1);}
+        else {assert_ne!(base.id(),image.id());assert!(!base.same_owner(&image));assert_eq!(incoming.images().unwrap().len(),2);}
+        PreparedTransfer::capture(&Editor::new(candidate).capture(0,Default::default()).unwrap(),&cancelled).unwrap();
+        let mut replacement=incoming.clone();
+        let handle=replacement.objects.iter().next().unwrap().0;
+        let fresh=Image::new(image.storage().clone());let fresh_id=fresh.id();replacement.objects.get_mut(handle).unwrap().image=fresh;
+        replacement.intern_images_from(&original.artwork).unwrap();assert_eq!(replacement.objects.get(handle).unwrap().image.id(),fresh_id);
+        let mut conflict=incoming;let handle=conflict.objects.iter().next().unwrap().0;
+        conflict.objects.get_mut(handle).unwrap().image=Image::with_id(image.id(),source(0));
+        assert!(conflict.intern_images_from(&original.artwork).is_err());
+    }
     }
 }

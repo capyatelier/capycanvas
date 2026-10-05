@@ -5,7 +5,7 @@ use super::*;
 fn native_layer_thumbnail_squircles() {
     let app = native_test_app("art.capycanvas.LayerThumbnailSquircles");
     let mut project = new_drawing(128, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    active_paint_mut(&mut project).original = Some(std::sync::Arc::new(place_source::source()));
+    active_paint_mut(&mut project).base = Some(layer_core::PaintBase::new(std::sync::Arc::new(place_source::source()).into()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.area.connect_realize(glib::clone!(#[weak] w, move |_| w.dispatch(UiAction::RestoreWorkspace {
         workspace: Box::new(layer_ui::WorkspaceState::default()),

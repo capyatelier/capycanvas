@@ -87,7 +87,13 @@ class AndroidRasterTest {
     private val files get() = activity.cacheDir
     private fun tick() = native { val now=System.nanoTime(); Native.frame(it,now,now+16_666_667) }
     private fun refresh() { tick(); compose.runOnUiThread { host.documentChanged() }; compose.waitForIdle() }
-    private fun send(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; compose.waitUntil(30_000) { !tick() } }
+    private fun drawingSettled(): Boolean {
+        tick()
+        val current = host.snapshot ?: return false
+        return current.optBoolean("canvas_ready") && current.optBoolean("brush_ready")
+            && native { !Native.renderingPending(it) }
+    }
+    private fun send(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; compose.waitUntil(30_000) { drawingSettled() } }
     private fun invoke(id: String) = send(obj("type" to "invoke", "command" to id))
     private fun action(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; scenario.onActivity { host.documentChanged() }; tick(); compose.waitForIdle() }
     private fun action(command: String) { compose.runOnUiThread { host.invoke(command) }; compose.waitForIdle() }
@@ -135,7 +141,6 @@ class AndroidRasterTest {
         assertNull(host.failure)
     }
     private fun state(handle: Long): JSONObject {
-        // Explicit invalidation through a harmless host presentation action.
         Native.dispatch(handle,obj("type" to "close_settings").toString())
         return JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
     }
@@ -173,10 +178,8 @@ class AndroidRasterTest {
         Native.pointer(handle,71,0,0,bytes,bytes.size,false,false)
         val now=System.nanoTime(); Native.frame(handle,now,now+16_666_667)
     }
-        // Direct JNI input bypasses CanvasHost.wake(). Honor frame()'s retry
-        // contract before capturing the completed stroke on a nonblocking surface.
         if (phase == 3) {
-            try { compose.waitUntil(10_000) { !tick() } }
+            try { compose.waitUntil(10_000) { drawingSettled() } }
             catch (failure: Throwable) {
                 val diagnostics=runCatching { native { handle ->
                     val display=JSONObject(Native.displayStatus(handle))
@@ -3266,7 +3269,7 @@ class AndroidRasterTest {
         val source = sourceIdentity(original)
         val authoredLookup = original.occurrenceRecords().objects().single {
             val effect = it.getJSONObject("data").getJSONObject("content").optJSONObject("effect") ?: return@single false
-            val definition = original.packageData(original.packageData(effect.getString("ref")).getJSONObject("definition").getString("ref"))
+            val definition = original.packageData(effect.getString("ref"))
             definition.optString("builtin") == "color_lookup"
         }
         val lookupName = authoredLookup.getJSONObject("data").optString("name")
@@ -3619,7 +3622,7 @@ class AndroidRasterTest {
         native {Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString())};tick();backingEqual(repaired,manifest(save("source-repair-redo.capy")))
         change("rasterize_source")
         val rasterized=manifest(save("source-rasterized.capy"));val image=activeSource(rasterized)
-        assertEquals("rasterized",image.optString("role","original"));assertEquals("u8",image.getJSONObject("interpretation").optString("depth","u8"));assertEquals("display_p3",image.getJSONObject("interpretation").getJSONObject("profile").getString("builtin"))
+        assertEquals("working_pixels",rasterized.paintBaseBindings().getJSONObject(0).getString("policy"));assertEquals("u8",image.getJSONObject("interpretation").optString("depth","u8"));assertEquals("display_p3",image.getJSONObject("interpretation").getJSONObject("profile").getString("builtin"))
         assertEquals(activeSource(repaired).getJSONArray("extent").toString(),image.getJSONArray("extent").toString())
         native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick();backingEqual(repaired,manifest(save("source-rasterize-undo.capy")))
         native {
@@ -3715,7 +3718,7 @@ class AndroidRasterTest {
         assertEquals(1,copied.occurrenceRecords().length())
         assertEquals("srgb",copied.compositionColor().optString("space","srgb"))
         assertEquals("u8",copied.compositionColor().optString("depth","u8"))
-        assertEquals("rasterized",copied.originalImages().getJSONObject(0).optString("role","original"))
+        assertEquals("working_pixels",copied.paintBaseBindings().getJSONObject(0).getString("policy"))
         open(copyFile);sameBacking(copied,manifest(save("copy-reopened.capy")))
 
         open(File(files,"color-depth.capy"));sameBacking(reduced,manifest(save("color-reopened.capy")))
@@ -4036,6 +4039,73 @@ class AndroidRasterTest {
         assertEquals(painted,hash(png("front-redone.png")))
         assertNull(host.failure)
     }
+    @Test fun sharedImageObjectsKeepPosePixelsAndIdentityAcrossFilesAndRecovery() {
+        val source = InstrumentationRegistry.getArguments().getString("objectArchive")
+        org.junit.Assume.assumeTrue("Pass the private objectArchive fixture", source != null)
+        require(source!!.matches(Regex("/data/local/tmp/capy-object-ga-[a-zA-Z0-9_-]+\\.capy")))
+        val fixture = File(files, "object-fixture.capy")
+        ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("cat $source")).use { input ->
+            fixture.outputStream().use { input.copyTo(it) }
+        }
+        open(fixture); refresh(); invoke("fit_canvas")
+        fun objects() = native { org.json.JSONArray(Native.imageObjects(it)) }
+        fun poses(): Map<String, Any?> = objects().objects().associate { row ->
+            row.getString("id") to jsonValue(obj("image" to row.getString("image"), "affine" to row.getJSONArray("affine")))
+        }
+        fun sharedSources() {
+            val rows = objects().objects()
+            assertEquals(4, rows.size)
+            assertEquals(1, rows.map { it.getString("image") }.toSet().size)
+            assertEquals(1, rows.map { it.getInt("source_owner") }.toSet().size)
+            assertTrue(rows.all { it.getBoolean("paint_base_image_shared") && it.getBoolean("paint_base_source_shared") })
+        }
+        sharedSources()
+        val original = poses()
+        val objectValue = objects().getJSONObject(0)
+        val objectId = objectValue.getString("id")
+        val affine = org.json.JSONArray(objectValue.getJSONArray("affine").toString())
+        affine.put(4, affine.getDouble(4) + 17.0).put(5, affine.getDouble(5) - 11.0)
+        native {
+            Native.setImageObjectMotion(it, objectId, true)
+            Native.setImageObjectAffine(it, objectId, affine.toString())
+            Native.setImageObjectMotion(it, objectId, false)
+        }
+        refresh()
+        val edited = poses()
+        assertNotEquals(original, edited)
+        assertEquals(jsonValue(affine), objects().objects().single { it.getString("id") == objectId }.getJSONArray("affine").let(::jsonValue))
+        val editedPixels = hash(png("objects-edited.png"))
+        val saved = manifest(save("objects-edited.capy"))
+        val imageId = objectValue.getString("image")
+        assertEquals(imageId, saved.paintBaseBindings().getJSONObject(0).getJSONObject("image").getString("ref"))
+        val imageObjects = saved.getJSONArray("objects").objects().filter { it.getString("type") == "capy.image-object/1" }
+        assertEquals(4, imageObjects.size)
+        assertTrue(imageObjects.all { it.getJSONObject("data").getJSONObject("image").getString("ref") == imageId })
+        invoke("undo"); assertEquals(original, poses())
+        val recovery = File(files, "objects-history-session")
+        captureSession(recovery)
+        val restore = restoreSessionTask(recovery)
+        try { adoptSession(restore) } finally { Native.sessionFree(restore) }
+        sharedSources(); assertEquals(original, poses())
+        invoke("redo"); assertEquals(edited, poses())
+        assertEquals(editedPixels, hash(png("objects-recovered.png")))
+        native { Native.destroyGpuForTest(it) }; compose.runOnUiThread { host.documentChanged() }
+        compose.waitUntil(10_000) { host.failure != null }
+        compose.runOnUiThread { host.restartCanvas() }
+        compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
+        assertNull(host.failure)
+        sharedSources(); assertEquals(edited, poses())
+        assertEquals(editedPixels, hash(png("objects-new-gpu.png")))
+        open(File(files, "objects-edited.capy")); sharedSources(); assertEquals(edited, poses())
+        assertEquals(editedPixels, hash(png("objects-reopened.png")))
+        val theme = native { state(it).getString("theme") }
+        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+            try { File(activity.getExternalFilesDir(null), "objects-$theme.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+            finally { bitmap.recycle() }
+        }
+        assertNull(host.failure); assertNull(host.actionError)
+    }
+
     @Test fun exactSnapshotsSurviveFilesGpuReplacementAndRecovery() {
         fun history(command:String) {
             compose.waitUntil(15_000) {tick();native {state(it).array("commands").objects().any {c->c.optString("id")==command && c.optBoolean("enabled")}}}

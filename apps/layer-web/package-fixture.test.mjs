@@ -1,13 +1,6 @@
 import assert from 'node:assert/strict';
 
-export const authoredIdentity=manifest=>{
-  const objects=structuredClone(manifest.objects);
-  for(const object of objects)if(object.type==='capy.output/1') {
-    assert.ok(Number.isFinite(object.data.context.elapsed)&&object.data.context.elapsed>=0,'Output capture elapsed time is finite and nonnegative');
-    object.data.context.elapsed=0;
-  }
-  return objects;
-};
+export const authoredIdentity=manifest=>structuredClone(manifest.objects);
 const evidenceByManifest = new WeakMap();
 
 export async function packageManifest(bytes) {
@@ -145,22 +138,26 @@ function sourceResource(manifest, reference, content, samples = false) {
   if (content) delete result.id;
   return result;
 }
+export const paintBaseImage = (manifest, reference) => {
+  const base = packageObject(manifest, reference).data.base;
+  return base ? packageObject(manifest, base.image).data : undefined;
+};
 function sourceOriginals(manifest, content) {
-  return packageObjects(manifest, 'capy.paint-source/1').filter(source => source.data.original).map(source => {
-    const original = source.data.original, interpretation = {...original.interpretation};
+  return packageObjects(manifest, 'capy.paint-source/2').filter(source => source.data.base).map(source => {
+    const original = paintBaseImage(manifest, source.id), interpretation = {...original.interpretation};
     if (interpretation.profile.resource) interpretation.profile = {
       ...interpretation.profile, resource: sourceResource(manifest, interpretation.profile.resource, content),
     };
-    return {...original, interpretation, tiles: original.tiles.map(tile => ({
+    return {...original, ...(!content ? {id: source.data.base.image.ref} : {}), interpretation, tiles: original.tiles.map(tile => ({
       ...tile, resource: sourceResource(manifest, tile.resource, content),
     }))};
   });
 }
 export const sourceIdentity = manifest => sourceOriginals(manifest, false);
 export const sourceContent = manifest => sourceOriginals(manifest, true);
-export const sourceSamples = manifest => packageObjects(manifest, 'capy.paint-source/1').filter(source => source.data.original).map(source =>
-  source.data.original.tiles.map(tile => ({...tile, resource: sourceResource(manifest, tile.resource, true, true)})));
-export const rasterIdentity = manifest => manifest.objects.filter(source => ['capy.paint-source/1', 'capy.coverage-source/1'].includes(source.type)).map(source => ({
+export const sourceSamples = manifest => packageObjects(manifest, 'capy.paint-source/2').filter(source => source.data.base).map(source =>
+  paintBaseImage(manifest, source.id).tiles.map(tile => ({...tile, resource: sourceResource(manifest, tile.resource, true, true)})));
+export const rasterIdentity = manifest => manifest.objects.filter(source => ['capy.paint-source/2', 'capy.coverage-source/1'].includes(source.type)).map(source => ({
   id: source.id, type: source.type, domain: source.data.domain,
   tiles: (source.data.tiles ?? []).map(tile => ({...tile, resource: resourceIdentity(manifest, tile.resource)})),
   ...(source.data.material ? {material: source.data.material} : {}),

@@ -98,10 +98,10 @@ impl Canvas {
             builder.push_row(&row)?;
         }
         let SourceTarget::Paint(paint) = document.working.target.unwrap() else { unreachable!() };
-        document.artwork.paint.get_mut(paint).unwrap().original = Some(Arc::new(builder.finish()?));
+        document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new(Arc::new(builder.finish()?).into()));
         for _ in 0..31 {
             let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),
-                domain: extent, raster: Default::default(), original: None, operations: Default::default(),
+                domain: extent, raster: Default::default(), base: None, operations: Default::default(),
             })?;
             let occurrence = document.artwork.occurrences.insert(PortableId::random(),
                 Occurrence::new(OccurrenceContent::Paint(source), "empty"))?;
@@ -343,8 +343,8 @@ impl Canvas {
             self.engine.backend().telemetry().resident_bytes as f64 / 1048576.,
             backed as f64 / 1048576.,
             self.engine.document().artwork.paint.iter()
-                .filter_map(|(_, _, source)| source.original.as_ref())
-                .map(|s| s.resident_bytes()).sum::<usize>() as f64
+                .filter_map(|(_, _, source)| source.base.as_ref())
+                .map(|base| base.image.resident_bytes()).sum::<usize>() as f64
                 / 1048576.
         );
         #[cfg(target_os = "linux")]
@@ -394,10 +394,11 @@ fn compare_saved(path: &Path, snapshot: &ArtworkCapture) -> Result<()> {
     assert_eq!(reopened.composition().color, before.composition().color);
     assert_eq!(reopened.scene().order().len(), before.scene().order().len());
     for (&a, &b) in before.scene().order().iter().zip(reopened.scene().order()) {
-        let original = before.scene().paint_source(a).and_then(|p| p.original.as_ref());
-        let saved = reopened.scene().paint_source(b).and_then(|p| p.original.as_ref());
+        let original = before.scene().paint_source(a).and_then(|p| p.base.as_ref());
+        let saved = reopened.scene().paint_source(b).and_then(|p| p.base.as_ref());
         assert!(original == saved, "Original source samples/profile changed");
         if let (Some(original), Some(saved)) = (original, saved) {
+            let original=original.image.storage();let saved=saved.image.storage();
             assert_eq!(original.interpretation, saved.interpretation);
             for (key, tile) in &original.tiles {
                 assert_eq!(tile.content_digest()?, saved.tiles[key].content_digest()?);

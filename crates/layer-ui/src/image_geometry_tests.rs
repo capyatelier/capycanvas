@@ -276,7 +276,7 @@ fn snapping_document() -> Document {
     let other = doc.artwork.occurrences.insert(PortableId::random(), other).unwrap();
     let root = doc.composition().result;
     doc.artwork.stacks.get_mut(root).unwrap().entries.push(other);
-    doc.artwork.paint.get_mut(paint).unwrap().original = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::PaintBase::new(layer_core::Image::new(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]))));
     let working = doc.working.clone();
     let mut doc = Document::from_artwork(doc.artwork).unwrap(); doc.working = working;
     doc
@@ -380,7 +380,7 @@ fn snapping_excludes_moved_nested_ancestors_but_keeps_siblings_and_cousins() {
     let extent = doc.composition().size;
     let mut add=|name:&str,parent:Option<OccurrenceHandle>,group| {
         let content = if group { OccurrenceContent::Stack(doc.artwork.stacks.insert(PortableId::random(), Stack::default()).unwrap()) }
-            else { OccurrenceContent::Paint(doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: extent, raster: Default::default(), original: None, operations: Default::default() }).unwrap()) };
+            else { OccurrenceContent::Paint(doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: extent, raster: Default::default(), base: None, operations: Default::default() }).unwrap()) };
         let id = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(content, name)).unwrap();
         let stack = parent.map(|h| match doc.artwork.occurrences.get(h).unwrap().content { OccurrenceContent::Stack(h) => h, _ => panic!("parent stack") }).unwrap_or(root);
         doc.artwork.stacks.get_mut(stack).unwrap().entries.push(id);

@@ -90,8 +90,8 @@ fn wrap(document: &mut Document, child: OccurrenceHandle, name: &str) -> Occurre
     h
 }
 fn add_effect(document: &mut Document, effect: layer_core::EffectInstance, name: &str) -> OccurrenceHandle {
-    let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: effect.program }).unwrap();
-    let application = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values}).unwrap();
+    let size=document.composition().size;
+    let application=document.artwork.effects.insert(PortableId::random(),EffectApplication::new(effect.program,effect.values,size)).unwrap();
     let h = document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), name)).unwrap();
     let root = document.composition().result; document.artwork.stacks.get_mut(root).unwrap().entries.insert(0, h);
     h
@@ -130,14 +130,14 @@ fn source_padding_and_fully_erased_override_do_not_count() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     let imported = source([96, 80], |x, y| if (19..41).contains(&x) && (27..53).contains(&y) { 255 } else { 0 });
-    { let paint = paint(&mut document); paint.domain = imported.extent; paint.original = Some(imported); }
+    { let paint = paint(&mut document); paint.domain = imported.extent; paint.base = Some(layer_core::authored::PaintBase::new((imported).into())); }
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(19., 27., 41., 53.));
     paint(&mut document).raster = raster(RasterPlane::Color, document.composition().color, |_, _| 0.);
     assert!(bounds(&renderer, &document, ContentScope::All).is_empty());
     assert!(bounds(&renderer, &document, ContentScope::Target(paint_target(&document))).is_empty());
 
     let imported = source([320, 80], |x, y| if (19..281).contains(&x) && (27..53).contains(&y) { 255 } else { 0 });
-    { let paint = paint(&mut document); paint.domain = imported.extent; paint.original = Some(imported); }
+    { let paint = paint(&mut document); paint.domain = imported.extent; paint.base = Some(layer_core::authored::PaintBase::new((imported).into())); }
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(256., 27., 281., 53.));
     assert_eq!(bounds(&renderer, &document, ContentScope::Target(paint_target(&document))), rect(256., 27., 281., 53.));
 }
@@ -264,7 +264,7 @@ fn wetness_pages_without_color_do_not_create_content_bounds() {
 fn transparent_offcanvas_photo_does_not_expand_paper_coverage() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = Document::new(PortableId::random(), 128, 96, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    paint(&mut document).original = Some(source([96, 80], |_, _| 0));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([96, 80], |_, _| 0)).into()));
     occurrence(&mut document).translation = Point { x: -80., y: -70. };
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(0., 0., 128., 96.));
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), rect(0., 0., 128., 96.));
@@ -305,7 +305,7 @@ fn renderer_cancellation_discards_the_old_result_before_replacement() {
 fn linked_and_unlinked_initial_mask_coverage_uses_the_owner_geometry_once() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
-    paint(&mut document).original = Some(source([96, 80], |_, _| 255));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([96, 80], |_, _| 255)).into()));
     occurrence(&mut document).translation = Point { x: 10., y: 10. };
     occurrence(&mut document).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
     let h = owner(&document);
@@ -323,7 +323,7 @@ fn linked_and_unlinked_initial_mask_coverage_uses_the_owner_geometry_once() {
 fn visible_filter_halos_extend_past_the_local_source_hull() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
-    paint(&mut document).original = Some(source([16, 16], |_, _| 255));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
     occurrence(&mut document).translation = Point { x: 20., y: 20. };
     let mut effect = layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
     effect.set("sigma", layer_core::EffectValue::Number(2.)).unwrap();
@@ -331,6 +331,65 @@ fn visible_filter_halos_extend_past_the_local_source_hull() {
     let canvas = bounds(&renderer, &document, ContentScope::Canvas);
     assert!(canvas.min.x < 20. && canvas.min.y < 20. && canvas.max.x > 36. && canvas.max.y > 36., "blur extends actual alpha outside the original source: {canvas:?}");
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), canvas);
+}
+
+#[test]
+fn off_frame_filter_bounds_keep_authored_coordinates_when_capture_rebases() {
+    let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut document = document(Default::default());
+    paint(&mut document).base = Some(PaintBase::new(source([32;2], |x,y| u8::from((10..18).contains(&x) && (10..18).contains(&y)) * 255).into()));
+    occurrence(&mut document).translation = Point {x:-12.,y:-14.};
+    let mut effect = layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
+    effect.set("sigma", layer_core::EffectValue::Number(2.)).unwrap();
+    add_effect(&mut document,effect,"off-frame blur");
+    reindex(&mut document);
+    let actual = bounds(&renderer,&document,ContentScope::Visible);
+    assert!(actual.min.x < -2. && actual.min.y < -4. && actual.max.x > 6. && actual.max.y > 4., "{actual:?}");
+    let mut reference = document.clone();
+    occurrence(&mut reference).translation = Point {x:20.,y:18.};
+    let expected = bounds(&renderer,&reference,ContentScope::Visible);
+    assert_eq!(actual,rect(expected.min.x-32.,expected.min.y-32.,expected.max.x-32.,expected.max.y-32.));
+}
+
+#[test]
+fn object_only_bounds_include_retained_off_frame_images() {
+    let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut artwork = Artwork::new([32;2]).unwrap();
+    let mut image = ImageObject::new(source([16,12],|_,_|255).into(),"retained image");
+    image.affine = Affine64([1.,0.,0.,1.,-9.,7.]);
+    image.interpolation = ImageInterpolation::Nearest;
+    let image = artwork.objects.insert(PortableId::random(),image).unwrap();
+    let collection = artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![image]}).unwrap();
+    let owner = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(collection),"Images")).unwrap();
+    let stack = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
+    let document = Document::from_artwork(artwork).unwrap();
+    for scope in [ContentScope::Visible,ContentScope::All,ContentScope::PlacedTarget(owner)] {
+        assert_eq!(bounds(&renderer,&document,scope),rect(-9.,7.,7.,19.));
+    }
+    assert_eq!(bounds(&renderer,&document,ContentScope::Canvas),rect(0.,7.,7.,19.));
+}
+
+#[test]
+fn large_position_object_bounds_retain_nonempty_candidates_and_conservative_float_enclosure() {
+    let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut artwork = Artwork::new([32;2]).unwrap();
+    let min = [33_554_433.,-33_554_433.];
+    let mut image = ImageObject::new(source([1;2],|_,_|255).into(),"distant pixel");
+    image.affine = Affine64([1.,0.,0.,1.,min[0],min[1]]);
+    image.interpolation = ImageInterpolation::Nearest;
+    let image = artwork.objects.insert(PortableId::random(),image).unwrap();
+    let collection = artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![image]}).unwrap();
+    let owner = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(collection),"Images")).unwrap();
+    let stack = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
+    let document = Document::from_artwork(artwork).unwrap();
+    for scope in [ContentScope::Visible,ContentScope::PlacedTarget(owner)] {
+        let actual = bounds(&renderer,&document,scope);
+        assert!(!actual.is_empty(),"{actual:?}");
+        assert!(f64::from(actual.min.x)<=min[0] && f64::from(actual.min.y)<=min[1],"{actual:?}");
+        assert!(f64::from(actual.max.x)>=min[0]+1. && f64::from(actual.max.y)>=min[1]+1.,"{actual:?}");
+    }
 }
 
 #[test]
@@ -353,7 +412,7 @@ fn content_bounds_timing_on_reference_canvas() {
             if x >= 10 && y >= 10 && x < extent[0] - 10 && y < extent[1] - 10 { 255 } else { 0 }]).collect();
         builder.push_row(&row).unwrap();
     }
-    paint(&mut document).original = Some(Arc::new(builder.finish().unwrap()));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((Arc::new(builder.finish().unwrap())).into()));
     for scope in [ContentScope::Target(paint_target(&document)), ContentScope::Visible] {
         for run in 0..4 {
             let start = std::time::Instant::now();

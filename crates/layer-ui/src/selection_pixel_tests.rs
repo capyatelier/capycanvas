@@ -120,14 +120,14 @@ mod selection_pixel_checks {
     fn clearing_a_placed_photo_keeps_its_original_and_clear_entire_layer_discards_it() {
         let mut s = photo_session();
         let layer = s.engine.document().working.occurrence.unwrap();
-        let source = paint(s.engine.document(),layer).original.clone().unwrap();
+        let source = paint(s.engine.document(),layer).base.as_ref().unwrap().image.storage().clone();
         select(&mut s, rectangle([20., 20., 60., 50.]));
         let before = s.engine.document().clone();
         invoke(&mut s, CommandId::ClearSelected);
         let operations = submitted(&mut s);
         assert!(matches!(&operations[..], [(target, op)] if Some(*target) == s.engine.document().scene().source_target(layer) && erase(op)));
         let cleared = paint(s.engine.document(),layer);
-        assert!(Arc::ptr_eq(cleared.original.as_ref().unwrap(), &source), "the raster clears over the original");
+        assert!(Arc::ptr_eq(cleared.base.as_ref().unwrap().image.storage(), &source), "the raster clears over the original");
         invoke(&mut s, CommandId::Undo);
         assert_live_artwork_eq(s.engine.document(),&before);
         assert_eq!(CommandId::ClearLayer.label().as_ref(), "Clear Entire Layer");
@@ -135,7 +135,7 @@ mod selection_pixel_checks {
             .description
             .contains("placed photo"));
         invoke(&mut s, CommandId::ClearLayer);
-        assert!(paint(s.engine.document(),layer).original.is_none());
+        assert!(paint(s.engine.document(),layer).base.is_none());
         assert!(s.state.settings.keys(&CommandId::ClearLayer.shortcut_id()).is_empty(), "Clear Entire Layer stays unbound");
     }
 
@@ -145,7 +145,7 @@ mod selection_pixel_checks {
         let id = s.engine.document().working.occurrence.unwrap();
         let reason = |s: &UiSession<Recorder>| s.command_disabled_reason(CommandId::RevertToOriginal);
         assert_eq!(reason(&s).as_deref(), Some("This photo has no edits"));
-        let source = paint(s.engine.document(),id).original.clone().unwrap();
+        let source = paint(s.engine.document(),id).base.as_ref().unwrap().image.storage().clone();
         select(&mut s, rectangle([20., 20., 60., 50.]));
         invoke(&mut s, CommandId::ClearSelected);
         submitted(&mut s);
@@ -175,7 +175,7 @@ mod selection_pixel_checks {
         let mut expected_paint=edited_paint.clone();expected_paint.raster=Default::default();expected_paint.operations=Arc::default();
         assert_eq!(paint(s.engine.document(),id),&expected_paint);
         assert_eq!(reverted, expected, "only the edits go; placement, mask, opacity and blend stay");
-        assert!(Arc::ptr_eq(paint(s.engine.document(),id).original.as_ref().unwrap(), &source), "the original is shared, not copied");
+        assert!(Arc::ptr_eq(paint(s.engine.document(),id).base.as_ref().unwrap().image.storage(), &source), "the original is shared, not copied");
         assert_eq!(reason(&s).as_deref(), Some("This photo has no edits"));
         assert_eq!(
             s.dispatch(UiAction::Invoke { command: CommandId::RevertToOriginal }).unwrap_err(),
@@ -202,9 +202,8 @@ mod selection_pixel_checks {
         assert_eq!(reason(&s).as_deref(), Some("Select a placed photo layer"));
         s.dispatch(UiAction::SelectLayer { id: crate::session::occurrence_token(id) }).unwrap();
         let mut rasterized=paint(s.engine.document(),id).clone();
-        let mut converted = (*source).clone();
-        converted.kind = layer_core::color::source::SourceKind::Rasterized;
-        rasterized.original = Some(Arc::new(converted));
+        let converted = (*source).clone();
+        rasterized.base = Some(layer_core::PaintBase {image:layer_core::Image::new(Arc::new(converted)),offset:[0;2],policy:layer_core::PaintBasePolicy::WorkingPixels});
         let SourceTarget::Paint(handle)=s.engine.document().scene().source_target(id).unwrap() else {unreachable!()};
         s.engine.apply_edit(layer_core::Edit::Paint(RecordChange::replace(&s.engine.document().artwork.paint,handle,Some(rasterized)).unwrap())).unwrap();
         assert_eq!(reason(&s).as_deref(), Some("A rasterized photo has no original to return to"));
@@ -231,9 +230,9 @@ mod selection_pixel_checks {
             assert_eq!(index(copy_id) + 1, index(clipped), "{command:?} goes directly above the clipping stack");
             assert!(copy.attachment == layer_core::Attachment::None && copy.mask.is_none());
             assert_eq!(doc.scene().parent(copy_id),before.scene().parent(base));
-            assert!(paint(doc,copy_id).original.is_none());
+            assert!(paint(doc,copy_id).base.is_none());
             assert_eq!(copy.placement, layer_core::LayerPlacement::IDENTITY);
-            assert!(Arc::ptr_eq(paint(doc,base).original.as_ref().unwrap(),paint(&before,base).original.as_ref().unwrap()));
+            assert!(Arc::ptr_eq(paint(doc,base).base.as_ref().unwrap().image.storage(),paint(&before,base).base.as_ref().unwrap().image.storage()));
             assert!(doc.working.selection.is_none(), "the selection moves into the new layer");
             let origin = copy.translation;
             let copy=doc.scene().source_target(copy_id).unwrap();
@@ -487,7 +486,7 @@ mod selection_pixel_checks {
         let RasterOperationKind::Bake { scene, scope, offset } = &operations[0].1.kind else { panic!("placed input is composited") };
         assert_eq!(*offset,Point{x:-origin.x,y:-origin.y});
         assert!(matches!(scope,SceneScope::Members(members) if members.contains(&id)));
-        assert!(Arc::ptr_eq(scene.view().paint_source(id).unwrap().original.as_ref().unwrap(),paint(&before,id).original.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(scene.view().paint_source(id).unwrap().base.as_ref().unwrap().image.storage(),paint(&before,id).base.as_ref().unwrap().image.storage()));
         assert_eq!(scene.view().occurrence(id).unwrap().placement,before.scene().occurrence(id).unwrap().placement);
         assert_eq!(operations[0].1.coverage.source.initial, Some(selection.translated(Point { x: -origin.x, y: -origin.y })));
         invoke(&mut s, CommandId::Undo);

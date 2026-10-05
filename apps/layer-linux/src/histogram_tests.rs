@@ -36,7 +36,7 @@ fn fixture() -> Document {
     for _ in 0..16 {
         source.push_row(&row).unwrap();
     }
-    paint_at_mut(&mut p, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));
+    paint_at_mut(&mut p, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(source.finish().unwrap())).into()));
     let owner = p.scene().order()[0];
     let coverage = p.artwork.coverage.next_handle();
     let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, [64, 16], Point::default());
@@ -347,7 +347,7 @@ pub(super) fn photo_workspace(app: &NativeTestApp) -> Rc<Workspace> {
     let photo=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/photo-editing-color/g2-inputs/portrait.png");
     dialog.set_file(&gtk::gio::File::for_path(photo)).unwrap();pump(200);dialog.response(gtk::ResponseType::Accept);
     super::new_photo::finish(&w);ready(&w);
-    assert!(super::photo_edit::document(&w).artwork.paint.iter().any(|(_,_,paint)|paint.original.is_some()));w
+    assert!(super::photo_edit::document(&w).artwork.paint.iter().any(|(_,_,paint)|paint.base.is_some()));w
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn native_compact_graphs_photo_review() {
                 assert_eq!(widgets(menu.upcast_ref()).filter(|widget|widget.is_mapped() && widget.widget_name()=="property-picker").count(),3);input.key(0xff1b);
             }
             crate::snapshot(&w).save_to_png(output.join(format!("photo-{effect}-{width}-{theme:?}.png"))).unwrap();
-            let edited=super::photo_edit::document(&w);for (_,id,paint) in original.artwork.paint.iter() {let current=edited.artwork.paint.get(edited.artwork.paint.resolve(id).unwrap()).unwrap();assert_eq!(current.original,paint.original);assert_eq!(current.raster,paint.raster);}
+            let edited=super::photo_edit::document(&w);for (_,id,paint) in original.artwork.paint.iter() {let current=edited.artwork.paint.get(edited.artwork.paint.resolve(id).unwrap()).unwrap();assert_eq!(current.base,paint.base);assert_eq!(current.raster,paint.raster);}
             w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);assert_live_artwork_eq(&super::photo_edit::document(&w),&original);
         }
     }
@@ -464,8 +464,10 @@ fn native_histogram_live_language() {
     let mut project = fixture();
     composition_mut(&mut project).color.depth = SampleDepth::F32;
     composition_mut(&mut project).blend = layer_core::BlendSpace::Linear;
-    std::sync::Arc::make_mut(paint_at_mut(&mut project,0).original.as_mut().unwrap()).interpretation.profile =
-        ColorProfile::Icc(layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap().into());
+    let base=paint_at_mut(&mut project,0).base.as_mut().unwrap();
+    let mut image=(*base.image).clone();
+    image.interpretation.profile=ColorProfile::Icc(layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap().into());
+    base.image=std::sync::Arc::new(image).into();
     crate::open_workspace(&app, &active, Some((project, None)));
     until(|| !active.borrow().is_empty(), "prepared histogram language window");
     let w = active.borrow().last().unwrap().clone();

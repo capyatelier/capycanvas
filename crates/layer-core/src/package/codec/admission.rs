@@ -1,7 +1,7 @@
 use super::*;
 
-fn paint(artwork: &mut Artwork, domain: [u32;2], original: Option<Arc<SourceImage>>, raster: RasterRevision) {
-    let source=artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain,original,raster,operations:Default::default()}).unwrap();
+fn paint(artwork: &mut Artwork, domain: [u32;2], original: Option<Image>, raster: RasterRevision) {
+    let source=artwork.paint.insert(PortableId::random(),PaintSource {color_mode:Default::default(),domain,base:original.map(PaintBase::new),raster,operations:Default::default()}).unwrap();
     let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),"Paint")).unwrap();
     let stack=artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
@@ -18,7 +18,7 @@ fn admitted_roundtrip(artwork: &Artwork) {
 #[test]
 fn shared_original_references_do_not_consume_evaluation_graph_edges() {
     let mut artwork=Artwork::new([4096;2]).unwrap();
-    let original=crate::color::source::rgba8_source([4096;2],|_,_|[32,64,128,255]);
+    let original=Image::new(crate::color::source::rgba8_source([4096;2],|_,_|[32,64,128,255]));
     for _ in 0..1025 {paint(&mut artwork,[4096;2],Some(original.clone()),Default::default());}
     admitted_roundtrip(&artwork);
 }
@@ -38,10 +38,10 @@ fn admitted_layer_tile_and_dependency_boundaries_reopen() {
 
     let mut artwork=Artwork::new([limits.dimension;2]).unwrap();
     let tile=crate::color::source::rgba8_source([256;2],|_,_|[0;4]).tiles[&[0;2]].clone();
-    let original=Arc::new(SourceImage {kind:SourceKind::Original,extent:[limits.dimension;2],resolution:None,
+    let original=Arc::new(SourceImage {extent:[limits.dimension;2],resolution:None,
         interpretation:SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},
         tiles:(0..limits.tiles).map(|i|([i as u32%128,i as u32/128],tile.clone())).collect()});
-    paint(&mut artwork,[limits.dimension;2],Some(original),Default::default());
+    paint(&mut artwork,[limits.dimension;2],Some(Image::new(original)),Default::default());
     admitted_roundtrip(&artwork);
 
     let mut artwork=Artwork::new([1;2]).unwrap();
@@ -144,7 +144,7 @@ fn material_and_ruler_precision_bounds_preserve_future_values() {
     for (width,length,preserved) in [(17.,1.,true),(0.25,1.,true),(7.,0.0001,true),(0.,1.,false),(7.,0.,false)] {
         let changed=rewrite(&bytes,|manifest| {
             for record in manifest["objects"].as_array_mut().unwrap() {
-                if record["type"]=="capy.paint-source/1" && record["data"].get("material").is_some() {
+                if record["type"]=="capy.paint-source/2" && record["data"].get("material").is_some() {
                     record["data"]["material"]["watercolor"]["edge_width"]=json!(width);
                 }
                 if record["type"]=="capy.guides/1" {
@@ -155,5 +155,100 @@ fn material_and_ruler_precision_bounds_preserve_future_values() {
         let outcome=open(backing(changed),Default::default(),&AtomicBool::new(false)).unwrap();
         if preserved {assert!(matches!(outcome,OpenOutcome::Preserved {ref outputs,..} if outputs.len()==1),"{outcome:?}");}
         else {assert!(matches!(outcome,OpenOutcome::RecoveredView {..}),"{outcome:?}");}
+    }
+}
+
+#[test]
+fn object_ancestors_preserve_valid_unimplemented_placement_and_reject_invalid_maps() {
+    let bytes=include_bytes!("fixtures/shared-image-objects.capy");
+    for (placement,supported,invalid) in [
+        (json!({"translation":[8,4]}),true,false),
+        (json!({"translation":[0.25,0]}),false,false),
+        (json!({"projective":[2,0,0,0,2,0,0,0,1]}),false,false),
+        (json!({"projective":[0,0,0,0,0,0,0,0,0]}),false,true),
+    ] {
+        let changed=rewrite(bytes,|manifest| {
+            let objects=manifest["objects"].as_array_mut().unwrap();
+            let stack=objects.iter_mut().find(|record|record["type"]=="capy.stack/1").unwrap();
+            let entries=stack["data"]["entries"].clone();
+            stack["data"]["entries"]=json!([resources::reference(identity(1001))]);
+            objects.push(json!({"id":identity(1000),"type":"capy.stack/1","data":{"entries":entries}}));
+            objects.push(json!({"id":identity(1001),"type":"capy.occurrence/2","data":{"content":{"stack":resources::reference(identity(1000))},"placement":placement}}));
+        });
+        let outcome=open(backing(changed),Default::default(),&AtomicBool::new(false)).unwrap();
+        if supported {assert!(matches!(outcome,OpenOutcome::Candidate {..}),"{outcome:?}");}
+        else if invalid {assert!(matches!(outcome,OpenOutcome::Failure {..}),"{outcome:?}");}
+        else {assert!(matches!(outcome,OpenOutcome::Preserved {..}),"{outcome:?}");}
+    }
+}
+
+#[test]
+fn unknown_drawable_children_preserve_the_complete_package() {
+    let bytes=include_bytes!("fixtures/shared-image-objects.capy");
+    let changed=rewrite(bytes,|manifest| {
+        manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["type"]=="capy.image-object/1").unwrap()["type"]=json!("example.path-object/1");
+    });
+    let OpenOutcome::Preserved {source,..}=open(backing(changed.clone()),Default::default(),&AtomicBool::new(false)).unwrap() else {panic!("Unknown drawable must preserve its owning object layer")};
+    let mut copied=Vec::new();copy_original(&source,&mut copied,&AtomicBool::new(false)).unwrap();assert_eq!(copied,changed);
+}
+
+fn collide_image_and_tile(manifest:&mut Value) {
+    let tile=manifest["resources"].as_array().unwrap().iter().find(|record|record["type"]=="capy.raster-tile/1").unwrap()["id"].clone();
+    let image=manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["type"]=="capy.image/1").unwrap();
+    let previous=resources::reference_id(&json!({"ref":image["id"]})).unwrap();
+    image["id"]=tile.clone();
+    let tile=resources::reference_id(&json!({"ref":tile})).unwrap();
+    crate::package::remap_references(manifest,&[(previous,tile)].into(),4_194_304).unwrap();
+}
+
+#[test]
+fn image_identity_cannot_alias_a_tile_in_portable_or_private_transfer() {
+    let bytes=include_bytes!("fixtures/shared-image-objects.capy");
+    let changed=rewrite(bytes,collide_image_and_tile);
+    assert!(matches!(open(backing(changed),Default::default(),&AtomicBool::new(false)).unwrap(),OpenOutcome::Failure {..}));
+    let artwork=editable(bytes.to_vec());
+    let transfer=crate::package::transfer::PreparedTransfer::capture(&capture(&artwork),&AtomicBool::new(false)).unwrap();
+    let mut descriptor=transfer.descriptor().clone();collide_image_and_tile(&mut descriptor.manifest);
+    assert!(crate::package::transfer::TransferReceiver::new(descriptor,Default::default()).is_err());
+}
+
+#[test]
+fn ancillary_only_images_are_dropped_and_unplaced_hidden_authored_uses_are_kept() {
+    let bytes=include_bytes!("fixtures/shared-image-objects.capy");
+    for authored_use in [false,true] {
+        let changed=rewrite(bytes,|manifest| {
+            let records=manifest["objects"].as_array_mut().unwrap();
+            let mut image=records.iter().find(|record|record["type"]=="capy.image/1").unwrap().clone();image["id"]=json!(identity(900));records.push(image);
+            records.push(json!({"id":identity(901),"type":"example.note/1","ancillary":true,"copy_safe":true,"data":{"image":resources::reference(identity(900))}}));
+            if authored_use {
+                records.push(json!({"id":identity(903),"type":"capy.image-object/1","data":{"image":resources::reference(identity(900)),"visible":false}}));
+                records.push(json!({"id":identity(904),"type":"capy.object-layer/1","data":{"children":[resources::reference(identity(903))]}}));
+                records.push(json!({"id":identity(905),"type":"capy.occurrence/3","data":{"content":{"objects":resources::reference(identity(904))}}}));
+            }
+        });
+        let artwork=editable(changed);let prepared=prepare(&artwork,false);
+        let manifest:Value=serde_json::from_slice(prepared.manifest()).unwrap();
+        let records=manifest["objects"].as_array().unwrap();
+        assert_eq!(records.iter().any(|record|record["id"]==json!(identity(900))),authored_use);
+        assert_eq!(records.iter().any(|record|record["id"]==json!(identity(901))),authored_use);
+        let reopened=editable(serialize(&prepared));
+        assert_eq!(reopened.objects.resolve(identity(903)).is_some(),authored_use);
+        if authored_use {assert!(!reopened.objects.get(reopened.objects.resolve(identity(903)).unwrap()).unwrap().visible);}
+    }
+}
+
+#[test]
+fn linked_integer_mask_offsets_preserve_packages_beyond_runtime_sum_precision() {
+    let bytes=serialize(&prepare(&fixture(SampleDepth::U8),true));
+    for (owner,relative) in [("16777216","1"),("2147483520","128"),("-2147483648","-1")] {
+        let changed=rewrite(&bytes,|manifest| {
+            let occurrence=manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["type"]=="capy.occurrence/2" && record["data"].get("mask").is_some()).unwrap();
+            occurrence["type"]="capy.occurrence/3".into();
+            let data=occurrence["data"].as_object_mut().unwrap();data.remove("placement");data.insert("offset".into(),json!([owner,"0"]));
+            let mask=data.get_mut("mask").unwrap().as_object_mut().unwrap();mask.remove("placement");mask.insert("linked".into(),true.into());mask.insert("offset".into(),json!([relative,"0"]));
+        });
+        let outcome=open(backing(changed.clone()),Default::default(),&AtomicBool::new(false)).unwrap();
+        let OpenOutcome::Preserved {source,preview:Some(_),..}=outcome else {panic!("exact mask offset must be preserved: {outcome:?}");};
+        let cancel=AtomicBool::new(false);let mut copied=Vec::new();copy_original(&source,&mut copied,&cancel).unwrap();assert_eq!(copied,changed);
     }
 }

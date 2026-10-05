@@ -114,9 +114,9 @@ fn partial_bakes_back_tiles_without_publishing_the_layer() {
     let mut document = layer_core::Document::new(PortableId::random(), 1280, 768, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let root = document.artwork.root;
     document.artwork.compositions.get_mut(root).unwrap().blend = layer_core::BlendSpace::Perceptual;
-    paint_mut(&mut document).original = Some(layer_core::color::source::rgba8_source([1280, 768], |x, y| {
+    paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source([1280, 768], |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
-    }));
+    })).into()));
     let photo = occurrence_id(&document);
     let (_, mut engine) = engine(document);
     let pixels = |engine: &mut CanvasEngine<WgpuRasterizer>| {
@@ -356,7 +356,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
             for _ in 0..769 {
                 source.push_row(&[70, 140, 210].repeat(4353)).unwrap();
             }
-            paint_mut(&mut document).original = Some(Arc::new(source.finish().unwrap()));
+            paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new((Arc::new(source.finish().unwrap())).into()));
             let (mut input, mut live) = engine(document);
             let r = live.backend_mut();
             let transfer = r.prepare_native_transfer(RgbSpace::Srgb).unwrap();
@@ -1019,9 +1019,9 @@ fn layer_color_modes_convert_originals_constrain_edits_and_survive_history_and_r
         for space in RgbSpace::ALL {
             let mut doc = paint_document([256; 2], "Paint");
             set_color(&mut doc, DocumentColor { space, depth });
-            paint_mut(&mut doc).original = Some(layer_core::color::source::rgba8_source([256; 2], |x, _| {
+            paint_mut(&mut doc).base = Some(layer_core::authored::PaintBase::new(layer_core::color::source::rgba8_source([256; 2], |x, _| {
                 if x < 85 { [255, 0, 0, 255] } else if x < 170 { [0, 255, 0, 255] } else { [255, 255, 255, 80] }
-            }));
+            }).into()));
             let owner = occurrence_id(&doc);
             let (_, mut live) = engine(doc);
             let original = live.backend_mut().readback_srgb_rgba8().unwrap();

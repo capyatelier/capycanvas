@@ -30,13 +30,12 @@ impl PreviewRevisions {
         let composition = document.composition();
         for &handle in scene.order() {
             let occurrence = scene.occurrence(handle).unwrap();
-            let source = scene.paint_source(handle).and_then(|paint| paint.original.as_ref()).map(Arc::downgrade);
+            let source = scene.paint_source(handle).and_then(|paint| paint.base.as_ref()).map(|base| Arc::downgrade(base.image.storage()));
             let placement = &occurrence.placement;
             let mesh = placement.mesh.as_ref().map(Arc::downgrade);
             let generator = match occurrence.content {
                 OccurrenceContent::Effect(effect) => document.artwork.effects.get(effect).and_then(|application| {
-                    let definition = document.artwork.definitions.get(application.definition)?;
-                    (definition.program.kind == layer_core::EffectKind::Generator).then_some((application, &definition.program))
+                    (application.program.kind == layer_core::EffectKind::Generator).then_some((application, &application.program))
                 }),
                 _ => None,
             };
@@ -161,7 +160,7 @@ pub(super) fn apply_mask_refusal(kind: LayerKind, l: &Localizer) -> Option<std::
         LayerKind::Paint => None,
         LayerKind::Group => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_A_GROUP_S_MASK_CAN_T_BE_APPLIED_ON_ITS_OWN_MERGE_GROUP_APPLIES_IT)),
         LayerKind::Effect => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_AN_EFFECT_LAYER_S_MASK_SETS_WHERE_THE_EFFECT_SHOWS_IT_CAN_T_BE_APPLIED)),
-        LayerKind::Selection => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_ONLY_A_PAINT_LAYER_S_MASK_CAN_BE_APPLIED)),
+        LayerKind::Selection | LayerKind::Object => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_ONLY_A_PAINT_LAYER_S_MASK_CAN_BE_APPLIED)),
     }
 }
 impl LayerControls {
@@ -661,7 +660,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return Err("Use an image name with 1 to 128 characters".into());
             }
             let [w, h] = source.extent.map(|v| v as f32);
-            let paint = RecordChange::insert(&artwork.paint, PaintSource { color_mode: Default::default(), domain: std::array::from_fn(|axis| doc.composition().size[axis].max(source.extent[axis])), raster: Default::default(), original: Some(Arc::new(source)), operations: Arc::default() });
+            let paint = RecordChange::insert(&artwork.paint, PaintSource { color_mode: Default::default(), domain: std::array::from_fn(|axis| doc.composition().size[axis].max(source.extent[axis])), raster: Default::default(), base: Some(layer_core::authored::PaintBase::new(Arc::new(source).into())), operations: Arc::default() });
             let mut occurrence = Occurrence::new(OccurrenceContent::Paint(paint.handle), name);
             occurrence.attachment = attachment;
             if interactive {
@@ -716,6 +715,26 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.apply_edit(edit).map_err(error)?;
         if previous.is_some() && self.engine.document().working.selection.is_none() { self.selection_masks.reselect = previous; }
         Ok(())
+    }
+    pub fn set_image_object_affine(
+        &mut self, object: layer_core::authored::ImageObjectHandle, affine: layer_core::authored::Affine64,
+    ) -> Result<UiChange, String> {
+        self.require_idle()?;
+        let edit = self.engine.document().set_image_object_affine_edit(object, affine).map_err(error)?;
+        self.engine.backend().preflight_image_object_affine(self.engine.document().scene(),object,affine,self.engine.view()).map_err(error)?;
+        self.layer_edit(edit)?;
+        self.refresh_document();
+        self.refresh_commands();
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
+    }
+    pub fn set_image_object_motion(
+        &mut self, object: Option<layer_core::authored::ImageObjectHandle>,
+    ) -> Result<UiChange, String> {
+        self.require_idle()?;
+        let owner = object.map(|object| self.engine.document().scene().object_owner(object)
+            .ok_or("Unknown image object")).transpose()?;
+        self.engine.backend_mut().prepare_moving_layer(owner);
+        Ok(self.changed(0, true))
     }
     pub(super) fn set_layer_opacity(
         &mut self,
@@ -907,7 +926,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let change = RecordChange::insert(&doc.artwork.stacks, Stack::default());
                     let content = OccurrenceContent::Stack(change.handle); edits.push(Edit::Stack(change)); content
                 } else {
-                    let change = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), original: None, operations: Arc::default() });
+                    let change = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), base: None, operations: Arc::default() });
                     let content = OccurrenceContent::Paint(change.handle); edits.push(Edit::Paint(change)); content
                 };
                 let id = doc.artwork.occurrences.next_handle();
@@ -1149,7 +1168,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     LayerAction::Clear { .. } => {
                         let OccurrenceContent::Paint(handle) = layer.content else { return Err("Choose a paint layer".into()); };
                         let mut source = self.engine.document().artwork.paint.get(handle).ok_or("Unknown source")?.clone();
-                        source.raster = Default::default(); source.operations = Arc::default(); source.original = None;
+                        source.raster = Default::default(); source.operations = Arc::default(); source.base = None;
                         edits.push(Edit::Paint(RecordChange::replace(&self.engine.document().artwork.paint, handle, Some(source))?));
                     }
                     lock @ (LayerAction::AlphaLock { .. } | LayerAction::ToggleAlphaLock { .. }) => {
@@ -1502,7 +1521,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 below.enabled = state.enabled;
                 protection.push(below);
             }
-            if doc.scene().paint_source(handle).and_then(|s| s.original.as_ref()).is_some_and(|s| s.is_original()) {
+            if doc.scene().paint_source(handle).and_then(|s| s.base.as_ref()).is_some_and(|s| s.is_original()) {
                 protection.push(item(self.localization().text(MessageId::COMMAND_REPAIR_SOURCE_PROFILE).as_ref(), A::RepairSourceProfile { id }));
                 protection.push(item(self.localization().text(MessageId::COMMAND_RASTERIZE_SOURCE).as_ref(), A::RasterizeSource { id }));
                 if Some(handle) == doc.working.occurrence {

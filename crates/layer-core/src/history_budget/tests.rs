@@ -24,8 +24,21 @@ fn paint_handle(document: &Document) -> PaintHandle {
 }
 fn paint_change(document: &Document, h: PaintHandle, source: Option<Arc<SourceImage>>) -> Edit {
     let mut s = document.artwork.paint.get(h).unwrap().clone();
-    s.original = source;
+    s.base = source.map(|source|PaintBase::new(source.into()));
     Edit::Paint(RecordChange::replace(&document.artwork.paint, h, Some(s)).unwrap())
+}
+#[test]
+fn image_and_proof_history_share_one_profile_allocation() {
+    let profile=ColorProfile::Icc(vec![17;512].into());
+    let mut source=(*rgba8_source([1,1],|_,_|[0,0,0,255])).clone();source.interpretation.profile=profile.clone();
+    let source=Arc::new(source);let mut doc=document([256;2]);let h=paint_handle(&doc);
+    doc.artwork.paint.get_mut(h).unwrap().base=Some(PaintBase::new(source.clone().into()));
+    let mut output=doc.artwork.outputs.get(doc.artwork.default_output).unwrap().clone();output.proof=Some(color::ProofRecipe::new("Proof".into(),profile.clone()));
+    let edit=Edit::Output(RecordChange::replace(&doc.artwork.outputs,doc.artwork.default_output,Some(output)).unwrap());
+    let entry=HistoryEntry::new(edit,0);assert_eq!(Accounting::new(&doc).charge(&entry),entry.metadata_bytes);
+    let mut accounting=Accounting::default();assert_eq!(accounting.charge_profile(&profile),512);
+    assert_eq!(accounting.sources.charge(&source),std::mem::size_of::<SourceImage>()+96+source.resident_bytes());
+    assert_eq!(accounting.charge_profile(&profile),0);
 }
 #[test]
 fn selection_history_charges_shared_coverage_once_and_rejects_oversized_edits() {
@@ -184,7 +197,7 @@ fn over_budget_source_changes_reject_atomically_in_both_directions() {
         let h = paint_handle(&d);
         let original = source();
         if remove {
-            d.artwork.paint.get_mut(h).unwrap().original = Some(original.clone());
+            d.artwork.paint.get_mut(h).unwrap().base = Some(PaintBase::new(original.clone().into()));
         }
         let mut editor = Editor::new(d);
         let occurrence = editor.document().working.occurrence.unwrap();
@@ -235,7 +248,7 @@ fn reinterpretation_charges_shared_tiles_once_and_new_profile_ownership() {
     let mut d = document([256; 2]);
     let h = paint_handle(&d);
     let original = source();
-    d.artwork.paint.get_mut(h).unwrap().original = Some(original.clone());
+    d.artwork.paint.get_mut(h).unwrap().base = Some(PaintBase::new(original.clone().into()));
     let mut repaired = original.as_ref().clone();
     repaired.interpretation.profile = ColorProfile::Builtin(RgbSpace::DisplayP3);
     let mut editor = Editor::new(d);
@@ -252,9 +265,9 @@ fn reinterpretation_charges_shared_tiles_once_and_new_profile_ownership() {
         .paint
         .get(h)
         .unwrap()
-        .original
+        .base
         .as_ref()
-        .unwrap();
+        .unwrap().image.storage();
     assert!(Arc::ptr_eq(
         &repaired.tiles[&[0, 0]],
         &original.tiles[&[0, 0]]
@@ -267,9 +280,9 @@ fn reinterpretation_charges_shared_tiles_once_and_new_profile_ownership() {
             .paint
             .get(h)
             .unwrap()
-            .original
+            .base
             .as_ref()
-            .unwrap(),
+            .unwrap().image.storage(),
         &original
     ));
 }

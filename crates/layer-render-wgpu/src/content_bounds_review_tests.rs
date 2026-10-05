@@ -6,7 +6,7 @@ fn batched_bounds_preserve_source_reads_before_late_color_and_mask_restores() {
     let mut document = document(Default::default());
     document.artwork.compositions.get_mut(document.artwork.root).unwrap().size = [2048, 512];
     paint(&mut document).domain = [2048, 512];
-    paint(&mut document).original = Some(source([2048, 512], |x, y| if x == 3 && y == 7 { 255 } else { 0 }));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([2048, 512], |x, y| if x == 3 && y == 7 { 255 } else { 0 })).into()));
     let late_page = |revision: RasterRevision| {
         let mut data = (*revision.wait_data().unwrap()).clone();
         data.tiles = data.tiles.into_iter().map(|(mut key, tile)| {
@@ -91,11 +91,11 @@ fn bounded_bounds_batch_falls_back_for_regions_above_the_batch_share() {
     let mut document = document(Default::default());
     document.artwork.compositions.get_mut(document.artwork.root).unwrap().size = [512, 256];
     paint(&mut document).domain = [512, 256];
-    paint(&mut document).original = Some(source([16, 16], |_, _| 255));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
     occurrence(&mut document).translation = Point { x: 32., y: 48. };
     let extent = document.composition().size;
     let (second, SourceTarget::Paint(second_paint)) = crate::test_support::add_paint(&mut document.artwork, "second boundary page", extent) else { panic!("paint") };
-    document.artwork.paint.get_mut(second_paint).unwrap().original = Some(source([16, 16], |_, _| 255));
+    document.artwork.paint.get_mut(second_paint).unwrap().base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
     document.artwork.occurrences.get_mut(second).unwrap().translation = Point { x: 300., y: 24. };
     while document.artwork.occurrences.len() < 16 {
         crate::test_support::add_paint(&mut document.artwork, "additional compositing layer", extent);
@@ -127,7 +127,7 @@ fn paper_bounds_follow_alpha_filters_and_masked_pass_through_groups() {
         let grouped = case == 1;
         let mut document = Document::new(PortableId::random(), 128, 96, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         if case == 2 {
-            paint(&mut document).original = Some(source([10, 10], |_, _| 255));
+            paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([10, 10], |_, _| 255)).into()));
             occurrence(&mut document).translation = Point { x: -10., y: -10. };
         }
         let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
@@ -177,7 +177,7 @@ fn remote_transparent_or_fully_masked_sources_do_not_refuse_small_actual_bounds(
     paint(&mut document).raster = raster(RasterPlane::Color, document.composition().color, |x, y| if x == 3 && y == 7 { 1. } else { 0. });
     let extent = document.composition().size;
     let (remote_id, SourceTarget::Paint(remote_paint)) = crate::test_support::add_paint(&mut document.artwork, "remote source", extent) else { panic!("paint") };
-    document.artwork.paint.get_mut(remote_paint).unwrap().original = Some(source([16, 16], |_, _| 0));
+    document.artwork.paint.get_mut(remote_paint).unwrap().base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 0)).into()));
     document.artwork.occurrences.get_mut(remote_id).unwrap().translation = Point { x: 40000., y: -40000. };
     let root = document.composition().result;
     let entries = &mut document.artwork.stacks.get_mut(root).unwrap().entries; entries.pop(); entries.insert(0, remote_id);
@@ -188,7 +188,7 @@ fn remote_transparent_or_fully_masked_sources_do_not_refuse_small_actual_bounds(
 
     let mask = attach_mask(&mut document, remote_id, Point { x: 40000., y: -40000. });
     document.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.;
-    document.artwork.paint.get_mut(remote_paint).unwrap().original = Some(source([16, 16], |_, _| 255));
+    document.artwork.paint.get_mut(remote_paint).unwrap().base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), expected);
     assert_eq!(bounds(&renderer, &document, ContentScope::Canvas), expected);
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(3., -40000., 40016., 8.));
@@ -201,7 +201,7 @@ fn remote_transparent_or_fully_masked_sources_do_not_refuse_small_actual_bounds(
 fn visible_alpha_filter_uses_the_canvas_domain_when_it_creates_alpha() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
-    paint(&mut document).original = Some(source([16, 16], |_, _| 255));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
     occurrence(&mut document).translation = Point { x: 32., y: 48. };
     let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
     program.wgsl = "fn opaque(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(.2,.3,.4,1.);}".into();
@@ -251,7 +251,7 @@ fn mask_target_selection_keeps_nested_nonuniform_registration_and_ignores_paint_
 fn visible_and_all_bounds_include_placement_interpolation_beyond_source_rectangle() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
-    paint(&mut document).original = Some(source([16, 16], |_, _| 255));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
     occurrence(&mut document).translation = Point { x: 20., y: 30. };
     occurrence(&mut document).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
     let canvas = bounds(&renderer, &document, ContentScope::Canvas);
@@ -265,7 +265,7 @@ fn visible_and_all_bounds_include_placement_interpolation_beyond_source_rectangl
 fn transferred_bounds_request_keeps_accumulated_alpha_animation_phase_after_pause() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
-    paint(&mut document).original = Some(source([128, 128], |_, _| 255));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([128, 128], |_, _| 255)).into()));
     let mut program = (*crate::tests::fixture("domain_warp").program()).clone();
     program.wgsl = "fn phase(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let low=floor(fx_time(b))*4.;return select(vec4<f32>(0.),vec4<f32>(1.),p.x>=low&&p.x<low+8.&&p.y>=12.&&p.y<20.);}".into();
     program.entry = "phase".into();
@@ -378,7 +378,7 @@ fn placed_target_bounds_match_masked_world_pixels_and_exclude_siblings() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     let target = paint_target(&document);
-    paint(&mut document).original = Some(source([48, 32], |_, _| 255));
+    paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([48, 32], |_, _| 255)).into()));
     occurrence(&mut document).placement = layer_core::LayerPlacement::from_projective(
         layer_core::Projective::rect_to_quad(Rect::from_extent([48, 32]), [
             Point { x: 20., y: 15. }, Point { x: 65., y: 19. },
@@ -393,7 +393,7 @@ fn placed_target_bounds_match_masked_world_pixels_and_exclude_siblings() {
         |x, y| if (10..50).contains(&x) && (10..55).contains(&y) { 0.5 } else { 0. });
     let extent = document.composition().size;
     let (sibling, SourceTarget::Paint(sibling_paint)) = crate::test_support::add_paint(&mut document.artwork, "unrelated outside target", extent) else { panic!("paint") };
-    document.artwork.paint.get_mut(sibling_paint).unwrap().original = Some(source([8, 8], |_, _| 255));
+    document.artwork.paint.get_mut(sibling_paint).unwrap().base = Some(layer_core::authored::PaintBase::new((source([8, 8], |_, _| 255)).into()));
     document.artwork.occurrences.get_mut(sibling).unwrap().translation = Point { x: 106., y: 106. };
     let mut reference = document.clone();
     let root = reference.composition().result;

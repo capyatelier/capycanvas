@@ -16,8 +16,8 @@ impl Cache {
         scene.native_reverse = !reverse;
         let changed = missing.iter().fold(PixelRect::EMPTY, |a, c| a.union(page_rect(*c))).intersect(PixelRect::full(packet.document_extent));
         let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
-        let plan = windows::Plan::new(packet.scene, packet.document_extent, budget)?;
-        let mut regions: Vec<_> = plan.map_or_else(|| vec![(changed, PixelRect::full(packet.document_extent))], |p| p.regions(changed)
+        let plan = windows::Plan::new_cached(packet.scene, packet.document_extent, budget, r.device.limits().max_texture_dimension_2d,Some(&scene.object_spatial))?;
+        let mut regions: Vec<_> = plan.map_or_else(|| vec![(changed, scene.cached_capture_window(packet.scene, changed))], |p| p.regions_cached(packet.scene, changed,Some(&scene.object_spatial))
             .filter(|(output, _)| page_coordinates(*output).any(|c| missing.contains(&c))).collect());
         if reverse { regions.reverse(); }
         let mut image = match &self.hierarchy {
@@ -26,7 +26,8 @@ impl Cache {
                 display_mips::Plan::at(exact_strip(packet.document_extent), 0), "exact composition working strip")).clone(),
         };
         let texture = image.texture.clone();
-        let mut batch = Vec::with_capacity(SOURCE_SLOTS);
+        let batch_size = if packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some()) { 1 } else { SOURCE_SLOTS };
+        let mut batch = Vec::with_capacity(batch_size);
         if plan.is_some() {
             Scene::submit_chunk(r, encoder, "before native filter windows")?;
             r.metrics.image_window_submissions += 1;
@@ -41,7 +42,7 @@ impl Cache {
             let mut coordinates = coordinates.into_iter().peekable();
             loop {
                 batch.clear();let mut bounds = PixelRect::EMPTY;
-                while batch.len() < SOURCE_SLOTS {
+                while batch.len() < batch_size {
                     let Some(&coordinate) = coordinates.peek() else {break;};
                     let region = page_rect(coordinate).intersect(PixelRect::full(packet.document_extent));
                     let combined = bounds.union(region);
@@ -105,6 +106,7 @@ impl Cache {
     }
 
     pub fn has_pending_work(&self, r: &WgpuRasterizer) -> bool {
+        if r.artwork_frame.as_ref().is_some_and(|frame| frame.scene.view().order().iter().any(|h| frame.scene.view().object_layer(*h).is_some())) { return false; }
         self.ready && r.moving_layer.is_none() && !self.transform.as_ref().is_some_and(|p| p.moving)
             && self.next_missing_page().is_some()
     }
@@ -113,6 +115,7 @@ impl Cache {
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, commands: &mut Commands,
     ) -> Result<PixelRect, GpuRasterError> {
+        if packet.scene.order().iter().any(|h| packet.scene.object_layer(*h).is_some()) { return Ok(PixelRect::EMPTY); }
         self.admit_hierarchy(r, encoder, commands)?;
         let mut image = match &self.hierarchy {
             Some(hierarchy) => hierarchy.root().clone(),
@@ -130,7 +133,7 @@ impl Cache {
         let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(4).take_while(|c| {
             let region = page_rect(*c).intersect(PixelRect::full(self.plan.extent));
             let combined = bounds.union(region);
-            let window = Scene::capture_window(packet.scene, combined, packet.document_extent);
+            let window = scene.cached_capture_window(packet.scene, combined);
             let work = combined.area().saturating_add(window.area().saturating_mul(passes));
             if bounds.is_empty() {work_limit=work_limit.max(work.saturating_add(work/2));}
             if !bounds.is_empty() && (passes>0&&(combined.area()>bounds.area()+region.area()||work>work_limit)
@@ -141,7 +144,7 @@ impl Cache {
         let regions: Vec<_> = pages.iter().map(|c| page_rect(*c).intersect(PixelRect::full(self.plan.extent))).collect();
         r.ensure_exact_preview(encoder)?;
         if !bounds.is_empty() {
-            scene.prepare_region(r, packet, Scene::capture_window(packet.scene, bounds, packet.document_extent), PixelRect::EMPTY, false, encoder)?;
+            scene.prepare_region(r, packet, scene.cached_capture_window(packet.scene, bounds), PixelRect::EMPTY, false, encoder)?;
         }
         let batched = self.hierarchy.is_some();
         if batched { scene.capture_prepared_regions(r, packet, &image, &regions, scene::Output::Display, false, encoder)?; }

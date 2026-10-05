@@ -669,7 +669,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         let source = doc.artwork.paint.get(*handle).unwrap();
         if source.color_mode == mode { return Ok(()); }
-        if source.original.is_none() && source.raster.is_empty() && source.operations.is_empty() {
+        if source.base.is_none() && source.raster.is_empty() && source.operations.is_empty() {
             let mut source = source.clone(); source.color_mode = mode;
             let change = layer_core::RecordChange::replace(&doc.artwork.paint, *handle, Some(source)).map_err(DocumentError::InvalidLayerOperation)?;
             return self.apply_edit(layer_core::Edit::Paint(change));
@@ -1020,7 +1020,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if self.settings.brush.execution.copies_from_source() && self.settings.clone_source.point.is_none() {
             return Some(StrokeRefusal::NoCloneSource);
         }
-        let empty = layer.original.is_none()
+        let empty = layer.base.is_none()
             && layer.raster.try_data().is_some_and(|data| data.is_ok_and(|data| data.tiles.is_empty()));
         (empty && Retouch::for_target(document, target, source).references.is_empty())
             .then_some(StrokeRefusal::EmptySource(source))
@@ -1218,7 +1218,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 Edit::Composition(change) => change.value.as_ref().is_none_or(|next| document.artwork.compositions.get(change.handle)
                     .is_none_or(|old| old.size != next.size || old.color != next.color)),
                 Edit::Paint(change) => change.value.as_ref().is_some_and(|next| document.artwork.paint.get(change.handle)
-                    .map_or(next.original.is_some(), |old| old.original != next.original || old.domain != next.domain)),
+                    .map_or(next.base.is_some(), |old| old.base != next.base || old.domain != next.domain)),
                 Edit::Coverage(change) => change.value.as_ref().is_some_and(|next| document.artwork.coverage.get(change.handle)
                     .is_some_and(|old| old.initial != next.initial || old.domain != next.domain || old.default_coverage != next.default_coverage)),
                 Edit::Batch(edits) => edits.iter().any(|e| rebuild_needed(document, e)),
@@ -2514,7 +2514,7 @@ mod tests {
         assert_eq!(left.metadata, right.metadata);
         assert_eq!(left.extensions, right.extensions);
         macro_rules! records { ($($field:ident),*) => { $(assert_eq!(left.$field.iter().collect::<Vec<_>>(), right.$field.iter().collect::<Vec<_>>()));* }; }
-        records!(compositions, stacks, occurrences, paint, coverage, effects, definitions, selections, guides, outputs);
+        records!(compositions, stacks, occurrences, paint, coverage, effects, selections, guides, outputs);
     }
     fn active_paint(document: &Document) -> &layer_core::authored::PaintSource {
         let SourceTarget::Paint(handle) = document.working.target.unwrap() else { panic!("paint target"); };
@@ -2545,7 +2545,7 @@ mod tests {
             Edit::Stack(layer_core::RecordChange::replace(&document.artwork.stacks, stack, Some(entries)).unwrap())])
     }
     fn empty_paint(document: &Document) -> layer_core::authored::PaintSource {
-        layer_core::authored::PaintSource { color_mode: Default::default(), domain:document.composition().size, raster:Default::default(), original:None, operations:Arc::default() }
+        layer_core::authored::PaintSource { color_mode:Default::default(), domain:document.composition().size, raster:Default::default(), base:None, operations:Arc::default() }
     }
     fn mask_edit(engine: &mut CanvasEngine<RecordingRenderer>, translation: Point) -> Edit {
         let mut candidate = engine.document().clone();
@@ -2622,12 +2622,12 @@ mod tests {
 
     #[test]
     fn capture_uses_successful_renderer_phases_and_seeds_replacement() {
-        use layer_core::authored::{Definition, EffectApplication, EvaluationContext, PortableId};
+        use layer_core::authored::{EffectApplication, EvaluationContext, PortableId};
         let mut document = Document::new(PortableId::random(), 64, 64, layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
         let program = layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program();
         let values = layer_core::EffectInstance::new(program.clone()).values;
-        let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program}).unwrap();
-        let effect = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values}).unwrap();
+
+        let effect = document.artwork.effects.insert(PortableId::random(), EffectApplication::new(program, values, document.composition().size)).unwrap();
         let saved = EvaluationContext {elapsed:3.,phases:vec![(effect,7.)].into()};
         document.artwork.outputs.get_mut(document.artwork.default_output).unwrap().context = saved.clone();
         let (_, mut canvas) = engine_with(RecordingRenderer::default(), document, view(64,64), TRANSFORM);
@@ -3804,7 +3804,7 @@ mod tests {
 
     #[test]
     fn inserting_paint_and_effect_masks_preserves_existing_raster_pages() {
-        use layer_core::authored::{Definition, EffectApplication, Occurrence, OccurrenceContent};
+        use layer_core::authored::{EffectApplication, Occurrence, OccurrenceContent};
         use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
         use layer_core::{CoverageSnapshot, RecordChange, Selection};
         let (_, mut engine) = engine("source insertion", 64, 64);
@@ -3844,15 +3844,15 @@ mod tests {
             let handle = coverage.handle;
             mask.use_.source = handle;
             let draft = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("exposure").unwrap().program());
-            let definition = RecordChange::insert(&document.artwork.definitions, Definition { program:draft.program });
-            let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition:definition.handle, values:draft.values});
+
+            let effect = RecordChange::insert(&document.artwork.effects, EffectApplication::new(draft.program, draft.values, document.composition().size));
             let mut occurrence = Occurrence::new(OccurrenceContent::Effect(effect.handle), "Masked exposure");
             occurrence.mask = Some(mask.use_);
             let occurrence = RecordChange::insert(&document.artwork.occurrences, occurrence);
             let stack = document.composition().result;
             let mut entries = document.artwork.stacks.get(stack).unwrap().clone();
             entries.entries.insert(0, occurrence.handle);
-            engine.apply_edit(Edit::Batch(vec![Edit::Coverage(coverage), Edit::Definition(definition), Edit::Effect(effect), Edit::Occurrence(occurrence),
+            engine.apply_edit(Edit::Batch(vec![Edit::Coverage(coverage), Edit::Effect(effect), Edit::Occurrence(occurrence),
                 Edit::Stack(RecordChange::replace(&document.artwork.stacks, stack, Some(entries)).unwrap())])).unwrap();
             engine.render_frame().unwrap();
             assert!(!engine.backend().saw_reset, "new mask initializes without restoring existing paint");

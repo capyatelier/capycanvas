@@ -177,6 +177,9 @@ attachment loads and driver command work for independent regions.
 Retained windows are admitted again when their source requirements change.
 Presentation regeneration advances display damage independently of the artwork
 revision used by document previews; camera motion does not publish an artwork edit.
+An unchanged output is reusable only when all requested pages are valid or its
+direct placement is complete. Allocated pixels survive deferred evaluation, but
+partial page coverage cannot replace the accepted display.
 
 One display hierarchy owns the visible window, overview and adjacent levels.
 Drawing and idle refinement write the same images. The separate full composite, detail atlas and duplicate display-only source cache

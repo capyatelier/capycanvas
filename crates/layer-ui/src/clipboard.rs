@@ -8,10 +8,10 @@ use layer_core::{
     Affine, Edit, Point, Rect, Selection,
     color::{
         DocumentColor,
-        source::{SourceImage, SourceKind},
+        source::SourceImage,
     },
 };
-use layer_core::authored::{Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, RecordChange, SceneSnapshot, SceneScope, SourceTarget};
+use layer_core::authored::{Occurrence, OccurrenceContent, OccurrenceHandle, PaintBase, PaintBasePolicy, PaintSource, RecordChange, SceneSnapshot, SceneScope, SourceTarget};
 use std::sync::Arc;
 
 /// Copies larger than this show the import-style progress with Cancel.
@@ -39,6 +39,7 @@ pub struct PixelClip {
     pub nonce: String,
     pub name: String,
     pub source: Arc<SourceImage>,
+    pub policy: PaintBasePolicy,
     /// Document pixels of the source's top-left corner where it was copied.
     pub origin: [u32; 2],
     pub color: DocumentColor,
@@ -49,12 +50,9 @@ impl PixelClip {
     /// The source as a paste into a drawing of `color` holds it: document
     /// pixels when the colour settings match, otherwise an original image
     /// converted through its explicit profile.
-    pub fn source_for(&self, color: DocumentColor) -> SourceImage {
-        let mut source = (*self.source).clone();
-        if color != self.color {
-            source.kind = SourceKind::Original;
-        }
-        source
+    pub fn source_for(&self, color: DocumentColor) -> PaintBase {
+        PaintBase { image: self.source.clone().into(), offset: [0; 2],
+            policy: if color == self.color { self.policy } else { PaintBasePolicy::SourceProfile } }
     }
 }
 
@@ -70,6 +68,7 @@ pub struct ClipboardCapture {
     pub coverage: Option<Arc<Selection>>,
     /// An untouched photo copied whole; the clip keeps its original samples.
     pub original: Option<Arc<SourceImage>>,
+    pub policy: PaintBasePolicy,
     pub name: String,
     /// Show the import-style progress with Cancel.
     pub large: bool,
@@ -84,6 +83,7 @@ impl ClipboardCapture {
             name: self.name,
             color: self.scene.view().composition().color,
             source,
+            policy: self.policy,
             origin: [self.crop[0], self.crop[1]],
             png: png.into(),
         }
@@ -139,6 +139,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let layer = document.scene().occurrence(document.working.occurrence?)?;
         match layer.kind() {
             LayerKind::Paint => {}
+            LayerKind::Object => return Some(l.text(MessageId::COMMANDS_SELECT_A_PAINT_LAYER)),
             LayerKind::Group => return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group, l)),
             LayerKind::Effect => return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_AN_EFFECT_LAYER_HAS_NO_PIXELS_OF_ITS_OWN)),
             LayerKind::Selection => {
@@ -233,19 +234,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         let scene = self.engine.scene_snapshot();
         let document = self.engine.document();
         let active = document.working.occurrence;
-        let (scope, name, original) = if merged {
-            (SceneScope::All, "Merged copy".to_string(), None)
+        let (scope, name, original, policy) = if merged {
+            (SceneScope::All, "Merged copy".to_string(), None, PaintBasePolicy::WorkingPixels)
         } else {
             let active = active.ok_or("Select a layer first")?;
             let occurrence = document.scene().occurrence(active).ok_or("Select a layer first")?;
             let paint = document.scene().paint_source(active).ok_or("Select a paint layer first")?;
             let target = document.scene().source_target(active).ok_or("Select a paint layer first")?;
             let offset = document.layer_offset(active);
-            let original = paint.original.clone().filter(|source| coverage.is_none()
+            let base = paint.base.as_ref().filter(|base| coverage.is_none() && base.offset == [0; 2]
                 && !source_edit::baked(paint) && occurrence.mask.is_none()
                 && offset == Point::default() && occurrence.placement.as_affine() == Some(Affine::IDENTITY)
-                && source.extent == document.composition().size);
-            (SceneScope::Raw(target), occurrence.name.to_string(), original)
+                && base.image.extent == document.composition().size);
+            (SceneScope::Raw(target), occurrence.name.to_string(), base.map(|base| base.image.storage().clone()),
+                base.map_or(PaintBasePolicy::WorkingPixels, |base| base.policy))
         };
         let pixels = u64::from(crop[2]) * u64::from(crop[3]);
         self.files.cut = cut.then(|| PendingCut {
@@ -260,6 +262,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             crop,
             coverage,
             original,
+            policy,
             name,
             large: pixels > LARGE_CLIP_PIXELS,
         })
@@ -343,12 +346,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if mode == PasteMode::Paste {
             return self.place_layer_sources(sources, context.center, context.destination);
         }
-        self.insert_pasted(sources, |s, extent| s.view_centred(extent), mode == PasteMode::Into)
+        self.insert_pasted(sources.into_iter().map(|(name, source)| (name, PaintBase::new(Arc::new(source).into()))).collect(), |s, extent| s.view_centred(extent), mode == PasteMode::Into)
     }
 
     fn insert_pasted(
         &mut self,
-        sources: Vec<(String, SourceImage)>,
+        sources: Vec<(String, PaintBase)>,
         position: impl Fn(&Self, [u32; 2]) -> Point,
         masked: bool,
     ) -> Result<(), String> {
@@ -374,10 +377,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut edits = Vec::with_capacity(sources.len() * 3 + 2);
         let mut layers = Vec::new();
         for (offset, (name, source)) in sources.into_iter().enumerate() {
-            source.validate()?;
-            let at = position(self, source.extent);
+            let extent = source.image.extent;
+            let domain = std::array::from_fn(|i| document.composition().size[i].max(extent[i]));
+            source.validate(domain, document.composition().color)?;
+            let at = position(self, extent);
             let paint = RecordChange::insert(&artwork.paint, PaintSource { color_mode: Default::default(),
-                domain: std::array::from_fn(|i| document.composition().size[i].max(source.extent[i])), raster: Default::default(), original: Some(Arc::new(source)), operations: Arc::default(),
+                domain, raster: Default::default(), base: Some(source), operations: Arc::default(),
             });
             artwork.paint.change(paint.handle, paint.id, paint.value.clone())?;
             let mut occurrence = Occurrence::new(OccurrenceContent::Paint(paint.handle), name.trim());

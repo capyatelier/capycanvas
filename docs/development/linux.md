@@ -253,6 +253,19 @@ private-compositor runner:
 bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_modes
 ```
 
+Photo binding changes use `native_multiple_photo_import_chooser` for native
+multi-select import, retained samples, paint above and below photos, save/reopen
+and undo. `native_photo_file_drops` checks canvas and layer destinations and
+opens project drops in document tabs. Pair these with the source rasterization,
+source profile repair and document color journeys, setting
+`CAPY_NATIVE_TEST_THEME=light` and `dark` for each.
+
+`native_object_only_shared_images` opens the fixed built-in, ICC and Nearest
+fixtures after removing their hidden paint and paper layers. It waits for native
+presentations without input before checking pixels, shared image ownership and
+F64 placement, then checks visibility Undo/Redo, native save/reopen, surface
+replacement and private recovery. Run in both themes with `--native-recovery`.
+
 `native_palette_entry_composition` checks editable submission, the real GTK
 default-button action and candidate-key retirement in both themes. Genuine
 engine composition is a separate acceptance check in a private display.

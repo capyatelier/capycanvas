@@ -106,8 +106,8 @@ fn candidate_errors(name: &str) -> [f32; 2] {
             let original = if source == 1 { hdr.clone() }
                 else if name == "threshold" { layer_core::color::source::rgba8_source(extent, |x, y| {
                     let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 }; [gray, gray, gray, 255]
-                }) } else { let base = document_at(extent); base.artwork.paint.get(primary_paint(&base)).unwrap().original.as_ref().unwrap().clone() };
-            doc.artwork.paint.get_mut(paint).unwrap().original = Some(original);
+                }) } else { let base = document_at(extent); base.artwork.paint.get(primary_paint(&base)).unwrap().base.as_ref().unwrap().image.storage().clone() };
+            doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((original).into()));
             let states = match name { "photo_filter" => 3, "selective_color" | "channel_mixer" => 5, _ => 1 };
             for state in 0..states {
                 if let Some(handle) = adjustment_handle.take() { remove_occurrence(&mut doc, handle); }
@@ -243,10 +243,10 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
     let paint = primary_paint(&doc);
     let stack = doc.composition().result;
     doc.artwork.stacks.get_mut(stack).unwrap().entries.truncate(1); reindex(&mut doc);
-    doc.artwork.paint.get_mut(paint).unwrap().original = Some(rgba8_source(extent, |x, y| [
+    doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((rgba8_source(extent, |x, y| [
         ((x * 3 + y * 7) % 256) as u8, ((y * 5 + x / 17) % 256) as u8,
         ((x / 5 + y / 3) % 256) as u8, 255,
-    ]));
+    ])).into()));
     let effect = effect_occurrence(&mut doc, EffectInstance::new(crate::tests::fixture("threshold").program()), "Resident native Threshold");
     let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap(); exact.test.reference = true;

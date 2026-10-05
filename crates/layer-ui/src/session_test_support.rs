@@ -47,6 +47,8 @@ pub(crate) struct Recorder {
     pub(crate) snapshot_fails: bool,
     pub(crate) transform: Option<layer_render::TransformPreview>,
     pub(crate) moving_layer: Option<OccurrenceHandle>,
+    pub(crate) image_affine_requests:std::cell::RefCell<Vec<(layer_core::ImageObjectHandle,layer_core::Affine64,layer_render::ViewState)>>,
+    pub(crate) reject_image_affines:bool,
     pub(crate) moving_pixels: Option<(SourceTarget, layer_core::Selection)>,
     pub(crate) overlay: Option<layer_render::SelectionOverlay>,
     pub(crate) filter_preview: Option<FilterPreviewRequest>,
@@ -77,6 +79,10 @@ impl CanvasRenderer for Recorder {
     }
     fn supports_tiled_sources(&self) -> bool { self.tiled_sources }
     fn max_document_dimension(&self) -> u32 { self.max_dimension.unwrap_or(u32::MAX) }
+    fn preflight_image_object_affine(&self,_scene:layer_core::SceneView<'_>,object:layer_core::ImageObjectHandle,affine:layer_core::Affine64,view:layer_render::ViewState)->Result<(),Self::Error> {
+        self.image_affine_requests.borrow_mut().push((object,affine,view));
+        if self.reject_image_affines {Err(BackendError("Image sampling request is unsupported"))}else {Ok(())}
+    }
     fn set_crop_overlay(&mut self, overlay: Option<layer_render::CropOverlay>) { self.crop_overlay = overlay; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry_enabled = enabled;
@@ -513,7 +519,7 @@ pub(crate) fn assert_live_artwork_eq(actual: &Document, expected: &Document) {
     assert_eq!(actual.metadata, expected.metadata);
     assert_eq!(actual.extensions, expected.extensions);
     macro_rules! records { ($($store:ident),+) => { $(assert_eq!(actual.$store.iter().collect::<Vec<_>>(), expected.$store.iter().collect::<Vec<_>>(), stringify!($store));)+ }; }
-    records!(compositions, stacks, occurrences, paint, coverage, effects, definitions, selections, guides, outputs);
+    records!(compositions, stacks, occurrences, paint, object_layers, objects, coverage, effects, selections, guides, outputs);
 }
 
 pub(crate) fn package_bytes(capture: &layer_core::ArtworkCapture) -> Vec<u8> {
@@ -524,14 +530,14 @@ pub(crate) fn package_bytes(capture: &layer_core::ArtworkCapture) -> Vec<u8> {
 }
 
 pub(crate) fn effect_insertion(document: &Document, draft: layer_core::EffectInstance, name: &str) -> (OccurrenceHandle, layer_core::Edit) {
-    use layer_core::authored::{Definition, EffectApplication, Occurrence, OccurrenceContent, RecordChange};
+    use layer_core::authored::{EffectApplication, Occurrence, OccurrenceContent, RecordChange};
     let artwork=&document.artwork;
-    let definition=RecordChange::insert(&artwork.definitions,Definition {program:draft.program});
-    let effect=RecordChange::insert(&artwork.effects,EffectApplication {definition:definition.handle,values:draft.values});
+
+    let effect=RecordChange::insert(&artwork.effects,EffectApplication::new(draft.program, draft.values, document.composition().size));
     let occurrence=RecordChange::insert(&artwork.occurrences,Occurrence::new(OccurrenceContent::Effect(effect.handle),name));
     let handle=occurrence.handle;
     let stack_handle=document.composition().result;
     let mut stack=artwork.stacks.get(stack_handle).unwrap().clone(); stack.entries.insert(0,handle);
-    (handle,layer_core::Edit::Batch(vec![layer_core::Edit::Definition(definition),layer_core::Edit::Effect(effect),layer_core::Edit::Occurrence(occurrence),
+    (handle,layer_core::Edit::Batch(vec![layer_core::Edit::Effect(effect),layer_core::Edit::Occurrence(occurrence),
         layer_core::Edit::Stack(RecordChange::replace(&artwork.stacks,stack_handle,Some(stack)).unwrap())]))
 }

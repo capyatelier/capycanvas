@@ -200,7 +200,7 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     pump(300);
     let id: OccurrenceHandle = document(&w).working.occurrence.unwrap();
     let original = document(&w).scene().paint_source(id).unwrap().clone();
-    assert!(original.original.as_ref().is_some_and(|s| s.is_original()));
+    assert!(original.base.as_ref().is_some_and(|s| s.is_original()));
     let revert = |w: &Workspace| state(w).commands.into_iter().find(|c| c.id == CommandId::RevertToOriginal).unwrap();
     assert_eq!(revert(&w).disabled_reason.as_deref(), Some("This photo has no edits"));
     w.dispatch(UiAction::Invoke { command: CommandId::Pen });
@@ -218,7 +218,7 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     choose(&w, &mut input, "Edit", &["Revert to Original Photo"]);
     until(|| document(&w).scene().paint_source(id).unwrap().raster.is_empty(), "Revert discards the edits");
     let reverted = document(&w).scene().paint_source(id).unwrap().clone();
-    assert!(std::sync::Arc::ptr_eq(reverted.original.as_ref().unwrap(), painted.original.as_ref().unwrap()));
+    assert!(std::sync::Arc::ptr_eq(reverted.base.as_ref().unwrap().image.storage(), painted.base.as_ref().unwrap().image.storage()));
     assert_eq!(document(&w).scene().occurrence(id), painted_doc.scene().occurrence(id));
     pump(300);
     let after = shown(&w, stroke);

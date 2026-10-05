@@ -3,7 +3,7 @@
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use std::sync::Arc;
-use layer_core::authored::{PortableId, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, Definition, EffectApplication, Stack};
+use layer_core::authored::{PortableId, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, EffectApplication, Stack};
 
 pub(super) fn photo(extent: [u32; 2]) -> layer_core::Document {
     let depth = match std::env::var("LAYER_NAVIGATION_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 };
@@ -63,7 +63,7 @@ pub(super) fn photo(extent: [u32; 2]) -> layer_core::Document {
     let source_image = Arc::new(source.finish().unwrap());
     let paint = project.artwork.paint.get_mut(paint).unwrap();
     paint.domain = extent;
-    paint.original = Some(source_image);
+    paint.base = Some(layer_core::PaintBase::new((source_image).into()));
     for _ in 0..31 {
         insert_paint(&mut project, "empty", None, 1);
     }
@@ -106,22 +106,22 @@ fn refresh(document: &mut layer_core::Document) {
     document.working = working;
 }
 fn insert_paint(document: &mut layer_core::Document, name: &str, original: Option<Arc<SourceImage>>, index: usize) -> OccurrenceHandle {
-    let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),domain:document.composition().size, original, raster:Default::default(), operations:Default::default()}).unwrap();
+    let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),domain:document.composition().size, base:original.map(|source|layer_core::PaintBase::new(source.into())), raster:Default::default(), operations:Default::default()}).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(source),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.insert(index,occurrence);
     refresh(document);
     occurrence
 }
 fn insert_effect(document: &mut layer_core::Document, name: &str, draft: layer_core::EffectInstance, index: usize) -> OccurrenceHandle {
-    let definition = document.artwork.definitions.insert(PortableId::random(),Definition {program:draft.program}).unwrap();
-    let effect = document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:draft.values}).unwrap();
+
+    let effect = document.artwork.effects.insert(PortableId::random(),EffectApplication::new(draft.program, draft.values, document.composition().size)).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.insert(index,occurrence);
     refresh(document);
     occurrence
 }
 fn retain_photos(document: &mut layer_core::Document) {
-    let photos: Vec<_> = document.scene().children(None).iter().copied().filter(|h|document.scene().paint_source(*h).is_some_and(|p|p.original.is_some())).collect();
+    let photos: Vec<_> = document.scene().children(None).iter().copied().filter(|h|document.scene().paint_source(*h).is_some_and(|p|p.base.is_some())).collect();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries = photos;
     refresh(document);
 }

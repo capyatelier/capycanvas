@@ -73,7 +73,7 @@ fn content(scene: SceneView<'_>, h: OccurrenceHandle) -> Rect {
         let [x, y] = k.coordinate.map(|v| v as f32 * size);
         b.union(Rect { min: Point { x, y }, max: Point { x: x + size, y: y + size } })
     });
-    paint.original.as_ref().map_or(bounds, |s| bounds.union(Rect::from_extent(s.extent)))
+    paint.base.as_ref().map_or(bounds, |base| bounds.union(Rect {min:Point {x:base.offset[0] as f32,y:base.offset[1] as f32},max:Point {x:(base.offset[0]+base.image.extent[0]) as f32,y:(base.offset[1]+base.image.extent[1]) as f32}}))
 }
 pub(crate) fn bake_bounds(snapshot: &SceneSnapshot, scope: &SceneScope, offset: Point, extent: [u32; 2]) -> Rect {
     let scene = snapshot.view().with_scope(scope).with_offset(offset);
@@ -83,6 +83,13 @@ pub(crate) fn bake_bounds(snapshot: &SceneSnapshot, scope: &SceneScope, offset: 
             let transform = scene.target_geometry(target);
             let mapped = transform.forward_bounds(content(scene, h));
             bounds = bounds.union(mapped);
+        } else if let Some(layer)=scene.object_layer(h) {
+            let world=scene.occurrence_offset64(h);
+            for object in layer.children.iter().filter_map(|h|scene.object(*h)).filter(|o|o.visible) {
+                let [min,max]=object.affine.bounds(object.image.extent);
+                let rectangle=Rect {min:Point {x:(min[0]+world[0]) as f32,y:(min[1]+world[1]) as f32},max:Point {x:(max[0]+world[0]) as f32,y:(max[1]+world[1]) as f32}};
+                bounds=bounds.union(rectangle);
+            }
         }
     }
     for effect in scene.order().iter().copied().filter(|h| layer_is_visible(scene, *h)).filter_map(|h| scene.effect(h)) {
@@ -323,7 +330,7 @@ impl Document {
         }
         let paint = RecordChange::insert(
             &self.artwork.paint,
-            PaintSource { color_mode: Default::default(), domain: extent, raster: Default::default(), original: None, operations: Arc::default() },
+            PaintSource { color_mode:Default::default(), domain: extent, raster: Default::default(), base: None, operations: Arc::default() },
         );
         let target = SourceTarget::Paint(paint.handle);
         let mut result = Occurrence::new(

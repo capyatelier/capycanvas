@@ -13,6 +13,9 @@ pub(crate) mod windows;
 pub(super) use previews::FilterPreviews;
 pub(super) mod sources;
 mod placement;
+mod objects;
+mod object_cache;
+mod object_spatial;
 mod bake;
 pub(crate) mod resample;
 pub(crate) mod scale;
@@ -38,6 +41,8 @@ struct ColorInput {
 
 #[derive(Clone)]
 enum Job {
+    Object(Box<objects::ObjectJob>),
+    PaintBase(Arc<crate::source_access::PaintBaseAssembly>),
     Positions(Arc<paint_transform::mesh::MeshGeometry>, [u32; 2], [i32;2]),
     Placement(Box<placement::PlacementJob>),
     Reduce { binding: wgpu::BindGroup, values: [u32; 20], size: [u32; 2] },
@@ -119,7 +124,7 @@ fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blu
     wgpu::Color { r: f64::from(red), g: f64::from(green), b: f64::from(blue), a: f64::from(alpha) }
 }
 #[derive(Clone, Copy)]
-pub(super) enum Output { Artwork(Option<OccurrenceHandle>), OwnerContent(OccurrenceHandle), EffectInput(OccurrenceHandle), EffectChannels(OccurrenceHandle), Source(SourceTarget), Display }
+pub(super) enum Output { Artwork(Option<OccurrenceHandle>), OwnerContent(OccurrenceHandle), Objects(OccurrenceHandle), EffectInput(OccurrenceHandle), EffectChannels(OccurrenceHandle), Source(SourceTarget), Display }
 
 pub(super) struct Scene {
     valid: Arc<std::sync::atomic::AtomicBool>,
@@ -132,8 +137,15 @@ pub(super) struct Scene {
     material_pages: std::collections::VecDeque<placement::MaterialPage>,
     material_bounds: std::collections::HashMap<SourceTarget, placement::MaterialBounds>,
     placement_display: bool,
+    object_display: bool,
+    object_source_damage: scale::Damage,
+    object_live: bool,
+    object_query: bool,
     native_reverse: bool,
     scale_sources: scale::Sources,
+    object_results: object_cache::ObjectCache,
+    exact_object_results: object_cache::ObjectCache,
+    object_spatial: object_spatial::SpatialIndex,
     scale_commands: Option<scale::Commands>,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
@@ -159,7 +171,8 @@ pub(super) struct Scene {
     pub(super) effects: effects::Effects,
     pub effect_passes: u64,
     images: images::ImageStages,
-    image_window: Option<PixelRect>,
+    image_window: Option<DocRect>,
+    image_evaluation_origin: [i64; 2],
     stop_before: Option<OccurrenceHandle>,
     image_damage: Option<scale::Damage>,
 }
@@ -168,6 +181,7 @@ pub(super) struct Scene {
 /// live composition, captures and recreated scenes. No canvas pixels retained.
 #[derive(Clone)]
 pub(super) struct Pipelines {
+    pub objects: crate::object_sampling::ObjectSampler,
     pub scale: scale::Pipelines,
     pub resample: resample::Resample,
     uniforms: wgpu::BindGroupLayout,
@@ -182,7 +196,19 @@ impl Scene {
         self.retire_images(|scene| scene.images = images::ImageStages::default());
     }
     fn begin_write(&mut self, r: &WgpuRasterizer) -> crate::submission::CacheWrite {
-        if !self.valid.load(std::sync::atomic::Ordering::Acquire) { *self = Self::new(r); }
+        if !self.valid.load(std::sync::atomic::Ordering::Acquire) {
+            let exact = std::mem::take(&mut self.exact_object_results);
+            let display = std::mem::take(&mut self.object_results);
+            let objects = std::mem::take(&mut self.object_spatial);
+            let damage = std::mem::take(&mut self.object_source_damage);
+            let query = self.object_query;
+            *self = Self::new(r);
+            self.exact_object_results = exact;
+            self.object_results = display;
+            self.object_spatial = objects;
+            self.object_source_damage = damage;
+            self.object_query = query;
+        }
         crate::submission::CacheWrite::shared(self.valid.clone())
     }
     #[cfg(test)]
@@ -206,11 +232,14 @@ impl Scene {
         self.scale_sources.cache_info_at(id, level)
     }
     pub fn scratch_bytes(&self) -> u64 {
+        let mut allocations=std::collections::HashSet::new();
+        let duplicate_metadata=self.object_spatial.key_allocations().chain(self.object_results.metadata_allocations())
+            .chain(self.exact_object_results.metadata_allocations()).filter_map(|(id,bytes)|(!allocations.insert(id)).then_some(bytes)).sum::<u64>();
         self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes() + self.positions.storage_bytes() + self.display_mesh.storage_bytes()
             + self.placement.iter().map(pixel_transform::PixelTransform::storage_bytes).sum::<u64>() + 32
-            + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes)
+            + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.object_results.bytes() + self.exact_object_results.bytes() + self.object_spatial.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes) - duplicate_metadata
     }
     fn submit_source_uploads(
         r: &mut WgpuRasterizer,
@@ -263,7 +292,7 @@ impl Scene {
         self.jobs.clear(); self.source_jobs.clear();
         for &handle in scene.order() {
             let Some(target) = scene.source_target(handle) else { continue; };
-            if scene.paint_source(handle).is_none_or(|paint| paint.original.is_none()) && r.native_backing(target).is_none() { continue; }
+            if scene.paint_source(handle).is_none_or(|paint| paint.base.is_none()) && r.native_backing(target).is_none() { continue; }
             let pages = r.paint_layers.iter().filter(|stored| stored.id == target)
                 .flat_map(|stored| stored.pages.iter().filter(|page| page.primary_needs_clear)
                     .map(|page| (page.coordinate, page.primary.view.clone()))).collect();
@@ -352,11 +381,18 @@ impl Scene {
         Self {
             valid: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             placement_display: false,
+            object_display: false,
+            object_source_damage: scale::Damage::EMPTY,
+            object_live: false,
+            object_query: false,
             positions: r.transforms.as_ref().map_or_else(|| paint_transform::mesh::Positions::new(device), paint_transform::mesh::Positions::sharing),
             position_key: None,
             mesh_geometry: Default::default(),
             display_mesh: Default::default(),
             scale_sources: Default::default(),
+            object_results: Default::default(),
+            object_spatial: Default::default(),
+            exact_object_results: Default::default(),
             scale_commands: None,
             native_reverse: false,
             placement: std::array::from_fn(|i| r.transforms.as_ref().map_or_else(
@@ -389,6 +425,7 @@ impl Scene {
             effect_passes: 0,
             images: images::ImageStages::default(),
             image_window: None,
+            image_evaluation_origin: [0; 2],
             stop_before: None,
             image_damage: None,
         }
@@ -442,11 +479,11 @@ impl Scene {
             r.source_tiles.borrow_mut().plan_raster(r, &blob, space, space)?
         } else {
             let SourceTarget::Paint(paint) = target else { return Ok(None); };
-            let Some(source) = scene.artwork().paint.get(paint).and_then(|paint| paint.original.as_ref()) else { return Ok(None); };
-            if coordinate[0] >= source.extent[0].div_ceil(PAGE_SIZE) || coordinate[1] >= source.extent[1].div_ceil(PAGE_SIZE) {
-                return Ok(None);
-            }
-            r.source_tiles.borrow_mut().plan(r, source, coordinate)?
+            let Some(base) = scene.artwork().paint.get(paint).and_then(|paint| paint.base.as_ref()) else { return Ok(None); };
+            let Some(read) = crate::source_access::plan_paint_base(r, base, coordinate)? else { return Ok(None); };
+            for pending in read.pending { self.enqueue_source_decode(pending); }
+            if let Some(assembly) = read.assembly { self.jobs.push(Job::PaintBase(Arc::new(assembly))); }
+            return Ok(Some(read.tile.view));
         };
         if let Some(pending) = pending { self.enqueue_source_decode(pending); }
         Ok(Some(tile.view))
@@ -474,17 +511,13 @@ impl Scene {
         Ok(crate::source_access::RawTile { texture: self.pool[page].texture.clone(), view: self.pool[page].view.clone() })
     }
 
-    pub fn source_tile_for_query(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        source: &std::sync::Arc<layer_core::color::source::SourceImage>,
-        coordinate: [u32; 2],
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<crate::source_access::RawTile, GpuRasterError> {
-        debug_assert!(self.jobs.is_empty());
-        let (tile, pending) = r.source_tiles.borrow_mut().plan(r, source, coordinate)?;
-        self.encode_decode(r, pending, encoder)?;
-        Ok(tile)
+    pub(super) fn paint_base_tile_for_query(&mut self, r: &mut WgpuRasterizer, base: &layer_core::authored::PaintBase,
+        coordinate: [u32; 2], encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<Option<crate::source_access::RawTile>, GpuRasterError> {
+        let Some(read) = crate::source_access::plan_paint_base(r, base, coordinate)? else { return Ok(None); };
+        for pending in read.pending { self.encode_decode(r, Some(pending), encoder)?; }
+        if let Some(assembly) = read.assembly { crate::source_access::encode_paint_base(&assembly, encoder); }
+        Ok(Some(read.tile))
     }
     pub fn prepare_native_transfer(&mut self, r: &WgpuRasterizer, space: layer_core::color::RgbSpace) -> Result<crate::native_tiles::NativeTransfer, GpuRasterError> {
         r.source_tiles.borrow_mut().prepare_transfer(&r.device, space)
@@ -664,7 +697,7 @@ impl Scene {
         let handle = indices[0];
         if packet.scene.effect(handle).unwrap().program.image_boundary() {
             let view = self.images.output(handle).ok_or_else(|| GpuRasterError::Effect("Missing image effect stage".into()))?;
-            let out = self.image_tile(r, view, self.images.bounds, tile);
+            let out = self.image_tile(r, view, self.images.doc_bounds, tile);
             self.free(input);
             return Ok(out);
         }
@@ -964,12 +997,15 @@ impl Scene {
         let layer = packet.scene.occurrence(index).unwrap();
         let out = if layer.kind() == LayerKind::Group {
             self.group(r, packet, Some(index), tile)?
-        } else if let Some(color) = packet.scene.effect(index).and_then(|effect| effect.constant_color()) {
+        } else if let Some(color) = packet.scene.effect(index).and_then(|effect| effect.constant_color())
+            .filter(|_| (self.image_window.is_none() && packet.scene.evaluation_offset64()==[0.;2]) || constant_frame_tile(packet.scene,tile,self.image_window)) {
             self.alloc(r, composite_color(r, packet, color.linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?))
         } else if layer.kind() == LayerKind::Effect {
             let input = self.alloc(r, wgpu::Color::TRANSPARENT);
             // Generator coverage is applied below with ordinary layer masks.
             self.effect(r, packet, &[index], tile, input)?
+        } else if packet.scene.object_layer(index).is_some() {
+            self.object_tile(r, packet, index, tile)?
         } else {
             let out = self.paint_tile(r, packet, index, tile, scale::placement_level(packet.scene, packet.scene.source_target(index).unwrap()))?;
             self.converted(r, out, Convert::layers(packet))
@@ -1005,7 +1041,7 @@ impl Scene {
         let out = self.alloc(r, wgpu::Color::TRANSPARENT);
         let offset = world_offset(packet.scene, index, false);
         let stored = r.paint_layers.iter().find(|l| l.id == target);
-        if stored.is_some() || packet.scene.paint_source(index).is_some_and(|paint| paint.original.is_some()) {
+        if stored.is_some() || packet.scene.paint_source(index).is_some_and(|paint| paint.base.is_some()) {
             // A translated output tile intersects at most four native
             // source tiles. Watercolor samples its halo from their bindings;
             // never scan/expand every page in the layer for every output tile.
@@ -1057,6 +1093,7 @@ impl Scene {
         if layer.blend == layer_core::LayerBlend::Normal
             && !layer.mask.as_ref().is_some_and(|mask| mask.enabled)
             && let Some(color) = packet.scene.effect(index).and_then(|effect| effect.constant_color())
+            && ((self.image_window.is_none() && packet.scene.evaluation_offset64()==[0.;2]) || constant_frame_tile(packet.scene,tile,self.image_window))
             && let Some(Job::Clear(view, back)) = self.jobs.last_mut()
             && *view == self.pool[output].view
         {
@@ -1104,9 +1141,7 @@ impl Scene {
         {
             return Ok(false);
         }
-        let Some(stored) = r.paint_layers.iter().find(|l| l.id == target) else {
-            return Ok(true);
-        };
+        let stored = r.paint_layers.iter().find(|l| l.id == target);
         if r.watercolor_style(target, packet.dab_batches).is_some() {
             return Ok(false);
         }
@@ -1124,7 +1159,7 @@ impl Scene {
             if mask.is_some() {
                 return Ok(false);
             }
-            let base = if let Some(page) = stored.pages.iter().find(|p| p.coordinate == tile) {
+            let base = if let Some(page) = stored.and_then(|stored| stored.pages.iter().find(|p| p.coordinate == tile)) {
                 Some(page.active().view.clone())
             } else {
                 self.source_tile(r, packet.scene, target, tile)?
@@ -1141,7 +1176,7 @@ impl Scene {
             );
             return Ok(true);
         }
-        let view = if let Some(page) = predicted.or_else(|| stored.pages.iter().find(|p| p.coordinate == tile)) {
+        let view = if let Some(page) = predicted.or_else(|| stored.and_then(|stored| stored.pages.iter().find(|p| p.coordinate == tile))) {
             page.active().view.clone()
         } else if let Some(view) = self.source_tile(r, packet.scene, target, tile)? {
             view
@@ -1345,20 +1380,29 @@ impl Scene {
         Ok(())
     }
 
-    pub(super) fn capture_window(layers: SceneView<'_>, region: PixelRect, extent: [u32; 2]) -> PixelRect {
-        if matches!(layers.scope(),Some(layer_core::SceneScope::Raw(_))) {region}
+    pub(super) fn object_content_bounds(layers:SceneView<'_>,owner:OccurrenceHandle)->DocRect {
+        object_spatial::SpatialIndex::default().content(layers,owner).map_or_else(DocRect::default,|content|content.bounds_at(0))
+    }
+    pub(super) fn capture_window(layers: SceneView<'_>, region: PixelRect, extent: [u32; 2]) -> DocRect {
+        if matches!(layers.scope(),Some(layer_core::SceneScope::Raw(_) | layer_core::SceneScope::RawObjects(_))) {region.into()}
         else {images::capture_window(layers, region, extent)}
     }
-    pub(super) fn release_capture_window(&mut self, window: PixelRect) {
+    pub(super) fn cached_capture_window(&self,layers:SceneView<'_>,region:PixelRect)->DocRect {
+        images::capture_window_cached(layers,region,Some(&self.object_spatial))
+    }
+    pub(super) fn window_plan(layers:SceneView<'_>,extent:[u32;2],limit:u64,maximum_side:u32,scene:Option<&Self>)->Result<Option<windows::Plan>,GpuRasterError> {
+        windows::Plan::new_cached(layers,extent,limit,maximum_side,scene.map(|scene|&scene.object_spatial))
+    }
+    pub(super) fn release_capture_window(&mut self, window: DocRect) {
         // The snapshot owner has completed its previous readback. Release job
         // references and old image windows before restoring the next inputs.
         self.jobs.clear();self.source_jobs.clear();
-        if self.images.bounds != window {
+        if self.images.doc_bounds != window {
             self.retire_images(|scene| scene.images = images::ImageStages::default());
         }
     }
-    pub(super) fn capture_image_bound(scene: SceneView<'_>, window: PixelRect) -> u64 {
-        if matches!(scene.scope(),Some(layer_core::SceneScope::Raw(_))) {return 0;}
+    pub(super) fn capture_image_bound(scene: SceneView<'_>, window: impl Into<DocRect>) -> u64 {
+        if matches!(scene.scope(),Some(layer_core::SceneScope::Raw(_) | layer_core::SceneScope::RawObjects(_))) {return 0;}
         let mut images = 0u64;
         let mut scratch = 0;
         for &handle in scene.order() {
@@ -1368,12 +1412,10 @@ impl Scene {
                 scratch = scratch.max(effect.program.passes.len().saturating_sub(1).min(2) as u64);
             }
         }
-        window.area().saturating_mul(16).saturating_mul(images + scratch)
+        window.into().area().saturating_mul(16).saturating_mul(images + scratch)
     }
 
-    /// Capture a document-coordinate crop. Neighborhood dependencies share one
-    /// conservative window expanded by every visible spatial pass. A global
-    /// dependency retains its full input; it must never silently sample a crop.
+    /// Capture a document-coordinate crop with its finite upstream dependencies.
     /// A larger destination receives the crop in its top-left prefix.
     pub(super) fn capture_region(
         &mut self,
@@ -1397,19 +1439,39 @@ impl Scene {
         {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let window = if matches!(output,Output::Source(_)) {region} else {Self::capture_window(packet.scene, region, packet.document_extent)};
-        let dirty = match output { Output::Display => PixelRect::EMPTY, _ => window };
-        self.prepare_region(r, packet, window, dirty, matches!(output,Output::Source(_)), encoder)?;
+        let window = if matches!(output,Output::Source(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
+        let dirty = match output { Output::Display => PixelRect::EMPTY, _ => window.in_frame(packet.document_extent) };
+        self.prepare_region(r, packet, window, dirty, matches!(output,Output::Source(_) | Output::Objects(_)), encoder)?;
         let destination = Image { texture: destination.clone(), view: destination.create_view(&Default::default()),
             plan: display_mips::Plan::window(packet.document_extent, 0, region) };
         self.capture_prepared_regions(r, packet, &destination, &[region], output, preview, encoder)
     }
 
+    pub(crate) fn capture_region_prepared(
+        &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &wgpu::Texture,
+        region: PixelRect, output: Output, encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        if r.snapshot_worker || !packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some()) {
+            return self.capture_region(r, packet, destination, region, output, encoder);
+        }
+        r.drain_image_decode(encoder)?;
+        self.object_results.retain(packet.scene,packet.blend_space,r.device.working_space());
+        let mut objects = std::mem::take(&mut self.object_results);
+        let advanced = objects.advance(r, self, encoder);
+        self.object_results = objects;
+        advanced?;
+        self.object_query = true;
+        let result = self.capture_region(r, packet, destination, region, output, encoder);
+        self.object_query = false;
+        result
+    }
+
     fn prepare_region(
-        &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, window: PixelRect,
+        &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, window: DocRect,
         dirty: PixelRect, raw: bool, encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         let write = self.begin_write(r);
+        self.object_spatial.prepare(packet.scene);
         if self.placement_display { self.retire_images(|scene| scene.images = images::ImageStages::default()); }
         self.placement_display = false;
         if let Some(mut transforms) = r.transforms.take() {
@@ -1425,8 +1487,35 @@ impl Scene {
             Ok(())
         } else { self.update_images(r, packet, dirty, encoder).map(|_|()) };
         self.stop_before = None;
-        if result.is_ok() { write.track(encoder); }
+        if result.is_ok() || matches!(result, Err(GpuRasterError::DeferredObjectWork)) { write.track(encoder); }
         result.map(|_| ())
+    }
+
+    pub(crate) fn release_exact_objects(&mut self,encoder:&crate::submission::CommandEncoder) {
+        self.exact_object_results.clear();
+        self.exact_object_results.flush_retired(encoder);
+    }
+
+    pub(crate) async fn drain_exact_objects_async(&mut self,r:&mut WgpuRasterizer)->Result<(),GpuRasterError> {
+        while self.exact_object_results.pending() {
+            if r.snapshot_cancelled.as_ref().is_some_and(|cancelled|cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
+            }
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            r.drain_image_decode(&mut encoder)?;
+            let mut objects=std::mem::take(&mut self.exact_object_results);
+            let result=objects.advance(r,self,&mut encoder);
+            self.exact_object_results=objects;result?;
+            r.uploads.finish(&encoder);
+            encoder.submit(&r.queue);
+            crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+            #[cfg(target_arch="wasm32")]
+            if r.image_decode_waiting() {r.await_image_decode().await?;}
+        }
+        if r.snapshot_cancelled.as_ref().is_some_and(|cancelled|cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
+        }
+        Ok(())
     }
 
     #[expect(clippy::too_many_arguments, reason = "Tiled capture keeps submission size and generic tile consumer explicit")]
@@ -1435,8 +1524,18 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         mut consume: impl FnMut(&mut WgpuRasterizer, &wgpu::TextureView, PixelRect, &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError>,
     ) -> Result<(), GpuRasterError> {
-        let window = if matches!(output,Output::Source(_)) {region} else {Self::capture_window(packet.scene, region, packet.document_extent)};
-        self.prepare_region(r, packet, window, window, matches!(output,Output::Source(_)), encoder)?;
+        let window = if matches!(output,Output::Source(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
+        loop {
+            match self.prepare_region(r, packet, window, window.in_frame(packet.document_extent), matches!(output,Output::Source(_) | Output::Objects(_)), encoder) {
+                Err(GpuRasterError::DeferredObjectWork)=> {
+                    r.uploads.finish(encoder);
+                    std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
+                    crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                    self.drain_exact_objects_async(r).await?;
+                },
+                result=> {result?;break;},
+            }
+        }
         let (texture, view) = create_color_target(&r.device, [PAGE_SIZE;2], "statistics tile");
         let mut tiles=0;
         for tile in page_coordinates(region) {
@@ -1444,7 +1543,17 @@ impl Scene {
             if preview && query_grid_size(grid).contains(&0) {continue;}
             let region = page_rect(tile).intersect(region);
             let destination = Image {texture:texture.clone(),view:view.clone(),plan:display_mips::Plan::window(packet.document_extent,0,region)};
-            self.capture_prepared_regions(r, packet, &destination, &[region], output, preview, encoder)?;
+            loop {
+                match self.capture_prepared_regions(r, packet, &destination, &[region], output, preview, encoder) {
+                    Err(GpuRasterError::DeferredObjectWork)=> {
+                        r.uploads.finish(encoder);
+                        std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
+                        crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                        self.drain_exact_objects_async(r).await?;
+                    },
+                    result=> {result?;break;},
+                }
+            }
             consume(r, &view, region, encoder)?;
             tiles+=1;
             if !preview && tiles%tiles_per_submission==0 {
@@ -1453,6 +1562,7 @@ impl Scene {
                 crate::local_tone::wait_async(&r.device, &r.queue).await.map_err(GpuRasterError::Color)?;
             }
         }
+        self.release_exact_objects(encoder);
         Ok(())
     }
 
@@ -1469,13 +1579,19 @@ impl Scene {
         regions: &[PixelRect], output: Output, preview: bool, encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         self.jobs.clear();self.source_jobs.clear();
+        self.object_display = self.object_live || matches!(output, Output::Display);
         self.clear_material_pages();
         self.used.fill(false);
         self.stop_before = packet.scene.effect_input();
+        let object_pages = packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some());
         for tile in regions.iter().flat_map(|r| page_coordinates(*r)) {
             let image = match output {
                 Output::Artwork(parent) => {
                     let image = self.group(r, packet, parent, tile)?;
+                    self.converted(r, image, Convert::linear(packet))
+                }
+                Output::Objects(id) => {
+                    let image = self.object_tile(r, packet, id, tile)?;
                     self.converted(r, image, Convert::linear(packet))
                 }
                 Output::OwnerContent(id) => {
@@ -1507,7 +1623,11 @@ impl Scene {
                 Output::Display => self.display_tile(r, packet, tile)?,
             };
             self.copy_window_tile(image, destination, tile);
-            if preview { self.encode_query_jobs(r, encoder, Some([tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]]))?; }
+            if preview || object_pages {
+                let result = self.encode_query_jobs(r, encoder, preview.then_some([tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]]));
+                if result.is_err() { self.object_results.reset_used(); self.exact_object_results.reset_used(); return result; }
+                self.object_results.flush_retired(encoder); self.exact_object_results.flush_retired(encoder);
+            }
         }
         if !preview && self.jobs.len() <= SOURCE_SLOTS * 2 && self.jobs.iter().all(|job| match job {
             Job::DecodedTile(_) => true,
@@ -1527,7 +1647,15 @@ impl Scene {
             }
             self.source_jobs.clear();
         }
-        self.encode_jobs(r, encoder)
+        let result = self.encode_jobs(r, encoder);
+        if result.is_ok() {
+            self.object_results.flush_retired(encoder);
+            self.exact_object_results.flush_retired(encoder);
+        } else {
+            self.object_results.reset_used();
+            self.exact_object_results.reset_used();
+        }
+        result
     }
 
     pub(crate) fn raster_published(&mut self,id:SourceTarget,data:Arc<layer_core::raster::RasterData>) {
@@ -1544,11 +1672,28 @@ impl Scene {
         tiles: Option<&std::collections::BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
         let write = self.begin_write(r);
+        self.object_results.retain(packet.scene,packet.blend_space,r.device.working_space());
+        self.object_spatial.prepare(packet.scene);
+        if let Some(cache) = &r.scale_display {
+            let bounds = self.cached_capture_window(packet.scene, cache.plan.bounds);
+            let level = if cache.evaluation == scale::Evaluation::Native { 0 } else { cache.plan.level };
+            self.object_results.retain_view(bounds, level);
+        }
+        let mut objects = std::mem::take(&mut self.object_results);
+        let advanced = objects.advance(r, self, encoder);
+        self.scale_sources.object_refinements = objects.take_damage();
+        self.scale_sources.object_damage = self.scale_sources.object_refinements.remove(&0).unwrap_or(scale::Damage::EMPTY)
+            .union(std::mem::take(&mut self.object_source_damage));
+        self.object_results = objects;
+        advanced?;
+        let dirty = dirty.union(self.scale_sources.object_damage.bounds());
         self.scale_sources.prepare(r, packet, batch_tiles);
         let mut commands = self.scale_commands.take().unwrap_or_else(|| scale::Commands::new(r));
         commands.begin();
         let mut cache = r.scale_display.take().expect("prepared display cache");
         cache.submission_valid = Some(self.valid.clone());
+        self.object_live = true;
+        self.object_display = true;
         let result = (|| {
             cache.prepare_graph(r, packet, self, &commands, tiles)?;
             cache.invalidate_hierarchy(&self.scale_sources, dirty, tiles);
@@ -1572,10 +1717,14 @@ impl Scene {
                 cache.render(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands }, tiles)
             }
         })();
+        self.object_live = false;
+        self.object_display = false;
         self.scale_commands = Some(commands);
         r.scale_display = Some(cache);
+        if result.is_err() { self.object_results.reset_used(); }
+        self.object_results.flush_retired(encoder);
         self.image_damage = None;
-        if result.is_ok() { write.track(encoder); }
+        if result.is_ok() || matches!(result, Err(GpuRasterError::DeferredObjectWork)) { write.track(encoder); }
         result
     }
 
@@ -1621,11 +1770,13 @@ impl Scene {
 
     fn encode_query_jobs(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, grid: Option<[u32;4]>) -> Result<(), GpuRasterError> {
         let result = self.encode_jobs_inner(r, encoder, grid);
-        if result.is_err() {
-            // Dropping unencoded reservations invalidates their source keys.
-            self.jobs.clear();self.source_jobs.clear();
-        }
+        if result.is_err() {self.discard_unencoded_jobs();}
         result
+    }
+
+    fn discard_unencoded_jobs(&mut self) {
+        self.jobs.clear();self.source_jobs.clear();self.clear_material_pages();self.used.fill(false);
+        self.object_results.reset_used();self.exact_object_results.reset_used();
     }
 
     fn encode_jobs_inner(
@@ -1634,6 +1785,14 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         grid: Option<[u32;4]>,
     ) -> Result<(), GpuRasterError> {
+        let mut deferred = false;
+        for job in &self.jobs {
+            let Job::Object(job) = job else {continue;};
+            if !job.live || self.object_results.has_job(job) || objects::live_ready(r,job)? {continue;}
+            if !job.preview || job.nearest {self.object_results.resolve_job(r,job)?;}
+            deferred = true;
+        }
+        if deferred {return Err(GpuRasterError::DeferredObjectWork);}
         let source_jobs = self.source_jobs.clone();
         let job_grid = |i| grid.filter(|_| !source_jobs.iter().any(|range| range.contains(&i)));
         let base = self.record_count;
@@ -1656,15 +1815,6 @@ impl Scene {
             self.upload[i*self.stride+128..i*self.stride+144].copy_from_slice(&sampling.into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>());
             let mut captured;
             let data: Option<&[f32]> = match job {
-                Job::Effect { data, .. } if r.capture_frame.is_some() => {
-                    let (origin, extent) = r.capture_frame.unwrap();
-                    captured = *data;
-                    captured[12] += origin[0];
-                    captured[13] += origin[1];
-                    captured[14..16].copy_from_slice(&extent.map(|n| n as f32));
-                    captured[30..32].copy_from_slice(&origin);
-                    Some(&captured)
-                }
                 Job::Reduce { values, .. } => {
                     captured = [0.; 32];
                     for (out, value) in captured.iter_mut().zip(scale::Commands::reduction_record(r, *values)) { *out = f32::from_bits(value); }
@@ -1798,6 +1948,18 @@ impl Scene {
                 continue;
             }
             match job {
+                Job::Object(job) => {
+                    if job.live && let Some(view)=self.object_results.take_job(job) {
+                        encoder.copy_texture_to_texture(view.texture().as_image_copy(),job.output.texture().as_image_copy(),
+                            wgpu::Extent3d {width:job.size[0],height:job.size[1],depth_or_array_layers:1});
+                    } else if r.snapshot_worker && !job.preview {
+                        if self.exact_object_results.resolve_job(r,job)?.is_none() {return Err(GpuRasterError::DeferredObjectWork);}
+                        let view=self.exact_object_results.take_job(job).expect("prepared canonical object result");
+                        encoder.copy_texture_to_texture(view.texture().as_image_copy(),job.output.texture().as_image_copy(),
+                            wgpu::Extent3d {width:job.size[0],height:job.size[1],depth_or_array_layers:1});
+                    } else {objects::encode(r,encoder,job)?;}
+                },
+                Job::PaintBase(assembly) => crate::source_access::encode_paint_base(assembly, encoder),
                 Job::Placement(_) | Job::Reduce { .. } => unreachable!(),
                 Job::Positions(geometry, tile, offset) => {
                     self.positions.upload(r, encoder, geometry)?;
@@ -2035,6 +2197,7 @@ impl Pipelines {
             (output, inputs, pipeline)
         };
         Self {
+            objects: crate::object_sampling::ObjectSampler::new(device),
             scale: scale::Pipelines::new(device),
             resample: resample::Resample::new(device),
             source: sources::Pipelines::new(device, &uniforms),
@@ -2107,6 +2270,13 @@ fn descriptor<'a>(
     }
 }
 
+fn constant_frame_tile(scene:SceneView<'_>,tile:[u32;2],window:Option<DocRect>)->bool {
+    let start=scene.evaluation_offset64();let extent=scene.composition().size;
+    let low=tile.map(|coordinate|i64::from(coordinate)*i64::from(PAGE_SIZE));
+    let region=DocRect {min:low,max:low.map(|coordinate|coordinate+i64::from(PAGE_SIZE))};
+    let region=window.map_or(region,|window|region.intersect(window));
+    !region.is_empty()&&(0..2).all(|axis|region.min[axis] as f64>=start[axis] && region.max[axis] as f64<=start[axis]+f64::from(extent[axis]))
+}
 fn fusable_adjustment(scene: SceneView<'_>, handle: OccurrenceHandle) -> bool {
     scene.effect(handle).is_some_and(|effect| effect.program.kind == layer_core::EffectKind::Adjustment && !effect.program.fusion_boundary())
 }
@@ -2123,7 +2293,7 @@ pub(super) fn startup_effect_chains(scene: SceneView<'_>) -> Vec<(Vec<Occurrence
     for &handle in scene.order() {
         parents.insert(scene.evaluation_parent(handle));
         if !scene.visible(handle) { continue; }
-        if let Some(effect) = scene.effect(handle).filter(|effect| effect.constant_color().is_none()) {
+        if let Some(effect) = scene.effect(handle).filter(|effect| effect.constant_color().is_none() || stack::support(scene,0)!=Some(0)) {
             if effect.program.image_boundary() {
                 for pass in 0..effect.program.passes.len().max(1) { result.push((vec![handle], effects::Execution::Image(pass))); }
             } else { result.push((vec![handle], effects::Execution::Fused)); }
@@ -2200,3 +2370,7 @@ fn query_grid_size([x,y,w,h]:[u32;4])->[u32;2] {
         let p=(2*i+1)*extent/(2*extent.min(256));p>=origin && p<origin+PAGE_SIZE
     }).count() as u32)
 }
+
+#[cfg(test)]
+#[path="scene/display_backup_tests.rs"]
+mod display_backup_tests;

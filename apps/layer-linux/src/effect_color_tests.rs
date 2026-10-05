@@ -594,7 +594,7 @@ fn native_gradient_editor_modes_contacts_and_archive() {
         app.style_manager().set_color_scheme(scheme);
         for effect in ["gradient_fill","gradient_map"] {
             let mut project=new_drawing(256,256,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-            paint_at_mut(&mut project,0).original=Some(layer_core::color::source::rgba8_source([256,256],|x,y|[x as u8,y as u8,(255-x) as u8,255]));
+            paint_at_mut(&mut project,0).base=Some(layer_core::PaintBase::new((layer_core::color::source::rgba8_source([256,256],|x,y|[x as u8,y as u8,(255-x) as u8,255])).into()));
             let w=Workspace::with_project(&app,Some((project,None)));w.window.maximize();w.window.present();ready(&w);
             super::pointwise::configure_properties(&w);
             w.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:effect.into()}});ready(&w);

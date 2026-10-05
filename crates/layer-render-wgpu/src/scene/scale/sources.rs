@@ -23,6 +23,7 @@ pub(super) struct Source {
     raw_material: bool,
     pub levels: BTreeMap<u32, Level>,
     source: Option<Arc<layer_core::color::source::SourceImage>>,
+    base: Option<([u32; 2], layer_core::authored::PaintBasePolicy)>,
     backing: Option<Arc<RasterData>>,
     mask: Option<metadata::MaskMetadata>,
     preview: Damage,
@@ -68,6 +69,9 @@ impl Source {
 pub(crate) struct Sources {
     pub(super) entries: HashMap<SourceTarget, Source>,
     pub(super) reset: bool,
+    pub(super) object_moving: Option<OccurrenceHandle>,
+    pub(in crate::scene) object_damage: Damage,
+    pub(in crate::scene) object_refinements: BTreeMap<u32, Damage>,
 }
 impl Sources {
     pub(crate) fn published(&mut self, id: SourceTarget, data: Arc<RasterData>) {
@@ -85,11 +89,13 @@ impl Sources {
         Some((image.image.texture.clone(), source.updates, level))
     }
     pub fn storage_bytes(&self) -> u64 {
-        self.entries.values().flat_map(|s| s.levels.values()).map(|l| texture_bytes(&l.image.texture)).sum()
+        self.entries.values().flat_map(|s| s.levels.values()).map(|l| texture_bytes(&l.image.texture)).sum::<u64>()
+            + self.object_refinements.values().map(|damage| std::mem::size_of::<(u32, Damage)>() as u64 + damage.regions.capacity() as u64 * std::mem::size_of::<PixelRect>() as u64).sum::<u64>()
     }
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, batch_tiles: &[Vec<brush_tiles::BrushTile>]) {
         let mut wanted = BTreeSet::new();
         self.reset = false;
+        self.object_moving = r.moving_layer;
         for &handle in packet.scene.order() {
             let occurrence = packet.scene.occurrence(handle).unwrap();
             let visible = packet.scene.visible(handle);
@@ -112,7 +118,8 @@ impl Sources {
         let scene = packet.scene;
         let (id, plane, image, mask) = if is_mask {
             (SourceTarget::Coverage(scene.mask(handle).unwrap().0.source), RasterPlane::Mask, None, metadata::mask_metadata(scene, handle))
-        } else { (scene.source_target(handle).unwrap(), RasterPlane::Color, scene.paint_source(handle).unwrap().original.clone(), None) };
+        } else { (scene.source_target(handle).unwrap(), RasterPlane::Color, scene.paint_source(handle).unwrap().base.as_ref().map(|base| base.image.storage().clone()), None) };
+        let base = scene.paint_source(handle).filter(|_| !is_mask).and_then(|paint| paint.base.as_ref()).map(|base| (base.offset, base.policy));
         let extent = scene.target_extent(id);
         let blend_space = if is_mask || r.moving_layer == Some(handle) || !scene.target_geometry(id).is_identity() {
             layer_core::BlendSpace::Linear
@@ -120,14 +127,14 @@ impl Sources {
         let raw_material = !is_mask && mapped_material(r, packet, id);
         self.reset |= !self.entries.contains_key(&id);
         let source = self.entries.entry(id).or_insert_with(|| Source {
-            extent, updates: 0, blend_space, raster: 0, watercolor: None, raw_material, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: Damage::EMPTY, damage: Damage::EMPTY,
+            extent, updates: 0, blend_space, raster: 0, watercolor: None, raw_material, levels: BTreeMap::new(), source: None, base: None, backing: None, mask: None, preview: Damage::EMPTY, damage: Damage::EMPTY,
         });
         let resized = source.extent != extent;
         if resized { source.extent = extent; source.levels.clear(); self.reset = true; }
         let same_image = match (&source.source, &image) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false,
         };
-        let reset = resized || packet.reset_layers || !same_image || source.mask != mask;
+        let reset = resized || packet.reset_layers || !same_image || source.mask != mask || source.base != base;
         let changed = reset || source.blend_space != blend_space || source.raw_material != raw_material;
         source.raw_material = raw_material;
         source.blend_space = blend_space;
@@ -136,6 +143,7 @@ impl Sources {
         }
         self.reset |= changed;
         source.source = image;
+        source.base = base;
         source.mask = mask;
         let backing = r.native_backing(id).cloned();
         let same_backing = match (&source.backing, &backing) {
@@ -185,7 +193,8 @@ impl Sources {
         let paint = scene.paint(paint)?;
         let source = self.entries.get(&target)?;
         let current = source.blend_space == layer_core::BlendSpace::Linear && source.extent == extent && source.raster == paint.raster.identity() && source.preview.is_empty()
-            && match (&source.source, &paint.original) { (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false };
+            && source.base == paint.base.as_ref().map(|base| (base.offset, base.policy))
+            && match (&source.source, paint.base.as_ref().map(|base| base.image.storage())) { (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false };
         let image = source.levels.get(&level)?;
         (current && source.accepts(image) && image.watercolor.is_none() && image.image.plan.bounds == PixelRect::full(extent)
             && page_coordinates(PixelRect::full(extent)).all(|c| image.valid.contains(&c))).then_some(&image.image.texture)

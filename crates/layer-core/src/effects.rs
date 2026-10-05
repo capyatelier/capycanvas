@@ -217,6 +217,13 @@ pub enum EffectAuxiliary {
 pub enum EffectAnalysisKind { LocalIllumination, Dehaze }
 
 impl EffectProgram {
+    pub fn uses_spatial_reference(&self) -> bool {
+        if crate::bundled_effect_catalog().get(&self.id).is_none_or(|builtin| builtin.program().as_ref() != self) {
+            return true;
+        }
+        !self.passes.is_empty() || matches!(self.id.as_ref(), "vignette" | "film_grain" | "crosshatch" | "iridescence" | "gradient_fill")
+    }
+
     pub fn analysis(&self) -> Option<EffectAnalysisKind> {
         match self.auxiliary { Some(EffectAuxiliary::Analysis {analysis}) => Some(analysis), _ => None }
     }
@@ -355,10 +362,23 @@ impl EffectClock {
 pub struct EffectView<'a> {
     pub program: &'a EffectProgram,
     pub values: &'a [EffectValue],
+    pub spatial: Option<&'a crate::authored::EffectSpatialReference>,
 }
 impl<'a> EffectView<'a> {
     pub fn new(program: &'a EffectProgram, values: &'a [EffectValue]) -> Self {
-        Self { program, values }
+        Self { program, values, spatial: None }
+    }
+    pub fn with_spatial(mut self, spatial: Option<&'a crate::authored::EffectSpatialReference>) -> Self {
+        self.spatial = spatial;
+        self
+    }
+    pub fn spatial_radius(self, radius: u32) -> Option<u32> {
+        let scale=self.spatial.map_or(1.,|spatial| {
+            let [a,b,c,d,_,_]=spatial.mapping.0;
+            (a.abs()+c.abs()).max(b.abs()+d.abs())
+        });
+        let mapped=(f64::from(radius)*scale).ceil();
+        (mapped.is_finite() && mapped<=u32::MAX as f64).then_some(mapped as u32)
     }
     pub fn constant_color(&self) -> Option<RgbColor> {
         match self.value(self.program.constant_color.as_deref()?) {
@@ -407,7 +427,7 @@ impl<'a> EffectView<'a> {
     }
     pub fn damage_radius(&self) -> Option<u32> {
         self.program.passes.iter().try_fold(0u32, |radius, pass| {
-            radius.checked_add(pass.sampling.radius(*self)?)
+            radius.checked_add(self.spatial_radius(pass.sampling.radius(*self)?)?)
         })
     }
     pub fn animated(&self) -> bool {
@@ -630,15 +650,7 @@ impl<'a> EffectView<'a> {
         }
         Ok(data)
     }
-    pub fn scaled_values(&self, factor: f32) -> Option<Vec<EffectValue>> {
-        let mut values = self.values.to_vec();
-        for (parameter, value) in self.program.parameters.iter().zip(&mut values) {
-            if let (Some([low, high]), EffectValue::Number(v)) = (parameter.accepted_range(), value) && parameter.pixel_length() {
-                *v = (*v * factor).clamp(low, high);
-            }
-        }
-        (values != self.values && EffectView::new(self.program, &values).validate().is_ok()).then_some(values)
-    }
+
 }
 impl<'a> From<&'a EffectInstance> for EffectView<'a> {
     fn from(effect: &'a EffectInstance) -> Self {
@@ -1020,28 +1032,12 @@ mod tests {
         }
     }
     #[test]
-    fn resizing_preserves_authored_precision_independently_of_numeric_presentation() {
-        for decimals in [0, 1, 2, 6] {
-            let mut effect=EffectInstance::new(fixture("gaussian_blur").program());
-            let parameters=Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters);
-            let EffectParameterKind::Number {decimals:places,step,..}=&mut parameters[0].kind else {panic!()};
-            *places=decimals;*step=0.25;
-            effect.set("sigma",EffectValue::Number(1.25)).unwrap();
-            let scaled=effect.view().scaled_values(1.5).unwrap();
-            assert_eq!(scaled[0],EffectValue::Number(1.875));
-            assert_eq!(EffectView::new(&effect.program,&scaled).scaled_values(2./3.).unwrap(),effect.values);
-        }
-    }
-    #[test]
-    fn resizing_evaluates_the_full_authored_pixel_length() {
+    fn pixel_lengths_evaluate_full_authored_values_beyond_control_range() {
         let mut effect=EffectInstance::new(fixture("gaussian_blur").program());
-        effect.set("sigma",EffectValue::Number(60.)).unwrap();
-        let scaled=effect.view().scaled_values(2.).unwrap();
-        assert_eq!(scaled[0],EffectValue::Number(120.));
-        let view=EffectView::new(&effect.program,&scaled);
+        effect.set("sigma",EffectValue::Number(120.)).unwrap();
+        let view=effect.view();
         assert_eq!(view.gpu_parameters(RgbSpace::Srgb).unwrap()[1][0],120.);
         assert_eq!(view.damage_radius(),Some(720));
-        assert_eq!(view.scaled_values(0.5).unwrap(),effect.values);
     }
     #[test]
     fn count_parameters_accept_only_whole_authored_values() {
@@ -1066,11 +1062,8 @@ mod tests {
         assert_eq!(view.damage_radius(), Some(6));
         assert_eq!(program.passes[0].sampling.radius(view), Some(3));
         assert_eq!(view.gpu_parameters(RgbSpace::Srgb).unwrap()[1], [1.,0.,0.,0.]);
-        let scaled = view.scaled_values(2.).unwrap();
-        assert_eq!(scaled[sigma], EffectValue::Number(2.));
         assert_eq!(values[sigma], EffectValue::Number(1.));
         assert_eq!(Arc::strong_count(&program), owners);
-        assert_eq!(view.scaled_values(1.), None);
     }
     #[test]
     fn borrowed_effect_validation_rejects_incomplete_and_constrained_values() {

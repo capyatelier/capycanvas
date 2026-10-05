@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {packageObject,packageComposition,packageOccurrences,rasterIdentity,sourceContent} from './package-fixture.test.mjs';
+import {paintBaseImage,packageObject,packageComposition,packageOccurrences,rasterIdentity,sourceContent} from './package-fixture.test.mjs';
 const outer=p=>{const [x,y]=p?.translation??[0,0],m=p?.projective??[1,0,0,0,1,0,0,0,1];return[m[0]+x*m[6],m[1]+x*m[7],m[2]+x*m[8],m[3]+y*m[6],m[4]+y*m[7],m[5]+y*m[8],...m.slice(6)];};
 
 import {png} from './clone-journey.test.mjs';
@@ -58,7 +58,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
   const affine=p=>{assert.equal(p?.mesh??null,null);const m=outer(p);assert.deepEqual(m.slice(6),[0,0,1]);return[m[0],m[3],m[1],m[4],m[2],m[5]];};
   let files;
   try {
-    await evaluate(`window.placementTestBounds=[];window.placementTestOriginalWorker=Worker;const OriginalWorker=Worker;window.Worker=class extends OriginalWorker{constructor(...args){super(...args);this.boundsIds=new Set();this.addEventListener('message',({data})=>{if(this.boundsIds.has(data.id))placementTestBounds.push(data);});}postMessage(message,...args){if(message.request?.operation==='snapshot'&&JSON.parse(message.request.metadata)[1].Bounds)this.boundsIds.add(message.id);return super.postMessage(message,...args);}};`);
+    await evaluate(`window.placementTestBounds=[];window.placementTestOriginalWorker=Worker;const OriginalWorker=Worker;window.Worker=class extends OriginalWorker{constructor(...args){super(...args);this.boundsIds=new Set();this.addEventListener('message',({data})=>{if(this.boundsIds.has(data.id))placementTestBounds.push(data);});}postMessage(message,...args){if(message.request?.operation==='snapshot'&&JSON.parse(message.request.metadata).at(-1).Bounds)this.boundsIds.add(message.id);return super.postMessage(message,...args);}};`);
     await call('Page.setInterceptFileChooserDialog',{enabled:true});
     await evaluate(`window.placementTest={open:window.showOpenFilePicker,save:window.showSaveFilePicker};window.showOpenFilePicker=undefined;
       window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){return{async write(b){placementTest.saved=new Uint8Array(b instanceof Blob?await b.arrayBuffer():b)},async close(){},async abort(){}}}});
@@ -99,7 +99,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await importFiles(files);
     const labels=(await state()).layers.slice(0,files.length).map(l=>l.label);
     await click('.canvas-action-bar [data-command=apply_transform]');
-    const fitted=await save(),sources=sourceIdentity(fitted),originals=packageOccurrences(fitted).filter(o=>o.data.content.paint&&packageObject(fitted,o.data.content.paint).data.original).map(o=>packageObject(fitted,o.data.content.paint).data.original),originalContents=sourceContent(fitted);
+    const fitted=await save(),sources=sourceIdentity(fitted),originals=packageOccurrences(fitted).filter(o=>o.data.content.paint&&paintBaseImage(fitted,o.data.content.paint)).map(o=>paintBaseImage(fitted,o.data.content.paint)),originalContents=sourceContent(fitted);
     assert.equal(sources.length,files.length);
     for(let i=0;i<files.length;i++){
       const [w,h]=originals[i].extent,scale=Math.min(1,2000/w,1500/h),pose=affine(packageOccurrences(fitted)[i].data.placement);
@@ -171,7 +171,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await invoke('redo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(repeated),'Redo reapplies Again once');
       await invoke('undo');
       const pivotBase=await save(),pivotOuter=outer(repeatPlacement(pivotBase));
-      const centerLocal=packageObject(rawBefore,retainedOccurrence.data.content.paint).data.original.extent.map(v=>v/2),centerDocument=map(pivotOuter,...centerLocal);
+      const centerLocal=paintBaseImage(rawBefore,retainedOccurrence.data.content.paint).extent.map(v=>v/2),centerDocument=map(pivotOuter,...centerLocal);
       await invoke('scale_rotate');await transforming();
       await drag(await screen(...centerDocument),21,13);
       const customPivot=[centerDocument[0]+21/(await state()).camera.zoom,centerDocument[1]+13/(await state()).camera.zoom];
@@ -196,7 +196,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await drag(await screen(anchor[0],anchor[1]),-25,12);await invoke('apply_transform');
       const distorted=await save(),outer=outer(repeatPlacement(distorted));
       assert.ok(outer[6]!==0||outer[7]!==0,'A real corner drag retains projective geometry');
-      const [sourceWidth,sourceHeight]=packageObject(rawBefore,retainedOccurrence.data.content.paint).data.original.extent;
+      const [sourceWidth,sourceHeight]=paintBaseImage(rawBefore,retainedOccurrence.data.content.paint).extent;
       const node=async(u,v)=>screen(...map(outer,u*sourceWidth,v*sourceHeight));
       await invoke('scale_rotate');await transforming();await invoke('transform_warp');await invoke('warp_split_cross');
       await tap(await node(.37,.61));await invoke('warp_select_points');
@@ -236,7 +236,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       }else await invoke('apply_transform_pixels');
       await wait(`!layerApp.state().commands.find(c=>c.id==='cancel_transform').enabled&&layerApp.app.brush_ready()`);
       const baked=await save(),bakedOccurrence=await activeOccurrence(baked);
-      assert.ok(!packageObject(baked,bakedOccurrence.data.content.paint).data.original,'Bake removes the retained source association');
+      assert.ok(!paintBaseImage(baked,bakedOccurrence.data.content.paint),'Bake removes the retained source association');
       assert.deepEqual(affine(bakedOccurrence.data.placement),[1,0,0,1,0,0]);
       assert.ok(rasterIdentity(baked).some(r=>r.tiles.length),'Bake publishes editable native tiles');
       assert.deepEqual(materialPlanes(baked),materialPlanes(seeded),'Bake preserves the real watercolor pigment and scalar planes');

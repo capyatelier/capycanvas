@@ -26,7 +26,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc = self.engine.document();
         matches!(doc.working.target, Some(layer_core::authored::SourceTarget::Paint(_)))
             && doc.working.occurrence.is_some_and(|h| !doc.is_locked(h)
-                && doc.scene().paint_source(h).is_some_and(|p| p.original.is_none()))
+                && doc.scene().paint_source(h).is_some_and(|p| p.base.is_none()))
     }
 
     pub(crate) fn start_picker(&mut self) -> Result<(), String> {

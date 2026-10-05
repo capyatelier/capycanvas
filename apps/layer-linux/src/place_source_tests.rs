@@ -39,7 +39,7 @@ fn source_is(w: &Rc<Workspace>, expected: &SourceImage) {
     let document = gpu.as_ref().unwrap().session.engine().document();
     assert_eq!(document.composition().color, Default::default());
     let layer = active_paint(document);
-    assert_source_samples(layer.original.as_deref().unwrap(), expected);
+    assert_source_samples(layer.base.as_ref().map(|base|base.image.as_ref()).unwrap(), expected);
     assert!(
         layer.raster.is_empty(),
         "retained import must not quantize to canvas precision"
@@ -138,7 +138,7 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
         wait_layer_thumbnail(&w, active);
         let saved = snapshot(&w);
         let reopened = open_native_document(std::io::Cursor::new(saved));
-        assert_source_samples(paint_at(&reopened, 0).original.as_deref().unwrap(), &photo.source);
+        assert_source_samples(paint_at(&reopened, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &photo.source);
         invoke(&w, CommandId::Undo);
         ready(&w);
         assert_eq!(ui_session(&w).engine().document().scene().order().len(), 2);
@@ -162,7 +162,7 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
         let (project, location) = opened.borrow_mut().take().expect("photo Open publishes a document");
         assert!(location.is_none(), "Open must not make the original image the master target");
         assert_eq!(project.composition().size, photo.source.extent);
-        assert_source_samples(paint_at(&project, 0).original.as_deref().unwrap(), &photo.source);
+        assert_source_samples(paint_at(&project, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &photo.source);
         assert_eq!(occurrence_at(&project, 0).name.contains("first frame"), photo.first_frame);
         assert_eq!(occurrence_at(&project, 0).name.contains("primary image"), photo.primary_image);
         let photo_id = layer_ui::occurrence_token(project.scene().order()[0]);
@@ -229,7 +229,7 @@ fn native_profiled_place_paste_and_source_history() {
     assert!(
         paint_at(ui_session(&w)
             .engine()
-            .document(), 0).original
+            .document(), 0).base
             .is_none()
     );
     let cleared = glib::MainContext::default()
@@ -293,8 +293,8 @@ fn native_profiled_place_paste_and_source_history() {
     let saved = snapshot(&w);
     let reopened =
         open_native_document(std::io::Cursor::new(saved.clone()));
-    assert_source_samples(paint_at(&reopened, 0).original.as_deref().unwrap(), &source);
-    assert_source_samples(paint_at(&reopened, 1).original.as_deref().unwrap(), &source);
+    assert_source_samples(paint_at(&reopened, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
+    assert_source_samples(paint_at(&reopened, 1).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
     let restored = Workspace::with_project(&app, Some((reopened, None)));
     restored.window.present();
     ready(&restored);

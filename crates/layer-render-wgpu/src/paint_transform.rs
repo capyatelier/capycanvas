@@ -146,8 +146,10 @@ impl PaintTransforms {
     }
     pub fn materialize_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
-        scene: SceneView<'_>, region: PixelRect,
+        scene: SceneView<'_>, region: DocRect,
     ) -> Result<(), GpuRasterError> {
+        let scene = scene.with_offset64(region.min.map(|value| -(value as f64)));
+        let local = PixelRect::full(region.size()?);
         for state in self.0.iter_mut().filter(|t| !t.native_preview && t.preview.is_some()) {
             let preview = state.preview.clone().unwrap();
             let extent = r.target_extent(preview.target);
@@ -156,7 +158,7 @@ impl PaintTransforms {
             let bounds = PixelRect::full(extent);
             let splitter = snapshot::Splitter::new(bounds, &transform, mesh, |c| !page_rect(c).intersect(bounds).is_empty())?;
             let mut jobs = Vec::new();
-            splitter.split(aligned(region, PAGE_SIZE, r.document_extent), &mut jobs)?;
+            splitter.split(local, &mut jobs)?;
             let pages: std::collections::BTreeSet<_> = jobs.into_iter().flat_map(|job| job.sources).collect();
             let retired: Vec<_> = state.queried.difference(&pages).copied().map(page_rect).collect();
             state.render_source(r, encoder, preview.target, &Default::default(), pixel_transform::PREVIEW_TAPS, &retired)?;
@@ -181,7 +183,7 @@ impl PaintTransforms {
     pub fn render_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         id: SourceTarget, placement: layer_core::Affine, output: &wgpu::TextureView,
-        display: pixel_transform::DisplayLevel, target: display_mips::Plan, region: PixelRect,
+        display: pixel_transform::DisplayLevel, target: display_mips::Plan, region: DocRect,
     ) -> Result<(), GpuRasterError> {
         let state = self.0.iter_mut().find(|t| t.preview.as_ref().is_some_and(|p| p.target == id)).unwrap();
         let preview = state.preview.clone().unwrap();
@@ -223,7 +225,7 @@ struct ImageTransformState {
 struct Standby {
     layer: SourceTarget,
     raster: u64,
-    source: Option<usize>,
+    source: Option<(usize, [u32; 2])>,
     selection: layer_core::Selection,
 }
 impl Standby {
@@ -231,7 +233,7 @@ impl Standby {
         Self {
             layer: id,
             raster: scene.raster(id).map_or(0, |r| r.identity()),
-            source: scene.original(id).map(|s| Arc::as_ptr(s) as usize),
+            source: scene.paint_base(id).map(|base| (Arc::as_ptr(base.image.storage()) as usize, base.offset)),
             selection: selection.clone(),
         }
     }
@@ -550,7 +552,7 @@ impl ImageTransformState {
     /// stays under its pages, so emptied pages must keep covering it.
     fn moves_everything(&self, selection: Option<&layer_core::Selection>) -> bool {
         let source = self.source_bounds.into_iter().fold(PixelRect::EMPTY, PixelRect::union);
-        self.sources[0].as_ref().is_some_and(|s| s.original.is_none())
+        self.sources[0].as_ref().is_some_and(|s| s.base.is_none())
             && !source.is_empty()
             && selection.is_none_or(|s| selects_all(s, source))
     }
@@ -592,7 +594,7 @@ impl ImageTransformState {
         }
         if let Some(original) = &original {
             self.source_bounds[0] = self.source_bounds[0]
-                .union(PixelRect::full(original.extent).intersect(PixelRect::full(extent)));
+                .union(source_access::paint_base_bounds(original).intersect(PixelRect::full(extent)));
         }
         let source_bounds = self
             .source_bounds
@@ -639,7 +641,7 @@ impl ImageTransformState {
                 };
                 self.sources[channel] = Some(TileSnapshot {
                     pages: pages.into_iter().collect(),
-                    original: if channel == 0 { original.clone() } else { None },
+                    base: if channel == 0 { original.clone() } else { None },
                     backing: backing.as_ref().map(|(data, space)| (data.clone(), *space, planes[channel])),
                     bounds,
                 });
@@ -737,11 +739,9 @@ impl ImageTransformState {
                 if self.sources[0]
                     .as_ref()
                     .unwrap()
-                    .original
+                    .base
                     .as_ref()
-                    .is_some_and(|s| {
-                        c[0] * PAGE_SIZE < s.extent[0] && c[1] * PAGE_SIZE < s.extent[1]
-                    })
+                    .is_some_and(|base| source_access::paint_base_contains(base, c))
                 {
                     initialize_original.insert(c);
                 } else {
@@ -1292,12 +1292,12 @@ impl ImageTransformState {
     fn render_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview, extent: [u32; 2], placement: layer_core::Affine,
-        level: &wgpu::TextureView, display: pixel_transform::DisplayLevel, target: display_mips::Plan, region: PixelRect,
+        level: &wgpu::TextureView, display: pixel_transform::DisplayLevel, target: display_mips::Plan, region: DocRect,
         resample: &resample::Resample,
     ) -> Result<(), GpuRasterError> {
         let side = display.side;
         let mesh = next.transform.placement.mesh.clone();
-        let texels = texel_rect(region.window_local(target.bounds), side);
+        let texels = texel_rect(target.doc_bounds.local(region), side);
         let values = self.display_record(next, extent, placement, display, target, texels)?;
         if mesh.is_some() {
             let tolerance = 0.5 * side as f32 / placement.magnification().max(1e-6);

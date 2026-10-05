@@ -13,7 +13,7 @@ fn paint_source(document: &Document, handle: OccurrenceHandle) -> Option<(PaintH
 fn repair_edit(document: &Document, handle: OccurrenceHandle, corrected: SourceImage) -> Result<(Edit, OccurrenceHandle), String> {
     let (paint, source) = paint_source(document, handle).ok_or("Select a placed photo layer")?;
     let mut replacement = source.clone();
-    replacement.original = Some(Arc::new(corrected));
+    replacement.base.as_mut().ok_or("Missing source binding")?.image = Arc::new(corrected).into();
     if !baked(source) {
         return Ok((Edit::Paint(RecordChange::replace(&document.artwork.paint, paint, Some(replacement)).map_err(error)?), handle));
     }
@@ -48,7 +48,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn can_edit_original(&self, handle: OccurrenceHandle) -> bool {
         let document = self.engine.document();
-        !document.is_locked(handle) && paint_source(document, handle).is_some_and(|(_, source)| source.original.as_ref().is_some_and(|source| source.is_original()))
+        !document.is_locked(handle) && paint_source(document, handle).is_some_and(|(_, source)| source.base.as_ref().is_some_and(|source| source.is_original()))
     }
     pub(super) fn revert_to_original_refusal(&self) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
@@ -58,7 +58,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.document_file.busy { return Some(l.text(MessageId::COMMANDS_WAIT_FOR_THE_CURRENT_FILE_OPERATION)); }
         let Some(handle) = document.working.occurrence else { return Some(l.text(MessageId::COMMANDS_REFUSAL_SOURCE_EDIT_SELECT_A_PLACED_PHOTO_LAYER)); };
         let Some((_, source)) = paint_source(document, handle) else { return Some(l.text(MessageId::COMMANDS_REFUSAL_SOURCE_EDIT_SELECT_A_PLACED_PHOTO_LAYER)); };
-        match &source.original {
+        match &source.base {
             None => Some(l.text(MessageId::COMMANDS_REFUSAL_SOURCE_EDIT_SELECT_A_PLACED_PHOTO_LAYER)),
             Some(original) if !original.is_original() => Some(l.text(MessageId::COMMANDS_REFUSAL_SOURCE_EDIT_A_RASTERIZED_PHOTO_HAS_NO_ORIGINAL_TO_RETURN_TO)),
             Some(_) if document.is_locked(handle) => Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED)),
@@ -85,9 +85,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         if !self.can_edit_original(handle) { return Err("Select an unlocked retained image layer".into()); }
         let (_, source) = paint_source(self.engine.document(), handle).unwrap();
-        if !Arc::ptr_eq(source.original.as_ref().unwrap(), original) { return Err("The source changed while choosing its profile; try again".into()); }
+        if !Arc::ptr_eq(source.base.as_ref().unwrap().image.storage(), original) { return Err("The source changed while choosing its profile; try again".into()); }
         corrected.validate()?;
-        if corrected.kind != original.kind || corrected.extent != original.extent || corrected.interpretation.channels != original.interpretation.channels
+        if corrected.extent != original.extent || corrected.interpretation.channels != original.interpretation.channels
             || corrected.interpretation.depth != original.interpretation.depth || corrected.interpretation.profile_assumed || corrected.tiles.len() != original.tiles.len()
             || !corrected.tiles.iter().zip(&original.tiles).all(|((a, x), (b, y))| a == b && Arc::ptr_eq(x, y)) {
             return Err("Source profile repair must preserve the original image samples".into());
@@ -99,6 +99,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let (paint, source) = self.rasterized_source(handle, original, converted)?;
             Edit::Paint(RecordChange::replace(&self.engine.document().artwork.paint, paint, Some(source)).map_err(error)?)
         } else {
+            let converted=self.engine.document().artwork.intern_source_image(converted)?;
             self.validate_source_repair(handle, original, &converted)?;
             if *converted == **original { Edit::Batch(Vec::new()) }
             else { repair_edit(self.engine.document(), handle, Arc::unwrap_or_clone(converted))?.0 }
@@ -114,12 +115,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub fn preview_layer_source(&self, handle: OccurrenceHandle, original: &Arc<SourceImage>, corrected: SourceImage) -> Result<Document, String> {
+        let corrected=Arc::unwrap_or_clone(self.engine.document().artwork.intern_source_image(Arc::new(corrected))?);
         self.validate_source_repair(handle, original, &corrected)?;
         if corrected == **original { return self.document_snapshot(); }
         let (edit, _) = repair_edit(self.engine.document(), handle, corrected)?;
         self.source_edit_candidates(&edit, Default::default())
     }
     pub fn repair_layer_source(&mut self, handle: OccurrenceHandle, original: &Arc<SourceImage>, corrected: SourceImage) -> Result<OccurrenceHandle, String> {
+        let corrected=Arc::unwrap_or_clone(self.engine.document().artwork.intern_source_image(Arc::new(corrected))?);
         self.validate_source_repair(handle, original, &corrected)?;
         if corrected == **original { return Ok(handle); }
         let (edit, result) = repair_edit(self.engine.document(), handle, corrected)?;
@@ -133,14 +136,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         if !self.can_edit_original(handle) { return Err("Select an unlocked retained image layer".into()); }
         let document = self.engine.document();
         let (paint, source) = paint_source(document, handle).unwrap();
-        if !Arc::ptr_eq(source.original.as_ref().unwrap(), original) { return Err("The source changed while rasterizing; try again".into()); }
-        converted.validate()?;
-        if converted.kind != layer_core::color::source::SourceKind::Rasterized || converted.extent != original.extent
+        if !Arc::ptr_eq(source.base.as_ref().unwrap().image.storage(), original) { return Err("The source changed while rasterizing; try again".into()); }
+        let converted=document.artwork.intern_source_image(converted)?;
+        if converted.extent != original.extent
             || converted.interpretation.profile != layer_core::color::ColorProfile::Builtin(document.composition().color.space)
             || converted.interpretation.depth != document.composition().color.depth {
             return Err("Rasterization must retain the full image extent in the document color mode".into());
         }
-        let mut source = source.clone(); source.original = Some(converted);
+        let mut source = source.clone();
+        let base = source.base.as_mut().ok_or("Missing source binding")?;
+        base.image = converted.into(); base.policy = layer_core::authored::PaintBasePolicy::WorkingPixels;
+        base.validate(source.domain, document.composition().color)?;
         Ok((paint, source))
     }
     pub fn preview_rasterized_source(&self, handle: OccurrenceHandle, original: &Arc<SourceImage>, converted: Arc<SourceImage>) -> Result<Document, String> {

@@ -489,7 +489,7 @@ fn snapshot_affine_material_bake_preserves_raw_codes_masks_and_world_registratio
         assert_eq!(target(&baked), target(&document));
         assert_eq!(occurrence(&baked).placement, layer_core::LayerPlacement::IDENTITY);
         assert_eq!(occurrence(&baked).opacity, occurrence(&before).opacity);
-        assert!(paint(&baked).original.is_none());
+        assert!(paint(&baked).base.is_none());
         assert_eq!(paint(&baked).raster.wait_data().unwrap().watercolor, paint(&before).raster.wait_data().unwrap().watercolor);
         let inverse = map.inverse().unwrap();
         assert_baked_codes(&baked, &[RasterPlane::Color, RasterPlane::WatercolorWetness], |plane, point| {
@@ -614,9 +614,9 @@ fn snapshot_photo_bake_keeps_original_source_and_honors_erased_base_overrides() 
     let preview = render(&mut renderer, &before, &[], true);
     let actual = render(&mut renderer, &baked, &[], true);
     assert_pixels(&actual, &preview, "source plus erased override bake parity");
-    assert!(paint(&baked).original.is_none());
+    assert!(paint(&baked).base.is_none());
     assert_eq!(document, before);
-    assert!(Arc::ptr_eq(paint(&document).original.as_ref().unwrap(), &source));
+    assert!(Arc::ptr_eq(paint(&document).base.as_ref().unwrap().image.storage(), &source));
 }
 
 #[test]
@@ -637,7 +637,7 @@ fn snapshot_magnified_nonuniform_photo_bake_matches_retained_bicubic_edges() {
     let mut baked = document.clone(); baked.apply(edit).unwrap();
     let actual = render(&mut renderer, &baked, &[], true);
     assert_pixels(&actual, &expected, "magnified nonuniform checker: retained and baked Bicubic appearance");
-    assert!(paint(&baked).original.is_none());
+    assert!(paint(&baked).base.is_none());
 }
 
 #[test]
@@ -1344,7 +1344,7 @@ fn folded_selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
         kind:RasterOperationKind::Bake {scene:owner.snapshot(),scope:SceneScope::All,offset:Point::default()}};
     let damage=operation.bounds(EXTENT);
     let (_, copied) = append_paint(&mut owner, "selection copy", PaintSource { color_mode: Default::default(),
-        domain: EXTENT, raster: Default::default(), original: None, operations: Arc::new(vec![operation]),
+        domain: EXTENT, raster: Default::default(), base: None, operations: Arc::new(vec![operation]),
     });
     let batch=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,damage,
         ..crate::test_support::dab_batch(copied,crate::tests::test_style(BrushExecution::Dry),damage)};

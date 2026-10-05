@@ -17,7 +17,7 @@ fn fixture() -> layer_core::Document {
         [value as u8, (value + 15) as u8, (value + 30) as u8, 255]
     }).collect();
     for _ in 0..256 {source.push_row(&row).unwrap();}
-    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));project
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(source.finish().unwrap())).into()));project
 }
 
 fn start(app: &NativeTestApp, effect: &str) -> (Rc<Workspace>, std::path::PathBuf) {
@@ -63,13 +63,12 @@ pub(super) fn assert_source_unchanged(w: &Workspace, before: &layer_core::Docume
     for (h, id, old) in before.artwork.paint.iter() {
         assert_eq!(after.artwork.paint.id(h), Some(id));
         let new = after.artwork.paint.get(h).unwrap();
-        assert_eq!(new.original, old.original);
+        assert_eq!(new.base, old.base);
         assert_eq!(new.raster.identity(), old.raster.identity());
         assert_eq!(new, old);
     }
     assert_eq!(after.artwork.occurrences.iter().collect::<Vec<_>>(), before.artwork.occurrences.iter().collect::<Vec<_>>());
     assert_eq!(after.artwork.coverage.iter().collect::<Vec<_>>(), before.artwork.coverage.iter().collect::<Vec<_>>());
-    assert_eq!(after.artwork.definitions.iter().collect::<Vec<_>>(), before.artwork.definitions.iter().collect::<Vec<_>>());
     let effect = before.scene().effect_handle(before.working.occurrence.unwrap());
     for (h, id, old) in before.artwork.effects.iter() {
         if Some(h) != effect { assert_eq!(after.artwork.effects.id(h), Some(id)); assert_eq!(after.artwork.effects.get(h), Some(old)); }
@@ -88,7 +87,7 @@ fn assert_persisted(w: &Rc<Workspace>, path: &std::path::Path) {
     assert_eq!((saved_effect.program, saved_effect.values), (current_effect.program, current_effect.values), "saved adjustment values reopen exactly");
     for (h, id, source) in current.artwork.paint.iter() {
         let reopened = reopened.artwork.paint.get(reopened.artwork.paint.resolve(id).unwrap()).unwrap();
-        assert_eq!(reopened.original, source.original, "source {h:?}");
+        assert_eq!(reopened.base, source.base, "source {h:?}");
     }
 }
 

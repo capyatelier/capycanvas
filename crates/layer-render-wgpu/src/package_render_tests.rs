@@ -41,7 +41,7 @@ fn cases(saved: &Document) -> BTreeMap<String,(Document,bool)> {
     let context=&saved.artwork.outputs.get(saved.artwork.default_output).unwrap().context;
     let mut filters=BTreeMap::new();
     for (handle,_,application) in saved.artwork.effects.iter() {
-        let program=saved.artwork.definitions.get(application.definition).unwrap().program.clone();
+        let program=application.program.clone();
         let phase=context.phases.iter().find(|(effect,_)|*effect==handle).map(|(_,phase)|*phase);
         filters.entry(program.id.to_string()).or_insert((EffectInstance {program,values:application.values.clone()},phase));
     }
@@ -58,7 +58,7 @@ fn cases(saved: &Document) -> BTreeMap<String,(Document,bool)> {
         LayerBlend::Divide,LayerBlend::Hue,LayerBlend::Saturation,LayerBlend::Luminosity,LayerBlend::PassThrough];
     for blend in blends {
         let mut document=base(SampleDepth::F32,false);
-        let source=base(SampleDepth::F32,true).artwork.paint.iter().next().unwrap().2.original.clone().unwrap();
+        let source=base(SampleDepth::F32,true).artwork.paint.iter().next().unwrap().2.base.as_ref().unwrap().image.storage().clone();
         let bottom=insert_source(&mut document,"Backdrop",source);
         let root=document.composition().result;
         let top=document.artwork.stacks.get(root).unwrap().entries[0];
@@ -92,7 +92,7 @@ fn cases(saved: &Document) -> BTreeMap<String,(Document,bool)> {
         (TileKey {plane:RasterPlane::WatercolorWetness,coordinate:[0;2]},RasterTile::backed(TileBlob::encode(color.coverage_descriptor(),&wetness).unwrap()))].into(),
         watercolor:Some(RasterWatercolor {..material})};
     let h=watercolor.artwork.paint.iter().next().unwrap().0;
-    let paint=watercolor.artwork.paint.get_mut(h).unwrap();paint.original=None;paint.raster=RasterRevision::backed(raster);
+    let paint=watercolor.artwork.paint.get_mut(h).unwrap();paint.base=None;paint.raster=RasterRevision::backed(raster);
     refresh(&mut watercolor);cases.insert("watercolor".into(),(watercolor,false));
     let mut sdr=base(SampleDepth::F32,false);
     sdr.artwork.outputs.get_mut(sdr.artwork.default_output).unwrap().sdr=saved.artwork.outputs.get(saved.artwork.default_output).unwrap().sdr;

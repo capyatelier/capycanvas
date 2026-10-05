@@ -3,7 +3,7 @@
 use super::canvas_bar_tests::{Device, choose_from_bar_menu, document, filled_selection, remote_input, until_some};
 use super::*;
 use crate::files::clipboard::{CLIP_MIME, current};
-use layer_core::color::source::SourceKind;
+use layer_core::PaintBasePolicy;
 use layer_ui::{CanvasBarMenu, LayerAction, PixelClip};
 use serde_json::json;
 use std::io::Read;
@@ -104,7 +104,7 @@ fn native_clipboard_copy_paste_round_trips() {
     };
     let selection = document(&w).working.selection.clone().unwrap().coverage_bounds();
     assert_eq!(clip.origin, [selection.min.x.floor() as u32, selection.min.y.floor() as u32]);
-    assert_eq!(clip.source.kind, SourceKind::Rasterized);
+    assert_eq!(clip.policy, PaintBasePolicy::WorkingPixels);
     let formats = clipboard_formats(&w);
     assert!(formats.iter().any(|m| m == "image/png") && formats.iter().any(|m| m == CLIP_MIME), "{formats:?}");
     let png = external_png();
@@ -117,7 +117,7 @@ fn native_clipboard_copy_paste_round_trips() {
     chord(&mut native, &[CONTROL], 0x76);
     until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), "Ctrl+V pastes a new layer");
     let pasted = document(&w);
-    assert_source_samples(active_paint(&pasted).original.as_deref().unwrap(), &clip.source_for(document(&w).composition().color));
+    assert_source_samples(active_paint(&pasted).base.as_ref().map(|base|base.image.as_ref()).unwrap(), clip.source_for(document(&w).composition().color).image.as_ref());
     assert_eq!(active_occurrence(&pasted).placement.as_affine().unwrap().0[4..], clip.origin.map(|v| v as f32), "at the copied position");
     assert!(state(&w).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement), "no handles");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
@@ -168,7 +168,7 @@ fn native_clipboard_copy_paste_round_trips() {
     chord(&mut native, &[CONTROL, SHIFT], 0x76);
     until(|| document(&second).scene().order().len() == 3 && idle(&second), "Paste in Place into another drawing");
     let pasted = document(&second);
-    assert_eq!(active_paint(&pasted).original.as_ref().unwrap().kind, SourceKind::Original, "another colour mode keeps an explicit profile");
+    assert_eq!(active_paint(&pasted).base.as_ref().unwrap().policy, PaintBasePolicy::SourceProfile, "another colour mode keeps an explicit profile");
     assert_eq!(active_occurrence(&pasted).placement.as_affine().unwrap().0[4..], copy.origin.map(|v| v as f32));
     second.window.destroy();
     w.window.present();
@@ -226,7 +226,7 @@ fn native_clipboard_copy_latency_24mp() {
         let row: Vec<u8> = (0..width).flat_map(|x| [(x / 24) as u8, (y / 16) as u8, ((x ^ y) & 255) as u8]).collect();
         builder.push_row(&row).unwrap();
     }
-    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(builder.finish().unwrap())).into()));
     let app = native_test_app("art.capycanvas.ClipboardLatency");
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
@@ -258,10 +258,10 @@ fn native_clipboard_copy_latency_24mp() {
     };
     w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
     let whole = timed(&mut native, "24 MP photo, Select All");
-    let photo = paint_at(&document(&w), 0).original.clone().unwrap();
+    let photo = paint_at(&document(&w), 0).base.as_ref().unwrap().image.storage().clone();
     assert!(std::sync::Arc::ptr_eq(&whole.source, &photo), "an untouched photo keeps its original samples");
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
     native_pen_path(&w, &[[100., 100.], [5900., 150.], [5850., 3900.], [150., 3850.], [100., 100.]]);
     let composed = timed(&mut native, "24 MP photo, lasso selection");
-    assert_eq!(composed.source.kind, SourceKind::Rasterized);
+    assert_eq!(composed.policy, PaintBasePolicy::WorkingPixels);
 }

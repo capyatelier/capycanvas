@@ -198,9 +198,8 @@ fn compile_candidate(
     let result = (|| {
         let mut artwork = layer_core::authored::Artwork::new([1,1]).map_err(|e| GpuRasterError::Effect(e.into()))?;
         for program in &request.programs {
-            let definition = artwork.definitions.insert(layer_core::authored::PortableId::random(), layer_core::authored::Definition {program:program.clone()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
-            let effect = artwork.effects.insert(layer_core::authored::PortableId::random(), layer_core::authored::EffectApplication {
-                definition,values:layer_core::EffectInstance::new(program.clone()).values}).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let application = layer_core::authored::EffectApplication::new(program.clone(), layer_core::EffectInstance::new(program.clone()).values, [1,1]);
+            let effect = artwork.effects.insert(layer_core::authored::PortableId::random(), application).map_err(|e|GpuRasterError::Effect(e.into()))?;
             let handle = artwork.occurrences.insert(layer_core::authored::PortableId::random(), layer_core::authored::Occurrence::new(OccurrenceContent::Effect(effect), "")).map_err(|e|GpuRasterError::Effect(e.into()))?;
             let index = Arc::new(layer_core::authored::SceneIndex::default());
             let scene = SceneView::new(&artwork, &index);

@@ -85,14 +85,12 @@ fn exact_integer_identity_and_depth_changes_preserve_samples_alpha_and_extent() 
                 || false,
             )
             .unwrap();
-            assert_eq!(materialized.kind, SourceKind::Rasterized);
             assert_eq!(materialized.extent, extent);
             assert_eq!(stats.clipped_channels, 0);
             assert!(!materialized.interpretation.profile_assumed);
             for (key, tile) in &original.tiles {
                 assert!(std::sync::Arc::ptr_eq(tile, &materialized.tiles[key]));
             }
-            assert!(original.is_original());
         }
         let original = fixture(SampleDepth::U8, space, [256, 3]);
         let (promoted, _) = rasterize_source(
@@ -167,9 +165,8 @@ fn conversion_clipping_cancellation_and_limits_leave_original_intact() {
     );
     assert!(stats.clipped_channels > 0);
     assert_eq!(original, snapshot);
-    assert!(
-        rasterize_source(&result, color, 4 * 1024 * 1024, || false)
-            .unwrap_err()
-            .contains("already")
-    );
+    let (repeated,stats)=rasterize_source(&result,color,4*1024*1024,||false).unwrap();
+    assert_eq!(repeated,result);
+    assert_eq!(stats.clipped_channels,0);
+
 }

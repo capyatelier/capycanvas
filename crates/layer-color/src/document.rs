@@ -49,6 +49,30 @@ pub struct PreparedDocumentColor {
     pub statistics: OutputStatistics,
 }
 
+pub fn color_job_artwork(original:&layer_core::Artwork)->layer_core::Artwork {
+    let mut artwork=original.clone();
+    let handles=artwork.paint.iter().map(|(handle,_,_)|handle).collect::<Vec<_>>();
+    for handle in handles {
+        let paint=artwork.paint.get_mut(handle).unwrap();
+        if paint.base.as_ref().is_some_and(layer_core::authored::PaintBase::is_original) {paint.base=None;}
+    }
+    artwork
+}
+
+pub fn adopt_color_job_artwork(original:&Document,mut artwork:layer_core::Artwork)->Result<Document,String> {
+    artwork.intern_images_from(&original.artwork)?;
+    let handles=artwork.paint.iter().map(|(handle,id,_)|(handle,id)).collect::<Vec<_>>();
+    for (handle,id) in handles {
+        if let Some(base)=original.artwork.paint.resolve(id).and_then(|handle|original.artwork.paint.get(handle)).and_then(|paint|paint.base.as_ref()).filter(|base|base.is_original()) {
+            artwork.paint.get_mut(handle).unwrap().base=Some(base.clone());
+        }
+    }
+    let mut document=Document::from_artwork(artwork).map_err(|error|error.to_string())?;
+    document.owner=original.owner;document.revision=original.revision;document.working=original.working.clone();
+    document.validate(Default::default()).map_err(|error|error.to_string())?;
+    Ok(document)
+}
+
 struct Converter<'a> {
     old: DocumentColor,
     target: DocumentColor,
@@ -61,7 +85,7 @@ struct Converter<'a> {
     statistics: OutputStatistics,
     blobs: HashMap<(usize, [u32; 2]), Arc<TileBlob>>,
     roots: HashMap<u64, RasterRevision>,
-    images: HashMap<usize, Arc<SourceImage>>,
+    images: HashMap<(layer_core::authored::PortableId, [u32; 2]), layer_core::authored::Image>,
 }
 impl Converter<'_> {
     fn check(&mut self) -> Result<(), String> {
@@ -178,8 +202,8 @@ impl Converter<'_> {
                 } else { old };
                 self.decoder.decode_pixels(old, &mut linear)?;
                 let origin = [
-                    coordinate[0] * TILE_SIZE,
-                    coordinate[1] * TILE_SIZE + y as u32,
+                    coordinate[0],
+                    coordinate[1] + y as u32,
                 ];
                 let stats = self.encoder.encode_straight(&linear, if reduced { &mut rgba } else { new }, None, origin)?;
                 if reduced {
@@ -215,7 +239,7 @@ impl Converter<'_> {
         let mut changed = false;
         for (key, tile) in &data.tiles {
             let blob = self.wait(|| tile.try_backing())?;
-            let converted = self.blob(&blob, key.coordinate)?;
+            let converted = self.blob(&blob, key.coordinate.map(|v|v*TILE_SIZE))?;
             let replacement = if Arc::ptr_eq(&blob, &converted) {
                 tile.clone()
             } else {
@@ -237,32 +261,25 @@ impl Converter<'_> {
         self.roots.insert(original.identity(), result.clone());
         Ok(result)
     }
-    fn image(&mut self, original: &Arc<SourceImage>) -> Result<Arc<SourceImage>, String> {
-        if original.is_original() {
-            return Ok(original.clone());
-        }
+    fn image(&mut self, base: &layer_core::authored::PaintBase) -> Result<layer_core::authored::Image, String> {
+        if base.is_original() { return Ok(base.image.clone()); }
         self.check()?;
-        let key = Arc::as_ptr(original) as usize;
-        if let Some(image) = self.images.get(&key) {
-            return Ok(image.clone());
+        let phase=if self.change.encoding().dither==OutputDither::None {[0;2]} else {base.offset};
+        let key=(base.image.id(),phase);
+        if let Some(image)=self.images.get(&key) {return Ok(image.clone());}
+        let mut converted=base.image.as_ref().clone();
+        converted.interpretation.depth=self.target.depth;
+        converted.interpretation.profile=ColorProfile::Builtin(self.target.space);
+        for (coordinate,tile) in &mut converted.tiles {
+            let origin=std::array::from_fn(|axis| coordinate[axis]*TILE_SIZE+base.offset[axis]);
+            *tile=self.blob(tile,origin)?;
         }
-        let mut converted = original.as_ref().clone();
-        converted.interpretation.depth = self.target.depth;
-        converted.interpretation.profile = ColorProfile::Builtin(self.target.space);
-        for (coordinate, tile) in &mut converted.tiles {
-            *tile = self.blob(tile, *coordinate)?;
-        }
-        self.charge(
-            converted
-                .tiles
-                .len()
-                .saturating_mul(128)
-                .saturating_add(256),
-        )?;
-        let converted = Arc::new(converted);
-        self.images.insert(key, converted.clone());
+        self.charge(converted.tiles.len().saturating_mul(128).saturating_add(256))?;
+        let converted=layer_core::authored::Image::new(Arc::new(converted));
+        self.images.insert(key,converted.clone());
         Ok(converted)
     }
+
 }
 
 /// Prepare immutable source records without changing the live artwork or originals.
@@ -325,7 +342,7 @@ pub fn prepare_document_color(
     for (handle, _, original) in candidate.artwork.paint.iter() {
         let mut source = original.clone();
         source.raster = converter.root(&source.raster, source.domain, false, source.color_mode)?;
-        if let Some(original) = &mut source.original { *original = converter.image(original)?; }
+        if let Some(base) = &mut source.base { base.image = converter.image(base)?; }
         paint.push(RecordChange::replace(&candidate.artwork.paint, handle, Some(source)).map_err(str::to_string)?);
     }
     let mut coverage = Vec::with_capacity(candidate.artwork.coverage.len());
@@ -345,14 +362,15 @@ pub fn prepare_document_color(
 pub fn validate_document_color(document: &Document) -> Result<(), String> {
     let color = document.composition().color;
     let mut sources = std::collections::HashSet::new();
-    for (_, _, paint) in document.artwork.paint.iter() {
-        let Some(source) = &paint.original else { continue; };
-        if !sources.insert(Arc::as_ptr(source) as usize) { continue; }
-        source.validate()?;
-        if source.interpretation.depth.is_float() && !color.depth.is_float() {
+    let images=document.artwork.paint.iter().filter_map(|(_,_,paint)|paint.base.as_ref().map(|base|&base.image))
+        .chain(document.artwork.objects.iter().map(|(_,_,object)|&object.image));
+    for image in images {
+        if !sources.insert(image.id()) {continue;}
+        image.validate()?;
+        if image.interpretation.depth.is_float() && !color.depth.is_float() {
             return Err("HDR placement requires an HDR document; export an SDR rendition for SDR placement".into());
         }
-        WorkingDecoder::new(&source.interpretation, color.space, Default::default())?;
+        WorkingDecoder::new(&image.interpretation,color.space,Default::default())?;
     }
     Ok(())
 }

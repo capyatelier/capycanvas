@@ -196,7 +196,7 @@ impl Operation {
     }
     pub fn original_size_available(&self) -> bool {
         self.current.as_ref().and_then(|t| t.placement.as_ref())
-            .is_some_and(|placement| placement.members.iter().all(|(h, o)| placement.source.view().paint_source(*h).is_some_and(|p| p.original.is_some())
+            .is_some_and(|placement| placement.members.iter().all(|(h, o)| placement.source.view().paint_source(*h).is_some_and(|p| p.base.is_some())
                 && o.placement.as_affine().is_some()))
             && self.current.as_ref().is_some_and(|t| t.map().is_some_and(|map| map.as_affine().is_some()))
     }
@@ -278,8 +278,10 @@ pub(super) const HANDLES: [[f32; 2]; 8] = [
 
 
 fn source_frame(doc: &Document, target: OccurrenceHandle) -> Rect {
-    Rect::from_extent(doc.scene().paint_source(target).and_then(|p| p.original.as_ref())
-        .map_or_else(|| doc.scene().local_extent(target), |source| source.extent))
+    doc.scene().paint_source(target).and_then(|paint| paint.base.as_ref()).map_or_else(
+        || Rect::from_extent(doc.scene().local_extent(target)),
+        |base| Rect { min: Point {x:base.offset[0] as f32,y:base.offset[1] as f32},
+            max: Point {x:(base.offset[0]+base.image.extent[0]) as f32,y:(base.offset[1]+base.image.extent[1]) as f32} })
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -303,7 +305,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && doc.working.occurrence.is_some_and(|h| doc.scene().occurrence(h).is_some_and(|o|
                 if matches!(target, SourceTarget::Coverage(_)) { o.mask.is_some() }
                 else { o.kind() == LayerKind::Paint && doc.scene().paint_source(h).is_some_and(|p|
-                    p.original.is_some() || !p.raster.is_empty() || !p.operations.is_empty()) }))
+                    p.base.is_some() || !p.raster.is_empty() || !p.operations.is_empty()) }))
     }
     pub(super) fn begin_transform(&mut self) -> Result<(), String> {
         self.require_idle()?;

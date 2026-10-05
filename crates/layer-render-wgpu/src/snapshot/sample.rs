@@ -63,6 +63,7 @@ impl SnapshotGpu {
         let view = snapshot.view();
         let (scope, output) = match &request.source {
             ArtworkSource::Visible => (snapshot.scope.clone(), scene::Output::Artwork(None)),
+            ArtworkSource::Objects(handle) => (SceneScope::RawObjects(*handle), scene::Output::Objects(*handle)),
             ArtworkSource::Reference => (view.reference_scope(), scene::Output::Artwork(None)),
             ArtworkSource::EffectBaseline(baseline) => {
                 *Arc::make_mut(&mut snapshot).artwork.effects.get_mut(baseline.effect).ok_or("Missing effect baseline")? = baseline.application.clone();
@@ -70,11 +71,10 @@ impl SnapshotGpu {
             },
             ArtworkSource::EffectInput(handle) => (SceneScope::EffectInput(*handle), scene::Output::EffectInput(*handle)),
             ArtworkSource::EffectChannels(handle) => {
-                let original = view.effect_application(*handle).unwrap();
-                let definition_handle = original.definition;
+                let application_handle = view.effect_handle(*handle).unwrap();
                 let snapshot = Arc::make_mut(&mut snapshot);
-                let definition = snapshot.artwork.definitions.get_mut(definition_handle).unwrap();
-                let program = Arc::make_mut(&mut definition.program);
+                let application = snapshot.artwork.effects.get_mut(application_handle).unwrap();
+                let program = Arc::make_mut(&mut application.program);
                 program.entry = format!("{}_channels", program.entry).into();
                 let occurrence = snapshot.artwork.occurrences.get_mut(*handle).unwrap();
                 occurrence.opacity = 1.; occurrence.mask = None; occurrence.blend = layer_core::LayerBlend::Normal;
@@ -116,7 +116,7 @@ impl SnapshotGpu {
                 r.scene = Some(scene);
                 result?;
                 Ok(pipeline.encode(&r.device, &texture, encoder, origin, center, request.width))
-            }).map_err(|e| e.to_string())?;
+            }).await.map_err(|e| e.to_string())?;
         let bytes = crate::local_tone::read_buffer_async(&self.device, &self.queue, &summary).await?;
         control.check().map_err(|e| e.to_string())?;
         let words: [u32; 8] = std::array::from_fn(|i| u32::from_le_bytes(bytes[i*4..i*4+4].try_into().unwrap()));

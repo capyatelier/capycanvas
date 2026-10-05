@@ -98,9 +98,7 @@ impl WebApp {
                     clipped,
                 )
             } else {
-                let mut transfer = original.artwork.clone();
-                let handles=transfer.paint.iter().map(|(h,_,_)|h).collect::<Vec<_>>();
-                for h in handles {let paint=transfer.paint.get_mut(h).unwrap();if paint.original.as_ref().is_some_and(|s|s.is_original()){paint.original=None;}}
+                let transfer = layer_color::color_job_artwork(&original.artwork);
                 let wire = artwork_transfer::pack(transfer).await?;
                 let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
                     .as_string()
@@ -122,16 +120,8 @@ impl WebApp {
                 let clipped = js_sys::Reflect::get(&result, &js("clipped"))?
                     .as_f64()
                     .unwrap_or(0.) as u64;
-                let mut artwork = artwork_transfer::unpack(&metadata, buffers).await?;
-                let handles=artwork.paint.iter().map(|(h,id,_)|(h,id)).collect::<Vec<_>>();
-                for (h,id) in handles {
-                    if let Some(source)=original.artwork.paint.resolve(id).and_then(|p|original.artwork.paint.get(p)).and_then(|p|p.original.as_ref()).filter(|s|s.is_original()) {
-                        artwork.paint.get_mut(h).unwrap().original=Some(source.clone());
-                    }
-                }
-                let mut project=layer_core::Document::from_artwork(artwork).map_err(js)?;
-                project.owner=original.owner;project.revision=original.revision;project.working=original.working.clone();
-                project.validate(Default::default()).map_err(js)?;
+                let artwork = artwork_transfer::unpack(&metadata, buffers).await?;
+                let project=layer_color::adopt_color_job_artwork(&original,artwork).map_err(js)?;
                 (project, clipped)
             };
             hdr::admit_document(&project)?;

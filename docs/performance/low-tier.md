@@ -1444,3 +1444,153 @@ display and thermal records, and the summary are in
 `artifacts/clipping-filter/build-provenance.json`,
 `artifacts/clipping-filter/low/` and
 `artifacts/clipping-filter/motion-summary.json`.
+
+## Image-object early gate
+
+Measured on the reference TCL on 2026-10-05 using the G optimized arm64-v8a measurement build,
+4248 × 2832 photo at Fit, Navigator open, Stats closed and prediction enabled.
+Painting uses the 1024 px G-Pen and an ellipse wholly inside the canvas. Each
+motion row retains all three ten-second contacts; priming, idle repeats and
+post-input refinement are excluded from rates. Thermal status is recorded
+before and after each case. Image objects are exercised through shared edits;
+authoring controls remain unexposed.
+
+| Painting workload | Fresh updates/s, contacts 1 / 2 / 3 | Completion-gap p99, ms | Result |
+| --- | --- | --- | --- |
+| Paint-only control | 61.08 / 61.20 / 61.66 | 25.80 / 27.45 / 27.25 | Fresh-completion thresholds pass |
+| Paint above four objects sharing their image with Photo | 44.77 / 54.01 / 63.72 | 33.41 / 29.67 / 26.91 | Rate fails contacts 1, 2; Gap fails contacts 1 |
+| Paint below four shared objects and above opaque Photo | 42.58 / 59.53 / 59.25 | 36.00 / 26.73 / 26.24 | Rate fails contacts 1, 2, 3; Gap fails contacts 1 |
+| Paint above four distinct object image sources | 44.63 / 63.07 / 63.13 | 32.63 / 30.29 / 28.14 | Rate fails contacts 1 |
+| Paint below four distinct sources and above opaque Photo | 42.67 / 50.10 / 58.78 | 34.85 / 32.10 / 27.82 | Rate fails contacts 1, 2, 3; Gap fails contacts 1 |
+| First strokes after zoom/Fit, shared sources | 44.87 / 54.80 / 63.22 | 34.74 / 34.14 / 26.49 | Rate fails contacts 1, 2; Gap fails contacts 1, 2 |
+| First strokes after zoom/Fit, distinct sources | 42.72 / 58.42 / 58.61 | 34.87 / 32.00 / 28.61 | Rate fails contacts 1, 2, 3; Gap fails contacts 1 |
+| First strokes after zoom/Fit, eight distinct object sources | 42.34 / 58.46 / 58.08 | 36.91 / 27.42 / 30.17 | Rate fails contacts 1, 2, 3; Gap fails contacts 1 |
+
+Brush timing counts the first GPU-completed update consuming each fresh input,
+under the front-buffer measurement rule. It does not establish physical canvas
+presentation. Painting below objects places Paint between Images and the opaque
+Photo layer, so its ink remains visible. Shared fixtures retain one immutable
+image ID and source owner across all objects and Photo; distinct fixtures retain
+four or eight separate object image IDs and owners, plus Photo's image.
+
+| Affine workload with attached Gaussian Blur | Fresh completed poses/s, gestures 1 / 2 / 3 | Pose completion-gap p99, ms | Result |
+| --- | --- | --- | --- |
+| Four shared object sources | 0.00 / 0.00 / 0.00 | Not sampled / Not sampled / Not sampled | Fails motion target; physical presentation unverified |
+| Four distinct object sources | 0.00 / 0.00 / 0.00 | Not sampled / Not sampled / Not sampled | Fails motion target; physical presentation unverified |
+
+Affine counts include only a newly evaluated authored revision submitted and
+GPU-completed during its gesture. Cached repeated poses and later refinement do
+not count. Each update commits a shared atomic affine edit; these measurements
+include adoption and undo-history cost, and do not qualify a future coalesced
+authoring gesture. Edit-call spans measure commit/adoption. Request-to-GPU spans
+begin when that call starts and include its queue time; neither is presentation
+latency. The trace has no canvas latches. Its fixed recording duration can end
+before later gestures finish their intervening canonical settles.
+
+
+The object early gate fails on this hardware. The paint-only control passes its
+fresh-completion thresholds, but the object rows miss rates or completion gaps,
+and affine motion completes zero fresh poses. No physical presentation gate is
+qualified. The untouched `5c76e202f` matched control recorded 62.31–62.82 fresh
+updates/s with p99 gaps of 26.65–27.01 ms; its exact source/APK/native identities
+remain in `artifacts/object-ga-early-gate/main-baseline/`. Upstream Android UI
+changes separate that older control from G, so this is a comparison, not an
+isolated attribution of every timing difference.
+
+| Latency observation | Shared four sources | Distinct four sources |
+| --- | --- | --- |
+| First-contact end to settled composition, s | 29.71 | 25.18 |
+| Affine gesture end to settled composition, s, all three | 16.91 / 15.50 / 15.35 | 20.49 / 20.15 / 22.29 |
+
+Settlement spans begin at the end of input and end when pending composition
+and edits clear; they include canonical refinement. They do not measure physical
+presentation. The shared first-contact observation is about 30 seconds. Memory
+boundedness does not qualify this delay as responsive. The eight-distinct-source
+post-view workload takes 75.75 seconds from its first measured contact's end to
+settlement. Its separate priming contact takes 179.57 seconds from contact end to
+the recorded settlement checkpoint after a fixed 1.5-second pause and readiness
+waits; that is a setup upper-bound observation, excluded from motion qualification.
+All six affine runs accept edits during motion but submit no viewport then. Each later completion evaluates
+the exact final authored revision and clears pending work. Settled screenshots
+show the composition without proving exact pixels. The separate 384 × 256,
+four-shared-object functional journey passes exact shared-ID, pose/history,
+save/reopen, session recovery, Redo and GPU-replacement pixel checks in both themes
+on the final I build. This qualifies the bounded fixture, not exact pixels for the
+12MP motion workloads. Earlier Redo drain failures remain in artifacts: drawing
+had completed, but the test waited for optional shader warmup. The corrected
+helper waits for current drawing with the original deadlines and assertions.
+Missing motion gap and request-to-GPU quantiles remain unobserved, not zero-latency
+results.
+
+First-contact timing below is the next qualifying GPU completion after the
+contact, as an upper-bound observation. It is not physical input-to-present
+latency. The first post-view contact arrives while composition is still pending.
+
+| Post-view workload | Next GPU completion after contact, ms, contacts 1 / 2 / 3 |
+| --- | --- |
+| navigation-shared | 135.10 / 117.58 / 98.97 |
+| navigation-unshared | 115.68 / 105.71 / 103.87 |
+| pressure-rate | 143.69 / 95.11 / 119.59 |
+
+The separate full-trace diagnostic repeats three five-second shared affine
+gestures and also completes zero fresh poses during motion. It diagnoses the
+same failure; it does not replace the three ten-second measurement contacts. No canvas
+latches establish a physical presentation rate or pose-to-present latency.
+
+The eight-source memory/eviction diagnostic times out during priming at its
+unchanged 180-second wait, after photo-ready and before measurement-ready. The
+intended five contacts did not execute. At failure, composition is pending,
+without a native or action exception. Its 1,057 setup samples span 195.17 seconds
+and peak at 1,406,429 KiB process PSS and 901,016,984 B GPU allocation.
+
+| Setup-only allocation observation | Independent maximum across samples |
+| --- | --- |
+| Reusable scene scratch | 3 tiles / 3,145,728 B |
+| Private canonical results | 5 entries / 4,653,056 B |
+| Collection prefix | 3 entries / 3,145,776 B |
+| Sampling parameters | 2 buffers / 224 B |
+| Shared / transient accumulation | One approximately 2 MiB buffer each |
+| Decoded source storage | 217 tiles / 227,541,064 B |
+| Shared mip residency | 8 entries / 142,901,248 B |
+
+These independent maxima are not a simultaneous GPU peak and must not be
+summed. The setup records 4,535 source slot replacements, 4,752 misses and no
+hits; upload peak is 53,477,376 B. This establishes actual setup eviction
+pressure, not completed warm/revisit or pressure-motion qualification. Memory
+and failure snapshots remain in
+`artifacts/object-ga-early-gate/final-G/pressure-eviction/`. Earlier F's setup
+timeout remains separately recorded with its older native identity.
+
+The APK SHA-256 is `3536961c94f2c7c99f5ce3cab58f3913ef86f98493466b5daf4567de1426be5c`; native library SHA-256 is
+`c45528bb016f46f8e7f97e4e47877319271154bfe51485172eb3d41eb2183fb4`.
+All 3407 frozen source inputs match before copying, after copying and after the
+build. Exact source manifests, staged/untracked source capture, compiler flags,
+arguments, traces, screenshots and per-contact results are under
+`artifacts/object-ga-early-gate/final-G/` and the adjacent `candidate/`.
+Earlier builds and failure investigations remain in artifacts and do not
+qualify this build.
+
+The analysis reporter was corrected after capture to preserve empty CPU/gap
+series for zero-submission runs. Its 19-test regression suite and the full
+38-test performance-tool suite pass; the measurement APK and native runtime are
+unchanged. Thermal status is zero before and after all ten
+completed motion cases. Frozen source manifests match the immutable build; later
+documentation, tooling/test and Windows-packaging deltas are classified separately
+in provenance.
+
+The final milestone includes later preview-only runtime corrections: small finite
+documents are centered in filter rows, and final atlas copies clip whole-document
+scratch to that frame. Preview admission refreshes nonblocking mandatory startup
+readiness, checks only the active row's dependencies, and discards canceled
+unencoded preparation work while retaining compiled caches. These changes are
+confined to filter-row work in `filter_previews.rs`, `lib.rs` and `effects.rs`; the
+canvas scene, shader sampling and source/memory algorithms measured above are
+unchanged. The G APK remains the exact motion measurement build. Final K's 1.0.2
+APK identities and the G-to-K source delta are recorded separately under
+`artifacts/object-ga-early-gate/final-K/` and
+`candidate/G-to-final-K-delta-classification.json`. A subsequent unused import
+move into the test module changes no runtime logic and is recorded separately.
+The original attached-filter preview/reference/recovery journey passes in both
+themes on K with its unchanged 30-second preview deadline and pixel assertions;
+optimized/debug/test APK builds and Android lint also pass. Earlier diagnostic
+failures remain under `final-I/` and `final-J/`.

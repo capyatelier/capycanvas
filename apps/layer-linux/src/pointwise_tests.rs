@@ -10,9 +10,9 @@ fn start(app: &NativeTestApp) -> Rc<Workspace> {
     let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     composition_mut(&mut project).color.space=RgbSpace::DisplayP3;
     let layer_core::authored::SourceTarget::Paint(paint) = project.working.target.unwrap() else { unreachable!() };
-    project.artwork.paint.get_mut(paint).unwrap().original = Some(layer_core::color::source::rgba8_source([256, 256], |x,y| {
+    project.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::PaintBase::new((layer_core::color::source::rgba8_source([256, 256], |x,y| {
         [x as u8, y as u8, (255-x) as u8, 255]
-    }));
+    })).into()));
     let w = Workspace::with_project(app, Some((project, None)));
     w.window.maximize();w.window.present();ready(&w);
     assert!(matches!(w.window.width(),640|1100));
@@ -146,7 +146,7 @@ fn unchanged_sources(w: &Rc<Workspace>, before: &layer_core::Document) {
     let after=document(w);
     for (_, id, original) in before.artwork.paint.iter() {
         let current=after.artwork.paint.get(after.artwork.paint.resolve(id).unwrap()).unwrap();
-        assert_eq!(current.original,original.original);assert_eq!(current.raster.identity(),original.raster.identity());
+        assert_eq!(current.base,original.base);assert_eq!(current.raster.identity(),original.raster.identity());
     }
 }
 pub(super) fn saved_artwork(w: &Rc<Workspace>) -> (layer_core::authored::ArtworkCapture, Vec<u8>) {
@@ -175,7 +175,7 @@ fn assert_source_scene(w: &Rc<Workspace>, before: &layer_core::Document) {
     assert_eq!(after.artwork.paint.iter().count(),before.artwork.paint.iter().count());
     for (_, id, original) in before.artwork.paint.iter() {
         let current=after.artwork.paint.get(after.artwork.paint.resolve(id).unwrap()).unwrap();
-        if let (Some(current),Some(original))=(&current.original,&original.original) {assert_source_samples(current,original);} else {assert_eq!(current.original,original.original);}
+        if let (Some(current),Some(original))=(&current.base,&original.base) {assert_source_samples(&current.image,&original.image);} else {assert_eq!(current.base,original.base);}
         assert_eq!(super::editing_tools::pixels(&current.raster),super::editing_tools::pixels(&original.raster),"original authored raster payload is unchanged");
     }
 }

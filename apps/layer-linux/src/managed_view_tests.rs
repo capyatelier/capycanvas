@@ -80,7 +80,7 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
     for _ in 0..64 {
         source.push_row(&row).unwrap();
     }
-    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(source.finish().unwrap())).into()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);

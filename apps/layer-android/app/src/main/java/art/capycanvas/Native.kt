@@ -30,6 +30,9 @@ internal object Native {
     @JvmStatic external fun resize(handle: Long, width: Int, height: Int, density: Float)
     @JvmStatic external fun scroll(handle: Long, x: Float, y: Float, dx: Float, dy: Float, zoom: Boolean, horizontal: Boolean)
     @JvmStatic external fun dispatch(handle: Long, action: String)
+    @JvmStatic external fun imageObjects(handle: Long): String
+    @JvmStatic external fun setImageObjectAffine(handle: Long, objectId: String, affine: String): Long
+    @JvmStatic external fun setImageObjectMotion(handle: Long, objectId: String, moving: Boolean)
     @JvmStatic external fun input(handle: Long, input: String): String
     @JvmStatic external fun predictionAvailability(handle: Long, available: Boolean)
     @JvmStatic external fun touchPolicy(handle: Long, tapMs: Int, slop: Float)

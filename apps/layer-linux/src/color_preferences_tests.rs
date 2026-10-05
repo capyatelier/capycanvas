@@ -170,7 +170,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
             depth: SampleDepth::U16
         }
     );
-    let retained = paint_at(&project, 0).original.as_ref().unwrap();
+    let retained = paint_at(&project, 0).base.as_ref().unwrap().image.storage();
     assert_eq!(retained.interpretation.depth, SampleDepth::U8);
     let mut expected = source.clone();
     expected.interpretation = retained.interpretation.clone();
@@ -250,7 +250,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     let gpu = w.gpu.borrow();
     let document = gpu.as_ref().unwrap().session.engine().document();
     assert_eq!(document.composition().color, DocumentColor::default());
-    let pasted = active_paint(document).original.as_ref().unwrap();
+    let pasted = active_paint(document).base.as_ref().unwrap().image.storage();
     assert_eq!(
         pasted.interpretation.profile,
         ColorProfile::Builtin(RgbSpace::DisplayP3)

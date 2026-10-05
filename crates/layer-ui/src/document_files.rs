@@ -422,7 +422,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             document.scene().order().iter().find_map(|handle| {
                 let occurrence = document.scene().occurrence(*handle)?;
                 let OccurrenceContent::Paint(paint) = occurrence.content else { return None; };
-                document.artwork.paint.get(paint)?.original.as_ref().map(|_| occurrence.name.to_string())
+                document.artwork.paint.get(paint)?.base.as_ref().map(|_| occurrence.name.to_string())
             })
         }).flatten();
         let mut session = Self::new_localized(renderer, document, viewport, platform, localization)?;

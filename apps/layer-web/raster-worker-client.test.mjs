@@ -102,3 +102,14 @@ test('failed saves release archive workers and checkpoints reuse their cache own
   const recovery=f.run(request('restart-write'));f.workers[1].reply(true);assert.equal(await recovery,true);assert.equal(f.workers[1].terminated,false);
   const begin=f.run(request('restart-begin'));f.workers[1].reply([]);assert.deepEqual(await begin,[]);assert.equal(f.workers.length,2);
 }));
+
+for(const operation of ['image-decode','nearest-coordinates'])test(`${operation} failure leaves file and compression workers usable`,()=>withFixture(async f=>{
+  const image=f.run(request(operation)),file=f.run(request('fingerprint')),encode=f.run(request('encode'));
+  assert.equal(f.workers.length,3);
+  const refused=assert.rejects(image,{message:'image decode failed'});
+  f.workers[0].reply(undefined,{error:'image decode failed'});await refused;
+  f.workers[1].reply('file');f.workers[2].reply('encoded');
+  assert.equal(await file,'file');assert.equal(await encode,'encoded');
+  const retry=f.run(request(operation==='image-decode'?'nearest-coordinates':'image-decode'));
+  f.workers[0].reply('prepared');assert.equal(await retry,'prepared');
+}));

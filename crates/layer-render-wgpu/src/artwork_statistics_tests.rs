@@ -137,7 +137,7 @@ fn statistics_reads_real_source_codecs_at_every_profile_and_depth() {
             doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color=DocumentColor {space,depth};
             doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=BlendSpace::Linear;
             paint_mut(&mut doc).raster=Default::default();
-            paint_mut(&mut doc).original=Some(crate::test_support::depth_source([pixels.len() as u32, 1], depth, space, 8 * 1024 * 1024, |x, _| pixels[x as usize]));
+            paint_mut(&mut doc).base=Some(layer_core::authored::PaintBase::new((crate::test_support::depth_source([pixels.len() as u32, 1], depth, space, 8 * 1024 * 1024, |x, _| pixels[x as usize])).into()));
             same(statistics(&doc, false, false).unwrap(), oracle(&doc, &pixels, false, |_, _| true), (space, depth));
         }
     }
@@ -285,10 +285,10 @@ fn sparse_statistics_transformed_source_matches_original_dense_pixels_across_win
     doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=BlendSpace::Linear;
     paint_mut(&mut doc).raster=Default::default();
     let source_extent = [797,401];
-    paint_mut(&mut doc).original=Some(crate::test_support::depth_source(source_extent,SampleDepth::F32,doc.composition().color.space,32*1024*1024,|x,y| {
+    paint_mut(&mut doc).base=Some(layer_core::authored::PaintBase::new((crate::test_support::depth_source(source_extent,SampleDepth::F32,doc.composition().color.space,32*1024*1024,|x,y| {
         let alpha = [0.,0.125,0.5,1.][((x/7+y/11)%4) as usize];
         [0.1+x as f32/397.,0.2+y as f32/199.,0.37,alpha]
-    }));
+    })).into()));
     paint_mut(&mut doc).domain=source_extent;
     let owner=paint_occurrence(&doc);
     doc.artwork.occurrences.get_mut(owner).unwrap().placement= layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(layer_core::Rect::from_extent(source_extent),
@@ -302,7 +302,8 @@ fn sparse_statistics_nested_clipped_spatial_and_document_image_match_dense_pixel
         let extent = [1033,517];
         let pixels = [[0.2,0.1,0.4,0.5],[0.75,0.25,0.5,1.],[0.;4]];
         let mut doc = generated(extent,DocumentColor {depth:SampleDepth::F32,..Default::default()},&pixels);
-        let base=doc.scene().children(None)[0];
+        let generated=doc.scene().children(None)[0];
+        let base=add_group(&mut doc,vec![generated],0);
         let spatial=insert_effect(&mut doc,crate::tests::image_windows::program(false,global),0);
         let occurrence=doc.artwork.occurrences.get_mut(spatial).unwrap();occurrence.opacity=0.63;occurrence.attachment = layer_core::Attachment::Effect;
         let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,extent,layer_core::Point{x:7.,y:-9.});
@@ -452,8 +453,8 @@ mod waveform {
 
     fn row_document(extent: [u32; 2], color: DocumentColor, row: &[[f32; 4]]) -> Document {
         let mut doc = generated(extent, color, row);
-        let handle=doc.scene().order()[0];let definition=doc.scene().effect_application(handle).unwrap().definition;
-        let program=Arc::make_mut(&mut doc.artwork.definitions.get_mut(definition).unwrap().program);
+        let handle=doc.scene().order()[0];let application=doc.scene().effect_handle(handle).unwrap();
+        let program=Arc::make_mut(&mut doc.artwork.effects.get_mut(application).unwrap().program);
         program.wgsl = program.wgsl.sources().unwrap()[0].replace("+3u*u32(floor(p.y))", "").into();
         doc
     }

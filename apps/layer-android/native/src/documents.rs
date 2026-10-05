@@ -191,7 +191,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
     };
     if control.is_cancelled() { return Err("Opening cancelled".into()); }
     if t.place.is_some() {
-        let source = imported.project.artwork.paint.iter().find_map(|(_,_,p)| p.original.as_ref())
+        let source = imported.project.artwork.paint.iter().find_map(|(_,_,p)| p.base.as_ref().map(|base| base.image.storage()))
             .ok_or("The selected file is not a photo")?;
         layer_color::WorkingDecoder::new(
             &source.interpretation,
@@ -267,7 +267,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectProfilePrompt(
         Payload::Open {
             environment: Some(e),
             ..
-        } => e.pending_import.as_ref().and_then(|i| i.project.artwork.paint.iter().find_map(|(_,_,p)| p.original.as_ref())).map(|s| &s.interpretation),
+        } => e.pending_import.as_ref().and_then(|i| i.project.artwork.paint.iter().find_map(|(_,_,p)| p.base.as_ref().map(|base| base.image.storage()))).map(|s| &s.interpretation),
         _ => None,
     };
     crate::android::string(&mut env, serde_json::to_string(&source).map_err(error))

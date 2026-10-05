@@ -102,8 +102,8 @@ impl OpenEnvironment {
             .gpu
             .rasterizer(project.composition().color, &self.options, true)?;
         let mut programs = Vec::new();
-        for (_, _, definition) in project.artwork.definitions.iter() {
-            if !programs.contains(&definition.program) { programs.push(definition.program.clone()); }
+        for (_, _, effect) in project.artwork.effects.iter() {
+            if !programs.contains(&effect.program) { programs.push(effect.program.clone()); }
         }
         let mut validating = !programs.is_empty();
         if validating {

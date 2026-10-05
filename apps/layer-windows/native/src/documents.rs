@@ -438,7 +438,7 @@ impl DocumentService {
             "type": "interpret", "id": self.active.as_ref().map(|a| a.id), "copy":self.profile_copy,
             "spaces": layer_core::color::RgbSpace::ALL.map(|s| (s, s.name())),
             "profiles": opening.profile_view,
-            "channels": opening.imported.project.artwork.paint.iter().find_map(|(_,_,p)| p.original.as_ref()).map(|s| s.interpretation.channels),
+            "channels": opening.imported.project.artwork.paint.iter().find_map(|(_,_,p)| p.base.as_ref().map(|base| base.image.storage())).map(|s| s.interpretation.channels),
         }))
     }
     pub(crate) fn renderer_unavailable(&mut self, host: &mut NativeHost) -> Result<(), String> {

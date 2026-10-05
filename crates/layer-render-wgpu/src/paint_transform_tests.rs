@@ -98,7 +98,7 @@ fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pix
     );
     r.set_transform_preview(None).unwrap();
     let removed = occurrence_id(&layer);
-    append_paint(&mut layer, "empty remaining", PaintSource { color_mode: Default::default(), domain: extent, raster: Default::default(), original: None, operations: Arc::default() });
+    append_paint(&mut layer, "empty remaining", PaintSource { color_mode: Default::default(), domain: extent, raster: Default::default(), base: None, operations: Arc::default() });
     let edit = layer.delete_layers_edit(&[removed]).unwrap(); layer.apply(edit).unwrap();
     submit(
         &mut r,

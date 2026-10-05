@@ -79,7 +79,7 @@ impl WebApp {
                     layer_core::Document::new(layer_core::PortableId::random(), original.extent[0], original.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
                 document.artwork.compositions.get_mut(document.artwork.root).unwrap().color=project.composition().color;
                 let paint=document.artwork.paint.iter().next().unwrap().0;
-                document.artwork.paint.get_mut(paint).unwrap().original=Some(original.clone());
+                document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase::new(original.clone().into()));
                 let paper=document.scene().order()[1];document.artwork.occurrences.get_mut(paper).unwrap().visible=false;
                 let wire = artwork_transfer::pack(document.artwork).await?;
                 let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
@@ -105,7 +105,7 @@ impl WebApp {
                 let name = js_sys::Reflect::get(&result, &js("source_profile"))?
                     .as_string();
                 let artwork=artwork_transfer::unpack(&metadata,buffers).await?;
-                let converted=artwork.paint.iter().find_map(|(_,_,p)|p.original.clone()).ok_or_else(||js("Missing converted source"))?;
+                let converted=artwork.paint.iter().find_map(|(_,_,p)|p.base.as_ref().map(|base| base.image.storage().clone())).ok_or_else(||js("Missing converted source"))?;
                 (converted, clipped, name)
             } else {
                 let metadata=serde_json::to_string(&serde_json::json!({"interpretation":original.interpretation,"color":project.composition().color,"profile":profile.unwrap()})).map_err(js)?;
@@ -186,12 +186,12 @@ pub async fn raster_worker_source_rasterize(
     buffers: js_sys::Array,
 ) -> Result<JsValue, JsValue> {
     let mut artwork = artwork_transfer::unpack(metadata, buffers).await?;
-    let paint=artwork.paint.iter().find_map(|(h,_,p)|p.original.is_some().then_some(h)).ok_or_else(||js("No source"))?;
-    let source=artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
+    let paint=artwork.paint.iter().find_map(|(h,_,p)|p.base.is_some().then_some(h)).ok_or_else(||js("No source"))?;
+    let source=artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
     let name=layer_color::profile_description_optional(&source.interpretation.profile).map_err(js)?;
     let color=artwork.compositions.get(artwork.root).unwrap().color;
     let (converted,statistics)=layer_color::rasterize_source(source,color,artwork_transfer::photo_memory_budget().encode_bytes,||false).map_err(js)?;
-    artwork.paint.get_mut(paint).unwrap().original=Some(Arc::new(converted));
+    artwork.paint.get_mut(paint).unwrap().base.as_mut().unwrap().image=Arc::new(converted).into();
     let wire=artwork_transfer::pack(artwork).await?;
     js_sys::Reflect::set(
         &wire,

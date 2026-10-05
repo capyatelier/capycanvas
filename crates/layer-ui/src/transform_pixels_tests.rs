@@ -44,7 +44,7 @@ fn bake_session(linked: bool) -> UiSession<Recorder> {
     let paint = bake_paint_handle(&doc);
     let color = doc.composition().color;
     let p = doc.artwork.paint.get_mut(paint).unwrap();
-    p.original = Some(std::sync::Arc::new(source.finish().unwrap()));
+    p.base = Some(layer_core::PaintBase::new(layer_core::Image::new(std::sync::Arc::new(source.finish().unwrap()))));
     p.domain = [16, 8];
     p.raster = raw_revision(color, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 20);
     doc.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 3., -17., 13.]));
@@ -125,7 +125,7 @@ fn apply_transform_pixels_is_pending_then_one_atomic_undo_restores_all_native_ro
         let after = s.engine.document().clone();
         assert!(s.engine.undo().unwrap());
         assert_live_artwork_eq(s.engine.document(), &before);
-        assert!(std::sync::Arc::ptr_eq(bake_paint(s.engine.document()).original.as_ref().unwrap(), bake_paint(&before).original.as_ref().unwrap()));
+        assert!(std::sync::Arc::ptr_eq(bake_paint(s.engine.document()).base.as_ref().unwrap().image.storage(), bake_paint(&before).base.as_ref().unwrap().image.storage()));
         assert!(!s.engine.can_undo(), "one undo restores color, scalar planes, source and mask together");
         assert!(s.engine.redo().unwrap());
         assert_live_artwork_eq(s.engine.document(), &after);
@@ -238,7 +238,7 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
     let paint = bake_paint_handle(&doc);
     let domain = doc.composition().size;
     let source = doc.artwork.paint.get_mut(paint).unwrap();
-    source.original = None;
+    source.base = None;
     source.domain = domain;
     let coverage = doc.artwork.occurrences.get(owner).unwrap().mask.as_ref().unwrap().source;
     doc.artwork.coverage.get_mut(coverage).unwrap().domain = domain;
@@ -281,7 +281,7 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
             assert!((moved_world.y - original_world.y - 10.).abs() < 0.001);
         }
     }
-    assert!(bake_paint(s.engine.document()).original.is_none());
+    assert!(bake_paint(s.engine.document()).base.is_none());
     assert!(bake_paint(s.engine.document()).domain.iter().all(|axis| *axis <= 512));
     let after = s.engine.document().clone();
     assert!(s.engine.undo().unwrap());

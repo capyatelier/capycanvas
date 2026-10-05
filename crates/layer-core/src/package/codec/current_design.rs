@@ -37,17 +37,23 @@ fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls(
     let directory=Directory::read(&mut Cursor::new(SAVED),262144,64*1024*1024).unwrap();
     let manifest:Value=serde_json::from_slice(&directory.read_member(&mut Cursor::new(SAVED),directory.member("manifest.json").unwrap(),64*1024*1024).unwrap()).unwrap();
     assert!(!manifest["resources"].as_array().unwrap().iter().any(|r|r["type"]=="capy.wgsl/1"));
+    let image_id:PortableId="8c540a6d0ab847a5980f489d16b6f32d".parse().unwrap();
+    let bases:Vec<_>=artwork.paint.iter().map(|(_,_,paint)|&paint.base.as_ref().unwrap().image).collect();
+    assert_eq!(bases.len(),2);assert_eq!(bases[0].id(),image_id);assert!(bases[0].same_owner(bases[1]));
+    assert_eq!(bases[0].extent,[256;2]);assert_eq!(bases[0].interpretation.channels,SourceChannels::Gray);
+    assert_eq!(bases[0].interpretation.depth,SampleDepth::U16);
     let mut builtin_ids=BTreeSet::new();
-    for (_,id,definition) in artwork.definitions.iter() {
-        let builtin=crate::bundled_effect_catalog().get(&definition.program.id).unwrap();
+    for (_,id,application) in artwork.effects.iter() {
+        let builtin=crate::bundled_effect_catalog().get(&application.program.id).unwrap();
         builtin_ids.insert(builtin.id());
-        assert!(Arc::ptr_eq(&definition.program,&builtin.program()));
+        assert!(Arc::ptr_eq(&application.program,&builtin.program()));
         let record=manifest["objects"].as_array().unwrap().iter().find(|r|r["id"]==json!(id)).unwrap();
-        assert_eq!(record["data"],json!({"builtin":builtin.id(),"version":if matches!(builtin.id(),"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"){2}else{1}}));
+        assert_eq!(record["data"]["builtin"],builtin.id());
+        assert_eq!(record["data"]["version"],if matches!(builtin.id(),"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"){2}else{1});
     }
     assert_eq!(builtin_ids.len(),52);
     let objects=manifest["objects"].as_array().unwrap();
-    let occurrence=|name:&str|&objects.iter().find(|r|r["type"]=="capy.occurrence/2" && r["data"]["name"]==name).unwrap()["data"];
+    let occurrence=|name:&str|&objects.iter().find(|r|matches!(r["type"].as_str(),Some("capy.occurrence/2"|"capy.occurrence/3")) && r["data"]["name"]==name).unwrap()["data"];
     assert_eq!(objects.iter().filter_map(|r|r["data"]["blend"].as_str()).collect::<BTreeSet<_>>().len(),24);
     assert_eq!([&occurrence("Original source")["attachment"],&occurrence("color_lookup")["attachment"],&occurrence("Fills")["blend"]],["clip","effect","pass_through"]);
     let placement=&occurrence("Independent copy")["placement"];
@@ -57,11 +63,11 @@ fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls(
     assert!(objects.iter().any(|r|r["data"]["shape"]["contours"].is_array() && r["data"]["inverted"]==true));
     let output=&objects.iter().find(|r|r["type"]=="capy.output/1").unwrap()["data"];
     assert_eq!([&output["proof"]["intent"],&output["sdr"]["balance"]],[&json!("perceptual"),&json!(-0.25)]);
-    let curves=artwork.effects.iter().map(|(_,_,e)|crate::EffectView::new(&artwork.definitions.get(e.definition).unwrap().program,&e.values)).find(|e|e.program.id.as_ref()=="curves").unwrap();
+    let curves=artwork.effects.iter().map(|(_,_,e)|crate::EffectView::new(&e.program,&e.values)).find(|e|e.program.id.as_ref()=="curves").unwrap();
     assert_eq!(curves.choice("domain"),Some("log_hdr"));
     assert!(crate::CURVE_KEYS.iter().all(|key|matches!(curves.value(key),Some(EffectValue::Curve(_)))));
     for (_,id,application) in artwork.effects.iter() {
-        let program=&artwork.definitions.get(application.definition).unwrap().program;
+        let program=&application.program;
         let record=manifest["objects"].as_array().unwrap().iter().find(|r|r["id"]==json!(id)).unwrap();
         assert_eq!(record["data"]["values"].as_object().map_or(0,|v|v.len()),program.parameters.len());
         if let Some(expected)=match program.id.as_ref() {"gradient_map"=>Some(crate::ColorMixSpace::LinearRgb),"gradient_fill"=>Some(crate::ColorMixSpace::Oklab),_=>None} {
@@ -80,15 +86,15 @@ fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls(
     let handles:Vec<_>=edited.effects.iter().map(|(handle,_,_)|handle).collect();
     for handle in handles {
         let application=edited.effects.get_mut(handle).unwrap();
-        let program=edited.definitions.get(application.definition).unwrap().program.clone();
+        let program=application.program.clone();
         if program.id.as_ref()=="exposure" {
             let mut draft=EffectInstance {program,values:application.values.clone()};
             draft.set("exposure",EffectValue::Number(37.25)).unwrap();application.values=draft.values;
         }
     }
     let reopened=editable(serialize(&prepare(&edited,false)));
-    let exposure=reopened.effects.iter().find(|(_,_,e)|reopened.definitions.get(e.definition).unwrap().program.id.as_ref()=="exposure").unwrap().2;
-    let program=&reopened.definitions.get(exposure.definition).unwrap().program;
+    let exposure=reopened.effects.iter().find(|(_,_,e)|e.program.id.as_ref()=="exposure").unwrap().2;
+    let program=&exposure.program;
     assert_eq!(crate::EffectView::new(program,&exposure.values).value("exposure"),Some(&EffectValue::Number(37.25)));
 }
 
@@ -113,14 +119,14 @@ fn pixel_lengths_reopen_and_evaluate_without_catalog_clamping() {
     let handles:Vec<_>=artwork.effects.iter().map(|(handle,_,_)|handle).collect();
     for handle in handles {
         let application=artwork.effects.get_mut(handle).unwrap();
-        let program=&artwork.definitions.get(application.definition).unwrap().program;
+        let program=&application.program;
         for (parameter,value) in program.parameters.iter().zip(&mut application.values) {
             if matches!(parameter.dimension,Dimension::SourcePixels|Dimension::CompositionPixels) {*value=EffectValue::Number(120.);}
         }
     }
     let reopened=editable(serialize(&prepare(&artwork,false)));
     for (_,_,application) in reopened.effects.iter() {
-        let mut program=reopened.definitions.get(application.definition).unwrap().program.clone();
+        let mut program=application.program.clone();
         for parameter in Arc::make_mut(&mut Arc::make_mut(&mut program).parameters) {
             if matches!(parameter.dimension,Dimension::SourcePixels|Dimension::CompositionPixels) {
                 if let crate::EffectParameterKind::Number {max,..}=&mut parameter.kind {*max=100.;}

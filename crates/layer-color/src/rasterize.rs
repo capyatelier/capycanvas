@@ -21,9 +21,6 @@ pub fn rasterize_source(
     };
     check(&mut cancelled)?;
     source.validate()?;
-    if !source.is_original() {
-        return Err("This image is already rasterized".into());
-    }
     let target = SourceInterpretation {
         channels: SourceChannels::Rgba,
         depth: color.depth,
@@ -38,7 +35,7 @@ pub fn rasterize_source(
             return Err("Rasterized image exceeds the memory budget".into());
         }
         let mut result = source.clone();
-        result.kind = SourceKind::Rasterized;
+
         result.interpretation.profile_assumed = false;
         check(&mut cancelled)?;
         return Ok((result, Default::default()));
@@ -63,7 +60,7 @@ pub fn rasterize_source(
     check(&mut cancelled)?;
     let mut result = builder.finish()?;
     result.resolution = source.resolution;
-    result.kind = SourceKind::Rasterized;
+
     result.validate()?;
     Ok((result, statistics))
 }

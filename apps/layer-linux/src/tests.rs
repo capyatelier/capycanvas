@@ -46,6 +46,8 @@ mod blend_menu;
 mod blending;
 #[path = "photo_edit_tests.rs"]
 mod photo_edit;
+#[path = "object_foundation_tests.rs"]
+mod object_foundation;
 #[path = "calibration_tests.rs"]
 mod calibration;
 #[path = "merge_tests.rs"]
@@ -177,8 +179,8 @@ fn assert_live_artwork_eq(actual: &layer_core::Document, expected: &layer_core::
 }
 
 fn assert_source_samples(actual: &layer_core::color::source::SourceImage, expected: &layer_core::color::source::SourceImage) {
-    assert_eq!((actual.kind, actual.extent, actual.resolution, actual.interpretation.channels, actual.interpretation.depth, actual.interpretation.profile_assumed),
-        (expected.kind, expected.extent, expected.resolution, expected.interpretation.channels, expected.interpretation.depth, expected.interpretation.profile_assumed));
+    assert_eq!((actual.extent, actual.resolution, actual.interpretation.channels, actual.interpretation.depth, actual.interpretation.profile_assumed),
+        (expected.extent, expected.resolution, expected.interpretation.channels, expected.interpretation.depth, expected.interpretation.profile_assumed));
     assert_eq!(layer_color::profile_bytes(&actual.interpretation.profile).unwrap(), layer_color::profile_bytes(&expected.interpretation.profile).unwrap());
     let mut actual_rows = actual.rows();
     let mut expected_rows = expected.rows();
@@ -295,7 +297,13 @@ fn apply_fixture_theme(w: &Rc<Workspace>) {
             "dark" => layer_ui::Theme::Dark,
             _ => panic!("CAPY_NATIVE_TEST_THEME must be light or dark"),
         };
-        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        if w.gpu.borrow().is_none() {
+            w.dispatch(UiAction::RestoreSettings { settings: layer_ui::Settings {
+                theme: Some(theme), ..Default::default()
+            }});
+        } else {
+            w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        }
     }
 }
 fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
@@ -724,7 +732,7 @@ fn native_document_files() {
     glib::MainContext::default().block_on(w.recovery().drain());
     let recovery_path=w.recovery().published_path();
     let recovery=glib::MainContext::default().block_on(w.recovery().read_snapshot()).unwrap().document().clone();
-    let sources = |p: &layer_core::Document| p.artwork.paint.iter().filter(|(_, _, source)| source.original.is_some()).count();
+    let sources = |p: &layer_core::Document| p.artwork.paint.iter().filter(|(_, _, source)| source.base.is_some()).count();
     assert_eq!(sources(&recovery), 1);
     assert!(state(&w).document_file.modified);
     w.dispatch(UiAction::Invoke {
@@ -8966,7 +8974,7 @@ fn native_frame_pacing() {
             let mut project = native_navigation::photo([6000, 4000]);
             match std::env::var("LAYER_PACING_PHOTO_LAYERS").as_deref() {
                 Ok("photo") => {
-                    let members = project.scene().order().iter().copied().filter(|h| project.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).collect();
+                    let members = project.scene().order().iter().copied().filter(|h| project.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).collect();
                     let stack = project.composition().result;
                     project.apply(layer_core::Edit::Stack(layer_core::authored::RecordChange::replace(&project.artwork.stacks, stack, Some(layer_core::authored::Stack { entries: members })).unwrap())).unwrap();
                 },

@@ -116,7 +116,7 @@ fn native_stamp_visible_adds_the_visible_image_on_top() {
 fn native_merge_timing() {
     let app = native_test_app("art.capycanvas.MergeTiming");
     let mut project = native_navigation::photo([6000, 4000]);
-    let remove: Vec<_> = project.scene().order().iter().copied().filter(|h| project.scene().paint_source(*h).is_none_or(|p| p.original.is_none()) && !project.scene().constant_backdrop().contains(h)).collect();
+    let remove: Vec<_> = project.scene().order().iter().copied().filter(|h| project.scene().paint_source(*h).is_none_or(|p| p.base.is_none()) && !project.scene().constant_backdrop().contains(h)).collect();
     if !remove.is_empty() { let edit = project.delete_layers_edit(&remove).unwrap(); project.apply(edit).unwrap(); }
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();

@@ -20,3 +20,6 @@ pub use scene::{EffectBaseline, SceneIndex, SceneScope, SceneSnapshot, SceneView
 
 mod occurrence_edits;
 pub use occurrence_edits::{OccurrenceDropPlan, OccurrenceDropPosition};
+
+mod objects;
+pub use objects::{Image, Affine64, Affine64Error, ImageInterpolation, ImageObject, ObjectLayer, PaintBase, PaintBasePolicy};

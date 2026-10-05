@@ -263,7 +263,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// readbacks are cancelled; pending filter validation resumes from retained
     /// source bytes before it can publish a catalog or edit.
     pub fn replace_renderer(&mut self, mut renderer: R) -> Result<(R, UiChange), String> {
-        if self.engine.document().artwork.paint.iter().any(|(_, _, source)| source.original.is_some())
+        if (!self.engine.document().artwork.objects.is_empty() || self.engine.document().artwork.paint.iter().any(|(_, _, source)| source.base.is_some()))
             && !renderer.supports_tiled_sources()
         {
             return Err("The replacement renderer does not support tiled photo documents".into());
@@ -441,6 +441,66 @@ mod tests {
     }
 
     #[test]
+    fn parked_fixed_image_objects_keep_shared_owners_and_private_redo_history() {
+        use layer_core::{Affine64, PortableId, ProjectLimits, package::{ImmutableBacking, codec::{self, OpenOutcome}}};
+        use crate::session_recovery::SessionRestore;
+        use std::sync::{Arc, atomic::AtomicBool};
+        let cancel = AtomicBool::new(false);
+        let backing = |bytes: &[u8]| ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+        let bytes = include_bytes!("../../layer-core/src/package/codec/fixtures/shared-image-objects.capy");
+        let OpenOutcome::Candidate { artwork, .. } = codec::open(backing(bytes), Default::default(), &cancel).unwrap() else { panic!("Fixed objects must be editable") };
+        let document = Document::from_artwork(artwork).unwrap();
+        let renderer = || Recorder {color:document.composition().color, ..sources()};
+        let identity = |value:u128| PortableId::from_bytes(value.to_be_bytes());
+        let object = document.artwork.objects.resolve(identity(9)).unwrap();
+        let original = document.artwork.objects.get(object).unwrap().clone();
+        let changed_affine = Affine64([1., 0.25, -0.5, 1., -7.125, 3.0000000000000004]);
+        let check = |document: &Document, expected: &layer_core::ImageObject| {
+            let first = document.artwork.objects.get(document.artwork.objects.resolve(identity(9)).unwrap()).unwrap();
+            let second = document.artwork.objects.get(document.artwork.objects.resolve(identity(10)).unwrap()).unwrap();
+            assert_eq!(first, expected);
+            assert_eq!(first.affine.0.map(f64::to_bits), expected.affine.0.map(f64::to_bits));
+            assert_eq!(first.image.id(), identity(11));
+            assert!(first.image.same_owner(&second.image));
+            assert!(!second.visible);
+            assert_eq!(second.interpolation, layer_core::ImageInterpolation::Nearest);
+            let source = document.artwork.paint.get(document.artwork.paint.resolve(identity(7)).unwrap()).unwrap();
+            assert!(first.image.same_owner(&source.base.as_ref().unwrap().image));
+        };
+        for failed in [false, true] {
+            let mut parked = UiSession::from_project(renderer(), document.clone(), None, [500, 400], Platform::Gtk).unwrap();
+            parked.frame(0, 0).unwrap();
+            let edit = parked.engine.document().set_image_object_affine_edit(object, changed_affine).unwrap();
+            parked.engine.apply_edit(edit).unwrap();
+            let changed = parked.engine.document().artwork.objects.get(object).unwrap().clone();
+            invoke(&mut parked, CommandId::Undo);
+            parked.frame(1, 1).unwrap();
+            check(parked.engine.document(), &original);
+            if failed { parked.suspend_renderer().unwrap(); }
+            else { assert!(parked.park_document().unwrap().try_blobs().unwrap().is_some()); }
+            let stamp = parked.session_stamp();
+            let mut archive = Vec::new();
+            parked.capture_session().unwrap().prepare(&cancel).unwrap().write(&mut archive, &cancel).unwrap();
+            let restored = SessionRestore::open(backing(&archive), ProjectLimits::default(), &cancel).unwrap();
+            check(restored.document(), &original);
+            let mut recovered = UiSession::from_project(renderer(), restored.document().clone(), None, [500, 400], Platform::Gtk).unwrap();
+            recovered.frame(0, 0).unwrap();
+            recovered.restore_session(restored, false, None).unwrap();
+            invoke(&mut recovered, CommandId::Redo);
+            check(recovered.engine.document(), &changed);
+            invoke(&mut recovered, CommandId::Undo);
+            check(recovered.engine.document(), &original);
+            parked.replace_renderer(renderer()).unwrap();
+            assert_eq!(parked.session_stamp(), stamp);
+            check(parked.engine.document(), &original);
+            invoke(&mut parked, CommandId::Redo);
+            check(parked.engine.document(), &changed);
+            invoke(&mut parked, CommandId::Undo);
+            check(parked.engine.document(), &original);
+        }
+    }
+
+    #[test]
     fn replacement_retains_sources_undo_redo_workspace_and_pending_save() {
         let mut s = UiSession::new(
             sources(),
@@ -560,8 +620,8 @@ mod tests {
         assert_eq!(s.engine.document(), &document);
         let recovered = s.capture_artwork().unwrap();
         let paint = match document.scene().occurrence(imported).unwrap().content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
-        let retained = document.artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
-        let recovered = recovered.artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
+        let retained = document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
+        let recovered = recovered.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
         assert!(std::sync::Arc::ptr_eq(recovered, retained));
         assert!(s.command(CommandId::SaveDocumentAs).enabled);
         assert!(

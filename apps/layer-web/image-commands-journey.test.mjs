@@ -111,7 +111,8 @@ export async function checkImageCommands({call,evaluate,settle,device=false}) {
     await evaluate(`document.querySelector('${entry}').select()`);
     await call('Input.insertText',{text});await settle();
   };
-  const pick=async(label,value)=>{
+  const pick=async(field,value)=>{
+    const v=await view(),label=field==='unit'?v.units.find(choice=>choice.unit===v.unit).label:v.resample_label;
     await evaluate(`(s=>{s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change',{bubbles:true}));})(document.querySelector('${dialog} .size-dialog-select[aria-label="${label}"]'))`);
     await settle();
   };
@@ -149,7 +150,7 @@ export async function checkImageCommands({call,evaluate,settle,device=false}) {
         await wait('layerApp.state().layer_tools.image_size.constrain');
         assert.equal(await evaluate(`document.activeElement===document.querySelector('${dialog} [data-image-size="width"] .number-entry')`),false,`${kind}: the checkbox commits and leaves the field`);
       } else {
-        await pick('Unit','percent');
+        await pick('unit','percent');
         await wait(`layerApp.state().layer_tools.image_size.unit==='percent'`);
         await typeInto(kind==='pen'?'height':'width','50',kind);
         if(kind==='mouse') {
@@ -157,7 +158,7 @@ export async function checkImageCommands({call,evaluate,settle,device=false}) {
           await wait(`!document.activeElement.matches('${dialog} input')`);
         }
         if(kind==='pen') {
-          await pick('Resample','bicubic');
+          await pick('resample','bicubic');
           await wait(`layerApp.state().layer_tools.image_size.resample==='bicubic'`);
         }
       }
@@ -224,7 +225,7 @@ export async function checkImageCommands({call,evaluate,settle,device=false}) {
 
       await invoke('fit_canvas');await invoke('zoom_out');
       await openCrop(kind);
-      assert.equal(await evaluate(`document.querySelector('${bar} [data-command="crop_fit_content"]')?.textContent.trim()`),'Fit Content',`${kind}: the crop bar offers Fit Content`);
+      assert.equal(await evaluate(`document.querySelector('${bar} [data-command="crop_fit_content"]')?.textContent.trim()`),'Fit Crop to Content',`${kind}: the crop bar offers Fit Crop to Content`);
       if(await pressBar('crop_fit_content',kind)==='more')console.log(`${kind}: Fit Content is in More at this window width`);
       await wait(`layerApp.state().tool_settings.find(s=>s.id==='crop_width').value<${width*.7}`);
       near(await setting('crop_width'),fill[0],3,`${kind}: Fit Content frames the fill's width`);

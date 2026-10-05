@@ -83,7 +83,7 @@ fn apply(doc: &Document, geometry: CanvasGeometry) -> Editor {
 fn same_state(a:&Document,b:&Document) {
     assert_eq!(a.composition(),b.composition());assert_eq!(a.working.selection,b.working.selection);
     macro_rules! records {($($store:ident),*)=>{$(assert_eq!(a.artwork.$store.iter().collect::<Vec<_>>(),b.artwork.$store.iter().collect::<Vec<_>>());)*};}
-    records!(stacks,occurrences,paint,coverage,selections,guides,effects,definitions,outputs);
+    records!(stacks,occurrences,paint,coverage,selections,guides,effects,outputs);
 }
 
 fn document_point(doc: &Document, id: SourceTarget, local: Point) -> Point {
@@ -212,7 +212,7 @@ fn locked_layers_follow_and_photos_never_rebase() {
     fixture::occurrence_mut(&mut doc,"Current ink").locked = true;
     fixture::insert_paint(&mut doc,"Photo",0,None);
     let photo=fixture::target(&doc,"Photo");
-    fixture::paint_mut(&mut doc,"Photo").original=Some(Arc::new(photo_source([300,200])));
+    fixture::paint_mut(&mut doc,"Photo").base=Some(PaintBase::new(Arc::new(photo_source([300,200])).into()));
     fixture::paint_mut(&mut doc,"Photo").domain=[300,200];
     let editor = apply(&doc, rect([-20, -20], [700, 300]));
     let result = editor.document();
@@ -221,7 +221,7 @@ fn locked_layers_follow_and_photos_never_rebase() {
     assert_eq!(placed.translation, Point { x: 20., y: 20. });
     assert_eq!(paint_source(result,photo).domain,doc.target_extent(photo));
     assert_eq!(result.target_extent(photo), doc.target_extent(photo));
-    assert!(Arc::ptr_eq(paint_source(result,photo).original.as_ref().unwrap(),paint_source(&doc,photo).original.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(paint_source(result,photo).base.as_ref().unwrap().image.storage(),paint_source(&doc,photo).base.as_ref().unwrap().image.storage()));
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn straightening_turns_a_photo_placement_without_touching_its_pixels() {
     let mut doc = fixture();
     fixture::insert_paint(&mut doc,"Photo",0,None);
     let photo=fixture::target(&doc,"Photo");
-    fixture::paint_mut(&mut doc,"Photo").original=Some(Arc::new(photo_source([300,200])));
+    fixture::paint_mut(&mut doc,"Photo").base=Some(PaintBase::new(Arc::new(photo_source([300,200])).into()));
     fixture::paint_mut(&mut doc,"Photo").domain=[300,200];
     fixture::occurrence_mut(&mut doc,"Photo").translation=Point{x:20.,y:10.};
     let photo_handle=fixture::id(&doc,"Photo");
@@ -381,7 +381,7 @@ fn straightening_turns_a_photo_placement_without_touching_its_pixels() {
     editor.perform(Edit::Batch(plan.edits)).unwrap();
     let result = editor.document();
     let before = owner(&doc,photo);
-    assert!(Arc::ptr_eq(paint_source(&doc,photo).original.as_ref().unwrap(),paint_source(result,photo).original.as_ref().unwrap()));
+    assert!(Arc::ptr_eq(paint_source(&doc,photo).base.as_ref().unwrap().image.storage(),paint_source(result,photo).base.as_ref().unwrap().image.storage()));
     assert_eq!(result.target_raster(photo),doc.target_raster(photo),"losslessly placed");
     let mask=SourceTarget::Coverage(before.mask.as_ref().unwrap().source);
     for id in [photo, mask] {
@@ -427,7 +427,7 @@ fn with_photo() -> (Document, SourceTarget) {
     let mut doc = fixture();
     fixture::insert_paint(&mut doc,"Photo",0,None);
     let photo=fixture::target(&doc,"Photo");
-    fixture::paint_mut(&mut doc,"Photo").original=Some(Arc::new(photo_source([300,200])));
+    fixture::paint_mut(&mut doc,"Photo").base=Some(PaintBase::new(Arc::new(photo_source([300,200])).into()));
     fixture::paint_mut(&mut doc,"Photo").domain=[300,200];
     fixture::occurrence_mut(&mut doc,"Photo").translation=Point{x:20.,y:10.};
     (doc, photo)
@@ -557,15 +557,14 @@ fn setting_the_resolution_is_one_undoable_metadata_edit() {
 }
 
 #[test]
-fn image_size_scales_layers_placements_selections_guides_and_pixel_distances() {
+fn image_size_scales_layers_placements_selections_guides_and_effect_reference() {
     let (mut doc, photo) = with_photo();
     let effect=fixture::insert_paint(&mut doc,"Blur",0,None);fixture::effect(&mut doc,"Blur","gaussian_blur");
-    let h=doc.scene().effect_handle(effect).unwrap();let definition=doc.artwork.effects.get(h).unwrap().definition;
-    let program=doc.artwork.definitions.get(definition).unwrap().program.clone();
+    let h=doc.scene().effect_handle(effect).unwrap();let program=doc.artwork.effects.get(h).unwrap().program.clone();
     let index=program.parameters.iter().position(|p|p.key.as_ref()=="sigma").unwrap();
     doc.artwork.effects.get_mut(h).unwrap().values[index]=EffectValue::Number(3.);
     let sigma=|doc:&Document|match doc.scene().effect(effect).unwrap().value("sigma") {Some(EffectValue::Number(v))=>*v,_=>panic!("a number")};
-    for (size, expected) in [([256, 128], 1.5), ([2048, 1024], 12.), ([5120, 2560], 30.)] {
+    for size in [[256, 128], [2048, 1024], [5120, 2560]] {
         let geometry = CanvasGeometry::resize([512, 256], size, Interpolation::Lanczos);
         let to_canvas = geometry.to_canvas();
         let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();
@@ -574,7 +573,10 @@ fn image_size_scales_layers_placements_selections_guides_and_pixel_distances() {
         let result = editor.document();
         assert_eq!(result.composition().size, size);
         assert!(result.extents_cover_canvas());
-        assert_eq!(sigma(result), expected, "clamped to the parameter's range");
+        assert_eq!(sigma(result), 3.);
+        let reference=result.artwork.effects.get(h).unwrap().spatial.unwrap();
+        assert_eq!(reference.extent, [512.,256.]);
+        assert_eq!(reference.mapping, Affine64(to_canvas.0.map(f64::from)));
         for (id, transform) in transforms(&plan) {
             assert_eq!(transform.placement.interpolation, Interpolation::Lanczos);
             for p in [Point { x: 0., y: 0. }, Point { x: 256., y: 256. }] {
@@ -701,7 +703,7 @@ fn paint_extent_plan_changes_only_selected_paint_and_keeps_photo_domains_fixed()
     fixture::occurrence_mut(&mut doc,"Unselected").placement=LayerPlacement::from_affine(Affine([1./128.,0.,0.,1./128.,0.,0.]));
     let other=fixture::target(&doc,"Unselected");let unrelated=fixture::occurrence(&doc,"Unselected").clone();let unrelated_source=fixture::paint(&doc,"Unselected").clone();
     fixture::insert_paint(&mut doc,"Photo",0,None);
-    fixture::paint_mut(&mut doc,"Photo").original=Some(Arc::new(photo_source([300,200])));fixture::paint_mut(&mut doc,"Photo").domain=[300,200];
+    fixture::paint_mut(&mut doc,"Photo").base=Some(PaintBase::new(Arc::new(photo_source([300,200])).into()));fixture::paint_mut(&mut doc,"Photo").domain=[300,200];
     fixture::occurrence_mut(&mut doc,"Photo").placement=LayerPlacement::from_affine(Affine([0.1,0.,0.,0.1,100.,50.]));
     let photo=fixture::target(&doc,"Photo");let source=fixture::occurrence(&doc,"Photo").clone();let photo_source=fixture::paint(&doc,"Photo").clone();
     let edits = doc.paint_extent_plan(&[id, photo], limits()).unwrap();
@@ -736,4 +738,86 @@ fn paint_extent_plan_cap_refusal_and_identity_are_atomic_and_add_no_history() {
 mod transform_pixels_plan {
     use super::*;
     include!("transform_pixels_plan_tests.rs");
+}
+
+#[test]
+fn spatial_effect_crop_orientation_resize_and_history_preserve_reference_coordinates() {
+    let mut doc=fixture::document([512,256], &["Group","Effect","Paint"]);
+    fixture::effect(&mut doc,"Effect","motion_blur");
+    fixture::nest(&mut doc,"Group", &["Effect","Paint"]);
+    fixture::occurrence_mut(&mut doc,"Group").translation=Point {x:27.,y:-13.};
+    let occurrence=fixture::id(&doc,"Effect");
+    let effect=doc.scene().effect_handle(occurrence).unwrap();
+    let mut application=doc.artwork.effects.get(effect).unwrap().clone();
+    let distance=application.program.parameters.iter().position(|p| p.key.as_ref()=="distance").unwrap();
+    application.values[distance]=EffectValue::Number(17.);
+    let original=application.clone();
+    doc.artwork.effects.get_mut(effect).unwrap().clone_from(&application);
+    let mut editor=Editor::new(doc.clone());
+    let mut expected=Affine64::default();
+    for geometry in [
+        CanvasGeometry::crop(CanvasRect {origin:[-73,41],size:[640,192]}),
+        CanvasGeometry::orient([640,192],ImageOrientation::RotateRight),
+        CanvasGeometry::orient([192,640],ImageOrientation::FlipHorizontal),
+        CanvasGeometry::resize([192,640],[384,320],Interpolation::Nearest),
+    ] {
+        let before=editor.document().clone();
+        let plan=before.canvas_geometry_plan(&geometry,limits()).unwrap();
+        editor.perform(Edit::Batch(plan.edits)).unwrap();
+        expected=Affine64(geometry.to_canvas().0.map(f64::from)).compose(expected);
+        let application=editor.document().artwork.effects.get(effect).unwrap();
+        let spatial=application.spatial.unwrap();
+        assert_eq!(spatial.mapping,expected);
+        assert_eq!(spatial.extent,original.spatial.unwrap().extent);
+        assert_eq!(application.values,original.values);
+        let radius=editor.document().scene().effect(occurrence).unwrap().damage_radius().unwrap();
+        let [a,b,c,d,_,_]=expected.0;
+        assert_eq!(radius,(10.*(a.abs()+c.abs()).max(b.abs()+d.abs())).ceil() as u32);
+        for point in [[0.,0.],[117.5,203.25],[512.,256.]] {
+            let composition=expected.map(point);
+            let restored=spatial.inverse().unwrap().map(composition);
+            assert!((restored[0]-point[0]).abs()<1e-9 && (restored[1]-point[1]).abs()<1e-9);
+        }
+        let after=editor.document().clone();
+        assert!(editor.undo().unwrap());same_state(editor.document(),&before);
+        assert!(editor.redo().unwrap());same_state(editor.document(),&after);
+    }
+}
+
+#[test]
+fn effect_spatial_admission_matches_consumed_coordinates() {
+    for definition in bundled_effect_catalog().filters() {
+        let draft=EffectInstance::new(definition.program());
+        let application=EffectApplication::new(draft.program,draft.values,[512,256]);
+        application.validate().unwrap();
+        assert_eq!(application.spatial.is_some(),application.program.uses_spatial_reference());
+        if let Some(reference)=application.spatial {
+            assert_eq!(reference.map([0.,0.]),[0.,0.]);
+            let mut missing=application.clone();missing.spatial=None;
+            assert!(missing.validate().is_err());
+            for extent in [[0.,256.],[512.,f64::NAN],[512.,-1.]] {
+                let mut invalid=application.clone();invalid.spatial.as_mut().unwrap().extent=extent;
+                assert!(invalid.validate().is_err());
+            }
+            let mut singular=application.clone();singular.spatial.as_mut().unwrap().mapping=Affine64([1.,2.,2.,4.,0.,0.]);
+            assert!(singular.validate().is_err());
+        } else {
+            assert!(!matches!(application.program.id.as_ref(),"gradient_fill"|"vignette"|"motion_blur"));
+        }
+    }
+}
+
+#[test]
+fn inserting_spatial_effect_after_crop_uses_the_current_local_frame() {
+    let doc=fixture::document([512,256],&["Paint"]);
+    let editor=apply(&doc,rect([97,-31],[300,400]));
+    let mut doc=editor.document().clone();
+    assert_ne!(doc.composition().origin,Point::default());
+    fixture::insert_paint(&mut doc,"Vignette",0,None);
+    fixture::effect(&mut doc,"Vignette","vignette");
+    let occurrence=fixture::id(&doc,"Vignette");
+    let reference=doc.scene().effect_application(occurrence).unwrap().spatial.unwrap();
+    assert_eq!(reference.mapping,Affine64::default());
+    assert_eq!(reference.extent,[300.,400.]);
+    assert_eq!(reference.map([150.,200.]),[150.,200.]);
 }

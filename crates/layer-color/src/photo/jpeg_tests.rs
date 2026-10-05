@@ -87,7 +87,7 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
                 use std::sync::{Arc, atomic::AtomicBool};
                 let mut document = layer_core::Document::new(PortableId::random(), 257, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
                 let SourceTarget::Paint(handle)=document.working.target.unwrap() else {unreachable!()};
-                document.artwork.paint.get_mut(handle).unwrap().original=Some(Arc::new(decoded));
+                document.artwork.paint.get_mut(handle).unwrap().base=Some(layer_core::authored::PaintBase::new(Arc::new(decoded).into()));
                 let cancelled=AtomicBool::new(false);
                 let capture=layer_core::Editor::new(document.clone()).capture(0,Default::default()).unwrap();
                 let prepared=PreparedPackage::prepare(&capture,None,&cancelled).unwrap();
@@ -96,8 +96,8 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
                 let backing=ImmutableBacking::new(Arc::new(layer_core::package::transport::ChunkedBytes::new(chunks).unwrap())).unwrap();
                 let OpenOutcome::Candidate {artwork,..}=layer_core::package::codec::open(backing,Default::default(),&cancelled).unwrap() else {panic!("JPEG master must reopen as editable")};
                 let reopened=layer_core::Document::from_artwork(artwork).unwrap();
-                let source=reopened.artwork.paint.iter().find_map(|(_,_,paint)|paint.original.as_ref()).unwrap();
-                assert_eq!(source,document.artwork.paint.get(handle).unwrap().original.as_ref().unwrap());
+                let source=reopened.artwork.paint.iter().find_map(|(_,_,paint)|paint.base.as_ref()).unwrap();
+                assert_eq!(source,document.artwork.paint.get(handle).unwrap().base.as_ref().unwrap());
                 let reopened_capture=layer_core::Editor::new(reopened).capture(0,Default::default()).unwrap();
                 let rewritten=PreparedPackage::prepare(&reopened_capture,None,&cancelled).unwrap();
                 assert_eq!(rewritten.manifest(),prepared.manifest());

@@ -92,7 +92,11 @@ impl PreparedPackage {
         let shape=artwork.topology()?;
         let (mut objects,mut inventory)=super::artwork_records::encode(artwork,cancelled)?;
         crate::Document::from_artwork((**artwork).clone()).map_err(|e|e.to_string())?.admit(Default::default())?;
-        if objects.iter().any(custom_definition) {return Err("Drawings with custom filters can't be saved yet".into());}
+        for record in &objects {
+            if super::registry::descriptor(record["type"].as_str().ok_or("Missing authored type")?).is_some() {
+                super::registry::validate_context(record,super::registry::RecordContext::Portable)?;
+            }
+        }
         let metadata=metadata(artwork,&mut inventory)?;
         let root=artwork.compositions.id(artwork.root).ok_or("Missing authored root")?;
         let default=artwork.outputs.id(artwork.default_output).ok_or("Missing default output")?;
@@ -170,7 +174,6 @@ fn limited(source:ImmutableBacking,value:Value,preview:Option<Preview>,reason:St
     }
     OpenOutcome::Preserved {source,outputs,preview:matched,reason}
 }
-fn custom_definition(record:&Value)->bool {record["type"]=="capy.effect-definition/1" && record["data"].get("builtin").is_none()}
 pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool) -> Result<OpenOutcome,String> {
     active(cancelled)?;
     let mut reader=BackingReader::new(&source,cancelled);
@@ -200,7 +203,6 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
     match decoded {
         Ok(mut artwork)=>{
             if let Support::Preserved(reasons)=&manifest.support {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason:reasons.iter().copied().collect::<Vec<_>>().join("; ")});}
-            if manifest.objects.values().any(custom_definition) {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason:"Custom filters are unsupported".into()});}
             let document=crate::Document::from_artwork(artwork.clone());
             match document {
                 Err(reason)=>return Ok(failed(source,preview,reason.to_string())),

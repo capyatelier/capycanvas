@@ -87,7 +87,7 @@ impl Timing {
     }
     pub fn photo_frame(&self, scene: layer_core::authored::SceneView<'_>) {
         self.stats.lock().unwrap().photo_frames.extend(scene.order().iter().copied()
-            .filter(|h| scene.paint_source(*h).is_some_and(|p| p.original.is_some()))
+            .filter(|h| scene.paint_source(*h).is_some_and(|p| p.base.is_some()))
             .map(|h| (self.id, layer_ui::occurrence_token(h), scene.occurrence(h).unwrap().placement.clone())));
     }
     pub fn camera_view(&self, view: layer_render::ViewState, renderer: &WgpuRasterizer) {

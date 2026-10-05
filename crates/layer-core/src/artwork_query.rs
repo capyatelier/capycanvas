@@ -6,6 +6,7 @@ use std::{sync::Arc,borrow::Cow};
 pub enum SnapshotSource {
     Visible,
     Source(crate::SourceTarget),
+    Objects(crate::OccurrenceHandle),
     EffectInput(crate::OccurrenceHandle),
     EffectChannels(crate::OccurrenceHandle),
 }
@@ -14,6 +15,7 @@ impl SnapshotSource {
         match self {
             Self::Visible => crate::ArtworkSource::Visible,
             Self::Source(target) => crate::ArtworkSource::Source(target),
+            Self::Objects(target) => crate::ArtworkSource::Objects(target),
             Self::EffectInput(target) => crate::ArtworkSource::EffectInput(target),
             Self::EffectChannels(target) => crate::ArtworkSource::EffectChannels(target),
         }
@@ -22,7 +24,7 @@ impl SnapshotSource {
 
 pub const ARTWORK_SAMPLE_WIDTHS:[u32;5]=[1,5,15,51,101];
 #[derive(Clone,Debug,PartialEq)]
-pub enum ArtworkSource {Visible,Source(SourceTarget),Reference,EffectInput(OccurrenceHandle),EffectChannels(OccurrenceHandle),EffectBaseline(EffectBaseline)}
+pub enum ArtworkSource {Visible,Source(SourceTarget),Objects(OccurrenceHandle),Reference,EffectInput(OccurrenceHandle),EffectChannels(OccurrenceHandle),EffectBaseline(EffectBaseline)}
 #[derive(Clone,Debug)]
 pub struct ArtworkQuery {
     pub snapshot:Arc<SceneSnapshot>,
@@ -112,6 +114,7 @@ impl ArtworkQuery {
         if !context.elapsed.is_finite()||context.phases.iter().any(|(_,v)|!v.is_finite())||scene.composition().size.iter().any(|v|*v>crate::MAX_EXTENT){return Err("Invalid artwork sample".into());}
         if scene.targets().any(|t|scene.operations(t).is_some_and(|ops|!ops.is_empty())){return Err("Wait for the current edit before sampling".into());}
         match &self.source {
+            ArtworkSource::Objects(h) if scene.object_layer(*h).is_none()=>Err("The object layer to sample was removed".into()),
             ArtworkSource::Source(t) if !matches!(t,SourceTarget::Paint(_))||scene.original(*t).is_none()&&scene.raster(*t).is_none()=>Err("This source has no color content to sample".into()),
             ArtworkSource::EffectChannels(h) if scene.effect(*h).is_none_or(|e|!matches!(e.program.id.as_ref(),"curves"|"levels")||e.program.kind!=crate::EffectKind::Adjustment)=>Err("This adjustment has no channel statistics".into()),
             ArtworkSource::EffectInput(h) if scene.effect(*h).is_none_or(|e|e.program.kind!=crate::EffectKind::Adjustment)=>Err("The adjustment to sample was removed".into()),
@@ -124,6 +127,7 @@ impl ArtworkQuery {
             let effect=s.view().effect_by_handle(h)?;
             effect.program.time.then(||s.context.phases.iter().find(|(id,_)|*id==h).map_or_else(||effect.time_seconds(s.context.elapsed),|(_,v)|*v).to_bits())
         };
+        if let ArtworkSource::Objects(h)=self.source {return self.snapshot.view().same_composition(snapshot.view()) && self.snapshot.view().same_objects(snapshot.view(),h) && self.snapshot.view().occurrence_offset64(h)==snapshot.view().occurrence_offset64(h);}
         if let ArtworkSource::EffectInput(h)|ArtworkSource::EffectChannels(h)=self.source {
             let Some(key)=self.input_key(h) else{return false;};
             return key.matches(snapshot.view(),true,matches!(self.source,ArtworkSource::EffectChannels(_)))
@@ -138,6 +142,7 @@ impl ArtworkQuery {
     pub fn matches_source_identity(&self,document:&Document)->bool{self.matches(document,true,false)}
     fn matches(&self,document:&Document,source_only:bool,values:bool)->bool {
         if self.snapshot.owner!=document.owner{return false;}
+        if let ArtworkSource::Objects(h)=self.source {return self.snapshot.view().same_composition(document.scene()) && self.snapshot.view().same_objects(document.scene(),h) && self.snapshot.view().occurrence_offset64(h)==document.scene().occurrence_offset64(h);}
         if source_only && let ArtworkSource::EffectInput(h)|ArtworkSource::EffectChannels(h)=self.source {
             let channels=matches!(self.source,ArtworkSource::EffectChannels(_));
             return self.input_key(h).is_some_and(|k|k.matches(document.scene(),values,channels));
@@ -157,15 +162,29 @@ impl SceneView<'_> {
         self.artwork().id==other.artwork().id && self.same_composition(other) && self.order()==other.order()
             && self.order().iter().all(|h|self.same_occurrence(other,*h,true))
     }
+    pub fn same_objects(self,other:SceneView<'_>,h:OccurrenceHandle)->bool {
+        match (self.object_layer(h),other.object_layer(h)) {
+            (None,None)=>true,
+            (Some(a),Some(b))=>{
+                if self.artwork().objects.same_root(&other.artwork().objects)
+                    && self.artwork().object_layers.same_root(&other.artwork().object_layers)
+                    && self.occurrence(h).map(|owner|&owner.content)==other.occurrence(h).map(|owner|&owner.content) {return true;}
+                a.children==b.children && a.children.iter().all(|h|match(self.object(*h),other.object(*h)){(Some(a),Some(b))=>a.image==b.image&&a.affine==b.affine&&a.visible==b.visible&&a.interpolation==b.interpolation,_=>false})
+            },
+            _=>false,
+        }
+    }
     pub fn same_occurrence(self,other:SceneView<'_>,h:OccurrenceHandle,values:bool)->bool {
         let (Some(a),Some(b))=(self.occurrence(h),other.occurrence(h)) else{return false;};
         if a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.attachment!=b.attachment||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask||self.parent(h)!=other.parent(h){return false;}
         if let Some(target)=self.source_target(h) {
-            if self.raster(target)!=other.raster(target)||self.operations(target)!=other.operations(target)||self.target_extent(target)!=other.target_extent(target){return false;}
+            if self.color_mode(target)!=other.color_mode(target)||self.raster(target)!=other.raster(target)||self.operations(target)!=other.operations(target)||self.target_extent(target)!=other.target_extent(target){return false;}
+            if self.paint_base(target)!=other.paint_base(target) {return false;}
             if match (self.original(target),other.original(target)){(Some(a),Some(b))=>!Arc::ptr_eq(a,b),(None,None)=>false,_=>true}{return false;}
         }
+        if !self.same_objects(other,h) {return false;}
         if let Some(mask)=&a.mask && self.coverage(mask.source)!=other.coverage(mask.source){return false;}
-        match (self.effect(h),other.effect(h)){(Some(a),Some(b))=>a.program==b.program&&(!values||a.values==b.values),(None,None)=>true,_=>false}
+        match (self.effect(h),other.effect(h)){(Some(a),Some(b))=>a.program==b.program&&a.spatial==b.spatial&&(!values||a.values==b.values),(None,None)=>true,_=>false}
     }
 }
 

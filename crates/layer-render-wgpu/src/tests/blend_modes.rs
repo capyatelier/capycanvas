@@ -236,14 +236,14 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
     composition.color = DocumentColor { space: RgbSpace::Srgb, depth };
     composition.blend = space;
     let paper = *document.scene().order().last().unwrap();
-    let paint = |document: &mut Document, name: &str, image| {
-        let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: EXTENT, original: Some(image), raster: Default::default(), operations: Arc::default() }).unwrap();
+    let paint = |document: &mut Document, name: &str, image: Arc<layer_core::color::source::SourceImage>| {
+        let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: EXTENT, base: Some(layer_core::authored::PaintBase::new((image).into())), raster: Default::default(), operations: Arc::default() }).unwrap();
         document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(source), name)).unwrap()
     };
     let effect = |document: &mut Document, image: bool| {
         let instance = Arc::unwrap_or_clone(probe_effect(depth, image));
-        let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program }).unwrap();
-        let application = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: instance.values}).unwrap();
+        let size=document.composition().size;
+        let application=document.artwork.effects.insert(PortableId::random(),EffectApplication::new(instance.program,instance.values,size)).unwrap();
         document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "Probe")).unwrap()
     };
     let top_layer = paint(&mut document, "Top", top(depth));

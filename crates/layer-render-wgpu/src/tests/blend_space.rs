@@ -27,12 +27,12 @@ fn document(depth: SampleDepth) -> Document {
 
 fn effect(document: &mut Document, id: &str) -> Occurrence {
     let draft = EffectInstance::new(fixture(id).program());
-    let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: draft.program }).unwrap();
-    let effect = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: draft.values}).unwrap();
+    let size=document.composition().size;
+    let effect=document.artwork.effects.insert(PortableId::random(),EffectApplication::new(draft.program,draft.values,size)).unwrap();
     Occurrence::new(OccurrenceContent::Effect(effect), id)
 }
 fn paint(document: &mut Document, name: &str, original: Option<Arc<SourceImage>>) -> Occurrence {
-    let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: EXTENT, original, raster: Default::default(), operations: Arc::default() }).unwrap();
+    let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: EXTENT, base: original.map(|source| layer_core::authored::PaintBase::new(source.into())), raster: Default::default(), operations: Arc::default() }).unwrap();
     Occurrence::new(OccurrenceContent::Paint(source), name)
 }
 fn group(document: &mut Document) -> Occurrence {
@@ -302,6 +302,8 @@ fn groups_masks_clips_and_opacity_match_an_encoded_reference() {
             let stacks: Vec<_> = artwork.stacks.iter().map(|(h, _, _)| h).collect();
             for stack in stacks { artwork.stacks.get_mut(stack).unwrap().entries.clear(); }
             artwork.stacks.get_mut(root).unwrap().entries = vec![handle];
+            let occurrences:Vec<_>=artwork.occurrences.iter().filter_map(|(candidate,_,_)|(candidate!=handle).then_some(candidate)).collect();
+            for occurrence in occurrences { artwork.occurrences.remove(occurrence).unwrap(); }
             let isolated = Document::from_artwork(artwork).unwrap();
             settle(&mut r, FramePacket { view, reset_layers: true, ..packet(isolated.scene(), EXTENT) });
             rgba(&composite(&r))

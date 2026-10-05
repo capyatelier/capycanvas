@@ -108,7 +108,7 @@ fn an_integer_offset_clones_the_source_exactly_and_a_second_pass_sees_the_first(
 fn clone_strokes_lay_one_continuous_stamp() {
     let mut doc = document(EXTENT);
     let SourceTarget::Paint(photo) = PHOTO else { unreachable!() };
-    doc.artwork.paint.get_mut(photo).unwrap().original = Some(rgba8_source(EXTENT, |_, _| [255; 4]));
+    doc.artwork.paint.get_mut(photo).unwrap().base = Some(layer_core::authored::PaintBase::new((rgba8_source(EXTENT, |_, _| [255; 4])).into()));
     let radius = 48.;
     let deviation = |brush: BrushSnapshot| {
         let (mut input, mut engine) = cloner(doc.clone(), TARGET, RetouchSource::References, false);

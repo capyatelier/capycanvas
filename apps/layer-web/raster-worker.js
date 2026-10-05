@@ -43,6 +43,8 @@ async function execute({id,request}) {
       }
       case "color-field": result = wasm.raster_worker_color_field(request.metadata); break;
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
+      case "image-decode": result = wasm.raster_worker_image_decode(request.metadata,request.buffers); break;
+      case "nearest-coordinates": result = wasm.raster_worker_nearest_coordinates(request.metadata); break;
       case "lookup": result = wasm.raster_worker_lookup(request.metadata,request.buffers[0]); break;
       case "profile-library": result=await navigator.locks.request("capy-profile-library",()=>profileLibrary(JSON.parse(request.metadata),request.buffers[0]));break;
       case "export-presets": result=await navigator.locks.request("capy-export-presets",async()=>{

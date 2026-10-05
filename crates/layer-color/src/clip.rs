@@ -5,7 +5,7 @@ use crate::WorkingEncoder;
 use layer_core::color::{
     ColorProfile, DocumentColor, RgbSpace, SampleDepth,
     hdr::{LocalToneGuide, SdrRendition},
-    source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation, SourceKind},
+    source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation},
 };
 
 /// Where a copy was taken and how its rows are delivered.
@@ -83,7 +83,7 @@ pub fn write_clip_rows(
     let source = builder
         .map(|builder| {
             let mut source = builder.finish()?;
-            source.kind = SourceKind::Rasterized;
+
             source.resolution = clip.resolution;
             Ok::<_, String>(source)
         })
@@ -217,7 +217,7 @@ mod tests {
         )
         .unwrap();
         let source = source.unwrap();
-        assert_eq!((source.kind, source.extent), (SourceKind::Rasterized, [2, 2]));
+        assert_eq!(source.extent, [2, 2]);
         assert_eq!(source.interpretation.depth, SampleDepth::U16);
         assert_eq!(source.interpretation.profile, ColorProfile::Builtin(RgbSpace::Srgb));
         let mut row = vec![0; source.row_bytes()];

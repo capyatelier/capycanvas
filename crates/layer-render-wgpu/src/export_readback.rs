@@ -25,13 +25,21 @@ impl WgpuRasterizer {
             page_coordinates(PixelRect::full(self.document_extent)).enumerate()
         {
             let region = page_rect(coordinate).intersect(PixelRect::full(self.document_extent));
-            let source = capture.region(
-                self,
-                frame.packet(self.document_extent),
-                region,
-                [PAGE_SIZE; 2],
-                encoder,
-            )?;
+            let source = loop {
+                match capture.region(self, frame.packet(self.document_extent), region, [PAGE_SIZE;2], encoder) {
+                    Ok(source) => break source,
+                    Err(GpuRasterError::DeferredObjectWork) => {
+                        #[cfg(target_arch = "wasm32")]
+                        return Err(GpuRasterError::DeferredObjectWork);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            scene::Scene::submit_chunk(self, encoder, "explicit artwork source preparation")?;
+                            std::thread::yield_now();
+                        }
+                    },
+                    Err(error) => return Err(error),
+                }
+            };
             let binding = create_texture_bind_group(
                 &self.device,
                 &self.texture_layout,

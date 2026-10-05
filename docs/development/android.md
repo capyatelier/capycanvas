@@ -311,6 +311,11 @@ manual save checkpoints and undo/redo after an actual process death.
     It checks the edge controls, fills
     two enclosed transparent areas, leaves open and partly enclosed areas
     intact, and verifies cancellation and exact undo/redo.
+  - `#sharedImageObjectsKeepPosePixelsAndIdentityAcrossFilesAndRecovery` takes
+    `-e objectArchive /data/local/tmp/capy-object-ga-functional.capy`, made by
+    `object_fixture` from a small photo. Run with `-e theme light` and `dark`.
+    It verifies shared paint/object image identity, exact affine undo/redo,
+    save/open, private history recovery and pixels after replacing the GPU.
   - `#drawingTabsRestoreMultipleInactiveDrawingsWithoutPrompt` restores order,
     active tab, camera, saved checkpoints and independent undo/redo history.
     `#failedInactiveSessionRetriesWithoutLosingNewDrawing` preserves a failed
@@ -367,7 +372,13 @@ also save images under `Pictures/` through MediaStore.
 
 - Poll with `CanvasHost.awaitMain`, which checks a condition in `runOnMainSync`
   until a timeout, and `CanvasHost.drain`, which waits for native publication.
-  Global idle waits can hang while a gesture is held.
+  Pass the test's Compose rule when it owns the frame clock. Global idle waits
+  can hang while a gesture is held.
+- Drawing checks wait for shared canvas/brush readiness and no
+  `Native.renderingPending` work, including queued surface presentation.
+  `Native.frame` can still request optional shader warmup after the drawing is
+  complete. Keep separate completion checks for asynchronous UI operations,
+  statistics, readbacks, file workers and recovery.
 - Between consecutive popup or held-contact journeys, wait for native window
   focus to settle.
 - Test focus loss with a real window. Send keyboard events through system
@@ -659,6 +670,30 @@ atomically, independently of which preference controls the device enables.
 canvas updates per second, the rate the performance targets use for brushes.
 Run directly, the instrumentation also accepts `-e navigationBetweenStrokes true`
 and `-e navigationSettleMs` to measure the handoff from navigation back to ink.
+The Python runner exposes these as `--navigation-between-strokes` and
+`--navigation-settle-ms`. `--photo` also accepts an authored `.capy` fixture under
+`/data/local/tmp`; supply `--canvas-width` and `--canvas-height` to verify its
+active canvas before collecting input. Its Photo row and paint-layer setup must
+match the requested workload.
+`cargo run --locked --release -p layer-color --example object_fixture -- PHOTO.jpg
+OUTPUT.capy 4 shared` creates a photo with four image objects above it. Use
+`unshared` for separate decoded sources. Run it with `--workload objects
+--photo-layers 2 --image-count 4 --image-sources shared|unshared`; paint index zero
+is above the object layer and index one is below it. `objects-effects` attaches
+Gaussian Blur to the object layer. `--mode object-affine` applies committed
+shared affine edits on the render owner and records call times separately from
+pen input. The completion observer records the document revision actually
+composed for each object frame. The report counts each new pose once, only when
+its GPU completion falls inside the motion interval, and records edit-to-GPU
+completion separately from JNI adoption. These observations do not establish
+scanout or physical input-to-present latency. This measures atomic-edit cost;
+it does not qualify a host transform
+gesture or physical input latency. The moving-layer boundary uses the renderer's
+ordinary interactive sampling and resumes exact refinement on release. Memory
+diagnostics retain process PSS alongside GPU allocation and system memory fields.
+Object runs also retain `-cold-setup.json` and `-prime.json`: package adoption,
+pending composition at the first stroke, and the priming motion before exact
+settling. These startup diagnostics remain separate from the warmed rate runs.
 `-e colorBeforeStrokes true` changes the quick paint color before each stroke
 and checks that the prepared brush remains ready.
 [Measuring performance](../performance/measuring.md) has the tier rules.

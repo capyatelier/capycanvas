@@ -13,6 +13,11 @@ impl AttachedRenderer {
     }
 }
 impl CanvasRenderer for AttachedRenderer {
+    fn preflight_image_object_affine(&self, scene: layer_core::SceneView<'_>, object: layer_core::authored::ImageObjectHandle,
+        affine: layer_core::authored::Affine64, view: layer_render::ViewState,
+    ) -> Result<(), Self::Error> {
+        self.0.as_deref().ok_or(GpuRasterError::AdapterUnavailable)?.preflight_image_object_affine(scene, object, affine, view)
+    }
     fn shader_input(&mut self) { if let Some(gpu) = &self.0 { gpu.shader_input(); } }
     fn shader_idle(&mut self, idle: bool) { if let Some(gpu) = &self.0 { gpu.shader_idle(idle); } }
     fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {

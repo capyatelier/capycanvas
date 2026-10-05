@@ -132,18 +132,18 @@ fn smaller_transparent_imports_keep_original_photo_frames_and_original_size_hand
         assert!(s.engine.backend().bounds_requests.is_empty());
         assert_eq!(s.engine.document().target_extent(s.engine.document().working.target.unwrap()), [200, 150],
             "the editable extent is larger than the original photo frame");
-        let original_sources: Vec<_> = s.engine.document().artwork.paint.iter().filter_map(|(_, _, p)| p.original.clone()).collect();
+        let original_sources: Vec<_> = s.engine.document().artwork.paint.iter().filter_map(|(_, _, p)| p.base.clone()).collect();
         s.set_transform_control("transform_width", 2.).unwrap();
         assert_ne!(s.transform_document_bounds(), Some(expected));
         assert!(s.command(CommandId::PlacementOriginalSize).enabled);
         invoke(&mut s, CommandId::PlacementOriginalSize);
         assert_eq!(s.transform_document_bounds(), Some(expected), "Original Size restores the photo or batch handle frame");
         for &handle in s.engine.document().scene().order() {
-            let Some(source) = s.engine.document().scene().paint_source(handle).filter(|p| p.original.is_some()) else { continue; };
+            let Some(source) = s.engine.document().scene().paint_source(handle).filter(|p| p.base.is_some()) else { continue; };
             assert_eq!(s.engine.document().scene().occurrence(handle).unwrap().placement.as_affine().unwrap().0[..4], [1., 0., 0., 1.]);
             assert!(source.raster.is_empty());
         }
-        assert_eq!(s.engine.document().artwork.paint.iter().filter_map(|(_, _, p)| p.original.clone()).collect::<Vec<_>>(), original_sources);
+        assert_eq!(s.engine.document().artwork.paint.iter().filter_map(|(_, _, p)| p.base.clone()).collect::<Vec<_>>(), original_sources);
         assert!(!s.engine.can_undo(), "provisional placement publishes no history");
         assert_eq!(s.engine.document().composition().size, [200, 150]);
     }
@@ -261,7 +261,7 @@ fn retained_whole_photo_bounds_do_not_query_a_linked_destructive_companion() {
     document.artwork.occurrences.get_mut(owner).unwrap().mask = Some(MaskUse { source: mask, enabled: true, linked: true,
         inverted: false, translation: Point::default(), placement: layer_core::Projective::IDENTITY });
     let SourceTarget::Paint(paint) = photo else { panic!("paint") };
-    document.artwork.paint.get_mut(paint).unwrap().original = Some(layer_core::color::source::rgba8_source([20, 10], |_, _| [0; 4]));
+    document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::PaintBase::new(layer_core::Image::new(layer_core::color::source::rgba8_source([20, 10], |_, _| [0; 4]))));
     let working = document.working.clone();
     let mut document = Document::from_artwork(document.artwork).unwrap();
     document.working = working;

@@ -305,7 +305,7 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
     assert_eq!(w.documents.len(), 2);
     assert_ne!(w.documents.selected(), incumbent);
     assert!(state(&w).document_file.location.is_none());
-    assert_source_samples(paint_at(ui_session(&w).engine().document(), 0).original.as_deref().unwrap(), &super::place_source::source());
+    assert_source_samples(paint_at(ui_session(&w).engine().document(), 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &super::place_source::source());
     glib::MainContext::default().block_on(w.documents.activate(&w, incumbent)).unwrap();
     ready(&w);
     assert_eq!(super::place_source::snapshot(&w), original);
@@ -492,7 +492,7 @@ fn native_new_presets_and_profiled_photo_master() {
             depth: SampleDepth::U16
         }
     );
-    assert_source_samples(paint_at(&project, 0).original.as_deref().unwrap(), &source);
+    assert_source_samples(paint_at(&project, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
     assert_eq!(project.composition().resolution, source.resolution);
     glib::MainContext::default().block_on(w.documents.activate(&w, incumbent)).unwrap();
     ready(&w);
@@ -527,7 +527,7 @@ fn native_new_presets_and_profiled_photo_master() {
             .tiles
             .is_empty()
     );
-    assert_source_samples(paint_at(&edited, 0).original.as_deref().unwrap(), &source);
+    assert_source_samples(paint_at(&edited, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
     assert_eq!(edited.composition().resolution, source.resolution);
     let master_path = output.join(format!("Photo master-{}.capy", std::process::id()));
     invoke(&photo, CommandId::SaveDocument);

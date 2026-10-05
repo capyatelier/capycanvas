@@ -47,7 +47,7 @@ pub fn insert_paint(doc: &mut Document, name: impl Into<Arc<str>>, index: usize,
         .paint
         .insert(
             PortableId::random(),
-            PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), original: None, operations: Arc::default() },
+            PaintSource { color_mode:Default::default(), domain: doc.composition().size, raster: Default::default(), base: None, operations: Arc::default() },
         )
         .unwrap();
     let o = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(p), name)).unwrap();
@@ -86,11 +86,11 @@ pub fn effect(doc: &mut Document, name: &str, program: &str) {
     let h = id(doc, name);
     let program = bundled_effect_catalog().get(program).unwrap().program();
     let draft = EffectInstance::new(program.clone());
-    let d = doc.artwork.definitions.insert(PortableId::random(), Definition { program }).unwrap();
+
     let e = doc
         .artwork
         .effects
-        .insert(PortableId::random(), EffectApplication { definition: d, values: draft.values})
+        .insert(PortableId::random(), EffectApplication::new(program, draft.values, doc.composition().size))
         .unwrap();
     doc.artwork.occurrences.get_mut(h).unwrap().content = OccurrenceContent::Effect(e);
     refresh(doc);

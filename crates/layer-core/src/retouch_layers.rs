@@ -74,7 +74,7 @@ impl Document {
         let canvas = self.composition().size;
         let paint = RecordChange::insert(
             &self.artwork.paint,
-            PaintSource { color_mode: Default::default(), domain: canvas, raster: Default::default(), original: None, operations: Arc::default() },
+            PaintSource { color_mode:Default::default(), domain: canvas, raster: Default::default(), base: None, operations: Arc::default() },
         );
         let target = SourceTarget::Paint(paint.handle);
         let mut o = Occurrence::new(OccurrenceContent::Paint(paint.handle), name);
@@ -150,13 +150,9 @@ impl Document {
         source.attachment = crate::Attachment::None;
         let high_scope = SceneScope::Members(vec![target].into());
         let mut low_artwork = high_scene.artwork.clone();
-        let definition = low_artwork
-            .definitions
-            .insert(PortableId::random(), Definition { program: filters.blur.program.clone() })
-            .map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let effect = low_artwork
             .effects
-            .insert(PortableId::random(), EffectApplication { definition, values: filters.blur.values.clone()})
+            .insert(PortableId::random(), EffectApplication::new(filters.blur.program.clone(), filters.blur.values.clone(), canvas))
             .map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let mut blur = Occurrence::new(OccurrenceContent::Effect(effect), filters.blur.program.id.clone());
         blur.attachment = crate::Attachment::Effect;
@@ -169,7 +165,7 @@ impl Document {
         let low_scene = low_doc.snapshot();
         let low_scope = SceneScope::Members(vec![blur, target].into());
         let mut allocator = self.artwork.clone();
-        let source = |domain| PaintSource { color_mode: Default::default(), domain, raster: Default::default(), original: None, operations: Arc::default() };
+        let source = |domain| PaintSource { color_mode:Default::default(), domain, raster: Default::default(), base: None, operations: Arc::default() };
         let low = RecordChange::insert(&allocator.paint, source(canvas));
         allocator.paint.change(low.handle, low.id, low.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let high = RecordChange::insert(&allocator.paint, source(canvas));

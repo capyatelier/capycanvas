@@ -590,7 +590,7 @@ impl ExportForm {
         let scene = document.scene();
         for &handle in scene.order() {
             let occurrence = scene.occurrence(handle).expect("admitted occurrence");
-            if let Some(source) = scene.paint_source(handle).and_then(|paint| paint.original.as_ref()) {
+            if let Some(source) = scene.paint_source(handle).and_then(|paint| paint.base.as_ref().map(|base| base.image.storage())) {
                 let profile = &source.interpretation.profile;
                 if profiles.iter().any(|p| p.profile == *profile) {
                     continue;
@@ -661,10 +661,10 @@ mod tests {
         let owner = document.working.occurrence.unwrap();
         let layer_core::SourceTarget::Paint(paint) = document.scene().source_target(owner).unwrap() else { unreachable!() };
         document.artwork.occurrences.get_mut(owner).unwrap().name = literal.into();
-        document.artwork.paint.get_mut(paint).unwrap().original = Some(std::sync::Arc::new(layer_core::color::source::SourceImage {
-            kind:layer_core::color::source::SourceKind::Original, extent:[1,1], resolution:None, tiles:Default::default(),
+        document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new(std::sync::Arc::new(layer_core::color::source::SourceImage {
+            extent:[1,1], resolution:None, tiles:Default::default(),
             interpretation:layer_core::color::source::SourceInterpretation { channels:SourceChannels::Rgba, depth:SampleDepth::U8, profile:ColorProfile::Icc(bytes.clone().into()), profile_assumed:false },
-        }));
+        }).into()));
         for language in crate::UiLanguage::ALL {
             let localization = crate::Localizer::shared(language); let form = ExportForm::new_localized(&document, &localization);
             assert_eq!(form.profiles.len(), form.profile_captions.len()); assert_eq!(form.profiles.len(), form.profile_names.len());

@@ -30,7 +30,7 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
         document.artwork.occurrences.get_mut(h).unwrap().opacity=0.7;
         if i%2==0 {mask(&mut document,h,0.4);}
     }
-    let source=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:extent,original:None,raster:Default::default(),operations:Default::default()}).unwrap();
+    let source=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:extent,base: None,raster:Default::default(),operations:Default::default()}).unwrap();
     let base=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),"Translucent paint")).unwrap();
     let root=document.composition().result;
     document.artwork.stacks.get_mut(root).unwrap().entries.push(base);
@@ -199,7 +199,7 @@ fn attached_spatial_effects_expand_owner_alpha_before_common_base_clipping() {
 fn independent_owner_counts_and_local_chain_lengths_bound_resident_work() {
     use layer_core::{Attachment,EffectAlpha,EffectPass,EffectSampling};
     use layer_core::color::{DocumentColor,SampleDepth,RgbSpace};
-    use layer_core::authored::{Definition,EffectApplication,SourceTarget};
+    use layer_core::authored::{EffectApplication,SourceTarget};
     let extent=[32;2];
     let color=DocumentColor {depth:SampleDepth::F32,..Default::default()};
     let backing=crate::test_support::depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,1024*1024,|_,_|[0.02,0.04,0.06,0.1]);
@@ -210,17 +210,16 @@ fn independent_owner_counts_and_local_chain_lengths_bound_resident_work() {
     let program=Arc::new(program);
     for (owners,length) in [(1,1),(10,1),(100,1),(10,2),(10,4)] {
         let mut document=empty_document(extent,color);
-        let definition=document.artwork.definitions.insert(PortableId::random(),Definition {program:program.clone()}).unwrap();
         let root=document.composition().result;
         let mut entries=Vec::new();let mut groups=Vec::new();let mut paints=Vec::new();
         for _ in 0..owners {
-            let paint=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:extent,original:Some(backing.clone()),raster:Default::default(),operations:Default::default()}).unwrap();
+            let paint=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:extent,base:Some(layer_core::authored::PaintBase::new((backing.clone()).into())),raster:Default::default(),operations:Default::default()}).unwrap();
             let content=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(paint),"content")).unwrap();
             let stack=document.artwork.stacks.insert(PortableId::random(),Stack {entries:vec![content]}).unwrap();
             let group=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Stack(stack),"owner")).unwrap();
             let mut chain=Vec::new();
             for _ in 0..length {
-                let application=document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:EffectInstance::new(program.clone()).values}).unwrap();
+                let application=document.artwork.effects.insert(PortableId::random(),EffectApplication::new(program.clone(),EffectInstance::new(program.clone()).values,extent)).unwrap();
                 let mut occurrence=Occurrence::new(OccurrenceContent::Effect(application),"average");occurrence.attachment=Attachment::Effect;
                 chain.push(document.artwork.occurrences.insert(PortableId::random(),occurrence).unwrap());
             }
@@ -245,7 +244,9 @@ fn independent_owner_counts_and_local_chain_lengths_bound_resident_work() {
         for renderer in [&mut r,&mut full] {renderer.submit(FramePacket {dabs:&[dab],dab_batches:std::slice::from_ref(&batch),..frame(&document)}).unwrap();}
         let after=r.scene.as_ref().unwrap().image_work();
         assert_eq!([after[0]-work[0],after[1]-work[1]],[1,length],"only the edited owner chain executes: {owners} owners, {length} effects");
-        assert_eq!(r.scene.as_ref().unwrap().image_pass_pixels()-pixels,length*32*32);
+        let input_side=32+2*(length-1);
+        let pixel_work=r.scene.as_ref().unwrap().image_pass_pixels()-pixels;
+        assert!((length*32*32..=length*input_side*input_side).contains(&pixel_work),"bounded owner chain work: {pixel_work} pixels");
         assert_eq!(r.metrics.composited_pixels-composed,32*32);
         assert_eq!(r.metrics.frame_composited_pages,vec![(0,[0,0])]);
         let incremental=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));

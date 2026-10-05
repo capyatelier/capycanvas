@@ -26,7 +26,7 @@ fn native(color: DocumentColor) -> Artwork {
             identity(10),
             PaintSource { color_mode: Default::default(),
                 domain: [512, 256],
-                original: None,
+                base: None,
                 operations: Arc::default(),
                 raster: RasterRevision::backed(RasterData {
                     tiles: [
@@ -99,8 +99,7 @@ fn exact_tiles(expected: &RasterRevision, actual: &RasterRevision) {
 fn layer_names_choices_and_pixels_resave_unchanged() {
     let mut artwork=fixture(SampleDepth::U16);
     let mut effect=EffectInstance::new(crate::bundled_effect_catalog().get("curves").unwrap().program());effect.set("domain",EffectValue::Choice(1)).unwrap();
-    let definition=artwork.definitions.insert(identity(90),Definition{program:effect.program}).unwrap();
-    let application=artwork.effects.insert(identity(91),EffectApplication{definition,values:effect.values.clone()}).unwrap();
+    let application=artwork.effects.insert(identity(91),EffectApplication::new(effect.program.clone(),effect.values.clone(),[256;2])).unwrap();
     let occurrence=artwork.occurrences.insert(identity(92),Occurrence::new(OccurrenceContent::Effect(application),"  My curves { $name } 한글 🎨  ")).unwrap();
     let root=artwork.compositions.get(artwork.root).unwrap().result;artwork.stacks.get_mut(root).unwrap().entries.insert(0,occurrence);
     let bytes=serialize(&prepare(&artwork,false));let reopened=editable(bytes.clone());
@@ -177,7 +176,7 @@ fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() 
         )
         .unwrap();
         builder.push_row(&vec![127; 4 * depth.bytes()]).unwrap();
-        artwork.paint.get_mut(paint).unwrap().original = Some(Arc::new(builder.finish().unwrap()));
+        artwork.paint.get_mut(paint).unwrap().base = Some(PaintBase::new(Image::new(Arc::new(builder.finish().unwrap()))));
         let prepared = prepare(&artwork, false);
         assert_eq!(prepared.resources().entries.iter().filter(|e| e.record["type"] == "capy.icc/1").count(), 1);
         let bytes = serialize(&prepared);
@@ -187,7 +186,7 @@ fn proof_metadata_roundtrips_deduplicates_profile_and_undo_keeps_raster_exact() 
             panic!()
         };
         let ColorProfile::Icc(source) =
-            &reopened.paint.get(reopened.paint.resolve(identity(10)).unwrap()).unwrap().original.as_ref().unwrap().interpretation.profile
+            &reopened.paint.get(reopened.paint.resolve(identity(10)).unwrap()).unwrap().base.as_ref().unwrap().image.interpretation.profile
         else {
             panic!()
         };
@@ -206,7 +205,7 @@ fn float_artwork(depth: SampleDepth, samples: &[u8]) -> Artwork {
             identity(10),
             PaintSource { color_mode: Default::default(),
                 domain: [256; 2],
-                original: None,
+                base: None,
                 operations: Arc::default(),
                 raster: RasterRevision::backed(RasterData {
                     tiles: [(
@@ -305,7 +304,7 @@ fn source_fixture() -> Artwork {
             .collect::<Vec<_>>();
         builder.push_row(&row).unwrap();
     }
-    let original = Arc::new(builder.finish().unwrap());
+    let original = Image::new(Arc::new(builder.finish().unwrap()));
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     for n in 0..2 {
         let source = artwork
@@ -314,7 +313,7 @@ fn source_fixture() -> Artwork {
                 identity(10 + n),
                 PaintSource { color_mode: Default::default(),
                     domain: [512, 259],
-                    original: Some(original.clone()),
+                    base: Some(PaintBase::new(original.clone())),
                     raster: Default::default(),
                     operations: Arc::default(),
                 },
@@ -337,7 +336,7 @@ fn persistent_placement_preserves_sources_overrides_and_independent_history() {
     let document = Document::from_artwork(artwork).unwrap();
     let paint = document.artwork.paint.resolve(identity(10)).unwrap();
     let occurrence = document.artwork.occurrences.resolve(identity(20)).unwrap();
-    let original = document.artwork.paint.get(paint).unwrap().original.clone().unwrap();
+    let original = document.artwork.paint.get(paint).unwrap().base.clone().unwrap().image;
     let placement = LayerPlacement::from_affine(Affine::around(Point::default(), [1. / 3.; 2], 0.3, Point { x: -45., y: 8. }));
     let mut value = document.artwork.occurrences.get(occurrence).unwrap().clone();
     value.placement = placement.clone();
@@ -345,7 +344,7 @@ fn persistent_placement_preserves_sources_overrides_and_independent_history() {
     let mut editor = Editor::new(document);
     editor.perform(edit).unwrap();
     assert!(editor.document().artwork.paint.get(paint).unwrap().raster.is_empty());
-    assert!(Arc::ptr_eq(editor.document().artwork.paint.get(paint).unwrap().original.as_ref().unwrap(), &original));
+    assert!(editor.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.same_owner(&original));
     editor.undo().unwrap();
     assert_eq!(editor.document().artwork.occurrences.get(occurrence).unwrap().placement, LayerPlacement::IDENTITY);
     editor.redo().unwrap();
@@ -354,9 +353,9 @@ fn persistent_placement_preserves_sources_overrides_and_independent_history() {
     assert_eq!(loaded.occurrences.get(occurrence).unwrap().placement, placement);
     assert_eq!(loaded.occurrences.get(loaded.occurrences.resolve(identity(21)).unwrap()).unwrap().placement, LayerPlacement::IDENTITY);
     let paint = loaded.paint.resolve(identity(10)).unwrap();
-    assert_eq!(loaded.paint.get(paint).unwrap().original.as_ref().unwrap(), &original);
+    assert_eq!(&loaded.paint.get(paint).unwrap().base.as_ref().unwrap().image, &original);
     loaded.occurrences.get_mut(occurrence).unwrap().placement = LayerPlacement::IDENTITY;
-    assert_eq!(loaded.paint.get(paint).unwrap().original.as_ref().unwrap(), &original);
+    assert_eq!(&loaded.paint.get(paint).unwrap().base.as_ref().unwrap().image, &original);
     let key = TileKey { plane: RasterPlane::Color, coordinate: [1, 0] };
     let descriptor = loaded.compositions.get(loaded.root).unwrap().color.paint_descriptor();
     let blob = TileBlob::encode(descriptor, &vec![0; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap();
@@ -379,33 +378,30 @@ fn persistent_placement_preserves_sources_overrides_and_independent_history() {
 fn native_sources_preserve_u16_profiles_hidden_rgb_and_shared_ownership() {
     let artwork = source_fixture();
     let document = Document::from_artwork(artwork.clone()).unwrap();
-    let original = artwork.paint.get(artwork.paint.resolve(identity(10)).unwrap()).unwrap().original.as_ref().unwrap();
-    assert!(Arc::ptr_eq(
-        document.snapshot().artwork.paint.get(artwork.paint.resolve(identity(10)).unwrap()).unwrap().original.as_ref().unwrap(),
-        original
-    ));
+    let original = &artwork.paint.get(artwork.paint.resolve(identity(10)).unwrap()).unwrap().base.as_ref().unwrap().image;
+    assert!(document.snapshot().artwork.paint.get(artwork.paint.resolve(identity(10)).unwrap()).unwrap().base.as_ref().unwrap().image.same_owner(&original));
     let bytes = serialize(&prepare(&artwork, false));
     let loaded = editable(bytes.clone());
-    let a = loaded.paint.get(loaded.paint.resolve(identity(10)).unwrap()).unwrap().original.as_ref().unwrap();
-    let b = loaded.paint.get(loaded.paint.resolve(identity(11)).unwrap()).unwrap().original.as_ref().unwrap();
-    assert!(Arc::ptr_eq(a, b));
+    let a = &loaded.paint.get(loaded.paint.resolve(identity(10)).unwrap()).unwrap().base.as_ref().unwrap().image;
+    let b = &loaded.paint.get(loaded.paint.resolve(identity(11)).unwrap()).unwrap().base.as_ref().unwrap().image;
+    assert!(a.same_owner(b));
     assert_eq!(a, original);
     for (key, tile) in &a.tiles {
         assert_eq!(tile.decode().unwrap(), original.tiles[key].decode().unwrap());
     }
     assert_eq!(serialize(&prepare(&loaded, false)), bytes);
-    let weak = Arc::downgrade(a);
+    let weak = Arc::downgrade(a.storage());
     let mut editor = Editor::new(Document::from_artwork(loaded).unwrap());
     for id in [identity(10), identity(11)] {
         let handle = editor.document().artwork.paint.resolve(id).unwrap();
         let mut value = editor.document().artwork.paint.get(handle).unwrap().clone();
-        value.original = None;
+        value.base = None;
         let edit = Edit::Paint(RecordChange::replace(&editor.document().artwork.paint, handle, Some(value)).unwrap());
         editor.perform(edit).unwrap();
     }
     editor.undo().unwrap();
     let paint = editor.document().artwork.paint.resolve(identity(11)).unwrap();
-    assert!(Arc::ptr_eq(editor.document().artwork.paint.get(paint).unwrap().original.as_ref().unwrap(), &weak.upgrade().unwrap()));
+    assert!(Arc::ptr_eq(editor.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage(), &weak.upgrade().unwrap()));
     editor.redo().unwrap();
     assert!(weak.upgrade().is_some());
     drop(editor);
@@ -448,7 +444,7 @@ fn photo_selection_roundtrips_shared_binary_coverage() {
     assert_eq!(saved, &selection);
     assert_eq!(mask, &selection);
     let (SelectionShape::Pixels(a), SelectionShape::Pixels(b)) = (&saved.shape, &mask.shape) else { panic!() };
-    assert!(Arc::ptr_eq(a, b));
+    assert!(Arc::ptr_eq(a,b));
     let limit = a.words().len() as u64 * 4;
     Document::from_artwork(restored).unwrap().validate(ProjectLimits { raster_bytes: limit, ..Default::default() }).unwrap();
     assert!(!matches!(
@@ -487,26 +483,27 @@ fn blend_space_round_trips_and_float_perceptual_is_rejected() {
 fn rasterized_image_role_roundtrips_and_rejects_wrong_document_interpretation() {
     let mut artwork = source_fixture();
     let paint = artwork.paint.resolve(identity(10)).unwrap();
-    let mut image = (**artwork.paint.get(paint).unwrap().original.as_ref().unwrap()).clone();
-    image.kind = SourceKind::Rasterized;
+    let mut image = (*artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image).clone();
     image.interpretation.profile = ColorProfile::Builtin(RgbSpace::Srgb);
     image.interpretation.profile_assumed = false;
     artwork.compositions.get_mut(artwork.root).unwrap().color.depth = image.interpretation.depth;
-    artwork.paint.get_mut(paint).unwrap().original = Some(Arc::new(image.clone()));
+    artwork.paint.get_mut(paint).unwrap().base = Some(PaintBase {image:Image::new(Arc::new(image.clone())),offset:[0;2],policy:PaintBasePolicy::WorkingPixels});
     let bytes = serialize(&prepare(&artwork, false));
     let restored = editable(bytes.clone());
-    assert_eq!(restored.paint.get(restored.paint.resolve(identity(10)).unwrap()).unwrap().original.as_deref(), Some(&image));
-    assert!(restored.paint.get(restored.paint.resolve(identity(11)).unwrap()).unwrap().original.as_ref().unwrap().is_original());
+    assert_eq!(restored.paint.get(restored.paint.resolve(identity(10)).unwrap()).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(&image));
+    assert!(restored.paint.get(restored.paint.resolve(identity(11)).unwrap()).unwrap().base.as_ref().unwrap().is_original());
     assert_eq!(serialize(&prepare(&restored, false)), bytes);
     for invalid in [0, 1] {
         let mut changed = artwork.clone();
-        let source = changed.paint.get_mut(paint).unwrap().original.as_mut().unwrap();
-        let source = Arc::make_mut(source);
+        let source = changed.paint.get_mut(paint).unwrap().base.as_mut().unwrap();
+        let source = &mut source.image;
+        let mut samples = (**source).clone();
         if invalid == 0 {
-            source.interpretation.profile_assumed = true;
+            samples.interpretation.profile_assumed = true;
         } else {
-            source.interpretation.depth = SampleDepth::U8;
+            samples.interpretation.depth = SampleDepth::U8;
         }
+        *source = Image::new(Arc::new(samples));
         assert!(PreparedPackage::prepare(&capture(&changed), None, &AtomicBool::new(false)).is_err());
     }
 }
@@ -525,15 +522,13 @@ fn retained_originals_cannot_bypass_asset_tile_or_dimension_limits() {
 fn filter_blending_space_round_trips() {
     let mut artwork = Artwork::new([256; 2]).unwrap();
     let instance = EffectInstance::new(crate::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
-    let definition =
-        artwork.definitions.insert(identity(30), Definition { program: instance.program }).unwrap();
-    let effect = artwork.effects.insert(identity(40), EffectApplication { definition, values: instance.values}).unwrap();
+    let effect = artwork.effects.insert(identity(40), EffectApplication::new(instance.program,instance.values,[256;2])).unwrap();
     let occurrence = artwork.occurrences.insert(identity(50), Occurrence::new(OccurrenceContent::Effect(effect), "Blur")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
     let restored = editable(serialize(&prepare(&artwork, false)));
     assert_eq!(
-        restored.definitions.get(restored.definitions.resolve(identity(30)).unwrap()).unwrap().program.space,
+        restored.effects.get(restored.effects.resolve(identity(40)).unwrap()).unwrap().program.space,
         crate::EffectSpace::Blending
     );
 }

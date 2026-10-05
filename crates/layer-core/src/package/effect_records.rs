@@ -1,5 +1,5 @@
 use crate::GradientStop;
-use crate::{authored::{Definition, Dimension, Resource}, effect_catalog::ResourceLabel, effects::*, Lut3d};
+use crate::{authored::{Dimension, Resource}, effect_catalog::ResourceLabel, effects::*, Lut3d};
 use super::values::{self, DecodeError, DecodeResult, object, required, string, boolean, array, finite_f32, u32_value};
 use serde_json::{json, Map, Value};
 use std::{collections::BTreeSet, sync::Arc};
@@ -170,8 +170,7 @@ fn decode_dimension(fields: &Map<String,Value>) -> DecodeResult<Dimension> {
         _=>return Err(unsupported("dimension"))})
 }
 
-pub fn encode_definition(definition: &Definition, writer: &mut impl ResourceWriter) -> Result<Value,String> {
-    let Definition {program}=definition;
+pub fn encode_program(program: &Arc<EffectProgram>, writer: &mut impl ResourceWriter) -> Result<Value,String> {
     if let Some(builtin)=crate::bundled_effect_catalog().get(&program.id) {
         if program != &builtin.program() { return Err("Reserved built-in filter ID".into()); }
         return Ok(json!({"builtin":program.id,"version":builtin_version(&program.id)}));
@@ -238,13 +237,13 @@ fn decode_auxiliary(value: &Value) -> DecodeResult<EffectAuxiliary> {
     })
 }
 
-pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> DecodeResult<Definition> {
+pub fn decode_program(value: &Value, reader: &mut impl ResourceReader) -> DecodeResult<Arc<EffectProgram>> {
     if value.get("builtin").is_some() {
         let fields=object(value,&["builtin","version"])?;
         let id=string(required(fields,"builtin")?)?;
         if u32_value(required(fields,"version")?)?!=builtin_version(id) {return Err(unsupported("built-in parameter version"));}
         let builtin=crate::bundled_effect_catalog().get(id).ok_or_else(||unsupported("built-in ID"))?;
-        return Ok(Definition {program:builtin.program()});
+        return Ok(builtin.program());
     }
     let fields=object(value,&["key","contract","label","kind","code","entry","parameters","slots","alpha","space",
         "time","passes","lookups","auxiliary","constraints"])?;
@@ -289,7 +288,7 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
         constant_color:None,
         auxiliary:fields.get("auxiliary").map(decode_auxiliary).transpose()?,pages:Arc::default(),parameters:parameters.into(),constraints:constraints.into()});
     EffectInstance::new(program.clone()).validate()?;
-    Ok(Definition {program})
+    Ok(program)
 }
 
 pub fn encode_values(program: &Arc<EffectProgram>, values: &[EffectValue], writer: &mut impl ResourceWriter) -> Result<Value,String> {
@@ -343,8 +342,8 @@ mod tests {
             self.luts.get(id).cloned().ok_or_else(||"Missing LUT resource".into())
         }
     }
-    fn fixture() -> Definition {
-        Definition {program:crate::effect_catalog::custom_program("exposure")}
+    fn fixture() -> Arc<EffectProgram> {
+        crate::effect_catalog::custom_program("exposure")
     }
     #[test]
     fn builtin_data_contracts_are_keyed_and_independent_of_shader_layout() {
@@ -418,20 +417,20 @@ mod tests {
     #[test]
     fn builtins_save_only_identity_and_all_authored_values() {
         for filter in crate::bundled_effect_catalog().filters() {
-            let definition=Definition {program:filter.program()};
+            let definition=filter.program();
             let mut resources=Resources::default();
-            let encoded=encode_definition(&definition,&mut resources).unwrap();
+            let encoded=encode_program(&definition,&mut resources).unwrap();
             assert_eq!(encoded,json!({"builtin":filter.id(),"version":builtin_version(filter.id())}));
-            let decoded=decode_definition(&encoded,&mut resources).unwrap();
-            assert!(Arc::ptr_eq(&decoded.program,&definition.program));
+            let decoded=decode_program(&encoded,&mut resources).unwrap();
+            assert!(Arc::ptr_eq(&decoded,&definition));
             assert!(resources.code.is_empty());
             for instance in [EffectInstance::new(filter.program()),filter.preview().unwrap()] {
-                let values=encode_values(&definition.program,&instance.values,&mut resources).unwrap();
-                assert_eq!(values.as_object().unwrap().len(),definition.program.parameters.len());
-                assert_eq!(decode_values(&decoded.program,&values,&mut resources).unwrap(),instance.values);
-                if let Some(parameter)=definition.program.parameters.first() {
+                let values=encode_values(&definition,&instance.values,&mut resources).unwrap();
+                assert_eq!(values.as_object().unwrap().len(),definition.parameters.len());
+                assert_eq!(decode_values(&decoded,&values,&mut resources).unwrap(),instance.values);
+                if let Some(parameter)=definition.parameters.first() {
                     let mut incomplete=values;incomplete.as_object_mut().unwrap().remove(parameter.key.as_ref());
-                    assert!(decode_values(&decoded.program,&incomplete,&mut resources).is_err());
+                    assert!(decode_values(&decoded,&incomplete,&mut resources).is_err());
                 }
             }
         }
@@ -440,33 +439,33 @@ mod tests {
     fn builtin_versions_ids_and_embedded_overrides_are_explicit() {
         let mut resources=Resources::default();
         for value in [json!({"builtin":"exposure","version":2}),json!({"builtin":"gradient_map","version":1}),json!({"builtin":"gradient_fill","version":1}),json!({"builtin":"unknown","version":1})] {
-            assert!(matches!(decode_definition(&value,&mut resources),Err(DecodeError::Unsupported(_))));
+            assert!(matches!(decode_program(&value,&mut resources),Err(DecodeError::Unsupported(_))));
         }
         let mut definition=fixture();
-        Arc::make_mut(&mut definition.program).id="exposure".into();
-        assert!(encode_definition(&definition,&mut resources).is_err());
-        let mut embedded=encode_definition(&fixture(),&mut resources).unwrap();
+        Arc::make_mut(&mut definition).id="exposure".into();
+        assert!(encode_program(&definition,&mut resources).is_err());
+        let mut embedded=encode_program(&fixture(),&mut resources).unwrap();
         embedded["key"]=json!("exposure");
-        assert!(matches!(decode_definition(&embedded,&mut resources),Err(DecodeError::Invalid(_))));
+        assert!(matches!(decode_program(&embedded,&mut resources),Err(DecodeError::Invalid(_))));
     }
     #[test]
     fn custom_definitions_preserve_code_and_literal_metadata() {
         for filter in crate::bundled_effect_catalog().filters() {
-            let definition=Definition {program:crate::effect_catalog::custom_program(filter.id())};
+            let definition=crate::effect_catalog::custom_program(filter.id());
             let mut resources=Resources::default();
-            let encoded=encode_definition(&definition,&mut resources).unwrap();
-            let decoded=decode_definition(&encoded,&mut resources).unwrap();
+            let encoded=encode_program(&definition,&mut resources).unwrap();
+            let decoded=decode_program(&encoded,&mut resources).unwrap();
             for field in ["abi","pages","resolution","constant_color"] {assert!(encoded.get(field).is_none());}
             for parameter in encoded["parameters"].as_object().unwrap().values() {
                 for field in ["section","page","visible_when","soft_bounds","mapping"] {assert!(parameter.get(field).is_none());}
                 for field in ["step","decimals"] {assert!(parameter["kind"].get(field).is_none());}
             }
-            let original=EffectInstance::new(definition.program.clone());
-            let restored=EffectInstance::new(decoded.program.clone());
+            let original=EffectInstance::new(definition.clone());
+            let restored=EffectInstance::new(decoded.clone());
             assert_eq!(restored.values,original.values);
             assert_eq!(restored.gpu_parameters(crate::color::RgbSpace::Srgb).unwrap(),original.gpu_parameters(crate::color::RgbSpace::Srgb).unwrap());
-            assert_eq!(encode_definition(&decoded,&mut resources).unwrap(),encoded);
-            for (source,loaded) in definition.program.wgsl.sources().unwrap().iter().zip(decoded.program.wgsl.sources().unwrap()) {
+            assert_eq!(encode_program(&decoded,&mut resources).unwrap(),encoded);
+            for (source,loaded) in definition.wgsl.sources().unwrap().iter().zip(decoded.wgsl.sources().unwrap()) {
                 assert!(source.same_owner(loaded));
             }
         }
@@ -516,23 +515,23 @@ mod tests {
     #[test]
     fn unknown_semantics_preserve_and_malformed_known_fields_reject() {
         let mut resources=Resources::default();
-        let definition=fixture(); let encoded=encode_definition(&definition,&mut resources).unwrap();
+        let definition=fixture(); let encoded=encode_program(&definition,&mut resources).unwrap();
         for (field,value) in [("abi",json!(EFFECT_ABI+1)),("contract",json!("future.filter/1")),("kind",json!("future")),("space",json!("future"))] {
             let mut future=encoded.clone();future[field]=value;
-            assert!(matches!(decode_definition(&future,&mut resources),Err(DecodeError::Unsupported(_))));
+            assert!(matches!(decode_program(&future,&mut resources),Err(DecodeError::Unsupported(_))));
         }
-        let key=definition.program.parameters.first().unwrap().key.as_ref();
+        let key=definition.parameters.first().unwrap().key.as_ref();
         for (field,value) in [("dimension",json!("future")),("future_field",json!(true)),("mapping",json!({"type":"future"}))] {
             let mut future=encoded.clone();future["parameters"][key][field]=value;
-            assert!(matches!(decode_definition(&future,&mut resources),Err(DecodeError::Unsupported(_))));
+            assert!(matches!(decode_program(&future,&mut resources),Err(DecodeError::Unsupported(_))));
         }
         let mut malformed=encoded.clone();malformed["slots"]=json!([key,key]);
-        assert!(matches!(decode_definition(&malformed,&mut resources),Err(DecodeError::Invalid(_))));
+        assert!(matches!(decode_program(&malformed,&mut resources),Err(DecodeError::Invalid(_))));
         let mut malformed=encoded.clone();malformed["parameters"][key]["dimension"]=json!("length");
-        assert!(matches!(decode_definition(&malformed,&mut resources),Err(DecodeError::Invalid(_))));
+        assert!(matches!(decode_program(&malformed,&mut resources),Err(DecodeError::Invalid(_))));
         let mut malformed=encoded;malformed.as_object_mut().unwrap().remove("entry");
-        assert!(matches!(decode_definition(&malformed,&mut resources),Err(DecodeError::Invalid(_))));
-        assert!(matches!(decode_values(&definition.program,&json!({"future": {"kind":"number","value":1}}),&mut resources),Err(DecodeError::Unsupported(_))));
+        assert!(matches!(decode_program(&malformed,&mut resources),Err(DecodeError::Invalid(_))));
+        assert!(matches!(decode_values(&definition,&json!({"future": {"kind":"number","value":1}}),&mut resources),Err(DecodeError::Unsupported(_))));
         let kind=EffectParameterKind::Choice {options:vec![EffectOption::Literal("known".into())].into()};
         assert!(matches!(decode_value(&json!({"kind":"choice","value":"future"}),&kind,&mut resources),Err(DecodeError::Unsupported(_))));
         assert!(matches!(decode_value(&json!({"kind":"choice","value":0}),&kind,&mut resources),Err(DecodeError::Invalid(_))));
@@ -541,12 +540,12 @@ mod tests {
     fn dimensions_are_semantic_and_parameter_map_order_does_not_change_abi() {
         let mut definition=fixture(); let mut resources=Resources::default();
         for dimension in [Dimension::Scalar,Dimension::Angle,Dimension::Time,Dimension::SourcePixels,Dimension::CompositionPixels,Dimension::Normalized] {
-            Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters)[0].dimension=dimension;
-            let encoded=encode_definition(&definition,&mut resources).unwrap();
-            let decoded=decode_definition(&encoded,&mut resources).unwrap();
-            assert_eq!(decoded.program.parameters[0].dimension,dimension);
-            assert_eq!(encode_definition(&decoded,&mut resources).unwrap(),encoded);
-            assert_eq!(decoded.program.parameters.iter().map(|p|&p.key).collect::<Vec<_>>(),definition.program.parameters.iter().map(|p|&p.key).collect::<Vec<_>>());
+            Arc::make_mut(&mut Arc::make_mut(&mut definition).parameters)[0].dimension=dimension;
+            let encoded=encode_program(&definition,&mut resources).unwrap();
+            let decoded=decode_program(&encoded,&mut resources).unwrap();
+            assert_eq!(decoded.parameters[0].dimension,dimension);
+            assert_eq!(encode_program(&decoded,&mut resources).unwrap(),encoded);
+            assert_eq!(decoded.parameters.iter().map(|p|&p.key).collect::<Vec<_>>(),definition.parameters.iter().map(|p|&p.key).collect::<Vec<_>>());
         }
     }
     #[test]

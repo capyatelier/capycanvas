@@ -217,3 +217,86 @@ fn metadata_and_reference_limits_apply_before_graph_adoption() {
         assert!(matches!(outcome,Err(DecodeError::Unsupported(_))|Ok(ManifestRead::Limited {..})|Ok(ManifestRead::Known(Manifest {support:Support::Preserved(_),..}))),"{outcome:?}");
     }
 }
+
+fn objects_fixture() -> Value {
+    let mut value = fixture("empty");
+    value["objects"][1]["data"]["entries"] = json!([reference_value(3)]);
+    push_object(&mut value,json!({"id":id(3),"type":"capy.occurrence/3","data":{"content":{"objects":reference_value(7)},"offset":["-256","128"]}}));
+    push_object(&mut value,json!({"id":id(7),"type":"capy.object-layer/1","data":{"children":[reference_value(8),reference_value(9)]}}));
+    for n in [8,9] { push_object(&mut value,json!({"id":id(n),"type":"capy.image-object/1","data":{"image":reference_value(10)}})); }
+    push_object(&mut value,json!({"id":id(10),"type":"capy.image/1","data":{"extent":[1,1],"interpretation":{"channels":"rgba","depth":"u8","profile":{"builtin":"srgb"}},"tiles":[]}}));
+    value
+}
+
+#[test]
+fn drawable_ownership_is_distinct_from_immutable_image_sharing() {
+    let value = objects_fixture();
+    let manifest = known(&value,&directory(&[]));
+    assert_eq!(manifest.support,Support::Editable);
+    assert_eq!(manifest.objects[&id(8)]["data"]["image"],manifest.objects[&id(9)]["data"]["image"]);
+    let mut duplicated = value.clone();
+    duplicated["objects"][4]["data"]["children"] = json!([reference_value(8),reference_value(8)]);
+    assert!(matches!(parse(&duplicated,&directory(&[])),Err(DecodeError::Invalid(_))));
+    let mut shared_child = value.clone();
+    push_object(&mut shared_child,json!({"id":id(11),"type":"capy.object-layer/1","data":{"children":[reference_value(8)]}}));
+    assert!(matches!(parse(&shared_child,&directory(&[])),Err(DecodeError::Invalid(_))));
+    let mut wrong_type = value.clone();
+    wrong_type["objects"][5]["data"]["image"] = reference_value(7);
+    assert!(matches!(parse(&wrong_type,&directory(&[])),Err(DecodeError::Invalid(_))));
+    let mut future = value;
+    future["objects"][5]["type"] = json!("example.path-object/1");
+    assert!(matches!(known(&future,&directory(&[])).support,Support::Preserved(_)));
+}
+
+#[test]
+fn image_tile_bindings_do_not_consume_evaluation_edges() {
+    let mut value = objects_fixture();
+    let mut tiles = Vec::new();
+    for n in 20..40 {
+        let name = format!("data/{}",id(n));
+        push_resource(&mut value,resource_value(n,"capy.raster-tile/1","capy.lz4-tile/1",json!({}),json!({"member":name}),b""));
+        tiles.push(json!({"coordinate":[n-20,0],"resource":reference_value(n)}));
+    }
+    value["objects"][7]["data"]["tiles"] = tiles.into();
+    value["objects"][7]["data"]["extent"] = json!([5120,1]);
+    let names: Vec<_> = (20..40).map(|n|format!("data/{}",id(n))).collect();
+    let members: Vec<_> = names.iter().map(|name|(name.as_str(),&[][..])).collect();
+    let bytes = serde_json::to_vec(&value).unwrap();
+    for (edges,editable) in [(8,true),(7,false)] {
+        let limits = ManifestLimits {graph:GraphLimits {edges,..Default::default()},..Default::default()};
+        let ManifestRead::Known(manifest) = Manifest::parse(&bytes,&directory(&members),limits).unwrap() else {panic!()};
+        assert_eq!(manifest.support == Support::Editable,editable);
+    }
+}
+
+#[test]
+fn final_offsets_are_canonical_signed_64_strings() {
+    let value = objects_fixture();
+    for component in [json!("-9223372036854775808"),json!("9223372036854775807"),json!("9007199254740993")] {
+        let mut value = value.clone();value["objects"][3]["data"]["offset"] = json!([component,"0"]);
+        assert_eq!(known(&value,&directory(&[])).support,Support::Editable);
+    }
+    for component in [json!(0),json!("-0"),json!("00"),json!("+1"),json!("1.0"),json!("9223372036854775808"),json!("-9223372036854775809")] {
+        let mut value = value.clone();value["objects"][3]["data"]["offset"] = json!([component,"0"]);
+        assert!(matches!(parse(&value,&directory(&[])),Err(DecodeError::Invalid(_))));
+    }
+    assert_eq!(decimal_i64(&json!(i64::MIN.to_string())).unwrap(),i64::MIN);
+}
+
+#[test]
+fn effect_programs_share_context_restrictions_and_removed_types_preserve() {
+    let mut value = fixture("empty");
+    push_object(&mut value,json!({"id":id(7),"type":"capy.effect/2","data":{"program":{},"values":{}}}));
+    assert!(matches!(known(&value,&directory(&[])).support,Support::Preserved(_)));
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let ManifestRead::Known(private) = Manifest::parse_private(&bytes,&directory(&[]),Default::default()).unwrap() else {panic!()};
+    assert_eq!(private.support,Support::Editable);
+    for data in [json!({"builtin":"exposure","version":1,"program":{},"values":{}}),json!({"builtin":"exposure","values":{}}),json!({"program":[],"values":{}}),json!({"program":{},"values":[]})] {
+        value["objects"][3]["data"] = data;
+        assert!(matches!(parse(&value,&directory(&[])),Err(DecodeError::Invalid(_))));
+    }
+    for removed in ["capy.paint-source/1","capy.effect/1","capy.effect-definition/1"] {
+        value["objects"][3] = json!({"id":id(7),"type":removed,"data":{}});
+        assert!(matches!(known(&value,&directory(&[])).support,Support::Preserved(_)));
+    }
+}

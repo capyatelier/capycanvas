@@ -11,6 +11,7 @@ pub(super) struct ColorSampler {
     tx: mpsc::Sender<Result<ColorSample, GpuRasterError>>,
     rx: mpsc::Receiver<Result<ColorSample, GpuRasterError>>,
     pending: bool,
+    waiting: Option<(ColorSampleRequest, Arc<artwork::Frame>)>,
 }
 impl ColorSampler {
     pub(super) fn storage_bytes(&self) -> u64 {
@@ -24,6 +25,7 @@ impl ColorSampler {
             tx,
             rx,
             pending: false,
+            waiting: None,
         }
     }
     pub fn take(&mut self) -> Option<Result<ColorSample, GpuRasterError>> {
@@ -37,19 +39,35 @@ impl ColorSampler {
 }
 impl WgpuRasterizer {
     pub fn color_sample_pending(&self) -> bool {
-        self.color_sampler.pending
+        self.color_sampler.pending || self.color_sampler.waiting.is_some()
     }
 
     pub(super) fn start_color_sample(
         &mut self,
         request: ColorSampleRequest,
     ) -> Result<bool, GpuRasterError> {
-        if self.color_sampler.pending {
+        if self.color_sample_pending() {
             return Ok(false);
         }
+        let frame = (request.source == ColorSampleSource::Composite).then(|| self.artwork_frame.clone())
+            .flatten();
+        self.encode_color_sample(request, frame)
+    }
+
+    pub(super) fn poll_color_sample(&mut self) -> Option<Result<ColorSample, GpuRasterError>> {
+        if let Some((request, frame)) = self.color_sampler.waiting.take()
+            && let Err(error) = self.encode_color_sample(request, Some(frame)) {
+            return Some(Err(error));
+        }
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        self.color_sampler.take()
+    }
+
+    fn encode_color_sample(&mut self, request: ColorSampleRequest, frame: Option<Arc<artwork::Frame>>)
+        -> Result<bool, GpuRasterError> {
         let request_id = request.request_id;
         let [x, y] = request.position;
-        let extent = self.document_extent;
+        let extent = frame.as_ref().map_or(self.document_extent, |frame| frame.scene.view().composition().size);
         let inside = x < extent[0] && y < extent[1];
         if !inside {
             let _ = self.color_sampler.tx.send(Ok(ColorSample {
@@ -98,20 +116,23 @@ impl WgpuRasterizer {
         // contents. Copy each contiguous row segment across page boundaries.
         encoder.clear_buffer(&buffer, 0, None);
         let composite = if request.source == ColorSampleSource::Composite {
-            let frame = self
-                .artwork_frame
-                .clone()
-                .ok_or(GpuRasterError::InvalidExtent)?;
+            let frame = frame.ok_or(GpuRasterError::InvalidExtent)?;
             let mut capture = mem::take(&mut self.color_sampler.capture);
             let region = PixelRect::new(left, top, right, bottom);
             let result = capture.region(
                 self,
-                frame.packet(self.document_extent),
+                frame.packet(extent),
                 region,
                 [width, bottom - top],
                 &mut encoder,
             );
             self.color_sampler.capture = capture;
+            if matches!(result, Err(GpuRasterError::DeferredObjectWork)) {
+                self.uploads.finish(&encoder);
+                encoder.submit(&self.queue);
+                self.color_sampler.waiting = Some((request, frame));
+                return Ok(true);
+            }
             Some(result?.texture)
         } else {
             None

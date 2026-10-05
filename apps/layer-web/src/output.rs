@@ -395,7 +395,7 @@ pub async fn raster_worker_output(
                 let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), source.extent[0], source.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
                 let root=document.artwork.root; document.artwork.compositions.get_mut(root).unwrap().color=metadata.color;
                 let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
-                document.artwork.paint.get_mut(paint).unwrap().original=Some(std::sync::Arc::new(source));
+                document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase {image:std::sync::Arc::new(source).into(),offset:[0;2],policy:layer_core::authored::PaintBasePolicy::WorkingPixels});
                 let stack=document.composition().result; document.artwork.stacks.get_mut(stack).unwrap().entries.truncate(1);
                 artwork_transfer::pack(document.artwork).await?
             }
@@ -557,7 +557,7 @@ pub async fn raster_worker_output(
     };
     let clipped = if let Some(original) = metadata.original {
         let project = artwork_transfer::unpack(&original, buffers).await?;
-        let source = project.paint.iter().find_map(|(_,_,paint)| paint.original.as_ref())
+        let source = project.paint.iter().find_map(|(_,_,paint)| paint.base.as_ref().map(|base| base.image.storage()))
             .ok_or_else(|| js("Missing original source"))?;
         if source.extent != extent
             || source.interpretation.channels != target.channels

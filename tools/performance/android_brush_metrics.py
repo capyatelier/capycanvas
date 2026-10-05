@@ -13,7 +13,7 @@ def input_completions(report):
     last_raster = int(next(row["value"] for row in report["renderer_before"]["rows"] if row["label"] == "Frames"))
     completed = [[] for _ in intervals]
     for row in report["completions"]:
-        _, queued, done, raster, consumed = row
+        _, queued, done, raster, consumed = row[:5]
         if raster <= last_raster:
             continue
         last_raster = raster
@@ -45,6 +45,24 @@ def contact_latencies(report):
     return contacts
 
 
+def object_completions(report):
+    begin, end = report["motion"]["begin_ns"], report["motion"]["end_ns"]
+    edits = {edit[2]: edit for edit in report["motion"].get("object_edits", [])}
+    last_pose = -1
+    rows = []
+    for row in report["completions"]:
+        if len(row) < 6:
+            continue
+        revision = row[5]
+        edit = edits.get(revision)
+        if edit is None or revision <= last_pose:
+            continue
+        last_pose = revision
+        if begin <= edit[0] <= row[1] < row[2] < end:
+            rows.append((row, edit))
+    return rows
+
+
 def validate_setup(info, requested):
     state = info["state"]
     camera = state["camera"]
@@ -59,15 +77,29 @@ def validate_setup(info, requested):
         expected["color_mode"] = requested["color_mode"]
         actual["color_mode"] = info.get("color_mode", "full_color")
         expected["layer_color_mode"] = {"full_color": "Full color", "grayscale": "Grayscale", "two_tone": "Two-tone (black & white)"}[requested["color_mode"]]
-        actual["layer_color_mode"] = state.get("layer_tools", {}).get("color_mode", {}).get("value")
+        control = next((control for control in state.get("layer_properties", {}).get("controls", [])
+                        if control.get("key") == "color_mode"), None)
+        if control is not None:
+            index = control.get("value", {}).get("value")
+            options = control.get("kind", {}).get("options", [])
+            actual["layer_color_mode"] = options[index] if type(index) is int and 0 <= index < len(options) else None
+        else:
+            actual["layer_color_mode"] = state.get("layer_tools", {}).get("color_mode", {}).get("value")
     if "stats_panel" in requested:
         expected["stats_panel"] = requested["stats_panel"]
         actual["stats_panel"] = info.get("stats_panel", True)
+    for key in ("navigation_between_strokes", "navigation_settle_ms"):
+        if key in requested:
+            expected[key] = requested[key]
+            actual[key] = info.get(key)
+    if "canvas" in requested:
+        expected["canvas"] = [requested["canvas"]]
+        actual["canvas"] = [[tab.get("width"), tab.get("height")] for tab in state.get("tabs", []) if tab.get("active")]
     for axis, (radius, extent) in enumerate(zip(requested["radii"], camera["work_area"][2:])):
         expected[f"radius_{axis}"] = min(radius, extent * .45)
         actual[f"radius_{axis}"] = info["radii"][axis]
     workload = requested.get("workload", "ordinary")
-    effect_count = int(workload == "blurred-base")
+    effect_count = int(workload in ("blurred-base", "objects-effects"))
     expected.update(layers=requested["photo_layers"] + 2 + effect_count,
                     diameter=requested["brush_size"], selected_preset=requested["preset"],
                     feedback=requested["prediction"])
@@ -76,7 +108,7 @@ def validate_setup(info, requested):
                   feedback=state["settings"]["feedback"])
     expected["workload"] = workload
     actual["workload"] = info.get("workload", "ordinary")
-    if workload != "ordinary":
+    if workload in ("clipped", "blurred-base"):
         fixture = info.get("attachment_fixture") or {}
         paint, base, effect = (fixture.get(key) for key in ("paint", "base", "effect"))
         expected["attachment_order"] = [paint] + ([effect] if effect_count else []) + [base]
@@ -88,8 +120,20 @@ def validate_setup(info, requested):
         if effect_count:
             expected.update(effect_id="gaussian_blur", effect_radius=requested["effect_radius"])
             actual.update(effect_id=fixture.get("effect_id"), effect_radius=fixture.get("sigma"))
+    if workload.startswith("objects"):
+        objects = info.get("object_fixture") or []
+        expected.update(image_count=requested["image_count"], image_identities=1 if requested["image_sources"] == "shared" else requested["image_count"])
+        actual.update(image_count=len(objects), image_identities=len({value.get("image") for value in objects}))
+        expected["source_owners"] = expected["image_identities"]
+        actual["source_owners"] = len({value.get("source_owner") for value in objects})
+        expected["source_owners_known"] = True
+        actual["source_owners_known"] = all(value.get("source_owner") is not None for value in objects)
+        for key in ("paint_base_image_shared", "paint_base_source_shared"):
+            expected[key] = [requested["image_sources"] == "shared"] * requested["image_count"]
+            actual[key] = [value.get(key) for value in objects]
     if "paint_layer_index" in requested:
-        expected["paint_layer_index"] = [requested["paint_layer_index"]]
+        index = requested["paint_layer_index"]
+        expected["paint_layer_index"] = [index + int(workload == "objects-effects" and index > 0)]
         actual["paint_layer_index"] = [i for i, layer in enumerate(state["layers"]) if layer.get("selected")]
     if requested["prediction"]:
         expected["horizon"] = requested["horizon"]
@@ -128,6 +172,8 @@ def completion_window(report):
     last_raster = int(next(row["value"] for row in report["renderer_before"]["rows"]
                            if row["label"] == "Frames"))
     submitted = completed = empty = pending = 0
+    last_completed = {}
+    gaps = []
     for row in report["completions"]:
         _, queued_ns, done_ns, raster = row[:4]
         changed = raster > last_raster
@@ -141,10 +187,13 @@ def completion_window(report):
         submitted += 1
         if done_ns < interval_end:
             completed += 1
+            if interval_end in last_completed:
+                gaps.append((done_ns - last_completed[interval_end]) / 1e6)
+            last_completed[interval_end] = done_ns
         else:
             pending += 1
     return dict(result, accounting="active-input-intervals-nonempty" if "active_intervals_ns" in report["motion"] else "input-window-nonempty",
                 active_input_seconds=active_seconds,
                 submitted=submitted, completed=completed, pending_at_input_end=pending,
                 empty_updates=empty, submitted_per_s=submitted / active_seconds,
-                completed_per_s=completed / active_seconds)
+                completed_per_s=completed / active_seconds, completion_gaps_ms=gaps)

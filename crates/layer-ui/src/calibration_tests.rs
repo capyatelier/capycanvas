@@ -136,7 +136,7 @@ fn calibration_stale_epoch_and_changed_artwork_cannot_publish() {
         let edit=match invalidation {
             0=>effect_test_occurrence_edit(document,target,|o|o.opacity=0.5),
             1=>{let mut draft=effects::effect_draft(document,target).unwrap();draft.set("temperature",layer_core::EffectValue::Number(12.)).unwrap();effects::effect_edit(document,target,draft).unwrap()},
-            _=>{let paint=effect_test_paint(document);let layer_core::SourceTarget::Paint(handle)=document.scene().source_target(paint).unwrap() else {unreachable!()};let mut source=document.artwork.paint.get(handle).unwrap().clone();source.original=Some(layer_core::color::source::rgba8_source([1,1],|_,_|[32;4]));layer_core::Edit::Paint(layer_core::authored::RecordChange::replace(&document.artwork.paint,handle,Some(source)).unwrap())},
+            _=>{let paint=effect_test_paint(document);let layer_core::SourceTarget::Paint(handle)=document.scene().source_target(paint).unwrap() else {unreachable!()};let mut source=document.artwork.paint.get(handle).unwrap().clone();source.base=Some(layer_core::PaintBase::new(layer_core::Image::new(layer_core::color::source::rgba8_source([1,1],|_,_|[32;4]))));layer_core::Edit::Paint(layer_core::authored::RecordChange::replace(&document.artwork.paint,handle,Some(source)).unwrap())},
         };
         s.engine.apply_edit(edit).unwrap();
         let expected = s.engine.document().artwork.clone();

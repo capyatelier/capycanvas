@@ -37,7 +37,7 @@ pub(super) async fn prepare(
     };
     if location.is_none() {
         let project = &imported.project;
-        let source = project.artwork.paint.iter().find_map(|(_,_,p)| p.original.clone())
+        let source = project.artwork.paint.iter().find_map(|(_,_,p)| p.base.as_ref().map(|base| base.image.storage().clone()))
             .ok_or_else(|| localization.text(layer_ui::MessageId::DOCUMENTS_ERROR_MISSING_SOURCE).to_string())?;
         let source = Arc::unwrap_or_clone(source);
         let metadata = (*project.artwork.metadata).clone();
@@ -346,7 +346,7 @@ mod tests {
         assert!(location.is_none());
         let layer_ui::ImportOutcome::Editable(imported) = project else { panic!("Photo was not editable") };
         assert_eq!(imported.project.composition().color, Default::default());
-        assert!(imported.project.artwork.paint.iter().find_map(|(_, _, source)| source.original.as_ref()).unwrap().interpretation.profile_assumed);
+        assert!(imported.project.artwork.paint.iter().find_map(|(_, _, source)| source.base.as_ref().map(|base|&base.image)).unwrap().interpretation.profile_assumed);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

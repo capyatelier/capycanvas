@@ -18,10 +18,14 @@ pub(super) struct Dispatch {
     pub binding: wgpu::BindGroup,
     pub groups: [u32; 3],
 }
+pub(super) enum Work {
+    Dispatch(Dispatch),
+    Copy { source: wgpu::Buffer, destination: wgpu::Buffer, offset: u64, size: u64 },
+}
 pub(super) struct Preparation {
     pub layout: wgpu::BindGroupLayout,
     pub(super) pipelines: Vec<(Key, Deferred<wgpu::ComputePipeline>)>,
-    pub pending: Vec<Dispatch>,
+    pub pending: Vec<Work>,
     pub executions: u64,
 }
 impl Preparation {
@@ -152,19 +156,26 @@ impl Preparation {
         Ok(pipeline)
     }
     pub fn encode(&mut self, encoder: &mut crate::submission::CommandEncoder) {
-        if self.pending.is_empty() {
-            return;
-        }
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("changed effect lookup tables"),
-            timestamp_writes: None,
-        });
-        for dispatch in self.pending.drain(..) {
-            pass.set_pipeline(&dispatch.pipeline);
-            pass.set_bind_group(0, &dispatch.binding, &[]);
-            let [x, y, z] = dispatch.groups;
-            pass.dispatch_workgroups(x, y, z);
-            self.executions += 1;
+        let mut pending = self.pending.drain(..).peekable();
+        while let Some(work) = pending.next() {
+            match work {
+                Work::Copy { source, destination, offset, size } => encoder.copy_buffer_to_buffer(&source, offset, &destination, offset, size),
+                Work::Dispatch(mut dispatch) => {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("changed effect lookup tables"), timestamp_writes: None,
+                    });
+                    loop {
+                        pass.set_pipeline(&dispatch.pipeline);
+                        pass.set_bind_group(0, &dispatch.binding, &[]);
+                        let [x, y, z] = dispatch.groups;
+                        pass.dispatch_workgroups(x, y, z);
+                        self.executions += 1;
+                        if !matches!(pending.peek(), Some(Work::Dispatch(_))) { break; }
+                        let Some(Work::Dispatch(next)) = pending.next() else { unreachable!() };
+                        dispatch = next;
+                    }
+                }
+            }
         }
     }
 }

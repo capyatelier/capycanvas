@@ -1,6 +1,44 @@
 import copy
+import csv
+import json
+import pathlib
+import subprocess
+import sys
+import tempfile
 import unittest
-from android_brush_metrics import completion_window, contact_latencies, input_completions, validate_setup
+from android_brush_metrics import completion_window, contact_latencies, input_completions, object_completions, validate_setup
+
+
+class ReportTests(unittest.TestCase):
+    def test_affine_retries_without_submissions_preserve_zero_fresh_poses(self):
+        info = dict(preset=1, brush_size=1024, mode="object-affine", prediction=True,
+                    speed=1, repeats=1)
+        display = dict(submitted_frames=1, completed_frames=1)
+        renderer = dict(rows=[dict(label="Frames", value="1"), dict(label="Dabs", value="0")],
+                        gpu_samples=[], resident_bytes=0)
+        report = dict(motion=dict(begin_ns=10, end_ns=100, begin_boot_ns=10, end_boot_ns=100,
+                                  object_edits=[[11, 15, 2]], injected=[]),
+                      frame_fields=["start_ns", "vsync_ns", "queue_present_ns", "cpu_callback_ns", "owner_thread_cpu_ns"],
+                      frames=[[20, 20, 0, 3, 2]], inputs=[], input_fields=[],
+                      completions=[[2, 110, 120, 2, 0, 2]], presentation=[],
+                      display_before=display, display_after_input=display,
+                      renderer_before=renderer, renderer_after=renderer,
+                      resources_after=dict(process_mappings=0), settled_ns=125)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            for suffix, value in [("info", info), ("0", report), ("complete", {})]:
+                (directory / f"retry-{suffix}.json").write_text(json.dumps(value))
+            result = subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("android-brush-report.py")),
+                                     str(directory)], capture_output=True, text=True, check=True)
+            self.assertIn("CPU=not sampled", result.stdout)
+            summary = json.loads((directory / "summary.json").read_text())[0]
+            self.assertEqual(summary["object_completed_per_s_median"], 0)
+            self.assertEqual(summary["runs"][0]["object_completion_gap_ms"], dict(n=0))
+            with (directory / "summary.csv").open() as output:
+                row = next(csv.DictReader(output))
+            self.assertEqual(row["cpu_callback_p50_ms"], "")
+            self.assertEqual(row["update_start_gap_p99_ms"], "")
+            self.assertEqual(row["fresh_object_gap_p99_ms"], "")
 
 
 class SetupTests(unittest.TestCase):
@@ -49,6 +87,19 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "layer_color_mode"):
             validate_setup(self.info, self.requested)
 
+    def test_properties_color_mode_requires_the_live_choice_to_match(self):
+        self.requested["color_mode"] = "grayscale"
+        self.info.update(color_mode="grayscale")
+        control = dict(key="color_mode", kind=dict(kind="choice", options=["Full color", "Grayscale", "Two-tone (black & white)"]),
+                       value=dict(kind="choice", value=1))
+        self.info["state"]["layer_properties"] = dict(controls=[control])
+        validate_setup(self.info, self.requested)
+        for index in (0, 2, -1, 3, None, True):
+            with self.subTest(index=index):
+                control["value"]["value"] = index
+                with self.assertRaisesRegex(ValueError, "layer_color_mode"):
+                    validate_setup(self.info, self.requested)
+
     def test_attachment_workloads_require_the_authored_order_and_parameters(self):
         self.requested.update(photo_layers=1, paint_layer_index=0, effect_radius=8)
         for workload in ("clipped", "blurred-base"):
@@ -96,6 +147,44 @@ class SetupTests(unittest.TestCase):
             self.info[key] = 1100
             validate_setup(self.info, self.requested)
 
+    def test_requires_the_active_canvas_and_navigation_handoff(self):
+        self.requested.update(canvas=[4248, 2832], navigation_between_strokes=True, navigation_settle_ms=0)
+        self.info.update(navigation_between_strokes=True, navigation_settle_ms=0)
+        self.info["state"]["tabs"] = [dict(active=True, width=4248, height=2832)]
+        validate_setup(self.info, self.requested)
+        for change, field in [(lambda d: d["state"]["tabs"][0].update(width=6000), "canvas"),
+                              (lambda d: d["state"]["tabs"][0].update(active=False), "canvas"),
+                              (lambda d: d.pop("navigation_between_strokes"), "navigation_between_strokes"),
+                              (lambda d: d.update(navigation_settle_ms=750), "navigation_settle_ms")]:
+            with self.subTest(field=field):
+                info = copy.deepcopy(self.info)
+                change(info)
+                with self.assertRaisesRegex(ValueError, field):
+                    validate_setup(info, self.requested)
+
+    def test_object_workloads_require_actual_image_identity_sharing(self):
+        self.requested.update(workload="objects",photo_layers=2,image_count=4,image_sources="shared",paint_layer_index=1)
+        self.info.update(workload="objects",object_fixture=[dict(image="same",source_owner=0,paint_base_image_shared=True,paint_base_source_shared=True) for _ in range(4)])
+        self.info["state"]["layers"] = [dict(selected=i==1) for i in range(4)]
+        validate_setup(self.info,self.requested)
+        missing_owner = copy.deepcopy(self.info)
+        for image in missing_owner["object_fixture"]:
+            image.pop("source_owner")
+        with self.assertRaisesRegex(ValueError,"source_owners_known"):
+            validate_setup(missing_owner,self.requested)
+        self.requested["image_sources"] = "unshared"
+        with self.assertRaisesRegex(ValueError,"image_identities"):
+            validate_setup(self.info,self.requested)
+        self.info["object_fixture"] = [dict(image=str(i),source_owner=i,paint_base_image_shared=False,paint_base_source_shared=False) for i in range(4)]
+        validate_setup(self.info,self.requested)
+        self.requested["workload"] = "objects-effects"
+        self.info["workload"] = "objects-effects"
+        self.info["state"]["layers"] = [dict(selected=i==2) for i in range(5)]
+        validate_setup(self.info,self.requested)
+        self.info["object_fixture"].pop()
+        with self.assertRaisesRegex(ValueError,"image_count"):
+            validate_setup(self.info,self.requested)
+
     def test_requires_the_requested_blend_space_to_be_selected(self):
         for blending in ("linear", "perceptual"):
             self.requested["blending"] = blending
@@ -116,6 +205,21 @@ class SetupTests(unittest.TestCase):
 
 
 class CompletionWindowTests(unittest.TestCase):
+    def test_object_completions_require_evaluated_new_poses_inside_motion(self):
+        report = {
+            "motion":{"begin_ns":10,"end_ns":100,"object_edits":[[11,14,4],[20,23,5],[40,42,6],[70,73,7]]},
+            "completions":[[1,15,18,1,0,3],[2,16,19,2,0,4],[3,24,28,3,0,4],
+                           [4,30,35,4,0,5],[5,43,45,5,0,6],[6,47,55,6,0,6],[7,74,102,7,0,7]],
+        }
+        self.assertEqual([row[5] for row,edit in object_completions(report)],[4,5,6])
+        report["completions"] = [row[:5] for row in report["completions"]]
+        self.assertEqual(object_completions(report),[])
+
+    def test_evaluated_pose_can_submit_before_instrumentation_receives_edit_reply(self):
+        report = {"motion":{"begin_ns":10,"end_ns":100,"object_edits":[[11,30,4]]},
+                  "completions":[[1,18,24,1,0,4],[2,32,38,2,0,4]]}
+        self.assertEqual(object_completions(report),[(report["completions"][0],report["motion"]["object_edits"][0])])
+
     def test_input_completions_exclude_refinement_duplicates_hover_and_drain(self):
         report = {
             "motion": {"begin_ns": 0, "end_ns": 100, "active_intervals_ns": [[10, 40], [60, 90]]},
@@ -168,6 +272,7 @@ class CompletionWindowTests(unittest.TestCase):
         self.assertEqual(result["active_input_seconds"], 50 / 1e9)
         self.assertEqual(result["completed_per_s"], 2 / (50 / 1e9))
         self.assertEqual(result["accounting"], "active-input-intervals-nonempty")
+        self.assertEqual(result["completion_gaps_ms"], [])
 
     def test_excludes_boundary_and_empty_updates_and_retains_pending(self):
         report = {
@@ -186,6 +291,7 @@ class CompletionWindowTests(unittest.TestCase):
         self.assertEqual(result["empty_updates"], 1)
         self.assertEqual(result["snapshot_pending"], 1)
         self.assertEqual(result["accounting"], "input-window-nonempty")
+        self.assertEqual(result["completion_gaps_ms"], [60e-6])
 
 
 if __name__ == "__main__":

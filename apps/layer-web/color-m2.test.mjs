@@ -1,6 +1,6 @@
 import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
-import {authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples} from './package-fixture.test.mjs';
+import {paintBaseImage,authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples} from './package-fixture.test.mjs';
 const rasterResources=m=>packageResources(m,'capy.raster-tile/1').map(resource=>resourceIdentity(m,{ref:resource.id}));
 const compositionColor=m=>({space:'srgb',depth:'u8',...packageComposition(m).data.color});
 const wireColor=c=>({space:{Srgb:'srgb',DisplayP3:'display_p3',AdobeRgb:'adobe_rgb',ProPhoto:'pro_photo'}[c.space],depth:c.depth.toLowerCase()});
@@ -12,7 +12,7 @@ const helpers=(evaluate,{timeout=60000,enabled=false}={})=>{
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>${timeout})reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||${enabled}&&b.disabled)throw Error('Missing button '+${JSON.stringify(label)});b.click()})()`);
   const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);return evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
-  const idle=()=>wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
+  const idle=()=>wait('!layerApp.state().document_file.busy && !layerApp.documents.busy() && layerApp.app.brush_ready()');
   return {wait,click,invoke,idle};
 };
 
@@ -192,9 +192,9 @@ export async function checkSourceImports({call,evaluate}) {
   await call('Browser.grantPermissions',{origin:await evaluate('location.origin'),permissions:['clipboardReadWrite','clipboardSanitizedWrite']},null);
   const pasted=await call('Runtime.evaluate',{expression:`(async()=>{await navigator.clipboard.write([new ClipboardItem({'web image/png':new Blob([sdrPhotoBytes],{type:'image/png'})})]);return true})()`,awaitPromise:true,returnByValue:true,userGesture:true});
   if(pasted.exceptionDetails)throw Error(JSON.stringify(pasted.exceptionDetails));
-  await call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'invoke',command:'paste_image'})",userGesture:true});
+  const paste=await call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'invoke',command:'paste_image'})",userGesture:true});assert.equal(paste.exceptionDetails,undefined);
   await idle();assert.equal(await evaluate('layerApp.state().host_error??null'),null);
-  await wait('layerApp.state().commands.find(c=>c.id==="apply_transform")?.enabled');await invoke('apply_transform');await idle();
+  await wait('layerApp.state().commands.find(c=>c.id==="apply_transform")?.enabled||!!layerApp.state().host_error');assert.equal(await evaluate('layerApp.state().host_error??null'),null);await invoke('apply_transform');await idle();
   const copy=await save();assert.equal(packageOccurrences(copy).length,packageOccurrences(placed).length+1);
   assert.deepEqual(compositionColor(copy),compositionColor(placed));assert.deepEqual(sourceContent(copy).map(o=>o.interpretation.profile),Array(sourceContent(copy).length).fill(sourceContent(original)[0].interpretation.profile));
   for(const image of sourceContent(copy)){assert.equal(image.interpretation.depth,'u16');assert.deepEqual(image.tiles,sourceContent(original)[0].tiles);}
@@ -205,7 +205,7 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   const {wait,invoke,click,idle}=helpers(evaluate);
   const save=async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'sdrFiles.get(layerApp.state().document_file.location.name)');};
   const backing=m=>({resources:packageResourceIdentity(m),rasters:rasterIdentity(m),sources:sourceIdentity(m)});
-  const source=async m=>packageObject(m,(await activeOccurrence(evaluate,m)).data.content.paint).data.original;
+  const source=async m=>paintBaseImage(m,(await activeOccurrence(evaluate,m)).data.content.paint);
   async function change(command,profile,apply=true){
     await invoke(command);await wait('!!document.querySelector("dialog[open]")');
     if(profile!==null)await evaluate(`(()=>{const select=document.querySelector('select[aria-label="Correct source profile"]');select.value=${JSON.stringify(profile)};select.dispatchEvent(new Event('change'));})()`);
@@ -220,7 +220,7 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(before));
   await invoke('redo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
   await change('rasterize_source',null);const rasterized=await save();
-  assert.equal((await source(rasterized)).role,'rasterized');assert.equal((await source(rasterized)).interpretation.depth,'u8');assert.deepEqual((await source(rasterized)).interpretation.profile,{builtin:'display_p3'});assert.deepEqual((await source(rasterized)).extent,(await source(repaired)).extent);
+  assert.equal(packageObject(rasterized,(await activeOccurrence(evaluate,rasterized)).data.content.paint).data.base.policy,'working_pixels');assert.equal((await source(rasterized)).interpretation.depth,'u8');assert.deepEqual((await source(rasterized)).interpretation.profile,{builtin:'display_p3'});assert.deepEqual((await source(rasterized)).extent,(await source(repaired)).extent);
   await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
   await invoke('fit_canvas');await invoke('pen');await settle();
   const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
@@ -325,7 +325,7 @@ export async function checkFlattenedCopy({evaluate}) {
   const copyName=saved.file.location.name.replace(/\.[^.]+$/,'')+' converted.capy';
   const copied=await readPackage(evaluate,`sdrFiles.get(${JSON.stringify(copyName)})`);
   assert.deepEqual(compositionColor(copied),{space:'srgb',depth:saved.color.depth.toLowerCase()});
-  assert.equal(packageOccurrences(copied).length,1);assert.equal(sourceIdentity(copied)[0].role,'rasterized');
+  assert.equal(packageOccurrences(copied).length,1);assert.equal(packageObject(copied,packageOccurrences(copied)[0].data.content.paint).data.base.policy,'working_pixels');
   const current=await evaluate('JSON.parse(JSON.stringify(layerApp.state().document_file,(_,v)=>typeof v==="bigint"?Number(v):v))');
   for(const key of ['epoch','revision','modified','location'])assert.deepEqual(current[key],saved.file[key]);
   await invoke('save_document_as');await idle();
@@ -355,9 +355,6 @@ export async function checkPhotoCorrections({evaluate,settle}) {
   const before=await histogram();
   await evaluate(`window.sdrAdjusted=sdrFiles.get('photo-master.capy');window.showOpenFilePicker=async()=>[{name:'adjusted.capy',async getFile(){return new File([sdrAdjusted],'adjusted.capy')}}]`);await invoke('open_document');await idle();
   const reopened=await save();
-  for(const output of reopened.objects.filter(object=>object.type==='capy.output/1')) {
-    assert.ok(output.data.context.elapsed>=packageObject(edited,output.id).data.context.elapsed,'Reopened output capture time advances');
-  }
   assert.deepEqual(authoredIdentity(reopened),authoredIdentity(edited));assert.deepEqual(sourceIdentity(reopened),source);assert.deepEqual(await histogram(),before);
   const reopenedIds=await Promise.all(portableIds.map(id=>runtimeId(evaluate,reopened,id)));
   for(const [i,[name,key,value]]of controls.entries()) {

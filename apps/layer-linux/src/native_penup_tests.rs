@@ -15,7 +15,7 @@ fn native_penup_and_following_strokes() {
     let stack = project.composition().result;
     for _ in 0..31 {
         let source = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource { color_mode: Default::default(),
-            domain: [4096; 2], raster: Default::default(), original: None, operations: Default::default(),
+            domain: [4096; 2], raster: Default::default(), base: None, operations: Default::default(),
         }).unwrap();
         let occurrence = project.artwork.occurrences.insert(layer_core::PortableId::random(),
             layer_core::Occurrence::new(layer_core::OccurrenceContent::Paint(source), "pacing layer")).unwrap();
@@ -29,7 +29,7 @@ fn native_penup_and_following_strokes() {
     if let Some(path) = &photo {
         project = open_native_document(std::fs::File::open(path).unwrap());
         if std::env::var_os("LAYER_PEN_ON_SOURCE").is_some() {
-            let source = project.scene().order().iter().copied().find(|h| project.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).unwrap();
+            let source = project.scene().order().iter().copied().find(|h| project.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).unwrap();
             project.working.occurrence = Some(source);
             project.working.target = project.scene().source_target(source);
         }

@@ -44,13 +44,23 @@ encoding and color work run in `raster-worker.js` through the shared
 `package::transfer` descriptor and bounded transferable payloads. The descriptor
 uses the final manifest adapters plus private runtime identity and verification
 receipts; Web has no second artwork schema. Main-thread adoption consumes verified
-owners without image decoding or decoded-content hashing. Package writes stream
+owners without image decoding or decoded-content hashing. Cold object tiles use a
+dedicated worker to decompress native samples or convert ICC samples into working
+pixels. Requests carry one tile and bounded profile chunks; completion wakes the
+canvas instead of polling while the worker is busy. Nearest placement uses the
+same preparation worker for bounded F64 coordinate batches; the receiving owner
+validates and uploads packed coordinates without performing geometry loops on
+input. Package writes stream
 to private OPFS output jobs and return a Blob for picker/download publication;
 completion closes that job. Unsupported files keep their original Blob and show shared
 package status, available outputs and an optional preview with Copy Original and
 Export Preview Image. Preview export refuses the original file handle. The
 manual-save worker retains its output job and storage lock until publication
 finishes and the host closes the job.
+
+Clipboard output carries the full-depth source transfer and a separate PNG for
+other applications. The receiver separates the declared PNG trailer before
+validating and adopting the source transfer.
 
 Restart snapshots use the shared session codec, preserving every open drawing,
 tab order, selection, camera, undo/redo and manual-save checkpoint. Browser events
@@ -171,8 +181,8 @@ selects the executable (default `google-chrome`); on macOS, for example,
 `LAYER_WEB_URL` changes the target (default `http://127.0.0.1:4173`). On Linux it
 selects offscreen Vulkan; other hosts keep their native GPU backend. Without
 `--headless` Chrome opens on the current Wayland display. `LAYER_TEST_VERBOSE=1`
-prints browser diagnostics, and journeys that save captures write them to
-`LAYER_TEST_ARTIFACTS`.
+prints browser diagnostics, `LAYER_TEST_THEME=light` or `dark` selects the initial
+theme, and journeys that save captures write them to `LAYER_TEST_ARTIFACTS`.
 
 On Linux, the same journeys also run headed inside a private Mutter compositor,
 which builds the Wasm module first and serves it on port 4179:
@@ -197,7 +207,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | Color | `--color-panel`, `--color-wheel-resize`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
 | Layers and filters | `--layers`, `--layer-relationships`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--gradients`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
-| Photo files, packages and export | `--portable-photo`, `--package-view`, `--export-metadata`, `--document-errors` |
+| Photo files, packages and export | `--portable-photo`, `--package-view`, `--image-object-fixture`, `--export-metadata`, `--document-errors` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--drawer-drag`, `--drawer-style` |
 | Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-options`, `--workspace-options-refresh`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
@@ -261,6 +271,19 @@ the toolbar popup, including mouse, pen and touch contacts, numeric edits,
 cancellation, undo and selected-stop retention. It checks two-dimensional
 integer preview dithering, unchanged floating previews, and gradient definitions
 through archive reopening and renderer recreation in both themes and widths.
+
+`--image-object-fixture` opens the fixed builtin, ICC and Nearest-only shared-image
+packages in `apps/layer-web/fixtures/`. Their sources are generated sample
+patterns: a 512 × 512 RGBA8 gradient and the ProPhoto RGBA16 pattern used by the
+Web color journeys, with its embedded profile. They contain no external photos.
+The packages were authored with the `layer-color` `object_fixture` example and
+fixed F64 placements. The journey checks cold worker preparation before input,
+object-only GPU pixels, 64× source minification, F64 placement beyond F32
+precision, immutable image identity, visibility history, package reopening and
+renderer replacement in both themes. It also exercises comparison, output and
+clipboard captures, and restores
+pending redo through a real IndexedDB restart.
+`LAYER_OBJECT_FIXTURE_URLS` can select equivalent fixtures as a JSON URL array.
 
 `--package-view` exercises preserved packages with and without a verified preview
 in light and dark themes. It checks output names, preview pixels, exact original
@@ -334,6 +357,11 @@ file and checks shared resource identities without replacing the open drawing.
   headless Dawn instance (`A valid external Instance reference no longer
   exists.`), and headless screenshots can omit WebGPU pixels. Run the journey
   headed through `workspace-motion.sh web`, which has hardware presentation.
+- **Original Size placement check fails.** The headed `--image-placement`
+  journey also fails on the untouched `5c76e202f` product: after Original Size
+  and Apply, the saved scale is `0.625` instead of `1`. Keep its unit-scale
+  assertion when comparing changes. The baseline requires the worker Bounds
+  spy to inspect the final snapshot task, rather than array index `1`.
 - **Startup never completes.** On failure the runner saves
   `artifacts/ui/web-failure.png` and prints page errors and GPU diagnostics.
   Check `#gpu-notice`, and in the page evaluate `layerApp.state()`,

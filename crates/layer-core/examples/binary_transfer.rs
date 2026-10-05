@@ -79,7 +79,7 @@ fn main() -> Result<(), String> {
         1024 * 1024,
     )?;
     source.push_row(&[17, 33, 65, 255])?;
-    artwork.paint.get_mut(paint).ok_or("Missing fixture source")?.original = Some(Arc::new(source.finish()?));
+    artwork.paint.get_mut(paint).ok_or("Missing fixture source")?.base = Some(layer_core::PaintBase::new(Arc::new(source.finish()?).into()));
     artwork.outputs.get_mut(artwork.default_output).ok_or("Missing fixture output")?.proof = Some(proof);
     let capture = artwork.capture(CaptureCheckpoint {
         owner: document.owner,

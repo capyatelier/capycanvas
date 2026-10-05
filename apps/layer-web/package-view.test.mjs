@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {packageManifest,packageObjects} from './package-fixture.test.mjs';
+import {packageManifest,packageOccurrences} from './package-fixture.test.mjs';
 
 function preservedFixture(bytes, preview, withPreview) {
   return execFileSync('python3', ['-c', `
@@ -8,7 +8,7 @@ import base64, io, json, sys, zipfile
 request=json.load(sys.stdin)
 source=zipfile.ZipFile(io.BytesIO(base64.b64decode(request['source'])))
 manifest=json.loads(source.read('manifest.json'))
-next(record for record in manifest['objects'] if record['type']=='capy.occurrence/2')['data']['blend']='future-package-blend'
+next(record for record in manifest['objects'] if record['type'] in ['capy.occurrence/2','capy.occurrence/3'])['data']['blend']='future-package-blend'
 for record in manifest['objects']:
     if record['type']=='capy.output/1':
         record['data']['name']='Package preview output'
@@ -61,7 +61,7 @@ export async function checkPackageView({evaluate,settle}) {
     await invoke('save_document_as');await ready();
     const source=await evaluate('Array.from([...packageViewTest.files.values()].at(-1))');
     const sourceManifest=await packageManifest(Uint8Array.from(source));
-    assert.ok(packageObjects(sourceManifest,'capy.occurrence/2').length>0);
+    assert.ok(packageOccurrences(sourceManifest).length>0);
     const preview=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IB2cksfwAAAA5JREFUeJxj+M/A8B8EARD4A/1OlcFvAAAAAElFTkSuQmCC','base64');
     const preserved=preservedFixture(source,preview,true),withoutPreview=preservedFixture(source,preview,false);
     const manifest=await packageManifest(preserved),outputs=manifest.outputs.map(ref=>manifest.objects.find(o=>o.id===ref.ref)).map(o=>({id:o.id,name:o.data.name}));

@@ -4,10 +4,10 @@
 
 Design date: 2026-10-04. Code inspected at
 `9f6b774bc`, with the concurrent documentation decisions in `e30671c35` integrated
-before publication. Those decisions add the illustration-filter policy and crop
-compensation; they do not implement the required renderer changes. The final
-audit was checked against code; its proposed solutions are adopted only where
-specified below.
+before publication. A further code and sampling review at `001948edd` established
+the binary64 transport requirement, complete effect coordinate mapping and the
+three implementation milestones below. Those reviews establish requirements,
+not evidence that the renderer implements them.
 
 This record defines the intended GA state, the long-term direction, and the work
 needed to reach GA. It is a design decision, not a claim that these capabilities
@@ -79,7 +79,7 @@ paintable pixels, but does not establish one universal layer model:
 These are precedents, not a survey proving that every artist prefers the chosen
 interaction. The concrete journeys in section 14 test Capy's implementation.
 
-Current-code findings relevant to this decision:
+Inspection findings at the design baseline, before the milestones below:
 
 | Finding | Evidence | Consequence |
 | --- | --- | --- |
@@ -94,7 +94,7 @@ Current-code findings relevant to this decision:
 | Move operates on layer/pixel targets; `PickLayer` is a color-picking mode. | [Tools and input](../../crates/layer-ui/src/art_layers.rs). | Add genuine object selection state and picking; existing tools are not sufficient unchanged. |
 | Internal pixel clips retain a nonce, full-depth source and copied position; external image paste has a separate entry point. | [Clipboard](../../crates/layer-ui/src/clipboard.rs). | Source-aware paste extends an existing distinction without adding provenance to artwork. |
 
-The following work is already on this baseline. Preserve it while replacing the
+The following work was already on that baseline. Preserve it while replacing the
 model; do not schedule it again as an unfixed defect:
 
 | Completed change | Evidence | Remaining object-layer work |
@@ -201,6 +201,13 @@ that round-trip binary64. Do not parse them through the existing F32 affine
 adapter. Compose and invert in sufficient precision before producing camera- or
 tile-relative GPU coordinates. Existing pixel samples and paint buffers do not
 need to become doubles.
+Enable `serde_json`'s `float_roundtrip` feature explicitly in `layer-core`;
+decimal formatting alone does not guarantee correctly rounded parsing. A
+100,000-value probe of the current default parser changed 19,022 binary64 bit
+patterns, while the same probe with that feature changed none. Package, private
+history and worker-transfer tests must compare coefficient bits, including
+nontrivial translations, instead of accepting a decimal tolerance. This is a
+transport requirement independent of renderer precision admission.
 Existing guides, selections and scalar effect parameters keep their present F32
 contracts. The new effect spatial reference in section 5.3 uses finite F64
 geometry for crop compensation. Neither change implies equivalent
@@ -232,9 +239,11 @@ Require the complete base-image rectangle to fit inside the paint domain. The
 domain can be larger. Rendering, merge, export and admission use this same rule.
 Reject inconsistent records instead of rendering a clipped base in one consumer
 and its full extent in another. Check the rectangle with overflow-safe arithmetic
-in both record decoding and `Document::validate`; neither currently checks this
-relationship. With zero-origin storage this requires nonnegative base offsets,
-even though the shared integer encoding also serves signed layer positions.
+in both record decoding and `Document::validate`. With zero-origin storage this
+requires nonnegative base offsets. Encode them as U32 JSON coordinate pairs,
+like storage-tile coordinates: the containing paint domain bounds their range.
+Signed layer/container offsets use the wider string encoding in section 4.1
+because they position content outside that storage domain.
 
 **Base offsets may be arbitrary integers, not only multiples of 256.** An exact
 horizontal flip produces `new_base_x = domain_width - base_x - image_width`,
@@ -347,7 +356,7 @@ remains in the GA registry.
 | --- | --- | --- |
 | Occurrence | `capy.occurrence/3` | Object content alternative, integer offsets, owner-relative linked mask offsets, and removal of retained placement/inapplicable flags. |
 | Composition | `capy.composition/2` | Remove portable origin. |
-| Paint source | `capy.paint-source/2` | Referenced base image, base offset and paint-use color policy replace inline originals. |
+| Paint source | `capy.paint-source/2` | Referenced base image, base offset and paint-use color policy replace inline originals; retain the authored paint color mode. |
 | Coverage source | `capy.coverage-source/2` | Materialized coverage replaces authored `initial`. |
 | Output | `capy.output/2` | Remove unevaluated frame and scale. |
 | Built-in effect application | `capy.effect/2` | Inline the built-in descriptor, add implemented typed image/spatial uses, and remove empty graph reservations and portable definition indirection. |
@@ -372,8 +381,9 @@ record. The occurrence continues to own the layer name, visibility, opacity,
 blend, edit lock, reference designation, attachment, integer offset and optional
 mask. The object-layer record does not duplicate those properties.
 
-Each drawable object has one owning collection in the GA editable subset, and
-each object-layer record has one layer occurrence. Duplicating objects allocates
+Each drawable object has at most one owning collection in the GA editable subset,
+and each object-layer record has at most one layer occurrence. Unplaced authored
+records remain retained. Duplicating objects allocates
 new object IDs and shares immutable image IDs. Duplicating a paint layer creates
 a new editable paint source with shared immutable backing. Neither operation
 creates linked editing. Referenced immutable image records may have many users.
@@ -398,8 +408,9 @@ present, is straight; premultiplication is an evaluation step. Do not introduce
 an arbitrary channel schema or silently reinterpret tile descriptors. Additional
 sample layouts belong to future typed image/resource contracts.
 
-Filter image inputs use this same immutable record, including Pattern, Paper,
-Displacement and Color Transfer. A typed image use carries the reference and its
+Implemented filter image inputs will use this same immutable record. Pattern,
+Paper, Displacement and Color Transfer remain separate feature work, not
+unconditional gates for this refactor. A typed image use carries the reference and its
 sampling role: `color` applies the declared profile/working-color conversion;
 `data` reads raw channels, normalizing integer samples by bit depth without
 profile or transfer conversion. Floating data samples retain their raw values,
@@ -409,11 +420,11 @@ samples or discarding metadata. Source-profile/working-pixel policy remains a
 paint-base concern. Each filter defines channel, alpha and interpolation behavior.
 
 Include filter references in image admission, save/copy/undo and dependency
-lifetime. These image-backed filters depend on Milestone 1's shared image model
-and Milestone 2's source evaluation, not completion of all object authoring UI.
+lifetime. These image-backed filters depend on milestone 1's shared image model
+and source evaluation, not completion of all object authoring UI.
 Add actual typed bindings when their consumers are implemented; do not revive
 empty general-purpose graph maps on every effect.
-Milestone 1 establishes the image/closure machinery; the first real filter use
+Milestone 1 establishes the image dependency closure; the first real filter use
 and its round-trip test land with that consumer after those dependencies. Do not
 add an unused wire binding or a fake filter just to meet a model milestone.
 
@@ -435,6 +446,12 @@ must be RGBA, use the composition's built-in working profile and depth, and have
 replaces affected image references without mutating an image still used by an
 object. Image objects always retain the referenced image's own color interpretation.
 Filter image uses select their sampling role separately, as described in section 5.
+
+Preserve the existing paint-source `color_mode` (`full_color`, `grayscale` or
+`two_tone`), including its explicit default. It controls editable paint and its
+native raster descriptors. It does not change the interpretation of a shared
+image or add a paint-mode control to object layers. Mode conversion, undo and
+document color conversion must preserve these separate responsibilities.
 
 The distinction is necessary, not disposable provenance:
 [current color edits](../../crates/layer-core/src/color_edit.rs) preserve imported
@@ -459,7 +476,7 @@ material; it does not reset placement. Preserve this useful operation under the
 accurate label **Discard Paint Edits** for a source-profile base with edits. It
 restores the current retained base, domain and placement, not the originally
 imported photograph after a destructive crop/resample. Undo restores discarded
-edits. Remove the old label and placement-dependent refusals at milestone 5,
+edits. Remove the old label and placement-dependent refusals at milestone 2,
 not the underlying capability. Do not retain a second historical original just
 to support the old wording.
 
@@ -507,11 +524,11 @@ Remove `capy.effect-definition/1` from the known registry at the effect cutover,
 write a separate portable record/ID solely to hold `{builtin, version}`. Built-in
 programs resolve through the catalog; shared runtime program objects need no
 authored definition identity. The current
-[definition adapter](../../crates/layer-core/src/package/effect_records.rs)
+[program adapter](../../crates/layer-core/src/package/effect_records.rs)
 contains no editable built-in definition beyond that descriptor.
 
-Private recovery, history and worker transfers currently use the same adapters
-and definition store. Replace that dependency in the same cutover: private
+Private recovery, history and worker transfers share the program adapters;
+they retain no authored definition store. Private
 `capy.effect/2` accepts either the portable built-in descriptor or a private
 `{program, values}` alternative. A program carries its validated custom-filter
 descriptor and references deduplicated code/table resources. These alternatives
@@ -538,20 +555,29 @@ graphs get implemented typed records with declared coordinate/evaluation edges.
 Keep the reference-envelope and endpoint mechanisms that actual composition and
 output records use. Do not reserve graph fields on every built-in application.
 
-Frame-dependent effects also store an authored spatial reference: origin and
-positive reference extent in composition units, using finite F64 geometry. It is
-initialized from the frame when the effect is inserted and consumed by that
-effect's coordinate evaluation. Existing scalar parameters keep their meanings
-relative to this reference: pattern phase uses its origin, and percentage
-centres/radii use its extent. It is neither an image domain nor a hidden general
-layer transform. Pointwise effects that do not use it have no such binding.
-Use `spatial: {origin:[x,y], extent:[width,height]}` on the effect application;
-all four numbers are finite doubles and both extents are positive. Effects whose
-declared evaluation consumes this reference require it on read; do not substitute
-the current frame for a missing saved reference. Unknown future spatial forms
-are Unsupported. Numerical/range admission and a non-default crop fixture must
-land with the evaluator before this record freezes. Section 7 specifies crop
-compensation and the limit of origin/extent for directional remapping.
+Spatial effects store an authored reference coordinate system. Use
+`spatial: {mapping:[a,b,c,d,tx,ty], extent:[width,height]}` on the application:
+the finite invertible F64 affine maps reference coordinates into composition
+coordinates, and both reference extents are positive finite doubles. Initialize
+the mapping from the frame when the effect is inserted. The evaluator maps
+composition positions and sampling displacements through this reference;
+percentage centres/radii use its extent, and directional patterns retain its
+orientation. Pointwise effects that do not consume coordinates have no binding.
+The mapping is effect input geometry, not a retained transform on a paint layer.
+
+Origin and extent alone handle crop compensation but cannot represent a rotated
+VHS row pattern or CRT stripe direction. Image Rotate and Flip compose their
+exact image operation with this mapping. Image Size composes its scale with the
+mapping, leaving authored reference distances and extent unchanged, so explicit
+pixel lengths and implicit periods scale together; anisotropic resize therefore
+also transforms sampling vectors. Do not scale a distance a second time in the
+parameter list. Frame-based analysis grids remain separate as section 7 defines.
+Crop translates the mapping once and retains its extent. Effects whose declared
+evaluation consumes the reference require it on read; never substitute the
+current frame for a missing saved reference. Unknown future spatial forms are
+Unsupported. Admission, crop, orientation, resize and output-density fixtures
+must land with the evaluator before this record freezes. Existing canvas image
+operations remain available for supported built-ins.
 
 Image and spatial bindings above represent implemented authored inputs, not the
 removed empty `inputs`/`bindings` reservations. Keep their references discoverable
@@ -573,7 +599,7 @@ by manifest classification, topology, adapters, admission and session/transfer.
 Do not maintain independently drifting registries. Private-only program content
 is a context restriction, not permission to execute package-embedded shaders.
 
-From milestone 1 until milestone 5, keep the existing occurrence `/2` adapter
+From milestone 1 until milestone 2, keep the existing occurrence `/2` adapter
 and add the **final** `/3` adapter. Write `/3` only when the runtime occurrence
 is exactly representable: integer permitted offsets, identity retained owner
 placement, representable mask geometry, and applicable GA fields. Object layers
@@ -596,7 +622,7 @@ correct value. Deletion descriptors and transfer layouts use the same registry.
 Test a batch mixing new objects, old placed paint and linked masks through
 portable open, autosave/recovery, worker transfer and incremental undo/redo.
 
-Milestone 5 switches every caller to the final integer model and removes `/2`
+Milestone 2 switches every caller to the final integer model and removes `/2`
 and its placement adapter. Existing pre-cutover private sessions are unsupported
 after that pre-release change; no recovery migration is promised. Other changed
 records switch once, when their complete new semantics are available, under
@@ -735,15 +761,18 @@ Measure reconstruction, transparent-edge coverage and detail along the
 unminified axis as well as average alias rejection. Include 1/16, 1/32, 1/64,
 noninteger reductions and rotated anisotropy; a simple isotropic mip can blur
 the narrow axis even while suppressing aliases. The reference and bounded GPU
-implementation are milestone 2 exit requirements. If their quality/performance
+implementation are milestone 1 exit requirements. If their quality/performance
 tradeoff requires a different smooth contract, revise this section and fixtures
 **before** exposing objects or freezing `/1`; do not silently weaken tolerances.
+
+PBRT’s EWA uses an elliptical, pyramid-backed filter, not this stretched-tent
+reference; citing it does not establish conformance.
 
 This is a release gate, not a claim that current sampling already meets an
 unmeasured quality target. New algorithms after GA must preserve the frozen
 meaning or introduce a new authored interpolation value/version. Runtime cache
 resolution and optimization limits are not serialized per object.
-Complete that reference and quality gate in milestone 2, before the new object
+Complete that reference and quality gate in milestone 1, before the new object
 authoring UI ships. The plan does not bless a capped undersampling algorithm as
 the permanent smooth contract. Footprint filtering and bounded mip/anisotropic
 implementations are distinct concerns, as described in the primary
@@ -779,14 +808,15 @@ Object-layer opacity is applied once to the isolated result, never separately
 to every image. This distinction changes overlap appearance.
 
 Existing attached filters remain composition-space operations after the owner's
-mask. Pixel lengths refer to composition units, not image-source pixels or
-physical screen pixels. Choose crop compensation using the spatial reference in
+mask. Pixel lengths are initialized in composition units and retained in the authored
+effect reference; image operations transform that reference and its sampling
+vectors together. They are not source-image pixels or physical screen pixels. Choose crop compensation using the spatial reference in
 section 5.3, while removing the composition origin. If crop moves the frame's
-top-left by `d`, content moves by `-d` and each frame-relative effect origin also
-moves by `-d`; retain its reference extent. Pattern phase and percentage-based
+top-left by `d`, content moves by `-d` and each frame-relative effect mapping
+composes that translation once; retain its reference extent. Pattern phase and percentage-based
 centres/radii then keep their position and scale relative to the artwork,
 including when crop changes aspect ratio. Do not clamp centres into the frame.
-These effect origins are in composition coordinates, not owner/group coordinates:
+These effect mappings end in composition coordinates, not owner/group coordinates:
 compensate each once, without also inheriting a translated root's offset.
 A photograph moved behind a frame-relative effect does not carry that effect's
 centre along as an object-local filter would. New explicitly owner-relative
@@ -833,10 +863,11 @@ and this plan use the same crop-compensated effect reference. This deliberately
 changes today's re-anchoring on crop. It does not put a hidden origin back on the
 composition or make effects owner-local. Image Size and image orientation need
 explicit per-filter rules for both declared controls and implicit directional
-patterns; origin/extent alone must not be assumed to rotate an arbitrary shader.
-Qualify each supported operation, or refuse the complete operation when its
-effect geometry cannot be represented. Implement these rules with the spatial
-reference, not as a later silent interpretation of a frozen field.
+patterns. The reference mapping transforms positions and sampling vectors;
+origin/extent alone cannot rotate an arbitrary shader. Qualify crop, Image Size,
+Rotate and Flip for all supported spatial built-ins with that evaluator. Reject
+unrepresentable private/custom geometry atomically; do not broadly remove these
+existing commands to compensate for an incomplete built-in implementation.
 
 Well-formed relationships outside the supported subset are `Unsupported`.
 Malformed references, duplicate ownership identities and prohibited cycles are
@@ -1215,7 +1246,7 @@ paint, objects, masks, selections and guides atomically. Object multi-selection
 transforms edit the selected affines together without giving the object-layer
 container a matrix.
 
-At milestone 5 remove Apply Transform to Pixels, its command registration and
+At milestone 2 remove Apply Transform to Pixels, its command registration and
 all “apply first” notices: no retained paint transform remains to apply.
 Discard Paint Edits replaces Revert to Original's wording as section 5.1
 specifies. Keep supported transient paint Transform Again through one new pixel
@@ -1351,6 +1382,13 @@ result selects its paint target; an undo cannot leave dangling object selections
 
 The read-only content interface receives a region in document coordinates, an
 explicit document-to-output mapping and requested quality/evaluation context.
+Signed document rectangles must remain distinct from unsigned allocation-local
+GPU rectangles. Rebase checked document coordinates into bounded local allocations;
+do not clamp negative dependency coordinates to zero or reinterpret them as
+unsigned tile indices. Track both the inputs needed for a requested output and
+the output support needed for a complete bake. A destination allocation’s extent
+is not the artwork frame or the finite boundary of every input.
+
 It returns a premultiplied result with its actual region and pixel mapping, or
 scheduled work to produce it. This describes a contract, not a prescribed Rust
 trait or asynchronous runtime. Reuse the existing frame/job scheduler.
@@ -1370,18 +1408,27 @@ The same authored objects serve different consumers:
 
 | Consumer | Sampling request / source |
 | --- | --- |
-| Viewport | Visible region at requested physical screen density, accounting for zoom and display density. |
+| Viewport | Visible region at the chosen composition evaluation density; GA may use the existing native-or-coarser display grids. Future direct screen-density composition accounts for zoom and display density. |
 | Pixel tools sampling visible artwork | Canonical document-grid evaluation; results do not depend on zoom, viewport cache age or preview quality. |
 | Rasterize / paint conversion | Explicit document-grid output and complete required bounds. |
-| Raster export | Explicit output dimensions and mapping, never a capture of the display cache. |
+| Raster export | Canonical document-grid composition followed by the existing explicit output resampler in GA, never a capture of the display cache. Direct composition at requested output density is deferred. |
 | SVG export | Authored objects and their geometry/appearance semantics, bypassing raster caches. |
 
-High-resolution object results must remain at the requested evaluation density
-through the relevant compositing chain. Downsampling them into a native pixel
-composite before enlarging the screen loses the benefit. A final vector overlay
-also fails when paint, masks or blending belong above the vectors. Evolve the
-existing shared stack traversal to compose the appropriate region at output
-density; keep pixel-grid effects as explicit evaluation boundaries.
+The image evaluator must honor its requested mapping at every supported density,
+including above native resolution. The GA composition policy does not yet request
+above-native grids. Object nodes on native or coarse composition grids evaluate
+the authored filter directly at that grid's mapping; an averaged image mip cannot
+stand in for canonical Nearest, and a moving Linear approximation cannot become
+an exact query result. Final composition-to-screen reconstruction and export
+resampling remain separate from this object sampling contract.
+
+When direct screen-density or export-density composition is implemented,
+high-resolution object results must remain at that density through the relevant
+compositing chain. Downsampling them into a native pixel composite before
+enlarging loses the benefit. A final vector overlay also fails when paint, masks
+or blending belong above the vectors. Evolve the existing shared stack traversal
+then, keeping pixel-grid effects as explicit evaluation boundaries. This deferred
+consumer policy must not constrain the GA authored coordinates or image evaluator.
 
 ### 9.2 Incremental painting and invalidation
 
@@ -1411,7 +1458,7 @@ simply adding a new enum variant would omit its content or reach a paint-target
 `unwrap` when an attached effect requests its input. These are integration gaps,
 not a claim that current valid files already contain crashing object layers.
 
-| Renderer boundary | Required object integration in milestone 2 |
+| Renderer boundary | Required object integration in milestone 1 |
 | --- | --- |
 | `scene/stack.rs`, `scene.rs` | Content discovery, layer evaluation and raw-content reads accept object layers without requiring a paint target. Reuse `owner_image` for the existing mask/effect/clipping order after supplying object content. |
 | `scene/scale/graph.rs` | Add the equivalent content/source/layer nodes to the display evaluator, including effect inputs, empty collections and masked layers. A working native path alone is insufficient. |
@@ -1770,43 +1817,46 @@ general placement to GA paint layers. This plan does not promise that workflow.
 
 ## 13. Changes required to reach GA
 
-These are complete implementation milestones, not instructions to commit
-non-building intermediate states. Keep production changes and current guides
-together. Do not implement deferred vector features to complete this plan.
-This order is intentional: the renderer and layer consumers precede user-facing
-object creation, and object creation precedes deleting retained paint placement.
-Each milestone lands on shared main with existing journeys usable. Update
-affected fixtures as soon as a schema changes; milestone 7 is final qualification,
-not permission to leave earlier commits with broken fixtures.
+Land three complete implementation milestones. The original seven work groups
+remain the checklist below, grouped by the boundaries that can be integrated,
+tested and reviewed together. Production changes, regression fixtures and current
+guides land together; final qualification does not excuse broken earlier commits.
+No milestone implements the deferred vector or illustration-filter features.
 
 | Milestone | Required changes | Exit condition |
 | --- | --- | --- |
-| 1. Shared model and package records | Add immutable ID-bearing images (no editable image store), final paint-base references/policy/offset, object-layer/image-object records and F64 affine adapters. Use section 5.4's single context-aware registry with temporary `/2` and final `/3` occurrence adapters. Update image dependencies in capture/admission, per-change history closure, ID interning and immutable-sharing topology, including the common dependency path that implemented filter image uses will consume. Replace inline originals and `SourceKind` ownership everywhere, preserving existing consumers through the binding policy. Validate base-inside-domain; adapt base access before publishing nonzero offsets. | Two independently editable objects and two paint uses share one image through model save/open/copy/undo, including an undo-only image and mixed occurrence versions. Existing paint/import paths work. New object authoring is not exposed before its consumers exist. No interim `/3` meaning or duplicate decoded history images. |
-| 2. Image rendering and early performance gate | Implement objects in both native and display evaluators, every read-only scope/query, image-ID mip residency/admission, object-edit damage and filter cache revisions. Separate current frame, effect spatial reference, source support and evaluation/output domain; remove frame-clamped dependency captures as section 8.4 specifies. Land final effect `/2`, direct runtime programs, private custom alternatives and spatial evaluation together here, including crop compensation and declared rules for every already available canvas image operation; introduce typed image uses with their implemented consumers. Implement section 6's independent sampling reference and bounded conforming image evaluation above/below native scale. Keep the still-used old paint-placement path until milestone 5. | Raw/composite and both evaluator results agree, including attached effects and mask/clipping. Private custom effects and all existing canvas commands survive the effect cutover; unsupported geometry refuses atomically. Object results never become paint targets. Sampling conformance passes. On the lowest-tier reference tablet measure painting above/below multi-image layers, object-affine motion and cache pressure before UI integration; fix failed caching assumptions here. |
-| 3. Layer consumers and conversions | Complete both command tables in section 8.4, full supported bake/dependency bounds and explicit unknown-support/admission refusals, masks, alpha/reference/region sampling and source-color workflows. Implement Convert to Object/Rasterize Layer and apply-mask conversion; prepare mixed-content image operations and shared selection/history state. Remove Web-only color-transfer policy. | No supported consumer omits objects or invents a paint target. Conversions preserve current appearance/color/material/outer properties and off-frame content, or refuse atomically under the stated domain/admission rules. Photo resampling uses one combined operation when edited. Jobs are bounded and cancellable. |
-| 4. Tools and creation | Implement target activation/gesture/shortcut tables, F64 object sessions, all transform command policies, typed child rows/actions/thumbnails/drag, multi-action notices and source-aware window-held clipboard. Reuse insertion destinations. GTK review first, then all five host projections and localization. External Place/Paste creates objects; internal pixel paste remains paint; explicit Paste Into creates a masked object layer. | Real multi-image, internal copy/paste/paint, cross-layer picking, overlap, touch, mask, notices, clipboard publication failure/cancel and undo work on every affected host. No native occurrence-only assumptions remain in object rows. Replacement creation/consumer paths work before retained placement removal. |
-| 5. Integer-only paint/container/mask cutover | Replace retained occurrence/mask placement and callers using the mask-operation table and pixel preview/commit jobs. Publish private integer view origin with complete resize/rebase rebuild detection. Preserve the effect spatial compensation already established in milestone 2 when removing portable composition origin; retain the per-filter image-operation rules through the integer cutover. Complete arbitrary-offset base reads, photo crop/grow/deletion, exact image permutations and combined resampling. Remove `/2`, old placement/cache/helpers, Apply Transform to Pixels and obsolete refusals; rename Revert to Original while retaining Discard Paint Edits. Materialize authored masks and split transient operation coverage before removing `initial`. Switch composition/coverage versions at this complete cutover. | Open, Place, all paste flavors, paint transforms, crop on every edge, grow/deletion, image resize/orientation, conversions and recovered undo remain usable. No general retained layer/container placement or portable origin survives. Photo domains cover the canvas under the same rules as paint, and base rectangles validate. |
-| 6. Remaining format cleanup and reader audit | Complete remaining section 10 removals and audit the effect cutover already landed in milestone 2. Confirm no Definition handles/store/edits/layout/topology or portable custom grammar survives; keep application phases and implemented typed image/spatial uses. Centralize saved-selection/property applicability, relationship classification and unit definitions. Audit admission/dependencies and preserve fixed preview/archive/limit/MIME behavior. | Same-limit admission/save/reopen and Unsupported-versus-Invalid fixtures pass, including all removed types. Ancillary metadata cannot keep dead images alive. Built-ins and private custom programs survive required sessions/worker/undo workflows. Current guides specify actual wire fields, private alternatives and defaults. |
-| 7. Semantic freeze and full qualification | Finish object and destructive-transform fixtures, replace obsolete placement baselines, retain unaffected render contracts, settle sampling conformance, complete all host journeys and tier performance rows. Update current guides. | Every section 14 gate has implementation evidence. Unmet or unmeasured gates block GA; passing the design review only permits starting implementation. |
+| 1. Shared model, persistence and rendering foundation | Combine the original shared-model and image-rendering groups. Add immutable ID-bearing images, paint bindings with policy/offset, object records, exact F64 transport and the context-aware registry. Complete package/private recovery/worker/incremental-history dependencies and image interning. Implement objects in both evaluators, read-only queries, source residency/admission, bounded invalidation and common arbitrary-offset paint-base reads. Separate frame, effect coordinates, source support and signed evaluation regions. Land effect `/2`, direct runtime programs, private custom alternatives, crop/orientation/resize compensation and evaluated spatial mappings together. Establish the independent sampling oracle before selecting the bounded GPU implementation. | Shared objects and paint bases save/open/copy/undo, including undo-only images and mixed occurrence versions. Both evaluators, exact queries and captures agree through masks/effects/clipping; existing paint/import and canvas image commands remain usable. Sampling conformance and existing regressions pass. Measure the early Android low-tier gate below. Object authoring remains unexposed until milestone 2. |
+| 2. Complete editor cutover | Combine the original layer-consumer/conversion, tools/creation, integer-model and remaining-format-cleanup groups. Complete both section 8.4 command tables, Convert to Object/Rasterize Layer, source repair, selection/alpha/reference queries and bounded conversions. Add F64 object interactions, typed child rows/order/thumbnails, notices and source-aware clipboard. Review GTK first, then implement every host projection and localization. Replace retained paint/container/mask placement with integer positioning and destructive jobs; finish crop/grow/deletion, image operations and private view-origin history. Materialize authored masks, remove the existing occurrence `/2` adapter, switch composition/coverage/output contracts and delete superseded commands/helpers/fields in the same landing. Audit admission, relationship/property applicability, resource lifetime and reader classifications. | Open/Place/paste, object picking/order, painting, transforms, crop/grow, conversions, masks and recovered undo work through the new model. No general retained paint/container placement, portable composition origin, authored lazy mask or stale definition identity remains. Supported consumers preserve content or refuse atomically under explicit admission rules. GTK, Web and Android journeys pass; Windows validation is deferred to milestone 3 and Apple testing is excluded by the agreed validation scope. |
+| 3. GA qualification and freeze | Complete destructive-transform and object fixtures, replace the eight obsolete placement baselines and retain the other 132 render contracts. Complete Android tier measurements, cache-pressure and fresh-input qualification, GTK/Web/Android journeys and the deeper Windows validation. Audit every section 14 contract and current guide against the implementation. | Every required release gate has current evidence; unmet or unmeasured gates remain identified and block the corresponding qualification claim. Record the explicit Apple testing exclusion rather than claiming it was tested. Freeze authored semantics only after conformance and performance qualification. |
 
-Version each wire contract when its meaning changes, using section 5's final
-registry names. Do not reuse a final version for incompatible intermediate
-meanings. Section 5.4's exact-representability writer and temporary existing `/2`
-adapter resolve the milestone ordering: objects can round-trip from milestone 1
-while Place/Paste and old paint transforms remain usable until their replacements
-land. Remove that adapter at milestone 5. This is the selected path, not an open
-choice between early destructive paste and one oversized tools/model cutover.
-For other records, stage runtime helpers until their one complete wire cutover;
-do not create temporary new schemas. Milestone 2's effect change replaces
-private custom programs, runtime definitions, crop/spatial-reference evaluation
-and the final effect adapter in the same complete landing. It cannot wait until
-milestone 6 once a spatial/image binding is being serialized.
+Version each wire contract once its complete semantics are available, using
+section 5's final names. Milestone 1 retains the existing occurrence `/2` adapter
+and writes final `/3` only for exactly representable occurrences. Both resolve
+to the same runtime identities through history. Milestone 2 switches the remaining
+callers and removes `/2`; it never changes `/3` to an incompatible interim meaning.
+Other changed records switch once, with their complete evaluator and all private
+persistence consumers. No recovery migration is promised for pre-release schemas.
 
-Milestones 2 and 4 are substantial integration milestones: two evaluators plus
-damage/residency are required in the former; five native row/notice/clipboard
-projections in the latter. Plan implementation time accordingly. Internal
-subtasks may be developed separately, but do not call an incomplete consumer or
-one-host UI milestone complete.
+Start milestone 1 with sampling and effect-coordinate prototypes. A bounded
+algorithm must pass the independently enumerated reference; conventional mip or
+EWA filtering is not evidence of equivalence to the chosen tent. If the measured
+quality/performance tradeoff requires revising that contract, resolve it before
+exposing authoring or freezing the record. Do not silently loosen the reference
+or report a partial evaluator as a completed milestone.
+
+Implement every affected platform throughout these milestones. The agreed test
+scope focuses performance work on Android, permits skipping Apple tests, and
+postpones Windows runtime validation until milestone 3. Shared and host build
+checks still catch broken projections. Commit and push each complete authorized
+milestone, then report its changes, tests, failures and omissions for review
+before proceeding to the next milestone.
+
+Run the small Android affine-edit, save/open, private-recovery and recovered-Redo
+journey in both themes before the longer performance matrix. Freeze the runtime
+inputs for each measurement build; subsequent fixes rerun the affected checks.
+Milestone 2 starts by resolving failed object-motion and cold-composition gates
+before exposing object authoring. Keep that work within the editor cutover
+milestone rather than adding a separate optimization milestone.
 
 The early hardware gate uses the [low-tier reference](../performance/low-tier.md),
 currently the TCL TAB 11 Gen 2 (9465X), with the tier's 4248×2832 canvas and 60 fps
@@ -1862,8 +1912,8 @@ host, including package codec/session/effect records and immutable publication
 paths. Run the existing hardware `saved_artwork_render_contracts` suite when
 rendering semantics change. Add focused regressions for the new contracts in
 section 14, not a second parallel harness. GTK-first review is a UI sequencing
-step; no shared model or policy belongs in GTK. Do not call a milestone complete
-with the other affected hosts left broken.
+step; no shared model or policy belongs in GTK. Implement every host projection
+and follow section 13’s explicit runtime-testing scope.
 
 Complete milestone commits, fetch/rebase before each authorized push, and update
 the current owning guides in the same change. Keep measurements in the tier
@@ -2050,7 +2100,8 @@ or model tests cannot replace these journeys.
 Implement and review object rows, Move selection/handles and refusal actions in
 GTK first, in both themes, then complete native projections and repeat affected
 journeys on every host. This does not authorize platform-local policy or defer
-the other hosts past completion of the UI milestone.
+GTK, Web or Android past milestone 2; Windows runtime validation belongs to
+milestone 3, and Apple testing is excluded under section 13’s agreed scope.
 
 ### 14.3 Performance qualification
 
@@ -2060,7 +2111,7 @@ multi-image object layer, object-transform motion, masks/clipping/effects,
 pan/zoom/rotation, cache pressure and interrupted refinement. Include source
 upload/cold-cache cases and the first stroke after a view change. Account for
 conversion/admission failure without input stalls.
-The milestone 2 tablet prototype is an earlier prerequisite, not a substitute
+The milestone 1 tablet prototype is an earlier prerequisite, not a substitute
 for these final measurements after the complete model/tool cutover.
 
 Distinguish painting above an unchanged cached object result from editing the

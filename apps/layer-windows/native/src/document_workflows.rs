@@ -1151,7 +1151,7 @@ mod tests {
                 ],
                 [12, 9]
             );
-            assert!(imported.project.artwork.paint.iter().any(|(_,_,p)|p.original.is_some()));
+            assert!(imported.project.artwork.paint.iter().any(|(_,_,p)|p.base.is_some()));
             assert!(
                 imported
                     .source

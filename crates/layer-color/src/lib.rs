@@ -14,7 +14,7 @@ pub use output_rows::{build_local_tone_guide, encode_working_rows_with_guide, pr
 mod rasterize;
 pub use rasterize::rasterize_source;
 mod document;
-pub use document::{DocumentColorChange, PreparedDocumentColor, prepare_document_color, validate_document_color};
+pub use document::{DocumentColorChange, PreparedDocumentColor, prepare_document_color, validate_document_color, color_job_artwork, adopt_color_job_artwork};
 
 mod document_info;
 pub use document_info::{DocumentInfo, InspectedDocumentInfo, InspectedSourceInfo};

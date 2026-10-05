@@ -178,7 +178,7 @@ fn native_application_file_launch() {
         let doc = session.engine().document();
         assert_eq!([doc.composition().size[0], doc.composition().size[1]], expected.extent);
         assert_eq!(doc.composition().color.depth, SampleDepth::U16);
-        assert_source_samples(paint_at(doc, 0).original.as_deref().unwrap(), &expected);
+        assert_source_samples(paint_at(doc, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &expected);
         assert!(session.state().document_file.location.is_none());
     }
     new_photo::invoke(&w, CommandId::AddLayer);

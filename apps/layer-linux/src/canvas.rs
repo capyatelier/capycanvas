@@ -106,7 +106,7 @@ impl GpuCanvas {
         let document = self.session.engine().document().clone();
         let brush = self.session.engine().configured_brush().clone();
         let mut programs = Vec::new();
-        for (_, _, definition) in document.artwork.definitions.iter() {
+        for (_, _, definition) in document.artwork.effects.iter() {
             if !programs.contains(&definition.program) { programs.push(definition.program.clone()); }
         }
         let mut validating = !programs.is_empty();

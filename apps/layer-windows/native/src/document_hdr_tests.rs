@@ -132,7 +132,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         for _ in 0..24 {
             source.push_row(&sample.repeat(32)).unwrap();
         }
-        paint_mut(&mut project,0).original = Some(Arc::new(source.finish().unwrap()));
+        paint_mut(&mut project,0).base = Some(layer_core::PaintBase::new((Arc::new(source.finish().unwrap())).into()));
         let (gpu, mut state) = hdr_renderer(color);
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session = UiSession::from_project(gpu, project, None, [128, 96], Platform::Windows).unwrap();
@@ -285,7 +285,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
                 ],
                 [32, 24]
             );
-            let source=imported.project.artwork.paint.iter().find_map(|(_,_,p)|p.original.as_ref()).unwrap();
+            let source=imported.project.artwork.paint.iter().find_map(|(_,_,p)|p.base.as_ref().map(|base|&base.image)).unwrap();
             let mut row = vec![0; source.row_bytes()];
             source.rows().read(0, &mut row).unwrap();
             assert!(

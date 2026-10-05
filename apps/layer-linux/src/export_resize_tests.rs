@@ -75,7 +75,7 @@ fn native_export_again_retains_recipe_and_current_pixels_per_document() {
         let output = output.canonicalize().unwrap();
         let destination = output.join("retained.png");
         let mut project = new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        paint_at_mut(&mut project, 0).original = Some(rgba8_source([64, 48], |_, _| [128, 128, 128, 255]));
+        paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((rgba8_source([64, 48], |_, _| [128, 128, 128, 255])).into()));
         crate::open_workspace(&app, &windows, Some((project, None)));
         until(|| windows.borrow().last().is_some_and(|w| w.window.is_mapped()), "export owner window mapped");
         let w = windows.borrow().last().unwrap().clone();
@@ -236,7 +236,7 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
             .collect();
         builder.push_row(&row).unwrap();
     }
-    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(builder.finish().unwrap())).into()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);
@@ -734,7 +734,7 @@ fn native_export_webp_to_a_prechosen_file() {
     for y in 0..128 {
         builder.push_row(&(0..192).flat_map(|x| pixel(x, y)).collect::<Vec<_>>()).unwrap();
     }
-    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(builder.finish().unwrap())).into()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);

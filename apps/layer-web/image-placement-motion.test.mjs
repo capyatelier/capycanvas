@@ -8,7 +8,7 @@ const summary=values=>{
   const v=values.slice().sort((a,b)=>a-b),p=q=>v[Math.round((v.length-1)*q)];
   return {count:v.length,p50:p(.5),p95:p(.95),max:v.at(-1)};
 };
-import {readPackage,packageOccurrences,packageObject,packageResources,rasterIdentity,sourceIdentity} from './package-fixture.test.mjs';
+import {paintBaseImage,readPackage,packageOccurrences,packageObject,packageResources,rasterIdentity,sourceIdentity} from './package-fixture.test.mjs';
 export {sourceIdentity} from './package-fixture.test.mjs';
 export const placementSave=({evaluate,invoke,idle})=>async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'placementTest.saved');};
 
@@ -18,7 +18,7 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,base
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/image-placement/web-motion';await mkdir(directory,{recursive:true});
   const report={...hardware??{cpu:cpus()[0]?.model,gpu:(await call('SystemInfo.getInfo',{},null)).gpu.devices},loading_ms:loadingMs,runs:[]};
   const sources=sourceIdentity(baseline),layers=(await evaluate('JSON.parse(JSON.stringify(layerApp.state().layers,(_,v)=>typeof v==="bigint"?Number(v):v))')).slice(0,sources.length);
-  const originals=packageOccurrences(baseline).filter(o=>o.data.content.paint).map(o=>packageObject(baseline,o.data.content.paint).data.original).filter(Boolean);
+  const originals=packageOccurrences(baseline).filter(o=>o.data.content.paint).map(o=>paintBaseImage(baseline,o.data.content.paint)).filter(Boolean);
   let profileIndex=0;
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const screen=async(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);

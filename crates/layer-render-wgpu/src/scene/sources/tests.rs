@@ -115,11 +115,11 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
             let extent = [tiles as u32 * PAGE_SIZE, PAGE_SIZE];
             let mut doc = Document::new(PortableId::random(), extent[0], extent[1], DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
             let SourceTarget::Paint(paint) = doc.working.target.unwrap() else { unreachable!() };
-            doc.artwork.paint.get_mut(paint).unwrap().original = Some(scan_source(tiles, 0));
+            doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((scan_source(tiles, 0)).into()));
             let program = crate::tests::fixture("threshold").program();
             let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == "threshold").unwrap();
-            let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: program.clone() }).unwrap();
-            let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: EffectInstance::new(program).values}).unwrap();
+            let size=doc.composition().size;
+            let effect=doc.artwork.effects.insert(PortableId::random(),EffectApplication::new(program.clone(),EffectInstance::new(program).values,size)).unwrap();
             let handle = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "Threshold")).unwrap();
             let stack = doc.composition().result;
             doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, handle);
@@ -151,7 +151,7 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
                 assert_threshold_pixels(&r, threshold, 0);
             }
             let replacement = scan_source(capacity, 64);
-            doc.artwork.paint.get_mut(paint).unwrap().original = Some(replacement);
+            doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((replacement).into()));
             doc.artwork.paint.get_mut(paint).unwrap().domain[0] = capacity as u32 * PAGE_SIZE;
             let composition = doc.artwork.root;
             doc.artwork.compositions.get_mut(composition).unwrap().size[0] = capacity as u32 * PAGE_SIZE;
@@ -176,13 +176,13 @@ fn discarded_source_decodes_cannot_be_reused_as_valid_pixels() {
     r.source_tiles.get_mut().limits.slots = 2;
     let source = scan_source(2, 32);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    r.original_source_tile(&source, [0, 0], &mut encoder).unwrap();
+    r.paint_base_tile(&layer_core::authored::PaintBase::new(source.clone().into()), [0, 0], &mut encoder).unwrap();
     assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_some());
     drop(encoder);
     assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_none());
     for x in 0..2 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let tile = r.original_source_tile(&source, [x, 0], &mut encoder).unwrap().unwrap();
+        let tile = r.paint_base_tile(&layer_core::authored::PaintBase::new(source.clone().into()), [x, 0], &mut encoder).unwrap().unwrap();
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
         let id = x as u8 + 32;
         let expected = [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11)]
@@ -318,4 +318,85 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
     assert!(pending_query.is_none());
     drop(r);
     startup::finish_shader_compiler_shutdown();
+}
+
+#[test]
+fn source_mip_reservations_wait_for_retired_slots_and_release_discarded_charges() {
+    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cache=DecodedTiles::default();let source=scan_source(25,0);
+    for x in 0..24 {cache.plan(&r,&source,[x,0]).unwrap();}
+    assert_eq!(cache.gpu_bytes(),24*FLOAT_TILE_BYTES);
+    let bytes=cache.mip_budget();assert_eq!(bytes,44*FLOAT_TILE_BYTES);
+    let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    assert!(!cache.reserve_mips(bytes,&encoder).unwrap());
+    assert_eq!(cache.slots.len(),MIN_DECODED_SLOTS);
+    assert_eq!(cache.gpu_bytes(),24*FLOAT_TILE_BYTES);
+    encoder.submit(&r.queue);crate::test_support::complete(&r);
+    assert_eq!(cache.gpu_bytes(),MIN_DECODED_SLOTS as u64*FLOAT_TILE_BYTES);
+    let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    assert!(cache.reserve_mips(bytes,&encoder).unwrap());
+    assert!(cache.reserve_mips(bytes+1,&encoder).is_err());
+    cache.reserve_mips(0,&encoder).unwrap();
+    for x in 0..24 {cache.plan(&r,&source,[x,0]).unwrap();}
+    assert!(!cache.reserve_mips(bytes,&encoder).unwrap());
+    drop(encoder);
+    cache.reap_retired();
+    assert_eq!(cache.retired_bytes.load(Ordering::Acquire),0);
+    assert_eq!(cache.gpu_bytes(),MIN_DECODED_SLOTS as u64*FLOAT_TILE_BYTES);
+}
+
+#[test]
+fn prepared_source_samples_upload_without_renderer_decompression_and_share_cached_pixels() {
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let source=layer_core::color::source::rgba8_source([PAGE_SIZE;2],|_,_|[64,128,192,128]);
+    let bytes=Arc::new([64,128,192,128].repeat((PAGE_SIZE*PAGE_SIZE) as usize));
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::NativeSamples(bytes)).unwrap();
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    assert_eq!(r.device.source_samples.stats().misses,0);
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let hit=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::NativeSamples(Arc::new(Vec::new()))).unwrap();
+    assert_eq!(tile.view,hit.view);
+    assert_eq!(r.source_cache_work(),[1,1]);
+    let alpha=128./255.;
+    let expected=[64,128,192].map(|code| RgbSpace::Srgb.decode(f64::from(code)/255.) as f32*alpha);
+    for pixel in crate::test_support::float_pixels(&r,&tile.texture) {
+        assert!((pixel[3]-alpha).abs()<2e-6);
+        for c in 0..3 {assert!((pixel[c]-expected[c]).abs()<2e-6);}
+    }
+}
+
+#[test]
+fn prepared_icc_working_pixels_upload_exactly_without_renderer_color_transform() {
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut source=(*scan_source(1,0)).clone();
+    source.interpretation.profile=ColorProfile::Icc(layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::ProPhoto)).unwrap().into());
+    let source=Arc::new(source);let expected=[0.25f32,0.125,0.0625,0.5];
+    let mut bytes=Vec::with_capacity(FLOAT_TILE_BYTES as usize);
+    for _ in 0..PAGE_SIZE*PAGE_SIZE {for value in expected {bytes.extend_from_slice(&value.to_ne_bytes());}}
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::PremultipliedWorkingPixels(Arc::new(bytes))).unwrap();
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    assert_eq!(r.device.source_samples.stats().misses,0);
+    assert!(r.source_tiles.borrow().decoders.is_empty());
+    assert!(crate::test_support::float_pixels(&r,&tile.texture).into_iter().all(|pixel| pixel==expected));
+}
+
+#[test]
+fn prepared_gray_alpha_samples_are_expanded_by_shared_worker_before_upload() {
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut builder=SourceBuilder::new([PAGE_SIZE;2],SourceInterpretation {channels:SourceChannels::GrayAlpha,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},1024*1024).unwrap();
+    let row=[96,192].repeat(PAGE_SIZE as usize);for _ in 0..PAGE_SIZE {builder.push_row(&row).unwrap();}
+    let source=Arc::new(builder.finish().unwrap());
+    let prepared=crate::prepare_image_tile(&source,[0;2],RgbSpace::Srgb,&r.device.source_samples,None).unwrap();
+    let PreparedSourcePixels::NativeSamples(bytes)=&prepared else {panic!("Expected native working samples")};
+    assert!(bytes.chunks_exact(4).all(|pixel|pixel==[96,96,96,192]));
+    let reads=r.device.source_samples.stats();let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],prepared).unwrap();
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    let after=r.device.source_samples.stats();assert_eq!((reads.hits,reads.misses),(after.hits,after.misses));
+    let alpha=192f32/255.;let value=RgbSpace::Srgb.decode(96./255.) as f32*alpha;
+    for pixel in crate::test_support::float_pixels(&r,&tile.texture) {
+        assert!((pixel[3]-alpha).abs()<2e-6);for channel in &pixel[..3] {assert!((*channel-value).abs()<2e-6);}
+    }
 }

@@ -127,7 +127,7 @@ Properties offers **Color mode** after opacity and blending for paint content: F
 Grayscale, and Two-tone (black & white). Changes convert existing paint and
 constrain later painting. Undo restores the previous pixels and mode; returning
 to Full color keeps the converted pixels. Reduced modes appear in the layer
-subtitle. Masks, selections and effect layers do not offer this control.
+subtitle. Image objects, masks, selections and effect layers do not offer this control.
 
 GTK Properties gives the layer name its own heading, with the smaller, muted
 layer type below it. **Add Filter** sits at the right of that second row with an
@@ -138,8 +138,9 @@ Other hosts keep the type in parentheses after a differing name, omit it for pai
 layers, and place **Add Filter** after the Properties controls. It is also available
 in each eligible layer's context menu. It opens the menu bar's filter categories and
 adds a local filter above the owner's existing chain, so it runs last. Selecting
-a local filter keeps its owner as the destination. Paint layers and isolated
-groups accept local filters; locked owners and Pass Through groups do not.
+a local filter keeps its owner as the destination. Paint layers, image object
+layers and isolated groups accept local filters; locked owners and Pass Through
+groups do not.
 Generators and Frequency Separation stay in the menu bar. A current selection
 becomes the new filter's mask. Insertion is one undo step and selects Properties.
 Every entry point captures its layer, so changing selection while a menu is open

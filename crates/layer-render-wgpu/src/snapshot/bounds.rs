@@ -85,6 +85,7 @@ impl SnapshotGpu {
                         transform.forward_bounds(local_hull(view, target)?.outset(if copied {0.} else {transform.placement.interpolation.support() as f32}))
                             .outset(view.paint(h).unwrap().raster.wait_data()?.watercolor.map_or(0., |style| 2. * style.edge_width.clamp(1.,16.)))
                     },
+                    OccurrenceContent::Objects(_) => scene::Scene::object_content_bounds(view,handle).to_rect(),
                     OccurrenceContent::Effect(_) if view.effect(handle).is_some_and(|e| e.program.kind == layer_core::EffectKind::Generator) => Rect::from_extent(original_extent), _ => Rect::EMPTY,
                 };
                 if !next.is_empty() { candidates.push(next); }
@@ -130,41 +131,12 @@ impl SnapshotGpu {
             let [dx, dy] = [(*x).min(last[0] - x), (*y).min(last[1] - y)];
             (dx.min(dy), dx + dy, *x, *y)
         });
-        if target.is_none() && (origin != [0.;2] || extent != original_extent) {
-            let generators: Vec<_> = scene.view().order().iter().copied().filter(|&h| scene.view().effect(h).is_some_and(|e| e.program.kind == layer_core::EffectKind::Generator)).collect();
-            for handle in generators {
-                let view = scene.view(); let owner = view.occurrence(handle).unwrap();
-                let parent_stack = view.stack(handle).unwrap();
-                let world = scene::world_offset(view, handle, false);
-                let offset = Point {x:owner.translation.x-world.x,y:owner.translation.y-world.y};
-                let attachment = owner.attachment;
-                let child = scene.artwork.stacks.insert(layer_core::authored::PortableId::random(), layer_core::authored::Stack {entries:vec![handle]}).map_err(str::to_owned)?;
-                let coverage = scene.artwork.coverage.insert(layer_core::authored::PortableId::random(), layer_core::authored::CoverageSource {
-                    domain:original_extent,raster:Default::default(),initial:Some(layer_core::Selection::polygon(Rect::from_extent(original_extent).corners().to_vec()).map_err(|e|e.to_string())?),default_coverage:0.,operations:Arc::default()
-                }).map_err(str::to_owned)?;
-                let mut group = layer_core::authored::Occurrence::new(OccurrenceContent::Stack(child), "");
-                group.attachment = attachment;
-                group.mask = Some(layer_core::authored::MaskUse {source:coverage,linked:false,enabled:true,inverted:false,translation:offset,placement:layer_core::Projective::IDENTITY});
-                let group = scene.artwork.occurrences.insert(layer_core::authored::PortableId::random(),group).map_err(str::to_owned)?;
-                let entries = &mut scene.artwork.stacks.get_mut(parent_stack).unwrap().entries;
-                let entry = entries.iter_mut().find(|h| **h == handle).ok_or("Missing generator occurrence")?; *entry = group;
-                scene.artwork.occurrences.get_mut(handle).unwrap().attachment = layer_core::Attachment::None;
-                if let SceneScope::Members(members) = &mut scene.scope { let mut updated = members.to_vec(); updated.push(group); *members = updated.into(); }
-                scene.index = Arc::new(SceneIndex::build(&scene.artwork)?);
-            }
-        }
-        let roots = scene.view().children(None).to_vec();
-        for handle in roots {
-            let occurrence = scene.artwork.occurrences.get_mut(handle).unwrap();
-            occurrence.translation.x -= origin[0]; occurrence.translation.y -= origin[1];
-            if let Some(mask) = &mut occurrence.mask { mask.translation.x -= origin[0]; mask.translation.y -= origin[1]; }
-        }
-        scene.artwork.compositions.get_mut(scene.artwork.root).unwrap().size = extent;
+        scene.offset = std::array::from_fn(|axis| scene.offset[axis] - f64::from(origin[axis]));
         const BATCH: usize = 8;
         let scope = scene.scope.clone();
         let mut snapshot = SnapshotRenderer::construct(Arc::new(scene), scope, control.clone(), self).map_err(|e| e.to_string())?;
         snapshot.planned_pixel_bytes = PLANNED_PIXEL_BYTES / BATCH as u64;
-        if target.is_none() { snapshot.renderer.capture_frame = Some((origin, original_extent)); }
+        snapshot.extent = extent;
         if target.is_none() { snapshot.prepare_effect_analysis_async(scene::Output::Artwork(None)).await?; }
         let device = snapshot.renderer.device.clone();
         let queue = snapshot.renderer.queue.clone();
@@ -179,7 +151,7 @@ impl SnapshotGpu {
             if x >= b[0] && y >= b[1] && x + size[0] <= b[2] && y + size[1] <= b[3] { continue; }
             let region = [x, y, size[0], size[1]];
             let snapshot_mask_inverted = target.and_then(|t| snapshot.scene.view().source_owner(t).and_then(|h| snapshot.scene.view().mask(h))).is_some_and(|(use_,_)| use_.inverted);
-            let capture = |snapshot: &mut SnapshotRenderer| {
+            let capture = async |snapshot: &mut SnapshotRenderer| {
                 if let Some(id) = target {
                     snapshot.with_region_gpu(region, 32, |r, packet, region, encoder| {
                         let coordinate = [x / PAGE_SIZE, y / PAGE_SIZE];
@@ -194,18 +166,18 @@ impl SnapshotGpu {
                         pipeline.reduce(&r.device, encoder, &output, &texture, [x, y], extent, mask,
                             selection.as_ref().and(r.selection_clip.buffer.as_ref()));
                         Ok(())
-                    })
+                    }).await
                 } else {
                     snapshot.capture_region_gpu(region, 32, |device, texture, encoder| {
                         pipeline.reduce(device, encoder, &output, texture, [x, y], extent, None, None);
-                    })
+                    }).await
                 }
             };
-            match capture(&mut snapshot) {
+            match capture(&mut snapshot).await {
                 Err(GpuRasterError::CaptureBudget { .. }) => {
                     if pending > 0 { read_bounds(&device, &queue, &output).await?; }
                     snapshot.planned_pixel_bytes = PLANNED_PIXEL_BYTES;
-                    capture(&mut snapshot).map_err(|e| e.to_string())?;
+                    capture(&mut snapshot).await.map_err(|e| e.to_string())?;
                     snapshot.planned_pixel_bytes = PLANNED_PIXEL_BYTES / BATCH as u64;
                     pending = BATCH;
                 }
@@ -220,8 +192,8 @@ impl SnapshotGpu {
         if pending > 0 { b = read_bounds(&device, &queue, &output).await?; }
         control.check().map_err(|e| e.to_string())?;
         Ok(if b[0] >= b[2] || b[1] >= b[3] { Rect::EMPTY } else {
-            Rect { min: Point { x: b[0] as f32 + origin[0], y: b[1] as f32 + origin[1] },
-                max: Point { x: b[2] as f32 + origin[0], y: b[3] as f32 + origin[1] } }
+            DocRect {min:std::array::from_fn(|axis|(origin[axis] as i64).saturating_add(i64::from(b[axis]))),
+                max:std::array::from_fn(|axis|(origin[axis] as i64).saturating_add(i64::from(b[axis+2])))}.to_rect()
         })
     }
 }
@@ -231,7 +203,7 @@ async fn read_bounds(device: &PipelineDevice, queue: &wgpu::Queue, output: &wgpu
 }
 
 fn local_hull(scene: SceneView<'_>, target: SourceTarget) -> Result<Rect, String> {
-    let mut bounds = scene.original(target).map_or(Rect::EMPTY, |source| Rect::from_extent(source.extent));
+    let mut bounds = scene.paint_base(target).map_or(Rect::EMPTY, |base| source_access::paint_base_bounds(base).to_rect());
     let raster = scene.raster(target).ok_or("Missing raster source")?.wait_data()?;
     for key in raster.tiles.keys().filter(|key| key.plane == RasterPlane::Color) { bounds = bounds.union(page_rect(key.coordinate).to_rect()); }
     Ok(bounds.intersect(Rect::from_extent(scene.target_extent(target))))

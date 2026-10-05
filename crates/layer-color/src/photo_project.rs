@@ -35,7 +35,7 @@ pub fn photo_project(
     composition.blend = BlendSpace::Perceptual.for_depth(depth);
     document.artwork.metadata = Arc::new(metadata);
     let SourceTarget::Paint(paint) = document.working.target.unwrap() else { unreachable!() };
-    document.artwork.paint.get_mut(paint).unwrap().original = Some(Arc::new(source));
+    document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new(Arc::new(source).into()));
     let paper = document.scene().order()[1];
     document.artwork.occurrences.get_mut(paper).unwrap().visible = false;
     document.validate(ProjectLimits::default())?;
