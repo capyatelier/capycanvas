@@ -7,6 +7,7 @@
 #include "LayersView.h"
 #include "PalettesView.h"
 #include "StatsView.h"
+#include "ScopesView.h"
 #include "ProofPanel.h"
 #include "WorkspaceQuery.h"
 #include "ColorPair.h"
@@ -148,7 +149,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             root=tiles;
         }else{
             StackPanel content;content.Spacing(12);auto panelId=str(panel,L"id");
-            double inset=panelId==L"stats"||panelId==L"properties"?6:8;
+            bool scope=panelId==L"histogram"||panelId==L"waveform";
+            double inset=scope||panelId==L"stats"||panelId==L"properties"?6:8;
             contentHeight=[content]{return content.ActualHeight();};
             content.Padding(Thickness{inset,inset,inset,inset});
             if(panelId==L"proof"){content.VerticalAlignment(VerticalAlignment::Top);content.Children().Append(ProofPanel(data,bindings));}
@@ -167,6 +169,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 }
                 else if(kind==L"properties")content.Children().Append(PropertiesPanel(data,bindings));
                 else if(kind==L"stats")content.Children().Append(StatsPanel(data,bindings));
+                else if(kind==L"histogram"||kind==L"waveform")content.Children().Append(CapyScopes::ScopePanel(data,bindings,kind==L"waveform"));
                 else if(kind==L"brush_size"||kind==L"brush_opacity"){
                     bool size=kind==L"brush_size";
                     content.Children().Append(number(data,size?L"Brush size":L"Brush opacity",
@@ -195,7 +198,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     auto root=fittedColor.XamlRoot();
                     return ColorPanelNaturalHeight(data,fittedColor.ActualWidth(),root?root.RasterizationScale():1.)+2*inset;
                 };
-            }else if(!scrollable||str(panel,L"id")==L"proof")root=content;
+            }else if(!scrollable||scope||str(panel,L"id")==L"proof")root=content;
             else if(str(panel,L"id")==L"tool_settings"||str(panel,L"id")==L"properties"){
                 scrollMetrics=[] {return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
                 ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
@@ -209,7 +212,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);root=scroll;
             }
         }
-    if(!scrollMetrics&&(contentHeight||navigator)&&str(panel,L"id")!=L"color"&&str(panel,L"id")!=L"proof")
+    if(!scrollMetrics&&(contentHeight||navigator)&&str(panel,L"id")!=L"color"&&str(panel,L"id")!=L"proof"
+        &&str(panel,L"id")!=L"histogram"&&str(panel,L"id")!=L"waveform")
         scrollMetrics=[]{return O({{L"fixed_height",N(0)},{L"unit_height",N(0)}});};
     if(!scrollable){
         auto id=str(panel,L"id");

@@ -437,7 +437,6 @@ resources-picker-neutral = Escolher ponto neutro
 resources-picker-prompt = Clique em um ponto neutro
 resources-picker-empty = Escolha um ponto com cor visível.
 resources-picker-neutral-failed = Escolha outro ponto. Esta cor não pode ficar neutra com Equilíbrio de branco.
-resources-picker-unavailable = Os conta-gotas dos ajustes ainda não estão disponíveis nesta plataforma.
 
 resources-curves-help = Arraste os pontos para alterar os tons. As teclas de seta movem o ponto selecionado; Shift move-o mais longe. Clique duas vezes em um ponto interno para removê-lo.
 resources-curves-reset = Redefinir curva
@@ -494,7 +493,6 @@ resources-lookup-space = Espaço de cor da LUT
 resources-lookup-intensity = Intensidade
 resources-lookup-import = Importar LUT…
 resources-lookup-files = Arquivos LUT 3D (.cube)
-resources-lookup-unavailable = A importação de tabelas de consulta de cores ainda não está disponível nesta plataforma.
 resources-lookup-failed = Não foi possível importar a tabela de consulta.
 resources-layer-menu-stop-using-as-reference = Parar de usar esta camada como referência
 resources-coverage-from-layer-opacity = A partir da opacidade da camada

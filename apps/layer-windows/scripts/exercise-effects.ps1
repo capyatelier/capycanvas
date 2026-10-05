@@ -83,6 +83,7 @@ function Preview-Hash([string]$Id){
 }
 
 function Field([string]$Axis){Control "property-rgb-$Axis"}
+function Graph-Height{200*[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.}
 function Show-Graph([double]$Percent=0){
     $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent((Control 'property-rgb-curve'))
     while($node){$scroll=$null;if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll) -and $scroll.Current.VerticallyScrollable){break};$node=$walker.GetParent($node)}
@@ -91,8 +92,8 @@ function Show-Graph([double]$Percent=0){
 }
 function Tap-Point([int]$Index){
     $point=(Property 'rgb').value.value[$Index];$low=$point[1] -lt .5;Show-Graph $(if($low){100}else{0})
-    $r=(Control 'property-rgb-curve').Current.BoundingRectangle;$top=if($low){$r.Bottom-$r.Width}else{$r.Y}
-    $at=@([int][Math]::Min([Math]::Max($r.X+$point[0]*$r.Width,$r.Left+10),$r.Right-10),[int][Math]::Min([Math]::Max($top+(1-$point[1])*$r.Width,$r.Top+10),$r.Bottom-10))
+    $r=(Control 'property-rgb-curve').Current.BoundingRectangle;$height=Graph-Height;$top=if($low){$r.Bottom-$height}else{$r.Y}
+    $at=@([int][Math]::Min([Math]::Max($r.X+$point[0]*$r.Width,$r.Left+10),$r.Right-10),[int][Math]::Min([Math]::Max($top+(1-$point[1])*$height,$r.Top+10),$r.Bottom-10))
     [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
     Wait-Until {(Property 'rgb').curve.selected -eq $Index} "Tapping point $Index did not select it"
 }
@@ -183,11 +184,10 @@ function Check-CurveGestures {
     function Curve-Json {ConvertTo-Json -InputObject ((Property 'rgb').value.value) -Compress -Depth 10}
     function Curve-At([double]$X,[double]$Y) {
         Show-Graph
-        # The graph is square; UIA can report only its visible, clipped height.
         $hit=@{at=$null}
         Wait-Until {
             $r=(Control 'property-rgb-curve').Current.BoundingRectangle
-            $at=@([int]($r.X+$X*$r.Width),[int]($r.Y+(1-$Y)*$r.Width))
+            $at=@([int]($r.X+$X*$r.Width),[int]($r.Y+(1-$Y)*(Graph-Height)))
             $hit.at=$at
             !($at[0] -le $r.Left+6 -or $at[0] -ge $r.Right-6 -or $at[1] -le $r.Top+6 -or $at[1] -ge $r.Bottom-6)
         } 'Curve contact is outside the visible graph' 5
@@ -249,8 +249,9 @@ function Check-CurveGestures {
             $at=Curve-At .3 .9;$to=Curve-At .36 .6
             [CapyRowPointer]::Down($device,$at[0],$at[1])
             Wait-Until {(Property 'rgb').value.value.Count -eq 4} "$device insertion did not preview"
+            $inserted=(Property 'rgb').value.value[1]
             for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($at[0]+($to[0]-$at[0])*$i/8),[int]($at[1]+($to[1]-$at[1])*$i/8));Start-Sleep -Milliseconds 30}
-            Wait-Until {$p=(Property 'rgb').value.value[1];[Math]::Abs($p[0]-.36) -lt .015 -and [Math]::Abs($p[1]-.6) -lt .015} "$device inserted point did not follow the same contact"
+            Wait-Until {$p=(Property 'rgb').value.value[1];[Math]::Abs($p[0]-$inserted[0]-.06) -lt .015 -and [Math]::Abs($p[1]-$inserted[1]+.3) -lt .015} "$device inserted point did not follow the same contact"
             [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
             if((Property 'rgb').value.value.Count -ne 4){throw "$device insert and drag did not keep the point"}
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device insert and drag was not one Undo"
@@ -265,7 +266,7 @@ function Check-CurveGestures {
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device double tap removal was not one Undo"
             $point=(Property 'rgb').value.value[1];$from=Curve-At $point[0] $point[1]
             $r=(Control 'property-rgb-curve').Current.BoundingRectangle
-            $away=@($from[0],[int]($r.Y-.25*$r.Width))
+            $away=@($from[0],[int]($r.Y-.25*(Graph-Height)))
             [CapyRowPointer]::Down($device,$from[0],$from[1])
             for($i=1;$i -le 10;$i++){[CapyRowPointer]::Move($from[0],[int]($from[1]+($away[1]-$from[1])*$i/10));Start-Sleep -Milliseconds 30}
             Wait-Until {(Property 'rgb').value.value.Count -eq 2} "$device drag beyond the graph did not remove the point"

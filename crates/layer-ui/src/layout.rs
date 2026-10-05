@@ -699,7 +699,6 @@ pub enum PanelKind {
 }
 
 impl Panel {
-    pub fn available_on(self, platform: crate::Platform) -> bool { !matches!(self, Self::Histogram | Self::Waveform) || platform != crate::Platform::Windows }
     /// Normal starting column width, excluding its divider. Allocation may
     /// raise this to a measured minimum or fit it into a smaller viewport.
     pub fn default_width(self) -> f32 {

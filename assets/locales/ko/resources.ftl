@@ -556,7 +556,6 @@ resources-picker-neutral = 중성색 지점 선택
 resources-picker-prompt = 중성색 지점을 클릭하세요
 resources-picker-empty = 색이 보이는 지점을 선택하세요.
 resources-picker-neutral-failed = 다른 지점을 선택하세요. 이 색은 화이트 밸런스로 중성색을 만들 수 없습니다.
-resources-picker-unavailable = 이 플랫폼에서는 아직 조정 스포이드를 사용할 수 없습니다.
 
 resources-histogram-preview = 미리 보기
 resources-histogram-updating = 업데이트 중…
@@ -611,7 +610,6 @@ resources-lookup-space = LUT 색 공간
 resources-lookup-intensity = 강도
 resources-lookup-import = LUT 가져오기…
 resources-lookup-files = 3D LUT 파일(.cube)
-resources-lookup-unavailable = 이 플랫폼에서는 아직 색상 조회 파일을 가져올 수 없습니다.
 resources-layer-menu-stop-using-as-reference = 이 레이어를 참조로 사용하지 않기
 resources-coverage-from-layer-opacity = 레이어 불투명도에서
 resources-coverage-from-layer-mask = 레이어 마스크에서

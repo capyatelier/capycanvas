@@ -6,7 +6,7 @@ fn histogram_open(s: &mut UiSession<Recorder>) {
 
 #[test]
 fn histogram_controls_have_captions_before_the_first_frame() {
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
+    for platform in Platform::ALL {
         let s = session(platform);
         for view in [&s.state.histogram, &s.state.waveform, &s.state.tonal_histogram] {
             assert_eq!(view.sources.len(), 4);
@@ -125,32 +125,10 @@ fn histogram_retained_panel_configurations_publish_only_supported_host_controls(
             let copy=crate::customization::PanelCopy::new(&s.state,config);
             let view=crate::customization::panel_view(&s.state,config.id,&copy).unwrap();
             let actual:Vec<_>=view.controls.iter().map(|control|control.control).collect();
-            let expected=if config.id.available_on(platform) {PanelControl::available(config.id)} else {&[]};
+            let expected=PanelControl::available(config.id);
             assert_eq!(actual,expected,"{platform:?} {:?}",config.id);
-            if config.id==Panel::Histogram {assert_eq!(actual.is_empty(),!Panel::Histogram.available_on(platform));}
         }
         assert_eq!(serde_json::to_vec(&s.state.workspace).unwrap(),serialized);
-    }
-}
-
-#[test]
-fn histogram_unsupported_host_actions_preserve_state_backend_history_and_workspace() {
-    use crate::HistogramAction::*;
-    for platform in Platform::ALL.into_iter().filter(|platform|!Panel::Histogram.available_on(*platform)) {
-        for contact in [false,true] {
-        let mut s=session(platform);if contact {s.pen(event(&s,1,PenPhase::Down,0.5)).unwrap();}
-        let state=serde_json::to_vec(&s.state).unwrap();let document=s.engine.document().clone();
-        let checkpoint=s.engine.checkpoint();let clipping=s.engine.backend().clipping_previews.clone();
-        let requests=s.engine.backend().snapshot_requests.len();let cancels=s.engine.backend().snapshot_cancels;
-        let composites=s.engine.backend().composites;let dabs=s.engine.backend().dabs;
-        for action in [Source {index:3},Channel {index:4},Logarithmic {enabled:true},Shadows {enabled:true},Highlights {enabled:true}] {
-            s.dispatch(UiAction::Histogram {action}).unwrap();
-            assert!(serde_json::to_vec(&s.state).unwrap()==state,"unsupported Histogram action changed UI state on {platform:?}");assert_eq!(s.engine.document(),&document);assert_eq!(s.engine.checkpoint(),checkpoint);
-            assert_eq!(s.engine.backend().clipping_previews,clipping);assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert_eq!(s.engine.backend().snapshot_cancels,cancels);
-            assert_eq!(s.engine.backend().composites,composites);assert_eq!(s.engine.backend().dabs,dabs);
-            assert_eq!(s.pen_contact,contact);
-        }
-        }
     }
 }
 
@@ -611,13 +589,12 @@ fn waveform_source_mutation_and_suspension_retire_shared_data_and_query() {
 }
 
 #[test]
-fn waveform_dedicated_command_is_localized_and_queries_only_supported_hosts() {
+fn waveform_dedicated_command_is_localized_and_queries_statistics() {
     for platform in Platform::ALL {for language in UiLanguage::ALL {
         let mut s=session(platform);s.set_localization(Localizer::shared(language));
         assert_eq!(CommandId::Waveform.localized_label(s.localization()),s.localization().text(MessageId::COMMAND_WAVEFORM));
         let config=s.state.workspace.layout.panel(Panel::Waveform).unwrap();assert_eq!(crate::customization::PanelCopy::new(&s.state,config).title,s.localization().text(MessageId::RESOURCES_WAVEFORM));
-        if Panel::Histogram.available_on(platform) {invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));}
-        else {let requests=s.engine.backend().snapshot_requests.len();s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert!(s.state.waveform.data.is_none());assert!(!Panel::Waveform.available_on(platform));}
+        invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));
     }}
 }
 
@@ -668,15 +645,11 @@ fn photo_monitors_share_default_tabs_and_remain_accessible_through_window_items(
 }
 
 #[test]
-fn window_menu_routes_monitor_panels_and_preserves_legacy_histogram_on_other_hosts() {
+fn window_menu_routes_monitor_panels() {
     for platform in Platform::ALL {
         let s=session(platform);let menu=s.application_menu(ApplicationMenu::Window);let items=menu.sections.iter().flatten().collect::<Vec<_>>();
-        if Panel::Histogram.available_on(platform) {
-            for panel in [Panel::Histogram,Panel::Waveform] {assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:p,..}}) if p==panel)));}
-        } else {
-            assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Invoke{command:CommandId::Histogram}))));
-            assert!(!items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:Panel::Histogram|Panel::Waveform,..}}))));
-        }
+        for panel in [Panel::Histogram,Panel::Waveform] {assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:p,..}}) if p==panel)));}
+        assert!(!items.iter().any(|item|matches!(item.action,Some(UiAction::Invoke{command:CommandId::Histogram}))));
     }
 }
 
@@ -719,7 +692,7 @@ fn waveform_straight_rgba_preserves_palette_chroma_and_transparent_background() 
 
 #[test]
 fn reopened_photo_content_panels_remain_usable_in_narrow_viewports() {
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios] {
+    for platform in Platform::ALL {
         let mut s=session(platform);s.set_viewport([640.,800.],[640,800]).unwrap();
         s.state.workspace.layout=crate::WorkspacePreset::Photographer.layout(platform);
         let document=s.engine.document().clone();

@@ -12,7 +12,7 @@ fn apply_lookup_complete(s:&mut UiSession<Recorder>,resource:std::sync::Arc<laye
 
 #[test]
 fn lookup_import_cancel_and_replacement_are_atomic_and_undoable() {
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios] {
+    for platform in Platform::ALL {
     let mut s=lookup_session(platform);let before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();let request=lookup_request(&mut s);assert_eq!(s.engine.document(),&before);s.complete_document_request(request,Ok(false)).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);assert!(s.state.requests.is_empty());
     let first=lookup_resource("First",0.25);apply_lookup_complete(&mut s,first.clone());let layer=s.engine.document().working.occurrence.unwrap();assert!(std::sync::Arc::ptr_eq(s.engine.document().scene().effect(layer).unwrap().lut3d().unwrap(),&first));
     let second=lookup_resource("Second",0.75);apply_lookup_complete(&mut s,second.clone());invoke(&mut s,CommandId::Undo);assert!(std::sync::Arc::ptr_eq(s.engine.document().scene().effect(layer).unwrap().lut3d().unwrap(),&first));invoke(&mut s,CommandId::Redo);assert!(std::sync::Arc::ptr_eq(s.engine.document().scene().effect(layer).unwrap().lut3d().unwrap(),&second));
@@ -31,7 +31,7 @@ fn lookup_bad_space_refuses_import_and_later_space_changes_without_partial_histo
 
 #[test]
 fn lookup_completion_rejects_stale_layer_revision_and_document_identity() {
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios] {
+    for platform in Platform::ALL {
     for reason in ["layer","revision","document","activation"] {
         let mut s=lookup_session(platform);let request=lookup_request(&mut s);
         match reason {
@@ -50,8 +50,7 @@ fn loaded_lookup_retains_values_across_hosts_and_localizes_shared_actions_in_bot
     let mut original=lookup_session(Platform::Gtk);apply_lookup_complete(&mut original,lookup_resource("Literal LUT title",0.5));color_adjustment_set(&mut original,"intensity",EffectValue::Number(42.));let document=original.engine.document().clone();
     for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios,Platform::Windows] {for theme in [Theme::Light,Theme::Dark] {
         let mut s=UiSession::new(Recorder::default(),document.clone(),[800,600],platform).unwrap();s.dispatch(UiAction::SetTheme {theme:Some(theme)}).unwrap();assert_eq!(s.state.layer_properties.description,"Literal LUT title");assert_eq!(s.state.layer_properties.resource_name.as_deref(),Some("Literal LUT title"));assert_eq!(s.state.layer_properties.controls.iter().map(|c|c.key.as_str()).collect::<Vec<_>>(),["color_space","intensity"]);let effect=s.engine.document().scene().effect(s.engine.document().working.occurrence.unwrap()).unwrap();assert_eq!(effect.value("intensity"),Some(&EffectValue::Number(42.)));assert!(effect.lut3d().is_some());
-        if Panel::Histogram.available_on(platform) {let action=s.state.layer_properties.actions.iter().find(|a|matches!(a.action,EffectAction::ImportLookup {..})).unwrap();assert_eq!(action.label.as_str(),s.localization().text(MessageId::RESOURCES_LOOKUP_IMPORT).as_ref());let request=lookup_request(&mut s);let request=s.document_request(request).unwrap();assert_eq!(request.title(s.localization()),s.localization().text(MessageId::RESOURCES_LOOKUP_IMPORT));}
-        else {assert!(s.state.layer_properties.actions.is_empty());let before=s.engine.document().clone();let requests=serde_json::to_value(&s.state.requests).unwrap();let action=EffectAction::ImportLookup {layer:s.state.layer_properties.layer.unwrap(),epoch:s.state.layer_properties.epoch};assert!(s.dispatch(UiAction::Effect {action}).is_err());assert_eq!(s.engine.document(),&before);assert_eq!(serde_json::to_value(&s.state.requests).unwrap(),requests);}
+        let action=s.state.layer_properties.actions.iter().find(|a|matches!(a.action,EffectAction::ImportLookup {..})).unwrap();assert_eq!(action.label.as_str(),s.localization().text(MessageId::RESOURCES_LOOKUP_IMPORT).as_ref());let request=lookup_request(&mut s);let request=s.document_request(request).unwrap();assert_eq!(request.title(s.localization()),s.localization().text(MessageId::RESOURCES_LOOKUP_IMPORT));
     }}
 }
 

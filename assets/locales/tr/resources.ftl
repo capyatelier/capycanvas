@@ -439,7 +439,6 @@ resources-picker-neutral = Nötr nokta seç
 resources-picker-prompt = Nötr bir noktaya tıklayın
 resources-picker-empty = Görünür renk içeren bir nokta seçin.
 resources-picker-neutral-failed = Başka bir nokta seçin. Bu renk Beyaz dengesi ile nötr hâle getirilemez.
-resources-picker-unavailable = Ayar damlalıkları bu platformda henüz kullanılamıyor.
 
 resources-histogram-preview = Önizleme
 resources-histogram-updating = Güncelleniyor…
@@ -493,7 +492,6 @@ resources-lookup-space = LUT renk uzayı
 resources-lookup-intensity = Yoğunluk
 resources-lookup-import = LUT içe aktar…
 resources-lookup-files = 3B LUT dosyaları (.cube)
-resources-lookup-unavailable = Bu platformda renk eşleme tablolarını içe aktarma henüz kullanılamıyor.
 resources-lookup-failed = Eşleme tablosu içe aktarılamadı.
 resources-layer-menu-stop-using-as-reference = Bu katmanı referans olarak kullanmayı bırak
 resources-coverage-from-layer-opacity = Katman Opaklığından

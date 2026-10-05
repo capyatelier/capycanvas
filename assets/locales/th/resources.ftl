@@ -440,7 +440,6 @@ resources-picker-neutral = เลือกจุดสีเป็นกลา�
 resources-picker-prompt = คลิกจุดสีเป็นกลาง
 resources-picker-empty = เลือกจุดที่มีสีมองเห็นได้
 resources-picker-neutral-failed = เลือกจุดอื่น สีนี้ปรับให้เป็นกลางด้วยสมดุลสีขาวไม่ได้
-resources-picker-unavailable = เครื่องมือเลือกจุดสำหรับการปรับแต่งยังใช้ไม่ได้บนแพลตฟอร์มนี้
 
 resources-histogram-preview = ตัวอย่าง
 resources-histogram-updating = กำลังอัปเดต…
@@ -494,7 +493,6 @@ resources-lookup-space = ปริภูมิสีของ LUT
 resources-lookup-intensity = ความเข้ม
 resources-lookup-import = นำเข้า LUT…
 resources-lookup-files = ไฟล์ 3D LUT (.cube)
-resources-lookup-unavailable = แพลตฟอร์มนี้ยังไม่รองรับการนำเข้าตารางแปลงสี
 resources-lookup-failed = นำเข้าตารางแปลงสีไม่ได้
 resources-layer-menu-stop-using-as-reference = เลิกใช้เลเยอร์นี้เป็นอ้างอิง
 resources-coverage-from-layer-opacity = จากความทึบของเลเยอร์

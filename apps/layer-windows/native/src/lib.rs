@@ -28,6 +28,8 @@ mod navigator;
 #[cfg(any(target_os = "windows", test))]
 mod previews;
 #[cfg(any(target_os = "windows", test))]
+mod scopes;
+#[cfg(any(target_os = "windows", test))]
 mod workspace;
 #[cfg(any(target_os = "windows", test))]
 mod workspace_async;

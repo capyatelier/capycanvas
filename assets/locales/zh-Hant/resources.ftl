@@ -556,7 +556,6 @@ resources-picker-neutral = 選取中性點
 resources-picker-prompt = 點選中性點
 resources-picker-empty = 請選擇有可見顏色的點。
 resources-picker-neutral-failed = 請選擇其他點。白平衡無法將此顏色調整為中性色。
-resources-picker-unavailable = 此平台暫不支援調整滴管。
 
 resources-histogram-preview = 預覽
 resources-histogram-updating = 正在更新…
@@ -611,7 +610,6 @@ resources-lookup-space = LUT 色彩空間
 resources-lookup-intensity = 強度
 resources-lookup-import = 匯入 LUT…
 resources-lookup-files = 3D LUT 檔案（.cube）
-resources-lookup-unavailable = 此平台尚不支援匯入顏色查找檔案。
 resources-layer-menu-stop-using-as-reference = 不再將此圖層用作參考
 resources-coverage-from-layer-opacity = 從圖層不透明度
 resources-coverage-from-layer-mask = 從圖層遮罩

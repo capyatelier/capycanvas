@@ -213,13 +213,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     title: menu.localized_label(self.localization()).to_string(),
                     sections: Vec::new(),
                 }),
-            M::Window => {
-                let mut model=self.workspace_menu();
-                if !Panel::Histogram.available_on(self.state.platform) {
-                    model.sections.push(vec![command(CommandId::Histogram)]);
-                }
-                model
-            },
+            M::Window => self.workspace_menu(),
             M::Filter => ContextMenu {
                 title: menu.localized_label(self.localization()).to_string(),
                 sections: self.filter_menu_sections(),

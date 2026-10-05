@@ -4,6 +4,7 @@
 #include "ColorView.h"
 #include "EffectControls.h"
 #include "StatsView.h"
+#include "ScopesView.h"
 #include "NativeMenus.h"
 #include "WorkspaceGeometry.h"
 
@@ -92,6 +93,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         if(kind==L"color_wheel")return ColorPanel(data,bindings);
         if(kind==L"properties")return PropertiesPanel(data,bindings);
         if(kind==L"stats")return StatsPanel(data,bindings);
+        if(kind==L"histogram"||kind==L"waveform")return CapyScopes::ScopePanel(data,bindings,kind==L"waveform");
         if(kind==L"layers")return layerSelector();
         if(kind==L"layer_opacity")return layerOpacity();
         if(kind==L"size_presets")return BrushSizePanel(data,bindings);

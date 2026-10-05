@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "EffectControls.h"
+#include "NativeMenus.h"
+#include "ScopesView.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 using namespace CapyEffects;
 namespace {
@@ -56,12 +58,23 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
         sample.Color(displayColor(object(form->view,L"new")));
     }
 };
+hstring actionId(J const& action){
+    auto role=str(action,L"role");
+    return L"property-action-"+str(action,L"op")+(role.empty()?hstring():L"-"+role);
+}
 struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     std::shared_ptr<WorkspaceData> data;
-    StackPanel root,body;
+    StackPanel root,body,actions;
     ContentControl bodyGate;
     TextBlock title;
-    ComboBox page;
+    ComboBox page,resource;
+    Grid toolbar;
+    FrameworkElement tonal{nullptr};
+    Bindings tonalBindings;
+    hstring actionSchema;
+    std::vector<std::pair<uint32_t,Button>> actionButtons,groupButtons;
+    std::vector<std::pair<uint32_t,MenuFlyoutItem>> menuItems;
+    std::vector<uint32_t> presets;
     struct Field{FrameworkElement row{nullptr};Bindings bindings;hstring schema;};
     std::map<std::wstring,Field> fields;
     Bindings headings;
@@ -137,13 +150,98 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         if(type==L"gradient")return GradientField(property,bindings);
         return Grid();
     }
+    void runAction(uint32_t index)const{
+        auto view=object(data->state,L"layer_properties");auto list=array(view,L"actions");
+        if(data->updating||index>=list.Size()||!flag(view,L"enabled"))return;
+        data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",object(list.GetObjectAt(index),L"action")}}),
+            to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch"))));
+    }
+    Button actionButton(J const& spec,hstring const& id,hstring const& text,std::function<void()> click){
+        auto pick=button(data,text,std::move(click));pick.Height(28);pick.MinWidth(28);pick.Background(data->brush(L"input"));
+        if(auto glyph=str(spec,L"icon");!glyph.empty()){pick.Width(28);pick.Content(icon(glyph,data->theme()));}
+        else pick.Padding({8,0,8,0});
+        AutomationProperties::SetAutomationId(pick,id);return pick;
+    }
+    void buildActions(A const& list){
+        actions.Children().Clear();actionButtons.clear();groupButtons.clear();menuItems.clear();presets.clear();
+        std::vector<hstring> groups;auto weak=weak_from_this();
+        for(uint32_t i=0;i<list.Size();++i){
+            auto spec=list.GetObjectAt(i);auto action=object(spec,L"action");
+            if(str(action,L"op")==L"lookup_preset"){presets.push_back(i);continue;}
+            auto group=object(spec,L"group");
+            if(!group.Size()){
+                auto pick=actionButton(spec,actionId(action),str(spec,L"label"),[weak,i]{if(auto self=weak.lock())self->runAction(i);});
+                actionButtons.emplace_back(i,pick);actions.Children().Append(pick);continue;
+            }
+            auto groupId=str(group,L"id");if(std::find(groups.begin(),groups.end(),groupId)!=groups.end())continue;groups.push_back(groupId);
+            auto menu=actionButton(spec,L"property-action-group-"+groupId,str(group,L"label"),[]{});
+            MenuFlyout flyout;TrackPopup(flyout,data);
+            for(uint32_t j=i;j<list.Size();++j){
+                auto choice=list.GetObjectAt(j);if(str(object(choice,L"group"),L"id")!=groupId)continue;
+                MenuFlyoutItem item;item.FontSize(data->textSize());item.MinHeight(32);
+                AutomationProperties::SetAutomationId(item,actionId(object(choice,L"action")));
+                item.Click([weak,j](auto&&,auto&&){if(auto self=weak.lock())self->runAction(j);});
+                flyout.Items().Append(item);menuItems.emplace_back(j,item);
+            }
+            menu.Flyout(flyout);groupButtons.emplace_back(i,menu);actions.Children().Append(menu);
+        }
+    }
+    void refreshActions(J const& view){
+        auto list=array(view,L"actions");
+        A keys;for(auto value:list){
+            auto spec=value.GetObject();
+            keys.Append(O({{L"action",object(spec,L"action")},{L"icon",spec.GetNamedValue(L"icon",JsonValue::CreateNullValue())},{L"group",S(str(object(spec,L"group"),L"id"))}}));
+        }
+        if(auto next=keys.Stringify();next!=actionSchema){actionSchema=next;buildActions(list);}
+        auto name=[](Button const& pick,hstring const& text){AutomationProperties::SetName(pick,text);tooltip(pick,text);};
+        for(auto const& [index,pick]:actionButtons){
+            auto spec=list.GetObjectAt(index);auto text=str(spec,L"label");name(pick,text);
+            if(str(spec,L"icon").empty())if(auto shown=pick.Content().try_as<Windows::Foundation::IReference<hstring>>();!shown||shown.Value()!=text)pick.Content(box_value(text));
+        }
+        for(auto const& [index,pick]:groupButtons){
+            auto spec=list.GetObjectAt(index);auto text=str(object(spec,L"group"),L"label");name(pick,text);
+            if(str(spec,L"icon").empty())pick.Content(box_value(text));
+        }
+        for(auto const& [index,item]:menuItems){auto text=str(list.GetObjectAt(index),L"label");item.Text(text);AutomationProperties::SetName(item,text);}
+        for(auto const& [index,pick]:actionButtons)pick.IsEnabled(flag(view,L"enabled"));
+        for(auto const& [index,pick]:groupButtons)pick.IsEnabled(flag(view,L"enabled"));
+        auto resourceLabel=view.GetNamedValue(L"resource_label",JsonValue::CreateNullValue());
+        bool lookup=resourceLabel.ValueType()==JsonValueType::String;
+        resource.Visibility(lookup?Visibility::Visible:Visibility::Collapsed);resource.IsEnabled(flag(view,L"enabled"));
+        if(lookup){
+            std::vector<hstring> labels;for(auto index:presets)labels.push_back(str(list.GetObjectAt(index),L"label"));
+            auto selection=view.GetNamedValue(L"resource_selection",JsonValue::CreateNullValue());int selected=-1;
+            if(selection.ValueType()==JsonValueType::Number)
+                if(auto at=std::find(presets.begin(),presets.end(),uint32_t(selection.GetNumber()));at!=presets.end())selected=int(at-presets.begin());
+            auto resourceName=str(view,L"resource_name");
+            if(selected<0){labels.push_back(resourceName.empty()?resourceLabel.GetString():resourceName);selected=int(labels.size())-1;}
+            if(resource.Items().Size()!=labels.size()){resource.Items().Clear();for(auto const& text:labels)comboOption(resource,text);}
+            for(uint32_t i=0;i<labels.size();++i)comboOptionText(resource,i,labels[i]);
+            if(resource.SelectedIndex()!=selected)resource.SelectedIndex(selected);
+            AutomationProperties::SetName(resource,resourceLabel.GetString());AutomationProperties::SetHelpText(resource,resourceName);
+            tooltip(resource,resourceName.empty()?resourceLabel.GetString():resourceName);
+        }
+        bool leading=array(view,L"pages").Size()>1||lookup;
+        toolbar.ColumnDefinitions().GetAt(0).Width({1,leading?GridUnitType::Star:GridUnitType::Auto});
+        toolbar.Visibility(array(view,L"pages").Size()>1||list.Size()?Visibility::Visible:Visibility::Collapsed);
+        bool statistics=flag(view,L"histogram");tonal.Visibility(statistics?Visibility::Visible:Visibility::Collapsed);
+        if(statistics)for(auto const& bind:tonalBindings)bind();
+    }
+    void styleChoice(ComboBox const& box,hstring const& id){
+        box.MinWidth(0);box.MinHeight(32);box.HorizontalAlignment(HorizontalAlignment::Stretch);box.FontSize(data->textSize());
+        box.Background(data->brush(L"input"));box.BorderThickness({0,0,0,0});box.CornerRadius({6,6,6,6});
+        AutomationProperties::SetAutomationId(box,id);box.Visibility(Visibility::Collapsed);
+    }
     explicit PropertiesView(std::shared_ptr<WorkspaceData> source):data(std::move(source)){
         root.Spacing(6);body.Spacing(6);title=label(data,L"",true);
         AutomationProperties::SetAutomationId(root,L"layer-properties");
         bodyGate.Content(body);bodyGate.IsTabStop(false);bodyGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-        page.MinWidth(0);page.MinHeight(32);page.HorizontalAlignment(HorizontalAlignment::Stretch);page.FontSize(data->textSize());
-        page.Background(data->brush(L"input"));page.BorderThickness({0,0,0,0});page.CornerRadius({6,6,6,6});
-        AutomationProperties::SetAutomationId(page,L"properties-page");page.Visibility(Visibility::Collapsed);
+        styleChoice(page,L"properties-page");styleChoice(resource,L"property-resource-choice");
+        toolbar.ColumnSpacing(6);
+        for(auto width:{GridUnitType::Star,GridUnitType::Auto}){ColumnDefinition column;column.Width({1,width});toolbar.ColumnDefinitions().Append(column);}
+        actions.Orientation(Orientation::Horizontal);actions.Spacing(4);actions.VerticalAlignment(VerticalAlignment::Center);
+        Grid::SetColumn(actions,1);toolbar.Children().Append(page);toolbar.Children().Append(resource);toolbar.Children().Append(actions);
+        tonal=CapyScopes::TonalScope(data,tonalBindings);tonal.Visibility(Visibility::Collapsed);
         page.SelectionChanged([weak=make_weak(page),data=data](auto&&,auto&&){
             auto box=weak.get();if(!box||data->updating||box.SelectedIndex()<0)return;
             auto view=object(data->state,L"layer_properties");auto pages=array(view,L"pages");
@@ -152,7 +250,14 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"select_page")},{L"layer",N(num(view,L"layer"))},{L"page",S(id)}})}}),
                 to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch"))));
         });
-        root.Children().Append(title);root.Children().Append(page);root.Children().Append(bodyGate);
+        for(FrameworkElement part:{FrameworkElement(title),FrameworkElement(toolbar),tonal,FrameworkElement(bodyGate)})root.Children().Append(part);
+    }
+    void init(){
+        resource.SelectionChanged([weak=weak_from_this()](auto&&,auto&&){
+            auto self=weak.lock();if(!self||self->data->updating)return;
+            auto index=self->resource.SelectedIndex();
+            if(index>=0&&size_t(index)<self->presets.size())self->runAction(self->presets[size_t(index)]);
+        });
     }
     void refresh(){
         Updating updating(data);
@@ -166,6 +271,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         if(page.SelectedIndex()!=selected)page.SelectedIndex(selected);
         page.Visibility(pageChoices.Size()>1?Visibility::Visible:Visibility::Collapsed);page.IsEnabled(flag(view,L"enabled"));
         AutomationProperties::SetName(page,str(view,L"title"));
+        refreshActions(view);
         A keys;for(auto value:array(view,L"controls")){
             auto c=value.GetObject();keys.Append(O({{L"key",S(str(c,L"key"))},{L"field",S(fieldSchema(c))},
                 {L"section_id",c.GetNamedValue(L"section_id",JsonValue::CreateNullValue())}}));
@@ -213,5 +319,5 @@ ColorSwatch CapyEffects::CompactColorField(std::shared_ptr<WorkspaceData> const&
     editor->init(editor->currentTitle());bindings.emplace_back([editor]{editor->refresh();});return {editor->pick,editor->root};
 }
 FrameworkElement PropertiesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
-    auto view=std::make_shared<PropertiesView>(data);bindings.emplace_back([view]{view->refresh();});return view->root;
+    auto view=std::make_shared<PropertiesView>(data);view->init();bindings.emplace_back([view]{view->refresh();});return view->root;
 }

@@ -439,7 +439,6 @@ resources-picker-neutral = Choisir un point neutre
 resources-picker-prompt = Cliquer sur un point neutre
 resources-picker-empty = Choisir un point avec une couleur visible.
 resources-picker-neutral-failed = Choisir un autre point. La balance des blancs ne peut pas rendre cette couleur neutre.
-resources-picker-unavailable = Les pipettes des réglages ne sont pas encore disponibles sur cette plateforme.
 
 resources-histogram-preview = Aperçu
 resources-histogram-updating = Mise à jour…
@@ -493,7 +492,6 @@ resources-lookup-space = Espace colorimétrique de la LUT
 resources-lookup-intensity = Intensité
 resources-lookup-import = Importer une LUT…
 resources-lookup-files = Fichiers LUT 3D (.cube)
-resources-lookup-unavailable = L’importation de tables de correspondance de couleurs n’est pas encore disponible sur cette plateforme.
 resources-lookup-failed = Impossible d’importer la table de correspondance.
 resources-layer-menu-stop-using-as-reference = Ne plus utiliser ce calque comme référence
 resources-coverage-from-layer-opacity = À partir de l’opacité du calque

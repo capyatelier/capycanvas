@@ -868,7 +868,6 @@ resources-picker-neutral = Pilih titik netral
 resources-picker-prompt = Klik titik netral
 resources-picker-empty = Pilih titik dengan warna yang terlihat.
 resources-picker-neutral-failed = Pilih titik lain. Warna ini tidak dapat dinetralkan dengan Keseimbangan Putih.
-resources-picker-unavailable = Alat pemilih untuk penyesuaian belum tersedia di platform ini.
 
 resources-histogram-preview = Pratinjau
 resources-histogram-updating = Memperbarui…
@@ -922,7 +921,6 @@ resources-lookup-space = Ruang warna LUT
 resources-lookup-intensity = Intensitas
 resources-lookup-import = Impor LUT…
 resources-lookup-files = File LUT 3D (.cube)
-resources-lookup-unavailable = Impor tabel pemetaan warna belum tersedia di platform ini.
 resources-lookup-failed = Tidak dapat mengimpor tabel pemetaan.
 resources-layer-menu-stop-using-as-reference = Berhenti menggunakan lapisan ini sebagai acuan
 resources-coverage-from-layer-opacity = Dari Opasitas Lapisan

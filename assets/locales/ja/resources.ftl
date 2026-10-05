@@ -556,7 +556,6 @@ resources-picker-neutral = 中間色の点を選択
 resources-picker-prompt = 中間色の点をクリック
 resources-picker-empty = 色が見える点を選択してください。
 resources-picker-neutral-failed = 別の点を選択してください。この色はホワイトバランスで中間色にできません。
-resources-picker-unavailable = このプラットフォームでは調整用スポイトはまだ利用できません。
 
 resources-histogram-preview = プレビュー
 resources-histogram-updating = 更新中…
@@ -611,7 +610,6 @@ resources-lookup-space = LUTの色空間
 resources-lookup-intensity = 強度
 resources-lookup-import = LUTを読み込む…
 resources-lookup-files = 3D LUTファイル（.cube）
-resources-lookup-unavailable = このプラットフォームではカラールックアップをまだ読み込めません。
 resources-layer-menu-stop-using-as-reference = このレイヤーを参照に使用しない
 resources-coverage-from-layer-opacity = レイヤーの不透明度から
 resources-coverage-from-layer-mask = レイヤーマスクから

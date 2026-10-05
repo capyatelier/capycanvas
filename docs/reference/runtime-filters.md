@@ -143,8 +143,7 @@ of zoom and output size.
 ## Imported color lookup tables
 
 Color Lookup (LUT) applies a saved color look. Its selector offers Original,
-Warm, Cool and Monochrome, with a separate Import LUT button for 3D `.cube` tables
-on every host except Windows.
+Warm, Cool and Monochrome, with a separate Import LUT button for 3D `.cube` tables.
 The original presets are 17-point sRGB tables; choosing one changes the table
 and its color space in one undo step and preserves Intensity. Original removes
 the table. Imported tables expose LUT color space; TITLE or the selected filename

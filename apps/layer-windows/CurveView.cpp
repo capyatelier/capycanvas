@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "EffectControls.h"
+#include "ScopesView.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <cmath>
 #include <optional>
@@ -89,18 +90,20 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         auto field=number(data,presentation.title(),object(curve(),L"numeric"),
             [value]{auto v=value();return v.ValueType()==JsonValueType::Object?num(v.GetObject(),L"value"):0.;},
             [property=property,operation,captured](double v){if(auto action=operation(v))property->action(action,*captured?L"move":L"");},
-            bindings,nullptr,false,property->id()+(axis?L"-output":L"-input"),false,presentation);
+            bindings,nullptr,true,property->id()+(axis?L"-output":L"-input"),false,presentation);
         auto& gate=coordinates[axis];gate.Content(field);gate.IsTabStop(false);gate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-        bindings.emplace_back([value,gate,property=property]{
+        auto caption=label(data,presentation.title());caption.TextTrimming(TextTrimming::CharacterEllipsis);
+        bindings.emplace_back([value,gate,caption,title=presentation.title,property=property]{
             auto v=value();gate.IsEnabled(v.ValueType()==JsonValueType::Object&&!flag(v.GetObject(),L"read_only")&&flag(property->view(),L"enabled"));
+            auto text=title();if(caption.Text()!=text){caption.Text(text);tooltip(caption,text);}
         });
-        StackPanel result;result.Children().Append(gate);ev[axis]=axisText(data);ev[axis].HorizontalAlignment(HorizontalAlignment::Right);
+        StackPanel result;result.Children().Append(caption);result.Children().Append(gate);ev[axis]=axisText(data);ev[axis].HorizontalAlignment(HorizontalAlignment::Right);
         AutomationProperties::SetAutomationId(ev[axis],property->id()+(axis?L"-output-ev":L"-input-ev"));
-        result.Children().Append(ev[axis]);return result;
+        result.Children().Append(ev[axis]);Grid::SetColumn(result,axis);return result;
     }
     void init(Bindings& bindings){
         auto data=property->data;auto weak=weak_from_this();root.Spacing(6);
-        graph.Background(data->brush(L"input"));graph.Children().Append(grid);graph.Children().Append(line);graph.Children().Append(dots);
+        graph.Background(clear());graph.Children().Append(grid);graph.Children().Append(line);graph.Children().Append(dots);
         grid.IsHitTestVisible(false);line.IsHitTestVisible(false);dots.IsHitTestVisible(false);
         graph.ManipulationMode(ManipulationModes::None);
         line.Stroke(data->brush(L"text"));line.StrokeThickness(1.5);
@@ -108,10 +111,10 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         focus.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetAutomationId(focus,property->id()+L"-curve");
         reset=button(data,L"",[weak]{if(auto self=weak.lock()){self->cancel();self->property->reset();}});
-        reset.Width(28);reset.Height(28);reset.Margin({2,2,2,2});reset.Content(icon(L"reset",data->theme()));
-        reset.HorizontalAlignment(HorizontalAlignment::Right);reset.VerticalAlignment(VerticalAlignment::Bottom);reset.Visibility(Visibility::Collapsed);
+        reset.Width(28);reset.Height(28);reset.Content(icon(L"reset",data->theme()));reset.Visibility(Visibility::Collapsed);
         AutomationProperties::SetAutomationId(reset,property->id()+L"-reset");
-        chart.Children().Append(focus);chart.Children().Append(reset);
+        chart.Height(200);chart.MinWidth(64);chart.Background(data->brush(L"input"));
+        chart.Children().Append(CapyScopes::TonalPlot(data,bindings));chart.Children().Append(focus);
         Grid frame;frame.ColumnSpacing(6);frame.RowSpacing(4);
         for(auto width:{GridUnitType::Auto,GridUnitType::Star}){ColumnDefinition column;column.Width({1,width});frame.ColumnDefinitions().Append(column);}
         for(auto height:{GridUnitType::Star,GridUnitType::Auto}){RowDefinition row;row.Height({1,height});frame.RowDefinitions().Append(row);}
@@ -126,10 +129,12 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         axes[0][1].HorizontalAlignment(HorizontalAlignment::Center);axes[1][1].VerticalAlignment(VerticalAlignment::Center);
         Grid::SetColumn(chart,1);Grid::SetColumn(horizontal,1);Grid::SetRow(horizontal,1);
         frame.Children().Append(vertical);frame.Children().Append(chart);frame.Children().Append(horizontal);root.Children().Append(frame);
-        for(int axis=0;axis<2;axis++)root.Children().Append(coordinate(axis,bindings));
-        graph.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){
-            if(self->graph.Height()!=e.NewSize().Width)self->graph.Height(e.NewSize().Width);self->refresh();
-        }});
+        Grid coordinateRow;coordinateRow.ColumnSpacing(6);
+        for(int axis=0;axis<2;axis++){ColumnDefinition column;column.Width({1,GridUnitType::Star});coordinateRow.ColumnDefinitions().Append(column);}
+        for(int axis=0;axis<2;axis++)coordinateRow.Children().Append(coordinate(axis,bindings));
+        root.Children().Append(coordinateRow);
+        root.Children().Append(CapyScopes::ScopeFooter(data,L"curve",[data]{return object(data->state,L"tonal_histogram");},bindings,nullptr,reset));
+        graph.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
         graph.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto raw=e.GetCurrentPoint(self->graph);
             if(self->pointer||self->graph.ActualWidth()<1||self->graph.ActualHeight()<1
@@ -173,7 +178,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         auto axisViews=array(view,L"axes");
         for(int axis=0;axis<2&&axis<int(axisViews.Size());axis++){
             auto spec=axisViews.GetObjectAt(axis);
-            for(int i=0;i<3;i++)if(auto text=str(spec,std::array{L"minimum",L"label",L"maximum"}[i]);axes[axis][i].Text()!=text)axes[axis][i].Text(text);
+            for(int i=0;i<3;i+=2)if(auto text=str(spec,i?L"maximum":L"minimum");axes[axis][i].Text()!=text)axes[axis][i].Text(text);
         }
         bool log=str(object(view,L"domain"),L"kind")==L"log_hdr";
         for(int axis=0;axis<2;axis++){
@@ -182,27 +187,27 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
             ev[axis].Visibility(log?Visibility::Visible:Visibility::Collapsed);
         }
         bool modified=flag(model,L"modified");reset.Visibility(modified?Visibility::Visible:Visibility::Collapsed);
-        double side=graph.ActualWidth();if(side<=0)return;
+        double width=graph.ActualWidth(),height=graph.ActualHeight();if(width<=0||height<=0)return;
         auto selected=view.GetNamedValue(L"selected",JsonValue::CreateNullValue());
         A whites;for(auto axis:axisViews)whites.Append(axis.GetObject().GetNamedValue(L"white",JsonValue::CreateNullValue()));
-        auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"side",N(side)},{L"selected",selected},
+        auto next=O({{L"points",p},{L"plot",array(model,L"plot")},{L"size",values({width,height})},{L"selected",selected},
             {L"whites",whites},{L"theme",S(data->theme())}}).Stringify();
         if(next==drawn)return;drawn=next;grid.Children().Clear();dots.Children().Clear();
         for(int i=1;i<4;i++)for(int axis=0;axis<2;axis++){
-            Shapes::Line l;l.X1(axis?0:side*i/4);l.Y1(axis?side*i/4:0);l.X2(axis?side:side*i/4);l.Y2(axis?side*i/4:side);
+            Shapes::Line l;l.X1(axis?0:width*i/4);l.Y1(axis?height*i/4:0);l.X2(axis?width:width*i/4);l.Y2(axis?height*i/4:height);
             l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.2);grid.Children().Append(l);
         }
         for(int axis=0;axis<2&&axis<int(axisViews.Size());axis++){
             auto white=axisViews.GetObjectAt(axis).GetNamedValue(L"white",JsonValue::CreateNullValue());
             if(white.ValueType()!=JsonValueType::Number)continue;double at=white.GetNumber();
-            Shapes::Line l;l.X1(axis?0:at*side);l.Y1(axis?(1-at)*side:0);l.X2(axis?side:at*side);l.Y2(axis?(1-at)*side:side);
+            Shapes::Line l;l.X1(axis?0:at*width);l.Y1(axis?(1-at)*height:0);l.X2(axis?width:at*width);l.Y2(axis?(1-at)*height:height);
             l.Stroke(data->brush(L"text"));l.StrokeThickness(1);l.Opacity(.7);
             DoubleCollection dash;dash.Append(3);dash.Append(3);l.StrokeDashArray(dash);grid.Children().Append(l);
         }
-        std::vector<Point> path;for(auto value:array(model,L"plot")){auto at=value.GetArray();path.push_back({float(at.GetNumberAt(0)*side),float((1-at.GetNumberAt(1))*side)});}
+        std::vector<Point> path;for(auto value:array(model,L"plot")){auto at=value.GetArray();path.push_back({float(at.GetNumberAt(0)*width),float((1-at.GetNumberAt(1))*height)});}
         line.Points().ReplaceAll(path);
         for(uint32_t i=0;i<p.Size();i++){
-            auto at=p.GetArrayAt(i);double x=at.GetNumberAt(0)*side,y=(1-at.GetNumberAt(1))*side;
+            auto at=p.GetArrayAt(i);double x=at.GetNumberAt(0)*width,y=(1-at.GetNumberAt(1))*height;
             Shapes::Ellipse dot;dot.Width(7);dot.Height(7);dot.Fill(data->brush(L"text"));
             Canvas::SetLeft(dot,x-3.5);Canvas::SetTop(dot,y-3.5);dots.Children().Append(dot);
             if(selected.ValueType()==JsonValueType::Number&&uint32_t(selected.GetNumber())==i){

@@ -440,7 +440,6 @@ resources-picker-neutral = Pick neutral point
 resources-picker-prompt = Click a neutral point
 resources-picker-empty = Choose a point with visible color.
 resources-picker-neutral-failed = Choose another point. This color cannot be made neutral with White Balance.
-resources-picker-unavailable = Adjustment pickers are not available on this platform yet.
 
 resources-histogram-preview = Preview
 resources-histogram-updating = Updating…
@@ -494,7 +493,6 @@ resources-lookup-space = LUT color space
 resources-lookup-intensity = Intensity
 resources-lookup-import = Import LUT…
 resources-lookup-files = 3D LUT files (.cube)
-resources-lookup-unavailable = Color Lookup import is not available on this platform yet.
 resources-lookup-failed = Could not import the lookup table.
 resources-layer-menu-stop-using-as-reference = Stop using this layer as a reference
 resources-coverage-from-layer-opacity = From Layer Opacity

@@ -173,14 +173,14 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     }
     void refreshPicker(){
         auto picker=object(data->state,L"color_picker");auto sizes=array(picker,L"sample_sizes");
-        bool layers=flag(picker,L"can_sample_layer");
-        auto next=O({{L"picker",B(true)},{L"layers",B(layers)},{L"sizes",sizes}}).Stringify();
+        bool layers=flag(picker,L"can_sample_layer"),calibrating=flag(picker,L"calibrating");
+        auto next=O({{L"picker",B(true)},{L"layers",B(layers)},{L"calibrating",B(calibrating)},{L"sizes",sizes}}).Stringify();
         if(next!=key){
             key=next;fields.clear();root.Children().Clear();
             auto weak=weak_from_this();
             auto sourceTitle=[weak]{if(auto self=weak.lock())return self->data->caption(L"sampler",L"source");return hstring();};
             auto sources=[weak,layers]{std::vector<hstring> names;if(auto self=weak.lock()){names.push_back(self->data->caption(L"sampler",L"visible_color"));if(layers)names.push_back(self->data->caption(L"sampler",L"selected_layer"));}return names;};
-            pickerChoice(sourceTitle,L"picker-setting-source",sources,
+            if(!calibrating)pickerChoice(sourceTitle,L"picker-setting-source",sources,
                 [](J const& value){return flag(value,L"layer")?1:0;},
                 [weak](int index){if(auto self=weak.lock();self&&picking(self->data->state)&&flag(object(self->data->state,L"color_picker"),L"layer")!=(index==1))
                     self->data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"source")},{L"layer",B(index==1)}})}}));});

@@ -440,7 +440,6 @@ resources-picker-neutral = Chọn điểm trung tính
 resources-picker-prompt = Nhấp vào một điểm trung tính
 resources-picker-empty = Chọn một điểm có màu nhìn thấy được.
 resources-picker-neutral-failed = Chọn điểm khác. Không thể làm màu này trở nên trung tính bằng Cân bằng trắng.
-resources-picker-unavailable = Công cụ chọn điểm cho điều chỉnh chưa có trên nền tảng này.
 
 resources-histogram-preview = Xem trước
 resources-histogram-updating = Đang cập nhật…
@@ -494,7 +493,6 @@ resources-lookup-space = Không gian màu LUT
 resources-lookup-intensity = Cường độ
 resources-lookup-import = Nhập LUT…
 resources-lookup-files = Tệp LUT 3D (.cube)
-resources-lookup-unavailable = Nền tảng này chưa hỗ trợ nhập bảng tra màu.
 resources-lookup-failed = Không thể nhập bảng tra màu.
 resources-layer-menu-stop-using-as-reference = Ngừng dùng lớp này làm tham chiếu
 resources-coverage-from-layer-opacity = Từ độ đục lớp

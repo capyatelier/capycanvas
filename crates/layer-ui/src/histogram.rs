@@ -182,7 +182,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .any(|drawer| drawer.columns.iter().any(|column| column.contains(&panel)))
     }
     pub(super) fn histogram_visibility_changed(&self)->bool {
-        if !Panel::Histogram.available_on(self.state.platform) {return false;}
         let document=self.engine.document();
         let tonal=document.working.occurrence.and_then(|handle|document.scene().effect(handle))
             .is_some_and(|effect|matches!(effect.program.id.as_ref(),"curves"|"levels"));
@@ -236,7 +235,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.document().scene().effect(*handle).is_some_and(|effect|matches!(effect.program.id.as_ref(),"curves"|"levels")));
         let channel = match properties.page.as_deref() {Some("red")=>1,Some("green")=>2,Some("blue")=>3,_=>0};
         let source = tonal.map(|handle| if channel==0 {ArtworkSource::EffectChannels(handle)} else {ArtworkSource::EffectInput(handle)});
-        let demand = Panel::Histogram.available_on(self.state.platform) && source.is_some() && self.panel_is_presented(Panel::Properties);
+        let demand = source.is_some() && self.panel_is_presented(Panel::Properties);
         let mut task=std::mem::take(&mut self.tonal_histogram);
         let mut view=std::mem::take(&mut self.state.tonal_histogram);
         if view.channel!=channel { if task.active {self.engine.backend_mut().cancel_snapshot();}task=Statistics::default();view.clear(); }
@@ -249,8 +248,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut task=std::mem::take(&mut self.histogram);
         let mut view=std::mem::take(&mut self.state.histogram);
         let source = match view.source {1=>ArtworkSource::Source(self.engine.document().working.occurrence.and_then(|handle|self.engine.document().scene().source_target(handle)).unwrap_or_default()),2=>ArtworkSource::Reference,_=>ArtworkSource::Visible};
-        let waveform=Panel::Histogram.available_on(self.state.platform) && self.panel_is_presented(Panel::Waveform);
-        let demand=Panel::Histogram.available_on(self.state.platform) && (self.panel_is_presented(Panel::Histogram) || waveform);
+        let waveform=self.panel_is_presented(Panel::Waveform);
+        let demand=self.panel_is_presented(Panel::Histogram) || waveform;
         let admitted=!self.tonal_histogram.active && (!self.tonal_histogram.demand || self.tonal_histogram.settled);
         updates|=self.poll_statistics(now,source,view.source==3,demand,admitted,(waveform,&mut task,&mut view));
         self.histogram=task;self.state.histogram=view;

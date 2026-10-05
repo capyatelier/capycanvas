@@ -83,6 +83,7 @@ pub struct CapyHost {
     workspaces: Option<crate::workspace_service::WorkspaceService<layer_workspace::StoreWorker>>,
     blocked_contacts: std::collections::BTreeSet<u64>,
     live_contacts: std::collections::BTreeMap<u64, CapyPointer>,
+    scopes: crate::scopes::Scopes,
 }
 fn pointer_button(sample: &CapyPointer) -> PointerButton {
     match sample.button {
@@ -166,6 +167,7 @@ impl CapyHost {
             workspaces: None,
             blocked_contacts: Default::default(),
             live_contacts: Default::default(),
+            scopes: Default::default(),
         })
     }
 
@@ -1022,6 +1024,8 @@ struct WindowsMetadata {
     windows_adapter: Option<String>,
     windows_workspace: Option<serde_json::Value>,
     windows_settings_close: Option<crate::settings::CloseStatus>,
+    windows_scopes: u64,
+    windows_request_copy: serde_json::Map<String, serde_json::Value>,
 }
 /// # Safety
 /// `host` must be null or a live host exclusively accessed by this caller.
@@ -1067,6 +1071,16 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .as_ref()
                 .and_then(|s| serde_json::to_value(s.status(&host.native)).ok()),
             windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
+            windows_scopes: host.scopes.revision(host.native.session.state()),
+            windows_request_copy: {
+                let localization = host.native.session.localization();
+                host.native.session.state().requests.iter().filter_map(|request| match &request.kind {
+                    layer_ui::HostRequestKind::Document { request: document } => Some((request.id.to_string(), serde_json::json!({
+                        "title": document.title(localization), "accept_label": document.accept_label(localization), "filter": document.filter(localization),
+                    }))),
+                    _ => None,
+                }).collect()
+            },
             windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
             windows_isolated_settings: crate::storage::isolated(),
             windows_adapter: host.native.session.engine().backend().0.as_ref().map(|gpu| {

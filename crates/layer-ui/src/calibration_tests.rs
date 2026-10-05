@@ -294,31 +294,6 @@ fn calibration_touch_width_change_cancels_old_preview_and_resamples_latest_conta
 }
 
 #[test]
-fn calibration_unported_hosts_hide_picker_and_refuse_direct_action_without_editing() {
-    for platform in [Platform::Windows] {
-        let mut s = session(platform);
-        s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "white_balance".into() } }).unwrap();
-        s.frame(1, 1).unwrap();
-        assert!(s.state.layer_properties.actions.is_empty());
-        let before = s.engine.document().clone();
-        let checkpoint = s.engine.checkpoint();
-        let tool = s.state.layer_tools.tool;
-        let colors = s.state.preview_colors().into_owned();
-        let unavailable = s.localization().text(MessageId::RESOURCES_PICKER_UNAVAILABLE).to_string();
-        let result = s.dispatch(UiAction::Effect { action: EffectAction::Calibrate { role:layer_core::levels::CalibrationRole::Gray,
-            layer: occurrence_token(s.engine.document().working.occurrence.unwrap()), epoch: s.state.layer_properties.epoch,
-        } });
-        assert_eq!(result.unwrap_err(), unavailable);
-        assert_eq!(s.engine.document(), &before);
-        assert_eq!(s.engine.checkpoint(), checkpoint);
-        assert_eq!(s.state.layer_tools.tool, tool);
-        assert_eq!(*s.state.preview_colors(), colors);
-        assert!(s.eyedropper.calibration.is_none());
-        assert!(s.engine.backend().snapshot_requests.is_empty());
-    }
-}
-
-#[test]
 fn calibration_picker_groups_publish_stable_localized_identity_in_every_language() {
     for language in UiLanguage::ALL {for id in ["white_balance","levels","curves"] {
         let mut s=color_adjustment_session(id);s.set_localization(Localizer::shared(language));
@@ -391,7 +366,7 @@ fn calibration_failed_notice_language_refresh_preserves_picker_request_document_
 
 #[test]
 fn ported_calibration_exposes_shared_action_and_commits_one_undo_without_changing_paint() {
-    for platform in [Platform::Web,Platform::Android] {
+    for platform in [Platform::Web,Platform::Android,Platform::Windows] {
     let mut s=calibration_session();s.set_platform(platform);s.frame(1,1).unwrap();
     assert!(s.state.layer_properties.actions.iter().any(|a|matches!(a.action,EffectAction::Calibrate{..})));
     let before=s.engine.document().clone();let paint=s.state.preview_colors().into_owned();let checkpoint=s.engine.checkpoint();arm_calibration(&mut s);release_calibration(&mut s);

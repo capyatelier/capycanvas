@@ -254,6 +254,14 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         response.Insert(L"revision",N(num(file,L"revision")));
                     }
                 }
+            } else if(type==L"import_lookup") {
+                auto copy=object(object(model,L"windows_request_copy"),to_hstring(uint64_t(id)).c_str());auto filter=array(copy,L"filter");
+                if(filter.Size()!=2)throw hresult_invalid_argument();
+                Pickers::FileOpenPicker open(window.AppWindow().Id());
+                open.CommitButtonText(str(copy,L"accept_label"));open.SuggestedStartLocation(Pickers::PickerLocationId::Downloads);
+                open.FileTypeFilter().Append(L"."+filter.GetStringAt(1));
+                picker=open.PickSingleFileAsync();auto selected=co_await picker;picker=nullptr;
+                if(selected)response=O({{L"operation",S(L"import_lookup")},{L"id",N(id)},{L"path",S(selected.Path())}});
             } else {
                 response=O({{L"operation",S(L"failure")},{L"id",N(id)},
                     {L"error",S(recovery(L"unsupported_operation"))}});
@@ -428,7 +436,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
             AutomationProperties::SetAutomationId(dialog,L"document-workflow");
             auto title=library?profileText(L"library_title"):kind==L"proof"?str(proofCopy,L"title"):kind==L"export"?exportText(L"title"):kind==L"assign"?colorText(L"assign_title"):kind==L"convert"?colorText(L"convert_title"):kind==L"depth"?colorText(L"depth_title"):
-                kind==L"place"||kind==L"paste"?profileText(L"interpret_title"):kind==L"repair"?colorText(L"repair_title"):kind==L"rasterize"?colorText(L"rasterize_title"):kind==L"histogram"?native(L"color",L"histogram"):str(details,L"title");
+                kind==L"place"||kind==L"paste"?profileText(L"interpret_title"):kind==L"repair"?colorText(L"repair_title"):kind==L"rasterize"?colorText(L"rasterize_title"):str(details,L"title");
             dialog.Title(box_value(title));
             StackPanel body;body.Spacing(10);body.Width(std::max(200.,std::min(540.,double(window.Content().XamlRoot().Size().Width)-120)));
             auto text=[&](auto const& value){auto item=label(data,value);item.TextWrapping(TextWrapping::Wrap);body.Children().Append(item);return item;};
@@ -505,21 +513,6 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 for(uint32_t i=0;i<array(details,L"rows").Size();++i)text(documentRow(L"rows",i));
                 if(array(details,L"sources").Size())text(documentText(L"source_images"));
                 for(uint32_t i=0;i<array(details,L"sources").Size();++i)text(documentRow(L"sources",i));dialog.CloseButtonText(str(details,L"done"));
-            }else if(kind==L"histogram"){
-                auto histogram=object(details,L"histogram");auto channels=array(histogram,L"channels");auto axis=object(details,L"axis");auto binRange=array(axis,L"bins");uint32_t first=binRange.Size()?uint32_t(binRange.GetNumberAt(0)):0,last=binRange.Size()?uint32_t(binRange.GetNumberAt(1)):256;
-                auto stops=array(axis,L"stops");if(stops.Size())text(data->copyCaption(O({{L"type",S(L"inspection_range")},{L"start",N(stops.GetNumberAt(0))},{L"end",N(stops.GetNumberAt(1))}})));
-                std::array<hstring,4> names{native(L"color",L"red"),native(L"color",L"green"),native(L"color",L"blue"),native(L"color",L"luminance")};
-                std::array<winrt::Windows::UI::Color,4> colors{{{255,220,75,75},{255,75,185,100},{255,90,130,240},{255,160,160,160}}};
-                text(data->copyCaption(O({{L"type",S(L"inspection_pixels")},{L"sampled",N(num(histogram,L"pixels"))},{L"transparent",N(num(histogram,L"transparent"))}})));
-                for(uint32_t i=0;i<channels.Size()&&i<4;++i){auto channel=channels.GetObjectAt(i);text(data->copyCaption(L"color",std::array<wchar_t const*,4>{L"red",L"green",L"blue",L"luminance"}[i]));auto bins=array(channel,L"bins");double maximum=1;for(auto bin:bins)maximum=std::max(maximum,bin.GetNumber());
-                    Canvas graph;graph.Width(256);graph.Height(80);graph.HorizontalAlignment(HorizontalAlignment::Left);AutomationProperties::SetName(graph,caption(O({{L"type",S(L"inspection_graph")},{L"channel",S(names[i])}})));
-                    data->copyView([source=std::weak_ptr<WorkspaceData>(data),weak=make_weak(graph),i]{auto data=source.lock();auto graph=weak.get();if(!data||!graph)return false;
-                        auto channel=data->caption(L"color",std::array<wchar_t const*,4>{L"red",L"green",L"blue",L"luminance"}[i]);AutomationProperties::SetName(graph,data->caption(O({{L"type",S(L"inspection_graph")},{L"channel",S(channel)}})));return true;});
-                    for(uint32_t x=first;x<std::min(last,bins.Size());++x){Shapes::Rectangle bar;bar.Width(256./std::max(1u,last-first));auto height=80*bins.GetNumberAt(x)/maximum;bar.Height(height);bar.Fill(SolidColorBrush(colors[i]));Canvas::SetLeft(bar,256.*(x-first)/std::max(1u,last-first));Canvas::SetTop(bar,80-height);graph.Children().Append(bar);}body.Children().Append(graph);
-                    text(data->copyCaption(O({{L"type",S(L"inspection_channel")},{L"below",N(num(channel,L"below"))},{L"above",N(num(channel,L"above"))},{L"black",N(num(channel,L"black"))},{L"white",N(num(channel,L"white"))}})));
-                }
-                if(details.GetNamedValue(L"sampled_time",JsonValue::CreateNullValue()).ValueType()==JsonValueType::Number)text(data->copyCaption(O({{L"type",S(L"inspection_sample")},{L"seconds",N(num(details,L"sampled_time"))}})));
-                dialog.CloseButtonText(common(L"done"));
             }else if(stage==L"preview"){
                 text(featureText(L"color",flag(details,L"copy")?L"clipped_comparison":L"compare_before_apply"));
                 auto sdr=flag(details,L"has_sdr_preview");
@@ -556,13 +549,13 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 auto color=[&](wchar_t const* key){return str(object(feature,L"color"),key);};
                 auto output=[&](wchar_t const* key){return str(object(feature,L"export"),key);};
                 auto profile=[&](wchar_t const* key){return str(object(feature,L"profile"),key);};
-                auto title=library?profile(L"library_title"):kind==L"assign"?color(L"assign_title"):kind==L"convert"?color(L"convert_title"):kind==L"depth"?color(L"depth_title"):kind==L"place"||kind==L"paste"?profile(L"interpret_title"):kind==L"repair"?color(L"repair_title"):kind==L"rasterize"?color(L"rasterize_title"):kind==L"histogram"?native(L"color",L"histogram"):str(details,L"title");
-                dialog.Title(box_value(title));dialog.CloseButtonText(common(stage==L"error"?L"close":library||kind==L"histogram"?L"done":L"cancel"));
+                auto title=library?profile(L"library_title"):kind==L"assign"?color(L"assign_title"):kind==L"convert"?color(L"convert_title"):kind==L"depth"?color(L"depth_title"):kind==L"place"||kind==L"paste"?profile(L"interpret_title"):kind==L"repair"?color(L"repair_title"):kind==L"rasterize"?color(L"rasterize_title"):str(details,L"title");
+                dialog.Title(box_value(title));dialog.CloseButtonText(common(stage==L"error"?L"close":library?L"done":L"cancel"));
                 if(library){dialog.PrimaryButtonText(profile(L"add_profile_dialog"));dialog.SecondaryButtonText(profile(L"remove"));
                     auto selected=profileList.SelectedIndex();auto profiles=array(details,L"profiles");for(uint32_t i=0;i<std::min(profiles.Size(),profileList.Items().Size());++i){auto entry=profiles.GetObjectAt(i);comboOptionText(profileList,i,profileLabel(entry));}profileList.SelectedIndex(selected);if(updateProfileVisibility)updateProfileVisibility();
                 }
                 else if(stage==L"preview")dialog.PrimaryButtonText(kind==L"export"?output(L"export"):flag(details,L"copy")?color(L"save_copy"):common(L"apply"));
-                else if(kind!=L"histogram"&&stage!=L"error")dialog.PrimaryButtonText(stage==L"interpret_image"?color(L"add_source"):color(L"preview"));
+                else if(stage!=L"error")dialog.PrimaryButtonText(stage==L"interpret_image"?color(L"add_source"):color(L"preview"));
                 for(auto control:{space,depth,intent,profileList})control.Language(data->language());
                 for(uint32_t i=0;i<profileChoices.Size();++i){auto choice=profileChoices.GetObjectAt(i);auto id=str(choice,L"library");
                     if(!id.empty()){auto entry=find(array(details,L"profiles"),L"id",id);if(entry.Size())comboOptionText(space,i,str(entry,L"name"));}
@@ -670,7 +663,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         if(str(document,L"type")==L"interpret"&&uint32_t(num(document,L"id"))!=interpreted){interpreted=uint32_t(num(document,L"id"));interpret(document);return;}
         for(auto value:array(object(model,L"state"),L"requests")) {
             auto envelope=value.GetObject();
-            if(str(object(envelope,L"kind"),L"type")==L"histogram"||str(object(envelope,L"kind"),L"type")==L"soft_proof_setup"){
+            if(str(object(envelope,L"kind"),L"type")==L"soft_proof_setup"){
                 auto id=uint32_t(num(envelope,L"id"));if(id!=handled){handled=id;send(to_string(O({{L"operation",S(L"workflow_begin")},{L"id",N(id)}}).Stringify()));}break;
             }
             if(str(object(envelope,L"kind"),L"type")!=L"document")continue;

@@ -51,17 +51,20 @@ fn request(json: &str) -> Result<Value, String> {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum StampQuery {
     ToolbarStamp { context: layer_ui::ToolbarContext },
+    Scopes { #[serde(default)] size: Option<[u32; 2]> },
 }
 
 pub fn query(host: &mut NativeHost, json: &str) -> Result<CapyPreview, String> {
-    if let Ok(StampQuery::ToolbarStamp { context }) = serde_json::from_str(json) {
-        return match host.session.toolbar_stamp(context) {
+    match serde_json::from_str(json) {
+        Ok(StampQuery::ToolbarStamp { context }) => return match host.session.toolbar_stamp(context) {
             Ok(stamp) => CapyPreview::packet(
                 json!({"result":{"size":stamp.size,"extent":stamp.extent},"error":null}),
                 stamp.alpha,
             ),
             Err(error) => CapyPreview::packet(json!({"result":null,"error":error}), Vec::new()),
-        };
+        },
+        Ok(StampQuery::Scopes { size }) => return crate::scopes::query(host.session.state(), size),
+        Err(_) => {}
     }
     // A delayed query can reference a group removed by intervening input.
     // Return that rejection to the view instead of failing the render loop.

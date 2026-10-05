@@ -12,7 +12,7 @@ use serde::Deserialize;
 mod tabs;
 use std::{
     fs::File,
-    io::BufReader,
+    io::{BufReader, Read},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     sync::{
@@ -63,6 +63,10 @@ pub(crate) enum DocumentAction {
         id: u32,
         path: String,
     },
+    ImportLookup {
+        id: u32,
+        path: String,
+    },
 }
 pub(crate) fn recovery_environment(session: &UiSession<Renderer>) -> Result<OpenEnvironment, String> {
     OpenEnvironment::capture(
@@ -90,6 +94,7 @@ enum Job {
         expected:Option<layer_ui::DestinationExpectation>,
         changed_message:String,
     },
+    Lookup { path: PathBuf },
     Prepare {
         environment: Box<OpenEnvironment>,
         source: Source,
@@ -107,6 +112,7 @@ enum Completed {
     ProfileFailure(layer_ui::ColorFeatureError),
     PhotoPrepared(Box<UiSession<Renderer>>),
     Saved(layer_ui::DestinationFingerprint),
+    Lookup(Arc<layer_core::Lut3d>),
     Prepared(Box<UiSession<Renderer>>),
 }
 #[derive(Default)]
@@ -263,6 +269,14 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
                 Ok(())
             })?;
             Ok(Completed::Saved(fingerprint.ok_or("Save fingerprint is missing")?))
+        }
+        Job::Lookup { path } => {
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path).and_then(|file| file.take(layer_core::Lut3d::MAX_TEXT_BYTES as u64 + 1).read_to_end(&mut bytes))
+                .map_err(|e| io_error("read the lookup table", e))?;
+            check_cancelled(cancel)?;
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            Ok(Completed::Lookup(Arc::new(layer_core::Lut3d::parse_cube_named(&bytes, &name)?)))
         }
         Job::Prepare {
             environment,
@@ -737,7 +751,8 @@ impl DocumentService {
             | DocumentAction::Failure { id, .. }
             | DocumentAction::Create { id, .. }
             | DocumentAction::Open { id, .. }
-            | DocumentAction::Save { id, .. } => *id,
+            | DocumentAction::Save { id, .. }
+            | DocumentAction::ImportLookup { id, .. } => *id,
             _ => unreachable!(),
         };
         let request = Self::request(host, id)?;
@@ -806,6 +821,8 @@ impl DocumentService {
                         Some(selected),
                     )
                 }
+                DocumentAction::ImportLookup { path, .. } if matches!(request, DocumentRequest::ImportLookup { .. }) =>
+                    (Job::Lookup { path: PathBuf::from(path) }, None),
                 _ => return Err("The file dialog no longer matches this document operation".into()),
             };
             Ok(Some((job, location)))
@@ -863,9 +880,6 @@ impl DocumentService {
                 Ok(Completed::Workflow(task)) => task,
                 Err(error) => {
                     let id = self.workflow_control.take().ok_or("Workflow identity is missing")?.0;
-                    if matches!(host.session.state().requests.iter().find(|r| r.id == id).map(|r| &r.kind), Some(HostRequestKind::Histogram)) {
-                        return host.dispatch(layer_ui::UiAction::CompleteRequest { id, error: Some(error) });
-                    }
                     return Self::complete(host, id, Err(error));
                 }
                 _ => return Err("Unexpected workflow completion".into()),
@@ -925,6 +939,7 @@ impl DocumentService {
                     Err("The completed file belongs to a document that is no longer open".into())
                 }
             }
+            Ok(Completed::Lookup(table)) => host.session.apply_lookup(active.id, table),
             Ok(Completed::Package(view))=>{self.present_package(host,view,active.location.as_ref().map(|location|PathBuf::from(&location.uri)))?;Self::complete(host,active.id,Ok(false))?;return Ok(());},
             Ok(Completed::PackageWritten)=>return Err("Unexpected package write completion".into()),
             Ok(Completed::Prepared(candidate)) => return self.append_candidate(host, active, candidate),

@@ -1,13 +1,13 @@
 //! Windows scheduling around shared candidate policies. No WinUI callback owns
 //! artwork, converts profiles, or decides how an edit enters history.
-use layer_core::{authored::ArtworkCapture, color::RgbSpace};
+use layer_core::color::RgbSpace;
 use layer_host::{
     NativeHost,
     clipboard::ClipTask,
     export::ExportTask,
     tasks::{ColorTask, SourceTask},
 };
-use layer_render_wgpu::snapshot::{CaptureControl, SnapshotGpu};
+use layer_render_wgpu::snapshot::CaptureControl;
 use layer_ui::{DocumentRequest, HostRequestKind};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -120,10 +120,6 @@ enum Payload {
     Color(Box<ColorTask>),
     Source(Box<SourceTask>),
     Info(layer_color::DocumentInfo),
-    Histogram {
-        project: Option<Box<ArtworkCapture>>,
-        gpu: SnapshotGpu,
-    },
 }
 pub(crate) struct Task {
     pub id: u32,
@@ -288,22 +284,6 @@ impl Task {
                     session.engine().document(),
                 )),
             ),
-            HostRequestKind::Histogram => {
-                session.require_document_snapshot_idle()?;
-                let gpu = session
-                    .engine()
-                    .backend()
-                    .0
-                    .as_ref()
-                    .ok_or("Canvas unavailable")?;
-                (
-                    "histogram",
-                    Payload::Histogram {
-                        project: Some(Box::new(session.capture_artwork()?)),
-                        gpu: gpu.snapshot_gpu(),
-                    },
-                )
-            }
             _ => return Err("Not a document inspection or color request".into()),
         };
         Ok(Box::new(Self {
@@ -402,21 +382,6 @@ impl Task {
             Payload::Info(info) => {
                 self.inspection = Some(info.inspect()?);
                 serde_json::to_value(layer_ui::document_properties(self.inspection.as_ref().unwrap(), &self.localization)).map_err(|e| e.to_string())?
-            }
-            Payload::Histogram {
-                project,
-                gpu,
-            } => {
-                let project = project.take().ok_or("Histogram was already captured")?;
-                let sampled_time = project.artwork.effects.iter().any(|(_,_,e)| project.artwork.definitions.get(e.definition).is_some_and(|d| layer_core::EffectView::new(&d.program, &e.values).animated())).then_some(project.output().context.elapsed);
-                let mut renderer = gpu
-                    .capture(
-                        *project,
-                        self.control.clone(),
-                    )
-                    .map_err(|e| e.to_string())?;
-                let histogram=renderer.histogram().map_err(|e| e.to_string())?;
-                json!({"axis":histogram.axis(),"histogram":histogram,"sampled_time":sampled_time})
             }
         };
         self.details["feature_copy"] = self.feature_copy.clone();
@@ -794,7 +759,7 @@ impl Task {
         if self.id == 0 {
             return Ok(());
         }
-        if matches!(self.kind, "histogram" | "proof") {
+        if self.kind == "proof" {
             host.dispatch(layer_ui::UiAction::CompleteRequest {
                 id: self.id,
                 error: None,
@@ -1255,10 +1220,6 @@ mod tests {
             drop(task);
             settle(&mut host);
         }
-        let mut histogram = begin(&mut host, CommandId::Histogram);
-        ready(&mut histogram, Action::Describe);
-        assert!(histogram.details.get("histogram").is_some());
-        histogram.complete(&mut host, false).unwrap();
         let profile =
             layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();
         let profile_path = directory.join("test.icc");

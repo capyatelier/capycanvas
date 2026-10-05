@@ -142,13 +142,13 @@ compilation do not prove native parity; several Windows controls already exist.
 | Former packets | Remaining parity/qualification scope |
 | --- | --- |
 | F01/F08 | Retained geometry, group transforms, bake and input/lifecycle controls. |
-| F02/F09 | Properties pages, precise Curves, calibration, targeted adjustment and scopes. |
-| F03/F10 | Unified gradient editor and LUT file import. |
+| F02/F09 | Apple: Properties pages, precise Curves, calibration, targeted adjustment and scopes. |
+| F03/F10 | Apple: unified gradient editor and LUT file import. |
 | F04/F11 | Info, persistent samplers and comparison after their shared implementation. |
 | F05/F12 | Effect clipboard and saved presets after their shared implementation. |
 | F06/F13 | Export recipe controls and output sharpening. |
 | F07/F14 | Apple: frozen export, destination ownership and Export Again. |
-| F15 | Retire remaining legacy Histogram routes and qualify every supported host. |
+| F15 | Retire the remaining Apple legacy Histogram route and qualify every supported host. |
 
 Require macOS mouse/keyboard and physical-iPad pen/touch journeys, and Windows
 native D3D12/input/device-loss journeys, in both themes. Keep capabilities honest

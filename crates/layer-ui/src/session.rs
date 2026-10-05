@@ -725,7 +725,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let labels = &copy.workspace_labels.as_ref().unwrap().labels;
         let restored = &copy.workspace_labels.as_ref().unwrap().restored;
-        let mut items: Vec<_> = labels.iter().filter(|(panel, _)| panel.available_on(self.state.platform) && panel.kind() == kind).map(|(panel, label)| {
+        let mut items: Vec<_> = labels.iter().filter(|(panel, _)| panel.kind() == kind).map(|(panel, label)| {
             let selected = layout.panel_group(*panel).is_some();
             let mut item = ContextMenuItem::edit(label, CustomizationAction::SetPanelVisible { panel: *panel, visible: !selected });
             item.selected = Some(selected);
@@ -2628,7 +2628,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
-        if matches!(action,UiAction::Histogram {..}) && !Panel::Histogram.available_on(self.state.platform) {return Ok(UiChange::default());}
         self.engine.backend_mut().shader_input();
         self.end_holds_for_tool_choice(&action);
         if let UiAction::CommandSearch { action } = action {
@@ -4518,12 +4517,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((change.regions, true))
             }
             CommandId::Histogram => {
-                if Panel::Histogram.available_on(self.state.platform) {
-                    let change = self.reveal_panel(Panel::Histogram)?;
-                    return Ok((change.regions, true));
-                }
-                self.request(HostRequestKind::Histogram)?;
-                Ok((HOST, false))
+                let change = self.reveal_panel(Panel::Histogram)?;
+                Ok((change.regions, true))
             }
             CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth => {
                 let operation = match command {
@@ -5829,9 +5824,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.auto_levels.is_some() {
             for action in &mut self.state.layer_properties.actions {if matches!(action.action,EffectAction::AutoLevels {..}) {action.label=self.state.localization.text(MessageId::TOOLBAR_CANCEL).to_string();}}
-        }
-        if !Panel::Histogram.available_on(self.state.platform) {
-            self.state.layer_properties.actions.clear();
         }
         self.state.layer_tools.has_selection = self.current_selection().is_some();
         self.state.layer_tools.quick_mask = self.selection_masks.quick();

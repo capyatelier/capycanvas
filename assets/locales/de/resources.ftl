@@ -439,7 +439,6 @@ resources-picker-neutral = Neutralen Punkt auswählen
 resources-picker-prompt = Auf einen neutralen Punkt klicken
 resources-picker-empty = Einen Punkt mit sichtbarer Farbe auswählen.
 resources-picker-neutral-failed = Einen anderen Punkt auswählen. Diese Farbe lässt sich mit dem Weißabgleich nicht neutralisieren.
-resources-picker-unavailable = Pipetten für Anpassungen sind auf dieser Plattform noch nicht verfügbar.
 
 resources-histogram-preview = Vorschau
 resources-histogram-updating = Wird aktualisiert…
@@ -493,7 +492,6 @@ resources-lookup-space = LUT-Farbraum
 resources-lookup-intensity = Intensität
 resources-lookup-import = LUT importieren…
 resources-lookup-files = 3D-LUT-Dateien (.cube)
-resources-lookup-unavailable = Das Importieren von Farbzuordnungstabellen ist auf dieser Plattform noch nicht verfügbar.
 resources-lookup-failed = Die Zuordnungstabelle konnte nicht importiert werden.
 resources-layer-menu-stop-using-as-reference = Diese Ebene nicht mehr als Referenz verwenden
 resources-coverage-from-layer-opacity = Aus Ebenendeckkraft

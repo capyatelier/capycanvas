@@ -440,7 +440,6 @@ resources-picker-neutral = Выбрать нейтральную точку
 resources-picker-prompt = Щёлкните нейтральную точку
 resources-picker-empty = Выберите точку с видимым цветом.
 resources-picker-neutral-failed = Выберите другую точку. Баланс белого не может сделать этот цвет нейтральным.
-resources-picker-unavailable = Пипетки для корректировок пока недоступны на этой платформе.
 
 resources-histogram-preview = Предпросмотр
 resources-histogram-updating = Обновление…
@@ -494,7 +493,6 @@ resources-lookup-space = Цветовое пространство LUT
 resources-lookup-intensity = Интенсивность
 resources-lookup-import = Импортировать LUT…
 resources-lookup-files = Файлы 3D LUT (.cube)
-resources-lookup-unavailable = Импорт таблиц соответствия цветов пока недоступен на этой платформе.
 resources-lookup-failed = Не удалось импортировать таблицу соответствия.
 resources-layer-menu-stop-using-as-reference = Перестать использовать этот слой как опорный
 resources-coverage-from-layer-opacity = Из непрозрачности слоя

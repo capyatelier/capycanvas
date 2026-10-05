@@ -353,6 +353,17 @@ interpolation, Reverse and the current-color bucket, each as one Undo step.
 `exercise-tools.ps1` and `exercise-toolbar-components.ps1` cover the Gradient
 tool's editor in Tool Settings and the Tool Options popup.
 
+Histogram, Waveform and the input statistics in Levels and Curves
+(`ScopesView.cpp`) draw the shared plots. The snapshot's `windows_scopes` revision
+changes when a view's counts, channel, Log counts or palette change; the views
+then send one `scopes` workspace query, which returns the plots and a
+premultiplied BGRA Waveform scaled to the graph on the render thread. Properties
+presents the shared action row (sampling menu, Auto, targeted adjustment), the
+Color Lookup selector and Import LUT, whose `.cube` file is read and parsed on the
+document worker. `exercise-scopes.ps1 -Executable <path> -Theme dark` walks the
+Photo scopes, Levels, Curves and Color Lookup with mouse, pen and touch; the VM
+fixture names are `scopes` and `scopes:light`.
+
 Canvas cursor shapes come from shared Rust and the shared GPU presenter. Tool
 uses the active tool's icon, aligned to its working point; Tool and brush size
 adds the current brush outline for brush tools. Windows presents the shared

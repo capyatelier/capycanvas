@@ -1349,7 +1349,7 @@ fn tool_available(control: ToolbarControl, platform: Platform) -> bool {
         ToolbarControl::Command { command } => command.available_on(platform),
         ToolbarControl::Brush { id } => preset(id).is_ok(),
         ToolbarControl::Size { tenths } => BRUSH_SIZES.iter().any(|size| (*size * 10.).round() as u16 == tenths),
-        ToolbarControl::Panel { panel } => panel.available_on(platform) && Panel::ALL.contains(&panel) && panel.kind() == PanelKind::Content,
+        ToolbarControl::Panel { panel } => Panel::ALL.contains(&panel) && panel.kind() == PanelKind::Content,
         _ => true,
     }
 }
@@ -1369,7 +1369,7 @@ pub(crate) fn tool_catalog_localized(platform: Platform, localization: &Localize
         .chain(
             Panel::ALL
                 .into_iter()
-                .filter(move |p| p.available_on(platform) && p.kind() == PanelKind::Content)
+                .filter(move |p| p.kind() == PanelKind::Content)
                 .map(|panel| ToolbarControl::Panel { panel }),
         )
         .chain(crate::tools::brush_catalog_localized(localization).map(|b| ToolbarControl::Brush { id: b.id }))
@@ -1526,7 +1526,6 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
     let expanded = state.customization.expanded == Some(panel);
     let controls = PanelControl::available(panel)
         .iter()
-        .filter(|_| panel.available_on(state.platform))
         .map(|&control| PanelControlView {
             control,
             label: control.localized_label(localization),
@@ -3108,7 +3107,6 @@ mod tests {
                     .iter()
                     .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))
                     .count()
-                + Panel::ALL.iter().filter(|panel| panel.kind()==PanelKind::Content && panel.available_on(Platform::Gtk) && !panel.available_on(Platform::Web)).count()
         );
         assert!(native.iter().any(|c| c.control == ToolbarControl::ColorPicker));
         assert!(web.iter().any(|c| c.control == ToolbarControl::ColorPicker));

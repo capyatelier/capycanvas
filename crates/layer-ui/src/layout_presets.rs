@@ -68,7 +68,7 @@ impl WorkspacePreset {
         if !layout.fit_height_groups.contains(&group) {
             layout.fit_height_groups.push(group);
         }
-        if self == Self::Photographer && Panel::Histogram.available_on(platform) {
+        if self == Self::Photographer {
             if let Some(DockNode::Tabs {panels,active,..})=layout.node_mut(group) {
                 *panels=vec![Panel::Histogram,Panel::Waveform];
                 *active=Panel::Histogram;
@@ -474,7 +474,7 @@ mod tests {
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
                 [Edge::Top, Edge::Left, Edge::Right, Edge::Right]);
             for (id, expected) in [
-                (14, if Panel::Histogram.available_on(platform) {vec![Panel::Histogram,Panel::Waveform]}else{vec![Panel::Color,Panel::Palettes]}),
+                (14, vec![Panel::Histogram,Panel::Waveform]),
                 (15, vec![Panel::Properties, Panel::Adjustments]),
                 (16, vec![Panel::Layers]),
                 (6, vec![Panel::Brushes, Panel::Stats]),
@@ -490,7 +490,7 @@ mod tests {
             for [width, height] in [[1600., 1200.], [1200., 800.], [640., 480.]] {
                 let resolved = layout.workspace(width, height, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
                 let group = |panel| resolved.groups.iter().find(|g| g.panels.contains(&panel)).unwrap().bounds;
-                let color = group(if Panel::Histogram.available_on(platform) {Panel::Histogram}else{Panel::Color});
+                let color = group(Panel::Histogram);
                 let properties = group(Panel::Properties);
                 let layers = group(Panel::Layers);
                 assert_eq!(properties, group(Panel::Adjustments));
@@ -555,7 +555,7 @@ mod tests {
             let mut layout = preset.layout(platform);
             layout.open_default_columns(platform);
             layout.validate().unwrap();
-            let scopes=preset==WorkspacePreset::Photographer && Panel::Histogram.available_on(platform);
+            let scopes=preset==WorkspacePreset::Photographer;
             let (anchor,selected,minimum_width)=if scopes {
                 for panel in [Panel::Color,Panel::Palettes] {assert!(layout.panel(panel).is_ok());assert!(layout.panel_group(panel).is_none());}
                 (Panel::Histogram,Panel::Waveform,254.)

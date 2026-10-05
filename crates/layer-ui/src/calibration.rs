@@ -22,7 +22,6 @@ impl From<String> for CalibrationFailure {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn start_calibration(&mut self, layer: u64, epoch: u64, role:layer_core::levels::CalibrationRole) -> Result<(), String> {
-        if !Panel::Histogram.available_on(self.state.platform) { return Err(self.localization().text(MessageId::RESOURCES_PICKER_UNAVAILABLE).to_string()); }
         self.require_idle()?;
         let doc = self.engine.document();
         let handle = occurrence_handle(layer)?;
@@ -146,7 +145,6 @@ impl<R:CanvasRenderer> UiSession<R> {
         if self.auto_levels.take().is_some_and(|task|task.submitted) {self.engine.backend_mut().cancel_snapshot();}
     }
     pub(super) fn start_auto_levels(&mut self,layer:u64,epoch:u64)->Result<(),String> {
-        if !Panel::Histogram.available_on(self.state.platform) {return Ok(());}
         if self.auto_levels.is_some() {self.cancel_auto_levels();self.refresh_document();return Ok(());}
         self.require_idle()?;
         let document=self.engine.document();
