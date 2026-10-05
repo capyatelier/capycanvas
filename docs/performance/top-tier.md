@@ -1405,9 +1405,9 @@ per-repetition analysis are under `artifacts/format/m3-final-android-performance
 
 ## Layer color modes
 
-Measured on 2026-10-04 with the layer-color-mode candidate on `012c36ed0`,
-release benchmark APK SHA-256
-`ee36286807517e72519f0cfee08dddc420837447017982f251048e3915c85a6d`.
+Measured on 2026-10-04 at `de1159228`, release benchmark APK SHA-256
+`fc0de7ee32ebbb9947803e461ca2bb436e07915019c2f82543cafcce8e5ea645`.
+App sources match the implementation at `c92420837`.
 The tier photo sits below one empty paint layer at Fit, with Perceptual blending,
 pressure 1, 16 ms prediction, default display settings and panel glass, Stats
 closed and thermal status 0 before and after each workload. Each mode uses one
@@ -1416,20 +1416,20 @@ The ellipse radii are 310 × 150 surface pixels at 16.53% Fit.
 
 | Brush | Color mode | Canvas updates/s, median (range) | Fresh input updates/s, median (range) | Fresh completion-gap p99, range | Target |
 | --- | --- | --- | --- | --- | --- |
-| G-Pen 2048 px | Full color | 103.05 (100.09–103.23) | 103.05 (100.09–103.23) | 22.83–23.41 ms | **Not met** |
-| G-Pen 2048 px | Grayscale | 104.14 (104.14–104.36) | 104.14 (104.14–104.36) | 19.29–20.88 ms | **Not met** |
-| G-Pen 2048 px | Two-tone | 104.59 (104.40–105.29) | 104.59 (104.40–105.29) | 19.80–22.21 ms | **Not met** |
-| Paintbrush 1024 px | Full color | 90.58 (89.41–90.70) | 90.58 (89.41–90.70) | 20.24–24.48 ms | **Not met** |
-| Paintbrush 1024 px | Grayscale | 89.83 (89.45–90.08) | 89.83 (89.45–90.08) | 23.40–26.54 ms | **Not met** |
-| Paintbrush 1024 px | Two-tone | 117.34 (115.90–120.25) | 117.34 (115.90–120.25) | 19.11–26.43 ms | **Not met** |
-| Watercolor Wash 512 px | Full color | 3.99 (3.99–4.20) | 3.99 (3.99–4.20) | 412.60–618.67 ms | **Not met** |
-| Watercolor Wash 512 px | Grayscale | 3.99 (3.99–4.19) | 3.99 (3.99–4.19) | 475.87–540.73 ms | **Not met** |
-| Watercolor Wash 512 px | Two-tone | 4.19 (3.79–4.19) | 4.19 (3.79–4.19) | 520.10–604.76 ms | **Not met** |
+| G-Pen 2048 px | Full color | 99.49 (99.39–102.36) | 99.49 (99.39–102.36) | 25.51–29.35 ms | **Not met** |
+| G-Pen 2048 px | Grayscale | 99.87 (98.23–100.25) | 99.87 (98.23–100.25) | 19.50–20.50 ms | **Not met** |
+| G-Pen 2048 px | Two-tone | 97.42 (96.69–97.63) | 97.42 (96.69–97.63) | 20.65–22.10 ms | **Not met** |
+| Paintbrush 1024 px | Full color | 90.58 (90.07–90.78) | 90.58 (90.07–90.78) | 23.52–24.55 ms | **Not met** |
+| Paintbrush 1024 px | Grayscale | 88.24 (88.02–90.18) | 88.24 (88.02–90.18) | 23.86–25.76 ms | **Not met** |
+| Paintbrush 1024 px | Two-tone | 117.78 (117.59–118.27) | 117.59 (117.18–118.27) | 21.34–26.06 ms | **Not met** |
+| Watercolor Wash 512 px | Full color | 3.99 (3.79–3.99) | 3.99 (3.79–3.99) | 575.35–609.82 ms | **Not met** |
+| Watercolor Wash 512 px | Grayscale | 3.59 (3.40–4.19) | 3.59 (3.40–4.19) | 440.00–640.91 ms | **Not met** |
+| Watercolor Wash 512 px | Two-tone | 3.99 (3.99–4.19) | 3.99 (3.99–4.19) | 528.27–600.27 ms | **Not met** |
 
 These workloads miss the tier rate. Other brushes, layer-mode conversion latency,
 and physical input-to-present latency remain unqualified. Raw runs, screenshots
-and environment records are under `artifacts/layer-modes/top-qualified/`;
-the binary and source snapshot are under `artifacts/layer-modes/qualified/`.
+and environment records are under `artifacts/layer-modes/top-rebased/`;
+the binary and source snapshot are under `artifacts/layer-modes/rebased-build/`.
 
 ## Brushes
 
@@ -1450,7 +1450,7 @@ are kept separate from the 10 s comparison table below.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 2048 px | BUILD32: forward 95.880–96.878, reverse 102.127–102.864 fresh updates/s; completion-gap p99 28.288–31.045 ms, Linear | **Not met**; [current M3 comparison](#current-m3-g-pen-comparison) |
+| G-Pen (1) | Simple | 2048 px | 99.49 (99.39–102.36) fresh updates/s; completion-gap p99 25.51–29.35 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | Rough G-Pen (28) | Simple | 2048 px | 61.8 updates/s (60.6–62.7); gap p99 33.6 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 2048 px | 189.3 updates/s (188.6–190.5); gap p99 10.6 ms | Met |
 | Antique Pen (30) | Simple | 2048 px | 82.0 updates/s (81.7–82.2); gap p99 26.4 ms | **Not met** |
@@ -1467,7 +1467,7 @@ are kept separate from the 10 s comparison table below.
 | Blotty Ink (33) | Complex | 1024 px | 117.8 updates/s (117.1–118.4); gap p99 17.0 ms | **Not met** |
 | Realistic Brushed Ink (34) | Complex | 1024 px | 112.5 updates/s (111.8–112.7); gap p99 18.3 ms | **Not met** |
 | Pastel Block (17) | Complex | 1024 px | 82.8 updates/s (82.1–82.8); gap p99 22.2 ms | **Not met** |
-| Paintbrush (4) | Complex | 1024 px | 109.1 updates/s (109.0–110.6); gap p99 18.9 ms | **Not met** |
+| Paintbrush (4) | Complex | 1024 px | 90.58 (90.07–90.78) fresh updates/s; completion-gap p99 23.52–24.55 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | Textured Flat (15) | Complex | 1024 px | 109.2 updates/s (108.8–110.0); gap p99 19.0 ms | **Not met** |
 | Dry Scumble (16) | Complex | 1024 px | 87.7 updates/s (87.4–88.0); gap p99 22.7 ms | **Not met** |
 | Transparent Glaze (18) | Complex | 1024 px | 99.9 updates/s (99.7–100.0); gap p99 21.6 ms | **Not met** |
@@ -1475,7 +1475,7 @@ are kept separate from the 10 s comparison table below.
 | Dual Texture (9) | Complex | 1024 px | 80.0 updates/s (79.5–80.6); gap p99 21.3 ms | **Not met** |
 | Spray (8) | Complex | 1024 px | 33.8 updates/s (32.7–34.3); gap p99 113.2 ms | **Not met** |
 | Opaque Gouache (19) | Very complex | 512 px | **Crashed**: native allocator out of memory (Scudo map failure) | **Not met** |
-| Watercolor Wash (20) | Very complex | 512 px | 1.40 fresh updates/s (1.20–1.40); completion-gap p99 960.82–1279.16 ms; [current comparison](#watercolor-prediction-precision) | **Not met** |
+| Watercolor Wash (20) | Very complex | 512 px | 3.99 (3.79–3.99) fresh updates/s; completion-gap p99 575.35–609.82 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | Wet Watercolor (21) | Very complex | 512 px | **Crashed**: SIGSEGV inside the Adreno Vulkan driver (fault address 0x1c) | **Not met** |
 | Loaded Oil (22) | Very complex | 512 px | **Crashed**: SIGSEGV inside the Adreno Vulkan driver (fault address 0x1c) | **Not met** |
 | Palette Knife (23) | Very complex | 512 px | **Crashed**: SIGSEGV inside the Adreno Vulkan driver (fault address 0x1c) | **Not met** |

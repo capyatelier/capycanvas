@@ -1101,9 +1101,9 @@ per-repetition analysis are under `artifacts/format/m3-final-android-performance
 
 ## Layer color modes
 
-Measured on 2026-10-04 with the layer-color-mode candidate on `012c36ed0`,
-release benchmark APK SHA-256
-`ee36286807517e72519f0cfee08dddc420837447017982f251048e3915c85a6d`.
+Measured on 2026-10-04 at `de1159228`, release benchmark APK SHA-256
+`fc0de7ee32ebbb9947803e461ca2bb436e07915019c2f82543cafcce8e5ea645`.
+App sources match the implementation at `c92420837`.
 The tier photo sits below one empty paint layer at Fit, with Perceptual blending,
 pressure 1, 16 ms prediction, default display settings and panel glass, Stats
 closed and thermal status 0 before and after each workload. Each mode uses one
@@ -1112,20 +1112,20 @@ The ellipse radii are 240 × 140 surface pixels at 15.97% Fit.
 
 | Brush | Color mode | Canvas updates/s, median (range) | Fresh input updates/s, median (range) | Fresh completion-gap p99, range | Target |
 | --- | --- | --- | --- | --- | --- |
-| G-Pen 1024 px | Full color | 59.19 (58.43–59.32) | 59.19 (58.43–59.32) | 27.93–28.47 ms | **Not met** |
-| G-Pen 1024 px | Grayscale | 59.38 (59.37–59.41) | 59.37 (59.21–59.38) | 29.37–30.97 ms | **Not met** |
-| G-Pen 1024 px | Two-tone | 58.91 (58.90–59.60) | 58.91 (58.90–59.60) | 27.94–28.96 ms | **Not met** |
-| Paintbrush 1024 px | Full color | 10.77 (10.76–10.97) | 10.77 (10.76–10.97) | 343.06–376.80 ms | **Not met** |
-| Paintbrush 1024 px | Grayscale | 10.76 (10.58–10.76) | 10.76 (10.58–10.76) | 366.28–383.20 ms | **Not met** |
-| Paintbrush 1024 px | Two-tone | 10.95 (10.78–11.15) | 10.95 (10.78–11.15) | 318.09–370.58 ms | **Not met** |
-| Watercolor Wash 512 px | Full color | 0.40 (0.40–0.40) | 0.40 (0.40–0.40) | 1984.72–2281.01 ms | **Not met** |
-| Watercolor Wash 512 px | Grayscale | 0.40 (0.40–0.40) | 0.40 (0.40–0.40) | 2078.48–2207.17 ms | **Not met** |
-| Watercolor Wash 512 px | Two-tone | 0.40 (0.40–0.40) | 0.40 (0.40–0.40) | 1656.66–2303.66 ms | **Not met** |
+| G-Pen 1024 px | Full color | 59.71 (59.45–59.80) | 59.71 (59.45–59.80) | 27.17–29.62 ms | **Not met** |
+| G-Pen 1024 px | Grayscale | 59.52 (59.47–59.58) | 59.52 (59.47–59.58) | 28.94–30.02 ms | **Not met** |
+| G-Pen 1024 px | Two-tone | 59.03 (58.54–59.18) | 58.98 (58.54–59.03) | 30.10–30.97 ms | **Not met** |
+| Paintbrush 1024 px | Full color | 10.75 (10.74–10.96) | 10.75 (10.74–10.96) | 350.01–385.67 ms | **Not met** |
+| Paintbrush 1024 px | Grayscale | 10.76 (10.57–10.98) | 10.76 (10.57–10.98) | 346.47–376.28 ms | **Not met** |
+| Paintbrush 1024 px | Two-tone | 10.77 (10.75–10.95) | 10.77 (10.75–10.95) | 345.47–389.82 ms | **Not met** |
+| Watercolor Wash 512 px | Full color | 0.40 (0.40–0.40) | 0.40 (0.40–0.40) | 2107.06–2310.56 ms | **Not met** |
+| Watercolor Wash 512 px | Grayscale | 0.40 (0.40–0.40) | 0.40 (0.40–0.40) | 1714.39–2208.98 ms | **Not met** |
+| Watercolor Wash 512 px | Two-tone | 0.40 (0.40–0.40) | 0.40 (0.40–0.40) | 1909.25–2213.02 ms | **Not met** |
 
 These workloads miss the tier rate. Other brushes, layer-mode conversion latency,
 and physical input-to-present latency remain unqualified. Raw runs, screenshots
-and environment records are under `artifacts/layer-modes/low-qualified/`;
-the binary and source snapshot are under `artifacts/layer-modes/qualified/`.
+and environment records are under `artifacts/layer-modes/low-rebased/`;
+the binary and source snapshot are under `artifacts/layer-modes/rebased-build/`.
 
 ## Brushes
 
@@ -1140,7 +1140,7 @@ Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with t
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | Solid Color revision: 95.77 fresh updates/s (89.67–96.53); fresh completion gap p99 ≤27.60 ms | Meets measured 1024 px stroke criteria; [Solid Color fills](#solid-color-fills) |
+| G-Pen (1) | Simple | 1024 px | 59.71 (59.45–59.80) fresh updates/s; completion-gap p99 27.17–29.62 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | G-Pen (1), M3 BUILD32 | Simple | 1024 px | Both orders: 64.295–65.713 fresh updates/s; fresh gap p99 24.960–27.643 ms, Linear | Meets this stroke; common response excess repeats: forward **+1.007 ms**, reverse **+1.192/+1.778 ms**; presentation unmeasured; [BUILD32](#build32-g-pen-comparison) |
 | G-Pen (1), M3 BUILD28 | Simple | 1024 px | BUILD28: 64.926–65.173 fresh updates/s; fresh gap p99 25.959–27.596 ms, Linear | Meets this stroke and matched CPU/response bounds; presentation unmeasured; [BUILD28](#build28-g-pen-comparison) |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
@@ -1159,7 +1159,7 @@ Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with t
 | Blotty Ink (33) | Complex | 1024 px | 15.1 updates/s (15.0–15.1); gap p99 105.5 ms | **Not met** |
 | Realistic Brushed Ink (34) | Complex | 1024 px | 14.3 updates/s (14.2–14.4); gap p99 178.0 ms | **Not met** |
 | Pastel Block (17) | Complex | 1024 px | 13.4 updates/s (13.4–13.4); gap p99 136.0 ms | **Not met** |
-| Paintbrush (4) | Complex | 1024 px | 16.6 updates/s (16.5–16.6); gap p99 191.7 ms | **Not met** |
+| Paintbrush (4) | Complex | 1024 px | 10.75 (10.74–10.96) fresh updates/s; completion-gap p99 350.01–385.67 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | Textured Flat (15) | Complex | 1024 px | 18.7 updates/s (18.6–18.8); gap p99 169.3 ms | **Not met** |
 | Dry Scumble (16) | Complex | 1024 px | 8.8 updates/s (8.7–9.0); gap p99 212.7 ms | **Not met** |
 | Transparent Glaze (18) | Complex | 1024 px | 14.7 updates/s (14.6–14.8); gap p99 112.0 ms | **Not met** |
@@ -1167,7 +1167,7 @@ Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with t
 | Dual Texture (9) | Complex | 1024 px | 2.6 updates/s (2.5–2.7); gap p99 559.5 ms | **Not met** |
 | Spray (8) | Complex | 1024 px | 7.4 updates/s (7.3–7.7); gap p99 217.2 ms | **Not met** |
 | Opaque Gouache (19) | Very complex | 512 px | **Killed** by Android's low-memory killer at 4.2 GB resident | **Not met** |
-| Watercolor Wash (20) | Very complex | 512 px | 0.3 updates/s (0.3–0.3); gap p99 3028.5 ms | **Not met** |
+| Watercolor Wash (20) | Very complex | 512 px | 0.40 (0.40–0.40) fresh updates/s; completion-gap p99 2107.06–2310.56 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | Wet Watercolor (21) | Very complex | 512 px | 0.4 updates/s (0.3–0.4); gap p99 4758.1 ms | **Not met** |
 | Loaded Oil (22) | Very complex | 512 px | **Killed** by Android's low-memory killer at 4.3 GB resident | **Not met** |
 | Palette Knife (23) | Very complex | 512 px | **Killed** by Android's low-memory killer at 4.1 GB resident | **Not met** |

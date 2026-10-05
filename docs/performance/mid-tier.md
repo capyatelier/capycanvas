@@ -358,9 +358,9 @@ Raw traces, complete ID joins, per-phase quantiles and limitations are in
 
 ## Layer color modes
 
-Measured on 2026-10-04 with the layer-color-mode candidate on `012c36ed0`,
-release benchmark APK SHA-256
-`ee36286807517e72519f0cfee08dddc420837447017982f251048e3915c85a6d`.
+Measured on 2026-10-04 at `de1159228`, release benchmark APK SHA-256
+`fc0de7ee32ebbb9947803e461ca2bb436e07915019c2f82543cafcce8e5ea645`.
+App sources match the implementation at `c92420837`.
 The tier photo sits below one empty paint layer at Fit, with Perceptual blending,
 pressure 1, 16 ms prediction, default display settings and panel glass, Stats
 closed and thermal status 0 before and after each workload. Each mode uses one
@@ -369,20 +369,20 @@ The ellipse radii are 310 × 150 surface pixels at 15.99% Fit.
 
 | Brush | Color mode | Canvas updates/s, median (range) | Fresh input updates/s, median (range) | Fresh completion-gap p99, range | Target |
 | --- | --- | --- | --- | --- | --- |
-| G-Pen 1536 px | Full color | 52.90 (52.80–53.01) | 52.90 (52.80–53.01) | 30.07–30.99 ms | **Not met** |
-| G-Pen 1536 px | Grayscale | 53.46 (53.40–53.58) | 53.46 (53.40–53.58) | 29.68–30.39 ms | **Not met** |
-| G-Pen 1536 px | Two-tone | 53.43 (53.31–53.51) | 53.31 (53.23–53.51) | 29.18–30.59 ms | **Not met** |
-| Paintbrush 1024 px | Full color | 24.75 (24.35–24.75) | 24.75 (24.35–24.75) | 85.63–102.51 ms | **Not met** |
-| Paintbrush 1024 px | Grayscale | 24.35 (24.16–24.55) | 24.35 (24.16–24.55) | 86.94–93.81 ms | **Not met** |
-| Paintbrush 1024 px | Two-tone | 24.55 (24.52–24.74) | 24.55 (24.52–24.74) | 92.40–99.60 ms | **Not met** |
-| Watercolor Wash 512 px | Full color | 0.60 (0.60–0.80) | 0.60 (0.40–0.80) | 1520.51–2613.56 ms | **Not met** |
-| Watercolor Wash 512 px | Grayscale | 0.60 (0.60–0.60) | 0.60 (0.60–0.60) | 1566.25–1710.56 ms | **Not met** |
-| Watercolor Wash 512 px | Two-tone | 0.60 (0.60–0.80) | 0.60 (0.60–0.80) | 1462.09–2606.01 ms | **Not met** |
+| G-Pen 1536 px | Full color | 53.46 (53.36–53.51) | 53.46 (53.36–53.51) | 30.18–31.25 ms | **Not met** |
+| G-Pen 1536 px | Grayscale | 53.39 (53.25–53.82) | 53.39 (53.25–53.82) | 29.86–30.44 ms | **Not met** |
+| G-Pen 1536 px | Two-tone | 53.60 (53.15–53.72) | 53.60 (53.15–53.72) | 29.01–30.22 ms | **Not met** |
+| Paintbrush 1024 px | Full color | 24.74 (24.73–24.93) | 24.74 (24.73–24.93) | 82.59–91.12 ms | **Not met** |
+| Paintbrush 1024 px | Grayscale | 24.54 (24.33–24.73) | 24.54 (24.33–24.73) | 84.41–85.88 ms | **Not met** |
+| Paintbrush 1024 px | Two-tone | 24.35 (24.35–24.37) | 24.35 (24.35–24.37) | 83.80–88.76 ms | **Not met** |
+| Watercolor Wash 512 px | Full color | 0.60 (0.60–0.60) | 0.60 (0.60–0.60) | 1536.52–1726.83 ms | **Not met** |
+| Watercolor Wash 512 px | Grayscale | 0.60 (0.60–0.60) | 0.60 (0.60–0.60) | 1587.10–1645.00 ms | **Not met** |
+| Watercolor Wash 512 px | Two-tone | 0.60 (0.60–0.80) | 0.60 (0.60–0.80) | 1552.36–2601.22 ms | **Not met** |
 
 These workloads miss the tier rate. Other brushes, layer-mode conversion latency,
 and physical input-to-present latency remain unqualified. Raw runs, screenshots
-and environment records are under `artifacts/layer-modes/mid-qualified/`;
-the binary and source snapshot are under `artifacts/layer-modes/qualified/`.
+and environment records are under `artifacts/layer-modes/mid-rebased/`;
+the binary and source snapshot are under `artifacts/layer-modes/rebased-build/`.
 
 ## Brushes
 
@@ -443,7 +443,7 @@ the rest of the simple class remains unqualified there.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1536 px | BUILD20: 58.890–59.790 fresh updates/s; fresh gap p99 25.264–27.520 ms, Linear | **Not met**; [BUILD20](#build20-g-pen-comparison) |
+| G-Pen (1) | Simple | 1536 px | 53.46 (53.36–53.51) fresh updates/s; completion-gap p99 30.18–31.25 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | Rough G-Pen (28) | Simple | 2048 px | 12.2 updates/s (12.0–12.2); gap p99 152.2 ms | 1536 px unmeasured |
 | Calligraphy Pen (29) | Simple | 2048 px | 35.2 updates/s (35.1–35.3); gap p99 73.2 ms | 1536 px unmeasured |
 | Antique Pen (30) | Simple | 2048 px | 16.2 updates/s (16.0–16.3); gap p99 171.2 ms | 1536 px unmeasured |
@@ -460,7 +460,7 @@ the rest of the simple class remains unqualified there.
 | Blotty Ink (33) | Complex | 1024 px | 20.1 updates/s (19.9–20.2); gap p99 90.2 ms | **Not met** |
 | Realistic Brushed Ink (34) | Complex | 1024 px | 19.6 updates/s (19.5–19.6); gap p99 136.3 ms | **Not met** |
 | Pastel Block (17) | Complex | 1024 px | 18.2 updates/s (18.2–18.4); gap p99 107.3 ms | **Not met** |
-| Paintbrush (4) | Complex | 1024 px | 23.2 updates/s (23.2–23.3); gap p99 132.7 ms | **Not met** |
+| Paintbrush (4) | Complex | 1024 px | 24.74 (24.73–24.93) fresh updates/s; completion-gap p99 82.59–91.12 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | Textured Flat (15) | Complex | 1024 px | 25.5 updates/s (25.4–25.5); gap p99 107.0 ms | **Not met** |
 | Dry Scumble (16) | Complex | 1024 px | 14.0 updates/s (14.0–14.3); gap p99 144.9 ms | **Not met** |
 | Transparent Glaze (18) | Complex | 1024 px | 22.0 updates/s (22.0–22.1); gap p99 82.7 ms | **Not met** |
@@ -468,7 +468,7 @@ the rest of the simple class remains unqualified there.
 | Dual Texture (9) | Complex | 1024 px | 6.2 updates/s (6.2–6.2); gap p99 201.8 ms | **Not met** |
 | Spray (8) | Complex | 1024 px | 5.9 updates/s (5.5–6.5); gap p99 266.9 ms | **Not met** |
 | Opaque Gouache (19) | Very complex | 512 px | **Crashed**: native allocator out of memory (Scudo map failure) | **Not met** |
-| Watercolor Wash (20) | Very complex | 512 px | **Crashed**: native allocator out of memory (Scudo map failure) | **Not met** |
+| Watercolor Wash (20) | Very complex | 512 px | 0.60 (0.60–0.60) fresh updates/s; completion-gap p99 1536.52–1726.83 ms, Full color | **Not met**; [layer color modes](#layer-color-modes) |
 | Wet Watercolor (21) | Very complex | 512 px | **Crashed**: native abort (SIGABRT) during the stroke | **Not met** |
 | Loaded Oil (22) | Very complex | 512 px | **Crashed**: native allocator out of memory (Scudo map failure) | **Not met** |
 | Palette Knife (23) | Very complex | 512 px | **Stopped**: canvas GPU out of memory | **Not met** |
