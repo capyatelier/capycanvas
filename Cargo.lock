@@ -1308,7 +1308,7 @@ dependencies = [
 
 [[package]]
 name = "layer-android"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "jni",
  "layer-color",
@@ -1330,14 +1330,14 @@ dependencies = [
 
 [[package]]
 name = "layer-android-link"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-android",
 ]
 
 [[package]]
 name = "layer-apple"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-color",
  "layer-core",
@@ -1356,14 +1356,14 @@ dependencies = [
 
 [[package]]
 name = "layer-apple-link"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-apple",
 ]
 
 [[package]]
 name = "layer-bench"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-core",
  "layer-engine",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "layer-color"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "exr",
  "gif",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "layer-core"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -1414,7 +1414,7 @@ dependencies = [
 
 [[package]]
 name = "layer-engine"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "bincode",
  "flate2",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "layer-host"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-color",
  "layer-core",
@@ -1444,7 +1444,7 @@ dependencies = [
 
 [[package]]
 name = "layer-linux"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "glib",
  "glib-unix",
@@ -1472,14 +1472,14 @@ dependencies = [
 
 [[package]]
 name = "layer-render"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-core",
 ]
 
 [[package]]
 name = "layer-render-wgpu"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ash",
  "crc32fast",
@@ -1504,11 +1504,11 @@ dependencies = [
 
 [[package]]
 name = "layer-shader-cache-key"
-version = "1.0.2"
+version = "1.0.3"
 
 [[package]]
 name = "layer-ui"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "fasteval",
  "flate2",
@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "layer-web"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
@@ -1550,14 +1550,14 @@ dependencies = [
 
 [[package]]
 name = "layer-web-link"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-web",
 ]
 
 [[package]]
 name = "layer-windows"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-color",
  "layer-core",
@@ -1576,14 +1576,14 @@ dependencies = [
 
 [[package]]
 name = "layer-windows-link"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "layer-windows",
 ]
 
 [[package]]
 name = "layer-workspace"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "async-channel",
  "layer-host",
