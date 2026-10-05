@@ -19,6 +19,9 @@ Progress notes, validation reports and other work records are not committed
 - [Vector layers: tool subset, stroke storage and new-artist journey](vector-layers-research.md),
   with its [source reports](vector-layers-research).
 - [Layers: illustration workflows and panel design](layers-research.md).
+- [Professional illustration and manga gaps](illustration-manga-gap-audit.md):
+  current capabilities and recommended behavior, with detailed daily-editing and
+  enclosed-region coloring priorities.
 - [Color palettes](color-palettes-research.md).
 
 ## Design records
