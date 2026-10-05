@@ -119,6 +119,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testPhotoScopesDark() { checkPhotoScopes(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testToolGroups() { checkToolGroups(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testToolGroupsDark() { checkToolGroups(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testLayerColorModes() { checkLayerColorModesAndFilters(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testLayerColorModesDark() { checkLayerColorModesAndFilters(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testSwitcherVisibility() { checkSwitcherVisibility(in: editorTestApplication()) }
     @MainActor func testWorkspaceSwitcher() {
         checkWorkspaceSwitcher(in: editorTestApplication())
