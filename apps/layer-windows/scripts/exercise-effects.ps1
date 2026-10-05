@@ -455,6 +455,9 @@ try {
     $float.item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select();Invoke 'Create' -Name
     Wait-Until {$active=@((Model).state.tabs|Where-Object active);$active.Count -eq 1 -and $active[0].width -eq 128 -and $active[0].height -eq 64 -and !(Model).state.document_file.busy} 'Document replacement failed' 45
     Wait-Until {(Control 'drawing-canvas').Current.IsEnabled} 'Document dialog gate did not clear'
+    if($null -eq (Model).state.filter_picker.search){Invoke 'filter-search-toggle'}
+    Edit 'filter-search' 'Curves'
+    Wait-Until {(Model).state.filter_picker.search -eq 'Curves'} 'Search did not reach the new drawing'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Preview after document replacement not ready' 20
     Select-Panel 'properties'
     Wait-Until {(Property 'opacity').value.value -eq 1 -and (Property 'blend').value.value -eq 0} 'Replacement reused old property values'

@@ -36,7 +36,7 @@ function Start-Review([string]$Label,[switch]$AllowFailure){
 function Crash-Review {Stop-Process -Id $review.Id;$review.WaitForExit()}
 function Close-Review {
     Wait-Until {$canvas=Find-Id 'drawing-canvas';$canvas -and $canvas.Current.IsEnabled} 'Native document dialog did not finish closing'
-    if(!$review.CloseMainWindow()){throw 'Review window did not accept close'}
+    Wait-Until {$review.Refresh();if($review.HasExited){return $true};$null=$review.CloseMainWindow();Start-Sleep -Milliseconds 250;$review.HasExited -or (Model).windows_settings_close.requested} 'Review window did not accept close'
     if(!$review.WaitForExit(15000)){throw 'Session flush did not complete window close'}
     if($review.ExitCode -ne 0){throw "Clean close failed: $($review.ExitCode)"}
 }
