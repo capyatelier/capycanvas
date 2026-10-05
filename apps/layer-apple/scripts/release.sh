@@ -12,7 +12,6 @@ case "${1:-}" in
   mac) CAPY_SCHEME=CapyCanvas-Mac; CAPY_DEST='generic/platform=macOS' ;;
   *) echo 'Usage: release.sh ipad|mac' >&2; exit 1 ;;
 esac
-CAPY_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$CAPY_APP/../../Cargo.toml")
 CAPY_OUT="$CAPY_APP/../../dist/apple-$1"
 rm -rf "$CAPY_OUT"
 CAPY_ARCHIVE="$CAPY_OUT/$CAPY_SCHEME.xcarchive"
@@ -43,7 +42,7 @@ fi
 mkdir "$CAPY_OUT/dmg"
 ditto "$CAPY_APP_BUNDLE" "$CAPY_OUT/dmg/Capy Canvas.app"
 ln -s /Applications "$CAPY_OUT/dmg/Applications"
-CAPY_DMG="$CAPY_APP/../../dist/capycanvas-$CAPY_VERSION-macos-arm64.dmg"
+CAPY_DMG="$CAPY_APP/../../dist/capycanvas-macos-arm64.dmg"
 hdiutil create -quiet -volname 'Capy Canvas' -srcfolder "$CAPY_OUT/dmg" -format UDZO -ov "$CAPY_DMG"
 [[ -n "${CAPY_APPLE_TEAM:-}" ]] || exit 0
 codesign --sign 'Developer ID Application' --timestamp "$CAPY_DMG"

@@ -59,7 +59,7 @@ Write-PackagedPayload $portable.source $payload $manifest $packaging {
     [IO.File]::WriteAllText((Join-Path $payload 'AppxManifest.xml'),$xml.Replace("`r`n",$lf)+$lf,$utf8)
     [IO.File]::WriteAllText((Join-Path $payload 'README.txt'),$readme,$utf8)
 }
-$label='capycanvas-'+$manifest.version+'-windows-x64'+$(if($UnsignedTestIdentity){'-test'}else{''})
+$label='capycanvas-windows-x64'+$(if($UnsignedTestIdentity){'-test'}else{''})
 if($manifest.development){$label+='-development'}
 $archive=Join-Path $run ($label+'.msix');$repeat=Join-Path $run 'repeat.msix'
 foreach($path in @($archive,$repeat)){

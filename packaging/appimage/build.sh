@@ -15,8 +15,8 @@ wget -qO target/quick-sharun https://raw.githubusercontent.com/pkgforge-dev/Anyl
 chmod +x target/quick-sharun
 export DESKTOP=/usr/share/applications/art.capycanvas.CapyCanvas.desktop
 export ICON=/usr/share/icons/hicolor/scalable/apps/art.capycanvas.CapyCanvas.svg
-export APPDIR=target/AppDir OUTPATH=dist OUTNAME="capycanvas-$version-linux-x86_64.AppImage"
-export UPINFO="gh-releases-zsync|capyatelier|capycanvas|latest|capycanvas-*-linux-x86_64.AppImage.zsync"
+export APPDIR=target/AppDir OUTPATH=dist OUTNAME=capycanvas-linux-x86_64.AppImage
+export UPINFO="gh-releases-zsync|capyatelier|capycanvas|latest|capycanvas-linux-x86_64.AppImage.zsync"
 target/quick-sharun /usr/bin/capycanvas
 docs=target/AppDir/share/doc
 mkdir -p "$docs/system-libraries" target/AppDir/share/metainfo
