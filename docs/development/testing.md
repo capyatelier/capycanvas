@@ -267,6 +267,11 @@ Preserve user names and document contents across language changes. Follow the
 
 ## UI and input
 
+- **Layer thumbnails.** GTK `native_layer_thumbnail_squircles`, Web `--layer-hold`,
+  Android `AndroidTitleBarTest#layerRelationships` and Windows `layers` fixtures
+  check full squircle clipping, outer accent borders, unchanged preview edge
+  pixels and mask linking in light and dark themes. Run GTK at scales 1 and 2;
+  Windows `layers:Relationships` covers both themes with native pickup paths.
 - **Both themes.** Check changed UI in light and dark themes, and brush changes in
   both live drawing and replay.
 - **Drags.** Reorder gestures follow the [drag convention](../ui/drag-and-reorder.md)

@@ -475,7 +475,7 @@ content-to-mask link's neutral color and shape, oriented vertically.
 
 Adjustment effects show their icon without a thumbnail background in the
 existing hit area; content generators retain their content thumbnails. Fill
-thumbnails cover their whole square, cropping the document's aspect, so they
+thumbnails fill their squircle, cropping the document's aspect, so they
 read differently from paint drawn on a checker. Tapping a solid color fill's
 thumbnail, the Paper included, selects it and opens Edit Color on its color
 (`LayerState::fill_color`); Use Color sets it like the Properties color. Hiding
@@ -484,7 +484,7 @@ visibility settings. The shared row marks inherited hiding for a dimmed eye.
 Showing the owner restores effects that were not individually hidden.
 Thumbnail editing marks identify editable paint, saved selection or mask pixels;
 filter, fill and folder icons do not show them. The narrow content-to-mask button
-uses distinct vertical linked and broken-chain symbols. GTK and Web use a 10px icon and
+uses distinct vertical linked and broken-chain symbols. Every host uses a 10px icon and
 minimum width for this control. Solo keeps individually hidden
 children hidden and restores visibility through undo and redo.
 Use Selection is a normal icon button with squircle corners, a transparent idle

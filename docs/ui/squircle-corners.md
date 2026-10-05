@@ -26,11 +26,11 @@ the former 8–10px circular corners.
   Controls 24px tall or shorter become capsules.
 - **Concave joins** (tab feet, drawer bridges and expanded-panel joins) keep
   their sizes and use inverted squircle curves.
-- GTK and Web layer and mask thumbnails use full squircles. Their editing target has
+- Layer and mask thumbnails use full squircles on every host. Their editing target has
   a 3px outer border in the resolved accent color, replacing the faint idle
   edge without covering preview pixels or changing the hit area. Type badges
   sit inside the preview corners.
-- Checkboxes, other hosts' thumbnails, slider thumbs and other small details
+- Checkboxes, slider thumbs and other small details
   keep their former visual rounding with squircle corners.
 
 A drawer's source tile squares only the corners facing its drawer and keeps
@@ -101,6 +101,7 @@ columns, drawers and segmented controls draw the exact squircle as their fill,
 with a cached shadow outside it, and clip content only with the fitted circular
 radius. Tabbed groups draw their strip and body as separate squircle segments,
 and glass regions publish the same design radii with `BackdropRegion::SQUIRCLE`.
+Layer and mask previews use the exact `.tile` clip within their 28px images.
 Core Animation applies circular clips directly; a squircle path clip is an
 offscreen mask on every composited frame, which is too slow beside a live
 canvas. Clipping does not narrow SwiftUI hit testing, and
@@ -116,7 +117,10 @@ Composition shadow masks and their Direct2D cut use the same outline, and glass
 regions publish design radii with `BackdropRegion::SQUIRCLE`. Title-bar tools,
 bars, chips, document tabs and toolbar tiles keep WinUI's circular
 `CornerRadius` at the fitted radius (design radius × 0.54), as on Web without
-`corner-shape`. Panel content clips with the fitted circle.
+`corner-shape`. Panel content clips with the fitted circle. Layer and mask
+previews fill exact squircle paths with an `ImageBrush` backed by the existing
+thumbnail source. Their perimeter uses concentric squircle paths, which also
+appear in native drag snapshots.
 
 ## Checks
 

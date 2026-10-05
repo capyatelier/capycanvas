@@ -189,6 +189,8 @@ function Test-LayerRelationships{
         Relationship-Undo
         $extra=Relationship-Insert 'Tone' 'Exposure'
         foreach($theme in 1..2){
+            Relationship-Reveal "layer-$owner-mask"
+            Test-ThumbnailSquircles $owner
             Relationship-Drop $extra $baseFx 'row' .125 $baseFx 'above' -Owner $base
             if((Relationship-Layer $extra).relationship.target -ne $base){throw 'Clipping gap did not attach to its base'}
             Relationship-Undo

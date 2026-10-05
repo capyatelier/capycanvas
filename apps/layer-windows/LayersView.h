@@ -3,6 +3,8 @@
 #include "LayerThumbnails.h"
 #include "NativeMenus.h"
 #include "LayerRowDrag.h"
+#include <winrt/Microsoft.UI.Xaml.Shapes.h>
+#include <array>
 #include <optional>
 
 winrt::Microsoft::UI::Xaml::FrameworkElement LayersPanel(
@@ -28,8 +30,12 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     Button eye{nullptr},check{nullptr},content{nullptr},load{nullptr},mask{nullptr},link{nullptr},name{nullptr},grip{nullptr};
     Border indent,dropMark,contentSymbol,groupMode;
     Grid contentTile,maskTile;
-    Image contentImage,maskImage,lockImage;
-    Canvas contentCorners,maskCorners;
+    Image lockImage;
+    ContentControl contentThumbnail,maskThumbnail;
+    Shapes::Path contentEdge,maskEdge;
+    std::array<GeometryGroup,2> contentEdges{nullptr,nullptr},maskEdges{nullptr,nullptr};
+    ImageBrush contentPreview,maskPreview;
+    Canvas contentFrame,maskFrame;
     TextBlock title{nullptr},meta{nullptr};
     TextBox rename;
     bool renaming=false,committing=false;

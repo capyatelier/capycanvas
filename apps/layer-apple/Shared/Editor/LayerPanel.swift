@@ -278,10 +278,11 @@ private struct LayerButton: View {
     var selected = false
     var height: CGFloat = 24
     var size: CGFloat = 16
+    var width: CGFloat = 24
     let action: () -> Void
     var body: some View {
         IconTile(icon: icon, label: label, selected: selected, enabled: enabled, size: size, action: action)
-            .frame(width: 24, height: height).accessibilityIdentifier("layer-" + label)
+            .frame(width: width, height: height).accessibilityIdentifier("layer-" + label)
     }
 }
 
@@ -312,7 +313,7 @@ private struct LayerRow: View {
                     }.frame(width: 30, height: 30).accessibilityIdentifier("selection-load-\(id)")
                 }
                 if layer["has_mask"].bool {
-                    LayerButton(icon: layer["mask_linked"].bool ? "link" : "unlink", label: layer["mask_linked"].bool ? store.catalog["native_copy"]["layers"]["unlink_mask"].string : store.catalog["native_copy"]["layers"]["link_mask_to_layer"].string, size: 12) {
+                    LayerButton(icon: layer["mask_linked"].bool ? "link" : "unlink", label: layer["mask_linked"].bool ? store.catalog["native_copy"]["layers"]["unlink_mask"].string : store.catalog["native_copy"]["layers"]["link_mask_to_layer"].string, size: 10, width: 10) {
                         perform { store.layer(["op": "link_mask", "id": id, "value": !layer["mask_linked"].bool]) }
                     }.foregroundStyle(palette["text"]).disabled(layer["locked"].bool)
                     thumbnail(mask: true)
@@ -358,7 +359,8 @@ private struct LayerRow: View {
             : (layer["visible"].bool ? store.catalog["native_copy"]["layers"]["hide"].string : store.catalog["native_copy"]["layers"]["show"].string)
     }
     private func thumbnail(mask: Bool) -> some View {
-        Button {
+        let editing = mask ? layer["mask_selected"].bool : layer["content_selected"].bool
+        return Button {
             perform {
                 if let load = ThumbnailSelectionLoad.current(), !layer["group"].bool {
                     store.dispatch(["type": "selection", "action": ["op": "load_thumbnail", "id": id, "mask": mask, "shift": load.shift, "alt": load.alt]])
@@ -374,12 +376,14 @@ private struct LayerRow: View {
                         SharedIcon(name: "layer-group-pass-through-symbolic", size: 12)
                             .padding(1).background(palette["input"], in: SquircleShape(2))
                             .frame(width: 28, height: 28, alignment: .bottomTrailing)
+                            .offset(x: -3, y: -3)
                     }
                 }
                 else {
                     if mask || layer["has_thumbnail"].bool,
                        let image = previews.images[LayerThumbnails.key(id, mask)] {
                         Image(decorative: image, scale: 1).resizable().frame(width: 28, height: 28)
+                            .clipShape(SquircleShape.tile)
                             .opacity(mask && !layer["mask_enabled"].bool ? 0.4 : 1)
                     }
                     if !mask && !layer["content_icon"].isNull && !layer["selection_layer"].bool {
@@ -388,15 +392,18 @@ private struct LayerRow: View {
                             .padding(layer["has_thumbnail"].bool ? 1 : 0)
                             .background(layer["has_thumbnail"].bool ? palette["input"] : Color.clear, in: SquircleShape(2))
                             .frame(width: 28, height: 28, alignment: layer["has_thumbnail"].bool ? .bottomTrailing : .center)
+                            .offset(x: layer["has_thumbnail"].bool ? -3 : 0, y: layer["has_thumbnail"].bool ? -3 : 0)
                             .allowsHitTesting(false).accessibilityHidden(true)
                     }
                 }
             }.frame(width: 30, height: 30)
-                .background(!mask && (layer["group"].bool || layer["adjustment_effect"].bool) ? Color.clear : palette["input"], in: SquircleShape(3))
                 .overlay {
-                    if mask ? layer["mask_selected"].bool : layer["content_selected"].bool {
-                        TargetCorners().stroke(.white, lineWidth: 1).shadow(color: .black, radius: 1).allowsHitTesting(false)
-                    }
+                    Path { edge in
+                        let bounds = CGRect(x: 0, y: 0, width: 30, height: 30)
+                        edge.addPath(SquircleShape.tile.inset(by: editing ? -2 : 0).path(in: bounds))
+                        edge.addPath(SquircleShape.tile.inset(by: 1).path(in: bounds))
+                    }.fill(editing ? palette["accent"] : palette["text"].opacity(0.1), style: FillStyle(eoFill: true))
+                        .allowsHitTesting(false)
                 }
                 // Bound the hit region as well as the drawing. Without this,
                 // iPad thumbnail hits can consume the adjacent checkbox tap.
@@ -424,16 +431,6 @@ private struct LayerRow: View {
         }
         #endif
         return ""
-    }
-}
-
-private struct TargetCorners: Shape {
-    func path(in r: CGRect) -> Path {
-        var p = Path()
-        for (x, y, dx, dy) in [(r.minX,r.minY,1.0,1.0),(r.maxX,r.minY,-1.0,1.0),(r.minX,r.maxY,1.0,-1.0),(r.maxX,r.maxY,-1.0,-1.0)] {
-            p.move(to: CGPoint(x: x + dx * 7, y: y)); p.addLine(to: CGPoint(x: x, y: y)); p.addLine(to: CGPoint(x: x, y: y + dy * 7))
-        }
-        return p
     }
 }
 

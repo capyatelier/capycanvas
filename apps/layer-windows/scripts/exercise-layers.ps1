@@ -94,7 +94,7 @@ function Test-LayerModes {
     if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke 'Layers' -Name}
     Capture ('layer-modes-and-filters-'+(Model).state.theme) -WithModel
 }
-function Preview-Hash([string]$Id){
+function Read-Preview([string]$Id,[scriptblock]$Read){
     $image=Control $Id
     if($image.Current.ItemStatus -ne 'Ready'){return ''}
     $r=$image.Current.BoundingRectangle
@@ -105,12 +105,56 @@ function Preview-Hash([string]$Id){
         $graphics=[Drawing.Graphics]::FromImage($bitmap);$dc=$graphics.GetHdc()
         try{if(![CapyLayersCapture]::PrintWindow($review.MainWindowHandle,$dc,2)){throw 'App capture failed'}}
         finally{$graphics.ReleaseHdc($dc);$graphics.Dispose()}
-        $area=[Drawing.Rectangle]::new([int]$r.X-$window.left+2,[int]$r.Y-$window.top+2,[int]$r.Width-4,[int]$r.Height-4)
-        $crop=$bitmap.Clone($area,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
-        $stream=[IO.MemoryStream]::new();$sha=[Security.Cryptography.SHA256]::Create()
-        try{$crop.Save($stream,[Drawing.Imaging.ImageFormat]::Png);[Convert]::ToBase64String($sha.ComputeHash($stream.ToArray()))}
-        finally{$crop.Dispose();$stream.Dispose();$sha.Dispose()}
+        & $Read $bitmap $r $window
     }finally{$bitmap.Dispose()}
+}
+function Preview-Hash([string]$Id,[string]$Save=''){
+    Read-Preview $Id {param($bitmap,$r,$window)
+        $area=[Drawing.Rectangle]::new([int]($r.X-$window.left+$r.Width/4),[int]($r.Y-$window.top+$r.Height/4),[int]($r.Width/2),[int]($r.Height/2))
+        $crop=$bitmap.Clone($area,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try{
+            if($Save){$crop.Save((Join-Path $run ($Save+'-pixels.png')));$bitmap.Save((Join-Path $run ($Save+'-window.png')));@{preview=$r;window=$window}|ConvertTo-Json|Set-Content (Join-Path $run ($Save+'-bounds.json'))}
+            $data=$crop.LockBits([Drawing.Rectangle]::new(0,0,$crop.Width,$crop.Height),[Drawing.Imaging.ImageLockMode]::ReadOnly,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            try{
+                $stride=$crop.Width*4;$pixels=[byte[]]::new($stride*$crop.Height)
+                for($y=0;$y -lt $crop.Height;$y++){[Runtime.InteropServices.Marshal]::Copy([IntPtr]::Add($data.Scan0,$y*$data.Stride),$pixels,$y*$stride,$stride)}
+                [Convert]::ToBase64String($sha.ComputeHash($pixels))
+            }finally{$crop.UnlockBits($data)}
+        }
+        finally{$crop.Dispose();$sha.Dispose()}
+    }
+}
+function Thumbnail-Pixels([string]$Id){
+    Read-Preview $Id {param($bitmap,$r,$window)
+        $name="$Id-$((Model).state.theme)-$((Model).state.layer_tools.editing_layer.mask_selected)"
+        $bitmap.Save((Join-Path $run ($name+'.png')))
+        @{preview=$r;window=$window}|ConvertTo-Json|Set-Content (Join-Path $run ($name+'-bounds.json'))
+        foreach($point in @(@(14,-2),@(0,0),@(0,-5),@(3,3),@(14,1),@(1,14),@(26,14),@(14,26))){
+            $x=[int][Math]::Floor($r.X-$window.left+$point[0]*$r.Width/28)
+            $y=[int][Math]::Floor($r.Y-$window.top+$point[1]*$r.Height/28)
+            $bitmap.GetPixel($x,$y).ToArgb() -band 0xffffff
+        }
+    }
+}
+function Stable-ThumbnailPixels([string]$Id){
+    (Wait-StablePixels {(Thumbnail-Pixels $Id) -join ','}) -split ','|ForEach-Object {[int]$_}
+}
+function Test-ThumbnailSquircles([long]$Id){
+    Wait-Until {(Find "layer-$Id-mask-thumbnail").Current.ItemStatus -eq 'Ready' -and (Find "layer-$Id-thumbnail").Current.ItemStatus -eq 'Ready'} 'Thumbnail pixels did not become ready' 20
+    Invoke "layer-$Id-mask";Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected} 'Mask editing did not publish'
+    $active=Stable-ThumbnailPixels "layer-$Id-mask-thumbnail";$content=Stable-ThumbnailPixels "layer-$Id-thumbnail"
+    @{active=$active;content=$content}|ConvertTo-Json|Set-Content (Join-Path $run ("thumbnail-pixels-$((Model).state.theme).json"))
+    $accent=[Drawing.ColorTranslator]::FromHtml((Model).state.palette.accent).ToArgb() -band 0xffffff
+    if($active[0] -ne $accent){throw 'Outer editing edge did not use the accent color'}
+    if($content[1] -ne $content[2] -or $content[3] -eq $content[2]){throw 'Thumbnail pixels did not form a full squircle'}
+    $scale=(Control "layer-$Id-thumbnail").Current.BoundingRectangle.Width/28
+    if([Math]::Abs((Control "layer-$Id-link").Current.BoundingRectangle.Width/$scale-10) -gt .1){throw 'Mask link did not narrow to 10 DIP'}
+    Capture "thumbnail-squircles-$((Model).state.theme)" -WithModel
+    Invoke "layer-$Id-content";Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected} 'Content editing did not publish'
+    $idle=Stable-ThumbnailPixels "layer-$Id-mask-thumbnail"
+    if(($active[4..7] -join ',') -ne ($idle[4..7] -join ',') -or $active[0] -eq $idle[0]){throw 'Editing border covered preview edge pixels'}
+    Invoke "layer-$Id-mask";Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected} 'Mask target did not restore'
 }
 
 try {
@@ -136,7 +180,7 @@ try {
     $paint=(Model).state.layer_tools.editing_layer.id
     Test-LayerModes
     Wait-Until {(Find ("layer-$paint-thumbnail")).Current.ItemStatus -eq 'Ready'} 'Paint thumbnail not ready' 20
-    $original=Preview-Hash "layer-$paint-thumbnail";if(!$original){throw 'No initial thumbnail pixels'}
+    $original=Wait-StablePixels {Preview-Hash "layer-$paint-thumbnail" 'original'};if(!$original){throw 'No initial thumbnail pixels'}
     $identity=(Control "layer-$paint-name").GetRuntimeId() -join ':'
     Capture 'initial'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
@@ -144,7 +188,7 @@ try {
     Wait-Until {$hash=Preview-Hash "layer-$paint-thumbnail";$hash -and $hash -ne $original} 'Thumbnail did not reflect paint' 15
     Invoke 'Undo' -Name
     Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore checkpoint'
-    Wait-Until {(Preview-Hash "layer-$paint-thumbnail") -eq $original} 'Thumbnail pixels did not restore after Undo' 15
+    Wait-Until {(Preview-Hash "layer-$paint-thumbnail" 'undo') -eq $original} 'Thumbnail pixels did not restore after Undo' 15
     if(((Control "layer-$paint-name").GetRuntimeId() -join ':') -ne $identity){throw 'Painting replaced the layer row'}
     $opacitySlider=Control 'layer-opacity-slider'
     $opacitySlider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.72)
@@ -171,6 +215,7 @@ try {
     Invoke "layer-$paint-selection"
     Invoke 'layer-add-mask';Wait-Until {(Model).state.layer_tools.editing_layer.has_mask} 'Layer mask not added'
     Wait-Until {(Find "layer-$created-mask-thumbnail").Current.ItemStatus -eq 'Ready'} 'Mask thumbnail not ready' 15
+    Test-ThumbnailSquircles $created
     Invoke "layer-$created-name"
     Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected} 'Active row did not preserve mask editing'
     Invoke "layer-$created-content"

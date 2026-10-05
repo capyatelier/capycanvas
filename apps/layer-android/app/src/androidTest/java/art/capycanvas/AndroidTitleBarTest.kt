@@ -1473,6 +1473,31 @@ class AndroidTitleBarTest {
             layer(obj("op" to "lock","id" to checked[0],"value" to false))
             clickLink();assertTrue(row(checked[0]).getBoolean("mask_linked"))
             layer(obj("op" to "select","id" to checked[0],"mask" to true))
+            waitFor("mask preview") { node("layer-thumbnail-${checked[0]}-true") != null }
+            fun thumbnailPixels(mask:Boolean=true): List<Int> {
+                val exit=motion(MotionEvent.TOOL_TYPE_MOUSE,MotionEvent.ACTION_HOVER_EXIT,point,SystemClock.uptimeMillis(),0)
+                try { instrumentation.runOnMainSync { checkNotNull(node("layer-row-${checked[0]}")).first.view.dispatchGenericMotionEvent(exit) } }
+                finally { exit.recycle() }
+                SystemClock.sleep(400)
+                val b=screenBounds("layer-thumbnail-${checked[0]}-$mask")
+                val image=checkNotNull(instrumentation.uiAutomation.takeScreenshot())
+                try {
+                    fun pixel(x:Float,y:Float)=image.getPixel((b.left+x*density).toInt(),(b.top+y*density).toInt())
+                    return listOf(pixel(14f,-2f),pixel(0f,0f),pixel(-5f,0f),pixel(3f,3f),
+                        pixel(14f,1f),pixel(1f,14f),pixel(26f,14f),pixel(14f,26f))
+                } finally { image.recycle() }
+            }
+            val activeMask=thumbnailPixels()
+            val idleContent=thumbnailPixels(false)
+            shot("layer-thumbnail-squircles-$theme")
+            assertEquals("$theme editing border uses the accent outside the preview",android.graphics.Color.parseColor(state().getJSONObject("palette").getString("accent")),activeMask[0])
+            layer(obj("op" to "select","id" to checked[0],"mask" to false))
+            val idleMask=thumbnailPixels()
+            assertEquals("$theme full squircle clears the preview corner",idleContent[2],idleContent[1])
+            assertNotEquals("$theme full squircle retains more than a circular thumbnail",idleContent[2],idleContent[3])
+            assertEquals("$theme editing border preserves preview edge pixels",activeMask.drop(4),idleMask.drop(4))
+            assertNotEquals("$theme outer editing edge changes with the target",activeMask[0],idleMask[0])
+            layer(obj("op" to "select","id" to checked[0],"mask" to true))
             clickRow(checked[0])
             assertTrue("Active row retains its mask target",row(checked[0]).getBoolean("mask_selected"))
             assertFalse(row(checked[0]).getBoolean("content_selected"))

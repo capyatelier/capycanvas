@@ -23,6 +23,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -33,6 +34,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.isShiftPressed as keyShiftPressed
@@ -262,12 +265,12 @@ internal class LayerSwipe {
 }
 
 @Composable private fun LayerButton(host:CanvasHost,icon:String,label:String,modifier:Modifier=Modifier,enabled:Boolean=true,selected:Boolean=false,subtle:Boolean=false,
-    action:JSONObject?=null,size:Dp=24.dp,onClick:()->Unit={action?.let { host.dispatch(it) }}) {
+    action:JSONObject?=null,size:Dp=24.dp,iconSize:Dp=16.dp,onClick:()->Unit={action?.let { host.dispatch(it) }}) {
     val colors=LocalPalette.current
     val content: @Composable () -> Unit = {
     Box(Modifier.size(size).clip(ControlShape).alpha(if(enabled)1f else .4f)
         .background(if(selected) { if(subtle) colors.text.copy(alpha=.12f) else colors.active } else Color.Transparent)
-        .clickable(enabled=enabled,onClick=onClick),contentAlignment=Alignment.Center) { SharedIcon(icon,label,Modifier.size(16.dp)) }
+        .clickable(enabled=enabled,onClick=onClick),contentAlignment=Alignment.Center) { SharedIcon(icon,label,Modifier.size(iconSize)) }
     }
     if(action!=null) ActionTip(host,label,action,modifier,content) else HoverTip(label,modifier,content=content)
 }
@@ -413,7 +416,6 @@ internal class LayerSwipe {
             val label=if(group) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse") else if(mask) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_mask") else if(layer.optBoolean("selection_layer")) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_selection") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_content")
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp).then(if(!mask && !preview) Modifier.testTag("layer-content-$id").onGloballyPositioned { contentBounds(it.boundsInRoot(),shift) } else Modifier)) {
             Box(Modifier.fillMaxSize().then(if(mask && !preview) Modifier.onGloballyPositioned { maskBounds=it.boundsInRoot() } else Modifier)
-                .then(if(group || !mask && layer.getBoolean("adjustment_effect"))Modifier else Modifier.background(colors.input,SquircleShape(3.dp)))
                 .then(if(group || preview) Modifier else Modifier.pointerInput(id,mask) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed=false, pass=PointerEventPass.Initial)
@@ -441,23 +443,30 @@ internal class LayerSwipe {
                         }
                     }
                 },onLongClick={openContext(mask)})
-                .drawWithContent {
-                    drawContent()
-                    if(!mask && (attachment || highlight=="attach")) drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density))
-                    if(selected) for((x,y,dx,dy) in listOf(listOf(1f,1f,1f,1f),listOf(size.width-1,1f,-1f,1f),listOf(1f,size.height-1,1f,-1f),listOf(size.width-1,size.height-1,-1f,-1f))) {
-                        for((color,width) in listOf(Color.Black to 3f,Color.White to 1f)) {
-                            drawLine(color,Offset(x,y+dy*6*density),Offset(x,y),width*density); drawLine(color,Offset(x,y),Offset(x+dx*6*density,y),width*density)
+                .drawWithCache {
+                    val outside=if(selected) -2.dp.toPx() else 0f
+                    val inside=1.dp.toPx()
+                    val edge=Path().apply {
+                        fillType=PathFillType.EvenOdd
+                        for(inset in listOf(outside,inside)) {
+                            val radius=size.minDimension/2-inset
+                            addSquircle(Rect(inset,inset,size.width-inset,size.height-inset),radius,radius,radius,radius)
                         }
+                    }
+                    onDrawWithContent {
+                        drawContent()
+                        drawPath(edge,if(selected) colors.accent else colors.text.copy(alpha=.1f))
+                        if(!mask && (attachment || highlight=="attach")) drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density))
                     }
                 },contentAlignment=Alignment.Center) {
                 if(group) {
                     SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse"),Modifier.size(28.dp))
-                    if(layer.getBoolean("pass_through")) SharedIcon("group-pass-through",null,Modifier.align(Alignment.BottomEnd).size(14.dp).background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-group-pass-through-$id"))
+                    if(layer.getBoolean("pass_through")) SharedIcon("group-pass-through",null,Modifier.align(Alignment.BottomEnd).padding(end=3.dp,bottom=3.dp).size(14.dp).background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-group-pass-through-$id"))
                 }
                 else {
-                if(mask || layer.getBoolean("has_thumbnail")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
+                if(mask || layer.getBoolean("has_thumbnail")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).clip(TileShape).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
                 if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,
-                    if(layer.getBoolean("has_thumbnail")) Modifier.align(Alignment.BottomEnd).size(14.dp)
+                    if(layer.getBoolean("has_thumbnail")) Modifier.align(Alignment.BottomEnd).padding(end=3.dp,bottom=3.dp).size(14.dp)
                         .background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-type-symbol-$id")
                     else Modifier.size(24.dp),tint=colors.text)
                 }
@@ -471,7 +480,7 @@ internal class LayerSwipe {
         }
         if(layer.getBoolean("has_mask")) {
             LayerButton(host,if(layer.getBoolean("mask_linked"))"link" else "unlink",if(layer.getBoolean("mask_linked"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("unlink_mask") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("link_mask_to_layer"),
-                Modifier.size(12.dp,24.dp),enabled=!layer.getBoolean("locked"),
+                Modifier.size(10.dp,24.dp),enabled=!layer.getBoolean("locked"),iconSize=10.dp,
                 action=obj("type" to "layer","action" to obj("op" to "link_mask","id" to id,"value" to !layer.getBoolean("mask_linked"))))
             thumb(true)
         }
