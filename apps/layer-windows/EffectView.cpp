@@ -68,6 +68,9 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     ContentControl bodyGate;
     TextBlock title;
     Button addFilter;
+    TextBlock addFilterLabel;
+    Image addFilterIcon;
+    hstring addFilterTheme;
     ComboBox page,resource;
     Grid toolbar;
     FrameworkElement tonal{nullptr};
@@ -252,6 +255,9 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
                 to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch"))));
         });
         addFilter=button(data,L"",[]{});
+        {StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(6);
+            addFilterLabel=label(data,L"");addFilterLabel.VerticalAlignment(VerticalAlignment::Center);
+            addFilterIcon.Width(16);addFilterIcon.Height(16);content.Children().Append(addFilterIcon);content.Children().Append(addFilterLabel);addFilter.Content(content);}
         addFilter.Click([data=data,weak=make_weak(addFilter)](auto&&,auto&&){
             auto anchor=weak.get();auto model=object(object(data->state,L"layer_properties"),L"add_filter");
             if(data->updating||!anchor||!anchor.XamlRoot()||!model.Size())return;
@@ -274,7 +280,8 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         Updating updating(data);
         auto view=object(data->state,L"layer_properties");
         auto filterMenu=object(view,L"add_filter");addFilter.Visibility(filterMenu.Size()?Visibility::Visible:Visibility::Collapsed);
-        addFilter.Content(box_value(str(filterMenu,L"title")));AutomationProperties::SetName(addFilter,str(filterMenu,L"title"));
+        addFilterLabel.Text(str(filterMenu,L"title"));AutomationProperties::SetName(addFilter,str(filterMenu,L"title"));
+        if(addFilterTheme!=data->theme()){addFilterTheme=data->theme();addFilterIcon.Source(icon(L"add-filter",addFilterTheme).Source());}
         title.Text(str(view,L"title"));AutomationProperties::SetName(root,str(view,L"title"));CapyUi::tooltip(title,str(view,L"description"));
         auto pageChoices=array(view,L"pages");
         A pageIds;for(auto choice:pageChoices)pageIds.Append(S(str(choice.GetObject(),L"id")));

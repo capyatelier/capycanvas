@@ -117,7 +117,7 @@ struct LayerPanel: View {
             LayerButton(icon: "mask", label: store.catalog["native_copy"]["layers"]["add_mask"].string, enabled: view["controls"]["mask"].bool) {
                 store.layer(["op": "add_mask", "id": current["id"].raw, "replace": false])
             }
-            LayerButton(icon: "adjustments", label: store.catalog["native_copy"]["layers"]["add_filter"].string, enabled: !view["add_filter"].isNull) {
+            LayerButton(icon: "add-filter", label: store.catalog["native_copy"]["layers"]["add_filter"].string, enabled: !view["add_filter"].isNull) {
                 filterMenu = view["add_filter"]
             }.accessibilityIdentifier("layer-add-filter")
                 .editorPopover(isPresented: Binding(get: { !filterMenu.isNull }, set: { if !$0 { filterMenu = JSON() } }), placement: .inward) {

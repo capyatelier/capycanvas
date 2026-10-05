@@ -201,7 +201,11 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .dock-panel entry, .dock-panel dropdown > button, .dock-panel menubutton.panel-choice > button { background: var(--input-bg); }
 .dock-panel .panel-control-row > button,
 .dock-panel .panel-control-row > dropdown > button,
-.dock-panel .panel-control-row > menubutton > button { min-height: 24px; padding: 0 6px; }
+.dock-panel .panel-control-row > menubutton > button,
+.effect-properties dropdown > button,
+.effect-properties menubutton > button,
+.effect-properties .property-actions > button,
+.effect-properties .gradient-editor > box > button { min-height: 24px; padding: 0 6px; }
 .dock-panel .brush-choice { padding: 3px 6px; }
 .brush-choice label { font-size: 1em; }
 .tool-groups flowboxchild { padding: 0; margin: 0; }
@@ -272,7 +276,6 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .filter-category { margin: 8px; font-weight: bold; opacity: .55; }
 .effect-properties { margin: 6px; }
 .properties-header > label { font-size: .9em; }
-.properties-header > menubutton > button { min-height: 24px; padding: 0 6px; }
 .content-drawer .filter-types,
 .content-drawer .filter-picker-body,
 .content-drawer .effect-properties { margin: 8px; }

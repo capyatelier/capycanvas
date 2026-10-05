@@ -75,7 +75,7 @@ impl CanvasBarMenu {
             Self::CopyToLayer => "copy-to-layer",
             Self::Clear => "clear-selection",
             Self::Refine => "feather",
-            Self::Adjust => "adjustments",
+            Self::Adjust => "add-filter",
             Self::Copy => "copy",
         }
     }

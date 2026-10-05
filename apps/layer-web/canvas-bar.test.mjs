@@ -110,7 +110,7 @@ function selectionView({ generation = 1n, enabled = true } = {}) {
   return view({ kind: "selection", generation, completion: [], items: [
     action("deselect", "Deselect"),
     menuItem("copy_to_layer", "Copy to Layer", "copy-to-layer", copy),
-    menuItem("adjust", "Adjust", "adjustments"),
+    menuItem("adjust", "Adjust", "add-filter"),
   ] });
 }
 
@@ -320,7 +320,7 @@ test("menu items are menu buttons with their icon and label that open the shared
   h.bar.refresh(v);
   const copy = h.menuButton("copy_to_layer"), adjust = h.menuButton("adjust");
   assert.deepEqual(copy.children.map(c => c.textContent || c.className), ["copy-to-layer", "Copy to Layer", "chevron-down"]);
-  assert.deepEqual(adjust.children.map(c => c.textContent || c.className), ["adjustments", "Adjust", "chevron-down"]);
+  assert.deepEqual(adjust.children.map(c => c.textContent || c.className), ["add-filter", "Adjust", "chevron-down"]);
   assert.equal(copy.getAttribute("aria-label"), "Copy to Layer", "More lists an overflowed menu by the same label");
   assert.equal(copy.getAttribute("aria-haspopup"), "menu");
   assert.equal(copy.tabIndex, -1, "A menu button never joins the tab order");

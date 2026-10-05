@@ -16,6 +16,12 @@ inline hstring menuSlug(hstring const& text){
 inline void NativeMenuItems(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> const& target,
     A const& sections,std::shared_ptr<WorkspaceData> const& data,std::function<void(J)> const& dispatch){
     uint32_t at=0;
+    auto updateIcon=[&](auto const& item,J const& spec){
+        if(auto name=str(spec,L"icon");!name.empty()){
+            auto glyph=item.Icon().template try_as<ImageIcon>();if(!glyph){glyph=ImageIcon();item.Icon(glyph);}
+            glyph.Source(icon(name,data->theme()).Source());
+        }else item.Icon(nullptr);
+    };
     auto retain=[&](auto fresh){
         using T=decltype(fresh);T item{nullptr};
         if(at<target.Size())item=target.GetAt(at).try_as<T>();
@@ -32,6 +38,7 @@ inline void NativeMenuItems(Windows::Foundation::Collections::IVector<MenuFlyout
             auto text=str(spec,L"label");auto action=object(spec,L"action");
             if(children.Size()){
                 auto item=retain(MenuFlyoutSubItem()).first;item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));AutomationProperties::SetAutomationId(item,menuSlug(text));
+                updateIcon(item,spec);
                 item.FontSize(data->textSize());NativeMenuItems(item.Items(),children,data,dispatch);
             }else{
                 auto identifier=action.Size()?str(action,L"command",L"layer-menu-"+str(object(action,L"action"),L"op")):menuSlug(text);
@@ -46,10 +53,7 @@ inline void NativeMenuItems(Windows::Foundation::Collections::IVector<MenuFlyout
                     auto [item,added]=retain(fresh);
                     item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));item.FontSize(data->textSize());item.MinHeight(34);
                     item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));AutomationProperties::SetAutomationId(item,identifier);
-                    if(auto name=str(spec,L"icon");!name.empty()){
-                        auto glyph=item.Icon().template try_as<ImageIcon>();if(!glyph){glyph=ImageIcon();item.Icon(glyph);}
-                        glyph.Source(icon(name,data->theme()).Source());
-                    }else item.Icon(nullptr);
+                    updateIcon(item,spec);
                     item.Tag(action);
                     if(added)item.Click([dispatch](auto const& sender,auto&&){
                         auto action=sender.template as<FrameworkElement>().Tag().template as<J>();if(action.Size())dispatch(action);

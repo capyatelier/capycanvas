@@ -454,6 +454,7 @@ fn all_layer_filter_entry_points_attach_to_the_captured_layer() {
         let filter = s.localization().text(MessageId::RESOURCES_LAYER_ADD_FILTER).to_string();
         let row = s.layer_menu(occurrence_token(base), false).unwrap();
         let submenu = menu_item(&row.sections, &filter).unwrap();
+        assert_eq!(submenu.icon, Some("add-filter"));
         assert_eq!(serde_json::to_value(&submenu.sections).unwrap(), serde_json::to_value(&s.state.layer_tools.add_filter.as_ref().unwrap().sections).unwrap());
         assert_eq!(s.state.layer_properties.add_filter, s.state.layer_tools.add_filter);
         assert!(menu_item(&s.application_menu(ApplicationMenu::Layer).sections, &filter).is_none(), "the menu bar keeps a single Filter menu");

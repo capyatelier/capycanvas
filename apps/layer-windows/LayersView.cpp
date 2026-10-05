@@ -134,7 +134,7 @@ void LayersView::init(){
         auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
     }});
     controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));mask.Opacity(mask.IsEnabled()?1.:.36);});
-    auto addFilter=footerButton(L"adjustments",data->copyCaption(L"layers",L"add_filter"),L"layer-add-filter",[weak]{if(auto self=weak.lock())self->showMenu(object(self->view(),L"add_filter"),self->footer);});
+    auto addFilter=footerButton(L"add-filter",data->copyCaption(L"layers",L"add_filter"),L"layer-add-filter",[weak]{if(auto self=weak.lock())self->showMenu(object(self->view(),L"add_filter"),self->footer);});
     controls.emplace_back([weak,addFilter](J,J){if(auto self=weak.lock()){addFilter.IsEnabled(object(self->view(),L"add_filter").Size()!=0);addFilter.Opacity(addFilter.IsEnabled()?1.:.36);}});
     auto import=footerButton(L"image",data->copyCaption(L"layers",L"import_image"),L"layer-import",[weak]{if(auto self=weak.lock()){
         self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"import_image")}}));

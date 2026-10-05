@@ -45,6 +45,7 @@ struct LayerPropertiesPanel: View {
             if !view["add_filter"].isNull {
                 EditorMenuButton(menu: { AppleContextMenu(view["add_filter"]) { store.dispatch($0) } }, identifier: "properties-filter-menu") {
                     HStack(spacing: 6) {
+                        SharedIcon(name: "add-filter")
                         Text(view["add_filter"]["title"].string)
                         SharedIcon(name: "chevron-down").frame(width: 12, height: 12)
                     }.padding(.horizontal, 6).frame(height: 32)

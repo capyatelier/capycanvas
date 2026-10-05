@@ -1675,29 +1675,30 @@ impl Workspace {
                 let section = gtk::gio::Menu::new();
                 for (i, item) in items.into_iter().enumerate() {
                     let id = format!("{prefix}-{s}-{i}");
+                    let entry = gtk::gio::MenuItem::new(Some(&item.label), None);
+                    if let Some(icon) = item.icon {
+                        entry.set_icon(&gtk::gio::ThemedIcon::new(&format!("layer-{icon}-symbolic")));
+                    }
                     if item.action.is_none() && item.enabled {
                         let submenu = model(w, popup, item.sections, &id, actions);
-                        section.append_submenu(Some(&item.label), &submenu);
+                        entry.set_submenu(Some(&submenu));
+                        section.append_item(&entry);
                         continue;
-                    }
-                    let model = gtk::gio::MenuItem::new(Some(&item.label), None);
-                    if let Some(icon) = item.icon {
-                        model.set_icon(&gtk::gio::ThemedIcon::new(&format!("layer-{icon}-symbolic")));
                     }
                     let action = if let Some(selected) = item.selected {
                         let action =
                             gtk::gio::SimpleAction::new_stateful(&id, None, &selected.to_variant());
-                        model.set_detailed_action(&format!("context.{id}"));
+                        entry.set_detailed_action(&format!("context.{id}"));
                         action
                     } else {
-                        model.set_detailed_action(&format!("context.{id}"));
+                        entry.set_detailed_action(&format!("context.{id}"));
                         gtk::gio::SimpleAction::new(&id, None)
                     };
                     action.set_enabled(item.enabled);
                     // Native rows share indicator gutters, padding and shortcut
                     // alignment across commands, toggles and menu sections.
                     if let Some(key) = item.bindings.first() {
-                        model.set_attribute_value(
+                        entry.set_attribute_value(
                             "accel",
                             Some(&native_accelerator(key).to_variant()),
                         );
@@ -1715,7 +1716,7 @@ impl Workspace {
                         ));
                     }
                     actions.add_action(&action);
-                    section.append_item(&model);
+                    section.append_item(&entry);
                 }
                 root.append_section(None, &section);
             }

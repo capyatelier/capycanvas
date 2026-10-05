@@ -132,6 +132,8 @@ subtitle. Masks, selections and effect layers do not offer this control.
 GTK Properties gives the layer name its own heading, with the smaller, muted
 layer type below it. **Add Filter** sits at the right of that second row with an
 **fx+** icon, its text label and a menu arrow. The Layers footer uses the same icon.
+GTK Properties dropdowns and their adjacent action buttons share the compact
+24-pixel panel height and 6-pixel horizontal padding, in docks and drawers.
 Other hosts keep the type in parentheses after a differing name, omit it for paint
 layers, and place **Add Filter** after the Properties controls. It is also available
 in each eligible layer's context menu. It opens the menu bar's filter categories and
@@ -207,6 +209,10 @@ visibility changes do not move artwork under the pen.
 
 Every host draws the same SVGs from `apps/layer-web/icons`; Rust supplies the
 icon identity for each command, preset, panel and tool setting.
+
+Filters panels and generic effects use **fx**. Actions that add a filter use
+**fx+**, including Properties, Layers, layer context menus and the selection bar.
+Individual filters retain their own symbols.
 
 - Use solid silhouettes for painting tools and concrete objects. Keep contour
   geometry where the outline carries the meaning: selection boundaries, shapes,

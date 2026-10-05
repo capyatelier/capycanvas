@@ -74,7 +74,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   footer.append(glyphButton("selection-brush", ()=>copy.new_selection_layer, () => dispatch({type:"invoke",command:"new_selection_layer"})));
   const addMask = () => ({ op: "add_mask", id: active().id, replace: false });
   const maskButton = glyphButton("mask", ()=>copy.add_mask, () => send(addMask()), "", addMask); footer.append(maskButton);
-  const addFilter = glyphButton("adjustments", ()=>copy.add_filter, () => openMenu(addFilter));
+  const addFilter = glyphButton("add-filter", ()=>copy.add_filter, () => openMenu(addFilter));
   addFilter.id = "layer-add-filter"; addFilter.menuModel = () => state().layer_tools.add_filter;
   addFilter.setAttribute("aria-haspopup", "menu"); footer.append(addFilter);
   footer.append(glyphButton("image", ()=>copy.import_image, () => dispatch({type:"invoke",command:"import_image"})));

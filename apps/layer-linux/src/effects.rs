@@ -202,6 +202,7 @@ impl EffectPanels {
         let property_toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         page.set_hexpand(true);property_toolbar.append(&page);
         let property_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        property_actions.add_css_class("property-actions");
         property_toolbar.append(&property_actions);properties.append(&property_toolbar);
         let tonal_histogram=crate::histogram::Inspector::new();
         tonal_histogram.root.set_widget_name("levels-histogram");tonal_histogram.root.set_visible(false);

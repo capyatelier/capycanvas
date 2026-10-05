@@ -696,6 +696,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .filter-animation { display:inline-block; width:12px; height:12px; margin-right:4px; vertical-align:-1px; opacity:.55; }
 .effect-properties,.renderer-stats { margin:6px; }
 .effect-properties h3 { font-size:inherit; margin:0 0 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.effect-properties #properties-add-filter { display:inline-flex; align-items:center; gap:6px; }
 .property-controls { display:flex; flex-direction:column; gap:6px; }
 .property-divider { border:0; border-top:1px solid color-mix(in srgb,var(--text) 15%,transparent); margin:3px 0; }
 .property-section { font-size:inherit; font-weight:700; margin:0 0 0 6px; }

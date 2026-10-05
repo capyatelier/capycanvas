@@ -263,6 +263,8 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
             Box {
                 TextButton({ menu = model }, colors = ButtonDefaults.textButtonColors(contentColor = LocalPalette.current.text),
                     modifier = Modifier.testTag("properties-add-filter")) {
+                    SharedIcon("add-filter", null)
+                    Spacer(Modifier.width(6.dp))
                     Text(model.getString("title"))
                     SharedIcon("chevron-down", null, Modifier.size(12.dp))
                 }

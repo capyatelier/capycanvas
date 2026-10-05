@@ -1565,7 +1565,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 [
                     Some(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW).as_ref(), new)),
                     (filters && !mask).then(|| self.layer_filter_menu(handle)).flatten()
-                        .map(|menu| ContextMenuItem::submenu(&menu.title, menu.sections)),
+                        .map(|menu| ContextMenuItem { icon: Some("add-filter"), ..ContextMenuItem::submenu(&menu.title, menu.sections) }),
                 ]
                 .into_iter()
                 .flatten()

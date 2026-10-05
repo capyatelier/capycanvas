@@ -94,6 +94,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   const title=element("h3"),page=element("select"),body=element("div","property-controls");page.dataset.propertiesPage="";page.onchange=()=>send({op:"select_page",layer:state().layer_properties.layer,page:page.value});const toolbar=element("div","property-toolbar"),actions=element("div","property-actions");
   toolbar.append(page,actions);properties.append(title,toolbar,body);panels.get("properties").append(properties);
   const addFilter=button(()=>state().layer_properties.add_filter?.title??"",()=>openMenu(addFilter));
+  addFilter.prepend(icon("add-filter"));
   addFilter.id="properties-add-filter";addFilter.setAttribute("aria-haspopup","menu");
   addFilter.menuModel=()=>state().layer_properties.add_filter;properties.append(addFilter);
   const tonal=createScope({state,app,element,button,icon,dispatch,tonal:true});properties.insertBefore(tonal.node,body);

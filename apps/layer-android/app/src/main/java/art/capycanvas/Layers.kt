@@ -242,7 +242,7 @@ internal class LayerSwipe {
                 LayerButton(host,"folder",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("new_group"),action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
                 LayerButton(host,"selection-brush",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("new_selection_layer"),action=obj("type" to "invoke","command" to "new_selection_layer"))
                 LayerButton(host,"mask",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("add_mask"),enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })
-                LayerButton(host,"adjustments",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("add_filter"),Modifier.testTag("layer-add-filter").onGloballyPositioned { filterPoint = it.boundsInRoot().topLeft - panelOrigin },enabled=view.optJSONObject("add_filter")!=null) {
+                LayerButton(host,"add-filter",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("add_filter"),Modifier.testTag("layer-add-filter").onGloballyPositioned { filterPoint = it.boundsInRoot().topLeft - panelOrigin },enabled=view.optJSONObject("add_filter")!=null) {
                     menuGeneration++; menuRequest = null; menu = view.optJSONObject("add_filter"); menuPoint = filterPoint
                 }
                 LayerButton(host,"image",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("import_image"), action=obj("type" to "invoke", "command" to "import_image"))
