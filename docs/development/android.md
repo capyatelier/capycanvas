@@ -206,9 +206,9 @@ profile/ABI changes invalidate its Rust task.
 
 ### Isolated installs
 
-Release builds use the application ID `art.capycanvas`. Debug and benchmark
-builds use `art.capycanvas.dev`, so a development build never replaces the
-release app or reads its data. `-PcapyApplicationId=<id>` sets the ID of every
+Release builds use the Google Play application ID `art.capycanvas.editor`.
+Debug and benchmark builds use `art.capycanvas.dev`, so a development build never
+replaces the release app or reads its data. `-PcapyApplicationId=<id>` sets the ID of every
 build type, and `-PcapyAppLabel=<label>` gives it its own launcher name. Its
 instrumentation package is `<id>.test`. On a shared tablet use your own ID:
 `tools/devices/devices.py appid` prints it, and [`devices.py run`](devices.md)

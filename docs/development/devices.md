@@ -68,8 +68,8 @@ tools/devices/devices.py release
   `$CAPY_APPLICATION_ID`. `apps/layer-android/run.sh` installs `art.capycanvas.dev`
   and is for single-user work on an emulator or your own device; `run.sh test`
   uses your own ID.
-- Never uninstall `art.capycanvas` or clear its data; it holds an artist's
-  drawings. Never touch another session's application IDs.
+- Never uninstall `art.capycanvas` or `art.capycanvas.editor` or clear their
+  data; they hold an artist's drawings. Never touch another session's application IDs.
 - A `connectedDebugAndroidTest` run uninstalls the tested app afterwards,
   deleting its data. Always give it your own `-PcapyApplicationId`, as
   `run.sh test` does.

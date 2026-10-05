@@ -82,7 +82,8 @@ specific tasks.
   only a device you were assigned or reserved; leave alone any device you are
   told belongs to someone else.
 - Install test builds under your own application ID. Never uninstall or clear
-  `art.capycanvas`, or touch another session's installs, ports or browser tabs.
+  `art.capycanvas` or `art.capycanvas.editor`, or touch another session's
+  installs, ports or browser tabs.
 - Never run tests against real user settings, documents or profiles, and inject
   input only into the private test display. Close only processes you started.
 

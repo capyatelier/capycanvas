@@ -42,6 +42,7 @@ android {
             applicationIdSuffix = capyDevelopmentSuffix
         }
         getByName("release") {
+            applicationIdSuffix = ".editor".takeUnless { capyApplicationId.isPresent }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

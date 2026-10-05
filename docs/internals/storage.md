@@ -60,7 +60,7 @@ its own, so it never opens an installed app's files or windows:
 | --- | --- | --- |
 | Linux | `art.capycanvas.CapyCanvas`, folders `capycanvas` | `art.capycanvas.CapyCanvas.Devel`, folders `capycanvas-devel` |
 | Windows | `CapyCanvas` folders, or the Store package | `CapyCanvas-Dev` folders |
-| Android | `art.capycanvas` | `art.capycanvas.dev` |
+| Android | `art.capycanvas.editor` | `art.capycanvas.dev` |
 | macOS and iPadOS | `art.capycanvas.CapyCanvas` | `art.capycanvas.CapyCanvas.dev` |
 
 The Linux and Windows host crates select the release identity with their
