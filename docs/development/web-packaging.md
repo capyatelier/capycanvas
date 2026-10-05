@@ -5,8 +5,9 @@
 The web client needs only static hosting: no Node or Rust server and no bundler.
 The package adds installation metadata and an offline service worker, and works
 unchanged at a domain root or a subpath such as `/capycanvas/`. The
-[release workflow](releasing.md) attaches the package to a release as a ZIP; a
-separate hosting repository publishes those files.
+[release workflow](releasing.md) attaches the package to a release as a ZIP, and
+the hosting repository deploys each published release from its own build of
+the release's commit ([releasing](releasing.md#publishing-a-release)).
 
 ## Build
 

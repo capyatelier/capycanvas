@@ -21,6 +21,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: version
         run: echo "version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          arguments: --locked
+          command: check licenses sources
       - if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -36,7 +40,7 @@ jobs:
     container: archlinux:latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: bash apps/layer-linux/appimage.sh
+      - run: bash packaging/appimage/build.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux
@@ -153,6 +157,7 @@ jobs:
         run: |
           $sign = @{}
           if ($env:SIGNED -eq 'true') {
+            az account get-access-token --scope https://codesigning.azure.net/.default --output none
             nuget install Microsoft.ArtifactSigning.Client -Version 1.0.128 -ExcludeVersion -OutputDirectory $env:RUNNER_TEMP | Out-Null
             $metadata = Join-Path $env:RUNNER_TEMP metadata.json
             @{ Endpoint = $env:ENDPOINT; CodeSigningAccountName = $env:ACCOUNT; CertificateProfileName = $env:PROFILE

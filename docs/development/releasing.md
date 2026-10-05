@@ -40,7 +40,7 @@ the same scripts developers run and the Rust version pinned in the workflow:
 
 | Job | Script | Output |
 | --- | --- | --- |
-| Linux | `apps/layer-linux/appimage.sh` in an Arch Linux container | `capycanvas-<version>-linux-x86_64.AppImage` and its `.zsync` file |
+| Linux | `packaging/appimage/build.sh` in an Arch Linux container | `capycanvas-<version>-linux-x86_64.AppImage` and its `.zsync` file |
 | Web | `node apps/layer-web/package.mjs` | `capycanvas-<version>-web.zip` |
 | Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-<version>-android.aab`; on a tag also the Play-signed universal `capycanvas-<version>-android.apk` |
 | Windows | `package.ps1`, `package-msix.ps1`, `test-msix.ps1` and `package-installer.ps1` | Portable ZIP, setup program and Store MSIX |
@@ -48,16 +48,16 @@ the same scripts developers run and the Rust version pinned in the workflow:
 
 Run it from the Actions tab to build unsigned packages as workflow artifacts.
 Pushing a `v*` tag checks that the tag names the workspace version and is on
-`main`, signs with the protected `release` environment, uploads the iPad build to
-TestFlight and the Android bundle to Play's internal track, and creates a draft
-GitHub Release holding every download, `SHA256SUMS` and build provenance
-attestations.
+`main` and runs `cargo deny`, then signs with the protected `release`
+environment, uploads the iPad build to TestFlight and the Android bundle to
+Play's internal track, and creates a draft GitHub Release holding every
+download, `SHA256SUMS` and build provenance attestations.
 
 ### Linux AppImage
 
-`appimage.sh` runs as root in a disposable Arch Linux container, which ships the
-GTK and libadwaita versions the app needs. It installs the
-[Arch recipe's](../../packaging/arch/README.md) dependencies, runs the native
+`packaging/appimage/build.sh` runs as root in a disposable Arch Linux container,
+which ships the GTK and libadwaita versions the app needs. It installs the [Arch
+recipe's](../../packaging/arch/README.md) dependencies, runs the native
 packager, installs the result into `/usr`, and lets a pinned `quick-sharun` from
 [Anylinux AppImages](https://github.com/pkgforge-dev/Anylinux-AppImages) bundle
 every library, including glibc, the Vulkan loader and Mesa. NVIDIA's proprietary
@@ -69,7 +69,7 @@ build one locally:
 
 ```bash
 podman run --rm -v "$PWD":/src:Z -w /src docker.io/library/archlinux:latest \
-  bash apps/layer-linux/appimage.sh
+  bash packaging/appimage/build.sh
 ```
 
 ### Signing credentials
@@ -104,9 +104,12 @@ executables and the setup program; the Store signs the MSIX.
    from the previous release with existing drawings, and the
    [performance targets](../PERFORMANCE_TARGETS.md) on reference hardware.
 3. Roll out the internal-track release in Play Console and promote it, upload the
-   MSIX to Partner Center, publish the web ZIP through the hosting repository, and
-   submit the TestFlight build for review.
+   MSIX to Partner Center, and submit the TestFlight build for review.
 4. Publish the draft. With immutable releases enabled, its assets and tag can no
-   longer change.
+   longer change. Within the hour, the `Deploy release` workflow in
+   [capycanvas-release](https://github.com/capyatelier/capycanvas-release)
+   builds the published release's commit with its own license and package
+   checks and deploys `editor.capycanvas.art`; run that workflow to deploy at
+   once, or with an earlier tag to roll back.
 5. If a check fails, delete the draft, fix `main` and release the next patch
    version. Never move a tag or reuse a version.
