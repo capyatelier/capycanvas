@@ -173,7 +173,7 @@ workspace-new-toolbar-confirm = Mulai dengan bilah alat kosong atau salinan terp
 
 workspace-start-with = Mulai dengan
 
-workspace-new-confirm = Salin pengaturan alat dan tata letak saat ini ke ruang kerja baru.
+workspace-new-confirm = Salin tata letak saat ini ke ruang kerja baru.
 
 workspace-create-and-switch = Buat dan Beralih
 
@@ -201,7 +201,7 @@ workspace-update = Perbarui
 
 workspace-toolbar = Bilah alat
 
-workspace-save-as-new-confirm = Pertahankan tata letak dalam memori, riwayat, sasaran pengaturan ulang asli, dan nilai alat terbaru dalam ruang kerja terpisah.
+workspace-save-as-new-confirm = Simpan tata letak saat ini beserta riwayatnya sebagai ruang kerja baru.
 
 workspace-save-and-switch = Simpan dan Beralih
 
