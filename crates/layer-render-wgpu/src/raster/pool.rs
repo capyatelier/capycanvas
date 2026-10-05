@@ -56,7 +56,7 @@ impl BufferPool {
         })
     }
     pub(super) fn take_native(&self, device: &wgpu::Device, descriptor: PixelDescriptor) -> Resource {
-        if descriptor.channels == 1 {
+        if descriptor.channels <= 2 {
             return Resource::Buffer(self.take_buffer(
                 device,
                 descriptor.byte_len([PAGE_SIZE; 2]).unwrap() as u64,

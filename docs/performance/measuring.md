@@ -303,7 +303,9 @@ python3 tools/performance/android-brush-report.py OUT --package art.capycanvas.b
 
 The runner defaults to the dry presets. Pass `--presets` to include the wet,
 smudge and Liquify presets. The photo opens as a Perceptual document;
-`--blending linear` measures it in linear light. The benchmark draws a 200 Hz
+`--blending linear` measures it in linear light. `--color-mode grayscale` or
+`--color-mode two_tone` constrains the empty paint layer; `full_color` is the
+default. The benchmark draws a 200 Hz
 stylus ellipse at Fit zoom, three 10 s strokes, with the default 16 ms
 prediction.
 Qualification runs keep the default workspace. `--trace` enables bounded GPU

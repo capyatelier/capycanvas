@@ -20,6 +20,7 @@ struct Style {
     layer_to_brush_linear: vec4<f32>,
     layer_to_brush_offset: vec4<f32>,
     bristle_streak: vec4<f32>,
+    color_mode: vec4<f32>,
 }
 
 @group(0) @binding(0)
@@ -135,7 +136,7 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if coverage <= 0.0 { discard; }
         let alpha = (1.0 - exp(-coverage * input.flow_hardness.x * input.color.a * 6.0))
             * brush_selection_at(brush_to_layer(input.world));
-        return vec4<f32>(input.color.rgb * alpha, alpha);
+        return advanced_layer_color(vec4<f32>(input.color.rgb * alpha, alpha));
     }
     var coverage = tip_coverage(
         style.flags.x > 0.5,
@@ -178,5 +179,11 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     );
     let burnt = clamp(style.edges.y * edge_band, 0.0, 1.0);
     let rgb = input.color.rgb * (1.0 - burnt * 0.55);
-    return vec4<f32>(rgb * alpha, alpha);
+    return advanced_layer_color(vec4<f32>(rgb * alpha, alpha));
+}
+
+fn advanced_layer_color(value:vec4<f32>)->vec4<f32> {
+    if style.color_mode.x==0. {return value;}
+    if style.color_mode.z!=0. {return working_encode(layer_color(working_decode(value),WORKING_LUMA,style.color_mode.x,style.color_mode.y));}
+    return layer_color(value,WORKING_LUMA,style.color_mode.x,style.color_mode.y);
 }

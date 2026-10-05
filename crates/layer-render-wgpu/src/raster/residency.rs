@@ -84,7 +84,7 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         if let Some(native) = &self.native_edit {
             let paint = self.paint_layers.iter().find(|l| l.id == target);
-            data.validate_index(self.target_extent(target), paint.is_none(), self.document_color())
+            data.validate_storage_index(self.target_extent(target), paint.is_none(), self.document_color())
                 .map_err(GpuRasterError::Effect)?;
             let resident: BTreeSet<_> = paint
                 .into_iter()

@@ -23,6 +23,7 @@ pub(crate) fn source(space: RgbSpace) -> String {
     ));
     shader.push_str(include_str!("sdr_color.wgsl"));
     shader.push_str(include_str!("working_color.wgsl"));
+    shader.push_str(include_str!("native_tiles/color_mode.wgsl"));
     shader
 }
 /// The id `sdr_encode` and `sdr_decode` take for `space`'s transfer curve.

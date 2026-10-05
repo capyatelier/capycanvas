@@ -14,7 +14,7 @@ fn native_penup_and_following_strokes() {
     composition_mut(&mut project).blend = project.composition().blend.for_depth(project.composition().color.depth);
     let stack = project.composition().result;
     for _ in 0..31 {
-        let source = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource {
+        let source = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource { color_mode: Default::default(),
             domain: [4096; 2], raster: Default::default(), original: None, operations: Default::default(),
         }).unwrap();
         let occurrence = project.artwork.occurrences.insert(layer_core::PortableId::random(),

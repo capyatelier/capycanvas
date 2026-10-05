@@ -99,7 +99,7 @@ impl Document {
         for target in self.scene().targets(){
             let Some(revision)=self.scene().raster(target)else{continue;};
             match revision.try_data(){
-                Some(Ok(data))=>data.validate(self.scene().target_extent(target),matches!(target,SourceTarget::Coverage(_)),self.composition().color)?,
+                Some(Ok(data))=>data.validate_mode(self.scene().target_extent(target),matches!(target,SourceTarget::Coverage(_)),self.composition().color,self.scene().color_mode(target))?,
                 Some(Err(error))=>return Err(error),None=>{},
             }
         }

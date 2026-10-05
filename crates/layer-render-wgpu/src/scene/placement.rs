@@ -244,8 +244,8 @@ impl Scene {
             transform.placement.interpolation = geometry.placement.interpolation;
             let page = self.placed_raw_plane(r, packet.scene, target, transform, coordinate, plane, extent)?;
             self.encode_jobs(r, encoder)?;
-            let tile = RasterTile::pending(plane.descriptor(r.document_color()));
-            inputs.push((self.pool[page].texture.clone(), tile.clone()));
+            let tile = RasterTile::pending(plane.descriptor_for(r.document_color(), packet.scene.color_mode(target)));
+            inputs.push((self.pool[page].texture.clone(), tile.clone(), packet.scene.color_mode(target)));
             tiles.push((plane, tile));
         }
         let capture = r.encode_private_tiles(inputs, encoder)?;

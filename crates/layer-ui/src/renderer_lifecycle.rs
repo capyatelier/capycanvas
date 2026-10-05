@@ -135,6 +135,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .checked_add(1).ok_or("Camera generation exhausted")?;
         self.automatic_camera_revision=self.state.camera.revision.checked_sub(navigation).ok_or("Camera revision moved backwards")?;
         self.sync_camera();
+        self.refresh_layer_presentation();
         self.refresh_commands();
         Ok(self.changed(regions::ALL, true))
     }

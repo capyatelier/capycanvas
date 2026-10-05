@@ -1,7 +1,7 @@
 use super::*;
 
 fn paint(artwork: &mut Artwork, domain: [u32;2], original: Option<Arc<SourceImage>>, raster: RasterRevision) {
-    let source=artwork.paint.insert(PortableId::random(),PaintSource {domain,original,raster,operations:Default::default()}).unwrap();
+    let source=artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain,original,raster,operations:Default::default()}).unwrap();
     let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),"Paint")).unwrap();
     let stack=artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);

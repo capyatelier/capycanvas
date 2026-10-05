@@ -250,7 +250,7 @@ impl Chunk {
 pub enum CaptureSource<'a> {
     /// Exact encoded color or coverage samples in a validated native format.
     Texture(&'a wgpu::Texture),
-    /// Exactly one tile of little-endian linear integer8/integer16 coverage.
+    /// One tile of little-endian coverage or gray-alpha samples.
     Packed(&'a wgpu::Buffer),
 }
 
@@ -267,14 +267,14 @@ impl TileCapture<'_> {
             CaptureSource::Texture(t) => t,
             CaptureSource::Packed(buffer) => {
                 let size = d.byte_len([PAGE_SIZE; 2]);
-                if d.channels != 1
-                    || d.encoding != TransferEncoding::Linear
-                    || d.alpha != AlphaAssociation::None
+                if !(d.channels == 1 && d.encoding == TransferEncoding::Linear && d.alpha == AlphaAssociation::None
+                    || d.channels == 2 && d.alpha == AlphaAssociation::Straight && d.bytes_per_pixel().is_some()
+                        && (d.encoding == TransferEncoding::Profile || d.sample == layer_core::color::SampleType::Float && d.encoding == TransferEncoding::Linear))
                     || size.is_none_or(|n| n as u64 != buffer.size())
                     || !buffer.usage().contains(wgpu::BufferUsages::COPY_SRC)
                 {
                     return Err(GpuRasterError::Color(
-                        "Invalid packed scalar capture representation".into(),
+                        "Invalid packed raster capture representation".into(),
                     ));
                 }
                 return Ok(size.unwrap() as u64);
@@ -878,7 +878,7 @@ impl WgpuRasterizer {
         let _trace = crate::performance_trace::Span::new(c"capy.restore");
         let index = self.paint_layers.iter().position(|l| l.id == target);
         let mask = index.is_none();
-        data.validate_index(self.target_extent(target), mask, self.document_color())
+        data.validate_storage_index(self.target_extent(target), mask, self.document_color())
             .map_err(GpuRasterError::Effect)?;
         // Stage GPU pages before publishing the revision. Keep only one decoded
         // tile on the CPU, rather than a second full decoded document. A failed
@@ -899,7 +899,7 @@ impl WgpuRasterizer {
                 continue;
             }
             let blob = tile.wait_backing().map_err(GpuRasterError::Effect)?;
-            if blob.descriptor != key.plane.descriptor(self.document_color()) {
+            if blob.descriptor != tile.descriptor() {
                 return Err(GpuRasterError::Effect(
                     "Raster plane has the wrong pixel representation".into(),
                 ));

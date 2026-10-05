@@ -28,7 +28,7 @@ fn fixture()->Editor {
     let paint=art.paint.iter().next().unwrap().0;
     let ink=initial.working.occurrence.unwrap();
     let original=crate::color::source::rgba8_source([19,11],|x,y|[x as u8,y as u8,73,255]);
-    *art.paint.get_mut(paint).unwrap()=PaintSource {domain:[19,11],raster:raster(RasterPlane::Color,23,true),original:Some(original),operations:Arc::default()};
+    *art.paint.get_mut(paint).unwrap()=PaintSource { color_mode: Default::default(),domain:[19,11],raster:raster(RasterPlane::Color,23,true),original:Some(original),operations:Arc::default()};
     let coverage=art.coverage.insert(PortableId::random(),CoverageSource {domain:[19,11],raster:raster(RasterPlane::Mask,127,false),
         initial:Some(Selection::polygon(vec![Point{x:1.,y:2.},Point{x:15.,y:2.},Point{x:1.,y:9.}]).unwrap()),default_coverage:0.375,operations:Arc::default()}).unwrap();
     *art.occurrences.get_mut(ink).unwrap()=Occurrence {content:OccurrenceContent::Paint(paint),name:"Ink 色".into(),visible:false,
@@ -89,7 +89,7 @@ fn perform_all(editor:&mut Editor) {
     change!(stacks,Stack,stack,Stack {entries});
     let mut occurrence=editor.document().artwork.occurrences.get(ink).unwrap().clone();occurrence.name="Renamed 🖌".into();occurrence.opacity=0.375;
     change!(occurrences,Occurrence,ink,occurrence);
-    change!(paint,Paint,paint,PaintSource {domain:[19,11],raster:raster(RasterPlane::Color,37,true),
+    change!(paint,Paint,paint,PaintSource { color_mode: Default::default(),domain:[19,11],raster:raster(RasterPlane::Color,37,true),
         original:Some(crate::color::source::rgba8_source([19,11],|x,y|[y as u8,x as u8,97,255])),operations:Arc::default()});
     change!(coverage,Coverage,coverage,CoverageSource {domain:[19,11],raster:raster(RasterPlane::Mask,79,false),initial:Some(pixels()),default_coverage:0.625,operations:Arc::default()});
     let mut program=crate::effect_catalog::custom_program("color_lookup");
@@ -318,7 +318,7 @@ fn captured_output_phases_remain_reversible_across_session_history() {
     let effect=application.handle;let mut occurrence=Occurrence::new(OccurrenceContent::Effect(effect),"Motion blur");occurrence.attachment=Attachment::Effect;
     let occurrence=crate::RecordChange::insert(&art.occurrences,occurrence);
     let mut scratch=art.occurrences.clone();scratch.change(occurrence.handle,occurrence.id,occurrence.value.clone()).unwrap();
-    let paint=crate::RecordChange::insert(&art.paint,PaintSource {domain:[32,32],original:None,raster:Default::default(),operations:Default::default()});
+    let paint=crate::RecordChange::insert(&art.paint,PaintSource { color_mode: Default::default(),domain:[32,32],original:None,raster:Default::default(),operations:Default::default()});
     let base=crate::RecordChange::insert(&scratch,Occurrence::new(OccurrenceContent::Paint(paint.handle),"Base"));
     let mut placed=art.occurrences.get(owner).unwrap().clone();placed.attachment=Attachment::Clip;
     let mut entries=art.stacks.get(stack).unwrap().clone();entries.entries.insert(0,occurrence.handle);entries.entries.insert(2,base.handle);

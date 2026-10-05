@@ -5,6 +5,8 @@ struct LayerPanel: View {
     let panel: JSON
     @StateObject private var interaction = LayerRowInteraction()
     @State private var popupID = UUID()
+    @State private var filterMenu = JSON()
+    @State private var filterPopupID = UUID()
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var view: JSON { store.state["layer_tools"] }
     private var current: JSON { view["editing_layer"] }
@@ -48,15 +50,16 @@ struct LayerPanel: View {
             }
         }
             .onAppear { interaction.store = store }
+            .onChange(of: filterMenu.isNull) { _, empty in store.workspace.popover(filterPopupID, open: !empty) }
             .onChange(of: interaction.menu.isNull) { _, empty in store.workspace.popover(popupID, open: !empty) }
             .onChange(of: store.state["revision"].uint) { _, _ in
                 interaction.validate(); store.layerThumbnails.refresh()
             }
             .onChange(of: store.state["layer_tools"]["rename_layer"].uint) { _, _ in interaction.validate() }
             .onChange(of: store.state["document_file"]["epoch"].uint) { _, _ in
-                interaction.cancel()
+                interaction.cancel(); filterMenu = JSON()
             }
-            .onDisappear { interaction.cancel(); store.workspace.popover(popupID, open: false) }
+            .onDisappear { interaction.cancel(); store.workspace.popover(popupID, open: false); store.workspace.popover(filterPopupID, open: false) }
 
     }
     @ViewBuilder private var dragPreview: some View {
@@ -80,6 +83,14 @@ struct LayerPanel: View {
                         }
                     }) { _ in }.disabled(!view["controls"]["blend"].bool).frame(maxWidth: .infinity)
                 LayerOpacityField(store: store).disabled(!view["controls"]["opacity"].bool).frame(maxWidth: .infinity)
+            }
+            if !view["color_mode"].isNull {
+                let control = view["color_mode"], menu = control["menu"]
+                let options = menu["sections"].array.flatMap { $0.array }.map { $0["label"].string }
+                EditorChoice(label: menu["title"].string, options: options, selected: options.firstIndex(of: control["value"].string) ?? -1,
+                    identifier: "layer-color-mode", background: palette["input"], compact: true,
+                    menu: { show in show(AppleContextMenu(menu) { store.dispatch($0) }) }) { _ in }
+                    .disabled(!control["enabled"].bool).frame(maxWidth: .infinity)
             }
             HStack(spacing: 2) {
                 flag("alpha-lock", store.catalog["native_copy"]["layers"]["alpha_lock"].string, "alpha_locked", "alpha_lock", "alpha_lock")
@@ -114,6 +125,12 @@ struct LayerPanel: View {
             LayerButton(icon: "mask", label: store.catalog["native_copy"]["layers"]["add_mask"].string, enabled: view["controls"]["mask"].bool) {
                 store.layer(["op": "add_mask", "id": current["id"].raw, "replace": false])
             }
+            LayerButton(icon: "adjustments", label: store.catalog["native_copy"]["layers"]["add_filter"].string, enabled: !view["add_filter"].isNull) {
+                filterMenu = view["add_filter"]
+            }.accessibilityIdentifier("layer-add-filter")
+                .editorPopover(isPresented: Binding(get: { !filterMenu.isNull }, set: { if !$0 { filterMenu = JSON() } }), placement: .inward) {
+                    EditorActionMenu(model: AppleContextMenu(filterMenu) { store.dispatch($0) }, identifier: "layer-filter-menu", dismiss: { filterMenu = JSON() })
+                }
             LayerButton(icon: "image", label: store.catalog["native_copy"]["layers"]["import_image"].string, enabled: store.command("import_image")["enabled"].bool) {
                 store.invoke("import_image")
             }

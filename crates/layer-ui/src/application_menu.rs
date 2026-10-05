@@ -86,6 +86,9 @@ impl ApplicationMenu {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn filter_category_items(&self) -> Vec<ContextMenuItem> {
+        self.filter_category_items_for(None)
+    }
+    fn filter_category_items_for(&self, owner: Option<layer_core::authored::OccurrenceHandle>) -> Vec<ContextMenuItem> {
         let enabled = self.effect_insert_enabled();
         self.effect_catalog
             .categories()
@@ -93,12 +96,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter_map(|category| {
                 let items: Vec<_> = self.effect_catalog.filters()
                     .iter()
-                    .filter(|f| f.category == category.id)
-                    .map(|f| ContextMenuItem { enabled, ..ContextMenuItem::command(effects::resource_label(f.label(), self.localization()).to_string(), UiAction::Effect { action: EffectAction::Insert { effect: f.program.id.clone() } }) })
+                    .filter(|f| f.category == category.id && (owner.is_none() || f.program.kind == layer_core::EffectKind::Adjustment))
+                    .map(|f| ContextMenuItem { enabled, ..ContextMenuItem::command(effects::resource_label(f.label(), self.localization()).to_string(), UiAction::Effect { action: owner.map_or_else(|| EffectAction::Insert { effect: f.program.id.clone() }, |owner| EffectAction::InsertAttached { effect: f.program.id.clone(), owner: occurrence_token(owner), epoch: self.state.document_file.epoch }) }) })
                     .collect();
                 (!items.is_empty()).then(|| ContextMenuItem::submenu(&effects::resource_label(&category.label, self.localization()), vec![items]))
             })
             .collect()
+    }
+    pub(crate) fn layer_filter_menu(&self, id: layer_core::authored::OccurrenceHandle) -> Option<ContextMenu> {
+        let doc = self.engine.document(); let scene = doc.scene();
+        let owner = scene.effect_owner(id).unwrap_or(id);
+        (scene.eligible_target(owner) && !doc.is_locked(owner) && self.effect_insert_enabled()).then(|| ContextMenu {
+            title: self.localization().text(MessageId::RESOURCES_LAYER_ADD_FILTER).to_string(),
+            sections: vec![self.filter_category_items_for(Some(owner))],
+        })
     }
     fn effect_insert_enabled(&self) -> bool {
         self.selection_masks.target().is_none() && self.require_document_idle().is_ok()

@@ -925,6 +925,18 @@ fn watercolor_prediction_canonicalizes_coverage_with_candidate_fallback() {
 }
 
 #[test]
+fn reduced_color_scaled_previews_support_in_place_and_candidate_conversion() {
+    for mode in [layer_core::color::LayerColorMode::Grayscale, layer_core::color::LayerColorMode::TwoTone] {
+        for in_place in [false, true] {
+            let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            let transfer = r.prepare_native_transfer(r.document_color().space).unwrap();
+            r.native_edit = Some(NativeEdit::with_mode(&r, transfer, in_place));
+            crate::layer_tests::reduced_color_scaled_preview(r, mode);
+        }
+    }
+}
+
+#[test]
 fn native_gradient_dither_changes_integer_code_boundaries_without_bias() {
     use layer_core::{Affine,GradientDefinition,GradientShape,GradientStop,ColorMixSpace,RasterOperation,RasterOperationKind,Point,SceneScope};
     use layer_core::color::RgbColor;
@@ -998,4 +1010,90 @@ fn native_gradient_dither_changes_integer_code_boundaries_without_bias() {
         assert!(changed>plain.len()/8);assert!(varied>512);assert!(mean.abs()<0.02);
         assert!(plain.iter().zip(&actual).all(|(a,b)|a.abs_diff(*b)<=1));
     }}}
+}
+
+#[test]
+fn layer_color_modes_convert_originals_constrain_edits_and_survive_history_and_reopen() {
+    use layer_core::color::LayerColorMode;
+    for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+        for space in RgbSpace::ALL {
+            let mut doc = paint_document([256; 2], "Paint");
+            set_color(&mut doc, DocumentColor { space, depth });
+            paint_mut(&mut doc).original = Some(layer_core::color::source::rgba8_source([256; 2], |x, _| {
+                if x < 85 { [255, 0, 0, 255] } else if x < 170 { [0, 255, 0, 255] } else { [255, 255, 255, 80] }
+            }));
+            let owner = occurrence_id(&doc);
+            let (_, mut live) = engine(doc);
+            let original = live.backend_mut().readback_srgb_rgba8().unwrap();
+            live.set_layer_color_mode(owner, LayerColorMode::Grayscale).unwrap(); flush(&mut live);
+            let gray = paint(live.document()).raster.clone();
+            assert_eq!(paint(live.document()).color_mode, LayerColorMode::Grayscale);
+            for tile in gray.wait_data().unwrap().tiles.values() { assert_eq!(tile.descriptor().channels, 2); }
+            let gray_pixels = live.backend_mut().readback_srgb_rgba8().unwrap();
+            assert_ne!(gray_pixels, original);
+            for p in gray_pixels.chunks_exact(4) { assert!(p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1, "{space:?} {depth:?} {p:?}"); }
+            assert!(live.undo().unwrap()); flush(&mut live);
+            assert_eq!(paint(live.document()).color_mode, LayerColorMode::FullColor);
+            assert_eq!(live.backend_mut().readback_srgb_rgba8().unwrap(), original);
+            assert!(live.redo().unwrap()); flush(&mut live);
+            assert_eq!(live.backend_mut().readback_srgb_rgba8().unwrap(), gray_pixels);
+            live.set_layer_color_mode(owner, LayerColorMode::TwoTone).unwrap(); flush(&mut live);
+            let two = paint(live.document()).raster.clone();
+            for bytes in backing(&two).values() {
+                for p in bytes.chunks_exact(2 * depth.bytes()) {
+                    let values = match depth {
+                        SampleDepth::U8 => [p[0] as f32 / 255., p[1] as f32 / 255.],
+                        SampleDepth::U16 => [u16::from_le_bytes(p[..2].try_into().unwrap()) as f32 / 65535., u16::from_le_bytes(p[2..].try_into().unwrap()) as f32 / 65535.],
+                        SampleDepth::F16 | SampleDepth::F32 => { let v = layer_core::color::hdr::decode_samples(depth, p).unwrap(); [v[0], v[3]] },
+                    };
+                    assert!(values.into_iter().all(|v| v == 0. || v == 1.), "{depth:?} {values:?}");
+                }
+            }
+            let mut bytes = Vec::new(); write_capture(&live.capture_artwork(0).unwrap(), &mut bytes).unwrap();
+            let (_, mut reopened) = engine(read_document(bytes));
+            assert_eq!(paint(reopened.document()).color_mode, LayerColorMode::TwoTone);
+            assert_eq!(reopened.backend_mut().readback_srgb_rgba8().unwrap(), live.backend_mut().readback_srgb_rgba8().unwrap());
+            let id = target(reopened.document());
+            reopened.append_raster_operation(id, layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
+                coverage: reveal_all([256; 2], layer_core::Point::default()), kind: layer_core::RasterOperationKind::Fill { color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
+            flush(&mut reopened);
+            let filled = reopened.backend_mut().readback_srgb_rgba8().unwrap();
+            assert!(filled.chunks_exact(4).all(|p| (p[..3] == [0; 3] || p[..3] == [255; 3]) && p[3] == 255));
+            reopened.set_layer_color_mode(occurrence_id(reopened.document()), LayerColorMode::FullColor).unwrap(); flush(&mut reopened);
+            assert_eq!(reopened.backend_mut().readback_srgb_rgba8().unwrap(), filled);
+            for tile in paint(reopened.document()).raster.wait_data().unwrap().tiles.values() { assert_eq!(tile.descriptor().channels, 4); }
+        }
+    }
+}
+
+#[test]
+fn reduced_color_empty_layers_constrain_colored_brush_strokes_and_restore_undo() {
+    use layer_core::color::LayerColorMode;
+    for mode in [LayerColorMode::Grayscale, LayerColorMode::TwoTone] {
+        let doc = paint_document([256; 2], "Paint");
+        let owner = occurrence_id(&doc);
+        let (mut input, mut live) = engine(doc);
+        live.set_layer_color_mode(owner, mode).unwrap();
+        assert!(paint(live.document()).raster.try_data().is_some());
+        assert!(paint(live.document()).operations.is_empty());
+        flush(&mut live);
+        assert_eq!(paint(live.document()).color_mode, mode);
+        assert!(paint(live.document()).raster.wait_data().unwrap().tiles.is_empty());
+        live.set_brush(layer_core::BrushSnapshot { color_rgba_linear: [0.1, 0.8, 0.2, 0.8], ..Default::default() }).unwrap();
+        stroke(&mut live, &mut input, 10, 80.);
+        let painted = backing(&paint(live.document()).raster);
+        assert!(!painted.is_empty());
+        assert!(paint(live.document()).raster.wait_data().unwrap().tiles.values().all(|t| t.descriptor().channels == 2));
+        let pixels = live.backend_mut().readback_srgb_rgba8().unwrap();
+        assert!(pixels.chunks_exact(4).any(|p| p[3] != 0));
+        for p in pixels.chunks_exact(4) {
+            assert_eq!(p[0], p[1]); assert_eq!(p[1], p[2]);
+            if mode == LayerColorMode::TwoTone { assert!([0, 255].contains(&p[0]) && [0, 255].contains(&p[3])); }
+        }
+        assert!(live.undo().unwrap()); flush(&mut live);
+        assert_eq!(paint(live.document()).color_mode, mode);
+        assert!(paint(live.document()).raster.wait_data().unwrap().tiles.is_empty());
+        assert!(live.redo().unwrap()); flush(&mut live);
+        assert_eq!(backing(&paint(live.document()).raster), painted);
+    }
 }

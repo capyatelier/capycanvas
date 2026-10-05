@@ -227,6 +227,9 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn operations(self,t:SourceTarget)->Option<&'a [crate::RasterOperation]>{match t{SourceTarget::Paint(h)=>Some(&self.paint(h)?.operations),SourceTarget::Coverage(h)=>Some(&self.coverage(h)?.operations),SourceTarget::Selection(_)=>None}}
     #[inline]
+    pub fn color_mode(self, target: SourceTarget) -> crate::color::LayerColorMode {
+        if let SourceTarget::Paint(handle) = target { self.paint(handle).map(|p| p.color_mode).unwrap_or_default() } else { Default::default() }
+    }
     pub fn target_extent(self,t:SourceTarget)->[u32;2]{match t{SourceTarget::Paint(h)=>self.paint(h).map(|p|p.domain),SourceTarget::Coverage(h)=>self.coverage(h).map(|p|p.domain),SourceTarget::Selection(_)=>None}.unwrap_or(self.composition().size)}
     #[inline]
     pub fn local_extent(self,h:OccurrenceHandle)->[u32;2]{self.source_target(h).map(|t|self.target_extent(t)).unwrap_or(self.composition().size)}
@@ -355,7 +358,7 @@ mod tests {
     #[test]
     fn unplaced_occurrences_retain_sources_without_entering_the_evaluation_index() {
         let mut artwork=Artwork::new([16,16]).unwrap();
-        let paint=artwork.paint.insert(PortableId::random(),PaintSource {domain:[16,16],raster:Default::default(),original:None,operations:Arc::default()}).unwrap();
+        let paint=artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[16,16],raster:Default::default(),original:None,operations:Arc::default()}).unwrap();
         let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(paint),"Retained content")).unwrap();
         let index=Arc::new(SceneIndex::build(&artwork).unwrap());let scene=SceneView::new(&artwork,&index);
         assert!(scene.targets().any(|t|t==SourceTarget::Paint(paint)));

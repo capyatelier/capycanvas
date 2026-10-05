@@ -134,4 +134,39 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   }
   await capture('pen-tools-scroll');await evaluate('filterScroll.style.maxHeight="";delete window.filterScroll');
   console.log('PASS: filter drawer replacement/reopen/cancel; paper properties; touch/pen swipe/delete; empty canvas and undo; mouse/touch/pen tool scrolling');
+  await send({type:'invoke',command:'new_document'});
+  await wait(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create')`);
+  await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create').click()`);
+  await wait(`!layerApp.state().document_file.busy && !layerApp.documents.busy() && layerApp.app.brush_ready() && !document.querySelector('dialog[open]')`);
+  await send({type:'customize',action:{type:'set_panel_visible',panel:'layers',visible:true}});
+  const showLayers = async () => send({type:'select_panel_tab',group:(await evaluate('layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("layers")).id')),panel:'layers'});
+  await showLayers();
+  const owner = await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
+  for (const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    for (const label of ['Grayscale','Two-tone (black & white)','Full color']) {
+      await contact('#layer-color-mode');
+      await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(label)}))`);
+      await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(label)})).dataset.layerChoice="true"`);
+      await contact('[data-layer-choice="true"]');
+      await wait(`layerApp.state().layer_tools.color_mode?.value===${JSON.stringify(label)}`);
+    }
+    const before = await evaluate('layerApp.state().layers.length');
+    for (const [index,filter] of ['Exposure','Curves'].entries()) {
+      await showLayers();
+      await contact('#layer-add-filter');
+      await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Tone'))`);
+      await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Tone')).click()`);
+      await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(filter)}))`);
+      await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(filter)})).click()`);
+      await wait(`layerApp.state().layer_tools.editing_layer.adjustment_effect && layerApp.state().layers.length===${before+index+1}`);
+    }
+    assert.equal(await evaluate('layerApp.state().layers.length'),before+2);
+    await send({type:'invoke',command:'undo'});await send({type:'invoke',command:'undo'});
+    assert.equal(await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)'),owner);
+    await showLayers();
+    await capture(`layer-modes-and-filters-${theme}`);
+  }
+  console.log('PASS: layer color modes and local filter insertion in both themes');
+
 }

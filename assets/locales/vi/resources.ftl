@@ -528,3 +528,9 @@ resources-gradient-interpolation = Interpolation
 resources-gradient-mix-oklab = Oklab
 resources-gradient-mix-linear = Ánh sáng tuyến tính
 resources-gradient-mix-classic = Cổ điển
+
+resources-layer-add-filter = Thêm bộ lọc
+resources-layer-color-mode = Chế độ màu
+resources-layer-color-full = Đầy đủ màu
+resources-layer-color-gray = Thang xám
+resources-layer-color-two-tone = Hai tông (đen và trắng)

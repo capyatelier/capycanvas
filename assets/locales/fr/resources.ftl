@@ -527,3 +527,9 @@ resources-gradient-interpolation = Interpolation
 resources-gradient-mix-oklab = Oklab
 resources-gradient-mix-linear = Lumière linéaire
 resources-gradient-mix-classic = Classique
+
+resources-layer-add-filter = Ajouter un filtre
+resources-layer-color-mode = Mode de couleur
+resources-layer-color-full = Couleur
+resources-layer-color-gray = Niveaux de gris
+resources-layer-color-two-tone = Deux tons (noir et blanc)

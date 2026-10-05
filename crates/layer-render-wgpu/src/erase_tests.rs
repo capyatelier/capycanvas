@@ -304,7 +304,7 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
             kind: RasterOperationKind::Bake { scene, scope: SceneScope::Members(Arc::from([owner])), offset: Point::default() },
         };
         let damage = operation.bounds(EXTENT);
-        let (handle, target) = placement::append_paint(&mut document, name, layer_core::PaintSource {
+        let (handle, target) = placement::append_paint(&mut document, name, layer_core::PaintSource { color_mode: Default::default(),
             domain: EXTENT, raster: RasterRevision::pending(), original: None, operations: Arc::new(vec![operation]),
         });
         outputs.push((handle, target));

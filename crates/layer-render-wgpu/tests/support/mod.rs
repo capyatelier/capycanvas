@@ -142,7 +142,7 @@ pub fn named_occurrence(doc: &Document, name: &str) -> OccurrenceHandle {
 }
 
 pub fn add_paint(doc: &mut Document, name: &str, index: usize) -> OccurrenceHandle {
-    let source = RecordChange::insert(&doc.artwork.paint, PaintSource {
+    let source = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(),
         domain: doc.composition().size, raster: Default::default(), original: None, operations: Default::default(),
     });
     let occurrence = RecordChange::insert(&doc.artwork.occurrences,

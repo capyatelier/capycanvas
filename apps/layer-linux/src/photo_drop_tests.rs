@@ -848,7 +848,7 @@ fn native_photo_transform_reference_pivot_snap_and_nudge() {
     active_paint_mut(&mut project).original = Some(layer_core::color::source::rgba8_source([120, 80], |_, _| [40, 120, 200, 255]));
     project.artwork.occurrences.get_mut(id).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x: 40., y: 50. }));
     let domain = project.composition().size;
-    let paint = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource { domain, raster: Default::default(), original: Some(layer_core::color::source::rgba8_source([20, 80], |_, _| [200, 80, 40, 255])), operations: Default::default() }).unwrap();
+    let paint = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource { color_mode: Default::default(), domain, raster: Default::default(), original: Some(layer_core::color::source::rgba8_source([20, 80], |_, _| [200, 80, 40, 255])), operations: Default::default() }).unwrap();
     let mut neighbor = layer_core::Occurrence::new(layer_core::OccurrenceContent::Paint(paint), "Snap reference");
     neighbor.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x: 180., y: 50. }));
     let neighbor = project.artwork.occurrences.insert(layer_core::PortableId::random(), neighbor).unwrap();

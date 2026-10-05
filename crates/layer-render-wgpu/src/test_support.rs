@@ -3,7 +3,7 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
 
 pub(crate) fn add_paint(artwork: &mut layer_core::authored::Artwork, name: impl Into<Arc<str>>, domain: [u32; 2]) -> (OccurrenceHandle, SourceTarget) {
     use layer_core::authored::*;
-    let source = artwork.paint.insert(PortableId::random(), PaintSource {
+    let source = artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),
         domain, raster: Default::default(), original: None, operations: Arc::default(),
     }).unwrap();
     let occurrence = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(source), name)).unwrap();

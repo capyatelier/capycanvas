@@ -24,7 +24,7 @@ fn native(color: DocumentColor) -> Artwork {
         .paint
         .insert(
             identity(10),
-            PaintSource {
+            PaintSource { color_mode: Default::default(),
                 domain: [512, 256],
                 original: None,
                 operations: Arc::default(),
@@ -204,7 +204,7 @@ fn float_artwork(depth: SampleDepth, samples: &[u8]) -> Artwork {
         .paint
         .insert(
             identity(10),
-            PaintSource {
+            PaintSource { color_mode: Default::default(),
                 domain: [256; 2],
                 original: None,
                 operations: Arc::default(),
@@ -312,7 +312,7 @@ fn source_fixture() -> Artwork {
             .paint
             .insert(
                 identity(10 + n),
-                PaintSource {
+                PaintSource { color_mode: Default::default(),
                     domain: [512, 259],
                     original: Some(original.clone()),
                     raster: Default::default(),

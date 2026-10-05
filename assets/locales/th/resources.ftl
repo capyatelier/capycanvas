@@ -528,3 +528,9 @@ resources-gradient-interpolation = Interpolation
 resources-gradient-mix-oklab = Oklab
 resources-gradient-mix-linear = แสงเชิงเส้น
 resources-gradient-mix-classic = คลาสสิก
+
+resources-layer-add-filter = เพิ่มฟิลเตอร์
+resources-layer-color-mode = โหมดสี
+resources-layer-color-full = สีเต็มรูปแบบ
+resources-layer-color-gray = ระดับสีเทา
+resources-layer-color-two-tone = สองโทน (ขาวและดำ)

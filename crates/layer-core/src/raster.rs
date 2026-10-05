@@ -113,6 +113,10 @@ impl RasterPlane {
             color.coverage_descriptor()
         }
     }
+    pub fn descriptor_for(self, color: crate::color::DocumentColor, mode: crate::color::LayerColorMode) -> crate::color::PixelDescriptor {
+        if self == Self::Color { mode.descriptor(color) } else { self.descriptor(color) }
+    }
+
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -398,9 +402,12 @@ impl RasterData {
         mask: bool,
         color: crate::color::DocumentColor,
     ) -> Result<(), String> {
-        self.validate_index(extent, mask, color)?;
+        self.validate_mode(extent, mask, color, Default::default())
+    }
+    pub fn validate_mode(&self, extent: [u32; 2], mask: bool, color: crate::color::DocumentColor, mode: crate::color::LayerColorMode) -> Result<(), String> {
+        self.validate_index_mode(extent, mask, color, mode)?;
         for (key, tile) in &self.tiles {
-            if tile.wait_backing()?.descriptor != key.plane.descriptor(color) {
+            if tile.wait_backing()?.descriptor != key.plane.descriptor_for(color, mode) {
                 return Err("Raster plane has the wrong pixel representation".into());
             }
         }
@@ -414,6 +421,15 @@ impl RasterData {
         mask: bool,
         color: crate::color::DocumentColor,
     ) -> Result<(), String> {
+        self.validate_index_mode(extent, mask, color, Default::default())
+    }
+    pub fn validate_storage_index(&self, extent: [u32; 2], mask: bool, color: crate::color::DocumentColor) -> Result<(), String> {
+        let mode = if self.tiles.iter().find(|(key, _)| key.plane == RasterPlane::Color).is_some_and(|(_, tile)| tile.descriptor().channels == 2) {
+            crate::color::LayerColorMode::Grayscale
+        } else { Default::default() };
+        self.validate_index_mode(extent, mask, color, mode)
+    }
+    pub fn validate_index_mode(&self, extent: [u32; 2], mask: bool, color: crate::color::DocumentColor, mode: crate::color::LayerColorMode) -> Result<(), String> {
         if let Some(w) = self.watercolor
             && (mask
                 || ![w.wet_edge, w.burnt_edge, w.edge_width]
@@ -433,7 +449,7 @@ impl RasterData {
             {
                 return Err("Invalid raster tile coordinates or plane".into());
             }
-            if tile.descriptor() != key.plane.descriptor(color) {
+            if tile.descriptor() != key.plane.descriptor_for(color, mode) {
                 return Err("Raster plane has the wrong pixel representation".into());
             }
         }

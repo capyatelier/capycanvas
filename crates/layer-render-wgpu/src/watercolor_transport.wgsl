@@ -11,6 +11,8 @@ struct Style {
     render_mode: vec4<f32>,
     transport_a: vec4<f32>,
     transport_b: vec4<f32>,
+    unused_brush_material: array<vec4<f32>, 9>,
+    color_mode: vec4<f32>,
 }
 
 struct Target {
@@ -323,7 +325,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
         next_pigment = vec4<f32>(working_unassociate(next_pigment) * center.a, center.a);
     }
     return TransportOutput(
-        mix(center, next_pigment, clip),
+        layer_color(mix(center, next_pigment, clip),WORKING_LUMA,style.color_mode.x,style.color_mode.y),
         vec4<f32>(mix(center_wet, select(next_wetness, 0.0, style.color.a > 0.5 && center.a == 0.0), clip), 0.0, 0.0, 1.0),
     );
 }

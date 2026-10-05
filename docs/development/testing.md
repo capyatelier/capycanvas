@@ -156,6 +156,21 @@ private 120 Hz display. Run it with `LAYER_NATIVE_INPUT_TRACE=1` to record input
 shared curve adoption and presentation times. Its small desktop fixture does
 not qualify the reference tablet canvases.
 
+Paint-layer color modes use `saved_reduced_color_layers_keep_modes_channel_counts_and_samples`
+in core, `fixed_reduced_color_layers_preserve_modes_and_alpha_through_document_depth_changes`
+in color, and the renderer’s `layer_color_modes` and `reduced_color` tests.
+They cover original images, two-channel backing at every document depth,
+colored live brush input before publication, scaled previews with in-place and
+candidate writeback, exact undo and save/reopen. Native gray-alpha writeback
+also covers odd partial regions and untouched packed half words. The shared UI’s
+`filter_drawer_tests` checks captured layer owners and the top of the local
+filter chain. Native journeys are GTK’s `native_layer_color_modes_and_add_filter`,
+Web’s `--filter-drawer`, Android’s
+`AndroidInteractionTest#layerColorModesAndLocalFilterMenu`, and Windows’
+`exercise-layers.ps1`. Run both themes. Measure painting with
+`android-brush-benchmark.py --color-mode grayscale` and `--color-mode two_tone`
+on each reference tier.
+
 Pointwise color adjustments use `color_adjustment_schema_tests` in `layer-core`,
 the Colorize and Threshold Properties tests in `layer-ui`, and `native_effects::color`
 and `scale::tests::color_effects` in `layer-render-wgpu`. The GPU references

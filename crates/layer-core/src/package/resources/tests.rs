@@ -273,7 +273,7 @@ fn aliased_archive_sources_remain_independently_editable_and_resave_exactly() {
     let stack=artwork.compositions.get(artwork.root).unwrap().result;
     let tiles=[tile(42),tile(42)];let tile_ids=tiles.each_ref().map(|tile|tile.resource_id());
     let sources=tiles.map(|tile| {
-        let source=artwork.paint.insert(PortableId::random(),PaintSource {domain:[TILE_SIZE;2],raster:revision(tile),original:None,operations:Default::default()}).unwrap();
+        let source=artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[TILE_SIZE;2],raster:revision(tile),original:None,operations:Default::default()}).unwrap();
         let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),"Independent paint")).unwrap();
         artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);artwork.paint.id(source).unwrap()
     });

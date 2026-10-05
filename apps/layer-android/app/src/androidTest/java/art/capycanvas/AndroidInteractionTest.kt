@@ -2154,6 +2154,41 @@ class AndroidInteractionTest {
         }
         println("PASS zoom readout: shared menu levels, Actual Pixels at a quarter turn, typed zoom and Back with mouse, finger and stylus, without taking focus")
     }
+    @Test fun layerColorModesAndLocalFilterMenu() {
+        action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+        layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+        val owner = editingLayer()
+        popupInput = true
+        try {
+            for (theme in listOf("light", "dark")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                for ((device, label) in pointerTools.zip(listOf("Grayscale", "Two-tone (black & white)", "Full color"))) {
+                    tool = device
+                    tap(bounds("layer-color-mode").center)
+                    waitFor("color modes open") { menuText(label) != null }; settle()
+                    tap(menuText(label)!!.center)
+                    waitFor("color mode selected") { popupCount() == 0 && state().getJSONObject("layer_tools").getJSONObject("color_mode").getString("value") == label }
+                }
+                val before = state().array("layers").length()
+                for ((index, filter) in listOf("Exposure", "Curves").withIndex()) {
+                    action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+                    tap(bounds("layer-add-filter").center)
+                    waitFor("filter categories open") { menuText("Tone") != null }; settle()
+                    tap(menuText("Tone")!!.center)
+                    waitFor("filter submenu open") { menuText(filter) != null }; settle()
+                    tap(menuText(filter)!!.center)
+                    waitFor("local filter selected") { popupCount() == 0 && state().array("layers").length() == before + index + 1 && state().getJSONObject("layer_tools").getJSONObject("editing_layer").optBoolean("adjustment_effect") }
+                    assertTrue(state().getJSONObject("layer_tools").has("add_filter"))
+                }
+                assertEquals(before + 2, state().array("layers").length())
+                action(obj("type" to "invoke", "command" to "undo"))
+                action(obj("type" to "invoke", "command" to "undo"))
+                assertEquals(owner, editingLayer())
+                action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+            }
+        } finally { popupInput = false }
+    }
+
     @Test fun layerBlendMenuAcrossDevices() {
         fun blend() = state().getJSONObject("layer_tools").getJSONObject("editing_layer").getString("blend_label")
         fun groups() = kotlinx.coroutines.runBlocking {

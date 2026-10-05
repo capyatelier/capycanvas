@@ -105,6 +105,7 @@ internal class LayerSwipe {
     val bounds = remember { mutableMapOf<Long, Rect>() }
     val thumbnails = remember { mutableStateMapOf<Long, LayerThumbnail>() }
     var dragGeneration by remember { mutableIntStateOf(0) }
+    var filterPoint by remember { mutableStateOf(Offset.Zero) }
     var panelOrigin by remember { mutableStateOf(Offset.Zero) }
     var drag by remember { mutableStateOf<LayerDrag?>(null) }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
@@ -207,6 +208,19 @@ internal class LayerSwipe {
                     NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity"),active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f).testTag("layer-opacity"),
                         enabled=controls.getBoolean("opacity"),inline=true) { host.dispatch(obj("type" to "set_layer_opacity","opacity" to it)) }
                 }
+                view.optJSONObject("color_mode")?.let { control ->
+                    var colorMenu by remember { mutableStateOf<JSONObject?>(null) }
+                    LaunchedEffect(epoch) { colorMenu = null }
+                    Box(Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,ControlShape).testTag("layer-color-mode")
+                            .clickable(enabled=control.getBoolean("enabled")) { colorMenu = control.getJSONObject("menu") }
+                            .padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically) {
+                            Text(control.getString("value"),Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
+                            SharedIcon("chevron-down",control.getJSONObject("menu").getString("title"),Modifier.size(12.dp))
+                        }
+                        colorMenu?.let { WorkspaceMenu(host,it) { colorMenu = null } }
+                    }
+                }
                 Row(horizontalArrangement=Arrangement.spacedBy(2.dp)) {
                     for ((icon, label, property, op, capability) in listOf(
                         listOf("alpha-lock",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("alpha_lock"),"alpha_locked","alpha_lock","alpha_lock"),
@@ -241,6 +255,9 @@ internal class LayerSwipe {
                 LayerButton(host,"folder",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("new_group"),action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
                 LayerButton(host,"selection-brush",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("new_selection_layer"),action=obj("type" to "invoke","command" to "new_selection_layer"))
                 LayerButton(host,"mask",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("add_mask"),enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })
+                LayerButton(host,"adjustments",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("add_filter"),Modifier.testTag("layer-add-filter").onGloballyPositioned { filterPoint = it.boundsInRoot().topLeft - panelOrigin },enabled=view.optJSONObject("add_filter")!=null) {
+                    menuGeneration++; menuRequest = null; menu = view.optJSONObject("add_filter"); menuPoint = filterPoint
+                }
                 LayerButton(host,"image",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("import_image"), action=obj("type" to "invoke", "command" to "import_image"))
                 LayerButton(host,"delete",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("delete_selected"),enabled=view.getBoolean("can_delete"),action=obj("type" to "layer","action" to obj("op" to "delete_selected")))
                 Spacer(Modifier.weight(1f))

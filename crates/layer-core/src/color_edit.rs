@@ -19,7 +19,7 @@ impl Document {
             }
             let old = self.artwork.paint.get(change.handle).ok_or(invalid("Missing color source"))?;
             let new = change.value.as_ref().ok_or(invalid("Color changes must preserve every source"))?;
-            if old.domain != new.domain || old.operations != new.operations || !new.operations.is_empty() {
+            if old.color_mode != new.color_mode || old.domain != new.domain || old.operations != new.operations || !new.operations.is_empty() {
                 return Err(invalid("Color changes must preserve source properties and completed edits"));
             }
             if old.original.as_ref().is_some_and(|s| s.is_original())
@@ -30,7 +30,7 @@ impl Document {
             if old.original.as_ref().map(|s| (s.kind, s.extent)) != new.original.as_ref().map(|s| (s.kind, s.extent)) {
                 return Err(invalid("Color changes must preserve image roles and full extents"));
             }
-            validate_color_root(&old.raster, &new.raster, new.domain, false, color)?;
+            validate_color_root(&old.raster, &new.raster, new.domain, false, color, new.color_mode)?;
             if let Some(source) = &new.original {
                 if !source.is_original()
                     && (source.interpretation.depth != color.depth
@@ -53,7 +53,7 @@ impl Document {
             if metadata != *old || !new.operations.is_empty() {
                 return Err(invalid("Color changes must preserve mask properties and completed edits"));
             }
-            validate_color_root(&old.raster, &new.raster, new.domain, true, color)?;
+            validate_color_root(&old.raster, &new.raster, new.domain, true, color, Default::default())?;
         }
         let mut composition = self.composition().clone();
         composition.color = color;
@@ -70,6 +70,7 @@ fn validate_color_root(
     domain: [u32; 2],
     mask: bool,
     color: color::DocumentColor,
+    mode: color::LayerColorMode,
 ) -> Result<(), DocumentError> {
     let invalid = |message| DocumentError::InvalidLayerOperation(message);
     let completed = |r: &raster::RasterRevision| {
@@ -80,5 +81,5 @@ fn validate_color_root(
     if before.watercolor != data.watercolor || !before.tiles.keys().eq(data.tiles.keys()) {
         return Err(invalid("Color changes must preserve raster coverage and watercolor state"));
     }
-    data.validate_index(domain, mask, color).map_err(|_| invalid("Color backing does not match the new document mode"))
+    data.validate_index_mode(domain, mask, color, mode).map_err(|_| invalid("Color backing does not match the new document mode"))
 }

@@ -410,27 +410,117 @@ fn alpha_lock_preserves_partial_alpha_and_eraser_is_noop() {
 
 #[test]
 fn small_swept_contact_preview_matches_commit_and_preserves_distant_pixels() {
+    swept_contact_preview(layer_core::color::LayerColorMode::FullColor);
+}
+
+#[test]
+fn reduced_color_contact_previews_match_committed_pixels() {
+    for mode in [layer_core::color::LayerColorMode::Grayscale, layer_core::color::LayerColorMode::TwoTone] {
+        swept_contact_preview(mode);
+    }
+}
+
+#[test]
+fn reduced_color_live_strokes_constrain_pixels_before_publication() {
+    for mode in [layer_core::color::LayerColorMode::Grayscale, layer_core::color::LayerColorMode::TwoTone] {
+        for preset in [layer_core::DefaultBrushPreset::GPen, layer_core::DefaultBrushPreset::Airbrush, layer_core::DefaultBrushPreset::WatercolorWash] {
+            let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            let mut document = paint_document([256; 2], "live reduced color stroke");
+            paint_mut(&mut document).color_mode = mode;
+            let mut ink = dab([0.03, 0.04, 0.3, 0.9]);
+            ink.center = Point { x: 128., y: 128. }; ink.radii = [80.; 2];
+            let mut stroke = batch(target(&document));
+            stroke.style = preset_style(preset); stroke.damage = ink.bounds(); stroke.stroke_end = false;
+            r.submit(FramePacket { dabs: &[ink], dab_batches: &[stroke], ..packet(document.scene(), [256; 2]) }).unwrap();
+            assert!(paint(&document).raster.is_empty());
+            let pages = &r.paint_layers.iter().find(|p| p.id == target(&document)).unwrap().pages;
+            assert!(!pages.is_empty());
+            for page in pages {
+                for pixel in page_bytes(&r, &page.active().texture).as_chunks::<16>().0 {
+                    let channels = std::array::from_fn::<_, 4, _>(|c| f32::from_le_bytes(pixel[c * 4..c * 4 + 4].try_into().unwrap()));
+                    assert_eq!(channels[0], channels[1], "{mode:?} {preset:?}");
+                    assert_eq!(channels[1], channels[2], "{mode:?} {preset:?}");
+                    if mode == layer_core::color::LayerColorMode::TwoTone {
+                        assert!(channels[0] == 0. || channels[0] == 1.);
+                        assert!(channels[3] == 0. || channels[3] == 1.);
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn reduced_color_scaled_preview(mut r: WgpuRasterizer, mode: layer_core::color::LayerColorMode) {
+    let mut document = paint_document([1024; 2], "reduced color scaled preview");
+    paint_mut(&mut document).color_mode = mode;
+    let send = |r: &mut WgpuRasterizer, document: &mut Document, dabs: &[Dab], batches: &[DabBatch], reset| {
+        if batches.iter().any(|b| b.kind != DabBatchKind::Preview) {
+            paint_mut(document).raster = layer_core::raster::RasterRevision::pending();
+        }
+        let mut frame = packet(document.scene(), [1024; 2]);
+        frame.composite_all = false;
+        frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+        frame.view.width_px = 128; frame.view.height_px = 128;
+        r.submit(FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..frame }).unwrap();
+    };
+    let mut base = dab([1.; 4]);
+    base.center = Point { x: 512., y: 512. }; base.radii = [900.; 2];
+    let mut background = batch(target(&document)); background.damage = base.bounds();
+    send(&mut r, &mut document, &[base], &[background], true);
+    let original = crate::scene::scale::tests::display_pixels(&r);
+    let mut ink = dab([0.03, 0.04, 0.3, 1.]);
+    ink.center = Point { x: 512., y: 512. }; ink.radii = [180.; 2];
+    let mut stroke = batch(target(&document));
+    stroke.style = preset_style(layer_core::DefaultBrushPreset::GPen);
+    stroke.damage = ink.bounds(); stroke.kind = DabBatchKind::Preview; stroke.stroke_end = false;
+    send(&mut r, &mut document, &[ink], &[stroke.clone()], false);
+    assert!(r.preview_level > 0);
+    assert!(r.preview_pages.iter().all(|p| p.active().texture.width() < 256));
+    let prediction = crate::scene::scale::tests::display_pixels(&r);
+    assert_ne!(prediction, original);
+    for pixel in &prediction {
+        assert!((pixel[0] - pixel[1]).abs() < 0.0001 && (pixel[1] - pixel[2]).abs() < 0.0001);
+    }
+    send(&mut r, &mut document, &[], &[], false);
+    assert_eq!(crate::scene::scale::tests::display_pixels(&r), original);
+    stroke.kind = DabBatchKind::Persistent; stroke.stroke_end = true;
+    send(&mut r, &mut document, &[ink], &[stroke], false);
+    let accepted = crate::scene::scale::tests::display_pixels(&r);
+    assert_ne!(accepted, original);
+    send(&mut r, &mut document, &[], &[], true);
+    assert_eq!(crate::scene::scale::tests::display_pixels(&r), accepted);
+}
+
+fn swept_contact_preview(mode: layer_core::color::LayerColorMode) {
     use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::Srgb, depth: SampleDepth::U8,
     }).unwrap();
-    let document = paint_document([1024; 2], "small swept preview");
+    let mut document = paint_document([1024; 2], "small swept preview");
+    let SourceTarget::Paint(handle) = target(&document) else { unreachable!() };
+    document.artwork.paint.get_mut(handle).unwrap().color_mode = mode;
+    let frames = std::cell::RefCell::new(document.clone());
     let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
+        let mut frame = frames.borrow_mut();
+        if mode != layer_core::color::LayerColorMode::FullColor && batches.iter().any(|b| b.kind != DabBatchKind::Preview) {
+            frame.artwork.paint.get_mut(handle).unwrap().raster = layer_core::raster::RasterRevision::pending();
+        }
         r.submit(FramePacket {
             view: view(),
             dabs,
             dab_batches: batches,
             reset_layers: reset,
-            ..packet(document.scene(), [1024; 2])
+            ..packet(frame.scene(), [1024; 2])
         }).unwrap();
     };
     for preset in layer_core::CONTACT_BRUSH_PRESETS {
-        let mut base = dab([0.7, 0.1, 0.2, 0.8]);
+        if mode != layer_core::color::LayerColorMode::FullColor { r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U8 }).unwrap(); }
+        let mut base = dab(if mode == layer_core::color::LayerColorMode::TwoTone { [0.03, 0.01, 0.02, 0.8] } else { [0.7, 0.1, 0.2, 0.8] });
         base.center = Point { x: 512., y: 512. };
         base.radii = [900.; 2];
         let mut base_batch = batch(target(&document));
         base_batch.damage = base.bounds();
-        let mut first = dab([0.1, 0.3, 0.8, 0.7]);
+        let mut first = dab(if mode == layer_core::color::LayerColorMode::TwoTone { [1., 1., 1., 0.7] } else { [0.1, 0.3, 0.8, 0.7] });
         first.center = Point { x: 260., y: 255. };
         first.radii = [9., 4.];
         first.previous = [0.6, 1.2, 0.8, 0.6];
@@ -449,14 +539,15 @@ fn small_swept_contact_preview_matches_commit_and_preserves_distant_pixels() {
         let original = r.readback_srgb_rgba8().unwrap();
         render(&mut r, &[first, last], &[stroke.clone()], false);
         let committed = r.readback_srgb_rgba8().unwrap();
-        assert_ne!(original, committed, "{preset:?} must deposit");
+        assert!(original != committed, "{mode:?} {preset:?} must deposit");
+        if mode != layer_core::color::LayerColorMode::FullColor { r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U8 }).unwrap(); }
         render(&mut r, &[base], &[base_batch], true);
         stroke.kind = DabBatchKind::Preview;
         stroke.stroke_end = false;
         render(&mut r, &[first, last], &[stroke.clone()], false);
         let predicted = r.readback_srgb_rgba8().unwrap();
         let maximum = predicted.iter().zip(&committed).map(|(a,b)|a.abs_diff(*b)).max().unwrap();
-        assert!(maximum <= 1, "{preset:?}: predicted vs committed maximum error {maximum}");
+        assert!(maximum <= 1, "{mode:?} {preset:?}: predicted vs committed maximum error {maximum}");
         for (x,y) in [(512,512), (100,100), (950,950)] {
             let i = (y*1024+x)*4;
             assert_eq!(&predicted[i..i+4], &original[i..i+4], "{preset:?}: untouched ({x}, {y})");

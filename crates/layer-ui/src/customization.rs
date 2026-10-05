@@ -631,7 +631,7 @@ pub enum CustomizationAction {
     CancelTools,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ContextMenuItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<&'static str>,
@@ -674,7 +674,7 @@ impl ContextMenuItem {
         }
     }
 }
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ContextMenu {
     pub title: String,
     pub sections: Vec<Vec<ContextMenuItem>>,

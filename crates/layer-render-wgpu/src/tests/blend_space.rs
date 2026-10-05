@@ -32,7 +32,7 @@ fn effect(document: &mut Document, id: &str) -> Occurrence {
     Occurrence::new(OccurrenceContent::Effect(effect), id)
 }
 fn paint(document: &mut Document, name: &str, original: Option<Arc<SourceImage>>) -> Occurrence {
-    let source = document.artwork.paint.insert(PortableId::random(), PaintSource { domain: EXTENT, original, raster: Default::default(), operations: Arc::default() }).unwrap();
+    let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: EXTENT, original, raster: Default::default(), operations: Arc::default() }).unwrap();
     Occurrence::new(OccurrenceContent::Paint(source), name)
 }
 fn group(document: &mut Document) -> Occurrence {

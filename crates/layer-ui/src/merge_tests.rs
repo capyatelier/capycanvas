@@ -80,7 +80,7 @@ mod merge_checks {
         assert_eq!(s.command(CommandId::MergeDown).label.as_ref(), "Merge Down");
         let upper = s.engine.document().working.occurrence.unwrap();
         let doc = s.engine.document();
-        let paint = RecordChange::insert(&doc.artwork.paint, PaintSource { domain: doc.composition().size, raster: Default::default(), original: None, operations: Default::default() });
+        let paint = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), original: None, operations: Default::default() });
         let mut clip = Occurrence::new(OccurrenceContent::Paint(paint.handle), "Shade");
         clip.attachment = layer_core::Attachment::Clip;
         let clip = RecordChange::insert(&doc.artwork.occurrences, clip);

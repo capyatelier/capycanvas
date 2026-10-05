@@ -1343,7 +1343,7 @@ fn folded_selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
     let operation=RasterOperation {placement:Affine::IDENTITY,coverage,
         kind:RasterOperationKind::Bake {scene:owner.snapshot(),scope:SceneScope::All,offset:Point::default()}};
     let damage=operation.bounds(EXTENT);
-    let (_, copied) = append_paint(&mut owner, "selection copy", PaintSource {
+    let (_, copied) = append_paint(&mut owner, "selection copy", PaintSource { color_mode: Default::default(),
         domain: EXTENT, raster: Default::default(), original: None, operations: Arc::new(vec![operation]),
     });
     let batch=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,damage,

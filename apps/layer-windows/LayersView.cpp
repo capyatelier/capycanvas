@@ -61,6 +61,16 @@ void LayersView::init(){
     copyName(data,blend,data->copyCaption(L"layers",L"blend"));AutomationProperties::SetAutomationId(blend,L"layer-blend");
     opacityGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     values.Children().Append(blend);Grid::SetColumn(opacityGate,1);values.Children().Append(opacityGate);header.Children().Append(values);
+    auto colorMode=button(data,L"",[weak]{if(auto self=weak.lock())self->showMenu(object(object(self->view(),L"color_mode"),L"menu"),self->header);});
+    colorMode.HorizontalAlignment(HorizontalAlignment::Stretch);colorMode.HorizontalContentAlignment(HorizontalAlignment::Left);
+    colorMode.MinHeight(24);colorMode.Height(24);colorMode.Padding({6,0,6,0});colorMode.Background(data->brush(L"input"));colorMode.BorderThickness({0,0,0,0});
+    AutomationProperties::SetAutomationId(colorMode,L"layer-color-mode");header.Children().Append(colorMode);
+    controls.emplace_back([weak,colorMode](J,J){if(auto self=weak.lock()){
+        auto control=object(self->view(),L"color_mode");colorMode.Visibility(control.Size()?Visibility::Visible:Visibility::Collapsed);
+        colorMode.Content(box_value(str(control,L"value")));colorMode.IsEnabled(flag(control,L"enabled"));
+        AutomationProperties::SetName(colorMode,str(object(control,L"menu"),L"title"));
+    }});
+
     tools.Orientation(Orientation::Horizontal);tools.Spacing(2);
     struct Toggle {wchar_t const* icon;LocalizedCopy label;wchar_t const* property;wchar_t const* op;wchar_t const* capability;};
     for(auto spec:{Toggle{L"alpha-lock",data->copyCaption(L"layers",L"alpha_lock"),L"alpha_locked",L"alpha_lock",L"alpha_lock"},
@@ -134,6 +144,8 @@ void LayersView::init(){
         auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
     }});
     controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));mask.Opacity(mask.IsEnabled()?1.:.36);});
+    auto addFilter=footerButton(L"adjustments",data->copyCaption(L"layers",L"add_filter"),L"layer-add-filter",[weak]{if(auto self=weak.lock())self->showMenu(object(self->view(),L"add_filter"),self->footer);});
+    controls.emplace_back([weak,addFilter](J,J){if(auto self=weak.lock()){addFilter.IsEnabled(object(self->view(),L"add_filter").Size()!=0);addFilter.Opacity(addFilter.IsEnabled()?1.:.36);}});
     auto import=footerButton(L"image",data->copyCaption(L"layers",L"import_image"),L"layer-import",[weak]{if(auto self=weak.lock()){
         self->data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(L"import_image")}}));
     }});
@@ -264,6 +276,19 @@ void LayersView::preview(){
     }
     RefreshLayerThumbnails(data->thumbnails,epoch,visible);
 }
+void LayersView::showMenu(J spec, FrameworkElement const& anchor){
+    if(data->updating||!spec.Size()||!anchor.XamlRoot())return;
+    if(pickup)pickup->Cancel();if(menu)menu.Hide();
+    auto generation=++menuGeneration;auto document=epochOf(data);auto weak=weak_from_this();
+    menuPending=false;menuTarget.reset();menu=MenuFlyout();TrackPopup(menu,data);
+    menu.Opened([weak](auto&&,auto&&){if(auto self=weak.lock()){self->menuOpen=true;if(self->pickup)self->pickup->MenuChanged();}});
+    menu.Closed([weak](auto&& sender,auto&&){if(auto self=weak.lock();self&&self->menu==sender){self->menuOpen=false;if(self->pickup)self->pickup->MenuChanged();}});
+    NativeMenuItems(menu.Items(),array(spec,L"sections"),data,[weak,generation,document](J action){
+        if(auto self=weak.lock();self&&self->menuGeneration==generation&&epochOf(self->data)==document)self->data->dispatchDocument(action,document);
+    });
+    menu.ShowAt(anchor);
+}
+
 void LayersView::context(double id,bool mask,UIElement const& anchor,std::optional<Windows::Foundation::Point> at,bool holding,bool blendMenu){
     if(data->updating||!anchor.XamlRoot())return;
     if(!holding&&pickup)pickup->Cancel();

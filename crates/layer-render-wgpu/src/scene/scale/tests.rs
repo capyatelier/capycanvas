@@ -81,7 +81,7 @@ fn copy_paint(doc: &mut Document, index: usize) -> OccurrenceHandle {
     doc.artwork.occurrences.insert(PortableId::random(), occurrence).unwrap()
 }
 fn paint_occurrence(doc: &mut Document, name: &str, original: Option<Arc<SourceImage>>) -> OccurrenceHandle {
-    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { domain: doc.composition().size, raster: Default::default(), original, operations: Arc::default() }).unwrap();
+    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), original, operations: Arc::default() }).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(paint), name)).unwrap()
 }
 fn stack_occurrence(doc: &mut Document, name: &str, entries: Vec<OccurrenceHandle>) -> OccurrenceHandle {

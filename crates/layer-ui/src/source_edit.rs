@@ -72,7 +72,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let handle = document.working.occurrence.ok_or("Select a placed photo layer")?;
         let (paint, source) = paint_source(document, handle).ok_or("Select a placed photo layer")?;
         let mut source = source.clone();
-        source.raster = Default::default(); source.operations = Default::default();
+        source.raster = Default::default(); source.operations = Default::default(); source.color_mode = Default::default();
         self.layer_edit(Edit::Paint(RecordChange::replace(&document.artwork.paint, paint, Some(source)).map_err(error)?))?;
         self.layer_interaction.changed = true;
         Ok(())

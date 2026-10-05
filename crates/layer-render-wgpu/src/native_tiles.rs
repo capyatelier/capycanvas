@@ -102,14 +102,21 @@ impl crate::WgpuRasterizer {
     }
 }
 
-/// A 256×256 working tile and its two publication candidates. Only `region` is
-/// written. Initialize both destinations from their previous pixels to preserve
-/// others, and publish neither until the status succeeds. The canonical working
-/// result agrees with decoding the native result, so save/reopen cannot reveal
-/// extra precision that survived only in a live cache.
+#[derive(Clone, Copy, PartialEq)]
+pub enum NativeEncoded<'a> { Texture(&'a wgpu::Texture), Buffer(&'a wgpu::Buffer) }
+impl<'a> From<&'a wgpu::Texture> for NativeEncoded<'a> { fn from(value: &'a wgpu::Texture) -> Self { Self::Texture(value) } }
+impl<'a> From<&'a wgpu::Buffer> for NativeEncoded<'a> { fn from(value: &'a wgpu::Buffer) -> Self { Self::Buffer(value) } }
+
+/// A working tile and its two publication candidates. Only `region` is written.
+/// Initialize both destinations from their previous pixels to preserve others,
+/// and publish neither until the status succeeds. The canonical working result
+/// agrees with decoding the native result, so save/reopen cannot reveal extra
+/// precision that survived only in a live cache.
 pub struct NativeTileRequest<'a> {
     pub working: &'a wgpu::Texture,
-    pub encoded: &'a wgpu::Texture,
+    pub encoded: NativeEncoded<'a>,
+    pub mode: layer_core::color::LayerColorMode,
+    pub space: layer_core::color::RgbSpace,
     pub canonical: &'a wgpu::Texture,
     pub transfer: &'a NativeTransfer,
     pub depth: SampleDepth,
@@ -120,7 +127,7 @@ pub struct NativeTileRequest<'a> {
 impl NativeTileRequest<'_> {
     pub fn descriptor(&self) -> PixelDescriptor {
         PixelDescriptor {
-            channels: 4,
+            channels: if self.mode == layer_core::color::LayerColorMode::FullColor { 4 } else { 2 },
             bits_per_channel: self.depth.bits(),
             sample: if self.depth.is_float() { layer_core::color::SampleType::Float } else { layer_core::color::SampleType::Unsigned },
             encoding: if self.depth.is_float() { TransferEncoding::Linear } else { TransferEncoding::Profile },
@@ -189,9 +196,9 @@ pub struct NativeTileEncoder {
     parameter_stride: u32,
 }
 impl NativeTileEncoder {
-    pub(crate) fn pipelines_for_depth(&self, depth: SampleDepth) -> &[crate::Deferred<wgpu::ComputePipeline>] {
+    pub(crate) fn pipelines_for_depth(&self, depth: SampleDepth) -> impl Iterator<Item = &crate::Deferred<wgpu::ComputePipeline>> {
         let start = depth.bytes().ilog2() as usize * self.tiles_per_dispatch;
-        &self.pipelines[start..start + self.tiles_per_dispatch]
+        self.pipelines[start..start + self.tiles_per_dispatch].iter().chain(self.pipelines[3 * self.tiles_per_dispatch..].iter())
     }
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
         Self::with_mode(device, false)
@@ -217,15 +224,17 @@ impl NativeTileEncoder {
         let mut layouts = Vec::new();
         let mut pipelines = Vec::new();
         for (output_format, output_name) in [
-            (wgpu::TextureFormat::Rgba8Uint, "rgba8uint"),
-            (wgpu::TextureFormat::Rgba16Uint, "rgba16uint"),
-            (wgpu::TextureFormat::Rgba32Uint, "rgba32uint"),
+            (Some(wgpu::TextureFormat::Rgba8Uint), "rgba8uint"),
+            (Some(wgpu::TextureFormat::Rgba16Uint), "rgba16uint"),
+            (Some(wgpu::TextureFormat::Rgba32Uint), "rgba32uint"),
+            (None, "gray_alpha"),
         ] {
             for count in 1..=tiles_per_dispatch {
                 let mut entries = Vec::new();
                 let mut textures = String::new();
                 let mut loads = String::new();
                 let mut stores = String::new();
+                let mut packed_stores = String::new();
                 for i in 0..count as u32 {
                     let base = i * bindings;
                     if in_place {
@@ -250,10 +259,17 @@ impl NativeTileEncoder {
                             "case {i}u: {{ return textureLoad(working{i},pixel,0); }}\n"
                         ));
                     }
-                    entries.push(storage_texture_entry(base + 1, output_format));
-                    textures.push_str(&format!("@group(0) @binding({}) var encoded{i}:texture_storage_2d<{output_name},write>;\n", base + 1));
                     let destination = if in_place { "working" } else { "canonical" };
-                    stores.push_str(&format!("case {i}u: {{ textureStore(encoded{i},pixel,result); textureStore({destination}{i},pixel,linear); }}\n"));
+                    if let Some(format) = output_format {
+                        entries.push(storage_texture_entry(base + 1, format));
+                        textures.push_str(&format!("@group(0) @binding({}) var encoded{i}:texture_storage_2d<{output_name},write>;\n", base + 1));
+                        stores.push_str(&format!("case {i}u: {{ textureStore(encoded{i},pixel,result); textureStore({destination}{i},pixel,linear); }}\n"));
+                    } else {
+                        entries.push(buffer_entry(base + 1, wgpu::BufferBindingType::Storage { read_only: false }, false, 256 * 256 * 2));
+                        textures.push_str(&format!("@group(0) @binding({}) var<storage,read_write> encoded{i}:array<u32>;\n", base + 1));
+                        stores.push_str(&format!("case {i}u: {{ let index=pixel.y*256u+pixel.x; if settings.maximum==255u {{ let shift=(index%2u)*16u; packed_mask|=65535u<<shift; packed_value|=(result.r|(result.a<<8u))<<shift; }} else if settings.maximum==0u && settings.scale==32u {{ encoded{i}[2u*index]=result.r; encoded{i}[2u*index+1u]=result.a; }} else {{ encoded{i}[index]=result.r|(result.a<<16u); }} textureStore({destination}{i},pixel,linear); }}\n"));
+                        packed_stores.push_str(&format!("case {i}u: {{ if packed_mask==0xffffffffu {{ encoded{i}[index]=packed_value; }} else {{ encoded{i}[index]=(encoded{i}[index]&~packed_mask)|packed_value; }} }}\n"));
+                    }
                 }
                 let shared = count as u32 * bindings;
                 entries.extend([
@@ -263,7 +279,7 @@ impl NativeTileEncoder {
                         false,
                         transfer::TABLE_BYTES,
                     ),
-                    buffer_entry(shared + 1, wgpu::BufferBindingType::Uniform, true, 32),
+                    buffer_entry(shared + 1, wgpu::BufferBindingType::Uniform, true, 48),
                     buffer_entry(
                         shared + 2,
                         wgpu::BufferBindingType::Storage { read_only: false },
@@ -272,7 +288,7 @@ impl NativeTileEncoder {
                     ),
                 ]);
                 let layout = crate::bindings::layout(device, "native tile encoder inputs", &entries);
-                let body = include_str!("native_tiles/encode.wgsl")
+                let mut body = include_str!("native_tiles/encode.wgsl")
                     .replace(
                         "PUBLICATION_GUARD",
                         if in_place {
@@ -281,15 +297,29 @@ impl NativeTileEncoder {
                             ""
                         },
                     )
+                    .replace("MODE_PROJECTION", if output_format.is_none() { "
+                        var source_error=color_error(value);
+                        if settings.maximum==0u {
+                            if settings.scale==32u {source_error=float32_color_error(value);}
+                            else {source_error=hdr_color_error(value);}
+                        }
+                        if source_error!=0u {atomicOr(&status.invalid,source_error);return;}
+                        value=layer_color(value,settings.weights.rgb,settings.weights.a,select(sdr_decode_component(0.5,settings.curve),0.5,settings.maximum==0u));
+                    " } else { "" })
                     .replace("TEXTURES", &textures)
                     .replace("LOADS", &loads)
                     .replace("STORES", &stores)
                     .replace("TRANSFER_BINDING", &shared.to_string())
                     .replace("SETTINGS_BINDING", &(shared + 1).to_string())
                     .replace("STATUS_BINDING", &(shared + 2).to_string());
+                if output_format.is_none() {
+                    body = body.replace("@compute @workgroup_size(8,8)\nfn main(@builtin(global_invocation_id) invocation:vec3<u32>)", "fn encode_pixel(invocation:vec3<u32>)");
+                    body.push_str(&include_str!("native_tiles/gray_alpha.wgsl").replace("PACKED_STORES", &packed_stores));
+                }
                 let source = format!(
-                    "{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}",
                     include_str!("sdr_color.wgsl"),
+                    include_str!("native_tiles/color_mode.wgsl"),
                     include_str!("native_tiles/validity.wgsl"),
                     include_str!("native_tiles/coverage.wgsl"),
                     body
@@ -304,18 +334,18 @@ impl NativeTileEncoder {
                 layouts.push(layout);
             }
         }
-        let records = std::array::from_fn::<_, 32, _>(|i| {
+        let records = std::array::from_fn::<_, 96, _>(|i| {
+            use layer_core::color::{RgbSpace, LayerColorMode};
             let depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32][i / 2 % 4];
-            [
-                if depth.is_float() { 0 } else { depth.maximum() },
+            let mode = if i < 32 { LayerColorMode::FullColor } else if i < 64 { LayerColorMode::Grayscale } else { LayerColorMode::TwoTone };
+            let space = RgbSpace::ALL[(i % 32) / 8];
+            let weights = space.to_xyz()[1].map(|v| (v as f32).to_bits());
+            [if depth.is_float() { 0 } else { depth.maximum() },
                 if depth.is_float() { depth.bits() as u32 } else { 65535 / depth.maximum() },
-                (i / 8) as u32,
-                (i % 2) as u32,
-                0,
-                0,
-                256,
-                256,
-            ]
+                if i < 32 { (i / 8) as u32 } else { match space { RgbSpace::Srgb | RgbSpace::DisplayP3 => 0, RgbSpace::AdobeRgb => 2, RgbSpace::ProPhoto => 3 } },
+                (i % 2) as u32, 0, 0, 256, 256,
+                weights[0], weights[1], weights[2],
+                (match mode { LayerColorMode::FullColor => 0f32, LayerColorMode::Grayscale => 1f32, LayerColorMode::TwoTone => 2f32 }).to_bits()]
         });
         let (full_parameters, parameter_stride) = full_parameters(device, &records);
         Self {
@@ -379,8 +409,12 @@ impl NativeTileEncoder {
                     r.region[1],
                     r.region[2],
                     r.region[3],
+                    (r.space.to_xyz()[1][0] as f32).to_bits(),
+                    (r.space.to_xyz()[1][1] as f32).to_bits(),
+                    (r.space.to_xyz()[1][2] as f32).to_bits(),
+                    (match r.mode { layer_core::color::LayerColorMode::FullColor => 0f32, layer_core::color::LayerColorMode::Grayscale => 1f32, layer_core::color::LayerColorMode::TwoTone => 2f32 }).to_bits(),
                 ];
-                for (slot, value) in bytes[i * stride as usize..][..32]
+                for (slot, value) in bytes[i * stride as usize..][..48]
                     .as_chunks_mut::<4>()
                     .0
                     .iter_mut()
@@ -414,17 +448,16 @@ impl NativeTileEncoder {
                         && next.depth == r.depth
                         && next.alpha == r.alpha
                         && next.transfer == r.transfer
+                        && next.mode == r.mode && next.space == r.space
                 })
                 .count();
             let depth = match r.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2, SampleDepth::F32 => 3 };
-            let format = (r.depth.bytes().ilog2() as usize) * self.tiles_per_dispatch + count - 1;
+            let format = (if r.mode == layer_core::color::LayerColorMode::FullColor { r.depth.bytes().ilog2() as usize } else { 3 }) * self.tiles_per_dispatch + count - 1;
             let tile_views: Vec<_> = requests[first..first + count]
                 .iter()
                 .map(|r| {
-                    let mut tile = vec![views.get(r.working), views.get(r.encoded)];
-                    if !self.in_place {
-                        tile.push(views.get(r.canonical));
-                    }
+                    let mut tile = vec![Some(views.get(r.working)), match r.encoded { NativeEncoded::Texture(t) => Some(views.get(t)), NativeEncoded::Buffer(_) => None }];
+                    if !self.in_place { tile.push(Some(views.get(r.canonical))); }
                     tile
                 })
                 .collect();
@@ -434,7 +467,7 @@ impl NativeTileEncoder {
                 .enumerate()
                 .map(|(i, view)| wgpu::BindGroupEntry {
                     binding: i as u32,
-                    resource: wgpu::BindingResource::TextureView(view),
+                    resource: if let Some(view) = view { wgpu::BindingResource::TextureView(view) } else { let NativeEncoded::Buffer(buffer) = requests[first + i / if self.in_place { 2 } else { 3 }].encoded else { unreachable!() }; buffer.as_entire_binding() },
                 })
                 .collect();
             let shared = count as u32 * if self.in_place { 2 } else { 3 };
@@ -448,7 +481,7 @@ impl NativeTileEncoder {
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &parameters,
                         offset: 0,
-                        size: wgpu::BufferSize::new(32),
+                        size: wgpu::BufferSize::new(48),
                     }),
                 },
                 wgpu::BindGroupEntry {
@@ -465,15 +498,20 @@ impl NativeTileEncoder {
                 binding,
                 format,
                 offset: if full {
-                    (r.transfer.curve * 8
-                        + depth as u32 * 2
+                    ((match r.mode {
+                        layer_core::color::LayerColorMode::FullColor => r.transfer.curve * 8,
+                        layer_core::color::LayerColorMode::Grayscale | layer_core::color::LayerColorMode::TwoTone => {
+                            let mode = if r.mode == layer_core::color::LayerColorMode::Grayscale { 1 } else { 2 };
+                            mode * 32 + layer_core::color::RgbSpace::ALL.iter().position(|s| *s == r.space).unwrap() as u32 * 8
+                        }
+                    }) + depth as u32 * 2
                         + u32::from(r.alpha == AlphaAssociation::Straight))
                         * stride
                 } else {
                     first as u32 * stride
                 },
                 groups: [
-                    r.region[2].div_ceil(8),
+                    if r.mode != layer_core::color::LayerColorMode::FullColor && r.depth == SampleDepth::U8 { (r.region[2] + r.region[0] % 2).div_ceil(16) } else { r.region[2].div_ceil(8) },
                     r.region[3].div_ceil(8),
                     count as u32,
                 ],
@@ -500,12 +538,12 @@ impl NativeTileEncoder {
 /// Immutable full-tile records prepared with the mode's pipelines. Partial
 /// rectangles still own their bounded parameter uploads; common publications
 /// reuse these records across tiles, batches and frames.
-fn full_parameters(device: &wgpu::Device, records: &[[u32; 8]]) -> (wgpu::Buffer, u32) {
+fn full_parameters<const N: usize>(device: &wgpu::Device, records: &[[u32; N]]) -> (wgpu::Buffer, u32) {
     use wgpu::util::DeviceExt;
-    let stride = 32u32.next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
+    let stride = (N as u32 * 4).next_multiple_of(device.limits().min_uniform_buffer_offset_alignment);
     let mut bytes = vec![0; stride as usize * records.len()];
     for (i, record) in records.iter().enumerate() {
-        bytes[i * stride as usize..i * stride as usize + 32]
+        bytes[i * stride as usize..i * stride as usize + N * 4]
             .copy_from_slice(record.map(u32::to_le_bytes).as_flattened());
     }
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -584,21 +622,19 @@ fn validate(r: &NativeTileRequest<'_>, in_place: bool) -> Result<(), GpuRasterEr
         wgpu::TextureFormat::Rgba16Uint
     };
     if !dimensions(r.working)
-        || !dimensions(r.encoded)
         || !dimensions(r.canonical)
         || r.working.format() != wgpu::TextureFormat::Rgba32Float
         || r.canonical.format() != wgpu::TextureFormat::Rgba32Float
         || (r.canonical == r.working) != in_place
-        || r.encoded.format() != format
         || !r.working.usage().contains(if in_place {
             wgpu::TextureUsages::STORAGE_BINDING
         } else {
             wgpu::TextureUsages::TEXTURE_BINDING
         })
-        || !r
-            .encoded
-            .usage()
-            .contains(wgpu::TextureUsages::STORAGE_BINDING)
+        || match r.encoded {
+            NativeEncoded::Texture(t) => r.mode != layer_core::color::LayerColorMode::FullColor || !dimensions(t) || t.format() != format || !t.usage().contains(wgpu::TextureUsages::STORAGE_BINDING),
+            NativeEncoded::Buffer(b) => r.mode == layer_core::color::LayerColorMode::FullColor || b.size() < r.descriptor().byte_len([256; 2]).unwrap() as u64 || !b.usage().contains(wgpu::BufferUsages::STORAGE),
+        }
         || !r
             .canonical
             .usage()

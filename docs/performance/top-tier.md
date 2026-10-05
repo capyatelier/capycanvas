@@ -1403,6 +1403,34 @@ Exact app/test APK and source provenance is under
 `artifacts/format/m3-{baseline,candidate}4a-android-build-20/`; raw strokes and
 per-repetition analysis are under `artifacts/format/m3-final-android-performance-20/`.
 
+## Layer color modes
+
+Measured on 2026-10-04 with the layer-color-mode candidate on `012c36ed0`,
+release benchmark APK SHA-256
+`ee36286807517e72519f0cfee08dddc420837447017982f251048e3915c85a6d`.
+The tier photo sits below one empty paint layer at Fit, with Perceptual blending,
+pressure 1, 16 ms prediction, default display settings and panel glass, Stats
+closed and thermal status 0 before and after each workload. Each mode uses one
+priming gesture undone, followed by three five-second 200 Hz stylus ellipses.
+The ellipse radii are 310 × 150 surface pixels at 16.53% Fit.
+
+| Brush | Color mode | Canvas updates/s, median (range) | Fresh input updates/s, median (range) | Fresh completion-gap p99, range | Target |
+| --- | --- | --- | --- | --- | --- |
+| G-Pen 2048 px | Full color | 103.05 (100.09–103.23) | 103.05 (100.09–103.23) | 22.83–23.41 ms | **Not met** |
+| G-Pen 2048 px | Grayscale | 104.14 (104.14–104.36) | 104.14 (104.14–104.36) | 19.29–20.88 ms | **Not met** |
+| G-Pen 2048 px | Two-tone | 104.59 (104.40–105.29) | 104.59 (104.40–105.29) | 19.80–22.21 ms | **Not met** |
+| Paintbrush 1024 px | Full color | 90.58 (89.41–90.70) | 90.58 (89.41–90.70) | 20.24–24.48 ms | **Not met** |
+| Paintbrush 1024 px | Grayscale | 89.83 (89.45–90.08) | 89.83 (89.45–90.08) | 23.40–26.54 ms | **Not met** |
+| Paintbrush 1024 px | Two-tone | 117.34 (115.90–120.25) | 117.34 (115.90–120.25) | 19.11–26.43 ms | **Not met** |
+| Watercolor Wash 512 px | Full color | 3.99 (3.99–4.20) | 3.99 (3.99–4.20) | 412.60–618.67 ms | **Not met** |
+| Watercolor Wash 512 px | Grayscale | 3.99 (3.99–4.19) | 3.99 (3.99–4.19) | 475.87–540.73 ms | **Not met** |
+| Watercolor Wash 512 px | Two-tone | 4.19 (3.79–4.19) | 4.19 (3.79–4.19) | 520.10–604.76 ms | **Not met** |
+
+These workloads miss the tier rate. Other brushes, layer-mode conversion latency,
+and physical input-to-present latency remain unqualified. Raw runs, screenshots
+and environment records are under `artifacts/layer-modes/top-qualified/`;
+the binary and source snapshot are under `artifacts/layer-modes/qualified/`.
+
 ## Brushes
 
 Target: **120 completed updates/s** at the guaranteed size, on the 61 MP canvas.

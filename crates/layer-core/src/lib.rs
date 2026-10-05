@@ -1292,7 +1292,7 @@ impl Document {
             .paint
             .insert(
                 PortableId::random(),
-                PaintSource {
+                PaintSource { color_mode: Default::default(),
                     domain: [width, height],
                     raster: Default::default(),
                     original: None,
@@ -1430,10 +1430,10 @@ impl Document {
                 ))?;
         if let Edit::SetRaster { target, revision } = &edit {
             if let Some(Ok(data)) = revision.try_data() {
-                data.validate_index(
+                data.validate_index_mode(
                     self.scene().target_extent(*target),
                     matches!(target, SourceTarget::Coverage(_)),
-                    self.composition().color,
+                    self.composition().color, self.scene().color_mode(*target),
                 )
                 .map_err(DocumentError::InvalidArtwork)?;
             }
@@ -1621,7 +1621,7 @@ impl Document {
                 }
             }
             if let Some(Ok(data)) = s.raster.try_data() {
-                data.validate_index(s.domain, false, color)
+                data.validate_index_mode(s.domain, false, color, s.color_mode)
                     .map_err(DocumentError::InvalidArtwork)?;
             }
             for operation in s.operations.iter() {

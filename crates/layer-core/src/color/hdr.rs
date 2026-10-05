@@ -60,7 +60,7 @@ pub fn validate_pixel_typed(depth: super::SampleDepth, pixel: [f32; 4]) -> Resul
 /// Decode one little-endian RGB/RGBA pixel at its declared precision.
 pub fn decode_samples(depth: super::SampleDepth, bytes: &[u8]) -> Result<[f32; 4], &'static str> {
     let step = depth.bytes();
-    if !depth.is_float() || ![3 * step, 4 * step].contains(&bytes.len()) {
+    if !depth.is_float() || ![2 * step, 3 * step, 4 * step].contains(&bytes.len()) {
         return Err("Incomplete floating-point RGB/RGBA pixel");
     }
     let mut pixel = [0., 0., 0., 1.];
@@ -69,6 +69,7 @@ pub fn decode_samples(depth: super::SampleDepth, bytes: &[u8]) -> Result<[f32; 4
             f32::from_le_bytes(sample.try_into().unwrap())
         } else { f16::from_bits(u16::from_le_bytes(sample.try_into().unwrap())).to_f32() };
     }
+    if bytes.len() == 2 * step { pixel = [pixel[0], pixel[0], pixel[0], pixel[1]]; }
     validate_pixel(depth, pixel)?;
     Ok(pixel)
 }

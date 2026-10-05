@@ -285,7 +285,7 @@ mod localization_tests {
         let name = "日本語 { $name } 🎨";
         use layer_core::{Edit, authored::{Occurrence, OccurrenceContent, PaintSource, RecordChange}};
         let artwork=&s.engine.document().artwork;
-        let paint=RecordChange::insert(&artwork.paint,PaintSource {domain:s.engine.document().composition().size,raster:Default::default(),original:None,operations:Default::default()});
+        let paint=RecordChange::insert(&artwork.paint,PaintSource { color_mode: Default::default(),domain:s.engine.document().composition().size,raster:Default::default(),original:None,operations:Default::default()});
         let occurrence=RecordChange::insert(&artwork.occurrences,Occurrence::new(OccurrenceContent::Paint(paint.handle),name));
         let id=occurrence.handle;let root=s.engine.document().composition().result;
         let mut stack=artwork.stacks.get(root).unwrap().clone();stack.entries.insert(1,id);

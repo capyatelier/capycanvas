@@ -108,7 +108,7 @@ mod tests {
         .unwrap();
         builder.push_row(&[255; 8]).unwrap();
         let mut artwork = layer_core::authored::Artwork::new([1, 1]).unwrap();
-        let paint = artwork.paint.insert(layer_core::authored::PortableId::random(), layer_core::authored::PaintSource {
+        let paint = artwork.paint.insert(layer_core::authored::PortableId::random(), layer_core::authored::PaintSource { color_mode: Default::default(),
             domain: [1, 1], raster: Default::default(), original: Some(Arc::new(builder.finish().unwrap())), operations: Arc::default(),
         }).unwrap();
         let handle = artwork.occurrences.insert(layer_core::authored::PortableId::random(), layer_core::authored::Occurrence::new(

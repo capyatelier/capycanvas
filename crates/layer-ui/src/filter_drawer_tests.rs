@@ -554,3 +554,99 @@ fn every_effect_color_control_offers_the_current_color() {
         }
     }
 }
+
+#[test]
+fn layer_add_filter_captures_owner_appends_to_local_chain_and_undoes_one_step() {
+    let (mut s, _) = filters();
+    let owner = s.engine.document().working.occurrence.unwrap();
+    let action = |effect: &str, s: &UiSession<Recorder>| UiAction::Effect { action: EffectAction::InsertAttached {
+        effect: effect.into(), owner: occurrence_token(owner), epoch: s.state.document_file.epoch } };
+    let captured = action("exposure", &s);
+    s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+    let before = s.engine.document().clone();
+    s.dispatch(captured).unwrap();
+    let first = s.engine.document().working.occurrence.unwrap();
+    assert_eq!(s.engine.document().scene().effect_owner(first), Some(owner));
+    assert_eq!(s.engine.document().scene().attached_effects(owner), &[first]);
+    assert!(s.state.layer_tools.add_filter.is_some());
+    s.dispatch(action("curves", &s)).unwrap();
+    let second = s.engine.document().working.occurrence.unwrap();
+    assert_ne!(first, second);
+    assert_eq!(s.engine.document().scene().attached_effects(owner), &[first, second]);
+    assert_eq!(s.engine.document().scene().order()[..3], [second, first, owner]);
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().scene().attached_effects(owner), &[first]);
+    invoke(&mut s, CommandId::Undo);
+    assert_live_artwork_eq(s.engine.document(), &before);
+    let stale = action("exposure", &s);
+    s.state.document_file.epoch += 1;
+    s.dispatch(stale).unwrap();
+    assert_live_artwork_eq(s.engine.document(), &before);
+}
+
+#[test]
+fn layer_add_filter_menu_excludes_generators_and_refuses_unsupported_or_locked_owners() {
+    let mut s = session(Platform::Gtk);
+    let menu = s.state.layer_tools.add_filter.as_ref().unwrap();
+    for item in menu.sections.iter().flatten().flat_map(|category| category.sections.iter().flatten()) {
+        let Some(UiAction::Effect { action: EffectAction::InsertAttached { effect, .. } }) = &item.action else { panic!("attached action") };
+        assert_eq!(s.effect_catalog.get(effect).unwrap().program.kind, layer_core::EffectKind::Adjustment);
+    }
+    s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 1, value: true } }).unwrap();
+    assert!(s.state.layer_tools.add_filter.is_none());
+    s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+    assert!(s.state.layer_tools.add_filter.is_none());
+    s.dispatch(UiAction::Effect { action: EffectAction::InsertAttached { effect: "fill".into(), owner: 1, epoch: s.state.document_file.epoch } }).unwrap_err();
+}
+
+#[test]
+fn layer_color_control_is_paint_only_captured_and_undoable() {
+    let mut s = session(Platform::Gtk);
+    let before = s.engine.document().artwork.clone();
+    let menu = s.state.layer_tools.color_mode.as_ref().unwrap().menu.clone();
+    assert_eq!(menu.title, "Color mode");
+    let action = menu.sections[0][1].action.clone().unwrap();
+    s.dispatch(action.clone()).unwrap(); s.frame(1, 1).unwrap();
+    assert_eq!(s.state.layer_tools.color_mode.as_ref().unwrap().value.as_ref(), "Grayscale");
+    assert!(s.state.layers.iter().find(|l| l.id == 1).unwrap().description.contains("Grayscale"));
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().artwork, before);
+    s.state.document_file.epoch += 1; s.dispatch(action).unwrap();
+    assert_eq!(s.engine.document().artwork, before);
+    s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+    assert!(s.state.layer_tools.color_mode.is_none());
+}
+
+#[test]
+fn a_captured_color_mode_action_cannot_change_a_locked_empty_layer() {
+    let mut s = session(Platform::Gtk);
+    let action = s.state.layer_tools.color_mode.as_ref().unwrap().menu.sections[0][1].action.clone().unwrap();
+    s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 1, value: true } }).unwrap();
+    let before = s.engine.document().artwork.clone();
+    assert!(!s.state.layer_tools.color_mode.as_ref().unwrap().enabled);
+    assert!(s.dispatch(action).is_err());
+    assert_eq!(s.engine.document().artwork, before);
+    invoke(&mut s, CommandId::Undo);
+    assert!(s.state.layer_tools.color_mode.as_ref().unwrap().enabled);
+}
+
+#[test]
+fn drawing_activation_rebuilds_layer_menu_actions_with_the_current_epoch() {
+    let previous = session(Platform::Gtk);
+    let mut next = session(Platform::Gtk);
+    let stale = next.state.layer_tools.color_mode.as_ref().unwrap().menu.sections[0][1].action.clone().unwrap();
+    next.inherit_window_state(&previous).unwrap();
+    let current = next.state.layer_tools.color_mode.as_ref().unwrap().menu.sections[0][1].action.clone().unwrap();
+    let UiAction::Layer { action: LayerAction::ColorMode { epoch, .. } } = current.clone() else { panic!("mode action") };
+    assert_eq!(epoch, next.state.document_file.epoch);
+    next.dispatch(stale).unwrap();
+    assert_eq!(next.state.layer_tools.color_mode.as_ref().unwrap().value.as_ref(), "Full color");
+    next.dispatch(current).unwrap();
+    assert_eq!(next.state.layer_tools.color_mode.as_ref().unwrap().value.as_ref(), "Grayscale");
+    let menu = next.state.layer_tools.add_filter.as_ref().unwrap();
+    let action = menu.sections.iter().flatten().flat_map(|c| c.sections.iter().flatten()).find(|i| i.label == "Exposure").unwrap().action.clone().unwrap();
+    let UiAction::Effect { action: EffectAction::InsertAttached { epoch, .. } } = action.clone() else { panic!("filter action") };
+    assert_eq!(epoch, next.state.document_file.epoch);
+    let count = next.state.layers.len(); next.dispatch(action).unwrap();
+    assert_eq!(next.state.layers.len(), count + 1);
+}

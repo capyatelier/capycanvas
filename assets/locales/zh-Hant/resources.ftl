@@ -644,3 +644,9 @@ resources-gradient-interpolation = Interpolation
 resources-gradient-mix-oklab = Oklab
 resources-gradient-mix-linear = 線性光
 resources-gradient-mix-classic = 經典
+
+resources-layer-add-filter = 新增濾鏡
+resources-layer-color-mode = 色彩模式
+resources-layer-color-full = 全彩
+resources-layer-color-gray = 灰階
+resources-layer-color-two-tone = 雙色（黑白）

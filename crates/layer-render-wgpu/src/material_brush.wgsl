@@ -798,6 +798,7 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
         }
         result.wetness *= select(0.0, 1.0, original.a > 0.0);
     }
+    result.color = layer_color(result.color, WORKING_LUMA, style.color_mode.x, style.color_mode.y);
     return result;
 }
 

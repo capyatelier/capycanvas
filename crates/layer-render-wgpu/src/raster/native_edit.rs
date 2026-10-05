@@ -108,7 +108,7 @@ impl NativeEdit {
             .chain(&self.validator.pipelines)
     }
     pub(crate) fn required_pipelines(&self, depth: layer_core::color::SampleDepth) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
-        self.color.pipelines_for_depth(depth).iter()
+        self.color.pipelines_for_depth(depth)
             .chain(&self.scalar.pipelines)
             .chain(self.promoter.iter().flat_map(|p| p.pipelines.iter()))
             .chain(&self.validator.pipelines)
@@ -146,7 +146,7 @@ pub(crate) struct NativeFrame {
 }
 pub(crate) struct NativeJob {
     pub frame: NativeFrame,
-    inputs: Vec<(wgpu::Texture, RasterTile)>,
+    inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>,
     views: crate::native_tiles::PublicationViews,
     validated: usize,
     encoded: usize,
@@ -374,8 +374,8 @@ impl WgpuRasterizer {
                     {
                         tile.clone()
                     } else {
-                        let tile = RasterTile::pending(key.plane.descriptor(self.document_color()));
-                        inputs.push((texture.clone(), tile.clone()));
+                        let tile = RasterTile::pending(key.plane.descriptor_for(self.document_color(), scene.color_mode(id)));
+                        inputs.push((texture.clone(), tile.clone(), scene.color_mode(id)));
                         frame.canonical_pages.push((id, key.coordinate));
                         tile
                     };
@@ -394,11 +394,11 @@ impl WgpuRasterizer {
         self.native_capture_job(frame, inputs).map(Some)
     }
 
-    fn native_capture_job(&self, mut frame: NativeFrame, inputs: Vec<(wgpu::Texture, RasterTile)>) -> Result<NativeJob, GpuRasterError> {
+    fn native_capture_job(&self, mut frame: NativeFrame, inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>) -> Result<NativeJob, GpuRasterError> {
         let output_bytes: u64 = STATUS_BYTES
             + inputs
                 .iter()
-                .map(|(_, tile)| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64)
+                .map(|(_, tile, _)| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64)
                 .sum::<u64>();
         if output_bytes > layer_core::raster::MAX_PUBLICATION_BYTES {
             return Err(GpuRasterError::Effect(
@@ -419,11 +419,11 @@ impl WgpuRasterizer {
             device: (*self.device).clone(),
             queue: self.queue.clone(),
         });
-        validate::Validator::validate(&inputs.iter().map(|(t, tile)| (t, tile.clone())).collect::<Vec<_>>())?;
+        validate::Validator::validate(&inputs.iter().map(|(t, tile, _)| (t, tile.clone())).collect::<Vec<_>>())?;
         Ok(NativeJob { frame, inputs, views: Default::default(), validated: 0, encoded: 0, started: false })
     }
 
-    pub(crate) fn encode_private_tiles(&mut self, inputs: Vec<(wgpu::Texture, RasterTile)>, encoder: &mut submission::CommandEncoder)
+    pub(crate) fn encode_private_tiles(&mut self, inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>, encoder: &mut submission::CommandEncoder)
         -> Result<NativeCapture, GpuRasterError> {
         let frame = NativeFrame { capture: None, publications: Vec::new(), canonical_pages: Vec::new() };
         let mut job = self.native_capture_job(frame, inputs)?;
@@ -440,7 +440,7 @@ impl WgpuRasterizer {
         let views = &mut job.views;
         if job.validated < job.inputs.len() {
             let end = (job.validated + MAX_BATCH_TILES).min(job.inputs.len());
-            let inputs = job.inputs[job.validated..end].iter().map(|(t, tile)| (t, tile.clone())).collect::<Vec<_>>();
+            let inputs = job.inputs[job.validated..end].iter().map(|(t, tile, _)| (t, tile.clone())).collect::<Vec<_>>();
             native.validator.encode(self, encoder, &inputs, status, views)?;
             job.validated = end;
             return Ok(true);
@@ -449,7 +449,7 @@ impl WgpuRasterizer {
         let chunk = &job.inputs[job.encoded..end];
         if !chunk.is_empty() {
             let first = capture.outputs.len();
-            capture.outputs.extend(chunk.iter().map(|(_, tile)| {
+            capture.outputs.extend(chunk.iter().map(|(_, tile, _)| {
                 NativeOutput {
                     resource: self
                         .raster_buffers
@@ -460,13 +460,12 @@ impl WgpuRasterizer {
             let mut color = Vec::new();
             let mut scalar = Vec::new();
             let mut promotions = Vec::new();
-            for ((texture, tile), output) in chunk.iter().zip(&capture.outputs[first..]) {
-                let canonical = if tile.descriptor().channels == 4 {
+            for ((texture, tile, mode), output) in chunk.iter().zip(&capture.outputs[first..]) {
+                let canonical = if tile.descriptor().channels != 1 {
                     let canonical = native.colors.get(color.len()).unwrap_or(texture);
-                    let pool::Resource::Texture(encoded) = &output.resource else {
-                        unreachable!()
-                    };
+                    let encoded = match &output.resource { pool::Resource::Texture(t) => t.into(), pool::Resource::Buffer(b) => b.into() };
                     color.push(NativeTileRequest {
+                        mode: *mode, space: self.document_color().space,
                         working: texture,
                         encoded,
                         canonical,

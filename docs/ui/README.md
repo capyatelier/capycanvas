@@ -124,6 +124,19 @@ parameter controls are shown; hidden values remain active. Channel selection,
 automatic adjustment and sampling share one toolbar. Levels and Curves offer
 black, neutral and white points through one sampling menu; White Balance uses the
 same sampling icon for its neutral point.
+The Layers header offers **Color mode** on unlocked paint content: Full color,
+Grayscale, and Two-tone (black & white). Changes convert existing paint and
+constrain later painting. Undo restores the previous pixels and mode; returning
+to Full color keeps the converted pixels. Reduced modes appear in the layer
+subtitle. Masks, selections and effect layers do not offer this control.
+
+**Add Filter** in the Layers footer opens the menu bar's filter categories and
+adds a local filter above the owner's existing chain, so it runs last. Selecting
+a local filter keeps its owner as the destination. Paint layers and isolated
+groups accept local filters; locked owners and Pass Through groups do not.
+Generators and Frequency Separation stay in the menu bar. A current selection
+becomes the new filter's mask. Insertion is one undo step and selects Properties.
+
 Number fields sit beside their labels; Curves coordinates use two labeled
 columns below the graph. Color Lookup (LUT) has a single selector
 for Original, Warm, Cool, Monochrome and the current imported LUT, with a separate

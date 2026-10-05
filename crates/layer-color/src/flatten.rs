@@ -39,7 +39,7 @@ pub fn flattened_document(
     composition.blend = BlendSpace::Perceptual.for_depth(color.depth);
     composition.resolution = resolution;
     let stack = composition.result;
-    let paint = artwork.paint.insert(PortableId::random(), PaintSource {domain:extent, raster:Default::default(), original:Some(Arc::new(source)), operations:Default::default()})?;
+    let paint = artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),domain:extent, raster:Default::default(), original:Some(Arc::new(source)), operations:Default::default()})?;
     let occurrence = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(paint), "Converted image"))?;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
     let mut document = Document::from_artwork(artwork).map_err(|error| error.to_string())?;

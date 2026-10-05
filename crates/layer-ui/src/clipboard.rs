@@ -376,7 +376,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         for (offset, (name, source)) in sources.into_iter().enumerate() {
             source.validate()?;
             let at = position(self, source.extent);
-            let paint = RecordChange::insert(&artwork.paint, PaintSource {
+            let paint = RecordChange::insert(&artwork.paint, PaintSource { color_mode: Default::default(),
                 domain: std::array::from_fn(|i| document.composition().size[i].max(source.extent[i])), raster: Default::default(), original: Some(Arc::new(source)), operations: Arc::default(),
             });
             artwork.paint.change(paint.handle, paint.id, paint.value.clone())?;

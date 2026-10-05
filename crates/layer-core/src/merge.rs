@@ -323,7 +323,7 @@ impl Document {
         }
         let paint = RecordChange::insert(
             &self.artwork.paint,
-            PaintSource { domain: extent, raster: Default::default(), original: None, operations: Arc::default() },
+            PaintSource { color_mode: Default::default(), domain: extent, raster: Default::default(), original: None, operations: Arc::default() },
         );
         let target = SourceTarget::Paint(paint.handle);
         let mut result = Occurrence::new(

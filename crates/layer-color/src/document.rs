@@ -114,9 +114,10 @@ impl Converter<'_> {
     ) -> Result<Arc<TileBlob>, String> {
         self.check()?;
         let scalar = original.descriptor.channels == 1;
+        let reduced = original.descriptor.channels == 2;
         if scalar && self.old.depth.coverage() == self.target.depth.coverage()
             || matches!(self.change, DocumentColorChange::Assign(_))
-                && original.descriptor == self.target.paint_descriptor()
+                && original.descriptor == (PixelDescriptor { channels: original.descriptor.channels, ..self.target.paint_descriptor() })
         {
             return Ok(original.clone());
         }
@@ -133,7 +134,7 @@ impl Converter<'_> {
         let descriptor = if scalar {
             self.target.coverage_descriptor()
         } else {
-            self.target.paint_descriptor()
+            PixelDescriptor { channels: if reduced { 2 } else { 4 }, ..self.target.paint_descriptor() }
         };
         let mut encoded = vec![
             0;
@@ -157,20 +158,36 @@ impl Converter<'_> {
         } else {
             let mut linear = [[0.; 4]; TILE_SIZE as usize];
             let old_stride =
-                TILE_SIZE as usize * self.old.paint_descriptor().bytes_per_pixel().unwrap();
+                TILE_SIZE as usize * original.descriptor.bytes_per_pixel().unwrap();
             let new_stride = TILE_SIZE as usize * descriptor.bytes_per_pixel().unwrap();
+            let mut expanded = vec![0; TILE_SIZE as usize * 4 * self.old.depth.bytes()];
+            let mut rgba = vec![0; TILE_SIZE as usize * 4 * self.target.depth.bytes()];
             for (y, (old, new)) in decoded
                 .chunks_exact(old_stride)
                 .zip(encoded.chunks_exact_mut(new_stride))
                 .enumerate()
             {
                 self.check()?;
+                let old = if reduced {
+                    let step = self.old.depth.bytes();
+                    for (input, output) in old.chunks_exact(2 * step).zip(expanded.chunks_exact_mut(4 * step)) {
+                        for channel in output[..3 * step].chunks_exact_mut(step) { channel.copy_from_slice(&input[..step]); }
+                        output[3 * step..].copy_from_slice(&input[step..]);
+                    }
+                    expanded.as_slice()
+                } else { old };
                 self.decoder.decode_pixels(old, &mut linear)?;
                 let origin = [
                     coordinate[0] * TILE_SIZE,
                     coordinate[1] * TILE_SIZE + y as u32,
                 ];
-                let stats = self.encoder.encode_straight(&linear, new, None, origin)?;
+                let stats = self.encoder.encode_straight(&linear, if reduced { &mut rgba } else { new }, None, origin)?;
+                if reduced {
+                    let step = self.target.depth.bytes();
+                    for (input, output) in rgba.chunks_exact(4 * step).zip(new.chunks_exact_mut(2 * step)) {
+                        output[..step].copy_from_slice(&input[..step]); output[step..].copy_from_slice(&input[3 * step..]);
+                    }
+                }
                 self.statistics.clipped_channels += stats.clipped_channels;
             }
         }
@@ -186,10 +203,11 @@ impl Converter<'_> {
         original: &RasterRevision,
         extent: [u32; 2],
         mask: bool,
+        mode: LayerColorMode,
     ) -> Result<RasterRevision, String> {
         self.check()?;
         let data = self.wait(|| original.try_data())?;
-        data.validate_index(extent, mask, self.old)?;
+        data.validate_index_mode(extent, mask, self.old, mode)?;
         if let Some(root) = self.roots.get(&original.identity()) {
             return Ok(root.clone());
         }
@@ -306,14 +324,14 @@ pub fn prepare_document_color(
     let mut paint = Vec::with_capacity(candidate.artwork.paint.len());
     for (handle, _, original) in candidate.artwork.paint.iter() {
         let mut source = original.clone();
-        source.raster = converter.root(&source.raster, source.domain, false)?;
+        source.raster = converter.root(&source.raster, source.domain, false, source.color_mode)?;
         if let Some(original) = &mut source.original { *original = converter.image(original)?; }
         paint.push(RecordChange::replace(&candidate.artwork.paint, handle, Some(source)).map_err(str::to_string)?);
     }
     let mut coverage = Vec::with_capacity(candidate.artwork.coverage.len());
     for (handle, _, original) in candidate.artwork.coverage.iter() {
         let mut source = original.clone();
-        source.raster = converter.root(&source.raster, source.domain, true)?;
+        source.raster = converter.root(&source.raster, source.domain, true, Default::default())?;
         coverage.push(RecordChange::replace(&candidate.artwork.coverage, handle, Some(source)).map_err(str::to_string)?);
     }
     converter.check()?;

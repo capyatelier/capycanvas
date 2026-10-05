@@ -119,7 +119,7 @@ impl Pixels {
             Self::Raster(tile, space) => Ok(NativeSamples {
                 tile,
                 descriptor: tile.descriptor,
-                channels: if tile.descriptor.channels == 1 { SourceChannels::Gray } else { SourceChannels::Rgba },
+                channels: match tile.descriptor.channels { 1 => SourceChannels::Gray, 2 => SourceChannels::GrayAlpha, _ => SourceChannels::Rgba },
                 depth: tile.descriptor.depth(),
                 space: *space,
             }),
@@ -401,7 +401,7 @@ impl DecodedTiles {
                 } else {
                     // Expand channels in one row of scratch. Alpha is coverage;
                     // grayscale uses the declared RGB transfer on equal R/G/B.
-                    let mut row = [0u8; PAGE_SIZE as usize * 8];
+                    let mut row = [0u8; PAGE_SIZE as usize * 16];
                     let bpp = samples.channels.count() * step;
                     let row_bytes = PAGE_SIZE as usize * 4 * step;
                     for (y, input) in decoded.chunks_exact(PAGE_SIZE as usize * bpp).enumerate() {
@@ -493,7 +493,7 @@ pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), Gp
     if d.channels == 1 && d.sample == layer_core::color::SampleType::Unsigned
         && matches!(d.bits_per_channel, 8 | 16) && d.encoding == TransferEncoding::Linear
         && d.alpha == AlphaAssociation::None { return Ok(()); }
-    if d.channels != 4
+    if !matches!(d.channels, 2 | 4)
         || d.bytes_per_pixel().is_none()
         || !matches!(
             d.alpha,
@@ -553,7 +553,14 @@ fn expand_source_row(input: &[u8], output: &mut [u8], channels: SourceChannels, 
         (SampleDepth::F16, SourceChannels::Rgb) => {
             for (p,o) in input.chunks_exact(6).zip(output.chunks_exact_mut(8)) { o[..6].copy_from_slice(p); o[6..].copy_from_slice(&0x3c00u16.to_le_bytes()); }
         }
-        (SampleDepth::F16 | SampleDepth::F32, SourceChannels::Gray | SourceChannels::GrayAlpha) => unreachable!("invalid HDR gray"),
+        (SampleDepth::F16 | SampleDepth::F32, SourceChannels::GrayAlpha) => {
+            let step = depth.bytes();
+            for (p, o) in input.chunks_exact(2 * step).zip(output.chunks_exact_mut(4 * step)) {
+                for channel in o[..3 * step].chunks_exact_mut(step) { channel.copy_from_slice(&p[..step]); }
+                o[3 * step..].copy_from_slice(&p[step..]);
+            }
+        }
+        (SampleDepth::F16 | SampleDepth::F32, SourceChannels::Gray) => unreachable!("invalid HDR gray source"),
         (_, SourceChannels::Rgba | SourceChannels::Cmyk) => unreachable!("RGBA copies directly; CMYK uses its ICC transform"),
     }
 }

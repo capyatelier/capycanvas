@@ -204,3 +204,45 @@ fn native_pass_through_group_and_new_group_preference() {
     w.window.destroy();
     pump(100);
 }
+
+#[test]
+#[ignore = "isolated compositor and native menu input"]
+fn native_layer_color_modes_and_add_filter() {
+    let app = native_test_app("art.capycanvas.LayerModes");
+    let w = fixture_workspace(&app); w.window.maximize(); w.window.present(); pump(1600);
+    let owner = state(&w).layer_tools.editing_layer.unwrap().id;
+    let color = named::<gtk::MenuButton>(w.layer_panel.root.upcast_ref(), "layer-color-mode");
+    let add = named::<gtk::MenuButton>(w.layer_panel.root.upcast_ref(), "layer-add-filter");
+    let mut input = RemoteInput::new().settle_ms(150); input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) }); pump(250);
+        for label in ["Grayscale", "Two-tone (black & white)", "Full color"] {
+            input.click(screen_point(color.upcast_ref(), &w.window, [0.5, 0.5]));
+            let popover = color.popover().unwrap();
+            until(|| popover.is_mapped() && mapped_label(popover.upcast_ref(), label).is_some(), "color mode opens");
+            input.click(screen_point(&mapped_label(popover.upcast_ref(), label).unwrap(), &w.window, [0.5, 0.5]));
+            until(|| state(&w).layer_tools.color_mode.as_ref().is_some_and(|m| m.value.as_ref() == label) && !popover.is_mapped(), "color mode selected");
+        }
+        for filter in ["Exposure", "Curves"] {
+            w.dispatch(UiAction::SelectPanelTab { group: state(&w).workspace.layout.panel_group(Panel::Layers).unwrap(), panel: Panel::Layers }); pump(200);
+            input.click(screen_point(add.upcast_ref(), &w.window, [0.5, 0.5]));
+            let popover = add.popover().unwrap();
+            let category = || widgets(popover.upcast_ref()).find(|node| node.is_mapped() && node.type_().name() == "GtkModelButton" && node.property::<String>("text") == "Tone");
+            until(|| category().is_some(), "filter categories open");
+            let category = category().unwrap();
+            let submenu = category.property::<Option<gtk::PopoverMenu>>("popover").unwrap();
+            input.perform(serde_json::json!([{"point":screen_point(&category, &w.window, [0.5,0.5])},{"wait_ms":250}]));
+            if !submenu.is_mapped() { input.click(screen_point(&category, &w.window, [0.5,0.5])); }
+            until(|| submenu.is_mapped() && mapped_label(submenu.upcast_ref(), filter).is_some(), "filter submenu opens");
+            input.click(screen_point(&mapped_label(submenu.upcast_ref(), filter).unwrap(), &w.window, [0.5,0.5]));
+            until(|| state(&w).layer_tools.editing_layer.as_ref().is_some_and(|l| l.adjustment_effect), "local filter selected");
+            let layers = state(&w).layers; let selected = layers.iter().find(|l| l.editing).unwrap();
+            assert!(state(&w).layer_tools.connections.iter().any(|edge| edge.from == selected.id || edge.to == selected.id));
+        }
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(250);
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(250);
+        assert_eq!(state(&w).layer_tools.editing_layer.unwrap().id, owner);
+        w.dispatch(UiAction::SelectPanelTab { group: state(&w).workspace.layout.panel_group(Panel::Layers).unwrap(), panel: Panel::Layers }); pump(200);
+    }
+    w.window.close(); pump(200);
+}

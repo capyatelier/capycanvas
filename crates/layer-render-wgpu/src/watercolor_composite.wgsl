@@ -11,6 +11,8 @@ struct Style {
     render_mode: vec4<f32>,
     transport_a: vec4<f32>,
     transport_b: vec4<f32>,
+    unused_brush_material: array<vec4<f32>, 9>,
+    color_mode: vec4<f32>,
 }
 
 struct Target {
@@ -199,7 +201,7 @@ fn watercolor(position: vec2<f32>) -> vec4<f32> {
         0.78,
     );
     let alpha = density * style.canvas_opacity.z;
-    return vec4<f32>(straight * (1.0 - darken) * alpha, alpha);
+    return layer_color(vec4<f32>(straight * (1.0 - darken) * alpha, alpha),WORKING_LUMA,style.color_mode.x,style.color_mode.y);
 }
 
 @fragment

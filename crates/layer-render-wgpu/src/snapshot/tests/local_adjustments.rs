@@ -349,7 +349,7 @@ fn scoped_worker_transfer_keeps_required_geometry_phases_and_handles_without_unr
     let (pending,pending_target)=crate::test_support::add_paint(&mut document.artwork,"Above pending",[33,17]);
     let (hidden,hidden_target)=crate::test_support::add_paint(&mut document.artwork,"Hidden failed",[33,17]);
     let hidden_group=add_group(&mut document,vec![hidden],0);document.artwork.occurrences.get_mut(hidden_group).unwrap().visible=false;
-    let library=document.artwork.paint.insert(PortableId::random(),PaintSource {domain:[33,17],raster:Default::default(),original:None,operations:Arc::default()}).unwrap();
+    let library=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[33,17],raster:Default::default(),original:None,operations:Arc::default()}).unwrap();
     let root=document.composition().result;let entries=&mut document.artwork.stacks.get_mut(root).unwrap().entries;
     entries.retain(|h|*h!=above&&*h!=pending);entries.splice(0..0,[above,pending]);refresh(&mut document);
     for (source,error) in [(above_target,"above source failed"),(hidden_target,"hidden source failed"),(SourceTarget::Paint(library),"unplaced source failed")] {

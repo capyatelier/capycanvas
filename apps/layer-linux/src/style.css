@@ -136,7 +136,7 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .layers-panel { padding: 0; }
 .layer-header, .layer-footer { padding: 4px 6px; }
 .layer-header menubutton > button { min-height: 24px; padding: 0 6px; }
-.layers-panel button.layer-icon { min-width: 24px; min-height: 24px; padding: 0; }
+.layers-panel button.layer-icon, .layers-panel menubutton.layer-icon > button { min-width: 24px; min-height: 24px; padding: 0; }
 .layer-icon image { -gtk-icon-size: 16px; }
 .layer-list { background: transparent; }
 .layer-list > row { padding: 0; margin: 0; border-radius: 0; }

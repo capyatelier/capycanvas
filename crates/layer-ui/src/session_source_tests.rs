@@ -141,7 +141,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     group.translation = Point { x: 40., y: -10. };
     let group_id = doc.artwork.occurrences.insert(PortableId::random(), group).unwrap();
     let canvas = doc.composition().size;
-    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { domain: canvas, raster: Default::default(), original: None, operations: Arc::default() }).unwrap();
+    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: canvas, raster: Default::default(), original: None, operations: Arc::default() }).unwrap();
     let mut clipped = Occurrence::new(OccurrenceContent::Paint(paint), "Clipped"); clipped.attachment = layer_core::Attachment::Clip;
     let clipped_id = doc.artwork.occurrences.insert(PortableId::random(), clipped).unwrap();
     doc.artwork.stacks.get_mut(nested).unwrap().entries.insert(0, clipped_id);

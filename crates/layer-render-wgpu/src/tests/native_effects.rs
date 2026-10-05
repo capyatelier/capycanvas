@@ -32,7 +32,7 @@ pub(crate) fn insert_effect(document: &mut Document, effect: EffectInstance) -> 
     occurrence
 }
 pub(crate) fn insert_source(document: &mut Document, name: &str, source: Arc<layer_core::color::source::SourceImage>) -> OccurrenceHandle {
-    let source = document.artwork.paint.insert(PortableId::random(),PaintSource {domain:source.extent,original:Some(source),raster:Default::default(),operations:Default::default()}).unwrap();
+    let source = document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:source.extent,original:Some(source),raster:Default::default(),operations:Default::default()}).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.push(occurrence);
     refresh(document);

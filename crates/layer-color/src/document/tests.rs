@@ -95,7 +95,7 @@ fn fixture(color: DocumentColor) -> Document {
     });
     artwork.paint.get_mut(ink_source).unwrap().raster = root;
     let occurrence = artwork.occurrences.get_mut(ink).unwrap(); occurrence.mask=Some(mask); occurrence.opacity=0.75;
-    let base_source = artwork.paint.insert(PortableId::random(), PaintSource {domain:[512,256],raster:Default::default(),original:Some(rasterized.clone()),operations:Default::default()}).unwrap();
+    let base_source = artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),domain:[512,256],raster:Default::default(),original:Some(rasterized.clone()),operations:Default::default()}).unwrap();
     let base = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(base_source),"Rasterized full image")).unwrap();
     let mut original = rasterized.as_ref().clone();
     original.kind = SourceKind::Original;
@@ -104,7 +104,7 @@ fn fixture(color: DocumentColor) -> Document {
             .unwrap()
             .into(),
     );
-    let original_source=artwork.paint.insert(PortableId::random(),PaintSource {domain:[512,256],raster:Default::default(),original:Some(Arc::new(original)),operations:Default::default()}).unwrap();
+    let original_source=artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[512,256],raster:Default::default(),original:Some(Arc::new(original)),operations:Default::default()}).unwrap();
     let original=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(original_source),"Independent original")).unwrap();
     let mut entries=vec![ink,base,original];
     use layer_core::{EffectInstance, EffectValue, GradientStop, color::RgbColor};
@@ -636,7 +636,7 @@ fn conversion_uses_unplaced_source_domain_outside_the_composition() {
     let color=document.composition().color;
     let coordinate=[2,0];
     let blob=Arc::new(TileBlob::encode(color.paint_descriptor(),&samples(SampleDepth::U8,4)).unwrap());
-    let handle=document.artwork.paint.insert(PortableId::random(),PaintSource {
+    let handle=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),
         domain:[768,256], original:None, operations:Default::default(),
         raster:RasterRevision::backed(RasterData {watercolor:None,tiles:[(TileKey {plane:RasterPlane::Color,coordinate},RasterTile::backed_shared(blob))].into()}),
     }).unwrap();
@@ -649,5 +649,25 @@ fn conversion_uses_unplaced_source_domain_outside_the_composition() {
     let output=tile.decode().unwrap();
     for (input,output) in samples(SampleDepth::U8,4).iter().zip(output.chunks_exact(2)) {
         assert_eq!(u16::from_le_bytes(output.try_into().unwrap()),u16::from(*input)*257);
+    }
+}
+
+#[test]
+fn fixed_reduced_color_layers_preserve_modes_and_alpha_through_document_depth_changes() {
+    let bytes: Arc<[u8]> = Arc::from(include_bytes!("../../../layer-core/src/package/codec/fixtures/layer-color-modes.capy").as_slice());
+    let source = layer_core::package::ImmutableBacking::new(Arc::new(bytes)).unwrap();
+    let layer_core::package::codec::OpenOutcome::Candidate { artwork, .. } = layer_core::package::codec::open(source, Default::default(), &std::sync::atomic::AtomicBool::new(false)).unwrap() else { panic!("editable fixture") };
+    let doc = Document::from_artwork(artwork).unwrap();
+    for depth in [SampleDepth::U8, SampleDepth::F16, SampleDepth::F32] {
+        let prepared = prepare_document_color(&doc, DocumentColorChange::Depth { depth, dither: OutputDither::None }, LIMIT, || false).unwrap();
+        let mut edited = doc.clone(); edited.apply(edit(&doc, &prepared)).unwrap();
+        for ((_, _, before), (_, _, after)) in doc.artwork.paint.iter().zip(edited.artwork.paint.iter()) {
+            assert_eq!(before.color_mode, after.color_mode);
+            let tile = after.raster.wait_data().unwrap().tiles[&key(RasterPlane::Color)].wait_backing().unwrap();
+            assert_eq!(tile.descriptor.channels, 2); assert_eq!(tile.descriptor.depth(), depth);
+            let data = tile.decode().unwrap();
+            if depth == SampleDepth::U8 { assert_eq!(&data[..2], if after.color_mode == LayerColorMode::TwoTone { &[255,255] } else { &[64,128] }); }
+            else { let values = hdr::decode_samples(depth, &data[..2 * depth.bytes()]).unwrap(); assert_eq!(values[0], values[1]); assert!((values[3] - if after.color_mode == LayerColorMode::TwoTone { 1. } else { 32768. / 65535. }).abs() < 0.001); }
+        }
     }
 }

@@ -215,7 +215,7 @@ fn asset_budget_deduplicates_physical_resource_and_source_ownership() {
     let mut document=resource_document();let base=code_bytes(&document)+96;
     assert!(document.validate(crate::ProjectLimits {asset_bytes:base-1,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:base,..Default::default()}).unwrap();
     let source=crate::color::source::rgba8_source([2,1],|_,_|[40,50,60,255]);let source_bytes=std::mem::size_of::<crate::color::source::SourceImage>()+source.tiles.len()*96+source.tiles.values().map(|t|t.compressed_len()).sum::<usize>();
-    for _ in 0..2 {document.artwork.paint.insert(PortableId::random(),PaintSource {domain:[64,48],original:Some(source.clone()),raster:Default::default(),operations:Default::default()}).unwrap();}
+    for _ in 0..2 {document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[64,48],original:Some(source.clone()),raster:Default::default(),operations:Default::default()}).unwrap();}
     let total=base+source_bytes as u64;assert!(document.validate(crate::ProjectLimits {asset_bytes:total-1,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:total,..Default::default()}).unwrap();
     let independent=Arc::new(Lut3d::parse_cube(cube().as_bytes()).unwrap());document.apply(application_edit(&document,0,EffectValue::Lut3d(Some(independent)))).unwrap();
     assert!(document.validate(crate::ProjectLimits {asset_bytes:total+95,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:total+96,..Default::default()}).unwrap();

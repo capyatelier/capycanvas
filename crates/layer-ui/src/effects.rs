@@ -277,6 +277,11 @@ pub enum EffectAction {
     Insert {
         effect: Arc<str>,
     },
+    InsertAttached {
+        effect: Arc<str>,
+        owner: u64,
+        epoch: u64,
+    },
     Set {
         layer: u64,
         key: String,
@@ -886,6 +891,87 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.property_editor.accepts(layer,epoch) && self.state.layer_properties.layer==Some(layer)
             && self.state.layer_properties.controls.iter().any(|control|control.key==key && matches!(control.kind,PropertyKind::Curve))
     }
+    fn insert_effect(&mut self, effect: Arc<str>, destination: Option<(OccurrenceHandle, u64)>) -> Result<(), String> {
+        if let Some((owner, epoch)) = destination {
+            if epoch != self.state.document_file.epoch { return Ok(()); }
+            let doc = self.engine.document();
+            if !doc.scene().eligible_target(owner) || doc.is_locked(owner)
+                || self.effect_catalog.get(&effect).is_none_or(|f| f.program.kind != layer_core::EffectKind::Adjustment) {
+                return Err(self.localization().text(MessageId::RESOURCES_ERROR_INVALID_LAYER_PROPERTY).to_string());
+            }
+        }
+        let choosing = destination.is_none() && self.filter_drawer_open();
+        let catalog = self.effect_catalog.get(&effect).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_FILTER).to_string())?;
+        let generator = catalog.program.kind == layer_core::EffectKind::Generator;
+        let doc = self.engine.document();
+        let scene = doc.scene();
+        let current = destination.map(|(owner, _)| owner).or(doc.working.occurrence);
+        let occurrence = current.and_then(|id| scene.occurrence(id));
+        let replacing = choosing && current.and_then(|id| scene.effect(id)).is_some_and(|effect| effect.program.kind == catalog.program.kind);
+        let masked = !replacing && doc.working.selection.is_some();
+        if replacing && doc.is_locked(current.unwrap()) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
+        if replacing && current.and_then(|id| scene.effect(id)).is_some_and(|effect| effect.program.id == catalog.program.id) { return Ok(()); }
+        let attaches=choosing && current.is_some_and(|id| scene.eligible_target(id)) && occurrence.is_some_and(|o| o.attachment==layer_core::Attachment::Clip);
+        let top = destination.map(|(owner, _)| scene.attached_effects(owner).last().copied().unwrap_or(owner)).or_else(|| current.map(|id| if choosing && (replacing || generator || attaches) { id } else { doc.clipping_stack_top(id).unwrap_or(id) }));
+        let parent = current.and_then(|id| scene.parent(id));
+        if !replacing && parent.is_some_and(|id| doc.is_locked(id)) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
+        let stack_handle = top.and_then(|id| scene.stack(id)).unwrap_or(doc.composition().result);
+        let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Missing containing stack")?.clone();
+        let index = top.and_then(|id| stack.entries.iter().position(|handle| *handle == id)).unwrap_or(0);
+        let (index,insertion_attachment)=if generator&&!replacing {doc.content_insertion(parent,index)}else{(index,layer_core::Attachment::None)};
+        let depth = doc.composition().color.depth;
+        let mut instance = EffectInstance::new(catalog.program());
+        if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set_choice("domain", "log_hdr").map_err(str::to_string)?; }
+        if generator && let Some(color) = instance.program.parameters.iter().find(|parameter| parameter.kind == EffectParameterKind::Color) {
+            instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
+        }
+        let mut edits = Vec::new();
+        let definition = if let Some((handle, _, _)) = doc.artwork.definitions.iter().find(|(_, _, definition)| definition.program == instance.program) {
+            handle
+        } else {
+            let change = RecordChange::insert(&doc.artwork.definitions, Definition {program: instance.program});
+            let handle = change.handle; edits.push(Edit::Definition(change)); handle
+        };
+        let application = EffectApplication {definition, values: instance.values};
+        let effect_handle = if replacing {
+            let handle = scene.effect_handle(current.unwrap()).ok_or("Missing adjustment")?;
+            edits.extend(doc.effect_edits(vec![RecordChange::replace(&doc.artwork.effects, handle, Some(application)).map_err(str::to_string)?]).map_err(|error|error.to_string())?);
+            handle
+        } else {
+            let change = RecordChange::insert(&doc.artwork.effects, application);
+            let handle = change.handle; edits.push(Edit::Effect(change)); handle
+        };
+        let mut occurrence = if replacing { occurrence.unwrap().clone() } else {
+            let mut value = Occurrence::new(OccurrenceContent::Effect(effect_handle), resource_label(catalog.label(), &self.state.localization));
+            value.attachment = if choosing && generator {insertion_attachment} else if attaches || destination.is_some() {
+                layer_core::Attachment::Effect
+            } else { layer_core::Attachment::None }; value
+        };
+        occurrence.content = OccurrenceContent::Effect(effect_handle);
+        if masked {
+            let (coverage, mask) = self.selection_mask(&occurrence, false, parent, if replacing { scene.local_extent(current.unwrap()) } else { doc.composition().size })?;
+            edits.push(Edit::Coverage(coverage)); occurrence.mask = Some(mask);
+        }
+        let handle = if replacing {
+            edits.push(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, current.unwrap(), Some(occurrence)).map_err(str::to_string)?)); current.unwrap()
+        } else {
+            let change = RecordChange::insert(&doc.artwork.occurrences, occurrence);
+            let handle = change.handle; edits.push(Edit::Occurrence(change));
+            stack.entries.insert(index, handle);
+            edits.push(Edit::Stack(RecordChange::replace(&doc.artwork.stacks, stack_handle, Some(stack)).map_err(str::to_string)?)); handle
+        };
+        let mut working = doc.working.clone();
+        working.occurrence = Some(handle); working.target = None; working.inspect_mask = None;
+        working.layer_selection = [handle].into(); working.layer_anchor = Some(handle);
+        if masked { working.selection = None; }
+        edits.push(Edit::Working(working));
+        self.layer_edit(Edit::Batch(edits))?;
+        if !choosing {
+            self.state.customization.expanded = None;
+            self.state.workspace.layout.reveal_after(Panel::Properties, Panel::Adjustments)?;
+        }
+        Ok(())
+    }
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
         if let Some(result) = self.mask_property_action(&action) { return result; }
 
@@ -1079,77 +1165,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     value: EffectValue::Curve(points),
                 });
             }
-            EffectAction::Insert { effect } => {
-                let choosing = self.filter_drawer_open();
-                let catalog = self.effect_catalog.get(&effect).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_FILTER).to_string())?;
-                let generator = catalog.program.kind == layer_core::EffectKind::Generator;
-                let doc = self.engine.document();
-                let scene = doc.scene();
-                let current = doc.working.occurrence;
-                let occurrence = current.and_then(|id| scene.occurrence(id));
-                let replacing = choosing && current.and_then(|id| scene.effect(id)).is_some_and(|effect| effect.program.kind == catalog.program.kind);
-                let masked = !replacing && doc.working.selection.is_some();
-                if replacing && doc.is_locked(current.unwrap()) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
-                if replacing && current.and_then(|id| scene.effect(id)).is_some_and(|effect| effect.program.id == catalog.program.id) { return Ok(()); }
-                let attaches=choosing && current.is_some_and(|id| scene.eligible_target(id)) && occurrence.is_some_and(|o| o.attachment==layer_core::Attachment::Clip);
-                let top = current.map(|id| if choosing && (replacing || generator || attaches) { id } else { doc.clipping_stack_top(id).unwrap_or(id) });
-                let parent = current.and_then(|id| scene.parent(id));
-                if !replacing && parent.is_some_and(|id| doc.is_locked(id)) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
-                let stack_handle = top.and_then(|id| scene.stack(id)).unwrap_or(doc.composition().result);
-                let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Missing containing stack")?.clone();
-                let index = top.and_then(|id| stack.entries.iter().position(|handle| *handle == id)).unwrap_or(0);
-                let (index,insertion_attachment)=if generator&&!replacing {doc.content_insertion(parent,index)}else{(index,layer_core::Attachment::None)};
-                let depth = doc.composition().color.depth;
-                let mut instance = EffectInstance::new(catalog.program());
-                if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set_choice("domain", "log_hdr").map_err(str::to_string)?; }
-                if generator && let Some(color) = instance.program.parameters.iter().find(|parameter| parameter.kind == EffectParameterKind::Color) {
-                    instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
-                }
-                let mut edits = Vec::new();
-                let definition = if let Some((handle, _, _)) = doc.artwork.definitions.iter().find(|(_, _, definition)| definition.program == instance.program) {
-                    handle
-                } else {
-                    let change = RecordChange::insert(&doc.artwork.definitions, Definition {program: instance.program});
-                    let handle = change.handle; edits.push(Edit::Definition(change)); handle
-                };
-                let application = EffectApplication {definition, values: instance.values};
-                let effect_handle = if replacing {
-                    let handle = scene.effect_handle(current.unwrap()).ok_or("Missing adjustment")?;
-                    edits.extend(doc.effect_edits(vec![RecordChange::replace(&doc.artwork.effects, handle, Some(application)).map_err(str::to_string)?]).map_err(|error|error.to_string())?);
-                    handle
-                } else {
-                    let change = RecordChange::insert(&doc.artwork.effects, application);
-                    let handle = change.handle; edits.push(Edit::Effect(change)); handle
-                };
-                let mut occurrence = if replacing { occurrence.unwrap().clone() } else {
-                    let mut value = Occurrence::new(OccurrenceContent::Effect(effect_handle), resource_label(catalog.label(), &self.state.localization));
-                    value.attachment = if choosing && generator {insertion_attachment} else if attaches {
-                        layer_core::Attachment::Effect
-                    } else { layer_core::Attachment::None }; value
-                };
-                occurrence.content = OccurrenceContent::Effect(effect_handle);
-                if masked {
-                    let (coverage, mask) = self.selection_mask(&occurrence, false, parent, if replacing { scene.local_extent(current.unwrap()) } else { doc.composition().size })?;
-                    edits.push(Edit::Coverage(coverage)); occurrence.mask = Some(mask);
-                }
-                let handle = if replacing {
-                    edits.push(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, current.unwrap(), Some(occurrence)).map_err(str::to_string)?)); current.unwrap()
-                } else {
-                    let change = RecordChange::insert(&doc.artwork.occurrences, occurrence);
-                    let handle = change.handle; edits.push(Edit::Occurrence(change));
-                    stack.entries.insert(index, handle);
-                    edits.push(Edit::Stack(RecordChange::replace(&doc.artwork.stacks, stack_handle, Some(stack)).map_err(str::to_string)?)); handle
-                };
-                let mut working = doc.working.clone();
-                working.occurrence = Some(handle); working.target = None; working.inspect_mask = None;
-                working.layer_selection = [handle].into(); working.layer_anchor = Some(handle);
-                if masked { working.selection = None; }
-                edits.push(Edit::Working(working));
-                self.layer_edit(Edit::Batch(edits))?;
-                if !choosing {
-                    self.state.customization.expanded = None;
-                    self.state.workspace.layout.reveal_after(Panel::Properties, Panel::Adjustments)?;
-                }
+            EffectAction::Insert { effect } => self.insert_effect(effect, None)?,
+            EffectAction::InsertAttached { effect, owner, epoch } => {
+                self.insert_effect(effect, Some((occurrence_handle(owner)?, epoch)))?;
             }
             EffectAction::Set {
                 layer: id,

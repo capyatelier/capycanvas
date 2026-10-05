@@ -1192,7 +1192,7 @@ impl Scene {
         let handle = packet.scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
         let op = &packet.scene.operations(target).ok_or(GpuRasterError::MissingPaintLayer(target))?[operation_index];
         let extent = packet.scene.target_extent(target);
-        if matches!(op.kind, RasterOperationKind::Erase { alpha_locked: true }) {
+        if matches!(op.kind, RasterOperationKind::ColorMode(_) | RasterOperationKind::Erase { alpha_locked: true }) {
             return Ok(());
         }
         if let RasterOperationKind::Bake { scene, scope, offset } = &op.kind {
@@ -1228,7 +1228,7 @@ impl Scene {
             let mask = self.command_mask_at(r, &op.coverage, layer_core::ImageTransform { placement: layer_core::LayerPlacement::from_projective(op.coverage.use_.placement.then(layer_core::Projective::from_affine(layer_core::Affine::translation(op.coverage.use_.translation))).ok_or(GpuRasterError::InvalidTransform("Invalid mask placement"))?), ..Default::default() }, c, (target, operation_index as u32))?;
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             match op.kind {
-                RasterOperationKind::Transform(_) | RasterOperationKind::Bake { .. } | RasterOperationKind::FrequencyDetail { .. } => {
+                RasterOperationKind::ColorMode(_) | RasterOperationKind::Transform(_) | RasterOperationKind::Bake { .. } | RasterOperationKind::FrequencyDetail { .. } => {
                     unreachable!("transforms and bakes run before page operations")
                 }
                 RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. } => {

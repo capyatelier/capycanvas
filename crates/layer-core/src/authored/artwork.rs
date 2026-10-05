@@ -76,6 +76,7 @@ impl Occurrence {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintSource {
+    pub color_mode: crate::color::LayerColorMode,
     pub domain: [u32; 2],
     pub raster: RasterRevision,
     pub original: Option<Arc<SourceImage>>,

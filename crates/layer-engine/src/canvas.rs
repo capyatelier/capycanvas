@@ -652,6 +652,32 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .map(std::borrow::Cow::Borrowed)
     }
 
+    pub fn set_layer_color_mode(&mut self, owner: layer_core::OccurrenceHandle, mode: layer_core::color::LayerColorMode) -> Result<(), DocumentError> {
+        self.flush_pending_edits()?;
+        if self.has_active_stroke() { return Err(DocumentError::InvalidLayerOperation("Finish the stroke first")); }
+        let doc = self.document();
+        let Some(layer_core::OccurrenceContent::Paint(handle)) = doc.scene().occurrence(owner).map(|o| &o.content) else {
+            return Err(DocumentError::InvalidLayerOperation("Select a paint layer"));
+        };
+        if doc.is_locked(owner) { return Err(DocumentError::InvalidLayerOperation("Select an unlocked paint layer")); }
+        if doc.affine_edit_transform(SourceTarget::Paint(*handle)).is_none() {
+            return Err(DocumentError::InvalidLayerOperation("Apply Transform to Pixels before editing this layer"));
+        }
+        let source = doc.artwork.paint.get(*handle).unwrap();
+        if source.color_mode == mode { return Ok(()); }
+        if source.original.is_none() && source.raster.is_empty() && source.operations.is_empty() {
+            let mut source = source.clone(); source.color_mode = mode;
+            let change = layer_core::RecordChange::replace(&doc.artwork.paint, *handle, Some(source)).map_err(DocumentError::InvalidLayerOperation)?;
+            return self.apply_edit(layer_core::Edit::Paint(change));
+        }
+        let operation = layer_core::RasterOperation {
+            placement: layer_core::Affine::IDENTITY,
+            coverage: layer_core::CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), source.domain, layer_core::Point::default()),
+            kind: layer_core::RasterOperationKind::ColorMode(mode),
+        };
+        self.append_operations(Vec::new(), vec![(SourceTarget::Paint(*handle), operation)], None, false)
+    }
+
     fn append_operations(
         &mut self,
         prefix: Vec<Edit>,
@@ -723,7 +749,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             match target {
                 SourceTarget::Paint(handle) => {
                     let mut source = document.artwork.paint.get(handle).unwrap().clone();
-                    source.raster = raster; source.operations = Arc::new(operations);
+                    source.raster = raster;
+                    if let Some(mode) = operations.iter().rev().find_map(|op| if let layer_core::RasterOperationKind::ColorMode(mode) = op.kind { Some(mode) } else { None }) { source.color_mode = mode; }
+                    source.operations = Arc::new(operations);
                     edits.push(Edit::Paint(layer_core::RecordChange::replace(&document.artwork.paint, handle, Some(source)).map_err(DocumentError::InvalidLayerOperation)?));
                 }
                 SourceTarget::Coverage(handle) => {
@@ -2513,7 +2541,7 @@ mod tests {
             Edit::Stack(layer_core::RecordChange::replace(&document.artwork.stacks, stack, Some(entries)).unwrap())])
     }
     fn empty_paint(document: &Document) -> layer_core::authored::PaintSource {
-        layer_core::authored::PaintSource { domain:document.composition().size, raster:Default::default(), original:None, operations:Arc::default() }
+        layer_core::authored::PaintSource { color_mode: Default::default(), domain:document.composition().size, raster:Default::default(), original:None, operations:Arc::default() }
     }
     fn mask_edit(engine: &mut CanvasEngine<RecordingRenderer>, translation: Point) -> Edit {
         let mut candidate = engine.document().clone();

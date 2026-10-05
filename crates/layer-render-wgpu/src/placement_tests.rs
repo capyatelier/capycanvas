@@ -466,7 +466,7 @@ fn placed_photo_display_cache_updates_paint_preview_undo_and_retains_lod() {
         );
         assert_eq!(work, updates, "pose changes do not reread source tiles");
     }
-    let (second, second_target) = append_paint(&mut layer, "second photo needs a finer preview", PaintSource {
+    let (second, second_target) = append_paint(&mut layer, "second photo needs a finer preview", PaintSource { color_mode: Default::default(),
         domain: size, original: Some(rgba8_source(size, |_, _| [0, 255, 0, 255])),
         raster: Default::default(), operations: Arc::default(),
     });

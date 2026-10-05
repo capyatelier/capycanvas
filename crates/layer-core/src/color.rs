@@ -17,6 +17,15 @@ pub mod histogram;
 pub mod hdr;
 pub use half::f16;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerColorMode { #[default] FullColor, Grayscale, TwoTone }
+impl LayerColorMode {
+    pub fn descriptor(self, color: DocumentColor) -> PixelDescriptor {
+        PixelDescriptor { channels: if self == Self::FullColor { 4 } else { 2 }, ..color.paint_descriptor() }
+    }
+}
+
 /// Native RGB coordinates and committed sample precision. Working math and
 /// per-operation blend domains are independent of these storage choices.
 /// The archive version fixes the built-in RGB definitions; monitor state never
@@ -99,7 +108,7 @@ impl PixelDescriptor {
         Ok(())
     }
     pub fn bytes_per_pixel(self) -> Option<usize> {
-        if self.sample == SampleType::Float && (!matches!(self.bits_per_channel, 16 | 32) || self.encoding != TransferEncoding::Linear || !matches!((self.channels, self.alpha), (3, AlphaAssociation::None) | (4, AlphaAssociation::Straight))) { return None; }
+        if self.sample == SampleType::Float && (!matches!(self.bits_per_channel, 16 | 32) || self.encoding != TransferEncoding::Linear || !matches!((self.channels, self.alpha), (3, AlphaAssociation::None) | (2 | 4, AlphaAssociation::Straight))) { return None; }
         if self.sample == SampleType::Unsigned && !matches!(self.bits_per_channel, 8 | 16) {
             return None;
         }

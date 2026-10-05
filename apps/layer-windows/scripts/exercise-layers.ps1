@@ -58,6 +58,32 @@ function Blend([string]$Option,[string[]]$Present=@(),[string[]]$Absent=@()){
     if($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
     else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
 }
+function Test-LayerModes {
+    $owner=(Model).state.layer_tools.editing_layer.id
+    foreach($mode in @('Grayscale','Two-tone (black & white)','Full color')){
+        Invoke 'layer-color-mode'
+        $item=Control $mode -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+        $item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+        Wait-Until {(Model).state.layer_tools.color_mode.value -eq $mode} 'Layer color mode did not change'
+    }
+    $count=(Model).state.layers.Count
+    $added=0
+    foreach($filter in @('Exposure','Curves')){
+        if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke 'Layers' -Name}
+        Invoke 'layer-add-filter'
+        (Control 'Tone' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        Invoke $filter -Name
+        $added++
+        Wait-Until {(Model).state.layer_tools.editing_layer.adjustment_effect -and (Model).state.layers.Count -eq $count+$added} 'Layer filter did not become selected'
+        $selected=(Model).state.layer_tools.editing_layer.id
+        if(!@((Model).state.layer_tools.connections|Where-Object {$_.from -eq $selected -or $_.to -eq $selected}).Count){throw 'Filter was not attached to its layer'}
+    }
+    if((Model).state.layers.Count -ne $count+2){throw 'Local filter insertion replaced a previous filter'}
+    for($i=0;$i -lt 5;$i++){Invoke 'Undo' -Name}
+    Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $owner -and (Model).state.layer_tools.color_mode.value -eq 'Full color' -and (Model).state.layers.Count -eq $count} 'Layer mode and filter history did not restore the owner'
+    if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke 'Layers' -Name}
+    Capture ('layer-modes-and-filters-'+(Model).state.theme) -WithModel
+}
 function Preview-Hash([string]$Id){
     $image=Control $Id
     if($image.Current.ItemStatus -ne 'Ready'){return ''}
@@ -100,6 +126,7 @@ try {
     $paint=(Model).state.layer_tools.editing_layer.id
     Wait-Until {(Find ("layer-$paint-thumbnail")).Current.ItemStatus -eq 'Ready'} 'Paint thumbnail not ready' 20
     $original=Preview-Hash "layer-$paint-thumbnail";if(!$original){throw 'No initial thumbnail pixels'}
+    Test-LayerModes
     $identity=(Control "layer-$paint-name").GetRuntimeId() -join ':'
     Capture 'initial'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
@@ -234,6 +261,7 @@ try {
     Wait-Until {(Find "layer-$fresh-thumbnail").Current.ItemStatus -eq 'Ready'} 'Replacement thumbnail not ready' 20
     if((Model).state.layers.Count -ne 2 -or (Model).state.document_file.modified -or (Model).state.layer_tools.editing_layer.opacity -ne 1){throw 'Old layer state leaked into replacement'}
     Capture 'replacement'
+    Test-LayerModes
     Edit 'layer-opacity' '55'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
@@ -249,7 +277,7 @@ try {
     Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-1) -lt .000001 -and !(Model).state.document_file.modified} 'Restored layer draft did not Undo to the clean checkpoint'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [PSCustomObject]@{thumbnail_paint_and_exact_undo='passed';row_retention='passed';header_and_lock_controls='passed';native_toggle_states_and_history='passed';keyboard_layer_and_mask_menus='passed';independent_selection='passed';mask_thumbnail='passed';rename_duplicate_delete_undo='passed';mask_controls_clipping_references='passed';group_collapse_hidden_target_and_ungroup='passed';virtualized_rows_and_recycling='passed';theme_and_document_replacement='passed';focused_draft_committed_before_close='passed';zero_exit='passed'}|ConvertTo-Json
+    [PSCustomObject]@{layer_color_modes_and_local_filters='passed';thumbnail_paint_and_exact_undo='passed';row_retention='passed';header_and_lock_controls='passed';native_toggle_states_and_history='passed';keyboard_layer_and_mask_menus='passed';independent_selection='passed';mask_thumbnail='passed';rename_duplicate_delete_undo='passed';mask_controls_clipping_references='passed';group_collapse_hidden_target_and_ungroup='passed';virtualized_rows_and_recycling='passed';theme_and_document_replacement='passed';focused_draft_committed_before_close='passed';zero_exit='passed'}|ConvertTo-Json
 }catch{
     if($Relationships -and $review -and !$review.HasExited){try{Capture 'relationships-failure' -Composed -WithModel}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

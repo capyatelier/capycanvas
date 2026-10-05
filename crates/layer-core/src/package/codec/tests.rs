@@ -65,7 +65,7 @@ fn fixture(depth: SampleDepth) -> Artwork {
     let tile=TileBlob::encode(interpretation.descriptor(),&source_bytes).unwrap();
     let original=Arc::new(SourceImage {kind:SourceKind::Original,extent:[256;2],resolution:Some(crate::ImageResolution::ppi(300)),
         tiles:[([0,0],Arc::new(tile))].into(),interpretation});
-    let source=PaintSource {domain:[256;2],raster,original:Some(original),operations:Default::default()};
+    let source=PaintSource { color_mode: Default::default(),domain:[256;2],raster,original:Some(original),operations:Default::default()};
     let first=artwork.paint.insert(identity(10),source.clone()).unwrap();
     let second=artwork.paint.insert(identity(11),source).unwrap();
     let selection=Selection::pixels(Arc::new(SelectionPixels::bytes([5,2],[0,0,5,2],vec![0xff804020,0x7f,0x804020ff,1]).unwrap()));

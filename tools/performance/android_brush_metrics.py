@@ -55,6 +55,11 @@ def validate_setup(info, requested):
         if key in requested:
             expected[key] = requested[key]
             actual[key] = info.get(key)
+    if "color_mode" in requested:
+        expected["color_mode"] = requested["color_mode"]
+        actual["color_mode"] = info.get("color_mode", "full_color")
+        expected["layer_color_mode"] = {"full_color": "Full color", "grayscale": "Grayscale", "two_tone": "Two-tone (black & white)"}[requested["color_mode"]]
+        actual["layer_color_mode"] = state.get("layer_tools", {}).get("color_mode", {}).get("value")
     if "stats_panel" in requested:
         expected["stats_panel"] = requested["stats_panel"]
         actual["stats_panel"] = info.get("stats_panel", True)

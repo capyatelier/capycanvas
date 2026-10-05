@@ -1,4 +1,4 @@
-struct Settings { maximum:u32, scale:u32, curve:u32, straight:u32, region:vec4<u32> }
+struct Settings { maximum:u32, scale:u32, curve:u32, straight:u32, region:vec4<u32>, weights:vec4<f32> }
 struct Status { invalid:atomic<u32> }
 TEXTURES
 @group(0) @binding(TRANSFER_BINDING) var<storage,read> transfer:array<vec2<f32>>;
@@ -43,7 +43,8 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
     PUBLICATION_GUARD
     if any(invocation.xy>=settings.region.zw) {return;}
     let pixel=invocation.xy+settings.region.xy;
-    let value=load_working(invocation.z,vec2<i32>(pixel));
+    var value=load_working(invocation.z,vec2<i32>(pixel));
+    MODE_PROJECTION
     if settings.maximum==0u {
         if settings.scale==32u {
             let error=float32_color_error(value);

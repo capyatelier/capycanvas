@@ -80,7 +80,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             o.visible=true;o.opacity=1.;o.blend=layer_core::LayerBlend::Normal;o.attachment=layer_core::Attachment::None;
             if h!=source_id {o.mask=None;}
         }
-        let paint=RecordChange::insert(&doc.artwork.paint,PaintSource {domain:extent,raster:Default::default(),original:None,operations:Arc::default()});
+        let paint=RecordChange::insert(&doc.artwork.paint,PaintSource { color_mode: Default::default(),domain:extent,raster:Default::default(),original:None,operations:Arc::default()});
         let target=SourceTarget::Paint(paint.handle);
         let mut copy=Occurrence::new(OccurrenceContent::Paint(paint.handle),format!("{} copy",source.name));
         copy.opacity=source.opacity;copy.visible=source.visible;copy.blend=source.blend;

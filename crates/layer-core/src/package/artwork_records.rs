@@ -49,8 +49,8 @@ fn material(value:&Value)->DecodeResult<Option<RasterWatercolor>> {
         if !(1. ..=16.).contains(&material.edge_width) {return Err(DecodeError::Unsupported("Watercolor edge width exceeds evaluator range".into()));}
         Ok(material)}).transpose()
 }
-fn encode_raster(raster:&RasterRevision, domain:[u32;2], mask:bool,color:DocumentColor,resources:&mut ResourceInventory,cancel:&AtomicBool)->Result<Map<String,Value>,String> {
-    let raster=raster.wait_data_cancellable(cancel)?; raster.validate_index(domain,mask,color)?;
+fn encode_raster(raster:&RasterRevision, domain:[u32;2], mask:bool,color:DocumentColor,mode:crate::color::LayerColorMode,resources:&mut ResourceInventory,cancel:&AtomicBool)->Result<Map<String,Value>,String> {
+    let raster=raster.wait_data_cancellable(cancel)?; raster.validate_index_mode(domain,mask,color,mode)?;
     let RasterData {tiles:raster_tiles,watercolor}=raster.as_ref();
     let mut data=Map::new();
     if !raster_tiles.is_empty() {
@@ -58,7 +58,7 @@ fn encode_raster(raster:&RasterRevision, domain:[u32;2], mask:bool,color:Documen
         for (key,tile) in raster_tiles {
             if cancel.load(Ordering::Relaxed) {return Err("Package operation cancelled".into());}
             let backing=tile.wait_backing_cancellable(cancel)?;
-            if backing.descriptor!=key.plane.descriptor(color) {return Err("Wrong raster tile interpretation".into());}
+            if backing.descriptor!=key.plane.descriptor_for(color,mode) {return Err("Wrong raster tile interpretation".into());}
             tiles.push(json!({"coordinate":key.coordinate,"plane":plane_name(key.plane),"resource":resources.tile(backing)?}));
         }
         data.insert("tiles".into(),Value::Array(tiles));
@@ -68,7 +68,7 @@ fn encode_raster(raster:&RasterRevision, domain:[u32;2], mask:bool,color:Documen
     }
     data.insert("domain".into(),v::encode_domain(domain)?); Ok(data)
 }
-fn decode_raster(data:&Map<String,Value>,domain:[u32;2],mask:bool,color:DocumentColor,reader:&mut ResourceReader<'_>)->DecodeResult<RasterRevision> {
+fn decode_raster(data:&Map<String,Value>,domain:[u32;2],mask:bool,color:DocumentColor,mode:crate::color::LayerColorMode,reader:&mut ResourceReader<'_>)->DecodeResult<RasterRevision> {
     let mut raster=RasterData {tiles:BTreeMap::new(),watercolor:data.get("material").map(material).transpose()?.flatten()};
     if let Some(tiles)=data.get("tiles") {
         let tiles=list(tiles)?;
@@ -81,7 +81,7 @@ fn decode_raster(data:&Map<String,Value>,domain:[u32;2],mask:bool,color:Document
             raster.tiles.insert(key,reader.raster_tile(resource)?);
         }
     }
-    raster.validate(domain,mask,color)?; Ok(RasterRevision::backed(raster))
+    raster.validate_mode(domain,mask,color,mode)?; Ok(RasterRevision::backed(raster))
 }
 fn validate_original_color(source:&SourceImage,color:DocumentColor)->Result<(),String> {
     if !source.is_original() && (source.interpretation.depth!=color.depth || source.interpretation.profile!=crate::color::ColorProfile::Builtin(color.space)) {
@@ -167,13 +167,14 @@ pub(crate) fn encode_change(art:&Artwork,edit:&crate::Edit,resources:&mut Resour
         },
         crate::Edit::Paint(change)=>{let identity=change.id;let paint=change.value.as_ref().ok_or("Cannot encode removed record")?;
             if !paint.operations.is_empty() {return Err("Wait for the current edit before transferring".into());}
-            let mut data=encode_raster(&paint.raster,paint.domain,false,canvas.color,resources,cancel)?;
+            let mut data=encode_raster(&paint.raster,paint.domain,false,canvas.color,paint.color_mode,resources,cancel)?;
+        data.insert("color_mode".into(),serde_json::to_value(paint.color_mode).map_err(|e|e.to_string())?);
         if let Some(source)=&paint.original {validate_original_color(source,canvas.color)?;data.insert("original".into(),encode_original(source,resources)?);}
         Ok(record(identity,"capy.paint-source/1",Value::Object(data)))
         },
         crate::Edit::Coverage(change)=>{let identity=change.id;let coverage=change.value.as_ref().ok_or("Cannot encode removed record")?;
             if !coverage.operations.is_empty() {return Err("Wait for the current edit before transferring".into());}
-            let mut data=encode_raster(&coverage.raster,coverage.domain,true,canvas.color,resources,cancel)?;
+            let mut data=encode_raster(&coverage.raster,coverage.domain,true,canvas.color,Default::default(),resources,cancel)?;
         if !(0. ..=1.).contains(&coverage.default_coverage) {return Err("Invalid default coverage".into());}
         set_float(&mut data,"default_coverage",coverage.default_coverage,1.)?;
         if let Some(selection)=&coverage.initial {data.insert("initial".into(),selection_records::encode_selection(selection,resources)?);}
@@ -304,12 +305,13 @@ pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,
     }}
     let canvas=art.compositions.get(art.root).ok_or("Missing root composition")?.clone();
     for (identity,kind,value) in &known {match *kind {
-        "capy.paint-source/1"=> {let data=fields(value,&["domain","tiles","material","original"])?;let domain=dimension(v::required(data,"domain")?,reader)?;
-            let raster=decode_raster(data,domain,false,canvas.color,reader)?;let original=data.get("original").map(|v|decode_original(v,reader)).transpose()?;
+        "capy.paint-source/1"=> {let data=fields(value,&["domain","tiles","material","original","color_mode"])?;let domain=dimension(v::required(data,"domain")?,reader)?;
+            let color_mode=data.get("color_mode").map(|v|serde_json::from_value(v.clone()).map_err(|e|DecodeError::from(e.to_string()))).transpose()?.unwrap_or_default();
+            let raster=decode_raster(data,domain,false,canvas.color,color_mode,reader)?;let original=data.get("original").map(|v|decode_original(v,reader)).transpose()?;
             if let Some(source)=&original {validate_original_color(source,canvas.color)?;}
-            art.paint.install(art.paint.allocated(*identity).unwrap(),PaintSource {domain,raster,original,operations:Arc::default()})?;},
+            art.paint.install(art.paint.allocated(*identity).unwrap(),PaintSource {color_mode,domain,raster,original,operations:Arc::default()})?;},
         "capy.coverage-source/1"=> {let data=fields(value,&["domain","tiles","initial","default_coverage"])?;let domain=dimension(v::required(data,"domain")?,reader)?;
-            let raster=decode_raster(data,domain,true,canvas.color,reader)?;let initial=data.get("initial").map(|v|selection_records::decode_selection(v,reader)).transpose()?;
+            let raster=decode_raster(data,domain,true,canvas.color,Default::default(),reader)?;let initial=data.get("initial").map(|v|selection_records::decode_selection(v,reader)).transpose()?;
             let default_coverage=float_field(data,"default_coverage",1.)?;if !(0. ..=1.).contains(&default_coverage) {return Err("Invalid default coverage".into());}
             art.coverage.install(art.coverage.allocated(*identity).unwrap(),CoverageSource {domain,raster,initial,default_coverage,operations:Arc::default()})?;},
         "capy.effect-definition/1"=> {let definition=effect_records::decode_definition(value,reader)?;art.definitions.install(art.definitions.allocated(*identity).unwrap(),definition)?;},
@@ -442,7 +444,7 @@ mod tests {
             raster.tiles.insert(TileKey {plane,coordinate:[0,0]},RasterTile::backed(crate::raster::TileBlob::encode(descriptor,&bytes).unwrap()));
         }
         let original=crate::color::source::rgba8_source([37,29],|x,y|[x as u8,y as u8,71,0]);
-        let paint=art.paint.insert(PortableId::random(),PaintSource {domain:[37,29],raster:RasterRevision::backed(raster),original:Some(original),operations:Arc::default()}).unwrap();
+        let paint=art.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[37,29],raster:RasterRevision::backed(raster),original:Some(original),operations:Arc::default()}).unwrap();
         let coverage=art.coverage.insert(PortableId::random(),CoverageSource {domain:[37,29],raster:RasterRevision::default(),initial:Some(crate::Selection::polygon(vec![Point {x:0.,y:0.},Point {x:17.,y:0.},Point {x:0.,y:18.}]).unwrap()),default_coverage:0.25,operations:Arc::default()}).unwrap();
         let mut occurrence=Occurrence::new(OccurrenceContent::Paint(paint),"Paint");occurrence.visible=false;occurrence.opacity=0.625;occurrence.translation=Point {x:-0.,y:1.25};occurrence.alpha_locked=true;occurrence.blend=LayerBlend::Multiply;
         occurrence.mask=Some(MaskUse {source:coverage,enabled:false,linked:false,inverted:true,translation:Point {x:1.,y:2.},placement:crate::Projective::IDENTITY});
@@ -451,7 +453,7 @@ mod tests {
         let mut group=Occurrence::new(OccurrenceContent::Stack(inner),"Group");group.blend=LayerBlend::PassThrough;
         let group=art.occurrences.insert(PortableId::random(),group).unwrap();
         let stack=art.compositions.get(art.root).unwrap().result;art.stacks.get_mut(stack).unwrap().entries.push(group);
-        art.paint.insert(PortableId::random(),PaintSource {domain:[3,5],raster:RasterRevision::default(),original:None,operations:Arc::default()}).unwrap();
+        art.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:[3,5],raster:RasterRevision::default(),original:None,operations:Arc::default()}).unwrap();
         art.selections.insert(PortableId::random(),SavedSelection {selection:crate::Selection::full(),}).unwrap();
         art.selections.insert(PortableId::random(),SavedSelection {selection:crate::Selection::empty(),}).unwrap();
         art.guides.insert(PortableId::random(),Guides {rulers:vec![(PortableId::random(),RulerGeometry::Parallel {start:Point {x:1.,y:2.},end:Point {x:3.,y:4.}})]}).unwrap();

@@ -380,7 +380,7 @@ fn snapping_excludes_moved_nested_ancestors_but_keeps_siblings_and_cousins() {
     let extent = doc.composition().size;
     let mut add=|name:&str,parent:Option<OccurrenceHandle>,group| {
         let content = if group { OccurrenceContent::Stack(doc.artwork.stacks.insert(PortableId::random(), Stack::default()).unwrap()) }
-            else { OccurrenceContent::Paint(doc.artwork.paint.insert(PortableId::random(), PaintSource { domain: extent, raster: Default::default(), original: None, operations: Default::default() }).unwrap()) };
+            else { OccurrenceContent::Paint(doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: extent, raster: Default::default(), original: None, operations: Default::default() }).unwrap()) };
         let id = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(content, name)).unwrap();
         let stack = parent.map(|h| match doc.artwork.occurrences.get(h).unwrap().content { OccurrenceContent::Stack(h) => h, _ => panic!("parent stack") }).unwrap_or(root);
         doc.artwork.stacks.get_mut(stack).unwrap().entries.push(id);

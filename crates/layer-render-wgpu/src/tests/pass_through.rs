@@ -62,7 +62,7 @@ impl Builder {
         id
     }
     fn paint(&mut self, name: &str, parent: Option<OccurrenceHandle>, blend: LayerBlend, seed: u32, alpha: impl Fn(u32, u32) -> u16) -> OccurrenceHandle {
-        let paint = RecordChange::insert(&self.0.artwork.paint, PaintSource { domain: EXTENT, original: Some(source(seed, alpha)), raster: Default::default(), operations: Arc::default() });
+        let paint = RecordChange::insert(&self.0.artwork.paint, PaintSource { color_mode: Default::default(), domain: EXTENT, original: Some(source(seed, alpha)), raster: Default::default(), operations: Arc::default() });
         let id = self.push(OccurrenceContent::Paint(paint.handle), name, parent, vec![Edit::Paint(paint)]);
         self.layer(id).blend = blend;
         id

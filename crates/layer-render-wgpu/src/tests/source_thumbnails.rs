@@ -81,7 +81,7 @@ fn photo_thumbnail_batches_survive_interleaved_layers_edits_and_discarded_comman
             data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [x, 0] },
                 RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &pixels.repeat(256 * 256)).unwrap()));
         }
-        PaintSource { domain: extent, original: Some(source.clone()), raster: RasterRevision::backed(data), operations: Arc::default() }
+        PaintSource { color_mode: Default::default(), domain: extent, original: Some(source.clone()), raster: RasterRevision::backed(data), operations: Arc::default() }
     };
     let mut artwork = Artwork::new(extent).unwrap();
     artwork.compositions.get_mut(artwork.root).unwrap().color = color;

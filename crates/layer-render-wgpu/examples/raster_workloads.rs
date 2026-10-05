@@ -100,7 +100,7 @@ impl Canvas {
         let SourceTarget::Paint(paint) = document.working.target.unwrap() else { unreachable!() };
         document.artwork.paint.get_mut(paint).unwrap().original = Some(Arc::new(builder.finish()?));
         for _ in 0..31 {
-            let source = document.artwork.paint.insert(PortableId::random(), PaintSource {
+            let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),
                 domain: extent, raster: Default::default(), original: None, operations: Default::default(),
             })?;
             let occurrence = document.artwork.occurrences.insert(PortableId::random(),

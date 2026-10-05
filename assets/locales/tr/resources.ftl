@@ -527,3 +527,9 @@ resources-gradient-interpolation = Interpolation
 resources-gradient-mix-oklab = Oklab
 resources-gradient-mix-linear = Doğrusal ışık
 resources-gradient-mix-classic = Klasik
+
+resources-layer-add-filter = Filtre ekle
+resources-layer-color-mode = Renk modu
+resources-layer-color-full = Tam renk
+resources-layer-color-gray = Gri tonlama
+resources-layer-color-two-tone = İki ton (siyah ve beyaz)

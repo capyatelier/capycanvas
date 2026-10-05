@@ -20,6 +20,7 @@ struct Style {
     layer_to_brush_linear: vec4<f32>,
     layer_to_brush_offset: vec4<f32>,
     bristle_streak: vec4<f32>,
+    color_mode: vec4<f32>,
 }
 
 struct Dab {

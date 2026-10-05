@@ -127,6 +127,7 @@ shared session or workspace owners.
 | `PaintSource.domain` | Explicit local pixel domain. | Canvas shrink does not shrink the source; domains and occurrence placement remain independent. |
 | `PaintSource.raster` | Immutable sparse revision, initially empty, with color and material planes. | Preserve tile codes and unchanged compressed bytes; missing overrides reveal the imported base. |
 | `PaintSource.original` | Optional immutable imported base, absent for new paint. | Preserve Original/Rasterized role, extent, density, profile, assumed-profile flag and samples separately from overrides. |
+| `PaintSource.color_mode` | Full color (default), Grayscale, or Two-tone. | Store full color as RGB + alpha and reduced modes as gray + alpha at the document precision. Changes convert existing pixels in one undo step; subsequent edits obey the selected mode. |
 | `PaintSource.operations` | Accepted transient raster commands and immutable inputs. | Package preparation refuses unfinished commands; represented pending revision promises may be retained. |
 
 Composition frame, source domain, occurrence placement and output frame are

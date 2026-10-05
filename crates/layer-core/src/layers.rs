@@ -386,6 +386,7 @@ pub struct RasterOperation {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum RasterOperationKind {
+    ColorMode(crate::color::LayerColorMode),
     ApplyMask,
     /// Erases where the coverage is set: ApplyMask with complemented coverage.
     /// Alpha-locked content keeps its transparency, so nothing changes.
@@ -461,7 +462,7 @@ impl RasterOperation {
         // coverage is a unit interval; native storage owns quantization/range.
         let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(&c[3]);
         let valid = match &self.kind {
-            RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. } => self.placement == Affine::IDENTITY,
+            RasterOperationKind::ColorMode(_) | RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. } => self.placement == Affine::IDENTITY,
             RasterOperationKind::Bake { offset, .. } => self.placement == Affine::IDENTITY && offset.x.is_finite() && offset.y.is_finite(),
             RasterOperationKind::FrequencyDetail { offset, .. } => {
                 self.placement == Affine::IDENTITY
@@ -1516,7 +1517,7 @@ mod organization_tests {
             .paint
             .insert(
                 PortableId::random(),
-                PaintSource { domain: [64; 2], raster: Default::default(), original: None, operations: Arc::default() },
+                PaintSource { color_mode: Default::default(), domain: [64; 2], raster: Default::default(), original: None, operations: Arc::default() },
             )
             .unwrap();
         let before = doc.clone();

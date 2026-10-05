@@ -956,3 +956,9 @@ resources-gradient-interpolation = Interpolation
 resources-gradient-mix-oklab = Oklab
 resources-gradient-mix-linear = Cahaya linear
 resources-gradient-mix-classic = Klasik
+
+resources-layer-add-filter = Tambahkan filter
+resources-layer-color-mode = Mode warna
+resources-layer-color-full = Warna penuh
+resources-layer-color-gray = Skala abu-abu
+resources-layer-color-two-tone = Dua nada (hitam dan putih)

@@ -45,6 +45,8 @@ pub struct LayerPanel {
     alpha: gtk::ToggleButton,
     lock: gtk::ToggleButton,
     mask_action: gtk::Button,
+    add_filter: gtk::MenuButton,
+    color_mode: gtk::MenuButton,
     delete: gtk::Button,
     reference: gtk::ToggleButton,
     attachment: gtk::ToggleButton,
@@ -420,6 +422,9 @@ impl LayerPanel {
         let opacity = NumberControl::inline(NumericControl::layer_opacity(), copy.borrow().layer.opacity.as_ref(), localization.clone());
         options.append(&opacity);
         header.append(&options);
+        let color_mode = gtk::MenuButton::builder().label("").hexpand(true).build();
+        color_mode.set_widget_name("layer-color-mode");
+        color_mode.add_css_class("layer-blend"); header.append(&color_mode);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         let alpha = toggle("layer-alpha-lock-symbolic", copy.borrow().layer.alpha_lock.as_ref());
         let lock = toggle("layer-lock-symbolic", copy.borrow().layer.lock_editing.as_ref());
@@ -953,6 +958,7 @@ impl LayerPanel {
             blend,
             blend_label,
             blend_menu,
+            color_mode,
             alpha,
             lock,
             mask_action: button(
@@ -961,6 +967,10 @@ impl LayerPanel {
             ),
             reference,
             attachment,
+            add_filter: {
+                let button = gtk::MenuButton::builder().icon_name("layer-adjustments-symbolic").build();
+                button.add_css_class("layer-icon"); caption(&button, copy.borrow().layer.add_filter.as_ref()); button
+            },
             delete: button("layer-delete-symbolic", copy.borrow().layer.delete_selected.as_ref()),
             context,
             owner,
@@ -1112,6 +1122,21 @@ impl LayerPanel {
             }
         ));
         self.footer.append(mask);
+        let color_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        self.color_mode.set_popover(Some(&color_menu)); w.watch_popover(color_menu.upcast_ref());
+        color_menu.connect_show(glib::clone!(#[weak] w, move |popover| {
+            let menu = w.gpu.borrow().as_ref().and_then(|g| g.session.state().layer_tools.color_mode.as_ref().map(|control| control.menu.clone()));
+            if let Some(menu) = menu { w.populate_workspace_menu(popover, menu); }
+        }));
+        self.add_filter.set_widget_name("layer-add-filter");
+        let filter_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        w.watch_popover(filter_menu.upcast_ref());
+        self.add_filter.set_popover(Some(&filter_menu));
+        filter_menu.connect_show(glib::clone!(#[weak] w, move |popover| {
+            let menu = w.gpu.borrow().as_ref().and_then(|g| g.session.state().layer_tools.add_filter.clone());
+            if let Some(menu) = menu { w.populate_workspace_menu(popover, menu); }
+        }));
+        self.footer.append(&self.add_filter);
         let import = button("layer-image-symbolic", copy.layer.import_image.as_ref());
         import.set_widget_name("import-image-layer");
         w.bind_action_tooltip(&import, UiAction::Invoke { command: layer_ui::CommandId::ImportImage });
@@ -1245,6 +1270,7 @@ impl LayerPanel {
         caption(&self.lock, &copy.layer.lock_editing);
         caption(&self.reference, &copy.reference);
         caption(&self.mask_action, &copy.layer.add_mask);
+        caption(&self.add_filter, &copy.layer.add_filter);
         caption(&self.delete, &copy.layer.delete_selected);
         self.opacity.set_caption(&copy.layer.opacity, "", localization);
         for child in self.footer.observe_children().iter::<glib::Object>().flatten().filter_map(|object| object.downcast::<gtk::Widget>().ok()) {
@@ -1322,6 +1348,11 @@ impl LayerPanel {
         self.alpha.set_sensitive(controls.alpha_lock);
         self.lock.set_sensitive(controls.edit_lock);
         self.mask_action.set_sensitive(controls.mask);
+        self.add_filter.set_sensitive(state.layer_tools.add_filter.is_some());
+        self.color_mode.set_visible(state.layer_tools.color_mode.is_some());
+        if let Some(control) = &state.layer_tools.color_mode {
+            self.color_mode.set_label(&control.value); self.color_mode.set_sensitive(control.enabled); caption(&self.color_mode, &control.menu.title);
+        }
         self.delete.set_sensitive(state.layer_tools.can_delete);
         self.reference
             .set_active(state.layer_tools.references_selected);

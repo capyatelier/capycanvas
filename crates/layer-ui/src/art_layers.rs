@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+pub(super) fn color_mode_label(mode: layer_core::color::LayerColorMode, localization: &Localizer) -> Arc<str> {
+    use layer_core::color::LayerColorMode::*;
+    localization.text(match mode { FullColor => MessageId::RESOURCES_LAYER_COLOR_FULL, Grayscale => MessageId::RESOURCES_LAYER_COLOR_GRAY, TwoTone => MessageId::RESOURCES_LAYER_COLOR_TWO_TONE })
+}
+
 type PreviewGeometry = (layer_core::Projective, layer_core::Interpolation, Point, [u32; 2],
     Option<(layer_core::authored::CoverageHandle, layer_core::Projective, Point, [u32; 2], bool)>);
 type GeneratorPreview = (layer_core::authored::EffectApplication, Arc<layer_core::EffectProgram>,
@@ -135,8 +140,13 @@ pub struct LayersView {
     pub rename_layer: Option<u64>,
     pub controls: LayerControls,
     pub attachment: LayerAttachmentControl,
+    pub add_filter: Option<ContextMenu>,
+    pub color_mode: Option<LayerColorControl>,
     pub connections: Vec<LayerConnection>,
 }
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LayerColorControl { pub value: Arc<str>, pub enabled: bool, pub menu: ContextMenu }
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct LayerControls {
     pub opacity: bool,
@@ -266,6 +276,7 @@ pub enum LayerAction {
     TogglePassThrough {
         id: u64,
     },
+    ColorMode { id: u64, epoch: u64, mode: layer_core::color::LayerColorMode },
     Blend {
         id: u64,
         value: u32,
@@ -651,7 +662,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return Err("Use an image name with 1 to 128 characters".into());
             }
             let [w, h] = source.extent.map(|v| v as f32);
-            let paint = RecordChange::insert(&artwork.paint, PaintSource { domain: std::array::from_fn(|axis| doc.composition().size[axis].max(source.extent[axis])), raster: Default::default(), original: Some(Arc::new(source)), operations: Arc::default() });
+            let paint = RecordChange::insert(&artwork.paint, PaintSource { color_mode: Default::default(), domain: std::array::from_fn(|axis| doc.composition().size[axis].max(source.extent[axis])), raster: Default::default(), original: Some(Arc::new(source)), operations: Arc::default() });
             let mut occurrence = Occurrence::new(OccurrenceContent::Paint(paint.handle), name);
             occurrence.attachment = attachment;
             if interactive {
@@ -897,7 +908,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let change = RecordChange::insert(&doc.artwork.stacks, Stack::default());
                     let content = OccurrenceContent::Stack(change.handle); edits.push(Edit::Stack(change)); content
                 } else {
-                    let change = RecordChange::insert(&doc.artwork.paint, PaintSource { domain: doc.composition().size, raster: Default::default(), original: None, operations: Arc::default() });
+                    let change = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), original: None, operations: Arc::default() });
                     let content = OccurrenceContent::Paint(change.handle); edits.push(Edit::Paint(change)); content
                 };
                 let id = doc.artwork.occurrences.next_handle();
@@ -1094,6 +1105,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let blend = if group.passes_through() { LayerBlend::Normal } else { LayerBlend::PassThrough };
                 self.layer_edit(doc.group_blend_edit(id, blend).map_err(error)?)?;
             }
+            LayerAction::ColorMode { id, epoch, mode } => {
+                if epoch != self.state.document_file.epoch { return Ok(()); }
+                self.require_document_idle()?;
+                self.engine.set_layer_color_mode(occurrence_handle(id)?, mode).map_err(error)?;
+            }
             LayerAction::Blend { id, value } => {
                 let blend = LayerBlend::from_code(value).ok_or("Unknown blend mode")?;
                 let handle = occurrence_handle(id)?;
@@ -1237,6 +1253,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         let layer = self.engine.document().scene().occurrence(handle).ok_or("Unknown layer")?;
         Ok(ContextMenu { title: self.localization().text(MessageId::RESOURCES_LAYER_MENU_BLEND_MODE).to_string(), sections: self.blend_sections(handle, layer) })
     }
+    pub(crate) fn layer_color_control(&self, id: OccurrenceHandle) -> Option<LayerColorControl> {
+        let doc = self.engine.document();
+        let source = doc.scene().paint_source(id)?;
+        if self.selection_masks.target().is_some() || matches!(doc.working.target, Some(SourceTarget::Coverage(_))) { return None; }
+        let enabled = !doc.is_locked(id) && !self.state.document_file.busy && self.require_document_idle().is_ok()
+            && doc.affine_edit_transform(SourceTarget::Paint(match doc.scene().occurrence(id)?.content { OccurrenceContent::Paint(h) => h, _ => return None })).is_some();
+        let items = [layer_core::color::LayerColorMode::FullColor, layer_core::color::LayerColorMode::Grayscale, layer_core::color::LayerColorMode::TwoTone]
+            .map(|mode| ContextMenuItem { enabled, selected: Some(source.color_mode == mode), ..ContextMenuItem::command(self.layer_color_label(mode).as_ref(), UiAction::Layer { action: LayerAction::ColorMode { id: occurrence_token(id), epoch: self.state.document_file.epoch, mode } }) });
+        Some(LayerColorControl { value: self.layer_color_label(source.color_mode), enabled,
+            menu: ContextMenu { title: self.localization().text(MessageId::RESOURCES_LAYER_COLOR_MODE).to_string(), sections: vec![items.into()] } })
+    }
+    pub(crate) fn layer_color_label(&self, mode: layer_core::color::LayerColorMode) -> Arc<str> {
+        color_mode_label(mode, self.localization())
+    }
+
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<ContextMenu, String> {
         self.layer_menu_with(id, mask, true)
     }
@@ -1577,6 +1608,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ContextMenuItem { enabled: !locked && self.current_selection().is_some(), ..ContextMenuItem::command(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SAVE_CURRENT_SELECTION_IN_GROUP).as_ref(), UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: true } }) },
             ]);
         }
+        if !mask && let Some(color) = self.layer_color_control(handle) { sections.push(vec![ContextMenuItem::submenu(&color.menu.title, color.menu.sections)]); }
         Ok(sections)
     }
     pub(super) fn layer_pen(&mut self, event: PenEvent) -> Result<(), String> {

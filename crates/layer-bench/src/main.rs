@@ -417,7 +417,7 @@ impl Canvas {
 
     fn add_layer(&mut self, name: &str, index: usize) -> Result<OccurrenceHandle, String> {
         let document=self.engine.document();
-        let paint=RecordChange::insert(&document.artwork.paint,PaintSource {domain:document.composition().size,raster:Default::default(),original:None,operations:Default::default()});
+        let paint=RecordChange::insert(&document.artwork.paint,PaintSource { color_mode: Default::default(),domain:document.composition().size,raster:Default::default(),original:None,operations:Default::default()});
         let occurrence=RecordChange::insert(&document.artwork.occurrences,Occurrence::new(OccurrenceContent::Paint(paint.handle),name));
         let id=occurrence.handle;
         let stack=document.composition().result;

@@ -54,6 +54,7 @@ def main():
     p.add_argument("--blending", choices=["linear", "perceptual"], help="Document blend space; default uses the imported document")
     p.add_argument("--photo-layers", type=int, default=1, help="Photo layer count, with translucent duplicates")
     p.add_argument("--paint-layer-index", type=int, default=0, help="Paint layer index from the top, above the opaque base photo")
+    p.add_argument("--color-mode", choices=["full_color", "grayscale", "two_tone"], default="full_color")
     p.add_argument("--workload", choices=["ordinary", "clipped", "blurred-base"], default="ordinary")
     p.add_argument("--effect-radius", type=float, default=8, help="Gaussian sigma in document pixels for blurred-base")
     tracing = p.add_mutually_exclusive_group()
@@ -91,7 +92,7 @@ def main():
                          radii=[args.radius_x, args.radius_y], photo_layers=args.photo_layers,
                          paint_layer_index=args.paint_layer_index,
                          horizon=args.horizon, zoom=args.zoom, blending=args.blending, stats_panel=args.stats)
-        requested.update(workload=args.workload, effect_radius=args.effect_radius)
+        requested.update(workload=args.workload, effect_radius=args.effect_radius, color_mode=args.color_mode)
         if args.mode == "pauses":
             requested["pause_ms"] = args.pause_ms
             requested["contact_ms"] = args.contact_ms
@@ -119,6 +120,7 @@ def main():
                                memorySnapshots=str(args.memory).lower(), statsPanel=str(args.stats).lower(),
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]
+        cmd += ["-e", "colorMode", args.color_mode]
         if args.paint_load is not None:
             cmd += ["-e", "paintLoad", str(args.paint_load)]
         if args.zoom is not None:

@@ -84,7 +84,7 @@ The initial registry is:
 | `capy.composition/1` | `frame` with required pixel `size`, optional `origin`; `resolution`, `color`, `blend`, and required `result` endpoint. |
 | `capy.stack/1` | `entries`, an ordered array of occurrence references, front to back. |
 | `capy.occurrence/2` | Required `content`; `name`, `visible`, `opacity`, `blend`, `locked`, `alpha_locked`, `reference`, `attachment`, `placement`, and optional `mask`. |
-| `capy.paint-source/1` | Required pixel `domain`; optional `original`, sparse `tiles`, `material`. The original retains its role, extent, interpretation, resolution and tile references independently of overrides. |
+| `capy.paint-source/1` | Required pixel `domain`; authored `color_mode` (`full_color`, `grayscale`, `two_tone`, default `full_color`), optional `original`, sparse `tiles`, `material`. The original retains its role, extent, interpretation, resolution and tile references independently of overrides. |
 | `capy.coverage-source/1` | Required pixel `domain`; `initial`, `default_coverage`, sparse `tiles`. Initial contour/pixel selection remains authoritative where supplied. |
 | `capy.effect/1` | Required `definition` reference; `values` keyed by parameter keys, `bindings` keyed by resource-local slots, `inputs` keyed by typed input ports. |
 | `capy.effect-definition/1` | Required `builtin` ID and parameter-data `version`. Custom definitions belong only to the private session and worker formats. |
@@ -101,6 +101,16 @@ Paper alternative fail admission. A mask is inline
 `{"source":{"ref":"…"},…}` with slot key `mask` fixed by the occurrence
 schema, and optional `enabled`, `linked`, `inverted` and `placement` values.
 The coverage source has its own paint-target identity.
+
+Paint sources write `color_mode` even at its default. Full color paint tiles use
+four channels; Grayscale and Two-tone paint tiles use two (gray and straight
+alpha), at the composition's depth and transfer. Coverage and watercolor planes
+keep their scalar descriptors. Two-tone commits black or white with binary
+coverage; its color threshold is encoded gray 0.5 for integer documents and
+linear gray 0.5 for floating documents, and its alpha threshold is 0.5.
+Layer filters operate on expanded RGB and may introduce color without changing
+the paint source's mode. A conversion preserves retained original image bytes;
+Revert to Original restores Full color.
 
 Writers omit optional fields equal to their frozen wire defaults. Required
 fields have no omission default. A changed UI default does not change the wire

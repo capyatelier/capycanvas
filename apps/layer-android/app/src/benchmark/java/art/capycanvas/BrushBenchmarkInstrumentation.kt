@@ -53,6 +53,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val mode = arguments.getString("mode", "constant")!!
             val prediction = arguments.getString("prediction", "true") == "true"
             val statsPanel = arguments.getString("statsPanel", "false") == "true"
+            val colorMode = arguments.getString("colorMode", "full_color")!!
+            check(colorMode in listOf("full_color", "grayscale", "two_tone"))
             val workload = arguments.getString("workload", "ordinary")!!
             val effectRadius = arguments.getString("effectRadius", "8")!!.toDouble()
             check(workload in listOf("ordinary", "clipped", "blurred-base"))
@@ -227,6 +229,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 }
             }
             invoke("add_layer")
+            if (colorMode != "full_color") {
+                action(obj("type" to "layer", "action" to obj("op" to "color_mode",
+                    "id" to state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id"),
+                    "epoch" to state().getJSONObject("document_file").getLong("epoch"), "mode" to colorMode)))
+                waitFor { !native { Native.renderingPending(it) } }
+            }
             val paintLayerIndex = arguments.getString("paintLayerIndex", "0")!!.toInt()
             check(paintLayerIndex in 0 until photoLayers)
             repeat(paintLayerIndex) { invoke("lower_layer") }
@@ -363,7 +371,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "brush_size" to size, "mode" to mode, "prediction" to prediction, "speed" to speed,
                 "memory_snapshots" to (arguments.getString("memorySnapshots") == "true"),
                 "stats_panel" to statsPanel,
-                "workload" to workload, "attachment_fixture" to attachmentFixture,
+                "color_mode" to colorMode, "workload" to workload, "attachment_fixture" to attachmentFixture,
                 "color_before_strokes" to colorBeforeStrokes,
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
                 "pause_ms" to pauseMs,

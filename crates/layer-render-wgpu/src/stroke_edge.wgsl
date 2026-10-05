@@ -11,6 +11,8 @@ struct Style {
     render_mode: vec4<f32>,
     transport_a: vec4<f32>,
     transport_b: vec4<f32>,
+    unused_brush_material: array<vec4<f32>, 9>,
+    color_mode: vec4<f32>,
 }
 
 struct Target {
@@ -95,5 +97,5 @@ fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> @location(0
     let straight = working_unassociate(color);
     let darken = clamp((style.edges.x * 0.18 + style.edges.y * 0.62) * band, 0.0, 0.8);
     let edge_color = straight * (1.0 - darken);
-    return mix(color, vec4<f32>(mix(straight, edge_color, band) * alpha, alpha), brush_selection_at(world));
+    return layer_color(mix(color, vec4<f32>(mix(straight, edge_color, band) * alpha, alpha), brush_selection_at(world)),WORKING_LUMA,style.color_mode.x,style.color_mode.y);
 }

@@ -237,7 +237,7 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
     composition.blend = space;
     let paper = *document.scene().order().last().unwrap();
     let paint = |document: &mut Document, name: &str, image| {
-        let source = document.artwork.paint.insert(PortableId::random(), PaintSource { domain: EXTENT, original: Some(image), raster: Default::default(), operations: Arc::default() }).unwrap();
+        let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: EXTENT, original: Some(image), raster: Default::default(), operations: Arc::default() }).unwrap();
         document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(source), name)).unwrap()
     };
     let effect = |document: &mut Document, image: bool| {

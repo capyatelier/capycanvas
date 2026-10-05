@@ -2128,7 +2128,9 @@ impl WgpuRasterizer {
         for index in 0..packet.dab_batches.len() {
             let batch = &packet.dab_batches[index];
             let block = if self.compute_dry_material(batch) { self.dry_material_block(batch) } else { 1 };
-            let record = StyleGpu::brush(self.target_extent(batch.target), batch, block, &self.device);
+            let mut record = StyleGpu::brush(self.target_extent(batch.target), batch, block, &self.device);
+            record.color_mode = layer_color_parameters(packet.scene.color_mode(batch.target), self.document_color());
+            record.color_mode[2] = f32::from(batch.style.blend_space == layer_core::BlendSpace::Perceptual);
             let offset = index * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
@@ -2138,7 +2140,8 @@ impl WgpuRasterizer {
             let record_index = packet.dab_batches.len() + index;
             self.layer_style_records.insert(handle, record_index as u32);
             let watercolor = packet.scene.source_target(handle).and_then(|target| self.watercolor_style(target, packet.dab_batches));
-            let record = StyleGpu::layer(packet.document_extent, watercolor);
+            let mut record = StyleGpu::layer(packet.document_extent, watercolor);
+            record.color_mode = layer_color_parameters(packet.scene.source_target(handle).map_or(Default::default(), |target| packet.scene.color_mode(target)), self.document_color());
             let offset = record_index * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
@@ -3578,7 +3581,8 @@ impl WgpuRasterizer {
                 new_preview_damage = new_preview_damage.union(visual_dirty);
                 let plan = BrushPassPlan::for_device(&batch.style, &self.device);
                 new_preview_requires_base |=
-                    plan.requires_destination() || batch.style.mode == DabMode::Erase;
+                    plan.requires_destination() || batch.style.mode == DabMode::Erase
+                    || packet.scene.color_mode(batch.target) != layer_core::color::LayerColorMode::FullColor;
                 preview_is_watercolor |= plan.state.watercolor_wetness;
             }
             dirty = dirty.union(visual_dirty);
@@ -3657,7 +3661,7 @@ impl WgpuRasterizer {
                 let op = &packet.scene.operations(target).ok_or(GpuRasterError::MissingPaintLayer(target))?[operation_index as usize];
                 let masking = matches!(
                     op.kind,
-                    layer_core::RasterOperationKind::ApplyMask | layer_core::RasterOperationKind::Erase { .. }
+                    layer_core::RasterOperationKind::ColorMode(_) | layer_core::RasterOperationKind::ApplyMask | layer_core::RasterOperationKind::Erase { .. }
                 );
                 if matches!(
                     op.kind,
@@ -4340,6 +4344,13 @@ struct StyleGpu {
     layer_to_brush_linear: [f32; 4],
     layer_to_brush_offset: [f32; 4],
     bristle_streak: [f32; 4],
+    color_mode: [f32; 4],
+}
+
+fn layer_color_parameters(mode: layer_core::color::LayerColorMode, color: layer_core::color::DocumentColor) -> [f32; 4] {
+    use layer_core::color::LayerColorMode::*;
+    [match mode { FullColor => 0., Grayscale => 1., TwoTone => 2. },
+        if color.depth.is_float() { 0.5 } else { color.space.decode(0.5) as f32 }, 0., 0.]
 }
 
 #[repr(C)]
@@ -4388,6 +4399,7 @@ impl StyleGpu {
             contact_c: [0.0; 4],
             bristles: [0.0; 4],
             bristle_streak: [0.0; 4],
+            color_mode: [0.0; 4],
             brush_to_layer_linear: [1., 0., 0., 1.],
             brush_to_layer_offset: [0.; 4],
             layer_to_brush_linear: [1., 0., 0., 1.],
@@ -4881,6 +4893,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("layer textured dry brush shader"),
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    &working_color::shader(&device),
                     include_str!("advanced_brush.wgsl"),
                     include_str!("brush_geometry.wgsl"),
                     include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
@@ -5812,7 +5825,7 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
     fn gpu_records_match_shader_layouts() {
         assert_eq!(mem::size_of::<Dab>(), 128);
         assert_eq!(mem::size_of::<DabGpu>(), 160);
-        assert_eq!(mem::size_of::<StyleGpu>(), 336);
+        assert_eq!(mem::size_of::<StyleGpu>(), 352);
         assert_eq!(mem::size_of::<TargetGpu>(), 32);
     }
 
@@ -5825,7 +5838,7 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
             crate::test_support::add_paint(&mut artwork, format!("Layer {id}"), [4096, 4096]);
         }
         let unused=layer_core::raster::RasterRevision::pending();unused.publish(Err("unused library source failed".into())).unwrap();
-        artwork.paint.insert(layer_core::authored::PortableId::random(),layer_core::authored::PaintSource {domain:[4096;2],raster:unused,original:None,operations:Arc::default()}).unwrap();
+        artwork.paint.insert(layer_core::authored::PortableId::random(),layer_core::authored::PaintSource { color_mode: Default::default(),domain:[4096;2],raster:unused,original:None,operations:Arc::default()}).unwrap();
         let index = Arc::new(layer_core::authored::SceneIndex::build(&artwork).unwrap());
         renderer
             .submit(FramePacket {

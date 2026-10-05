@@ -66,7 +66,7 @@ fn over_in(space: layer_core::BlendSpace, top: [f32; 4], below: [f32; 4]) -> [f3
 fn photo_document(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 4]) -> Document {
     let mut doc = Document::new(PortableId::random(), extent[0], extent[1],
         layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let paint = RecordChange::insert(&doc.artwork.paint, PaintSource {
+    let paint = RecordChange::insert(&doc.artwork.paint, PaintSource { color_mode: Default::default(),
         domain: extent, original: Some(rgba8_source(extent, pixel)),
         raster: Default::default(), operations: Default::default(),
     });

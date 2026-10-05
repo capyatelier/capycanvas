@@ -30,7 +30,7 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
         document.artwork.occurrences.get_mut(h).unwrap().opacity=0.7;
         if i%2==0 {mask(&mut document,h,0.4);}
     }
-    let source=document.artwork.paint.insert(PortableId::random(),PaintSource {domain:extent,original:None,raster:Default::default(),operations:Default::default()}).unwrap();
+    let source=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:extent,original:None,raster:Default::default(),operations:Default::default()}).unwrap();
     let base=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),"Translucent paint")).unwrap();
     let root=document.composition().result;
     document.artwork.stacks.get_mut(root).unwrap().entries.push(base);
@@ -214,7 +214,7 @@ fn independent_owner_counts_and_local_chain_lengths_bound_resident_work() {
         let root=document.composition().result;
         let mut entries=Vec::new();let mut groups=Vec::new();let mut paints=Vec::new();
         for _ in 0..owners {
-            let paint=document.artwork.paint.insert(PortableId::random(),PaintSource {domain:extent,original:Some(backing.clone()),raster:Default::default(),operations:Default::default()}).unwrap();
+            let paint=document.artwork.paint.insert(PortableId::random(),PaintSource { color_mode: Default::default(),domain:extent,original:Some(backing.clone()),raster:Default::default(),operations:Default::default()}).unwrap();
             let content=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(paint),"content")).unwrap();
             let stack=document.artwork.stacks.insert(PortableId::random(),Stack {entries:vec![content]}).unwrap();
             let group=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Stack(stack),"owner")).unwrap();

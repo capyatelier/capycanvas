@@ -106,7 +106,7 @@ fn refresh(document: &mut layer_core::Document) {
     document.working = working;
 }
 fn insert_paint(document: &mut layer_core::Document, name: &str, original: Option<Arc<SourceImage>>, index: usize) -> OccurrenceHandle {
-    let source = document.artwork.paint.insert(PortableId::random(), PaintSource {domain:document.composition().size, original, raster:Default::default(), operations:Default::default()}).unwrap();
+    let source = document.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(),domain:document.composition().size, original, raster:Default::default(), operations:Default::default()}).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(source),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.insert(index,occurrence);
     refresh(document);

@@ -74,7 +74,7 @@ impl Document {
         let canvas = self.composition().size;
         let paint = RecordChange::insert(
             &self.artwork.paint,
-            PaintSource { domain: canvas, raster: Default::default(), original: None, operations: Arc::default() },
+            PaintSource { color_mode: Default::default(), domain: canvas, raster: Default::default(), original: None, operations: Arc::default() },
         );
         let target = SourceTarget::Paint(paint.handle);
         let mut o = Occurrence::new(OccurrenceContent::Paint(paint.handle), name);
@@ -169,7 +169,7 @@ impl Document {
         let low_scene = low_doc.snapshot();
         let low_scope = SceneScope::Members(vec![blur, target].into());
         let mut allocator = self.artwork.clone();
-        let source = |domain| PaintSource { domain, raster: Default::default(), original: None, operations: Arc::default() };
+        let source = |domain| PaintSource { color_mode: Default::default(), domain, raster: Default::default(), original: None, operations: Arc::default() };
         let low = RecordChange::insert(&allocator.paint, source(canvas));
         allocator.paint.change(low.handle, low.id, low.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let high = RecordChange::insert(&allocator.paint, source(canvas));

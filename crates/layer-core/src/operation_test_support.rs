@@ -47,7 +47,7 @@ pub fn insert_paint(doc: &mut Document, name: impl Into<Arc<str>>, index: usize,
         .paint
         .insert(
             PortableId::random(),
-            PaintSource { domain: doc.composition().size, raster: Default::default(), original: None, operations: Arc::default() },
+            PaintSource { color_mode: Default::default(), domain: doc.composition().size, raster: Default::default(), original: None, operations: Arc::default() },
         )
         .unwrap();
     let o = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(p), name)).unwrap();

@@ -5709,6 +5709,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             label: l.name.to_string(),
             description: {
                 let mut parts = Vec::new();
+                if let Some(paint) = scene.paint_source(id).filter(|p| p.color_mode != layer_core::color::LayerColorMode::FullColor) { parts.push(art_layers::color_mode_label(paint.color_mode, &self.state.localization).to_string()); }
                 if l.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.blend, &self.state.localization).to_string()); }
                 if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
                 parts.join(" · ")
@@ -5776,6 +5777,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.controls = doc.working.occurrence.and_then(|id| doc.scene().occurrence(id).map(|l| art_layers::LayerControls::for_layer(doc, id, l))).unwrap_or_default();
         self.state.layers = doc.ordered_layers().iter().copied().filter(|id| !self.layer_interaction.hidden_by_group(doc, *id)).map(layer_state).collect();
         self.state.layer_tools.attachment = crate::layer_relationships::attachment_control(doc, doc.working.occurrence, self.localization());
+        self.state.layer_tools.add_filter = doc.working.occurrence.and_then(|id| self.layer_filter_menu(id));
+        self.state.layer_tools.color_mode = doc.working.occurrence.and_then(|id| self.layer_color_control(id));
         if self.selection_masks.quick() {
             let row = LayerState {
                 id: 0, selection_layer: true, quick_mask: true, can_rename: false, has_thumbnail: true,
@@ -10137,7 +10140,7 @@ mod tests {
         let mask = layer_core::authored::SourceTarget::Coverage(s.engine.document().scene().occurrence(paper_handle).unwrap().mask.as_ref().unwrap().source);
         assert_eq!(s.engine.document().drawing_target(), Some(mask));
         let document = s.engine.document();
-        let paint = layer_core::authored::RecordChange::insert(&document.artwork.paint, layer_core::authored::PaintSource {
+        let paint = layer_core::authored::RecordChange::insert(&document.artwork.paint, layer_core::authored::PaintSource { color_mode: Default::default(),
             domain: document.composition().size, original: None, raster: Default::default(), operations: Default::default(),
         });
         let occurrence = layer_core::authored::RecordChange::insert(&document.artwork.occurrences,

@@ -40,6 +40,15 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duration_ms"):
             validate_setup(self.info, self.requested)
 
+    def test_reduced_color_mode_requires_the_live_layer_to_match(self):
+        self.requested["color_mode"] = "grayscale"
+        self.info.update(color_mode="grayscale")
+        self.info["state"]["layer_tools"] = {"color_mode": {"value": "Grayscale"}}
+        validate_setup(self.info, self.requested)
+        self.info["state"]["layer_tools"]["color_mode"]["value"] = "Full color"
+        with self.assertRaisesRegex(ValueError, "layer_color_mode"):
+            validate_setup(self.info, self.requested)
+
     def test_attachment_workloads_require_the_authored_order_and_parameters(self):
         self.requested.update(photo_layers=1, paint_layer_index=0, effect_radius=8)
         for workload in ("clipped", "blurred-base"):

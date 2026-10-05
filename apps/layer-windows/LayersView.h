@@ -88,6 +88,7 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     void refresh();
     void preview();
     void connections();
+    void showMenu(J spec, FrameworkElement const& anchor);
     void context(double id,bool mask,UIElement const& anchor,
         std::optional<Windows::Foundation::Point> at={},bool holding=false,bool blendMenu=false);
 };
