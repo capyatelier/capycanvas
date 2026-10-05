@@ -100,6 +100,68 @@ fn native_layer_settings_menu() {
     pump(100);
 }
 
+#[test]
+#[ignore = "private Wayland display and native menu input"]
+fn native_layer_row_filter_menu() {
+    let app = native_test_app("art.capycanvas.LayerRowFilterMenu");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1600);
+    let base = state(&w).layer_tools.editing_layer.as_ref().unwrap().id;
+    relationship_action(&w, A::New { group: false, clipped: false });
+    let top = state(&w).layer_tools.editing_layer.as_ref().unwrap().id;
+    let item = |popover: &gtk::Popover, label: &str| {
+        widgets(popover.upcast_ref()).find(|node| node.is_mapped() && node.type_().name() == "GtkModelButton"
+            && node.property::<String>("text") == label).unwrap()
+    };
+    let submenu = |input: &mut RemoteInput, popover: &gtk::Popover, label: &str, shows: &str| {
+        let button = item(popover, label);
+        let nested = button.property::<Option<gtk::PopoverMenu>>("popover").unwrap();
+        let point = screen_point(&button, &w.window, [0.5, 0.5]);
+        input.perform(serde_json::json!([{"point":point},{"wait_ms":200}]));
+        if !nested.is_mapped() { input.click(point); }
+        until(|| nested.is_mapped() && mapped_label(nested.upcast_ref(), shows).is_some(), &format!("{label} opens"));
+        nested.upcast::<gtk::Popover>()
+    };
+    let directory = std::path::Path::new("../../artifacts/layer-row-filters/gtk").join(std::process::id().to_string());
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut input = RemoteInput::new().settle_ms(150);
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        w.dispatch(UiAction::SelectPanelTab { group: state(&w).workspace.layout.panel_group(Panel::Layers).unwrap(), panel: Panel::Layers });
+        pump(180);
+        let row = find_named(w.layer_panel.root.upcast_ref(), &format!("art-layer-{base}")).unwrap();
+        let point = screen_point(&find_css(&row, "layer-name").unwrap(), &w.surface, [0.5, 0.5]);
+        input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
+        let shown = || w.popovers.borrow().iter().filter_map(|p| p.upgrade())
+            .find(|p| p.is_visible() && mapped_label(p.upcast_ref(), "Filter").is_some());
+        until(|| shown().is_some(), "the row menu offers Filter");
+        let menu = shown().unwrap();
+        let filters = submenu(&mut input, &menu, "Filter", "Tone");
+        let tone = submenu(&mut input, &filters, "Tone", "Curves");
+        let rows = state(&w).layers.len();
+        let curves = screen_point(&item(&tone, "Curves"), &w.window, [0.5, 0.5]);
+        for (popover, name) in [(&menu, "row"), (&filters, "filter"), (&tone, "tone")] {
+            capture_popover(popover, directory.join(format!("{theme:?}-{name}.png")).to_str().unwrap());
+        }
+        input.click(curves);
+        until(|| state(&w).layers.len() == rows + 1, "the row menu adds Curves");
+        let layers = state(&w).layers;
+        let position = |id| layers.iter().position(|layer| layer.id == id).unwrap();
+        let curves = layers.iter().find(|layer| layer.adjustment_effect && layer.label == "Curves").unwrap();
+        assert!(position(base).min(position(top)) < position(curves.id) && position(curves.id) < position(base).max(position(top)),
+            "Curves lands on the row the menu opened for");
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        until(|| state(&w).layers.len() == rows, "one undo step removes it");
+    }
+    input.finish();
+    w.window.close();
+    pump(50);
+}
+
 fn relationship_action(w: &Rc<Workspace>, action: A) {
     w.dispatch(UiAction::Layer { action });
     pump(100);

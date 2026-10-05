@@ -264,11 +264,11 @@ fn active_layer_menu_keeps_typed_actions_and_literal_mask_names() {
     assert!(menu.sections.iter().flatten().any(|item| matches!(item.action, Some(UiAction::Invoke { command: CommandId::EditLayerContent }))));
     let index = ApplicationMenu::ALL.iter().position(|menu| *menu == ApplicationMenu::Layer).unwrap();
     let primary = s.header_view_with(true).primary_menu.unwrap();
-    let on_open = s.layer_menu(id, s.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage)).unwrap();
+    let on_open = s.application_menu(ApplicationMenu::Layer);
     assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&on_open.sections).unwrap());
     s.dispatch(UiAction::Layer { action: LayerAction::Lock { id, value: true } }).unwrap();
     let primary = s.header_view_with(true).primary_menu.unwrap();
-    let on_open = s.layer_menu(id, s.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage)).unwrap();
+    let on_open = s.application_menu(ApplicationMenu::Layer);
     assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&on_open.sections).unwrap());
     let coverage = s.coverage_menu_items(id, true);
     assert_eq!(coverage.len(), 4);

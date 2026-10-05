@@ -11855,10 +11855,10 @@ mod tests {
         }
         let serialize = |menu: ContextMenu| serde_json::to_value(menu.sections).unwrap();
         let doc = app.engine.document();
-        assert_eq!(
-            serialize(app.application_menu(ApplicationMenu::Layer)),
-            serialize(app.layer_menu(occurrence_token(doc.working.occurrence.unwrap()), matches!(doc.working.target,Some(SourceTarget::Coverage(_)))).unwrap())
-        );
+        let mut row = app.layer_menu(occurrence_token(doc.working.occurrence.unwrap()), matches!(doc.working.target,Some(SourceTarget::Coverage(_)))).unwrap();
+        let filter = row.sections[0].remove(1);
+        assert_eq!(filter.label, ApplicationMenu::Filter.localized_label(app.localization()).as_ref());
+        assert_eq!(serialize(app.application_menu(ApplicationMenu::Layer)), serialize(row));
         assert_eq!(
             serialize(app.application_menu(ApplicationMenu::Window)),
             serialize(app.workspace_menu())

@@ -440,6 +440,29 @@ fn the_filter_menu_inserts_fill_generators_without_default_masks_on_every_host()
 }
 
 #[test]
+fn a_layer_row_menu_offers_the_filter_menu_for_that_layer() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        let base = s.engine.document().working.occurrence.unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
+        let top = s.engine.document().working.occurrence.unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::Context { id: occurrence_token(base), mask: false } }).unwrap();
+        let filter = ApplicationMenu::Filter.localized_label(s.localization()).to_string();
+        let row = s.layer_menu(occurrence_token(base), false).unwrap();
+        let submenu = menu_item(&row.sections, &filter).unwrap();
+        assert_eq!(serde_json::to_value(&submenu.sections).unwrap(), serde_json::to_value(s.application_menu(ApplicationMenu::Filter).sections).unwrap());
+        assert!(menu_item(&s.application_menu(ApplicationMenu::Layer).sections, &filter).is_none(), "the menu bar keeps a single Filter menu");
+        assert!(menu_item(&s.layer_menu(occurrence_token(top), false).unwrap().sections, &filter).is_none(), "filters apply to the row the menu opened for");
+        s.dispatch(menu_item(&submenu.sections, "Curves").unwrap().action.clone().unwrap()).unwrap();
+        let doc = s.engine.document();
+        let created = doc.working.occurrence.unwrap();
+        assert_eq!(doc.scene().effect(created).unwrap().program.id.as_ref(), "curves");
+        let position = |handle| doc.scene().order().iter().position(|h| *h == handle).unwrap();
+        assert!(position(base).min(position(top)) < position(created) && position(created) < position(base).max(position(top)), "the filter lands on that layer, below the newer one");
+    }
+}
+
+#[test]
 fn replacing_fill_generators_preserves_the_presence_or_absence_of_a_mask() {
     let (mut s, _) = filters();
     insert_effect(&mut s, "solid_color");

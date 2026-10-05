@@ -362,7 +362,10 @@ and the icon independently; hosts keep the symbol above the preview.
 The Filter menu and the selection bar's Adjust menu list
 adjustments only; the effect browser lists both. The Filter menu ends with
 Frequency Separation…, which bakes Gaussian Blur and High Pass into new layers
-([documents](../internals/documents.md#retouching-layers)).
+([documents](../internals/documents.md#retouching-layers)). A layer row's context
+menu repeats the Filter menu after **New** for the row it opened on, which
+becomes the current layer; **Layer** in the menu bar leaves it out, so the menu
+bar and command search keep one Filter menu.
 
 For timed programs, `fx_time` supplies accumulated playback phase in seconds.
 The shared clock integrates the numeric `speed` parameter (default 1), so speed

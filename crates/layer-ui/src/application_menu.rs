@@ -124,15 +124,19 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn proof_panel_command(&self, id: CommandId) -> bool {
         matches!(id, CommandId::SoftProofSetup | CommandId::GamutWarning | CommandId::PreviewSdr)
     }
+    fn menu_command(&self, id: CommandId) -> ContextMenuItem {
+        let state = self.command(id);
+        let mut item = ContextMenuItem::command(state.label.to_string(), UiAction::Invoke { command: id });
+        item.enabled = state.enabled;
+        item.selected = id.is_toggle().then_some(state.selected);
+        item
+    }
+    pub(crate) fn filter_menu_sections(&self) -> Vec<Vec<ContextMenuItem>> {
+        vec![self.filter_category_items(), vec![self.menu_command(CommandId::FrequencySeparation)]]
+    }
     pub fn application_menu(&self, menu: ApplicationMenu) -> ContextMenu {
         use ApplicationMenu as M;
-        let command = |id: CommandId| {
-            let state = self.command(id);
-            let mut item = ContextMenuItem::command(state.label.to_string(), UiAction::Invoke { command: id });
-            item.enabled = state.enabled;
-            item.selected = id.is_toggle().then_some(state.selected);
-            item
-        };
+        let command = |id: CommandId| self.menu_command(id);
         let mut model = match menu {
             M::Primary => ContextMenu {
                 title: menu.localized_label(self.localization()).to_string(),
@@ -141,7 +145,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .into_iter()
                         .map(|id| {
                             ContextMenuItem::submenu(&id.localized_label(self.localization()), if id == M::Layer && self.selection_masks.quick() { self.quick_mask_menu().sections } else if id == M::Layer {
-                                self.layer_menu_sections(self.engine.document().working.occurrence.map(super::occurrence_token).unwrap_or(0), self.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage)).unwrap_or_default()
+                                self.layer_menu_sections(self.engine.document().working.occurrence.map(super::occurrence_token).unwrap_or(0), self.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage), false).unwrap_or_default()
                             } else { self.application_menu(id).sections })
                         })
                         .collect(),
@@ -189,9 +193,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 vec![command(CommandId::SelectionOutline)],
             ] },
             M::Layer => self
-                .layer_menu(
+                .layer_menu_with(
                     self.engine.document().working.occurrence.map(super::occurrence_token).unwrap_or(0),
                     self.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage),
+                    false,
                 )
                 .unwrap_or(ContextMenu {
                     title: menu.localized_label(self.localization()).to_string(),
@@ -206,7 +211,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             M::Filter => ContextMenu {
                 title: menu.localized_label(self.localization()).to_string(),
-                sections: vec![self.filter_category_items(), vec![command(CommandId::FrequencySeparation)]],
+                sections: self.filter_menu_sections(),
             },
             _ => {
                 let sections: &[&[CommandId]] = match menu {

@@ -1238,16 +1238,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(ContextMenu { title: self.localization().text(MessageId::RESOURCES_LAYER_MENU_BLEND_MODE).to_string(), sections: self.blend_sections(handle, layer) })
     }
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<ContextMenu, String> {
+        self.layer_menu_with(id, mask, true)
+    }
+    pub(crate) fn layer_menu_with(&self, id: u64, mask: bool, filters: bool) -> Result<ContextMenu, String> {
         if id == 0 && self.selection_masks.quick() { return Ok(self.quick_mask_menu()); }
         let handle = occurrence_handle(id)?;
         let layer = self.engine.document().scene().occurrence(handle).ok_or("Unknown layer")?;
         if layer.kind() == LayerKind::Selection { return self.selection_layer_menu(handle); }
         let mut args = FluentArgs::new(); args.set("name", layer.name.as_ref());
         let title = self.localization().format(if mask { MessageId::RESOURCES_LAYER_MENU_MASK_TITLE } else if layer.kind() == LayerKind::Group { MessageId::RESOURCES_LAYER_MENU_GROUP_TITLE } else { MessageId::RESOURCES_LAYER_MENU_LAYER_TITLE }, &args);
-        Ok(ContextMenu { title, sections: self.layer_menu_sections(id, mask)? }
+        Ok(ContextMenu { title, sections: self.layer_menu_sections(id, mask, filters)? }
             .with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization()))
     }
-    pub(super) fn layer_menu_sections(&self, id: u64, mask: bool) -> Result<Vec<Vec<ContextMenuItem>>, String> {
+    pub(super) fn layer_menu_sections(&self, id: u64, mask: bool, filters: bool) -> Result<Vec<Vec<ContextMenuItem>>, String> {
         use LayerAction as A;
         if id == 0 && self.selection_masks.quick() { return Ok(self.quick_mask_menu().sections); }
         let doc = self.engine.document();
@@ -1405,7 +1408,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 organization.push(item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_UNGROUP).as_ref(), A::Ungroup { id }));
             }
             let mask_menu = if l.mask.is_some() {
-                let mut sections = self.layer_menu_sections(id, true)?;
+                let mut sections = self.layer_menu_sections(id, true, false)?;
                 sections[0][0] = routed(self.localization().text(MessageId::RESOURCES_LAYER_MENU_EDIT_MASK).as_ref(), CommandId::EditLayerMask, A::Select { id, mask: true });
                 sections
             } else {
@@ -1523,7 +1526,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     },
                 ),
             ]];
-            if Some(handle) == doc.working.occurrence {
+            let current = Some(handle) == doc.working.occurrence;
+            if current {
                 new.push(self.fill_layer_items());
                 new.push(
                     [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer]
@@ -1537,7 +1541,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 );
             }
             vec![
-                vec![ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW).as_ref(), new)],
+                [
+                    Some(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW).as_ref(), new)),
+                    (filters && current && !mask)
+                        .then(|| ContextMenuItem::submenu(&ApplicationMenu::Filter.localized_label(self.localization()), self.filter_menu_sections())),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
                 vec![
                     ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_ORGANIZE).as_ref(), vec![organization]),
                     ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_BLEND_MODE).as_ref(), self.blend_sections(handle, l)),
