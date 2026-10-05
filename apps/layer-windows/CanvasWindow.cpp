@@ -1327,6 +1327,12 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     status.TextWrapping(suspended?TextWrapping::Wrap:TextWrapping::NoWrap);
     status.Margin(suspended?Thickness{24,24,24,24}:Thickness{0,0,0,40});
     SendLaunchFiles(model);
+    if(auto sessionWindows=uint32_t(num(object(model,L"windows_recovery"),L"windows"));sessionWindows&&!sessionWindowsOpened&&createWindow){
+        sessionWindowsOpened=true;
+        window.DispatcherQueue().TryEnqueue([weak=weak_from_this(),sessionWindows]{
+            if(auto self=weak.lock();self&&!self->closing)for(uint32_t index=0;index<sessionWindows;++index)self->createWindow();
+        });
+    }
     auto storage=object(model,L"windows_workspace");
     if(flag(storage,L"ready")){
         auto next=uint64_t(num(storage,L"switcher_revision"));

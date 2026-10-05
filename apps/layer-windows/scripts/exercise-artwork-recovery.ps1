@@ -40,8 +40,11 @@ function Close-Review {
     if(!$review.WaitForExit(15000)){throw 'Session flush did not complete window close'}
     if($review.ExitCode -ne 0){throw "Clean close failed: $($review.ExitCode)"}
 }
+function Session-File {
+    @(Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -Filter session.json -Recurse)|Sort-Object {(Get-Content $_.FullName -Raw|ConvertFrom-Json).generation} -Descending|Select-Object -First 1
+}
 function Session-Index {
-    @(Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -Filter session.json -Recurse)|ForEach-Object{Get-Content $_.FullName -Raw|ConvertFrom-Json}|Sort-Object generation -Descending|Select-Object -First 1
+    $file=Session-File;if($file){Get-Content $file.FullName -Raw|ConvertFrom-Json}
 }
 function Settled-Checkpoint([int]$Count){
     Wait-Until {$index=Session-Index;$index -and @($index.drawings).Count -eq $Count -and !(Model).windows_recovery.busy} 'Session checkpoint did not become durable' 120
@@ -88,6 +91,7 @@ try {
     Crash-Review
     Start-Review 'crash-reopen'
     if((Signature) -ne $before){throw 'Crash restart changed tab order, active drawing, size, modified state or Undo/Redo'}
+    if(!(Model).state.document_file.recovered){throw 'Crash restart did not mark the drawing recovered'}
     Capture 'crash-reopened' -WithModel
     Command 'Edit' 'redo'
     Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Restored Redo did not apply'
@@ -177,9 +181,46 @@ try {
     [IO.File]::WriteAllBytes($manifest.FullName,$original)
     Invoke-Control 'Retry Storage'
     Wait-Until {!(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring -and !(Model).windows_recovery.error -and (Signature) -eq $remaining} 'Retry did not reopen the preserved drawing' 120
+    Command 'File' 'new_document'
+    Wait-Until {Find-Id 'document-width'} 'New drawing did not open'
+    Invoke-Control 'Create'
+    Wait-Until {@((Model).windows_tabs.tabs).Count -eq 2 -and !(Model).state.document_file.busy} 'New drawing did not open beside the restored one'
+    Invoke-Control 'Test pen'
+    Start-Sleep -Seconds 3
+    Settled-Checkpoint 2
+    $index=Session-Index
+    $session=(Session-File).DirectoryName
+    Close-Review
+    $damaged=@($index.drawings|Where-Object id -ne $index.active)[0]
+    $head=Join-Path $session "$($damaged.key)/head.json"
+    $headBytes=[IO.File]::ReadAllBytes($head)
+    [IO.File]::WriteAllText($head,'unreadable')
+    Start-Review 'unreadable-drawing'
+    Wait-Until {Find-Name 'Recover drawing'} 'An unreadable drawing did not ask what to do'
+    if(@((Model).windows_tabs.tabs).Count -ne 1){throw 'An unreadable drawing kept the readable one closed'}
+    Capture 'unreadable-drawing' -WithModel
+    Invoke-Control 'Later'
+    Wait-Until {!(Find-Name 'Recover drawing')} 'Later did not dismiss the recovery choice'
+    Close-Review
+    Start-Review 'retry-drawing'
+    Wait-Until {Find-Name 'Recover drawing'} 'A drawing left for later was not offered again'
+    [IO.File]::WriteAllBytes($head,$headBytes)
+    Invoke-Control 'Retry Storage'
+    Wait-Until {@((Model).windows_tabs.tabs).Count -eq 2 -and !(Model).windows_recovery.busy} 'Retry did not reopen the repaired drawing' 120
+    Start-Sleep -Seconds 3
+    Settled-Checkpoint 2
+    Close-Review
+    [IO.File]::WriteAllText($head,'unreadable')
+    Start-Review 'discard-drawing'
+    Wait-Until {Find-Name 'Recover drawing'} 'An unreadable drawing did not ask again'
+    Invoke-Control 'Discard recovery copy'
+    Settled-Checkpoint 1
+    Close-Review
+    Start-Review 'after-discard'
+    if((Find-Name 'Recover drawing') -or @((Model).windows_tabs.tabs).Count -ne 1){throw 'A discarded drawing came back'}
     Close-Review
     foreach($log in Get-ChildItem $run -Filter '*.stderr.log'){if($log.Length){throw "Native error in $($log.Name)"}}
-    [pscustomobject]@{theme=$Theme;automatic_crash_and_clean_restart='passed';tabs_active_and_history='passed';save_cancel_and_discard='passed';missing_and_changed_original_close_protection='passed';closed_drawing_stays_closed='passed';idle_write_coalescing='passed';corrupt_source_preserved_and_retried='passed';scope='isolated Windows UI on selected adapter'}|ConvertTo-Json
+    [pscustomobject]@{theme=$Theme;automatic_crash_and_clean_restart='passed';tabs_active_and_history='passed';save_cancel_and_discard='passed';missing_and_changed_original_close_protection='passed';closed_drawing_stays_closed='passed';idle_write_coalescing='passed';corrupt_source_preserved_and_retried='passed';unreadable_drawing_later_retry_discard='passed';scope='isolated Windows UI on selected adapter'}|ConvertTo-Json
 } catch {
     [Console]::Error.WriteLine($_.ScriptStackTrace)
     throw

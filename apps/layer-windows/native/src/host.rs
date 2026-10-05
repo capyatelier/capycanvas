@@ -1044,7 +1044,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
             windows_active_tag: host.native.session.localization().language().tag(),
             windows_display: serde_json::json!({"output": host.display, "format": host.config.as_ref().map(|c| format!("{:?}", c.format)), "headroom": host.config.as_ref().map_or(1., |c| host.display.available_headroom(c.format)), "analysis": host.documents.as_ref().map(|s| s.tone.status())}),
             windows_rendering_suspended: host.native.session.rendering_suspended(),
-            windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status()),
+            windows_recovery: host.documents.as_ref().and_then(|d| d.recovery.as_ref()).map(|service| service.status(host.native.session.localization())),
             windows_tabs: host.documents.as_ref().map(|d| d.tabs_view(&host.native)),
             windows_palettes: host.documents.as_ref().map(|d| d.palettes.status()),
             windows_tab_styles: {

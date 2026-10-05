@@ -1,5 +1,5 @@
 use crate::{document_io::io_error, documents::recovery_environment};
-use layer_core::package::session_store::{OwnerLock, SessionStore, create_directory,collect_unreferenced_stores};
+use layer_core::package::session_store::{OwnerLock, SessionStore, create_directory,collect_unreferenced_stores,prepare_store_retirement};
 use layer_host::{
     NativeHost, Renderer,
     window::{DocumentWindow, Parked},
@@ -24,6 +24,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 static NEXT: AtomicU64 = AtomicU64::new(1);
+static LAUNCHED: AtomicBool = AtomicBool::new(false);
 fn key() -> String {
     format!(
         "{:x}-{:x}-{:x}",
@@ -61,7 +62,7 @@ impl Storage {
             stores: BTreeMap::new(),
         })
     }
-    fn open(root: &std::path::Path) -> Result<Self, String> {
+    fn open(root: &std::path::Path) -> Result<(Self, usize), String> {
         create_directory(root)?;
         let mut candidates = Vec::new();
         for entry in fs::read_dir(root).map_err(|e| io_error("list sessions", e))? {
@@ -87,11 +88,17 @@ impl Storage {
                 collect_unreferenced_stores(directory,&Default::default(),&AtomicBool::new(false))?;
             }
         }
+        let mut claimed = None;
+        let mut others = 0;
         for (_, directory) in candidates {
             let Some(lease) = OwnerLock::claim(&directory.join("owner.lock"))? else {
                 continue;
             };
             let path = directory.join("session.json");
+            if claimed.is_some() {
+                others += usize::from(matches!(SessionManifest::read(&path), Ok(Some(manifest)) if !manifest.drawings.is_empty()));
+                continue;
+            }
             let Some(manifest)=SessionManifest::read(&path)? else {continue};
             if manifest.drawings.is_empty() {
                 continue;
@@ -107,9 +114,9 @@ impl Storage {
                 storage.publish(manifest, &AtomicBool::new(false))?;
             }
             collect_unreferenced_stores(&storage.directory,&storage.manifest.drawings.iter().map(|drawing|drawing.key.clone()).collect(),&AtomicBool::new(false))?;
-            return Ok(storage);
+            claimed = Some(storage);
         }
-        Self::create(root)
+        Ok((match claimed {Some(storage)=>storage,None=>Self::create(root)?}, others))
     }
     fn publish(
         &mut self,
@@ -134,13 +141,70 @@ impl Storage {
         for key in self.stores.keys().filter(|key|!reachable.contains(*key)).cloned().collect::<Vec<_>>() {self.stores.get_mut(&key).unwrap().retire()?;self.stores.remove(&key);}
         collect_unreferenced_stores(&self.directory,&reachable,cancel)?;Ok(())
     }
-
+    fn begin_restore(&mut self,id:u64,retry:bool,cancel:&AtomicBool)->Result<SessionRestoreAttempt,String>{
+        let manifest=if retry {self.manifest.retry_restore(id)?} else {self.manifest.begin_restore(id)?};self.publish(manifest,cancel)?;
+        self.manifest.restoring.iter().find(|attempt|attempt.id==id).copied().ok_or_else(||"Session restore attempt is missing".into())
+    }
+    fn finish_restore(&mut self,attempt:SessionRestoreAttempt,success:bool,cancel:&AtomicBool)->Result<(),String>{
+        let manifest=self.manifest.finish_restore(attempt,success)?;self.publish(manifest,cancel)
+    }
+    fn read(&mut self,drawing:&SessionDrawing,limits:layer_core::ProjectLimits,cancel:&AtomicBool)->Result<(SessionRestore,bool),String>{
+        let store=self.store(drawing.id,&drawing.key)?;
+        let opened=store.load(limits,cancel)?.ok_or("Session drawing is missing")?;
+        let recovered=store.recovered_previous();
+        Ok((SessionRestore::from_core(opened)?,recovered))
+    }
+    fn discard(&mut self,id:u64,cancel:&AtomicBool)->Result<(),String>{
+        let Some(drawing)=self.manifest.drawings.iter().find(|drawing|drawing.id==id).cloned() else {return Ok(())};
+        self.stores.remove(&drawing.key);prepare_store_retirement(&self.directory.join(&drawing.key))?;
+        let manifest=self.manifest.remove(id)?;self.publish(manifest,cancel)?;self.collect(cancel)
+    }
+    fn decode(&mut self,limits:layer_core::ProjectLimits,admit:impl Fn(Vec<&layer_core::Editor>)->Result<(),String>,cancel:&AtomicBool)->Result<Decoded,String>{
+        let recovered=!self.manifest.clean_exit;
+        let mut drawings=self.manifest.drawings.clone();
+        drawings.sort_by_key(|drawing|drawing.id!=self.manifest.active);
+        let mut decoded=Decoded::default();
+        for drawing in drawings {
+            if self.manifest.blocked.contains(&drawing.id) {decoded.failed.push(drawing.key);continue;}
+            let attempt=self.begin_restore(drawing.id,false,cancel)?;
+            let result=self.read(&drawing,limits,cancel).and_then(|(restore,previous)|{
+                admit(decoded.drawings.iter().map(|(_,_,restore,_)|&restore.editor).chain(std::iter::once(&restore.editor)).collect())?;Ok((restore,previous))
+            });
+            match result {
+                Ok((restore,previous))=>decoded.drawings.push((drawing.id,attempt,restore,recovered||previous)),
+                Err(error)=>{if cancel.load(Ordering::Acquire){return Err(error);}self.finish_restore(attempt,false,cancel)?;decoded.failed.push(drawing.key);decoded.errors.push(error);}
+            }
+        }
+        Ok(decoded)
+    }
+}
+#[derive(Default)]
+struct Decoded{drawings:Vec<(u64,SessionRestoreAttempt,SessionRestore,bool)>,failed:Vec<String>,errors:Vec<String>}
+fn prepare(environment:&layer_host::open::OpenEnvironment,restored:SessionRestore,recovered:bool,active:bool,stopping:&AtomicBool)->Result<Box<UiSession<Renderer>>,String>{
+    let mut candidate=environment.prepare(restored.document().clone(),||stopping.load(Ordering::Acquire))?;
+    let observed=restored.state.location.as_ref().and_then(|location|DestinationFingerprint::observe_path(std::path::Path::new(&location.uri),restored.state.destination.as_ref()));
+    candidate.restore_session(restored,recovered,observed)?;
+    let deadline=Instant::now()+layer_host::open::PREPARE_DEADLINE;
+    while !candidate.can_park_document()||candidate.retained_document_tiles().try_blobs()?.is_none(){
+        if stopping.load(Ordering::Acquire){return Err("Session operation cancelled".into());}
+        candidate.frame(0,0)?;
+        if let Some(renderer)=candidate.engine().backend().0.as_ref(){renderer.device().poll(wgpu::PollType::Poll).map_err(|error|error.to_string())?;}
+        if Instant::now()>=deadline{return Err("Session drawing preparation timed out".into());}
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    if !active {candidate.park_document()?;drop(candidate.renderer_mut().0.take());}
+    Ok(candidate)
 }
 enum Job {
     Restore {
         environment: Box<layer_host::open::OpenEnvironment>,
     },
-    Adopt{mapping:Vec<(u64,u64)>,attempts:Vec<SessionRestoreAttempt>},
+    RestoreDrawing {
+        id: u64,
+        environment: Box<layer_host::open::OpenEnvironment>,
+    },
+    Adopt{mapping:Vec<(u64,u64)>,attempts:Vec<(SessionRestoreAttempt,bool)>},
+    Discard{id:u64},
     Capture {
         manifest: SessionManifest,
         captures: Vec<(u64, SessionCapture)>,
@@ -156,8 +220,9 @@ enum Job {
     Stop,
 }
 enum Finished {
-    Opened(Result<SessionManifest, String>),
-    Restored(Result<PreparedRestore, String>),
+    Opened(Result<(SessionManifest, usize), String>),
+    Restored{result:Result<PreparedRestore, String>,manifest:Option<SessionManifest>},
+    RestoredDrawing{result:Result<(u64,SessionRestoreAttempt,Box<UiSession<Renderer>>),String>,manifest:Option<SessionManifest>},
     Captured{result:Result<(),String>,manifest:Option<SessionManifest>},
     Updated{result:Result<(),String>,manifest:Option<SessionManifest>},
 }
@@ -166,13 +231,16 @@ enum Finished {
 pub(crate) enum Action {
     Retry,
     KeepOpen,
+    Later { id: u64 },
+    Discard { id: u64 },
+    RestoreDrawing { id: u64 },
 }
 pub(crate) struct Restored {
     pub candidates: Vec<(u64, Box<UiSession<Renderer>>)>,
     pub active: u64,
     pub stamp: SessionStamp,
 }
-struct PreparedRestore{candidates:Vec<(u64,Box<UiSession<Renderer>>)>,attempts:Vec<SessionRestoreAttempt>}
+struct PreparedRestore{candidates:Vec<(u64,Box<UiSession<Renderer>>)>,attempts:Vec<SessionRestoreAttempt>,failed:Vec<String>,errors:Vec<String>}
 pub(crate) struct Service {
     send: SyncSender<Job>,
     receive: Receiver<Finished>,
@@ -187,6 +255,12 @@ pub(crate) struct Service {
     restore_queue: VecDeque<u64>,
     restore_mapping:Vec<(u64,u64)>,
     restore_attempts:Vec<SessionRestoreAttempt>,
+    retained: Vec<String>,
+    asking: VecDeque<String>,
+    retry: Option<u64>,
+    restored_drawing: Option<(u64,SessionRestoreAttempt,Box<UiSession<Renderer>>)>,
+    restore_errors: Vec<String>,
+    windows: usize,
     ready: bool,
     busy: bool,
     restoring: bool,
@@ -204,49 +278,43 @@ impl Service {
         let cancel = Arc::new(AtomicBool::new(false));
         let stopping = cancel.clone();
         let thread=std::thread::Builder::new().name("capy-session".into()).stack_size(8*1024*1024).spawn(move||{
-            let (mut storage,initial)=match Storage::open(&root){Ok(storage)=>{let manifest=storage.manifest.clone();(Some(storage),Ok(manifest))},Err(error)=>(None,Err(error))};let _=reply.send(Finished::Opened(initial));wake();
+            let (mut storage,initial)=match Storage::open(&root){Ok((storage,others))=>{let manifest=storage.manifest.clone();(Some(storage),Ok((manifest,if LAUNCHED.swap(true,Ordering::AcqRel){0}else{others})))},Err(error)=>(None,Err(error))};let _=reply.send(Finished::Opened(initial));wake();
             while let Ok(job)=jobs.recv(){
                 let completed=match job {
                     Job::Stop=>break,Job::RetireSession(session)=>{drop(session);continue},Job::RetireRenderer(renderer)=>{drop(renderer);continue},
-                    Job::Retry=>{if let Some(storage)=&mut storage {let result=(||{let mut manifest=storage.manifest.clone();manifest.restoring.clear();manifest.blocked.clear();manifest.generation=manifest.generation.checked_add(1).ok_or("Session generation exhausted")?;storage.publish(manifest,&stopping)?;storage.collect(&stopping)?;Ok(())})();let _=reply.send(Finished::Updated{result,manifest:Some(storage.manifest.clone())});wake();}else{let result=Storage::open(&root).map(|next|{let manifest=next.manifest.clone();storage=Some(next);manifest});let _=reply.send(Finished::Opened(result));wake();}continue},
-                    Job::Fresh=>{let result=Storage::create(&root).map(|next|{let manifest=next.manifest.clone();storage=Some(next);manifest});Finished::Opened(result)},
-                    Job::Adopt{mapping,attempts}=>{let result=(||{let storage=storage.as_mut().ok_or("Session storage is unavailable")?;let mut manifest=storage.manifest.clone();for attempt in attempts{manifest=manifest.finish_restore(attempt,true)?;}let manifest=manifest.remap(&mapping)?;storage.publish(manifest,&stopping)?;Ok(())})();let _=reply.send(Finished::Updated{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())});wake();continue},
-                    Job::Restore{environment}=>Finished::Restored((||{
+                    Job::Retry=>{if let Some(storage)=&mut storage {let result=(||{let mut manifest=storage.manifest.clone();manifest.restoring.clear();manifest.blocked.clear();manifest.generation=manifest.generation.checked_add(1).ok_or("Session generation exhausted")?;storage.publish(manifest,&stopping)?;storage.collect(&stopping)?;Ok(())})();let _=reply.send(Finished::Updated{result,manifest:Some(storage.manifest.clone())});wake();}else{let result=Storage::open(&root).map(|(next,_)|{let manifest=next.manifest.clone();storage=Some(next);(manifest,0)});let _=reply.send(Finished::Opened(result));wake();}continue},
+                    Job::Fresh=>{let result=Storage::create(&root).map(|next|{let manifest=next.manifest.clone();storage=Some(next);(manifest,0)});Finished::Opened(result)},
+                    Job::Adopt{mapping,attempts}=>{let result=(||{let storage=storage.as_mut().ok_or("Session storage is unavailable")?;let mut manifest=storage.manifest.clone();for (attempt,success) in attempts{manifest=manifest.finish_restore(attempt,success)?;}let manifest=manifest.remap(&mapping)?;storage.publish(manifest,&stopping)?;Ok(())})();let _=reply.send(Finished::Updated{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())});wake();continue},
+                    Job::Discard{id}=>{let result=storage.as_mut().ok_or_else(||"Session storage is unavailable".to_string()).and_then(|storage|storage.discard(id,&stopping));let _=reply.send(Finished::Updated{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())});wake();continue},
+                    Job::Restore{environment}=>{let result=(||{
                         let storage=storage.as_mut().ok_or("Session storage is unavailable")?;
-                        if !storage.manifest.restoring.is_empty()||!storage.manifest.blocked.is_empty(){return Err("A drawing could not finish reopening. Its session copy has been kept.".into());}
-                        let mut drawings=storage.manifest.drawings.clone();
-                        if let Some(position)=drawings.iter().position(|drawing|drawing.id==storage.manifest.active){drawings.swap(0,position);}
-                        let recovered=!storage.manifest.clean_exit;
-                        let mut decoded:Vec<(u64,SessionRestore,bool)>=Vec::new();
-                        let mut attempts=Vec::new();
-                        for drawing in drawings {
-                            let manifest=storage.manifest.begin_restore(drawing.id)?;storage.publish(manifest,&stopping)?;
-                            attempts.push(*storage.manifest.restoring.iter().find(|attempt|attempt.id==drawing.id).ok_or("Session restore attempt is missing")?);
-                            let store=storage.store(drawing.id,&drawing.key)?;
-                            let opened=store.load(environment.limits(),&stopping)?.ok_or("Session drawing is missing")?;
-                            let drawing_recovered=recovered||store.recovered_previous();
-                            let restored=SessionRestore::from_core(opened)?;
-                            environment.admit_sessions(decoded.iter().map(|(_,restore,_)|&restore.editor).chain(std::iter::once(&restored.editor)))?;
-                            decoded.push((drawing.id,restored,drawing_recovered));
-                        }
-                        let mut candidates=Vec::new();
-                        for (id,restored,recovered) in decoded {
-                            let mut candidate=environment.prepare(restored.document().clone(),||stopping.load(Ordering::Acquire))?;
-                            let observed=restored.state.location.as_ref().and_then(|location|DestinationFingerprint::observe_path(std::path::Path::new(&location.uri),restored.state.destination.as_ref()));
-                            candidate.restore_session(restored,recovered,observed)?;
-                            let deadline=Instant::now()+layer_host::open::PREPARE_DEADLINE;
-                            while !candidate.can_park_document()||candidate.retained_document_tiles().try_blobs()?.is_none(){
-                                if stopping.load(Ordering::Acquire){return Err("Session operation cancelled".into());}
-                                candidate.frame(0,0)?;
-                                if let Some(renderer)=candidate.engine().backend().0.as_ref(){renderer.device().poll(wgpu::PollType::Poll).map_err(|error|error.to_string())?;}
-                                if Instant::now()>=deadline{return Err("Session drawing preparation timed out".into());}
-                                std::thread::sleep(Duration::from_millis(2));
+                        let Decoded{drawings,mut failed,mut errors}=storage.decode(environment.limits(),|editors|environment.admit_sessions(editors),&stopping)?;
+                        let mut prepared=PreparedRestore{candidates:Vec::new(),attempts:Vec::new(),failed:Vec::new(),errors:Vec::new()};
+                        for (id,attempt,restored,recovered) in drawings {
+                            match prepare(&environment,restored,recovered,prepared.candidates.is_empty(),&stopping) {
+                                Ok(candidate)=>{prepared.attempts.push(attempt);prepared.candidates.push((id,candidate));}
+                                Err(error)=>{
+                                    if stopping.load(Ordering::Acquire){return Err(error);}
+                                    storage.finish_restore(attempt,false,&stopping)?;
+                                    failed.extend(storage.manifest.drawings.iter().find(|drawing|drawing.id==id).map(|drawing|drawing.key.clone()));errors.push(error);
+                                }
                             }
-                            if id!=storage.manifest.active {candidate.park_document()?;drop(candidate.renderer_mut().0.take());}
-                            candidates.push((id,candidate));
                         }
-                        Ok(PreparedRestore{candidates,attempts})
-                    })()),
+                        prepared.failed=failed;prepared.errors=errors;
+                        Ok(prepared)
+                    })();Finished::Restored{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())}},
+                    Job::RestoreDrawing{id,environment}=>{let result=(||{
+                        let storage=storage.as_mut().ok_or("Session storage is unavailable")?;
+                        let drawing=storage.manifest.drawings.iter().find(|drawing|drawing.id==id).cloned().ok_or("Session drawing is missing")?;
+                        let attempt=storage.begin_restore(id,true,&stopping)?;
+                        let result=storage.read(&drawing,environment.limits(),&stopping).and_then(|(restored,_)|{
+                            environment.admit_sessions(std::iter::once(&restored.editor))?;prepare(&environment,restored,true,false,&stopping)
+                        });
+                        match result {
+                            Ok(candidate)=>Ok((id,attempt,candidate)),
+                            Err(error)=>{if !stopping.load(Ordering::Acquire){storage.finish_restore(attempt,false,&stopping)?;}Err(error)}
+                        }
+                    })();Finished::RestoredDrawing{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())}},
                     Job::Capture{manifest,captures}=>{let result=(||{
                         let storage=storage.as_mut().ok_or("Session storage is unavailable")?;
                         if manifest.generation!=storage.manifest.generation {return Err("Stale session checkpoint membership".into());}
@@ -284,6 +352,12 @@ impl Service {
             restore_queue: VecDeque::new(),
             restore_mapping:vec![],
             restore_attempts:vec![],
+            retained: vec![],
+            asking: VecDeque::new(),
+            retry: None,
+            restored_drawing: None,
+            restore_errors: vec![],
+            windows: 0,
             ready: false,
             busy: true,
             restoring: false,
@@ -329,7 +403,8 @@ impl Service {
             self.changed = true;
             match completed {
                 Finished::Opened(result) => match result {
-                    Ok(manifest) => {
+                    Ok((manifest, windows)) => {
+                        self.windows = windows;
                         self.restore_queue = manifest.drawings.iter().map(|d| d.id).collect();
                         if let Some(position) = self
                             .restore_queue
@@ -343,12 +418,12 @@ impl Service {
                     }
                     Err(error) => self.error = Some(error),
                 },
-                Finished::Restored(result) => match result {
-                    Ok(PreparedRestore{candidates,attempts}) => {
-                        self.restore_attempts=attempts;
+                Finished::Restored{result,manifest} => {if let Some(manifest)=manifest{self.manifest=manifest;}match result {
+                    Ok(PreparedRestore{candidates,attempts,failed,errors}) => {
+                        self.restore_attempts=attempts;self.retained=failed;self.restore_errors=errors;
                         self.restored = Some(Restored {
+                            active: candidates.first().map_or(0,|(id,_)|*id),
                             candidates,
-                            active: self.manifest.active,
                             stamp: self
                                 .startup_stamp
                                 .take()
@@ -359,7 +434,11 @@ impl Service {
                         self.restoring = false;
                         self.error = Some(error)
                     }
-                },
+                }},
+                Finished::RestoredDrawing{result,manifest}=>{if let Some(manifest)=manifest{self.manifest=manifest;}match result {
+                    Ok(restored)=>self.restored_drawing=Some(restored),
+                    Err(error)=>self.restore_errors.push(error),
+                }},
                 Finished::Updated{result,manifest}=>{
                     if let Some(manifest)=manifest{self.manifest=manifest;}
                     if let Err(error)=result{self.error=Some(error);}
@@ -378,7 +457,7 @@ impl Service {
             self.closing = false;
             self.closed = false;
         }
-        if self.ready && !self.busy && self.error.is_none() && self.restored.is_none() {
+        if self.ready && !self.busy && self.error.is_none() && self.restored.is_none() && self.restored_drawing.is_none() {
             if !self.restore_queue.is_empty() {
                 if host.session.can_park_document() {
                     let mut environment = recovery_environment(&host.session)?;
@@ -392,6 +471,12 @@ impl Service {
                         environment: Box::new(environment),
                     });
                 }
+            } else if let Some(id) = self.retry.filter(|_| !quitting && host.session.can_park_document()) {
+                let mut environment = recovery_environment(&host.session)?;
+                environment.admission = window.documents.admission(&host.session.retained_document_tiles());
+                self.retry = None;
+                self.busy = true;
+                self.queue(Job::RestoreDrawing { id, environment: Box::new(environment) });
             } else if !host.session.recovery_document().busy && (quitting || Instant::now() >= self.next_observation) {
                 self.next_observation = Instant::now() + Duration::from_secs(2);
                 let closing_drawing = host.session.state().document_file.close_ready && !quitting;
@@ -432,6 +517,10 @@ impl Service {
                     }
                     stamps.insert(id, stamp);
                 }
+                manifest.drawings.extend(self.manifest.drawings.iter().filter(|drawing| self.retained.contains(&drawing.key)).cloned());
+                if manifest.active == 0 {
+                    manifest.active = manifest.drawings.first().map_or(0, |drawing| drawing.id);
+                }
                 if !captures.is_empty()
                     || manifest.drawings != self.manifest.drawings
                     || manifest.active != self.manifest.active
@@ -455,8 +544,8 @@ impl Service {
     pub fn complete_restore(&mut self, result: Result<(), String>) -> Result<(), String> {
         if result.is_ok() {
             self.restore_queue.clear();
-            self.manifest.restoring.clear();
-            let mapping=std::mem::take(&mut self.restore_mapping);let attempts=std::mem::take(&mut self.restore_attempts);self.busy=true;self.queue(Job::Adopt{mapping,attempts});
+            let mapping=std::mem::take(&mut self.restore_mapping);let attempts=std::mem::take(&mut self.restore_attempts).into_iter().map(|attempt|(attempt,true)).collect();self.busy=true;self.queue(Job::Adopt{mapping,attempts});
+            self.asking=self.retained.iter().cloned().collect();
         } else {
             self.error = result.err();
         }
@@ -467,6 +556,30 @@ impl Service {
     }
     pub fn remap_restored(&mut self,mapping:Vec<(u64,u64)>)->Result<(),String>{
         self.manifest=self.manifest.remap(&mapping)?;self.restore_mapping=mapping;Ok(())
+    }
+    pub fn retained_ids(&self)->Vec<u64>{
+        self.manifest.drawings.iter().filter(|drawing|self.retained.contains(&drawing.key)).map(|drawing|drawing.id).collect()
+    }
+    pub fn take_restored_drawing(&mut self)->Option<(u64,SessionRestoreAttempt,Box<UiSession<Renderer>>)>{
+        self.restored_drawing.take()
+    }
+    pub fn complete_drawing(&mut self,attempt:SessionRestoreAttempt,restored:Option<u64>)->Result<(),String>{
+        let mapping=restored.filter(|id|*id!=attempt.id).map(|id|vec![(attempt.id,id)]).unwrap_or_default();
+        if restored.is_some() {
+            let key=self.manifest.drawings.iter().find(|drawing|drawing.id==attempt.id).map(|drawing|drawing.key.clone());
+            self.retained.retain(|retained|Some(retained)!=key.as_ref());
+            self.manifest=self.manifest.remap(&mapping)?;
+        }
+        self.busy=true;self.queue(Job::Adopt{mapping,attempts:vec![(attempt,restored.is_some())]});
+        self.next_observation=Instant::now();self.changed=true;
+        self.drain()
+    }
+    pub fn take_errors(&mut self)->Option<String>{
+        (!self.restore_errors.is_empty()).then(||std::mem::take(&mut self.restore_errors).join("\n"))
+    }
+    fn answer(&mut self,id:u64)->Result<String,String>{
+        let key=self.manifest.drawings.iter().find(|drawing|drawing.id==id).map(|drawing|drawing.key.clone()).filter(|key|self.asking.front()==Some(key)).ok_or("This drawing is not waiting for a recovery choice")?;
+        self.asking.pop_front();Ok(key)
     }
     pub fn restore_order(&self) -> Vec<u64> {
         self.manifest
@@ -500,6 +613,19 @@ impl Service {
                 }
                 self.error = None;
             }
+            Action::Later { id } => {
+                self.answer(id)?;
+            }
+            Action::Discard { id } => {
+                let key = self.answer(id)?;
+                self.retained.retain(|retained| *retained != key);
+                self.busy = true;
+                self.queue(Job::Discard { id });
+            }
+            Action::RestoreDrawing { id } => {
+                self.answer(id)?;
+                self.retry = Some(id);
+            }
         }
         self.changed = true;
         self.drain()
@@ -515,8 +641,10 @@ impl Service {
         not(target_os = "windows"),
         expect(dead_code, reason = "Used by the Windows host")
     )]
-    pub fn status(&self) -> serde_json::Value {
-        serde_json::json!({"busy":self.busy,"restoring":self.restoring,"closing":self.closing,"ready":self.close_ready(),"error":self.error})
+    pub fn status(&self, localization: &layer_ui::Localizer) -> serde_json::Value {
+        let drawing=self.asking.front().and_then(|key|self.manifest.drawings.iter().find(|drawing|drawing.key==*key)).map(|drawing|drawing.id);
+        serde_json::json!({"busy":self.busy,"restoring":self.restoring,"closing":self.closing,"ready":self.close_ready(),
+            "error":self.error.as_ref().map(|error|layer_ui::document_recovery_unavailable(localization,error)),"drawing":drawing,"retained":self.retained.len(),"windows":self.windows})
     }
     #[cfg_attr(
         not(target_os = "windows"),
@@ -534,6 +662,9 @@ impl Service {
             for (_, candidate) in restored.candidates {
                 self.queue(Job::RetireSession(candidate));
             }
+        }
+        if let Some((_, _, candidate)) = self.restored_drawing.take() {
+            self.queue(Job::RetireSession(candidate));
         }
         while let Some(job) = self.deferred.pop_front() {
             self.send.send(job).map_err(|_| "Session worker stopped")?;
@@ -568,12 +699,12 @@ mod tests {
         original.store(7,"drawing-seven").unwrap().commit(&prepared,&cancel).unwrap();
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:7,key:"drawing-seven".into()},SessionDrawing{id:4,key:"drawing-four".into()}],4,false).unwrap();
         original.publish(manifest,&cancel).unwrap();
-        let concurrent=Storage::open(&root.path).unwrap();assert_ne!(concurrent.directory,original.directory);assert!(concurrent.manifest.drawings.is_empty());
+        let concurrent=Storage::open(&root.path).unwrap().0;assert_ne!(concurrent.directory,original.directory);assert!(concurrent.manifest.drawings.is_empty());
         drop(concurrent);
         let directory=original.directory.clone();drop(original);
-        let mut restored=Storage::open(&root.path).unwrap();assert_eq!(restored.directory,directory);assert_eq!(restored.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[7,4]);assert_eq!(restored.manifest.active,4);
+        let mut restored=Storage::open(&root.path).unwrap().0;assert_eq!(restored.directory,directory);assert_eq!(restored.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[7,4]);assert_eq!(restored.manifest.active,4);
         let closed=restored.manifest.remove(4).unwrap();restored.publish(closed,&cancel).unwrap();restored.store(4,"drawing-four").unwrap().retire().unwrap();drop(restored);
-        let reopened=Storage::open(&root.path).unwrap();assert_eq!(reopened.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[7]);assert_eq!(reopened.manifest.active,7);
+        let reopened=Storage::open(&root.path).unwrap().0;assert_eq!(reopened.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[7]);assert_eq!(reopened.manifest.active,7);
     }
     #[test]
     fn stale_membership_cannot_resurrect_an_explicitly_closed_drawing() {
@@ -585,18 +716,36 @@ mod tests {
     fn staged_first_checkpoint_remains_reachable_after_interruption() {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
         let staged=storage.manifest.stage(vec![SessionDrawing{id:9,key:"first-drawing".into()}],9).unwrap();storage.publish(staged,&cancel).unwrap();let directory=storage.directory.clone();drop(storage);
-        let mut reopened=Storage::open(&root.path).unwrap();assert_eq!(reopened.directory,directory);assert_eq!(reopened.manifest.drawings[0].id,9);assert!(!reopened.manifest.clean_exit);
+        let mut reopened=Storage::open(&root.path).unwrap().0;assert_eq!(reopened.directory,directory);assert_eq!(reopened.manifest.drawings[0].id,9);assert!(!reopened.manifest.clean_exit);
         assert!(reopened.store(9,"first-drawing").unwrap().load(Default::default(),&cancel).unwrap().is_none());
         let prepared=capture().prepare(&cancel).unwrap();reopened.store(9,"first-drawing").unwrap().commit(&prepared,&cancel).unwrap();drop(reopened);
-        let mut completed=Storage::open(&root.path).unwrap();assert_eq!(completed.manifest.drawings[0].key,"first-drawing");assert!(completed.store(9,"first-drawing").unwrap().load(Default::default(),&cancel).unwrap().is_some());
+        let mut completed=Storage::open(&root.path).unwrap().0;assert_eq!(completed.manifest.drawings[0].key,"first-drawing");assert!(completed.store(9,"first-drawing").unwrap().load(Default::default(),&cancel).unwrap().is_some());
     }
     #[test]
     fn interrupted_restore_is_blocked_and_corrupt_membership_is_preserved() {
         let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:1,key:"drawing".into()}],1,true).unwrap();storage.publish(manifest,&cancel).unwrap();
         let interrupted=storage.manifest.begin_restore(1).unwrap();storage.publish(interrupted,&cancel).unwrap();let directory=storage.directory.clone();drop(storage);
-        let restored=Storage::open(&root.path).unwrap();assert_eq!(restored.manifest.blocked,[1]);assert!(restored.manifest.restoring.is_empty());drop(restored);
+        let restored=Storage::open(&root.path).unwrap().0;assert_eq!(restored.manifest.blocked,[1]);assert!(restored.manifest.restoring.is_empty());drop(restored);
         fs::write(directory.join("session.json"),b"incomplete membership").unwrap();assert!(Storage::open(&root.path).is_err());assert_eq!(fs::read(directory.join("session.json")).unwrap(),b"incomplete membership");
+    }
+    #[test]
+    fn an_unreadable_drawing_waits_for_a_choice_while_the_others_reopen() {
+        let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
+        let prepared=capture().prepare(&cancel).unwrap();storage.store(2,"readable").unwrap().commit(&prepared,&cancel).unwrap();
+        let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:5,key:"unreadable".into()},SessionDrawing{id:2,key:"readable".into()}],5,false).unwrap();storage.publish(manifest,&cancel).unwrap();
+        let decoded=storage.decode(Default::default(),|_|Ok(()),&cancel).unwrap();
+        assert_eq!(decoded.drawings.iter().map(|(id,..)|*id).collect::<Vec<_>>(),[2]);assert_eq!(decoded.failed,["unreadable"]);assert_eq!(decoded.errors.len(),1);
+        assert_eq!(storage.manifest.blocked,[5]);storage.finish_restore(decoded.drawings[0].1,true,&cancel).unwrap();
+        let directory=storage.directory.clone();drop(decoded);drop(storage);
+        let mut reopened=Storage::open(&root.path).unwrap().0;assert_eq!(reopened.directory,directory);
+        let decoded=reopened.decode(Default::default(),|_|Ok(()),&cancel).unwrap();
+        assert_eq!(decoded.drawings.iter().map(|(id,..)|*id).collect::<Vec<_>>(),[2]);assert_eq!(decoded.failed,["unreadable"]);assert!(decoded.errors.is_empty());
+        reopened.finish_restore(decoded.drawings[0].1,true,&cancel).unwrap();drop(decoded);
+        assert!(reopened.begin_restore(5,true,&cancel).is_ok());assert!(reopened.read(&SessionDrawing{id:5,key:"unreadable".into()},Default::default(),&cancel).is_err());
+        let attempt=*reopened.manifest.restoring.iter().find(|attempt|attempt.id==5).unwrap();reopened.finish_restore(attempt,false,&cancel).unwrap();
+        reopened.discard(5,&cancel).unwrap();assert_eq!(reopened.manifest.drawings,[SessionDrawing{id:2,key:"readable".into()}]);assert!(reopened.manifest.blocked.is_empty());drop(reopened);
+        let restarted=Storage::open(&root.path).unwrap().0;assert_eq!(restarted.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[2]);
     }
     #[test]
     fn cancelled_checkpoint_keeps_the_previous_artwork_and_history() {

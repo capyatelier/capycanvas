@@ -170,11 +170,24 @@ impl DocumentService {
         restored: crate::recovery::Restored,
     ) -> Result<(), String> {
         let crate::recovery::Restored { mut candidates, active, stamp } = restored;
-        let order=self.recovery.as_ref().unwrap().restore_order();
-        let result=if self.window.documents.order().len()==1&&host.session.can_replace_startup_session(&stamp){
-            self.window.restore_sessions(host,&mut candidates,active,stamp,|session|Parked{session}).and_then(|retired|{self.window.documents.restore_order(&order,active)?;Ok(retired)})
+        let recovery=self.recovery.as_mut().unwrap();
+        let order=recovery.restore_order().into_iter().filter(|id|candidates.iter().any(|(candidate,_)|candidate==id)).collect::<Vec<_>>();
+        let retained=recovery.retained_ids();
+        let result=if !candidates.is_empty()&&self.window.documents.order().len()==1&&host.session.can_replace_startup_session(&stamp){
+            self.window.restore_sessions(host,&mut candidates,active,stamp,|session|Parked{session}).and_then(|retired|{self.window.documents.restore_order(&order,active)?;self.window.documents.reserve_identities(&retained)?;Ok(retired)})
         }else{
-            self.window.append_restored_sessions(host,&mut candidates,|session|Parked{session}).and_then(|(mapping,retired)|{self.recovery.as_mut().unwrap().remap_restored(mapping)?;Ok(retired)})
+            (||{
+                let mut used=recovery.restore_order().into_iter().chain(self.window.documents.order().iter().copied()).collect::<std::collections::BTreeSet<_>>();
+                let mut mapping=Vec::new();let mut reserved=Vec::new();
+                for id in retained {
+                    let target=if self.window.documents.order().contains(&id) {(1..=layer_ui::MAX_SESSION_DRAWING_ID).find(|id|!used.contains(id)).ok_or("No drawing identity is available")?} else {id};
+                    used.insert(target);reserved.push(target);if target!=id {mapping.push((id,target));}
+                }
+                self.window.documents.reserve_identities(&reserved)?;
+                let retired=if candidates.is_empty() {Vec::new()} else {let (appended,retired)=self.window.append_restored_sessions(host,&mut candidates,|session|Parked{session})?;mapping.extend(appended);retired};
+                recovery.remap_restored(mapping)?;
+                Ok(retired)
+            })()
         };
         match result {
             Ok(retired)=>{for renderer in retired{self.worker.retire_renderer(Renderer(Some(renderer)));}self.document_retired(host)?;self.recovery.as_mut().unwrap().complete_restore(Ok(()))?;},
@@ -303,6 +316,20 @@ impl DocumentService {
         if !self.activating && self.active.is_none() && host.session.can_park_document()
             && let Some(restored) = self.recovery.as_mut().and_then(|r| r.take_restored()) {
             self.adopt_recovery(host, restored)?;
+        }
+        if !self.activating && self.active.is_none() && host.session.can_park_document()
+            && let Some((id, attempt, candidate)) = self.recovery.as_mut().and_then(|r| r.take_restored_drawing()) {
+            let mut candidate = Some(candidate);
+            let restored = match self.window.hydrate_restored(host, &mut candidate, id, |session| Parked { session }) {
+                Ok((restored, retired)) => {self.worker.retire_renderer(Renderer(retired));Some(restored)}
+                Err(error) => {if let Some(candidate) = candidate {self.worker.retire(candidate);}host.error = Some(layer_ui::document_recovery_unavailable(host.session.localization(), &error));None}
+            };
+            self.recovery.as_mut().unwrap().complete_drawing(attempt, restored)?;
+            host.invalidate_snapshot();
+        }
+        if let Some(error) = self.recovery.as_mut().and_then(|r| r.take_errors()) {
+            host.error = Some(layer_ui::document_recovery_unavailable(host.session.localization(), &error));
+            host.invalidate_snapshot();
         }
         if self.close_next && self.idle() && host.session.can_park_document() {
             self.close_next = false;

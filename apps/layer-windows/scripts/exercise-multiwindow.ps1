@@ -160,7 +160,9 @@ try {
     Invoke 'Test stroke' -Name
     Wait-Until {(Model).state.document_file.modified} 'First window did not draw'
     if((Model $second).state.document_file.modified){throw 'Drawing dirtied the other document'}
-    [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$first.hwnd)
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'file'
+    Wait-Until {$item=Find 'close_document';$item -and $item.Current.IsEnabled} 'File menu did not offer Close'
+    Invoke 'close_document'
     Wait-Until {$null -ne (Find 'document-dialog')} 'Dirty close did not open its owning dialog'
     Use-Window $second
     Invoke 'Test stroke' -Name
@@ -221,7 +223,6 @@ try {
         Close-Preferences
     }
     [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$first.hwnd)
-    Invoke 'Discard Changes' -Name -Within (Control 'document-dialog')
     if($FailPreferences){
         function Wait-PreferenceRecovery {
             Wait-Until {
@@ -257,16 +258,25 @@ try {
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),78)
     Wait-Until {@(Windows).Count -eq 2} 'Ctrl+Shift+N failed after the original window closed'
     $third=@(Windows|Where-Object id -ne $second.id)[0];Ready $third
-    if((Model $third).state.settings.dark_base -ne $expectedDark -or (Model $third).state.settings.light_base -ne '#dcecfb'){throw 'New window did not inherit current preferences'}
+    $inherited=@{settings=$null};Wait-Until {$inherited.settings=(Model $third).state.settings;$null -ne $inherited.settings} 'New window did not publish its preferences'
+    if($inherited.settings.dark_base -ne $expectedDark -or $inherited.settings.light_base -ne '#dcecfb'){throw 'New window did not inherit current preferences'}
     Use-Window $second
     [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$second.hwnd)
-    Invoke 'Discard Changes' -Name -Within (Control 'document-dialog')
     Wait-Until {![CapyWindowTest]::IsWindow([IntPtr]$second.hwnd)} 'Second window did not close'
     [CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$third.hwnd)
     if(!$review.WaitForExit(5000)){throw 'Final window process exit exceeded five seconds'}
     if($review.ExitCode -ne 0){throw "Native process exited $($review.ExitCode)"}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{new_window_menu='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';preferences_close_recovery=if($FailPreferences){'owned recovery, peer Undo/Redo, failed retry, repaired save and new-window inheritance passed'}else{'not requested'};gpu_recovery=if($RecoverGpu){'both windows recover two shared device removals, retained state and Undo/Redo'}else{'not requested'};scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
+    $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+    $null=$review.Handle
+    Wait-Until {@(Windows).Count -eq 2} 'Restart did not reopen both windows with unsaved drawings' 60
+    foreach($window in @(Windows)){Wait-Until {$m=Model $window;$m.brush_ready -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} "Window $($window.id) did not finish reopening" 60}
+    if(@(Windows|Where-Object {(Model $_).state.document_file.modified}).Count -ne 2){throw 'Restart did not bring back both unsaved drawings'}
+    foreach($window in @(Windows)){[CapyWindowTest]::Close([uint32]$review.Id,[IntPtr]$window.hwnd)}
+    if(!$review.WaitForExit(15000)){throw 'Reopened windows did not close'}
+    if($review.ExitCode -ne 0){throw "Native process exited $($review.ExitCode)"}
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+    [pscustomobject]@{new_window_menu='passed';restart_reopens_every_window='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';preferences_close_recovery=if($FailPreferences){'owned recovery, peer Undo/Redo, failed retry, repaired save and new-window inheritance passed'}else{'not requested'};gpu_recovery=if($RecoverGpu){'both windows recover two shared device removals, retained state and Undo/Redo'}else{'not requested'};scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{

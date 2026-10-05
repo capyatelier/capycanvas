@@ -54,11 +54,12 @@ function Minimize {
     [CapyWindowLifecycle]::ShowWindowAsync($handle,6)|Out-Null
     Wait-Until {[CapyWindowLifecycle]::IsIconic($handle)} 'Review did not minimize'
 }
-function Close-Decision([bool]$Maximized,[string]$Choice) {
-    $review.CloseMainWindow()|Out-Null
-    Wait-Until {![CapyWindowLifecycle]::IsIconic($handle)} 'Unsaved decision left its owner minimized'
+function Close-Drawing([string]$Choice) {
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'file'
+    Wait-Until {$item=Find 'close_document';$item -and $item.Current.IsEnabled} 'File menu did not offer Close'
+    Invoke 'close_document'
     Wait-Until {$button=Button $Choice;$button -and !$button.Current.IsOffscreen} 'Unsaved decision is not visible'
-    if([CapyWindowLifecycle]::IsZoomed($handle) -ne $Maximized){throw 'Unsaved decision changed the pre-minimize maximized state'}
+    if(![CapyWindowLifecycle]::IsZoomed($handle)){throw 'Unsaved decision changed the maximized state'}
     (Button $Choice).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     if($Choice -eq 'Cancel'){
         Wait-Until {$model=Model;$model -and !$model.state.document_file.busy} 'Cancelled close did not finish'
@@ -76,8 +77,7 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
     $env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
-    foreach($scenario in @('startup','warming','clean','dirty')){
-        $dirty=$scenario -eq 'dirty'
+    foreach($scenario in @('startup','warming','clean','dirty','restored')){
         $stderr=Join-Path $run ("$scenario.stderr.log")
         $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
         $null=$review.Handle # Keep exit-code observation valid after a fast close.
@@ -101,28 +101,30 @@ try {
             Check-Closed
             continue
         }
-        if(!$dirty){
+        if($scenario -eq 'clean'){
             Lose-Gpu
             Minimize
             $review.CloseMainWindow()|Out-Null
             Check-Closed
             continue
         }
-        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
-        Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the document'
-        Lose-Gpu
-        Minimize
-        Close-Decision $false 'Cancel'
+        if($scenario -eq 'dirty'){
+            & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
+            Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the document'
+            Lose-Gpu
+            Minimize
+            $review.CloseMainWindow()|Out-Null
+            Check-Closed
+            continue
+        }
+        Wait-Until {$model=Model;$model.state.document_file.modified -and !$model.windows_recovery.busy -and !$model.windows_recovery.restoring} 'Closing the window did not keep the unsaved drawing' 60
+        Wait-Canvas
         [CapyWindowLifecycle]::ShowWindowAsync($handle,3)|Out-Null
         Wait-Until {[CapyWindowLifecycle]::IsZoomed($handle)} 'Review did not maximize'
         Lose-Gpu
-        Minimize
-        Close-Decision $true 'Cancel'
-        [CapyWindowLifecycle]::ShowWindowAsync($handle,9)|Out-Null
-        Wait-Until {![CapyWindowLifecycle]::IsZoomed($handle)} 'Review did not restore from maximized state'
+        Close-Drawing 'Cancel'
         Lose-Gpu
-        Minimize
-        Close-Decision $false 'Discard Changes'
+        Close-Drawing 'Discard Changes'
         Check-Closed
     }
     [PSCustomObject]@{
@@ -130,9 +132,9 @@ try {
         shader_warmup_close='passed'
         startup_close_requested_before_brush_ready=$startupBeforeReady
         clean_minimized_close='passed'
-        visible_unsaved_decision_from_minimized='passed'
+        dirty_minimized_close_keeps_drawing='passed'
         cancelled_close_preserves_drawing='passed'
-        maximized_state_survives_minimize_and_prompt='passed'
+        maximized_state_survives_prompt='passed'
         restored_caption_measurements_and_error_status='passed'
         discard_and_zero_exit='passed'
         gpu_recovery_overlap=if($RecoverGpu){'forced device loss queued with close, minimize, Cancel and Discard'}else{'not requested'}

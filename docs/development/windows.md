@@ -51,7 +51,9 @@ the system FXC compiler, which is several times slower. Set
 copied beside the executable, so development builds run unpackaged.
 
 Ordinary restarts reopen saved and untitled drawings automatically, retaining tab
-order, the active drawing, camera, selection and bounded Undo/Redo. Closing the
+order, the active drawing, camera, selection and bounded Undo/Redo. The first
+window's session worker counts the other saved window sessions, and the app opens
+one window for each so every window returns at launch. Closing the
 window flushes the session asynchronously and destroys its GPU and storage owners
 on a worker after detaching the surface; explicitly closing a drawing still
 uses Save/Discard/Cancel and removes its durable membership before cleanup.
@@ -62,8 +64,13 @@ Unchanged drawings produce no periodic writes. Atomic publication preserves the
 previous complete drawing checkpoint when storage fails, and live windows hold
 exclusive leases. Startup admits the complete session before preparing renderers;
 inactive drawings use one scratch renderer at a time. The active canvas appears
-after this bounded preparation of all tabs. Unfinished restore attempts remain on disk and require an
-explicit retry; Keep Open starts a separate session while retaining those copies.
+after this bounded preparation of all tabs. A drawing that cannot be read or
+prepared, or whose restore was interrupted, stays on disk with its identity
+reserved while the others reopen; the window then asks about each one with the
+shared Later, Discard and Retry copy. Retry prepares that drawing on the session
+worker and adds it as an inactive tab. Storage failures for the whole session
+present Retry or Keep Open; Keep Open starts a separate session while retaining
+those copies.
 A restored destination is checked before saving so external changes cannot be
 silently overwritten. Use Save As when the original drawing changed.
 File workers use `color_storage::export_profile` for imported profiles in export
@@ -75,8 +82,7 @@ status, available output names and bounded preview, with Copy Original, Export
 Preview and Close actions. Copy Original writes the retained package bytes on the
 document worker. Export Preview appears when the package has a verified preview
 and writes those exact PNG bytes to a new destination on the document worker.
-Unsupported portable packages remain in that view. Private session failures
-retain their snapshots on disk and present Retry or Keep Open.
+Unsupported portable packages remain in that view.
 
 Language changes prepare shared copy on the profile worker, then update retained
 controls in every window using that private profile. Publication waits for native

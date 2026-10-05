@@ -54,6 +54,7 @@ private:
     std::function<void()> createWindow,testDeviceLoss;
     std::function<void(uint64_t)> onClosed,workspacePreferencesChanged;
     std::optional<uint64_t> workspacePreferencesRevision;
+    bool sessionWindowsOpened=false;
     void TraceState(char const* kind,std::string const& value)const;
     winrt::Microsoft::UI::Xaml::Controls::SwapChainPanel panel;
     winrt::Microsoft::UI::Xaml::Controls::ContentControl canvasFocus;

@@ -24,7 +24,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     static hstring depthValue(int index){return std::array<hstring,4>{L"U8",L"U16",L"F16",L"F32"}.at(index);}
     Dispatch send,report;
     PreviewTransport query;
-    hstring workflowStamp,recoveryStamp,packageStamp;
+    hstring workflowStamp,recoveryStamp,drawingStamp,packageStamp;
     bool busyDialog=false,busyCompleted=false;
     std::function<void()> changed;
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
@@ -620,6 +620,18 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
         dialog=nullptr;presentationChanged={};if(!stopping)send(to_string(O({{L"operation",S(L"recovery")},{L"action",O({{L"op",S(action)}})}}).Stringify()));showing=false;changed();
     }
+    fire_and_forget recoverDrawing(double id){
+        auto lifetime=shared_from_this();showing=true;changed();hstring action=L"later";
+        try{
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());
+            TextBlock text;text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);dialog.Content(text);
+            presentationChanged=[this,text]{dialog.Title(box_value(recovery(L"title")));dialog.PrimaryButtonText(recovery(L"retry"));dialog.SecondaryButtonText(recovery(L"discard"));dialog.CloseButtonText(recovery(L"later"));text.Text(recovery(L"explanation"));};
+            presentationChanged();dialog.DefaultButton(ContentDialogButton::Close);
+            auto result=co_await dialog.ShowAsync();
+            if(result==ContentDialogResult::Primary)action=L"restore_drawing";else if(result==ContentDialogResult::Secondary)action=L"discard";
+        }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
+        dialog=nullptr;presentationChanged={};if(!stopping)send(to_string(O({{L"operation",S(L"recovery")},{L"action",O({{L"op",S(action)},{L"id",N(id)}})}}).Stringify()));showing=false;changed();
+    }
     hstring busyTitle(J const& state){auto title=str(state,L"title");return title.empty()?str(object(catalog,L"bootstrap"),L"preparing_document"):title;}
     fire_and_forget working(J state){
         auto lifetime=shared_from_this();showing=true;busyDialog=true;busyCompleted=false;changed();
@@ -650,6 +662,11 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         if(failure.empty())recoveryStamp=L"";
         if(!flag(recovery,L"busy")&&!failure.empty()){
             auto stamp=failure+L"/"+(flag(recovery,L"closing")?L"close":L"open");if(stamp!=recoveryStamp){recoveryStamp=stamp;recovering(recovery);return;}
+        }
+        auto drawing=recovery.GetNamedValue(L"drawing",JsonValue::CreateNullValue());
+        if(drawing.ValueType()!=JsonValueType::Number)drawingStamp=L"";
+        else if(!flag(recovery,L"busy")&&failure.empty()){
+            auto stamp=to_hstring(uint64_t(drawing.GetNumber()));if(stamp!=drawingStamp){drawingStamp=stamp;recoverDrawing(drawing.GetNumber());return;}
         }
         auto document=object(model,L"windows_document");
         if(str(document,L"type")==L"workflow_busy"||str(document,L"type")==L"opening_busy"||str(document,L"type")==L"package_busy"){handled=uint32_t(num(document,L"id"));working(document);return;}

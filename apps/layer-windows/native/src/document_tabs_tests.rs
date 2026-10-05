@@ -46,7 +46,7 @@ fn settle(service: &mut DocumentService, host: &mut NativeHost) {
         assert!(
             Instant::now() < deadline,
             "drawing transition did not settle: {:?}; recovery: {:?}; requests: {:?}; park: {}; startup: {:?}",
-            service.tabs_view(host),service.recovery.as_ref().map(|recovery|recovery.status()),host.session.state().requests,host.session.can_park_document(),host.startup
+            service.tabs_view(host),service.recovery.as_ref().map(|recovery|recovery.status(host.session.localization())),host.session.state().requests,host.session.can_park_document(),host.startup
         );
         std::thread::sleep(Duration::from_millis(2));
     }
