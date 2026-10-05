@@ -457,6 +457,9 @@ presentation.
 and copy, typing and refusal, value scrubbing and arrow steps, Current, the
 swatch sheet and its search, remembered formats, canvas picking through the
 strip, Use Color and the Paper's fill thumbnail.
+`enclose-fill` (dark) and `enclose-fill:light` draw an Enclose and Fill loop with
+the mouse over reference ink: two closed holes fill a new layer, a crossed hole
+and the exterior stay empty, and one Undo, Redo and Escape behave as on GTK.
 
 `exercise-workspace-pickup.ps1 -DebuggerPath <cdb.exe>` attaches CDB before input
 and saves an access-violation stack and dump in the run directory.
