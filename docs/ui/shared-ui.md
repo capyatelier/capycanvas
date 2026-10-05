@@ -484,7 +484,7 @@ visibility settings. The shared row marks inherited hiding for a dimmed eye.
 Showing the owner restores effects that were not individually hidden.
 Thumbnail editing marks identify editable paint, saved selection or mask pixels;
 filter, fill and folder icons do not show them. The narrow content-to-mask button
-uses distinct vertical linked and broken-chain symbols. GTK uses a 10px icon and
+uses distinct vertical linked and broken-chain symbols. GTK and Web use a 10px icon and
 minimum width for this control. Solo keeps individually hidden
 children hidden and restores visibility through undo and redo.
 Use Selection is a normal icon button with squircle corners, a transparent idle

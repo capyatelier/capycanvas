@@ -26,7 +26,7 @@ the former 8–10px circular corners.
   Controls 24px tall or shorter become capsules.
 - **Concave joins** (tab feet, drawer bridges and expanded-panel joins) keep
   their sizes and use inverted squircle curves.
-- GTK layer and mask thumbnails use full squircles. Their editing target has
+- GTK and Web layer and mask thumbnails use full squircles. Their editing target has
   a 3px outer border in the resolved accent color, replacing the faint idle
   edge without covering preview pixels or changing the hit area. Type badges
   sit inside the preview corners.

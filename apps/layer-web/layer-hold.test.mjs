@@ -13,6 +13,19 @@ export async function checkLayerHolding({call, evaluate, settle}) {
   const order=()=>evaluate("layerApp.state().layers.map(l=>String(l.id))");
   const menu=()=>evaluate("document.querySelector('.panel-context-menu').matches(':popover-open')");
   const rect=selector=>evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};})()`);
+  const thumbnailPixels = async selector => {
+    const shot = await call("Page.captureScreenshot",{format:"png"});
+    return evaluate(`(async()=>{
+      const button=document.querySelector(${JSON.stringify(selector)}),r=button.getBoundingClientRect(),image=new Image();
+      image.src='data:image/png;base64,${shot.data}';await image.decode();
+      const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
+      const at=(x,y)=>Array.from(ctx.getImageData(Math.floor(x*devicePixelRatio),Math.floor(y*devicePixelRatio),1,1).data);
+      return {edge:at(r.x+15,r.y-1),accent:[...getComputedStyle(button).outlineColor.match(/[\\d.]+/g).slice(0,3).map(Number),255],
+        corner:at(r.x+2,r.y+2),background:at(r.x-4,r.y+2),inside:at(r.x+4,r.y+4),
+        preview:[[15,2],[2,15],[27,15],[15,27]].map(([x,y])=>at(r.x+x,r.y+y))};
+    })()`);
+  };
   const saved=await evaluate("layerApp.state().workspace");
   let down=false,device="touch",point;
   const input=async(type,p=point)=>{
@@ -85,6 +98,19 @@ export async function checkLayerHolding({call, evaluate, settle}) {
       await click(`${source} .layer-name`);
       assert.equal(await evaluate("layerApp.state().layer_tools.editing_layer.mask_selected"),true,"active row keeps mask editing");
       assert.deepEqual(await checked(),before.slice(0,2),"active row keeps checked companions");
+      const mask = `${source} [aria-label="Edit layer mask"]`;
+      assert.equal((await rect(mask)).width,30,"thumbnail hit area stays fixed");
+      assert.equal((await rect(`${source} .layer-link`)).width,10,"mask link is narrower");
+      const active = await thumbnailPixels(mask);
+      assert.deepEqual(active.edge,active.accent,"outer editing edge uses the accent color");
+      await click(`${source} .layer-thumbnail`);
+      const idle = await thumbnailPixels(mask);
+      assert.deepEqual(idle.corner,idle.background,"full squircle clears the preview corner");
+      assert.notDeepEqual(idle.inside,idle.background,"full squircle retains pixels beyond a circular corner");
+      assert.deepEqual(active.preview,idle.preview,"editing border leaves preview edge pixels unchanged");
+      assert.notDeepEqual(active.edge,idle.edge,"editing border replaces the idle edge outside the preview");
+      await click(mask);
+      await capture(`thumbnail-squircles-${theme}`);
       await click(`${source} .layer-link`);
       assert.equal(await evaluate(`document.querySelector('${source} .layer-link svg').dataset.asset`),"unlink");
       assert.equal(await evaluate(`document.querySelector('${source} .layer-link').getAttribute('aria-pressed')`),"false");
@@ -110,7 +136,7 @@ export async function checkLayerHolding({call, evaluate, settle}) {
       await send({type:"layer",action:{op:"select",id:Number(before[0]),mask:false}});
       await send({type:"effect",action:{op:"insert",effect:"curves"}});
       const effect = await evaluate("String(layerApp.state().layer_tools.editing_layer.id)");
-      assert.equal(await evaluate(`document.querySelector('#layer-rows .layer-row[data-layer="${effect}"] .layer-thumbnail').classList.contains('editing-target')`),false,"filter icon has no editable-pixel corners");
+      assert.equal(await evaluate(`document.querySelector('#layer-rows .layer-row[data-layer="${effect}"] .layer-thumbnail').classList.contains('editing-target')`),false,"filter icon has no editing border");
       await capture(`filter-selected-${theme}`);
       await send({type:"invoke",command:"undo"});
       await send({type:"layer",action:{op:"select",id:Number(before[0]),mask:false}});
@@ -118,7 +144,8 @@ export async function checkLayerHolding({call, evaluate, settle}) {
       device="mouse";
       const start = await rect(`${source} .layer-name`), target = await rect(`#layer-rows .layer-row[data-layer="${before[2]}"]`);
       await input("down",{x:start.x+start.width/2,y:start.y+start.height/2});
-      await input("move",{x:target.x+target.width/2,y:target.y+target.height-3});await input("up");
+      await input("move",{x:target.x+target.width/2,y:target.y+target.height-3});
+      await capture(`thumbnail-drag-${theme}`);await input("up");
       assert.deepEqual(await order(),[before[2],...before.slice(0,2),...before.slice(3)],"drag moves the checked block in stack order");
       await send({type:"invoke",command:"undo"});assert.deepEqual(await order(),before);
       await send({type:"layer",action:{op:"select",id:Number(before[0]),mask:false}});
@@ -164,7 +191,7 @@ export async function checkLayerHolding({call, evaluate, settle}) {
       assert.equal(await evaluate("document.querySelector('#layer-rows').scrollTop"),stopped,"cancelled drag stops edge scrolling");
       assert.deepEqual(await order(),scrollingOrder);
     }
-    console.log("PASS: layer range/group/delete, checked drag, content corners, mask link, accessibility, edge scrolling, whole-row holds and undo/redo");
+  console.log("PASS: layer range/group/delete, checked drag, thumbnail squircles and outer editing borders, mask link, accessibility, edge scrolling, whole-row holds and undo/redo");
   } finally {
     if(down)await input(device==="touch"?"cancel":"up");
     await evaluate("document.querySelector('.panel-context-menu').hidePopover()");
