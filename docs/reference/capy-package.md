@@ -199,6 +199,74 @@ the format. New fields must represent authored
 intent; runtime layouts, caches, preview settings and editor organization stay
 outside the file.
 
+### Adding controls after GA
+
+Use a built-in **parameter-data version bump with an explicit converter** when
+adding an authored control to a released built-in. New readers recognize the
+released source version, validate its complete values against that version's
+schema, then convert to the supported representation before current-schema
+validation. The converter inserts the documented value that preserves the
+earlier control intent; it does not consult a later insertion default. Preserve
+all other authored values and resources. Writers save every parameter of the
+resulting version, including defaults and hidden controls.
+
+A missing required value in a package claiming the current version remains
+invalid. Do not add a key to a released version and recover missing values by
+guessing. Unknown future built-ins, versions, keys or choices remain unsupported.
+An older app preserves the original package and may display an independently
+verified cached preview; it cannot promise an editable document or a fresh
+read-only render of effects it does not understand.
+
+This is the extension rule for released GA data, not an implementation of a
+conversion framework. Add each concrete converter with an unchanged older-file
+regression, including save/reopen and resources, when that extension ships.
+Pre-release replacements still need no compatibility reader. Future controls
+have no reserved field today, and their neutral/default values are not frozen
+until their introduction requires a concrete conversion decision.
+
+Algorithm improvements in the explicitly evolving artistic filters follow the
+[illustration rendering policy](../development/illustration-filters-proposal.md#release-policy-small-saved-controls-evolving-artistic-rendering).
+They do not require parameter-data versions solely to retain an old appearance.
+Saved IDs, units, accepted values and resources remain interpretable; changes to
+those data meanings still use the extension rule above. The current evaluation
+tables and hardware fixtures describe the implemented baseline. Enabling this
+exception for a filter requires its implementation and tests to distinguish
+stable data/geometry/alpha invariants from reviewed artistic appearance changes;
+it does not authorize weakening unrelated color or sampling contracts.
+
+### Planned GA filter data
+
+The [illustration design](../development/illustration-filters-proposal.md#decisions-before-implementation)
+coordinates these additions with the
+[object-layer records](../history/object-layer-ga-design.md#5-minimal-ga-records-and-ownership).
+They are implementation requirements, not already supported wire fields:
+
+- Actual image inputs reference the shared `capy.image/1`, with a per-use
+  `color` or `data` role. Raw data sampling ignores profile conversion without
+  discarding the shared image's interpretation. Do not invent another image
+  resource or add empty future graph input maps.
+- Frame-dependent effects save the spatial reference they actually evaluate.
+  Crop compensates its origin and retains its reference extent, preserving
+  pattern phase and percentage geometry after composition-origin removal. The
+  frame and temporary capture edges never replace true source boundaries.
+- Seeds use Number with Count dimension and inclusive range `0..16777215`.
+  Reject fractional wire values before conversion to f32; save Randomize as an
+  ordinary authored edit. This does not promise support for every u32 value.
+- Serialized bundled-asset IDs are permanent. Artistic pixels may evolve; a
+  retired ID needs an explicit, cycle-free mapping to an available replacement.
+  Internal assets with no serialized selection need no portable ID. Imported
+  images remain retained authored samples.
+- Freeze each new parameter's accepted type, units, bounds, choices and coupled
+  constraints before that filter's release. Do not narrow a released accepted
+  range; slider ranges and processing admission are separate. Unsupported work
+  must not silently clamp authored values.
+
+Ship each data contract with its actual consumer and fixtures. A future filter
+can reuse the package envelope while remaining unsupported by an older reader;
+no unimplemented filter or parameter is reserved solely to avoid that outcome.
+
+### Private custom filters
+
 Custom filters are not yet part of the portable format. A writer refuses to save
 artwork that uses one, and a reader opens a package containing one as preserved.
 The private session and worker formats keep them with the grammar below until a
@@ -305,9 +373,14 @@ evaluate at native resolution through their retained code.
 
 ### Evaluation meaning
 
-Saved values mean the following. Renderer changes may refine precision,
-performance and approximations within these meanings; changing one of them needs
-a new record or data version.
+The table below describes the implemented baseline. Renderer changes may refine
+precision, performance and approximations within these meanings; changing stable
+data meanings needs a new record or data version. The scoped artistic exception
+in [Adding controls after GA](#adding-controls-after-ga) permits reviewed look
+improvements when adopted by the relevant filter's implementation and tests.
+The planned spatial references and source-boundary corrections above must update
+the affected position/sampling contracts and fixtures before GA; they are not
+claims about the current renderer.
 
 | Saved value | Meaning |
 | --- | --- |
@@ -339,7 +412,10 @@ authored values with operation-specific tolerances; rendered GPU bytes are not t
 portable contract. Fixed linear-float hardware renders protect the appearance of
 saved values. A change beyond its recorded tolerance is a regression to fix, or
 requires a new data version with a concrete converter and a fixed-file regression
-test. Never regenerate a baseline merely to make a failing test pass.
+test, except for a reviewed artistic appearance change under the scoped policy
+above. Procedural synthesis in those designated filters may evolve while its
+saved seed, spatial reference, resources and control intent remain interpretable.
+Never regenerate a baseline merely to make a failing test pass.
 
 ## Resources and packs
 

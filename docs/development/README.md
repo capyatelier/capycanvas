@@ -59,6 +59,9 @@ and how parity is checked.
 
 ## Work in progress
 
+- [Illustration filters proposal](illustration-filters-proposal.md) defines the
+  filter gaps, artist controls, researched GPU approaches, package extensions and
+  coordination with the object-layer design.
 - [Photo editing roadmap](photo-editing-roadmap.md) collects deferred inspection,
   presets, export, masking, retouching and host qualification work. Current
   measurements and remaining targets belong in the
