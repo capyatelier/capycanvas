@@ -49,8 +49,9 @@ the same scripts developers run and the Rust version pinned in the workflow:
 Run it from the Actions tab to build unsigned packages as workflow artifacts.
 Pushing a `v*` tag checks that the tag names the workspace version and is on
 `main`, signs with the protected `release` environment, uploads the iPad build to
-TestFlight and creates a draft GitHub Release holding every download,
-`SHA256SUMS` and build provenance attestations.
+TestFlight and the Android bundle to Play's internal track, and creates a draft
+GitHub Release holding every download, `SHA256SUMS` and build provenance
+attestations.
 
 ### Linux AppImage
 
@@ -82,6 +83,8 @@ and require a maintainer's approval.
 | `APPLE_API_KEY` | Secret | Base64 App Store Connect team API key (`.p8`) with the Admin role, for cloud signing, upload and notarization |
 | `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_TEAM_ID` | Variables | That key's identifiers and the team |
 | `APPLE_DEVELOPER_ID_P12`, `APPLE_DEVELOPER_ID_PASSWORD` | Secrets | Base64 Developer ID Application certificate and its password; Xcode cannot cloud-sign Developer ID builds with an API key |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` | Variables | The Google Cloud workload identity provider that trusts the `release` environment, and the service account it acts as; Play Console grants that account release access |
+| `PLAY_RELEASE_STATUS` | Variable | Optional status of the internal-track release; `draft` until the app is published, then `completed` |
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` | Variables | The Microsoft Entra app the Windows job signs in as through OIDC; it holds the Artifact Signing Certificate Profile Signer role and trusts the `release` environment |
 | `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, `ARTIFACT_SIGNING_PROFILE` | Variables | The Azure Artifact Signing account's regional endpoint, its name and the Public Trust certificate profile |
 
@@ -100,8 +103,9 @@ executables and the setup program; the Store signs the MSIX.
    [checks](testing.md) and user journeys on every host, installation, updating
    from the previous release with existing drawings, and the
    [performance targets](../PERFORMANCE_TARGETS.md) on reference hardware.
-3. Upload the AAB to Google Play and the MSIX to Partner Center, publish the web
-   ZIP through the hosting repository, and submit the TestFlight build for review.
+3. Roll out the internal-track release in Play Console and promote it, upload the
+   MSIX to Partner Center, publish the web ZIP through the hosting repository, and
+   submit the TestFlight build for review.
 4. Publish the draft. With immutable releases enabled, its assets and tag can no
    longer change.
 5. If a check fails, delete the draft, fix `main` and release the next patch
