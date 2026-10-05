@@ -54,8 +54,8 @@ class FakeElement extends SharedElement {
   }
 }
 
-function action(id, label, { enabled = true, selected = false, checkable = false, accent = false } = {}) {
-  return { option: { Action: { state: { id, icon: id, label, tooltip: `${label} tooltip`, enabled,
+function action(id, label, { name = label, enabled = true, selected = false, checkable = false, accent = false } = {}) {
+  return { option: { Action: { state: { id, icon: id, label: name, tooltip: `${label} tooltip`, enabled,
     disabled_reason: enabled ? null : `${id} is unavailable`, selected }, checkable } }, label, accent };
 }
 function view({ kind = "transform", generation = 1n, items, completion, placement = "near_object", label = null } = {}) {
@@ -182,14 +182,17 @@ test("state changes update retained controls; schema changes rebuild them", () =
 test("a mode bar shows its label and accented exit, and a relabelled item is rebuilt with its new label", () => {
   const h = harness();
   const mode = label => view({ kind: "layer_mask", label: "Editing Ink mask", placement: "bottom_edge",
-    items: [action("invert_layer_mask", "Invert"), action("layer_mask_enabled", label)],
+    items: [action("invert_layer_mask", "Invert"), action("layer_mask_enabled", label, { name: "Enable Layer Mask" })],
     completion: [action("edit_layer_content", "Edit Content", { accent: true })] });
   const caption = command => h.find(command).children.find(n => n.className === "toolbar-action-label")?.textContent;
   h.bar.refresh(mode("Disable"));
   const title = h.bar.root.children.find(n => n.className === "canvas-action-bar-label");
   assert.equal(title.hidden, false);
   assert.equal(title.textContent, "Editing Ink mask");
-  assert.equal(caption("layer_mask_enabled"), "Disable");
+  assert.equal(caption("layer_mask_enabled"), "Disable", "the bar shows the item label, not the command name");
+  assert.equal(h.find("layer_mask_enabled").getAttribute("aria-label"), "Disable");
+  h.bar.refresh(mode("Disable"));
+  assert.equal(caption("layer_mask_enabled"), "Disable", "a state refresh keeps the item label");
   assert.ok(h.find("edit_layer_content").classList.contains("suggested-action"), "the exit uses the accent");
   const toggle = h.find("layer_mask_enabled");
   h.bar.refresh(mode("Enable"));

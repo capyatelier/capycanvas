@@ -13,14 +13,12 @@ export function actionField({ element, button, icon }, spec, send, { label, aria
     else explain?.(b);
   });
   b.append(icon(spec.state.icon || 'settings'));
-  const caption = label ? element('span', 'toolbar-action-label', label) : null;
-  if (caption) b.append(caption);
-  row.append(b); b.setAttribute('aria-label', spec.state.label);
+  if (label) b.append(element('span', 'toolbar-action-label', label));
+  row.append(b);
   let tooltip, disabled, pressed;
   function update(option) {
     const state = option.Action.state;
-    b.setAttribute('aria-label', state.label);
-    if (caption) caption.textContent = state.label;
+    b.setAttribute('aria-label', label ?? state.label);
     if (disabled !== !state.enabled) {
       disabled = !state.enabled;
       if (ariaDisabled) b.setAttribute('aria-disabled', String(disabled)); else b.disabled = disabled;
