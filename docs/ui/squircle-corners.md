@@ -27,7 +27,8 @@ the former 8–10px circular corners.
 - **Concave joins** (tab feet, drawer bridges and expanded-panel joins) keep
   their sizes and use inverted squircle curves.
 - GTK layer and mask thumbnails use full squircles. Their editing target has
-  a white squircle outline, and type badges sit inside the preview corners.
+  a 3px border in the resolved accent color, and type badges sit inside the
+  preview corners.
 - Checkboxes, other hosts' thumbnails, slider thumbs and other small details
   keep their former visual rounding with squircle corners.
 

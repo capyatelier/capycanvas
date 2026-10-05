@@ -147,6 +147,7 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .layers-panel button.layer-reference:checked { background: alpha(var(--window-fg-color), .12); color: var(--window-fg-color); }
 .layers-panel button.layer-thumbnail { min-width: 28px; min-height: 28px; padding: 0; border: 1px solid transparent; border-radius: calc(15px * var(--corner-fit)); background: var(--input-bg); }
 .layer-thumbnail picture { border-radius: calc(14px * var(--corner-fit)); }
+.layer-thumbnail-target { color: var(--accent-bg-color); }
 .layer-type-symbol { padding: 1px; border-radius: 2px; background: var(--input-bg); color: var(--window-fg-color); }
 .layers-panel button.layer-effect { background: transparent; }
 .layers-panel button.layer-folder { background: transparent; }

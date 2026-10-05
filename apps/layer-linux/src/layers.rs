@@ -124,16 +124,15 @@ fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay, gtk::Dr
     overlay.set_measure_overlay(&picture, false);
     // Above the thumbnail, so opaque image pixels cannot obscure the marks.
     let frame = gtk::DrawingArea::new();
+    frame.add_css_class("layer-thumbnail-target");
     frame.set_can_target(false);
-    frame.set_draw_func(|_, cr, w, h| {
+    frame.set_draw_func(|area, cr, w, h| {
         let (w, h) = (w as f64, h as f64);
         let bounds = gtk::graphene::Rect::new(1.5, 1.5, (w - 3.) as f32, (h - 3.) as f32);
         crate::squircle::rounded_rect(cr, &gtk::gsk::RoundedRect::from_rect(bounds, (w.min(h) - 3.) as f32 / 2.));
-        cr.set_source_rgba(0., 0., 0., 0.8);
+        let ink = area.color();
+        cr.set_source_rgba(ink.red().into(), ink.green().into(), ink.blue().into(), ink.alpha().into());
         cr.set_line_width(3.);
-        let _ = cr.stroke_preserve();
-        cr.set_source_rgb(1., 1., 1.);
-        cr.set_line_width(1.5);
         let _ = cr.stroke();
     });
     overlay.add_overlay(&frame);
