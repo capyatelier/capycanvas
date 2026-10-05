@@ -422,6 +422,7 @@ internal class LayerSwipe {
             val group=!mask && layer.getBoolean("group")
             val selected=if(mask)layer.getBoolean("mask_selected") else layer.getBoolean("content_selected")
             val operation=if(group)obj("op" to "collapse","id" to id) else obj("op" to "select","id" to id,"mask" to mask)
+            val windowed=inSeparateWindow()
             val label=if(group) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse") else if(mask) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_mask") else if(layer.optBoolean("selection_layer")) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_selection") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_content")
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp).then(if(!mask && !preview) Modifier.testTag("layer-content-$id").onGloballyPositioned { contentBounds(it.boundsInRoot(),shift) } else Modifier)) {
             Box(Modifier.fillMaxSize().then(if(mask && !preview) Modifier.onGloballyPositioned { maskBounds=it.boundsInRoot() } else Modifier)
@@ -445,7 +446,14 @@ internal class LayerSwipe {
                         } while(true)
                     }
                 })
-                .combinedClickable(onClick={host.layer(operation)},onLongClick={openContext(mask)})
+                .combinedClickable(onClick={
+                    host.layer(operation)
+                    layer.optJSONObject("fill_color")?.takeIf { !mask }?.let { fill ->
+                        host.colorEditor = ColorEditorRequest(null, fill.getJSONObject("color"), fill.getBoolean("opaque"), windowed) { color, _ ->
+                            host.dispatch(obj("type" to "effect", "action" to obj("op" to "set", "layer" to id, "key" to fill.getString("key"), "value" to obj("kind" to "color", "value" to color))))
+                        }
+                    }
+                },onLongClick={openContext(mask)})
                 .drawWithContent {
                     drawContent()
                     if(!mask && (attachment || highlight=="attach")) drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density))

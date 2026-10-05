@@ -134,6 +134,20 @@ export async function checkColorEditor({call,evaluate,settle}) {
     await wait(`!document.querySelector('${dialog}')`);
     assert.deepEqual(await evaluate('layerApp.state().colors.foreground.rgba.slice(0,3).map(v=>Math.round(v*255))'),[47,123,156]);
   }
+  await evaluate(`layerApp.dispatch({type:'set_color',rgba:[0.2,0.4,0.8,1]})`);
+  await evaluate(`layerApp.dispatch({type:'effect',action:{op:'insert',effect:'solid_color'}})`);await settle();
+  const fillId=await evaluate(`String(layerApp.state().layers.find(l=>l.label==='Solid Color').id)`);
+  const fillThumb=`[data-layer="${fillId}"] .layer-thumbnail`;
+  const square=hex=>`(()=>{const c=document.querySelector('${fillThumb} canvas'),d=c.getContext('2d').getImageData(0,0,32,32).data,want=${JSON.stringify(hex)};for(let i=0;i<d.length;i+=4)for(let k=0;k<3;k++)if(Math.abs(d[i+k]-want[k])>2)return false;return true})()`;
+  await wait(square([51,102,204]),15000);
+  await click(fillThumb);
+  await wait(`!!document.querySelector('${dialog}')`);
+  assert.equal(await text(`${dialog} .color-value[data-color-value="hex"]`),'#3366CC','the fill thumbnail opens its color');
+  await type(`${dialog} .color-value[data-color-value="hex"]`,'#D7263D');
+  await click(`${dialog} .suggested-action`);
+  await wait(`!document.querySelector('${dialog}')`);
+  await wait(square([215,38,61]),15000);
+  await capture('fill-thumbnail');
   await call('Emulation.setDeviceMetricsOverride',{width:640,height:900,deviceScaleFactor:1,mobile:false});await settle();
   await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
   await wait(`!!document.querySelector('${dialog}')`);await settle();

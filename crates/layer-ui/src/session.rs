@@ -5735,6 +5735,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             visible: doc.effective_visibility(id),
             visibility_blocked: l.is_artwork() && l.visible && !scene.visible(id),
             adjustment_effect: scene.effect(id).is_some_and(|fx| fx.program.kind == layer_core::EffectKind::Adjustment),
+            fill_color: scene.effect(id).filter(|_| !doc.is_locked(id)).and_then(|fx| {
+                let key = fx.program.constant_color.as_deref()?;
+                let parameter = fx.program.parameters.iter().find(|p| p.key.as_ref() == key)?;
+                Some(LayerFillColor { key: key.to_string(), color: fx.constant_color()?, opaque: parameter.opaque })
+            }),
             opacity: l.opacity,
             selected: !self.selection_masks.quick() && selected.contains(&id),
             load_selection_tooltip: "Use this layer as the current selection; keep the saved layer unchanged",
@@ -5807,7 +5812,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 alpha_locked: false, locked: false, relationship: None, right_swipe: None, pass_through: false, reference: false, group: false,
                 can_drop_below: false, depth: 0, collapsed: false, blend: layer_core::LayerBlend::Normal.code(),
                 blend_label: effects::blend_label(layer_core::LayerBlend::Normal, &self.state.localization).to_string(),
-                paint_revision: self.selection_masks.preview_revision(None), mask_revision: 0, mask_id: None,
+                paint_revision: self.selection_masks.preview_revision(None), mask_revision: 0, mask_id: None, fill_color: None,
             };
             self.state.layer_tools.editing_layer = Some(row.clone());
             self.state.layers.insert(0, row);

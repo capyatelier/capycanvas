@@ -580,6 +580,7 @@ impl LayerPanel {
                                 return;
                             };
                             w.dispatch(row_button_action(&row, kind));
+                            if let Some(fill) = row.fill_color.filter(|_| kind == 2) { crate::color_editor::edit_fill(&w, row.id, fill); }
                         }
                     ));
                 }

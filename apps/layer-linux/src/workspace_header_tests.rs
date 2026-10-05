@@ -1662,6 +1662,11 @@ fn native_layer_preview_selection() {
     for id in [2, 1, 2, 1] {
         let row = d.named(&format!("art-layer-{id}"));
         d.click(&find_css(&row, "layer-thumbnail").unwrap());
+        if state(&d.w).layers.iter().find(|row| row.id == id).is_some_and(|row| row.fill_color.is_some()) {
+            crate::color_editor::tests::editor(&d.w);
+            super::new_photo::response(&d.w, "cancel");
+            until(|| d.w.color_editors.borrow().is_empty(), "the Paper color closes");
+        }
         super::place_source::wait_layer_thumbnail(&d.w, 1);
         let _warm = crate::snapshot(&d.w); pump(120);
         let shot = crate::snapshot(&d.w);

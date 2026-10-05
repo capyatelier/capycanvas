@@ -72,7 +72,7 @@ impl Gradient {
 }
 
 #[test]
-fn fill_thumbnails_render_gradient_parameters_and_future_multipass_generators() {
+fn fill_thumbnails_fill_their_square_for_gradients_and_future_multipass_generators() {
     let points = [[4usize, 8usize], [15, 16], [27, 23]];
     for depth in DEPTHS {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
@@ -119,7 +119,7 @@ fn fill_thumbnails_render_gradient_parameters_and_future_multipass_generators() 
             let bytes = crate::source_thumbnails::tests::thumbnail(&mut r, layer_render::ThumbnailTarget::Occurrence(owner));
             for [x, y] in points {
                 let checker = if (x / 4 + y / 4) % 2 == 0 { 0.855 } else { 0.497 };
-                let expected = [0.25, (y as f64 + 0.5 - 16. / 3.) / (64. / 3.), (x as f64 + 0.5) / 32.]
+                let expected = [0.25, (y as f64 + 0.5) / 32., (x as f64 + 8.5) / 48.]
                     .map(|value| (RgbSpace::Srgb.encode(value * 0.5 + checker * 0.5) * 255.).round() as i32);
                 let pixel = &bytes[(y * 32 + x) * 4..][..4];
                 for c in 0..3 { assert!((i32::from(pixel[c]) - expected[c]).abs() <= 2, "{depth:?} {extent:?} {x},{y}: {pixel:?} expected {expected:?}"); }

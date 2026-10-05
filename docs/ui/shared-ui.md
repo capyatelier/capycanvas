@@ -473,7 +473,11 @@ Effect links match the existing
 content-to-mask link's neutral color and shape, oriented vertically.
 
 Adjustment effects show their icon without a thumbnail background in the
-existing hit area; content generators retain their content thumbnails. Hiding
+existing hit area; content generators retain their content thumbnails. Fill
+thumbnails cover their whole square, cropping the document's aspect, so they
+read differently from paint drawn on a checker. Tapping a solid color fill's
+thumbnail, the Paper included, selects it and opens Edit Color on its color
+(`LayerState::fill_color`); Use Color sets it like the Properties color. Hiding
 an owner also hides its attached effects without changing their individual
 visibility settings. The shared row marks inherited hiding for a dimmed eye.
 Showing the owner restores effects that were not individually hidden.

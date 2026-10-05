@@ -1,5 +1,6 @@
 import {liveCopy,bindCopy} from './localization.js';
 import { composingKey } from "./text-input.js";
+import { chooseColor } from "./color-editor.js";
 let thumbnailRequest=0n;
 const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
@@ -146,7 +147,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const thumb = (mask) => {
       const getAction = () => !mask && get().group ? { op: "collapse", id: get().id } : { op: "select", id: get().id, mask };
       const readLabel = ()=>mask?copy.edit_mask:get().group?(get().collapsed?copy.expand:copy.collapse):get().selection_layer?copy.edit_selection:copy.edit_content;
-      const b = glyphButton("mask", readLabel, () => send(getAction()), "layer-thumbnail", getAction);
+      const editFill = async () => {
+        const { id, fill_color: fill } = get();
+        if (mask || !fill) return;
+        const selected = await chooseColor({ app, color: fill.color, element, button, opaque: fill.opaque });
+        if (selected) dispatch({ type: "effect", action: { op: "set", layer: id, key: fill.key, value: { kind: "color", value: selected.color } } });
+      };
+      const b = glyphButton("mask", readLabel, () => { send(getAction()); editFill(); }, "layer-thumbnail", getAction);
       const image = element("canvas"); image.width = image.height = 32; image.setAttribute("aria-hidden", "true");
       // These are already-rasterized GPU preview bytes. Keep their tiny UI
       // bitmap in host memory rather than invoking another GPU canvas path.

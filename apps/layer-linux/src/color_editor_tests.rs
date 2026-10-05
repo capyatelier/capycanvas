@@ -313,3 +313,42 @@ fn native_color_editor_visual_audit() {
     w.window.destroy();
     pump(100);
 }
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_fill_thumbnail_edits_its_color() {
+    let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
+    let app = native_test_app("art.capycanvas.FillThumbnail");
+    let w = Workspace::with_project(&app, Some((new_drawing_at(96, 64, SampleDepth::U8), None)));
+    w.window.maximize();
+    w.window.present();
+    ready(&w);
+    let change = ui_session_mut(&w).reveal_panel(Panel::Layers);
+    w.changed(change);
+    w.dispatch(UiAction::SetColor { rgba: [0.2, 0.4, 0.8, 1.] });
+    w.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Insert { effect: "solid_color".into() } });
+    ready(&w);
+    let id = state(&w).layers.iter().find(|row| row.label == "Solid Color").unwrap().id;
+    let thumbnail = || find_named(w.window.upcast_ref(), &format!("art-layer-{id}")).and_then(|row| find_css(&row, "layer-thumbnail"));
+    until(|| thumbnail().and_then(|button| descendant::<gtk::Picture>(&button)).is_some_and(|picture| picture.paintable().is_some()), "fill thumbnail");
+    let pixels = |hex: [u8; 3]| {
+        let texture = descendant::<gtk::Picture>(&thumbnail().unwrap()).unwrap().paintable().and_downcast::<gtk::gdk::Texture>().unwrap();
+        let mut downloader = gtk::gdk::TextureDownloader::new(&texture);
+        downloader.set_format(gtk::gdk::MemoryFormat::R8g8b8a8);
+        let (bytes, _) = downloader.download_bytes();
+        bytes.chunks_exact(4).all(|pixel| pixel[..3].iter().zip(hex).all(|(a, b)| a.abs_diff(b) <= 2))
+    };
+    until(|| pixels([51, 102, 204]), "the fill thumbnail is a full square of its color");
+    thumbnail().unwrap().downcast::<gtk::Button>().unwrap().emit_clicked();
+    let editor = editor(&w);
+    assert_eq!(editor.hex.label.text(), "#3366CC", "the fill thumbnail opens its color");
+    assert_eq!(state(&w).layers.iter().find(|row| row.id == id).map(|row| row.editing), Some(true));
+    type_into(&w, "edit-color-hex", "#D7263D");
+    save_snapshot(&w, 80, || output.join("fill-thumbnail-editor.png"));
+    response(&w, "apply");
+    until(|| state(&w).layers.iter().find(|row| row.id == id).and_then(|row| row.fill_color.clone()).is_some_and(|fill| layer_ui::ColorLibrary::hex_preview(fill.color) == "#D7263D"), "Use Color sets the fill");
+    until(|| pixels([215, 38, 61]), "the fill thumbnail follows the new color");
+    save_snapshot(&w, 80, || output.join("fill-thumbnail.png"));
+    w.window.destroy();
+    pump(100);
+}

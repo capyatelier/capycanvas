@@ -1226,6 +1226,14 @@ pub struct LayerState {
     pub paint_revision: u64,
     pub mask_revision: u64,
     pub mask_id: Option<u64>,
+    pub fill_color: Option<LayerFillColor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LayerFillColor {
+    pub key: String,
+    pub color: layer_core::color::RgbColor,
+    pub opaque: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

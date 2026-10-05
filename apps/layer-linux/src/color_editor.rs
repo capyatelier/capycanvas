@@ -1142,6 +1142,12 @@ pub fn choose(
     choose_opaque(workspace, definition, false, accepted);
 }
 
+pub(crate) fn edit_fill(workspace: &Rc<Workspace>, layer: u64, fill: layer_ui::LayerFillColor) {
+    choose_opaque(workspace, fill.color, fill.opaque, move |workspace, color| {
+        workspace.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Set { layer, key: fill.key, value: layer_core::EffectValue::Color(color) } });
+    });
+}
+
 fn choose_opaque(workspace: &Rc<Workspace>, definition: RgbColor, opaque: bool, accepted: impl FnOnce(&Rc<Workspace>, RgbColor) + 'static) {
     let Some(draft) = workspace.gpu.borrow().as_ref().map(|g| ColorEditor::for_color(g.session.state().display_colors(), definition, opaque)) else {
         return;

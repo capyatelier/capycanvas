@@ -390,6 +390,9 @@ fn fill_layers_start_from_the_current_color_and_mask_to_the_selection() {
     assert_eq!(effect.program.kind, layer_core::EffectKind::Generator);
     assert_eq!(effect.value("color"), Some(&layer_core::EffectValue::Color(s.state.colors.definition())));
     assert!(doc.scene().mask(handle).is_none());
+    let row = |s: &UiSession<Recorder>, handle| s.state.layers.iter().find(|row| row.id == occurrence_token(handle)).unwrap().fill_color.clone();
+    assert_eq!(row(&s, handle), Some(crate::LayerFillColor { key: "color".into(), color: s.state.colors.definition(), opaque: false }), "the fill thumbnail edits its color");
+    assert_eq!(row(&s, base), None);
     assert_eq!(doc.scene().order().iter().position(|h|*h==handle).unwrap()+1,doc.scene().order().iter().position(|h|*h==base).unwrap());
     assert_eq!(doc.drawing_target(), None);
     invoke(&mut s, CommandId::Undo);
@@ -406,6 +409,7 @@ fn fill_layers_start_from_the_current_color_and_mask_to_the_selection() {
     let doc = s.engine.document();
     let handle=doc.working.occurrence.unwrap();
     assert_eq!(doc.scene().effect(handle).unwrap().program.id.as_ref(), "gradient_fill");
+    assert_eq!(row(&s, handle), None, "gradient fills open their gradient in Properties instead");
     assert_eq!(doc.scene().mask(handle).unwrap().1.initial.as_ref(), Some(&selection), "the selection becomes the mask");
     assert_eq!(doc.working.selection, None, "and is consumed");
     invoke(&mut s, CommandId::Undo);

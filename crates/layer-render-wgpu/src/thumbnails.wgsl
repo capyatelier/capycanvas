@@ -40,7 +40,7 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     if record.options.x < 2u || record.options.x == 4u {
         let low = vec2<f32>(bounds.xy);
         let size = max(vec2<f32>(bounds.zw) - low, vec2<f32>(1.));
-        let scale = 32. / max(size.x, size.y);
+        let scale = 32. / select(max(size.x, size.y), min(size.x, size.y), record.options.x == 4u);
         let source_size = select(vec2(256.), vec2<f32>(record.tile.zw), record.options.x == 4u);
         p = (vec2<f32>(record.tile.xy) + uv * source_size - low) * scale + (32. - size * scale) * .5;
     }

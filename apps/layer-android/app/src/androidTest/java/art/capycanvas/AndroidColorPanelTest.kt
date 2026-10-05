@@ -624,6 +624,30 @@ class AndroidColorPanelTest {
         }
         File(output,"picker-performance.json").writeText(reports.toString())
     }
+    @Test fun fillThumbnailEditsItsColor() {
+        fun description(tag: String): String { var text = ""; instrumentation.runOnMainSync { text = findTag(tag)!!.second.config[SemanticsProperties.ContentDescription].single() }; return text }
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.2, .4, .8, 1))))
+        action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "solid_color")))
+        val id = state().array("layers").objects().first { it.getString("label") == "Solid Color" }.getLong("id")
+        waitFor("fill row") { findTag("layer-content-$id") != null }; settle()
+        tool = MotionEvent.TOOL_TYPE_FINGER
+        tap(findTag("layer-content-$id")!!.second.boundsInRoot.center)
+        waitFor("Edit Color from the fill thumbnail") { findTag("color-value-hex") != null }; settle()
+        assertTrue("the fill thumbnail opens its color", description("color-value-hex").endsWith("#3366CC"))
+        instrumentation.runOnMainSync { assertTrue(findTag("color-value-hex")!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+        waitFor("typing hex") { findTag("color-value-hex-input") != null }
+        instrumentation.runOnMainSync { assertTrue(findTag("color-value-hex-input")!!.second.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString("#D7263D"))) }
+        settle()
+        instrumentation.runOnMainSync { assertTrue(findTag("color-value-hex-input")!!.second.config[SemanticsActions.OnImeAction].action!!.invoke()) }
+        settle()
+        fullCapture("fill-thumbnail-editor")
+        instrumentation.runOnMainSync { assertTrue(findTag("color-use")!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+        waitFor("Use Color sets the fill") {
+            val rgba = state().array("layers").objects().first { it.getLong("id") == id }.optJSONObject("fill_color")?.getJSONObject("color")?.array("rgba")
+            rgba != null && listOf(215, 38, 61).withIndex().all { (i, v) -> abs(rgba.getDouble(i) * 255 - v) < 1.5 }
+        }
+        fullCapture("fill-thumbnail")
+    }
     @Test fun compactGeometryAndRastersInBothThemes() {
         val report = JSONArray()
         for (theme in listOf("light", "dark")) for (width in listOf(144, 160, 200, 280, 360)) {
