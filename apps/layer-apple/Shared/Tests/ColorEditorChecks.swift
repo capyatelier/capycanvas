@@ -134,4 +134,39 @@ extension XCTestCase {
         XCTAssertTrue(use.waitForNonExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
+    @MainActor func checkFillThumbnailColor(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        app.launch()
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        func pixels(_ accept: @escaping (Int, Int, Int) -> Bool, _ message: String) {
+            let match = NSPredicate { _, _ in
+                let data = self.editorPixels(in: app)
+                return stride(from: 0, to: data.count, by: 4).allSatisfy { accept(Int(data[$0]), Int(data[$0 + 1]), Int(data[$0 + 2])) }
+            }
+            if XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: match, object: app)], timeout: 15) != .completed {
+                attachEditor(in: app, name: "fill-thumbnail-unexpected-\(theme)"); XCTFail(message)
+            }
+        }
+        pixels({ r, g, b in min(r, g, b) >= 250 }, "A new drawing shows white Paper")
+        let paper = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Paper layer row")).firstMatch
+        XCTAssertTrue(paper.waitForExistence(timeout: 10))
+        workspaceActivate(paper.buttons.matching(NSPredicate(format: "identifier ENDSWITH %@", "-content")).firstMatch)
+        let use = app.buttons["color-use"]
+        XCTAssertTrue(use.waitForExistence(timeout: 10), "Paper's thumbnail opens Edit Color on its color")
+        XCTAssertEqual(colorValueText("hex", in: app).uppercased(), "#FFFFFF")
+        let current = elementPixel(app.descendants(matching: .any)["color-current"].firstMatch, in: app)
+        XCTAssertTrue(min(current.0, current.1, current.2) >= 250, "Current shows Paper's white: \(current)")
+        editColorValue("hex", "#FF0000", in: app)
+        attachEditor(in: app, name: "fill-thumbnail-edit-\(theme)")
+        workspaceActivate(use)
+        XCTAssertTrue(use.waitForNonExistence(timeout: 10))
+        pixels({ r, g, b in r >= 250 && g <= 5 && b <= 5 }, "Use Color sets the fill")
+        editorHistory("Undo", in: app)
+        pixels({ r, g, b in min(r, g, b) >= 250 }, "Undo restores the fill")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
 }

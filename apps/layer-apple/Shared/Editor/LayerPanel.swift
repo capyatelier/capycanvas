@@ -366,6 +366,12 @@ private struct LayerRow: View {
                     store.dispatch(["type": "selection", "action": ["op": "load_thumbnail", "id": id, "mask": mask, "shift": load.shift, "alt": load.alt]])
                 } else {
                     store.layer(!mask && layer["group"].bool ? ["op": "collapse", "id": id] : ["op": "select", "id": id, "mask": mask])
+                    let fill = layer["fill_color"]
+                    if !mask && !fill.isNull {
+                        store.colorEditing.open(colors: store.displayColors, value: fill["color"], opaque: fill["opaque"].bool, viewing: store.colorViewing) { color, _ in
+                            store.dispatch(["type": "effect", "action": ["op": "set", "layer": id, "key": fill["key"].raw, "value": ["kind": "color", "value": color.raw]]])
+                        }
+                    }
                 }
             }
         } label: {
