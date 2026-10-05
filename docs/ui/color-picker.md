@@ -149,9 +149,10 @@ an editor opened from another dialog window uses a dialog window and hides the
 eyedropper, as GTK does when another dialog is open. Windows presents a
 `ContentDialog`, hides it while picking and shows it again afterwards; the
 strip is an overlay on the workspace, and the wheel uses the panel's background
-ring and field workers. Properties, gradient stops and solid fill thumbnails
-open the same dialog. Apple shows the value rows without the wheel, eyedropper
-or sheet.
+ring and field workers. Apple keeps one editor session per window and presents
+it as a sheet sized to its content; picking dismisses the sheet, shows the strip
+over the canvas and presents the same draft again. On both, Properties, gradient
+stops and solid fill thumbnails open the same editor.
 
 ## Picker
 

@@ -27,17 +27,8 @@ extension XCTestCase {
         }
         func thumbnail(_ accept: @escaping (Int, Int, Int) -> Bool, _ message: String) {
             show("layers")
-            #if os(macOS)
-            let reference = app.windows.firstMatch
-            #else
-            let reference = canvas
-            #endif
             let content = rows.element(boundBy: 0).buttons.matching(NSPredicate(format: "identifier ENDSWITH %@", "-content")).firstMatch
-            let match = NSPredicate { _, _ in
-                let f = content.frame, r = reference.frame
-                let data = self.editorPixelSamples(in: app, at: [CGPoint(x: (f.midX - r.minX) / r.width, y: (f.midY - r.minY) / r.height)], size: 4)[0]
-                return accept(Int(data[0]), Int(data[1]), Int(data[2]))
-            }
+            let match = NSPredicate { _, _ in let (r, g, b) = self.elementPixel(content, in: app); return accept(r, g, b) }
             if XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: match, object: app)], timeout: 15) != .completed {
                 attachEditor(in: app, name: "layer-color-mode-thumbnail-\(theme)"); XCTFail(message)
             }

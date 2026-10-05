@@ -2,20 +2,20 @@ import SwiftUI
 
 struct HDRIntensityArc: View {
     @Environment(\.capyNativeCopy) private var nativeCopy
-    @ObservedObject var store: EditorStore
+    let model: JSON
+    let viewing: JSON
+    let identity: String
+    let language: String
     let geometry: JSON
     let caption: JSON
     let size: CGFloat
+    let set: (Double) -> Void
     @State private var original: Double?
     @State private var range: [Double]?
-    @State private var editing = false
-    @State private var input = "0"
-    private var model: JSON { store.colorPanel }
     var body: some View {
-        let viewing = store.colorViewing
         let arc = ColorUI.resolve(["type": "intensity_arc", "size": size, "stops": model["intensity"].number,
             "base": model["base"].raw, "document_space": model["rgb_space"].raw,
-            "recipe": viewing["recipe"].raw, "headroom": viewing["headroom"].number, "depth": model["document_depth"].raw], language: store.interfaceLanguage)
+            "recipe": viewing["recipe"].raw, "headroom": viewing["headroom"].number, "depth": model["document_depth"].raw], language: language)
         ZStack(alignment: .topLeading) {
             Canvas(colorMode: .extendedLinear) { graphics, _ in
                 let points = geometry["points"].array, colors = arc["colors"].array
@@ -32,7 +32,7 @@ struct HDRIntensityArc: View {
                 graphics.stroke(marker, with: .color(.black.opacity(0.65)), lineWidth: 4)
                 graphics.stroke(marker, with: .color(.white), lineWidth: 2)
             }.allowedDynamicRange(.high).allowsHitTesting(false)
-            ParameterInput(hdr: true, identity: "\(store.state["document_file"]["epoch"].uint):\(store.displayColors["paint_slot"].string)", nudge: { phase, _, delta in
+            ParameterInput(hdr: true, identity: identity, nudge: { phase, _, delta in
                 if phase == "down" { original = model["intensity"].number }
                 if phase == "cancel" { if let original { set(original) }; original = nil; return }
                 if phase == "up" { original = nil; return }
@@ -42,35 +42,19 @@ struct HDRIntensityArc: View {
                 if phase == "cancel" { if let original { set(original) }; original = nil; range = nil; return }
                 if phase == "down" { original = model["intensity"].number; range = [arc["minimum"].number, arc["maximum"].number] }
                 let range = range ?? [arc["minimum"].number, arc["maximum"].number]
-                let value = ColorUI.resolve(["type": "intensity_point", "size": side, "point": [p.x, p.y], "minimum": range[0], "maximum": range[1]], language: store.interfaceLanguage)
+                let value = ColorUI.resolve(["type": "intensity_point", "size": side, "point": [p.x, p.y], "minimum": range[0], "maximum": range[1]], language: language)
                 if !value.isNull { set(value.number) }
                 if phase == "up" { original = nil; self.range = nil }
             }.accessibilityHidden(true)
             let font = caption[2].number, label = String(format: "%+.2f EV", model["intensity"].number)
-            Button { input = String(format: "%.2f", model["intensity"].number); editing = true } label: {
-                Text(label).font(.system(size: font)).monospacedDigit().fixedSize()
-            }.buttonStyle(.plain)
+            Text(label).font(.system(size: font)).monospacedDigit().fixedSize().allowsHitTesting(false)
                 .offset(x: caption[0].number - EditorTextMetrics.width(label, size: font, weight: .regular, monospacedDigits: true) / 2,
                     y: caption[1].number - EditorTextMetrics.ascent(size: font))
-                .accessibilityLabel(nativeCopy["color"]["intensity"].string).accessibilityIdentifier("color-intensity")
+                .accessibilityElement().accessibilityLabel(nativeCopy["color"]["intensity"].string).accessibilityValue(label)
+                .accessibilityIdentifier("color-intensity")
                 .accessibilityAdjustableAction { set(model["intensity"].number + ($0 == .increment ? 0.1 : -0.1)) }
-                .popover(isPresented: $editing) {
-                    let draft = ColorUI.resolve(["type": "form", "request": ["color": model["definition"].raw,
-                        "document_space": model["rgb_space"].raw, "intensity": model["intensity"].number, "document_depth": model["document_depth"].raw, "change_intensity_text": input]], language: store.interfaceLanguage)
-                    VStack(spacing: 12) {
-                        Text(store.catalog["native_copy"]["color"]["intensity_ev"].string).font(.headline)
-                        TextField(store.catalog["native_copy"]["color"]["intensity_ev"].string, text: $input).textFieldStyle(.roundedBorder)
-                        if !draft["error"].isNull { Text(draft["error"].string).font(.caption).foregroundStyle(.red) }
-                        HStack {
-                            Button(store.bootstrap["common"]["cancel"].string) { editing = false }.keyboardShortcut(.cancelAction)
-                            Button(store.bootstrap["common"]["apply"].string) { set(draft["draft"]["intensity"].number); editing = false }
-                                .disabled(!draft["error"].isNull || draft["value"].isNull).keyboardShortcut(.defaultAction)
-                        }
-                    }.padding(16).frame(width: 220)
-                }
         }
     }
-    private func set(_ value: Double) { store.dispatch(["type": "color", "action": ["op": "hdr_intensity", "stops": value]]) }
     private func point(_ p: JSON) -> CGPoint { CGPoint(x: p[0].number, y: p[1].number) }
     private func linear(_ p: JSON) -> Color { Color(.sRGBLinear, red: p[0].number, green: p[1].number, blue: p[2].number) }
 }

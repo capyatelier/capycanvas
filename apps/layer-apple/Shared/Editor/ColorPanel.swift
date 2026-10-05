@@ -67,7 +67,8 @@ struct ColorPanel: View {
                 }
                 PaintColorControls(store: store, compact: true).colorPlaced(layout["edit"], id: "edit")
                 if hdr {
-                    HDRIntensityArc(store: store, geometry: spec["arc"], caption: layout["intensity_caption"], size: side)
+                    HDRIntensityArc(model: model, viewing: store.colorViewing, identity: "\(store.state["document_file"]["epoch"].uint):\(store.displayColors["paint_slot"].string)",
+                        language: store.interfaceLanguage, geometry: spec["arc"], caption: layout["intensity_caption"], size: side) { color(["op": "hdr_intensity", "stops": $0]) }
                         .frame(width: side, height: height)
                 }
                 ForEach(0..<2, id: \.self) { index in
@@ -257,7 +258,7 @@ private struct ColorReadoutDrawing: View {
     }
 }
 
-private extension View {
+extension View {
     func colorPlaced(_ bounds: JSON, id: String) -> some View {
         frame(width: bounds[2].number, height: bounds[3].number)
             .modifier(ColorPanelMeasurement(id: id))

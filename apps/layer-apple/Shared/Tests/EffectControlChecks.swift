@@ -44,7 +44,7 @@ extension XCTestCase {
             if searched { workspaceActivate(app.buttons["filter-search-toggle"]) }
             workspaceActivate(app.buttons["filter-search-toggle"])
             let field = app.textFields["filter-search"]
-            XCTAssertTrue(field.waitForExistence(timeout: 5)); field.typeText(name); expectValue(field, name)
+            XCTAssertTrue(field.waitForExistence(timeout: 5)); typeConfirmed(field, name); expectValue(field, name)
             searched = true
             let filter = app.buttons["adjustment-" + id]
             XCTAssertTrue(filter.waitForExistence(timeout: 10)); expectValue(filter, "Preview ready")
@@ -163,12 +163,11 @@ extension XCTestCase {
         let linear = pixels()
         let color = app.buttons["gradient-stop-color"]
         reveal(color); workspaceActivate(color)
-        let redField = app.textFields["color-input-0"]
-        XCTAssertTrue(redField.waitForExistence(timeout: 5), "A stop color opens the shared Edit Color form")
-        workspaceActivate(redField)
-        redField.typeKey("a", modifierFlags: .command); redField.typeText("1")
-        workspaceActivate(app.buttons["color-input-use"])
-        XCTAssertTrue(redField.waitForNonExistence(timeout: 10))
+        let use = app.buttons["color-use"]
+        XCTAssertTrue(use.waitForExistence(timeout: 5), "A stop color opens the shared Edit Color form")
+        editColorValue("0-0", "255", in: app)
+        workspaceActivate(use)
+        XCTAssertTrue(use.waitForNonExistence(timeout: 10))
         let red = changed(from: linear)
         XCTAssertGreaterThan(red[0], linear[0]); XCTAssertEqual(Int(red[1]), Int(linear[1]), accuracy: 2); XCTAssertEqual(Int(red[2]), Int(linear[2]), accuracy: 2)
         history(before: linear, after: red)
@@ -225,7 +224,7 @@ extension XCTestCase {
             workspaceActivate(app.buttons["filter-search-toggle"])
             let field = app.textFields["filter-search"]
             XCTAssertTrue(field.waitForExistence(timeout: 5))
-            field.typeText(text); expect(field, text)
+            typeConfirmed(field, text); expect(field, text)
             XCTAssertEqual(canvas.frame.minY, before.minY, accuracy: 1, "Search keyboard must not translate the canvas")
             XCTAssertEqual(canvas.frame.height, before.height, accuracy: 1, "Search keyboard must not resize the canvas")
             XCTAssertTrue(viewport.contains(field.frame), "Filter search must remain onscreen with the keyboard open")

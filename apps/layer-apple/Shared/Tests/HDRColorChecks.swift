@@ -48,24 +48,18 @@ extension XCTestCase {
         XCTAssertTrue(headline.waitForNonExistence(timeout: 5))
         let edit = app.buttons["paint-edit-color"].firstMatch
         XCTAssertTrue(edit.waitForExistence(timeout: 15)); workspaceActivate(edit)
-        let ev = app.textFields["color-input-intensity"]
-        XCTAssertTrue(ev.waitForExistence(timeout: 15))
-        workspaceActivate(ev)
-        #if os(macOS)
-        ev.typeKey("a", modifierFlags: .command); ev.typeText("2")
-        #else
-        let current = ev.value as? String ?? "0.00"
-        ev.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + "2")
-        #endif
-        XCTAssertTrue(app.staticTexts["Base"].exists && app.staticTexts["Adjusted"].exists)
+        let use = app.buttons["color-use"]
+        XCTAssertTrue(use.waitForExistence(timeout: 15))
+        editColorValue("ev", "2", in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["color-current"].firstMatch.exists && app.descendants(matching: .any)["color-new"].firstMatch.exists)
         attachEditor(in: app, name: "hdr-edit-color")
-        workspaceActivate(app.buttons["color-input-use"])
-        XCTAssertTrue(ev.waitForNonExistence(timeout: 15))
+        workspaceActivate(use)
+        XCTAssertTrue(use.waitForNonExistence(timeout: 15))
         workspaceActivate(edit)
-        XCTAssertTrue(ev.waitForExistence(timeout: 15))
-        XCTAssertEqual(Double(ev.value as? String ?? ""), 2, "Use Color must commit the final EV character")
-        workspaceActivate(app.buttons["Cancel"].firstMatch)
-        XCTAssertTrue(ev.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(use.waitForExistence(timeout: 15))
+        XCTAssertTrue(colorValueText("ev", in: app).contains("2.00"), "Use Color must commit the final EV character")
+        workspaceActivate(app.buttons["color-cancel"])
+        XCTAssertTrue(use.waitForNonExistence(timeout: 15))
         XCTAssertFalse(app.buttons["paint-palettes"].exists)
         command("Proof SDR")
         let dial = app.descendants(matching: .any)["proof-dial"].firstMatch

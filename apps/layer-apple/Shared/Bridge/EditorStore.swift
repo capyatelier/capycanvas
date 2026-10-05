@@ -56,6 +56,7 @@ import SwiftUI
     let scopes = ScopePlots()
     lazy var proof = ProofController(store: self)
     lazy var palettes = PaletteController(store: self)
+    lazy var colorEditing = ColorEditingController(store: self)
     lazy var strokeRecording = StrokeRecording(store: self)
     let canvasBar = CanvasBarPresence()
     let notice = CanvasNoticePresence()
@@ -161,6 +162,7 @@ import SwiftUI
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 proof.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
                 drawingTabs.receive()
+                colorEditing.receive(state["color_picker"])
                 projectFiles.receive(state.json)
                 windowPresentation.receive(state.json)
                 contentDrawers.refresh()
