@@ -25,6 +25,7 @@ function Assert-Installed{
 try {
     if((Install) -ne 0){throw 'The installer failed.'}
     Assert-Installed
+    if($result.signed -and (Get-AuthenticodeSignature -LiteralPath (Join-Path $target 'Uninstall.exe')).Status -ne 'Valid'){throw 'The installed uninstaller is not signed.'}
     $entry=Get-ItemProperty -LiteralPath $uninstall
     if($entry.DisplayName -ne $result.name -or $entry.DisplayVersion -ne $result.version -or $entry.InstallLocation -ne $target){throw 'The uninstall entry does not describe the installed app.'}
     if((Default 'HKCU:\Software\Classes\.capy') -ne $result.progid){throw '.capy drawings do not open with the installed app.'}

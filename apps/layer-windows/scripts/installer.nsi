@@ -4,6 +4,9 @@ SetCompressor /SOLID zlib
 RequestExecutionLevel user
 Name "${NAME}"
 OutFile "${OUTFILE}"
+!ifdef SIGNER
+!uninstfinalize '"${SIGNER}" "%1"' = 0
+!endif
 BrandingText "${NAME} ${VERSION}"
 VIProductVersion "${VERSION}"
 VIAddVersionKey "ProductName" "${NAME}"

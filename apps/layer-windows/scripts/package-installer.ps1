@@ -49,20 +49,24 @@ Write-PackagedPayload $portable.source $payload $manifest $packaging {
 $label='capycanvas-'+$manifest.version+'-windows-x64'+$(if($TestIdentity){'-installer-test'}else{'-setup'})
 if($manifest.development){$label+='-development'}
 $installer=Join-Path $run ($label+'.exe');$repeat=Join-Path $run 'repeat.exe'
-foreach($path in @($installer,$repeat)){
-    & $makensis -V2 -NOCD "-DPAYLOAD=$payload" "-DOUTFILE=$path" "-DVERSION=$Version" "-DNAME=$($identity.name)" "-DKEY=$($identity.key)" "-DPROGID=$($identity.progid)" (Join-Path $PSScriptRoot 'installer.nsi') *> (Join-Path $run ([IO.Path]::GetFileName($path)+'.log'))
+function Build-Installer([string]$Path,[string[]]$Defines){
+    & $makensis -V2 -NOCD "-DPAYLOAD=$payload" "-DOUTFILE=$Path" "-DVERSION=$Version" "-DNAME=$($identity.name)" "-DKEY=$($identity.key)" "-DPROGID=$($identity.progid)" @Defines (Join-Path $PSScriptRoot 'installer.nsi') *> (Join-Path $run ([IO.Path]::GetFileName($Path)+'.log'))
     if($LASTEXITCODE -ne 0){throw "NSIS failed; inspect $run"}
 }
+foreach($path in @($installer,$repeat)){Build-Installer $path @()}
 Assert-PackagingSourceUnchanged $repo $packager
 $hash=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 if((Get-FileHash -LiteralPath $repeat -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash){throw 'Repeated installer assembly produced different bytes.'}
 Remove-Item -LiteralPath $repeat
 if($SignArguments){
+    $signer=Join-Path $run 'sign-uninstaller.cmd'
+    [IO.File]::WriteAllText($signer,'@signtool sign '+(($SignArguments|ForEach-Object {'"'+$_+'"'}) -join ' ')+' %1'+[char]13+[char]10,$utf8)
+    Build-Installer $installer @("-DSIGNER=$signer")
     & signtool sign @SignArguments $installer
     if($LASTEXITCODE -ne 0){throw 'Signing the setup program failed.'}
     $hash=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 }
-$report=[ordered]@{installer=$installer;sha256=$hash;payload=$payload;source_commit=$manifest.source_commit;development=$manifest.development;packaging_source_commit=$packager.commit;name=$identity.name;key=$identity.key;progid=$identity.progid;version=$Version;test_identity=[bool]$TestIdentity;signed=$false;repeat_installer='passed'}
+$report=[ordered]@{installer=$installer;sha256=$hash;payload=$payload;source_commit=$manifest.source_commit;development=$manifest.development;packaging_source_commit=$packager.commit;name=$identity.name;key=$identity.key;progid=$identity.progid;version=$Version;test_identity=[bool]$TestIdentity;signed=[bool]$SignArguments;repeat_installer='passed'}
 [IO.File]::WriteAllText(($installer+'.sha256'),$hash+'  '+[IO.Path]::GetFileName($installer)+$lf,$utf8)
 [IO.File]::WriteAllText((Join-Path $run 'result.json'),($report|ConvertTo-Json)+$lf,$utf8)
 $report|ConvertTo-Json

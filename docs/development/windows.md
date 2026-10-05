@@ -270,9 +270,10 @@ other installer. It checks the installed files against the manifest, the Apps
 entry, shortcut and `.capy` association, that setup refuses to replace a running
 app and upgrades a closed one in place, and that uninstalling leaves nothing
 behind. Opening the drawing itself needs a hardware GPU;
-`exercise-file-activation.ps1` covers it. `-SignArguments` signs the finished
-setup program, after the repeat-build check, with the same `signtool` values as
-the ZIP.
+`exercise-file-activation.ps1` covers it. After the repeat-build check,
+`-SignArguments` builds the setup program once more with NSIS signing its
+uninstaller, then signs the setup program, with the same `signtool` values as the
+ZIP.
 
 ### MSIX
 
