@@ -1,6 +1,6 @@
 function Catalog-Text([string]$Tag,[string]$Id,[string]$Domain='color-features'){
  $source=[IO.File]::ReadAllText((Join-Path $repo ("assets/locales/$Tag/$Domain.ftl")))
- $match=[Text.RegularExpressions.Regex]::Match($source,'(?m)^'+[Text.RegularExpressions.Regex]::Escape($Id)+' = ([^\r\n]+)$')
+ $match=[Text.RegularExpressions.Regex]::Match($source,'(?m)^'+[Text.RegularExpressions.Regex]::Escape($Id)+' = ([^\r\n]+)\r?$')
  if(!$match.Success){throw "Expected a simple canonical fixture message: $Id"};$match.Groups[1].Value
 }
 function Selected-Option($Control){@($Control.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection())[0]}

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "LayersView.h"
+#include "ColorEditor.h"
 #include "ExternalImages.h"
 #include "WorkspaceQuery.h"
 #include "WorkspaceGeometry.h"
@@ -30,6 +31,16 @@ bool LayerRow::clickAllowed()const{auto view=owner.lock();return view&&(!view->p
 bool LayerRow::contextAllowed()const{auto view=owner.lock();return view&&(!view->pickup||!view->pickup->SuppressContext());}
 void LayerRow::action(J operation){if(!data->updating&&current())data->dispatchDocument(layerAction(operation),epoch);}
 void LayerRow::context(bool isMask,UIElement const& anchor){if(current())if(auto view=owner.lock())view->context(id,isMask,anchor);}
+void LayerRow::editFill(){
+    auto fill=object(model(),L"fill_color");
+    if(!fill.Size()||data->updating||!current())return;
+    auto key=str(fill,L"key");
+    EditColor(data,content,O({{L"color",object(fill,L"color")}}),flag(fill,L"opaque"),[weak=weak_from_this(),key](J color,std::optional<double>){
+        auto self=weak.lock();if(!self||!self->current())return;
+        self->data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"set")},{L"layer",N(self->id)},{L"key",S(key)},
+            {L"value",O({{L"kind",S(L"color")},{L"value",color}})}})}}),self->epoch);
+    });
+}
 bool LayerRow::loadThumbnail(bool isMask){
     if(!(GetKeyState(VK_CONTROL)&0x8000)||flag(model(),L"group")||data->updating||!current())return false;
     data->dispatchDocument(O({{L"type",S(L"selection")},{L"action",O({{L"op",S(L"load_thumbnail")},{L"id",N(id)},{L"mask",B(isMask)},
@@ -85,6 +96,7 @@ void LayerRow::init(){
     content=pick(data->caption(L"layers",L"edit_content"),4,[weak]{if(auto self=weak.lock();self&&!self->loadThumbnail(false)){
         auto layer=self->model();self->action(flag(layer,L"group")?O({{L"op",S(L"collapse")},{L"id",N(self->id)}}):
             O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));
+        self->editFill();
     }});
     load=pick(L"",5,[weak]{if(auto self=weak.lock();self&&!self->data->updating&&self->current())
         self->data->dispatchDocument(O({{L"type",S(L"selection")},{L"action",O({{L"op",S(L"load_layer")},{L"id",N(self->id)},

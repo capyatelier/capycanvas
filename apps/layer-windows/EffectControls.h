@@ -1,6 +1,6 @@
 #pragma once
 #include "UiControls.h"
-#include "ColorForm.h"
+#include "ColorEditor.h"
 #include <array>
 #include <utility>
 
@@ -58,8 +58,7 @@ struct Property:std::enable_shared_from_this<Property> {
 FrameworkElement ColorField(std::shared_ptr<Property> const& property,hstring const& title,
     std::function<J()> get,std::function<void(J)> set,Bindings& bindings,
     std::function<hstring()> context={},std::function<hstring()> currentTitle={});
-struct ColorSwatch {Button pick{nullptr};FrameworkElement fields{nullptr};};
-ColorSwatch CompactColorField(std::shared_ptr<WorkspaceData> const& data,hstring const& id,std::function<hstring()> title,
+Button CompactColorField(std::shared_ptr<WorkspaceData> const& data,hstring const& id,std::function<hstring()> title,
     std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context);
 FrameworkElement CurveField(std::shared_ptr<Property> const& property,Bindings& bindings);
 struct GradientSource {

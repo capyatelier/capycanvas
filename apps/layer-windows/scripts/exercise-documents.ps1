@@ -109,6 +109,12 @@ function Find-Name([string]$Name,$Type=[System.Windows.Automation.ControlType]::
 function Find-Id([string]$Id) {
     Find $Id -Within $scope
 }
+function Choose-Item($Item) {
+    $pattern=$null
+    if($Item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
+    elseif($Item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$pattern)){$pattern.Select()}
+    else{$Item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
+}
 function Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
     $script:found=$null;Wait-Until {$script:found=Find-Name $Name $Type;$null -ne $script:found} "Missing control: $Name";$script:found
 }
@@ -324,18 +330,23 @@ function Draw {
     Wait-Until {(Model).state.colors.slot -eq 'foreground'} 'Foreground paint did not select'
     Wait-Until {$control=Find-Id 'color-edit';$control -and !$control.Current.IsOffscreen} 'Controlled ink edit control did not appear'
     (Find-Id 'color-edit').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {Find-Id 'precise-color-form-0'} 'Controlled ink editor did not open'
-    Combo-Select (Find-Id 'precise-color-form-0') {$_.Current.Name -eq 'Linear RGB'}
+    Wait-Until {Find-Id 'edit-color-form-0'} 'Controlled ink editor did not open'
+    (Find-Id 'edit-color-form-0').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {Find-Id 'edit-color-form-0-linear_rgb'} 'Controlled ink formats did not open'
+    Choose-Item (Find-Id 'edit-color-form-0-linear_rgb')
+    Wait-Until {(Find-Id 'edit-color-form-0').Current.Name -eq 'Linear RGB'} 'Controlled ink did not switch to Linear RGB'
     $channels=@('.03',$channel,'.025')
     for($i=0;$i -lt 3;$i++){
-        $entry=Find-Id "precise-color-0-$i";$entry.SetFocus()
+        (Find-Id "edit-color-0-$i").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Wait-Until {Find-Id "edit-color-0-$i-entry"} 'Controlled ink value did not open for typing'
+        $entry=Find-Id "edit-color-0-$i-entry";$entry.SetFocus()
         $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($channels[$i])
         [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+        Wait-Until {!(Find-Id "edit-color-0-$i-entry")} 'Controlled ink value did not commit'
     }
-    (Find-Id 'precise-color-apply').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    (Find-Id 'edit-color-apply').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$definition=(Model).paint_pair.definition;$definition.linear_rgb -and [Math]::Abs($definition.linear_rgb[1]-[double]$channel) -lt .000001 -and $definition.rgba[3] -eq 1} 'Controlled ink color did not publish'
-    [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
-    Wait-Until {!(Find-Id 'precise-color-apply')} 'Controlled ink editor did not close'
+    Wait-Until {!(Find-Id 'edit-color-apply')} 'Controlled ink editor did not close'
     (Find-Id "tile-toolbar-$($colorTile.id)").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find-Id 'tool-drawer')} 'Controlled ink drawer did not close'
     $revision=(Model).state.document_file.revision

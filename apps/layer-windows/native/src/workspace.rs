@@ -35,6 +35,7 @@ fn request(json: &str) -> Result<Value, String> {
             | "palette_menu"
             | "palette_reorder_preview"
             | "palette_action"
+            | "swatch_sheet"
             | "reveal_panel"
             | "canvas_bar_layout"
             | "canvas_bar_menu"
@@ -210,6 +211,8 @@ mod tests {
             json!({"type":"drawer","column":null,"heights":[],"progress":1}),
             json!({"type":"expansion","panel":"toolbar","heights":[0,420],"progress":1}),
             json!({"type":"header","request":{"op":"geometry","width":1400,"insets":[0,0],"metrics":[]}}),
+            json!({"type":"swatch_sheet","query":"","current":layer_core::color::RgbColor::WHITE}),
+            json!({"type":"swatch_sheet","query":"zzz","current":layer_core::color::RgbColor::WHITE}),
         ] {
             let expected = host.query(query.clone()).unwrap();
             let result = metadata(super::query(&mut host, &query.to_string()).unwrap());

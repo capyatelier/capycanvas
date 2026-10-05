@@ -10,7 +10,7 @@ Windows::UI::Color rgba(A const& a){
     auto byte=[&](int i){return uint8_t(std::round(std::clamp(a.GetNumberAt(i),0.,1.)*255));};
     return {byte(3),byte(0),byte(1),byte(2)};
 }
-struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
+struct ColorButton : std::enable_shared_from_this<ColorButton> {
     std::shared_ptr<WorkspaceData> data;
     hstring id;
     std::function<J()> get;
@@ -18,44 +18,38 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
     std::function<hstring()> context,currentTitle;
     std::function<bool()> opaque;
     bool compact=false;
-    TextBlock name;Button pick;
-    StackPanel root,fields;
-    Bindings numbers;
+    TextBlock name{nullptr};Button pick{nullptr};Grid root;
     SolidColorBrush sample{Windows::UI::Color{}};
-    hstring editingContext;
-    std::shared_ptr<ColorForm> form;
-    void rebuild(){
-        fields.Children().Clear();form=std::make_shared<ColorForm>(data);auto weak=weak_from_this();
-        form->init([weak,expected=editingContext](J value,std::optional<double>){if(auto self=weak.lock();self&&(!self->context||self->context()==expected))self->set(value);},id+L"-color");
-        fields.Children().Append(form->root);
-    }
+    hstring shown;
     void init(hstring const& title){
-        root.Spacing(6);fields.Spacing(6);fields.Visibility(Visibility::Collapsed);
         auto weak=weak_from_this();
-        pick=button(data,title,[weak]{if(auto self=weak.lock()){
-            self->fields.Visibility(self->fields.Visibility()==Visibility::Visible?Visibility::Collapsed:Visibility::Visible);
-        }});
+        pick=button(data,title,[weak]{if(auto self=weak.lock())self->edit();});
         pick.Background(data->brush(L"input"));
         Shapes::Rectangle color;color.Fill(sample);color.Margin({2,2,2,2});pick.Content(color);
         pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.VerticalContentAlignment(VerticalAlignment::Stretch);
         AutomationProperties::SetAutomationId(pick,id+L"-color");
-        if(compact){pick.Width(36);pick.Height(28);}
-        else{
-            Grid row;ColumnDefinition text;text.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(text);
-            ColumnDefinition swatch;swatch.Width({56,GridUnitType::Pixel});row.ColumnDefinitions().Append(swatch);
-            name=label(data,title);name.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(name);
-            pick.Height(32);pick.HorizontalAlignment(HorizontalAlignment::Stretch);
-            Grid::SetColumn(pick,1);row.Children().Append(pick);root.Children().Append(row);
-        }
-        root.Children().Append(fields);
-        rebuild();
+        if(compact){pick.Width(36);pick.Height(28);return;}
+        ColumnDefinition text;text.Width({1,GridUnitType::Star});root.ColumnDefinitions().Append(text);
+        ColumnDefinition swatch;swatch.Width({56,GridUnitType::Pixel});root.ColumnDefinitions().Append(swatch);
+        name=label(data,title);name.VerticalAlignment(VerticalAlignment::Center);root.Children().Append(name);
+        pick.Height(32);pick.HorizontalAlignment(HorizontalAlignment::Stretch);
+        Grid::SetColumn(pick,1);root.Children().Append(pick);
+    }
+    void edit(){
+        auto original=get();auto expected=context?context():hstring{};
+        EditColor(data,pick,O({{L"color",original}}),opaque(),[weak=weak_from_this(),original,expected](J color,std::optional<double>){
+            auto self=weak.lock();if(!self||!self->pick.XamlRoot())return;
+            if((self->context&&self->context()!=expected)||self->get().Stringify()!=original.Stringify())return;
+            self->set(color);
+        });
     }
     void refresh(){
-        auto title=currentTitle();if(!compact)name.Text(title);AutomationProperties::SetName(pick,title);tooltip(pick,title);
-        auto next=context?context():L"";
-        if(next!=editingContext){editingContext=next;rebuild();}
-        form->load(displayColors(data->state),O({{L"color",get()}}),opaque(),object(data->model,L"color_panel"));
-        sample.Color(displayColor(object(form->view,L"new")));
+        auto title=currentTitle();if(name)name.Text(title);AutomationProperties::SetName(pick,title);tooltip(pick,title);
+        auto panel=object(data->model,L"color_panel");A colors;colors.Append(get());
+        auto request=O({{L"type",S(L"preview")},{L"colors",colors},{L"document_space",S(str(panel,L"rgb_space",L"Srgb"))},
+            {L"display_space",S(L"Srgb")},{L"rendition",panel.GetNamedValue(L"rendition",JsonValue::CreateNullValue())}});
+        auto key=request.Stringify();if(key==shown)return;shown=key;
+        try{sample.Color(displayColor(colorUi(data->localization.get(),request).GetArray().GetObjectAt(0)));}catch(hresult_error const&){}
     }
 };
 hstring actionId(J const& action){
@@ -325,18 +319,18 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
 }
 FrameworkElement CapyEffects::ColorField(std::shared_ptr<Property> const& property,hstring const& title,
     std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context,std::function<hstring()> currentTitle){
-    auto editor=std::make_shared<ColorEditor>();editor->data=property->data;editor->id=property->id();
+    auto editor=std::make_shared<ColorButton>();editor->data=property->data;editor->id=property->id();
     editor->get=std::move(get);editor->set=std::move(set);editor->context=std::move(context);
     editor->currentTitle=currentTitle?std::move(currentTitle):std::function<hstring()>([property]{return str(property->model(),L"label");});
     editor->opaque=[property]{return flag(object(property->model(),L"kind"),L"opaque");};
     editor->init(title);bindings.emplace_back([editor]{editor->refresh();});return editor->root;
 }
-ColorSwatch CapyEffects::CompactColorField(std::shared_ptr<WorkspaceData> const& data,hstring const& id,std::function<hstring()> title,
+Button CapyEffects::CompactColorField(std::shared_ptr<WorkspaceData> const& data,hstring const& id,std::function<hstring()> title,
     std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context){
-    auto editor=std::make_shared<ColorEditor>();editor->data=data;editor->id=id;editor->compact=true;
+    auto editor=std::make_shared<ColorButton>();editor->data=data;editor->id=id;editor->compact=true;
     editor->get=std::move(get);editor->set=std::move(set);editor->context=std::move(context);
     editor->currentTitle=std::move(title);editor->opaque=[]{return false;};
-    editor->init(editor->currentTitle());bindings.emplace_back([editor]{editor->refresh();});return {editor->pick,editor->root};
+    editor->init(editor->currentTitle());bindings.emplace_back([editor]{editor->refresh();});return editor->pick;
 }
 FrameworkElement PropertiesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
     auto view=std::make_shared<PropertiesView>(data);view->init();bindings.emplace_back([view]{view->refresh();});return view->root;

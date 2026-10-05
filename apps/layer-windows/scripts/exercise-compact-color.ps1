@@ -231,16 +231,21 @@ function Assert-Pair([string]$Name){
         }
     }finally{$bitmap.Dispose();$samples|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ($Name+'-pixels.json'))}
 }
-function Pair-SetPaint([string[]]$Channels,[string]$Alpha='100',[string]$Intensity=''){
+function Pair-Value([string]$Id,[string]$Value){
+    Invoke $Id;$entry=Control ($Id+'-entry');$entry.SetFocus()
+    $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Value)
+    [CapyRowPointer]::Key([uint32]$review.Id,0x0D);Wait-Until {!(Find ($Id+'-entry'))} "Edit Color did not commit $Id"
+}
+function Pair-SetPaint([string[]]$Channels,[string]$Intensity=''){
     $before=(Model).paint_pair.definition|ConvertTo-Json -Compress
-    Invoke 'color-edit';Wait-Until {Find 'precise-color-model'} 'Precise paint editor did not open'
-    Pair-Choice 'precise-color-model' 'Linear RGB'
-    for($i=0;$i -lt 3;$i++){Pair-Text "precise-color-$i" $Channels[$i]}
-    Pair-Text 'precise-color-3' $Alpha
-    if($Intensity){Pair-Text 'precise-color-intensity' $Intensity}
-    Invoke 'precise-color-apply'
-    Wait-Until {$pair=(Model).paint_pair;$pair -and $pair.definition.rgba -and (($pair.definition|ConvertTo-Json -Compress) -ne $before) -and $pair.definition.rgba[3] -eq [double]$Alpha/100} 'Paint definition did not publish'
-    [CapyRowPointer]::Key([uint32]$review.Id,0x1B);Wait-Until {!(Find 'precise-color-apply')} 'Paint editor did not close'
+    Invoke 'color-edit';Wait-Until {Find 'edit-color-apply'} 'Edit Color did not open'
+    Invoke 'edit-color-form-0';Invoke 'edit-color-form-0-linear_rgb'
+    Wait-Until {(Control 'edit-color-form-0').Current.Name -eq 'Linear RGB'} 'Edit Color did not switch to Linear RGB'
+    for($i=0;$i -lt 3;$i++){Pair-Value "edit-color-0-$i" $Channels[$i]}
+    if($Intensity){Pair-Value 'edit-color-intensity' $Intensity}
+    Invoke 'edit-color-apply'
+    Wait-Until {$pair=(Model).paint_pair;$pair -and $pair.definition.rgba -and (($pair.definition|ConvertTo-Json -Compress) -ne $before)} 'Paint definition did not publish'
+    Wait-Until {!(Find 'edit-color-apply')} 'Edit Color did not close'
 }
 function Pair-Journey{
     Pair-Setup
@@ -269,18 +274,17 @@ function Pair-Journey{
     (Control 'panel-tab-sizes').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1B)
     Wait-Until {!(Model).state.customization.expanded} 'Brush configuration did not close'
     Invoke 'color-foreground';Wait-Until {(Model).state.colors.slot -eq 'foreground'} 'Foreground did not restore'
-    foreach($alpha in @('50','0')){Pair-SetPaint @('0.1','0.35','0.6') $alpha;Assert-Pair "pair-alpha-$alpha"}
-    Pair-SetPaint @('0.1','0.35','0.6') '100'
-    Invoke 'color-background';Wait-Until {(Model).state.colors.slot -eq 'background'} 'Background did not select before alpha edit'
-    Pair-SetPaint @('0.8','0.1','0.3') '50';Assert-Pair 'pair-background-alpha'
-    Pair-SetPaint @('1','1','1') '100';Invoke 'color-foreground'
+    Pair-SetPaint @('0.1','0.35','0.6');Assert-Pair 'pair-foreground-edited'
+    Invoke 'color-background';Wait-Until {(Model).state.colors.slot -eq 'background'} 'Background did not select before its edit'
+    Pair-SetPaint @('0.8','0.1','0.3');Assert-Pair 'pair-background-edited'
+    Pair-SetPaint @('1','1','1');Invoke 'color-foreground'
     Wait-Until {(Model).state.colors.slot -eq 'foreground'} 'Foreground did not select before mask entry'
     Assert-Pair 'pair-artwork-before-mask'
     $artwork=(Model).state.colors|ConvertTo-Json -Depth 12 -Compress
     (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x51)
     Wait-Until {(Model).state.layer_tools.mask_editing} 'Quick Mask did not publish its paints'
     Invoke 'color-background';Wait-Until {(Model).paint_pair.front_swatch -eq 'background'} 'Mask background selection did not publish'
-    Pair-SetPaint @('0.2','0.2','0.2') '100'
+    Pair-SetPaint @('0.2','0.2','0.2')
     if(((Model).state.layer_tools.mask_editing.colors.background|ConvertTo-Json -Compress) -eq ((Model).state.colors.background|ConvertTo-Json -Compress)){throw 'Mask icon fixture did not establish a separate paint definition'}
     Assert-Pair 'pair-mask-background'
     Invoke 'color-transparent';Wait-Until {@((Model).color_panel.swatches|Where-Object {$_.slot -eq 'transparent' -and $_.selected}).Count -eq 1} 'Mask Transparent did not select';Assert-Pair 'pair-mask-transparent'
@@ -291,7 +295,7 @@ function Pair-Journey{
     Pair-Command 'new_document' 'File';Pair-Text 'document-width' '128';Pair-Text 'document-height' '96'
     Pair-Choice 'document-depth' '16-bit float HDR';Invoke 'Create' -Name
     Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Float drawing did not open' 60
-    Pair-SetPaint @('1','0.5','0.25') '100' '2'
+    Pair-SetPaint @('1','0.5','0.25') '2'
     if((Model).paint_pair.definition.rgba[0] -le 1){throw 'HDR icon fixture did not establish paint above SDR white'}
     Assert-Pair 'pair-hdr'
     $definition=(Model).paint_pair.definition|ConvertTo-Json -Compress;$rgba=(Model).paint_pair.rgba|ConvertTo-Json -Compress

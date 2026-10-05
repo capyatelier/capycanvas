@@ -1,3 +1,4 @@
+function Shown-Value($Control){$name=$Control.Current.Name;$name.Substring($name.LastIndexOf(" ")+1)}
 function Workspace-Grips{
  $nodes=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -match '^(group-grip-|panel-footer-grip-|ribbon-grip-|divider-|floating-\d+-)'})
  $ids=@($nodes|ForEach-Object {$_.Current.AutomationId}|Select-Object -Unique)
@@ -177,23 +178,24 @@ function Property-Surfaces{
  foreach($surface in @(@{filter='split_tone';key='shadows'},@{filter='gradient_map';key='gradient'})){
   Property-Filter $surface.filter;$colorId='property-'+$surface.key+'-color'
   Invoke-Id $colorId
-  Wait-Until {(Find ($colorId+'-0-0'))} 'Native color form did not open' 20
-  $colorEntry=Control ($colorId+'-0-0');Select-Draft $colorEntry $numericDraft;Key 13
+  Wait-Until {(Find 'edit-color-0-0')} 'Edit Color did not open' 20
+  Invoke-Id 'edit-color-0-0';$colorEntry=Control 'edit-color-0-0-entry';Select-Draft $colorEntry $numericDraft;Key 13
   $baseline=Fresh-Model;$propertyDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$propertyGpu=$baseline.windows_gpu_generation;$propertyValues=Property-Values $baseline
-  $colorIds=@($colorId,($colorId+'-form-0'),($colorId+'-apply'),($colorId+'-error'))
-  foreach($i in 0..2){$colorIds+=($colorId+'-0-'+$i)}
+  $colorIds=@($colorId,'edit-color-form-0','edit-color-apply','edit-color-error','edit-color-0-0-entry','edit-color-0-1','edit-color-0-2')
   if($surface.key -eq 'gradient'){$colorIds+=@('property-gradient-gradient','property-gradient-position','property-gradient-interpolation','property-gradient-reverse','property-gradient-remove','property-gradient-reset','property-gradient-use-color')}
-  $identities=Native-Identities $colorIds;$colorOptionIdentity=(Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':'
-  $otherValues=@(1..2|ForEach-Object {Value (Control ($colorId+'-0-'+$_))})
+  $identities=Native-Identities $colorIds
+  $otherValues=@(1..2|ForEach-Object {Shown-Value (Control ('edit-color-0-'+$_))})
   Surface-Languages ('retained-color-form-'+$surface.filter) {
    $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
-   $current=Control ($colorId+'-0-0')
-   if((Value $current) -ne $numericDraft -or ((Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Color form lost its native editor, Unicode draft or selected format identity'}
-   foreach($i in 1..2){if((Value (Control ($colorId+'-0-'+$i))) -ne $otherValues[$i-1]){throw 'Color form changed another retained value'}}
-   foreach($i in 0..2){$field=@('red','green','blue')[$i];if((Control ($colorId+'-0-'+$i)).Current.Name -ne (Catalog-Text $choice.tag ('settings-'+$field) 'settings')){throw 'Color value retained an earlier language caption'}}
-   if((Selected-Option (Control ($colorId+'-form-0'))).Current.Name -ne 'RGB' -or (Control ($colorId+'-apply')).Current.IsEnabled){throw 'Color form lost its format or enabled a refused draft'}
-   if((Control ($colorId+'-error')).Current.Name -ne (Catalog-Text $choice.tag 'color-form-finite-field').Replace('{ $label }',(Catalog-Text $choice.tag 'settings-red' 'settings'))){throw 'Color form refusal did not follow the current language'}
+   $current=Control 'edit-color-0-0-entry'
+   if((Value $current) -ne $numericDraft){throw 'Edit Color lost its native field or Unicode draft'}
+   foreach($i in 1..2){if((Shown-Value (Control ('edit-color-0-'+$i))) -ne $otherValues[$i-1]){throw 'Edit Color changed another retained value'}}
+   if($current.Current.Name -ne (Catalog-Text $choice.tag 'settings-red' 'settings')){throw 'The open color value retained an earlier language caption'}
+   foreach($i in 1..2){$field=@('red','green','blue')[$i];if(!(Control ('edit-color-0-'+$i)).Current.Name.StartsWith((Catalog-Text $choice.tag ('settings-'+$field) 'settings'))){throw 'Color value retained an earlier language caption'}}
+   if((Control 'edit-color-form-0').Current.Name -ne 'RGB' -or (Control 'edit-color-apply').Current.IsEnabled){throw 'Edit Color lost its format or enabled a refused draft'}
+   if((Control 'edit-color-error').Current.Name -ne (Catalog-Text $choice.tag 'color-form-finite-field').Replace('{ $label }',(Catalog-Text $choice.tag 'settings-red' 'settings'))){throw 'Edit Color refusal did not follow the current language'}
   }
+  Invoke-Id 'edit-color-cancel';Wait-Until {!(Find 'edit-color-apply')} 'Cancel did not close Edit Color'
  }
  Menu-Command 'file' 'new_document'
  (Control 'document-width').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('64')
@@ -203,24 +205,26 @@ function Property-Surfaces{
  Choose-Option 'document-depth' $floatDepth[1];Invoke 'PrimaryButton'
  Wait-Until {$view=Model;$view -and $view.color_panel.hdr -and $view.color_panel.document_depth -eq 'F16' -and $view.state.tabs[-1].width -eq 64} 'Floating test document did not prepare its HDR color controls' 45
  Property-Filter 'gradient_map';$colorId='property-gradient-color';Invoke-Id $colorId
- Wait-Until {(Find ($colorId+'-intensity'))} 'Floating document ColorForm did not expose intensity' 20
- Select-Draft (Control ($colorId+'-intensity')) '12+';Key 13
+ Wait-Until {(Find 'edit-color-intensity')} 'Floating document Edit Color did not expose intensity' 20
+ Invoke-Id 'edit-color-intensity';Select-Draft (Control 'edit-color-intensity-entry') '12+';Key 13
  $baseline=Fresh-Model;$propertyDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$propertyGpu=$baseline.windows_gpu_generation;$propertyValues=Property-Values $baseline
- $identities=Native-Identities @($colorId,($colorId+'-form-0'),($colorId+'-intensity'),($colorId+'-apply'),($colorId+'-error'))
- $colorOptionIdentity=(Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':'
+ $identities=Native-Identities @($colorId,'edit-color-form-0','edit-color-intensity-entry','edit-color-apply','edit-color-error')
  Surface-Languages 'retained-hdr-color-intensity-error' {
   $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
-  $intensity=Control ($colorId+'-intensity')
-  if(!$view.color_panel.hdr -or $view.color_panel.document_depth -ne 'F16' -or (Value $intensity) -ne '12+' -or (Selection $intensity) -ne '12+' -or (Control ($colorId+'-apply')).Current.IsEnabled -or ((Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Floating ColorForm lost its invalid EV draft, selection, model or refusal eligibility'}
-  if($intensity.Current.Name -ne (Catalog-Text $choice.tag 'native-color-intensity-ev' 'common') -or (Control ($colorId+'-error')).Current.Name -ne (Catalog-Text $choice.tag 'color-form-finite-field').Replace('{ $label }',(Catalog-Text $choice.tag 'native-color-intensity-ev' 'common'))){throw 'Floating ColorForm EV syntax refusal did not use current canonical copy'}
+  $intensity=Control 'edit-color-intensity-entry'
+  if(!$view.color_panel.hdr -or $view.color_panel.document_depth -ne 'F16' -or (Value $intensity) -ne '12+' -or (Selection $intensity) -ne '12+' -or (Control 'edit-color-apply').Current.IsEnabled){throw 'Floating Edit Color lost its invalid EV draft, selection or refusal eligibility'}
+  if($intensity.Current.Name -ne (Catalog-Text $choice.tag 'native-color-intensity-ev' 'common') -or (Control 'edit-color-error').Current.Name -ne (Catalog-Text $choice.tag 'color-form-finite-field').Replace('{ $label }',(Catalog-Text $choice.tag 'native-color-intensity-ev' 'common'))){throw 'Floating Edit Color EV syntax refusal did not use current canonical copy'}
  }
- Select-Draft (Control ($colorId+'-intensity')) '1.25';Key 13
+ Select-Draft (Control 'edit-color-intensity-entry') '1.25';Key 13
+ Wait-Until {!(Find 'edit-color-intensity-entry')} 'Floating Edit Color did not accept the corrected EV'
+ $identities=Native-Identities @($colorId,'edit-color-form-0','edit-color-intensity','edit-color-apply','edit-color-error')
  Surface-Languages 'retained-hdr-color-intensity-retry' {
   $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
-  $intensity=Control ($colorId+'-intensity')
-  if((Value $intensity) -ne '1.25' -or !(Control ($colorId+'-apply')).Current.IsEnabled -or ((Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':') -ne $colorOptionIdentity){throw 'Floating ColorForm retry did not accept the corrected EV'}
-  if($intensity.Current.Name -ne (Catalog-Text $choice.tag 'native-color-intensity-ev' 'common') -or (Control ($colorId+'-error')).Current.Name){throw 'Floating ColorForm retry kept a stale refusal or caption'}
+  $intensity=Control 'edit-color-intensity'
+  if(!(Control 'edit-color-apply').Current.IsEnabled -or !$intensity.Current.Name.EndsWith('+1.25 EV')){throw 'Floating Edit Color retry did not accept the corrected EV'}
+  if(!$intensity.Current.Name.StartsWith((Catalog-Text $choice.tag 'native-color-intensity-ev' 'common')) -or (Control 'edit-color-error').Current.Name){throw 'Floating Edit Color retry kept a stale refusal or caption'}
  }
+ Invoke-Id 'edit-color-cancel';Wait-Until {!(Find 'edit-color-apply')} 'Cancel did not close Edit Color'
  Use-Window $textWindow
 }
 

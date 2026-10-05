@@ -1,5 +1,5 @@
 #pragma once
-#include "ColorForm.h"
+#include "ColorEditor.h"
 #include "Checker.h"
 #include <array>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>

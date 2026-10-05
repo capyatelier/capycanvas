@@ -146,8 +146,12 @@ closes the dialog and presents it again afterwards. Web closes its modal
 `<dialog>` while picking so the canvas receives input. Android draws the editor
 in the workspace tree, because a dialog window would take the canvas's input;
 an editor opened from another dialog window uses a dialog window and hides the
-eyedropper, as GTK does when another dialog is open. Apple and Windows show the
-value rows without the wheel, eyedropper or sheet.
+eyedropper, as GTK does when another dialog is open. Windows presents a
+`ContentDialog`, hides it while picking and shows it again afterwards; the
+strip is an overlay on the workspace, and the wheel uses the panel's background
+ring and field workers. Properties, gradient stops and solid fill thumbnails
+open the same dialog. Apple shows the value rows without the wheel, eyedropper
+or sheet.
 
 ## Picker
 
@@ -356,8 +360,11 @@ tools/windows-vm/windows-vm.py fixtures compact-color:dark compact-color:light
   state, keeps the page one size across formats and shapes, and checks the
   Current/New seam; run it also with `LAYER_MOTION_SCALE=1.25`), `test.mjs --color-editor` and
   `--live-language-color` (Web), `node --test apps/layer-web/color-controls-copy.test.mjs`
-  and `color-button-lifecycle.test.mjs`, and Android
-  `AndroidColorPanelTest#editColorRowsSheetAndCanvasPick`. Each runs in both themes.
+  and `color-button-lifecycle.test.mjs`, Android
+  `AndroidColorPanelTest#editColorRowsSheetAndCanvasPick`, and Windows
+  `exercise-color-editor.ps1 -Theme dark|light` (rows, paste and copy, formats,
+  typing and refusal, scrubbing, the sheet, memory, canvas picking and the Paper
+  thumbnail). Each runs in both themes.
 - Web pen timing uses `tools/performance/web-pen.mjs --os-input --picker`
   (`LAYER_PICKER_SAMPLE_SIZE=101` for the largest sample); see
   [measuring](../performance/measuring.md). Large-area averaging still costs

@@ -261,13 +261,18 @@ try {
  Invoke 'panel-tab-color'
  [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
  (Control 'color-readout').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D)
- Invoke 'edit-color';Select-Choice 'precise-color-model' 'Linear RGB'
- Set-Text 'precise-color-0' '1';Set-Text 'precise-color-1' '0.5';Set-Text 'precise-color-2' '0.25';Set-Text 'precise-color-3' '100'
- Set-Text 'precise-color-intensity' 'not a number';Invoke 'precise-color-apply'
- Wait-Until {!(Control 'precise-color-apply').Current.IsEnabled} 'Invalid HDR intensity was accepted'
- Set-Text 'precise-color-intensity' '2';Invoke 'precise-color-apply'
+ Invoke 'edit-color';Wait-Until {Find 'edit-color-apply'} 'Edit Color did not open'
+ Invoke 'edit-color-form-0';Invoke 'edit-color-form-0-linear_rgb'
+ Wait-Until {(Control 'edit-color-form-0').Current.Name -eq 'Linear RGB'} 'Edit Color did not switch to Linear RGB'
+ foreach($value in @(@('edit-color-0-0','1'),@('edit-color-0-1','0.5'),@('edit-color-0-2','0.25'),@('edit-color-intensity','not a number'))){
+  Invoke $value[0];(Control ($value[0]+'-entry')).SetFocus();Set-Text ($value[0]+'-entry') $value[1];[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+ }
+ Wait-Until {(Find 'edit-color-intensity-entry') -and !(Control 'edit-color-apply').Current.IsEnabled} 'Invalid HDR intensity was accepted'
+ Set-Text 'edit-color-intensity-entry' '2';[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+ Wait-Until {!(Find 'edit-color-intensity-entry')} 'HDR intensity did not commit'
+ Invoke 'edit-color-apply'
  Wait-Until {(Model).color_panel.intensity -eq 2 -and (Model).color_panel.definition.rgba[0] -gt 1} 'HDR numeric paint was not applied'
- [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+ Wait-Until {!(Find 'edit-color-apply')} 'Edit Color did not close'
  $revision=(Model).state.document_file.revision
  Button 'Test pen';Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).windows_display.analysis.ready} 'HDR painting analysis failed' 60
  # Exercise the retained native Proof controls through the shared Window menu.

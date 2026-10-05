@@ -32,6 +32,17 @@ function Invoke([string]$Value,[switch]$Name){
 function Edit([string]$Id,[string]$Text){
     $entry=Control $Id;$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
 }
+function Edit-Value([string]$Id,[string]$Text){
+    Invoke $Id;Edit ($Id+'-entry') $Text;[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+    Wait-Until {!(Find ($Id+'-entry'))} "Edit Color did not commit $Id"
+}
+function Edit-Form([int]$Row,[string]$Form){
+    Invoke "edit-color-form-$Row";$item=Control "edit-color-form-$Row-$Form";$pattern=$null
+    if($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke()}
+    elseif($item.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$pattern)){$pattern.Select()}
+    else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
+    Wait-Until {$item=Find "edit-color-form-$Row-$Form";!$item -or $item.Current.IsOffscreen} 'The format menu did not close'
+}
 function Property([string]$Key){(Model).state.layer_properties.controls|Where-Object {$_.key -eq $Key}}
 function Rgba($Color){if($null -ne $Color.rgba){$Color.rgba}else{$Color}}
 function Choose([string]$Id,[string]$Option){
@@ -419,15 +430,19 @@ try {
     Check-Gradient
     Edit 'property-gradient-position' '35';(Control 'property-gradient-color').SetFocus()
     Wait-Until {[Math]::Abs((Property 'gradient').value.value.stops[1].position-.35) -lt .000001} 'Gradient position not updated'
-    Invoke 'property-gradient-color';Edit 'property-gradient-color-3' '40';Invoke 'property-gradient-color-apply'
-    Wait-Until {[Math]::Abs((Rgba (Property 'gradient').value.value.stops[1].color)[3]-.4) -lt .000001} 'Gradient alpha not updated'
+    $alpha=(Rgba (Property 'gradient').value.value.stops[1].color)[3]
+    Invoke 'property-gradient-color';Edit-Value 'edit-color-hex' '#336699';Invoke 'edit-color-apply'
+    Wait-Until {$stop=Rgba (Property 'gradient').value.value.stops[1].color;[Math]::Abs($stop[2]-.6) -lt .002 -and [Math]::Abs($stop[0]-.2) -lt .002 -and $stop[3] -eq $alpha} 'Gradient stop color not updated'
+    Wait-Until {!(Find 'edit-color-apply')} 'Use Color did not close Edit Color'
     Capture 'gradient'
-    Edit 'property-gradient-color-0' '90';Invoke 'property-gradient-reset'
+    Invoke 'property-gradient-color';Edit-Value 'edit-color-0-0' '90';Invoke 'edit-color-cancel'
+    Wait-Until {!(Find 'edit-color-apply')} 'Cancel did not close Edit Color'
+    Invoke 'property-gradient-reset'
     Wait-Until {(Property 'gradient').value.value.stops.Count -eq 2} 'Gradient reset failed'
-    if((Rgba (Property 'gradient').value.value.stops[0].color)[0] -ne 0){throw 'Draft leaked into reset gradient'}
+    if((Rgba (Property 'gradient').value.value.stops[0].color)[0] -ne 0){throw 'A cancelled draft leaked into the reset gradient'}
     if((Control 'property-gradient-position').Current.IsEnabled){throw 'Gradient endpoint position should be disabled'}
     Select-Filter 'split_tone' 'Split Tone';Invoke 'property-shadows-color'
-    Edit 'property-shadows-color-0' '0.25';Invoke 'property-shadows-color-apply'
+    Edit-Form 0 'rgb_unit';Edit-Value 'edit-color-0-0' '0.25';Invoke 'edit-color-apply'
     Wait-Until {[Math]::Abs((Rgba (Property 'shadows').value.value)[0]-.25) -lt .000001} 'Scalar color not updated'
     if([Math]::Abs((Rgba (Property 'shadows').value.value)[1]-.33) -gt .000001){throw 'Scalar channel edit changed another channel'}
     Capture 'color'

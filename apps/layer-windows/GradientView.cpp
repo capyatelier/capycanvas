@@ -162,15 +162,15 @@ struct EditorView:std::enable_shared_from_this<EditorView> {
             fields,nullptr,true,source.id+L"-position",false,presentation));
         positionGate.IsTabStop(false);positionGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);positionGate.VerticalAlignment(VerticalAlignment::Center);
         remove=iconButton(L"minus",L"remove",[weak]{if(auto self=weak.lock())self->removeSelected();});
-        auto swatch=CompactColorField(data,source.id,[weak]{if(auto self=weak.lock())return self->data->caption(L"color",L"color");return hstring();},
+        colorPick=CompactColorField(data,source.id,[weak]{if(auto self=weak.lock())return self->data->caption(L"color",L"color");return hstring();},
             [weak]{if(auto self=weak.lock())return object(self->stop(),L"color");return J{};},
             [weak](J color){if(auto self=weak.lock())self->send(stopEdit(N(self->selected),num(self->stop(),L"position"),color));},
             fields,[weak]{if(auto self=weak.lock())return self->context();return hstring();});
-        swatch.pick.VerticalAlignment(VerticalAlignment::Center);colorPick=swatch.pick;
+        colorPick.VerticalAlignment(VerticalAlignment::Center);
         bucket=iconButton(L"fill",L"use-color",[weak]{if(auto self=weak.lock())self->send(O({{L"kind",S(L"use_current_color")},{L"index",N(self->selected)}}));});
-        Grid::SetColumn(remove,1);Grid::SetColumn(swatch.pick,2);Grid::SetColumn(bucket,3);
-        for(FrameworkElement part:{FrameworkElement(positionGate),FrameworkElement(remove),FrameworkElement(swatch.pick),FrameworkElement(bucket)})bottom.Children().Append(part);
-        for(FrameworkElement part:{FrameworkElement(top),FrameworkElement(focus),FrameworkElement(bottom),swatch.fields})root.Children().Append(part);
+        Grid::SetColumn(remove,1);Grid::SetColumn(colorPick,2);Grid::SetColumn(bucket,3);
+        for(FrameworkElement part:{FrameworkElement(positionGate),FrameworkElement(remove),FrameworkElement(colorPick),FrameworkElement(bucket)})bottom.Children().Append(part);
+        for(FrameworkElement part:{FrameworkElement(top),FrameworkElement(focus),FrameworkElement(bottom)})root.Children().Append(part);
     }
     void down(PointerRoutedEventArgs const& e){
         auto p=e.GetCurrentPoint(focus);

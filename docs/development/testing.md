@@ -298,7 +298,9 @@ Preserve user names and document contents across language changes. Follow the
   Android uses `AndroidColorPanelTest#retainedPaintIconsAndCompactControlFollowCommittedContext`
   and `#retainedPaintIconsUseMappedRenditionAndIgnorePickerHover` on a reserved tablet.
   Windows uses `exercise-compact-color.ps1 -Journey pair-dark` and `pair-light`,
-  or VM fixture selections `compact-color:pair-dark compact-color:pair-light`.
+  or VM fixture selections `compact-color:pair-dark compact-color:pair-light`;
+  its paints come from Edit Color, which has no alpha, so translucent pairs are
+  left to the shared and GTK checks.
 - **Popups on GTK.** Run popup and menu checks without `--tablet`: the tablet
   proxy's synthetic serials cannot take compositor popup grabs.
 - **Real pens.** Injected input checks logic, not the OS driver. Input changes

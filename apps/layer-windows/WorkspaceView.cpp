@@ -17,6 +17,7 @@
 #include "CollapsedColumns.h"
 #include "WorkspaceGestures.h"
 #include "ColorView.h"
+#include "ColorStrip.h"
 #include "ToolView.h"
 #include "NavigatorView.h"
 #include "EffectControls.h"
@@ -100,6 +101,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<CommandSearchPopup> commandSearch=std::make_shared<CommandSearchPopup>();
     std::shared_ptr<CanvasActionBar> canvasBar=std::make_shared<CanvasActionBar>();
     std::shared_ptr<CanvasNotice> notice=std::make_shared<CanvasNotice>();
+    std::shared_ptr<ColorStrip> colorStrip=std::make_shared<ColorStrip>();
     std::array<std::shared_ptr<PreviewPanel>,2> previewPanels{std::make_shared<PreviewPanel>(),std::make_shared<PreviewPanel>()};
     double cameraRevision=-1;
     hstring previousTheme,previousPalette;
@@ -137,6 +139,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();self->placePreviews();if(self->glassChanged)self->glassChanged();}};
         canvasBar->init(root);
         notice->data=data;notice->init(root);
+        colorStrip->data=data;colorStrip->init(root);data->colorStrip=colorStrip;
         for(auto [panel,kind]:{std::pair{previewPanels[0],PreviewPanel::SelectionRefine},std::pair{previewPanels[1],PreviewPanel::FrequencySeparation}}){
             panel->data=data;panel->kind=kind;panel->moved=[weak=weak_from_this()]{if(auto self=weak.lock())self->placeNotice();};panel->init(root);
         }
@@ -296,7 +299,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));canvasBar->Dragging(object(update,L"drag").Size()!=0);}
             if(snapshot.HasKey(L"camera")){
                 auto cameraPatch=object(snapshot,L"camera");
-                data->state.Insert(L"camera",cameraPatch);updateCamera(cameraPatch);
+                data->state.Insert(L"camera",cameraPatch);updateCamera(cameraPatch);colorStrip->present();
             }
             tracePresentation();return true;
         }
@@ -314,7 +317,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);canvasBar->attach();notice->attach();for(auto const& panel:previewPanels)panel->attach();
+            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(cameraSlot);root.Children().Append(zenCapy);canvasBar->attach();notice->attach();colorStrip->attach();for(auto const& panel:previewPanels)panel->attach();
             measureHost.Children().Clear();offscreen.clear();root.Children().Append(measureHost);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
@@ -388,7 +391,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         commandSearch->Apply(data->state);
         canvasBar->Dragging(object(update,L"drag").Size()!=0);canvasBar->Apply(data->state);
         for(auto const& panel:previewPanels){panel->Place(layout);panel->Publish(data->state);}
-        notice->Place(layout);notice->Publish(data->state);
+        notice->Place(layout);notice->Publish(data->state);data->queueColors();
         expansion->Apply(configurationHeight());present();
         collapsed->Apply();drawers->Apply();gestures->Refresh();
         auto status=object(layout,L"status");place(cameraSlot,status);

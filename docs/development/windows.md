@@ -453,6 +453,10 @@ focus and retained control identities. The default `compact-color` also runs its
 wheel, readout, menu and drawer journeys. Use both themes when changing swatch
 presentation.
 `compact-color:input` isolates overlap routing and focus from border pixel checks.
+`color-editor` (dark) and `color-editor:light` walk Edit Color: format rows, paste
+and copy, typing and refusal, value scrubbing and arrow steps, Current, the
+swatch sheet and its search, remembered formats, canvas picking through the
+strip, Use Color and the Paper's fill thumbnail.
 
 `exercise-workspace-pickup.ps1 -DebuggerPath <cdb.exe>` attaches CDB before input
 and saves an access-violation stack and dump in the run directory.

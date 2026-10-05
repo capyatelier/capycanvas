@@ -32,6 +32,7 @@ using V=IJsonValue;
 namespace CapyUi {
 struct StrokeRecording;
 struct ScopeFeed;
+struct ColorStrip;
 void captureTextComposition(TextBox const& entry,std::function<void(bool)> localizationInput={});
 bool textComposing(DependencyObject element);
 bool focusedTextComposing(XamlRoot const& root);
@@ -159,6 +160,7 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     uint64_t windowId=0;bool glassSurfaces=false;A drawerSources;
     std::shared_ptr<StrokeRecording> strokes;
     std::shared_ptr<ScopeFeed> scopes;
+    std::shared_ptr<ColorStrip> colorStrip;
     std::function<void(bool)> popupChanged;
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
