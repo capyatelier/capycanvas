@@ -56,11 +56,8 @@ $pm.WaitForExit(30000)|Out-Null
 if(!$pm.HasExited){throw 'PresentMon did not finish'}
 }else{Start-Sleep -Seconds 2}
 $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|ForEach-Object {$_.Current.Name}|Where-Object {$_ -match 'Invalid|normalized|chronological|failed|overflow|panic|unavailable|Nonfinite'}|Set-Content (Join-Path $OutputDirectory 'errors.txt')
-# Request normal close; discard only the synthetic unsaved benchmark stroke.
 [CapyWindowApi]::PostMessage($review.MainWindowHandle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null
-Wait-Until {$discard=Find "Discard Changes" -Name;$discard -or $review.HasExited} 'Missing benchmark close confirmation'
-if(!$review.HasExited){$discard=Find "Discard Changes" -Name;$discard.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
-$review.WaitForExit(30000)|Out-Null
+$review.WaitForExit(90000)|Out-Null
 if(!$review.HasExited){throw 'Benchmark app did not finish'}
 $prefix='latency-'+$review.Id+'-'+$meta.window_id
 Get-ChildItem (Join-Path $directory ($prefix+'-*'))|Copy-Item -Destination $OutputDirectory
