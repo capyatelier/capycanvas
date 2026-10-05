@@ -82,7 +82,7 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 .workspace-form .destructive-action:active:not(:disabled) { background:#a22; }
 :where(:root:not([data-touch])) .workspace-form footer button:not(.suggested-action):hover:not(:disabled) { background:color-mix(in srgb,var(--text) 12%,transparent); }
 .workspace-form footer button:not(.suggested-action):active:not(:disabled) { background:color-mix(in srgb,var(--text) 16%,transparent); }
-.workspace-form { width:420px; height:fit-content; padding:22px; box-sizing:border-box; }
+.workspace-form { width:420px; padding:22px; box-sizing:border-box; }
 .workspace-form label { display:flex; flex-direction:column; gap:7px; margin:16px 0; }
 .workspace-form footer { margin:18px 0 0; flex-wrap:wrap; }
 .workspace-form .destructive-action { background:#b33; }
@@ -495,7 +495,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .refine-actions .suggested-action { background: var(--accent); color: var(--accent-foreground); }
 :where(:root:not([data-touch])) .refine-actions button:not(.suggested-action):hover { background: color-mix(in srgb, var(--text) 12%, transparent); }
 :where(:root:not([data-touch])) .refine-actions .suggested-action:hover { background: color-mix(in srgb, white 10%, var(--accent)); }
-dialog { border: 0; border-radius: calc(16px * var(--squircle-scale)); background: var(--settings); color: var(--text); padding: 0; width: 800px; height: 620px; max-width: calc(100vw - 60px); max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; }
+dialog { border: 0; border-radius: calc(16px * var(--squircle-scale)); background: var(--settings); color: var(--text); padding: 0; width: 800px; height: fit-content; max-width: calc(100vw - 60px); max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; }
 #settings { width: 1000px; height: 744px; }
 dialog::backdrop { background: #0008; }
 body[data-theme="light"] dialog::backdrop { background: #0002; }
@@ -591,7 +591,7 @@ body[data-theme="dark"] .button-row.destructive-action { color: #ff7b63; }
 .subpage-back, .preferences-back { position: absolute; left: 6px; place-items: center; padding: 0; width: 34px; }
 .subpage-back { display: grid; }
 .preferences-layout.in-subpage .preferences-back { display: none !important; }
-dialog.sheet { width: 460px; height: fit-content; }
+dialog.sheet { width: 460px; }
 dialog.sheet[open] { display: flex; flex-direction: column; }
 dialog.sheet.picker { height: 600px; }
 .sheet-body { display: flex; flex-direction: column; gap: 18px; padding: 0 12px 24px; min-height: 0; overflow-y: auto; }
@@ -640,7 +640,7 @@ dialog footer { display: flex; justify-content: end; align-items: center; gap: 6
 dialog footer .preferences-error { flex: 1; }
 dialog footer button { background: color-mix(in srgb, var(--text) 8%, transparent); }
 dialog .suggested-action { background: var(--accent); color: var(--accent-foreground); }
-dialog.toolbar-prompt { width: 400px; height: fit-content; padding: 24px; }
+dialog.toolbar-prompt { width: 400px; padding: 24px; }
 dialog.toolbar-manager { width: 480px; height: 420px; }
 .toolbar-manager[open] { display: flex; flex-direction: column; }
 .toolbar-manager-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 18px; padding: 24px; }
@@ -838,7 +838,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .document-dialog h2 { margin:0; font-size:1.15em; }
 .document-dialog footer { display:flex; gap:8px; justify-content:flex-end; }
 .document-dialog .document-note { margin:-8px 0 0; color:var(--settings-secondary); font-size:.9em; }
-.size-dialog { width:min(380px,90vw); height:fit-content; }
+.size-dialog { width:min(380px,90vw); }
 .size-dialog h2:focus { outline:none; }
 .size-dialog-fields { display:flex; flex-direction:column; gap:10px; }
 .size-dialog .number-spin .number-entry { width:96px; }
@@ -966,7 +966,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 @media(prefers-reduced-motion:reduce) { .header-dragging .header-item { transition:none; } }
 
 /* Tagged color forms use the same shared numeric editor as native hosts. */
-.color-dialog { width:min(720px,calc(100vw - 24px)); height:fit-content; max-height:calc(100dvh - 24px); padding:0; border-radius:calc(20px * var(--squircle-scale)); box-sizing:border-box; overflow:hidden; }
+.color-dialog { width:min(720px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); padding:0; border-radius:calc(20px * var(--squircle-scale)); box-sizing:border-box; overflow:hidden; }
 .color-editor { display:flex; flex-direction:column; max-height:calc(100dvh - 24px); }
 .color-editor-page { position:relative; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
 .color-editor-body { display:grid; grid-template-columns:232px minmax(0,1fr); grid-template-rows:auto auto 1fr; grid-template-areas:"title title" "left head" "left values"; align-content:start; gap:14px 24px; padding:20px; overflow:auto; }
