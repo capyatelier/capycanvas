@@ -2364,7 +2364,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
                 self.require_raster_snapshot().is_ok() && !self.state.document_file.busy
             }
-            CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok(),
+            CommandId::CloseDocument => self.require_document_snapshot_idle().is_ok() && !self.opening_drawing(),
             CommandId::ScaleRotate => idle && !self.cropping() && self.can_transform(),
             CommandId::TransformAgain => self.require_document_idle().is_ok() && self.transform_again_refusal().is_none(),
             CommandId::TransformSnapping => idle && (self.operation.transforming() || self.layer_interaction.tool == LayerCanvasTool::Move),
@@ -7679,6 +7679,24 @@ mod tests {
                 request: DocumentRequest::New
             }
         ));
+    }
+
+    #[test]
+    fn closing_while_another_drawing_opens_keeps_both_drawings() {
+        for opening in [false, true] {
+            let mut s = session(Platform::Web);
+            s.request_document_open(opening).unwrap();
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.refresh_commands();
+            assert!(!s.command(CommandId::CloseDocument).enabled);
+            assert!(s.request_document_close().is_err());
+            s.complete_document_request(id, Ok(true)).unwrap();
+            assert!(!s.state.document_file.close_ready, "the opened drawing never closes the one that requested it");
+            s.refresh_commands();
+            assert!(s.command(CommandId::CloseDocument).enabled);
+            s.request_document_close().unwrap();
+            assert!(s.state.document_file.close_ready);
+        }
     }
 
     #[test]

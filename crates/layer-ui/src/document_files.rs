@@ -729,8 +729,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
+    pub(super) fn opening_drawing(&self) -> bool {
+        self.files.pending.as_ref().is_some_and(|(id, _)| matches!(self.document_request(*id), Ok(DocumentRequest::New | DocumentRequest::Open)))
+    }
+
     pub fn request_document_close(&mut self) -> Result<UiChange, String> {
         self.require_document_snapshot_idle()?;
+        if self.opening_drawing() {
+            return Err(FileFailure::Busy.message(self.localization()));
+        }
         self.refresh_file_state();
         if self.files.pending.is_some() {
             self.files.close_after = true;
