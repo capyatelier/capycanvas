@@ -27,10 +27,6 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   const options = element("div", "layer-options");
   const opacity = numberField(catalog.layer_opacity, ()=>copy.opacity, value => dispatch({ type: "set_layer_opacity", opacity: value }), true);
   opacity.id = "layer-opacity"; options.append(blend, opacity); header.append(options);
-  const colorMode = button("", () => openMenu(colorMode), "layer-blend");
-  colorMode.id = "layer-color-mode"; colorMode.setAttribute("aria-haspopup", "menu");
-  colorMode.menuModel = () => state().layer_tools.color_mode?.menu;
-  header.append(colorMode);
   const glyphButton = (glyph, label, click, cls = "", getAction) => {
     const b = button("", e => { e.stopPropagation(); click(e); }, `layer-icon ${cls}`);
     if(typeof label==="function"){bindCopy(b,label,"title");bindCopy(b,label,"ariaLabel");}else{b.title=label;b.setAttribute("aria-label",label);} b.append(icon(glyph));
@@ -321,9 +317,6 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask; more.disabled = !current;
     deleteButton.disabled = !state().layer_tools.can_delete;
     addFilter.disabled = !view.add_filter;
-    colorMode.hidden = !view.color_mode; colorMode.disabled = !view.color_mode?.enabled;
-    colorMode.textContent = view.color_mode?.value ?? "";
-    colorMode.title = view.color_mode?.menu.title ?? ""; colorMode.setAttribute("aria-label", colorMode.title);
     for (const { b, property, capability } of toggles) {
       const reference = capability === "reference";
       b.disabled = !(reference ? view.can_reference : controls[capability]);

@@ -141,11 +141,8 @@ pub struct LayersView {
     pub controls: LayerControls,
     pub attachment: LayerAttachmentControl,
     pub add_filter: Option<ContextMenu>,
-    pub color_mode: Option<LayerColorControl>,
     pub connections: Vec<LayerConnection>,
 }
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct LayerColorControl { pub value: Arc<str>, pub enabled: bool, pub menu: ContextMenu }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct LayerControls {
@@ -1253,21 +1250,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let layer = self.engine.document().scene().occurrence(handle).ok_or("Unknown layer")?;
         Ok(ContextMenu { title: self.localization().text(MessageId::RESOURCES_LAYER_MENU_BLEND_MODE).to_string(), sections: self.blend_sections(handle, layer) })
     }
-    pub(crate) fn layer_color_control(&self, id: OccurrenceHandle) -> Option<LayerColorControl> {
-        let doc = self.engine.document();
-        let source = doc.scene().paint_source(id)?;
-        if self.selection_masks.target().is_some() || matches!(doc.working.target, Some(SourceTarget::Coverage(_))) { return None; }
-        let enabled = !doc.is_locked(id) && !self.state.document_file.busy && self.require_document_idle().is_ok()
-            && doc.affine_edit_transform(SourceTarget::Paint(match doc.scene().occurrence(id)?.content { OccurrenceContent::Paint(h) => h, _ => return None })).is_some();
-        let items = [layer_core::color::LayerColorMode::FullColor, layer_core::color::LayerColorMode::Grayscale, layer_core::color::LayerColorMode::TwoTone]
-            .map(|mode| ContextMenuItem { enabled, selected: Some(source.color_mode == mode), ..ContextMenuItem::command(self.layer_color_label(mode).as_ref(), UiAction::Layer { action: LayerAction::ColorMode { id: occurrence_token(id), epoch: self.state.document_file.epoch, mode } }) });
-        Some(LayerColorControl { value: self.layer_color_label(source.color_mode), enabled,
-            menu: ContextMenu { title: self.localization().text(MessageId::RESOURCES_LAYER_COLOR_MODE).to_string(), sections: vec![items.into()] } })
-    }
-    pub(crate) fn layer_color_label(&self, mode: layer_core::color::LayerColorMode) -> Arc<str> {
-        color_mode_label(mode, self.localization())
-    }
-
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<ContextMenu, String> {
         self.layer_menu_with(id, mask, true)
     }
@@ -1574,8 +1556,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             vec![
                 [
                     Some(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW).as_ref(), new)),
-                    (filters && current && !mask)
-                        .then(|| ContextMenuItem::submenu(&ApplicationMenu::Filter.localized_label(self.localization()), self.filter_menu_sections())),
+                    (filters && !mask).then(|| self.layer_filter_menu(handle)).flatten()
+                        .map(|menu| ContextMenuItem::submenu(&menu.title, menu.sections)),
                 ]
                 .into_iter()
                 .flatten()
@@ -1608,7 +1590,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ContextMenuItem { enabled: !locked && self.current_selection().is_some(), ..ContextMenuItem::command(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SAVE_CURRENT_SELECTION_IN_GROUP).as_ref(), UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: true } }) },
             ]);
         }
-        if !mask && let Some(color) = self.layer_color_control(handle) { sections.push(vec![ContextMenuItem::submenu(&color.menu.title, color.menu.sections)]); }
         Ok(sections)
     }
     pub(super) fn layer_pen(&mut self, event: PenEvent) -> Result<(), String> {

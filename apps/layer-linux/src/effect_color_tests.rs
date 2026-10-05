@@ -51,7 +51,7 @@ fn assert_curve_readout_visible(spin: &gtk::SpinButton) {
     let width = text.create_pango_layout(Some(&spin.text())).pixel_size().0;
     assert!(text.width() >= width, "complete curve readout {}: text {}px in {}px", spin.text(), width, text.width());
 }
-fn choose_curve_option(w: &Rc<Workspace>, native: &mut RemoteInput, drop: &gtk::DropDown, index: u32) {
+pub(super) fn choose_curve_option(w: &Rc<Workspace>, native: &mut RemoteInput, drop: &gtk::DropDown, index: u32) {
     let point = curve_option_point(w, native, drop, index);
     native.click(point);
     assert_eq!(drop.selected(), index);

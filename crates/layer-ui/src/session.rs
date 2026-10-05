@@ -5793,7 +5793,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layers = doc.ordered_layers().iter().copied().filter(|id| !self.layer_interaction.hidden_by_group(doc, *id)).map(layer_state).collect();
         self.state.layer_tools.attachment = crate::layer_relationships::attachment_control(doc, doc.working.occurrence, self.localization());
         self.state.layer_tools.add_filter = doc.working.occurrence.and_then(|id| self.layer_filter_menu(id));
-        self.state.layer_tools.color_mode = doc.working.occurrence.and_then(|id| self.layer_color_control(id));
+        self.state.layer_properties.add_filter = self.state.layer_tools.add_filter.clone();
         if self.selection_masks.quick() {
             let row = LayerState {
                 id: 0, selection_layer: true, quick_mask: true, can_rename: false, has_thumbnail: true,
@@ -11872,7 +11872,7 @@ mod tests {
         let doc = app.engine.document();
         let mut row = app.layer_menu(occurrence_token(doc.working.occurrence.unwrap()), matches!(doc.working.target,Some(SourceTarget::Coverage(_)))).unwrap();
         let filter = row.sections[0].remove(1);
-        assert_eq!(filter.label, ApplicationMenu::Filter.localized_label(app.localization()).as_ref());
+        assert_eq!(filter.label, app.localization().text(MessageId::RESOURCES_LAYER_ADD_FILTER).as_ref());
         assert_eq!(serialize(app.application_menu(ApplicationMenu::Layer)), serialize(row));
         assert_eq!(
             serialize(app.application_menu(ApplicationMenu::Window)),

@@ -61,16 +61,6 @@ void LayersView::init(){
     copyName(data,blend,data->copyCaption(L"layers",L"blend"));AutomationProperties::SetAutomationId(blend,L"layer-blend");
     opacityGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     values.Children().Append(blend);Grid::SetColumn(opacityGate,1);values.Children().Append(opacityGate);header.Children().Append(values);
-    auto colorMode=button(data,L"",[weak]{if(auto self=weak.lock())self->showMenu(object(object(self->view(),L"color_mode"),L"menu"),self->header);});
-    colorMode.HorizontalAlignment(HorizontalAlignment::Stretch);colorMode.HorizontalContentAlignment(HorizontalAlignment::Left);
-    colorMode.MinHeight(24);colorMode.Height(24);colorMode.Padding({6,0,6,0});colorMode.Background(data->brush(L"input"));colorMode.BorderThickness({0,0,0,0});
-    AutomationProperties::SetAutomationId(colorMode,L"layer-color-mode");header.Children().Append(colorMode);
-    controls.emplace_back([weak,colorMode](J,J){if(auto self=weak.lock()){
-        auto control=object(self->view(),L"color_mode");colorMode.Visibility(control.Size()?Visibility::Visible:Visibility::Collapsed);
-        colorMode.Content(box_value(str(control,L"value")));colorMode.IsEnabled(flag(control,L"enabled"));
-        AutomationProperties::SetName(colorMode,str(object(control,L"menu"),L"title"));
-    }});
-
     tools.Orientation(Orientation::Horizontal);tools.Spacing(2);
     struct Toggle {wchar_t const* icon;LocalizedCopy label;wchar_t const* property;wchar_t const* op;wchar_t const* capability;};
     for(auto spec:{Toggle{L"alpha-lock",data->copyCaption(L"layers",L"alpha_lock"),L"alpha_locked",L"alpha_lock",L"alpha_lock"},

@@ -7,7 +7,7 @@ import {colorButton, colorCss} from './color-controls.js';
 import {filterPreviewView} from './filter-previews.js';
 import {gradientEditor} from './gradient.js';
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
-export function createEffectPanels({app,wake,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false,message}) {
+export function createEffectPanels({app,wake,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false,message,openMenu}) {
   const copy=liveCopy(app,"catalog").native_copy.color,common=liveCopy(app,"bootstrap_view").common;
   const send=action=>dispatch({type:"effect",action});
   const adjustments=element("div","filter-picker");adjustments.dataset.control="adjustments";
@@ -93,6 +93,9 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   const properties=element("div","effect-properties");properties.dataset.control="properties";
   const title=element("h3"),page=element("select"),body=element("div","property-controls");page.dataset.propertiesPage="";page.onchange=()=>send({op:"select_page",layer:state().layer_properties.layer,page:page.value});const toolbar=element("div","property-toolbar"),actions=element("div","property-actions");
   toolbar.append(page,actions);properties.append(title,toolbar,body);panels.get("properties").append(properties);
+  const addFilter=button(()=>state().layer_properties.add_filter?.title??"",()=>openMenu(addFilter));
+  addFilter.id="properties-add-filter";addFilter.setAttribute("aria-haspopup","menu");
+  addFilter.menuModel=()=>state().layer_properties.add_filter;properties.append(addFilter);
   const tonal=createScope({state,app,element,button,icon,dispatch,tonal:true});properties.insertBefore(tonal.node,body);
   let actionKey,actionNodes=[],groupMenus=[];
   function refreshActions(view) {
@@ -236,6 +239,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   function refresh(){
     refreshPicker();
     const view=state().layer_properties;title.textContent=view.title;title.title=view.description;
+    addFilter.hidden=!view.add_filter;
     resource.hidden=view.resource_label==null;
     if(!resource.hidden){
       const choices=view.actions.flatMap((a,i)=>a.action.op==="lookup_preset"?[[i,a.label]]:[]);

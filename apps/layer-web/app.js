@@ -835,7 +835,7 @@ function buildPanels() {
   panels.get("sizes").append(controls, grid);
   palettes.mount(panels.get("palettes"));
   layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext: () => customization.dismissContext(), openMenu: node => customization.openMenu(node), contentChanged: panelContentChanged });
-  effectPanels = createEffectPanels({app,wake,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,
+  effectPanels = createEffectPanels({app,wake,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,message,openMenu:node=>customization.openMenu(node),
     contentChanged:panelContentChanged});
 }
 function contentPanel(id, splitPicker=false, readToolSet=null) {
@@ -851,7 +851,7 @@ function contentPanel(id, splitPicker=false, readToolSet=null) {
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else if(["filter_types","adjustments","properties","stats"].includes(id)) {
     const copies=new Map(["filter_types","adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
-    const view=createEffectPanels({app,wake,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,message,contentChanged:()=>{},splitPicker});
+    const view=createEffectPanels({app,wake,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,message,contentChanged:()=>{},splitPicker,openMenu:node=>customization.openMenu(node)});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else {
     for(const control of customization.view(id).controls.filter(c=>c.visible_in_panel)) panel.append(customization.field(control.control,control.label));

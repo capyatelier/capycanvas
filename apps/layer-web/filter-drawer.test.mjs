@@ -79,16 +79,18 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   await send({type:'effect',action:{op:'set',layer:2,key:'angle',value:{kind:'number',value:0}}});
   assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),'layer-gradient-symbolic');
   await contact(layers);
+  const gradientPixels=`(()=>{const c=document.querySelector('${row(2)} .layer-thumbnail canvas');if(!c)return null;const d=c.getContext('2d');return [4,27].map(x=>d.getImageData(x,16,1,1).data[0]);})()`;
   for(const theme of ['light','dark']) {
     await send({type:'set_theme',theme});
-    await wait(`(()=>{const c=document.querySelector('${row(2)} .layer-thumbnail canvas');if(!c)return false;const d=c.getContext('2d');return d.getImageData(4,16,1,1).data[0]<60&&d.getImageData(27,16,1,1).data[0]>200;})()`);
+    await wait(`(()=>{const p=${gradientPixels};return p&&p[1]-p[0]>100;})()`);
     assert.equal(await evaluate(`document.querySelector('${row(2)} .layer-type-symbol')?.getBoundingClientRect().width`),14);
     await capture(`gradient-thumbnail-${theme}`);
   }
+  const gradientBefore=await evaluate(gradientPixels);
   await evaluate(`layerApp.dispatch({type:'effect',action:{op:'gradient',target:layerApp.state().layer_properties.controls.find(c=>c.key==='gradient').gradient.destination,edit:{kind:'reverse'}}})`);await settle();
-  await wait(`(()=>{const d=document.querySelector('${row(2)} .layer-thumbnail canvas')?.getContext('2d');return d&&d.getImageData(4,16,1,1).data[0]>200&&d.getImageData(27,16,1,1).data[0]<60;})()`);
+  await wait(`(()=>{const p=${gradientPixels};return p&&p[0]-p[1]>100;})()`);
   await send({type:'invoke',command:'undo'});
-  await wait(`(()=>{const d=document.querySelector('${row(2)} .layer-thumbnail canvas')?.getContext('2d');return d&&d.getImageData(4,16,1,1).data[0]<60&&d.getImageData(27,16,1,1).data[0]>200;})()`);
+  await wait(`JSON.stringify(${gradientPixels})===${JSON.stringify(JSON.stringify(gradientBefore))}`);
   console.log('PASS: gradient thumbnails, parameter changes and undo in both themes');
   await swipe(row(1),-90,0,'mouse');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(1))}).parentElement.style.getPropertyValue('--swipe')`),'0px');
@@ -139,30 +141,48 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Create').click()`);
   await wait(`!layerApp.state().document_file.busy && !layerApp.documents.busy() && layerApp.app.brush_ready() && !document.querySelector('dialog[open]')`);
   await send({type:'customize',action:{type:'set_panel_visible',panel:'layers',visible:true}});
-  const showLayers = async () => send({type:'select_panel_tab',group:(await evaluate('layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("layers")).id')),panel:'layers'});
+  await send({type:'customize',action:{type:'set_panel_visible',panel:'properties',visible:true}});
+  const showPanel = async panel => {
+    const group=await evaluate(`layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes(${JSON.stringify(panel)}))`);
+    if(group.active!==panel)await send({type:'select_panel_tab',group:group.id,panel});
+    await send({type:'customize',action:{type:'close_expanded'}});
+  };
+  const showLayers = () => showPanel('layers'), showProperties = () => showPanel('properties');
   await showLayers();
+  assert.equal(await evaluate('document.querySelector("#layer-color-mode")'),null);
   const owner = await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
   for (const theme of ['light','dark']) {
     await send({type:'set_theme',theme});
-    for (const label of ['Grayscale','Two-tone (black & white)','Full color']) {
-      await contact('#layer-color-mode');
-      await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(label)}))`);
-      await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(label)})).dataset.layerChoice="true"`);
-      await contact('[data-layer-choice="true"]');
-      await wait(`layerApp.state().layer_tools.color_mode?.value===${JSON.stringify(label)}`);
+    await showProperties();
+    for (const value of [1,2,0]) {
+      await contact('.effect-properties [data-property-key="color_mode"] select');
+      for (const [key,code] of [['Home',36],...Array(value).fill(['ArrowDown',40]),['Enter',13]]) {
+        for (const type of ['keyDown','keyUp']) await call('Input.dispatchKeyEvent',{type,key,code:key,windowsVirtualKeyCode:code});
+      }
+      await settle();
+      await wait(`layerApp.state().layer_properties.controls.find(c=>c.key==='color_mode')?.value.value===${value}`);
     }
+    await capture(`layer-properties-${theme}`);
     const before = await evaluate('layerApp.state().layers.length');
-    for (const [index,filter] of ['Exposure','Curves'].entries()) {
-      await showLayers();
-      await contact('#layer-add-filter');
+    for (const [index,filter] of ['Exposure','Curves','Levels'].entries()) {
+      if(index===0) { await showProperties(); await contact('#properties-add-filter'); }
+      else if(index===1) { await showLayers(); await contact('#layer-add-filter'); }
+      else {
+        await showLayers();
+        const selected=await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
+        const p=await point(`.layer-row[data-layer="${selected}"] .layer-name`);
+        for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1});
+        await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Add Filter'))`);
+        await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Add Filter')).click()`);
+      }
       await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Tone'))`);
       await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Tone')).click()`);
       await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(filter)}))`);
       await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(filter)})).click()`);
       await wait(`layerApp.state().layer_tools.editing_layer.adjustment_effect && layerApp.state().layers.length===${before+index+1}`);
     }
-    assert.equal(await evaluate('layerApp.state().layers.length'),before+2);
-    await send({type:'invoke',command:'undo'});await send({type:'invoke',command:'undo'});
+    assert.equal(await evaluate('layerApp.state().layers.length'),before+3);
+    for(let i=0;i<3;i++)await send({type:'invoke',command:'undo'});
     assert.equal(await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)'),owner);
     await showLayers();
     await capture(`layer-modes-and-filters-${theme}`);

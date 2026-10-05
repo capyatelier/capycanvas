@@ -67,6 +67,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     StackPanel root,body,actions;
     ContentControl bodyGate;
     TextBlock title;
+    Button addFilter;
     ComboBox page,resource;
     Grid toolbar;
     FrameworkElement tonal{nullptr};
@@ -250,7 +251,17 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"select_page")},{L"layer",N(num(view,L"layer"))},{L"page",S(id)}})}}),
                 to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch"))));
         });
-        for(FrameworkElement part:{FrameworkElement(title),FrameworkElement(toolbar),tonal,FrameworkElement(bodyGate)})root.Children().Append(part);
+        addFilter=button(data,L"",[]{});
+        addFilter.Click([data=data,weak=make_weak(addFilter)](auto&&,auto&&){
+            auto anchor=weak.get();auto model=object(object(data->state,L"layer_properties"),L"add_filter");
+            if(data->updating||!anchor||!anchor.XamlRoot()||!model.Size())return;
+            auto epoch=to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch")));
+            MenuFlyout menu;TrackPopup(menu,data);
+            NativeMenuItems(menu.Items(),array(model,L"sections"),data,[data,epoch](J action){data->dispatchDocument(action,epoch);});
+            menu.ShowAt(anchor);
+        });
+        AutomationProperties::SetAutomationId(addFilter,L"properties-add-filter");
+        for(FrameworkElement part:{FrameworkElement(title),FrameworkElement(toolbar),tonal,FrameworkElement(bodyGate),FrameworkElement(addFilter)})root.Children().Append(part);
     }
     void init(){
         resource.SelectionChanged([weak=weak_from_this()](auto&&,auto&&){
@@ -262,6 +273,8 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     void refresh(){
         Updating updating(data);
         auto view=object(data->state,L"layer_properties");
+        auto filterMenu=object(view,L"add_filter");addFilter.Visibility(filterMenu.Size()?Visibility::Visible:Visibility::Collapsed);
+        addFilter.Content(box_value(str(filterMenu,L"title")));AutomationProperties::SetName(addFilter,str(filterMenu,L"title"));
         title.Text(str(view,L"title"));AutomationProperties::SetName(root,str(view,L"title"));CapyUi::tooltip(title,str(view,L"description"));
         auto pageChoices=array(view,L"pages");
         A pageIds;for(auto choice:pageChoices)pageIds.Append(S(str(choice.GetObject(),L"id")));

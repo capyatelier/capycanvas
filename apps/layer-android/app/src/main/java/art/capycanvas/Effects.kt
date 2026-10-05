@@ -258,6 +258,17 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                 "gradient" -> GradientControl(host,control,enabled)
             }
         }
+        view.optJSONObject("add_filter")?.let { model ->
+            var menu by remember { mutableStateOf<JSONObject?>(null) }
+            Box {
+                TextButton({ menu = model }, colors = ButtonDefaults.textButtonColors(contentColor = LocalPalette.current.text),
+                    modifier = Modifier.testTag("properties-add-filter")) {
+                    Text(model.getString("title"))
+                    SharedIcon("chevron-down", null, Modifier.size(12.dp))
+                }
+                menu?.let { WorkspaceMenu(host, it) { menu = null } }
+            }
+        }
     }
     }
 }

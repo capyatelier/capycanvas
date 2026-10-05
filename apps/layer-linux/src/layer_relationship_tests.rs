@@ -137,10 +137,10 @@ fn native_layer_row_filter_menu() {
         let point = screen_point(&find_css(&row, "layer-name").unwrap(), &w.surface, [0.5, 0.5]);
         input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
         let shown = || w.popovers.borrow().iter().filter_map(|p| p.upgrade())
-            .find(|p| p.is_visible() && mapped_label(p.upcast_ref(), "Filter").is_some());
-        until(|| shown().is_some(), "the row menu offers Filter");
+            .find(|p| p.is_visible() && mapped_label(p.upcast_ref(), "Add Filter").is_some());
+        until(|| shown().is_some(), "the row menu offers Add Filter");
         let menu = shown().unwrap();
-        let filters = submenu(&mut input, &menu, "Filter", "Tone");
+        let filters = submenu(&mut input, &menu, "Add Filter", "Tone");
         let tone = submenu(&mut input, &filters, "Tone", "Curves");
         let rows = state(&w).layers.len();
         let curves = screen_point(&item(&tone, "Curves"), &w.window, [0.5, 0.5]);

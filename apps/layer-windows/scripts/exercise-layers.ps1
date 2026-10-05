@@ -60,17 +60,27 @@ function Blend([string]$Option,[string[]]$Present=@(),[string[]]$Absent=@()){
 }
 function Test-LayerModes {
     $owner=(Model).state.layer_tools.editing_layer.id
-    foreach($mode in @('Grayscale','Two-tone (black & white)','Full color')){
-        Invoke 'layer-color-mode'
-        $item=Control $mode -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
-        $item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-        Wait-Until {(Model).state.layer_tools.color_mode.value -eq $mode} 'Layer color mode did not change'
+    if(Find 'layer-color-mode' -Visible){throw 'Color mode is still in the Layers header'}
+    if(!@((Model).layout.groups|Where-Object {$_.active -eq 'properties'}).Count){Invoke 'Properties' -Name}
+    foreach($choice in @(@('Grayscale',1),@('Two-tone (black & white)',2),@('Full color',0))){
+        (Control 'property-color_mode' -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        (Control $choice[0] -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Wait-Until {@((Model).state.layer_properties.controls|Where-Object key -eq 'color_mode')[0].value.value -eq $choice[1]} 'Layer color mode did not change'
     }
+    Capture ('layer-properties-'+(Model).state.theme) -WithModel
     $count=(Model).state.layers.Count
     $added=0
-    foreach($filter in @('Exposure','Curves')){
-        if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke 'Layers' -Name}
-        Invoke 'layer-add-filter'
+    foreach($filter in @('Exposure','Curves','Levels')){
+        if($added -eq 0){Invoke 'properties-add-filter'}
+        else {
+            if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke 'Layers' -Name}
+            if($added -eq 1){Invoke 'layer-add-filter'}
+            else {
+                $selected=(Model).state.layer_tools.editing_layer.id
+                Focus "layer-$selected-name";[CapyRowPointer]::Key([uint32]$review.Id,0x5D)
+                (Control 'Add Filter' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+            }
+        }
         (Control 'Tone' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
         Invoke $filter -Name
         $added++
@@ -78,9 +88,9 @@ function Test-LayerModes {
         $selected=(Model).state.layer_tools.editing_layer.id
         if(!@((Model).state.layer_tools.connections|Where-Object {$_.from -eq $selected -or $_.to -eq $selected}).Count){throw 'Filter was not attached to its layer'}
     }
-    if((Model).state.layers.Count -ne $count+2){throw 'Local filter insertion replaced a previous filter'}
-    for($i=0;$i -lt 5;$i++){Invoke 'Undo' -Name}
-    Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $owner -and (Model).state.layer_tools.color_mode.value -eq 'Full color' -and (Model).state.layers.Count -eq $count} 'Layer mode and filter history did not restore the owner'
+    if((Model).state.layers.Count -ne $count+3){throw 'Local filter insertion replaced a previous filter'}
+    for($i=0;$i -lt 6;$i++){Invoke 'Undo' -Name}
+    Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $owner -and @((Model).state.layer_properties.controls|Where-Object key -eq 'color_mode')[0].value.value -eq 0 -and (Model).state.layers.Count -eq $count} 'Layer mode and filter history did not restore the owner'
     if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke 'Layers' -Name}
     Capture ('layer-modes-and-filters-'+(Model).state.theme) -WithModel
 }
@@ -124,9 +134,9 @@ try {
         return
     }
     $paint=(Model).state.layer_tools.editing_layer.id
+    Test-LayerModes
     Wait-Until {(Find ("layer-$paint-thumbnail")).Current.ItemStatus -eq 'Ready'} 'Paint thumbnail not ready' 20
     $original=Preview-Hash "layer-$paint-thumbnail";if(!$original){throw 'No initial thumbnail pixels'}
-    Test-LayerModes
     $identity=(Control "layer-$paint-name").GetRuntimeId() -join ':'
     Capture 'initial'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'

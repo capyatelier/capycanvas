@@ -84,14 +84,6 @@ struct LayerPanel: View {
                     }) { _ in }.disabled(!view["controls"]["blend"].bool).frame(maxWidth: .infinity)
                 LayerOpacityField(store: store).disabled(!view["controls"]["opacity"].bool).frame(maxWidth: .infinity)
             }
-            if !view["color_mode"].isNull {
-                let control = view["color_mode"], menu = control["menu"]
-                let options = menu["sections"].array.flatMap { $0.array }.map { $0["label"].string }
-                EditorChoice(label: menu["title"].string, options: options, selected: options.firstIndex(of: control["value"].string) ?? -1,
-                    identifier: "layer-color-mode", background: palette["input"], compact: true,
-                    menu: { show in show(AppleContextMenu(menu) { store.dispatch($0) }) }) { _ in }
-                    .disabled(!control["enabled"].bool).frame(maxWidth: .infinity)
-            }
             HStack(spacing: 2) {
                 flag("alpha-lock", store.catalog["native_copy"]["layers"]["alpha_lock"].string, "alpha_locked", "alpha_lock", "alpha_lock")
                 flag("lock", store.catalog["native_copy"]["layers"]["lock_editing"].string, "locked", "lock", "edit_lock")

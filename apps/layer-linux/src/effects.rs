@@ -6,7 +6,7 @@ mod gradient_editor;
 pub(crate) use gradient_editor::{GradientEditor,GradientButton};
 use crate::{number_control::NumberControl, workspace::Workspace};
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gio, glib};
 use layer_core::EffectValue;
 use layer_ui::{
     ContactPhase, EffectAction, FilterPickerAction, LayerPropertiesView, PropertyKind, UiAction,
@@ -51,6 +51,7 @@ pub struct EffectPanels {
     recording_was_active: Cell<bool>,
     page: gtk::DropDown,
     property_actions: gtk::Box,
+    add_filter: gtk::MenuButton,
     property_buttons: RefCell<Vec<(usize, gtk::Button)>>,
     property_groups: RefCell<Vec<(usize, gtk::MenuButton)>>,
     property_choice: RefCell<Option<gtk::DropDown>>,
@@ -186,6 +187,10 @@ impl EffectPanels {
         tonal_histogram.root.set_widget_name("levels-histogram");tonal_histogram.root.set_visible(false);
         properties.append(&tonal_histogram.root);
         properties.append(&body);
+        let add_filter = gtk::MenuButton::builder().halign(gtk::Align::Start).build();
+        add_filter.add_css_class("panel-choice");
+        add_filter.set_widget_name("properties-add-filter");
+        properties.append(&add_filter);
         let stats = gtk::Box::new(gtk::Orientation::Vertical, 6);
         stats.add_css_class("renderer-stats");
         let recording_button = gtk::Button::with_label("Start stroke recording");
@@ -258,6 +263,7 @@ impl EffectPanels {
             recording_was_active: Cell::new(false),
             page,
             property_actions,
+            add_filter,
             property_buttons: RefCell::default(),
             property_groups: RefCell::default(),
             property_choice: RefCell::default(),
@@ -282,6 +288,13 @@ impl EffectPanels {
         if self.picker_bound.replace(true) {
             return;
         }
+        let filter_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        self.add_filter.set_popover(Some(&filter_menu));
+        w.watch_popover(filter_menu.upcast_ref());
+        filter_menu.connect_show(glib::clone!(#[weak] w, move |popover| {
+            let menu = w.gpu.borrow().as_ref().and_then(|g| g.session.state().layer_properties.add_filter.clone());
+            if let Some(menu) = menu { w.populate_workspace_menu(popover, menu); }
+        }));
         w.on_localization(glib::clone!(#[weak(rename_to = button)] self.recording_button, #[upgrade_or] false, move |localization| {
             button.set_tooltip_text(Some(&layer_ui::NativeCopy::new(localization).color.record_tablet));
             true
@@ -647,6 +660,8 @@ impl EffectPanels {
         let language_changed = self.property_localization.borrow().as_ref().is_none_or(|old| !std::sync::Arc::ptr_eq(old, &localization));
         *self.property_localization.borrow_mut() = Some(localization);
         let view = &state.layer_properties;
+        self.add_filter.set_visible(view.add_filter.is_some());
+        if let Some(menu) = &view.add_filter { self.add_filter.set_label(&menu.title); }
         let document_changed=self.property_document.replace(state.document_file.epoch)!=state.document_file.epoch;
         self.properties_updating.set(true);
         if self.schema.borrow().as_ref().is_none_or(|old| document_changed || old.layer!=view.layer || old.actions.len()!=view.actions.len() || old.resource_label.is_some()!=view.resource_label.is_some()

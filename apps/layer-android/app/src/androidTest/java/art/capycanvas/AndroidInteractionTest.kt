@@ -107,7 +107,7 @@ class AndroidInteractionTest {
                 if (action == MotionEvent.ACTION_DOWN) {
                     inputWindow = owner.view
                     if (popupInput) android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { view ->
-                        view.descendant<ViewRootForTest>()?.let { root -> listOf("brush-slider-preview", "workspace-menu", "toolbar-number-menu", "zoom-menu").any { root.find(hasTag(it)) != null } } == true
+                        view.descendant<ViewRootForTest>()?.let { it !== owner } == true
                     }?.let { view ->
                         val p = IntArray(2); view.getLocationOnScreen(p)
                         if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) inputWindow = view
@@ -2162,17 +2162,30 @@ class AndroidInteractionTest {
         try {
             for (theme in listOf("light", "dark")) {
                 action(obj("type" to "set_theme", "theme" to theme))
+                action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "properties"))
+                assertFalse(shown("layer-color-mode"))
+                captureCanvasBar(theme, "layer-properties")
                 for ((device, label) in pointerTools.zip(listOf("Grayscale", "Two-tone (black & white)", "Full color"))) {
                     tool = device
-                    tap(bounds("layer-color-mode").center)
+                    tap(bounds("property-color_mode").center)
                     waitFor("color modes open") { menuText(label) != null }; settle()
                     tap(menuText(label)!!.center)
-                    waitFor("color mode selected") { popupCount() == 0 && state().getJSONObject("layer_tools").getJSONObject("color_mode").getString("value") == label }
+                    waitFor("color mode selected") { popupCount() == 0 && state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == "color_mode" }.getJSONObject("value").getInt("value") == listOf("Full color", "Grayscale", "Two-tone (black & white)").indexOf(label) }
                 }
                 val before = state().array("layers").length()
-                for ((index, filter) in listOf("Exposure", "Curves").withIndex()) {
-                    action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
-                    tap(bounds("layer-add-filter").center)
+                for ((index, filter) in listOf("Exposure", "Curves", "Levels").withIndex()) {
+                    if (index == 0) tap(bounds("properties-add-filter").center)
+                    else {
+                        action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+                        if (index == 1) tap(bounds("layer-add-filter").center)
+                        else {
+                            tool = MotionEvent.TOOL_TYPE_STYLUS
+                            event(MotionEvent.ACTION_DOWN, bounds("layer-row-${editingLayer()}").center); SystemClock.sleep(700)
+                            event(MotionEvent.ACTION_UP); settle()
+                            waitFor("layer Add Filter menu") { menuText("Add Filter") != null }
+                            tap(menuText("Add Filter")!!.center)
+                        }
+                    }
                     waitFor("filter categories open") { menuText("Tone") != null }; settle()
                     tap(menuText("Tone")!!.center)
                     waitFor("filter submenu open") { menuText(filter) != null }; settle()
@@ -2180,9 +2193,8 @@ class AndroidInteractionTest {
                     waitFor("local filter selected") { popupCount() == 0 && state().array("layers").length() == before + index + 1 && state().getJSONObject("layer_tools").getJSONObject("editing_layer").optBoolean("adjustment_effect") }
                     assertTrue(state().getJSONObject("layer_tools").has("add_filter"))
                 }
-                assertEquals(before + 2, state().array("layers").length())
-                action(obj("type" to "invoke", "command" to "undo"))
-                action(obj("type" to "invoke", "command" to "undo"))
+                assertEquals(before + 3, state().array("layers").length())
+                repeat(3) { action(obj("type" to "invoke", "command" to "undo")) }
                 assertEquals(owner, editingLayer())
                 action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
             }
@@ -2576,7 +2588,7 @@ class AndroidInteractionTest {
         var result: Rect? = null
         onMain {
             val base = IntArray(2); owner.view.getLocationOnScreen(base)
-            semanticsRoots().filter { it !== owner && it.find(hasTag("workspace-menu")) != null }
+            semanticsRoots().filter { it !== owner }
                 .firstNotNullOfOrNull { root -> root.find(hasLabel(text))?.let { root to it } }?.let { (root, node) ->
                     val origin = IntArray(2); root.view.getLocationOnScreen(origin)
                     result = node.boundsInRoot.translate(Offset((origin[0] - base[0]).toFloat(), (origin[1] - base[1]).toFloat()))

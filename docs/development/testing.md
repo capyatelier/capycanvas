@@ -167,7 +167,8 @@ also covers odd partial regions and untouched packed half words. The shared UI�
 filter chain. Native journeys are GTK’s `native_layer_color_modes_and_add_filter`,
 Web’s `--filter-drawer`, Android’s
 `AndroidInteractionTest#layerColorModesAndLocalFilterMenu`, and Windows’
-`exercise-layers.ps1`. Run both themes. Measure painting with
+`exercise-layers.ps1`. Run both themes. Check Color mode in Properties and Add
+Filter in Properties, the Layers footer, and the layer row context menu. Measure painting with
 `android-brush-benchmark.py --color-mode grayscale` and `--color-mode two_tone`
 on each reference tier.
 

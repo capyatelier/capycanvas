@@ -11,37 +11,46 @@ struct LayerPropertiesPanel: View {
         let actions = view["actions"].array, palette = EditorPalette(source: store.state["palette"])
         let tools = actions.filter { !["lookup_preset", "import_lookup"].contains($0["action"]["op"].string) }
         VStack(alignment: .leading, spacing: 6) {
-            Text(view["title"].string).fontWeight(.bold).help(view["description"].string)
-            if !view["resource_label"].isNull { lookup(actions, palette: palette) }
-            if pages.count > 1 || !tools.isEmpty {
-                HStack(spacing: 4) {
-                    if pages.count > 1 {
-                        EditorChoice(label: view["title"].string, options: pages.map { $0["label"].string },
-                            selected: pages.firstIndex { $0["id"].string == view["page"].string } ?? 0, identifier: "properties-page",
-                            background: palette["input"]) {
-                            store.dispatch(["type": "effect", "action": ["op": "select_page", "layer": layer, "page": pages[$0]["id"].string]])
+            VStack(alignment: .leading, spacing: 6) {
+                Text(view["title"].string).fontWeight(.bold).help(view["description"].string)
+                if !view["resource_label"].isNull { lookup(actions, palette: palette) }
+                if pages.count > 1 || !tools.isEmpty {
+                    HStack(spacing: 4) {
+                        if pages.count > 1 {
+                            EditorChoice(label: view["title"].string, options: pages.map { $0["label"].string },
+                                selected: pages.firstIndex { $0["id"].string == view["page"].string } ?? 0, identifier: "properties-page",
+                                background: palette["input"]) {
+                                store.dispatch(["type": "effect", "action": ["op": "select_page", "layer": layer, "page": pages[$0]["id"].string]])
+                            }
                         }
+                        ForEach(groups(tools), id: \.id) { group in action(group.id, group.items, palette: palette) }
                     }
-                    ForEach(groups(tools), id: \.id) { group in action(group.id, group.items, palette: palette) }
                 }
+                if view["histogram"].bool { ScopeControl(store: store, kind: "tonal_histogram", tonal: true) }
+                ForEach(controls.indices, id: \.self) { index in
+                    let control = controls[index]
+                    if index == 0 || control["section_id"].stableKey != controls[index - 1]["section_id"].stableKey {
+                        if index > 0 { Divider().padding(.vertical, 3) }
+                        if !control["section"].isNull { Text(control["section"].string).fontWeight(.bold).padding(.leading, 6) }
+                    }
+                    if control["kind"]["kind"].string == "curve" {
+                        CurveProperty(store: store, layer: layer, control: control)
+                            .id("\(epoch):\(layer):\(control["key"].string):\(control["curve"]["domain"].stableKey)")
+                    } else {
+                        PropertyField(store: store, layer: layer, epoch: epoch, control: control)
+                            .id("\(epoch):\(layer):\(control["key"].string):\(control["kind"]["kind"].string)")
+                    }
+                }
+            }.disabled(!view["enabled"].bool).opacity(view["enabled"].bool ? 1 : 0.4)
+            if !view["add_filter"].isNull {
+                EditorMenuButton(menu: { AppleContextMenu(view["add_filter"]) { store.dispatch($0) } }, identifier: "properties-filter-menu") {
+                    HStack(spacing: 6) {
+                        Text(view["add_filter"]["title"].string)
+                        SharedIcon(name: "chevron-down").frame(width: 12, height: 12)
+                    }.padding(.horizontal, 6).frame(height: 32)
+                }.buttonStyle(EditorControlButtonStyle()).accessibilityIdentifier("properties-add-filter")
             }
-            if view["histogram"].bool { ScopeControl(store: store, kind: "tonal_histogram", tonal: true) }
-            ForEach(controls.indices, id: \.self) { index in
-                let control = controls[index]
-                if index == 0 || control["section_id"].stableKey != controls[index - 1]["section_id"].stableKey {
-                    if index > 0 { Divider().padding(.vertical, 3) }
-                    if !control["section"].isNull { Text(control["section"].string).fontWeight(.bold).padding(.leading, 6) }
-                }
-                if control["kind"]["kind"].string == "curve" {
-                    CurveProperty(store: store, layer: layer, control: control)
-                        .id("\(epoch):\(layer):\(control["key"].string):\(control["curve"]["domain"].stableKey)")
-                } else {
-                    PropertyField(store: store, layer: layer, epoch: epoch, control: control)
-                        .id("\(epoch):\(layer):\(control["key"].string):\(control["kind"]["kind"].string)")
-                }
-            }
-        }.disabled(!view["enabled"].bool).opacity(view["enabled"].bool ? 1 : 0.4)
-            .accessibilityElement(children: .contain).accessibilityIdentifier("layer-properties")
+        }.accessibilityElement(children: .contain).accessibilityIdentifier("layer-properties")
     }
     private func effect(_ action: JSON) { store.dispatch(["type": "effect", "action": action.raw]) }
     private func groups(_ actions: [JSON]) -> [(id: String, items: [JSON])] {

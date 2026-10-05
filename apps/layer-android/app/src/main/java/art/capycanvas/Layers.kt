@@ -208,19 +208,6 @@ internal class LayerSwipe {
                     NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity"),active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f).testTag("layer-opacity"),
                         enabled=controls.getBoolean("opacity"),inline=true) { host.dispatch(obj("type" to "set_layer_opacity","opacity" to it)) }
                 }
-                view.optJSONObject("color_mode")?.let { control ->
-                    var colorMenu by remember { mutableStateOf<JSONObject?>(null) }
-                    LaunchedEffect(epoch) { colorMenu = null }
-                    Box(Modifier.fillMaxWidth()) {
-                        Row(Modifier.fillMaxWidth().height(26.dp).background(colors.input,ControlShape).testTag("layer-color-mode")
-                            .clickable(enabled=control.getBoolean("enabled")) { colorMenu = control.getJSONObject("menu") }
-                            .padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically) {
-                            Text(control.getString("value"),Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
-                            SharedIcon("chevron-down",control.getJSONObject("menu").getString("title"),Modifier.size(12.dp))
-                        }
-                        colorMenu?.let { WorkspaceMenu(host,it) { colorMenu = null } }
-                    }
-                }
                 Row(horizontalArrangement=Arrangement.spacedBy(2.dp)) {
                     for ((icon, label, property, op, capability) in listOf(
                         listOf("alpha-lock",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("alpha_lock"),"alpha_locked","alpha_lock","alpha_lock"),

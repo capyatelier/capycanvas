@@ -383,6 +383,7 @@ pub(super) fn catalog(
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct LayerPropertiesView {
+    pub add_filter: Option<ContextMenu>,
     pub histogram:bool,
     pub actions: Vec<PropertyActionView>,
     pub pages:Vec<PropertyPageView>,
@@ -561,6 +562,11 @@ fn property_effect(doc: &Document, handle: OccurrenceHandle) -> Option<layer_cor
     }
     scene.effect(handle)
 }
+const LAYER_COLOR_MODES: [layer_core::color::LayerColorMode; 3] = [
+    layer_core::color::LayerColorMode::FullColor,
+    layer_core::color::LayerColorMode::Grayscale,
+    layer_core::color::LayerColorMode::TwoTone,
+];
 pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBehavior, l: &Localizer) -> LayerPropertiesView {
     let scene = doc.scene();
     let Some((handle, layer)) = doc.working.occurrence.and_then(|handle| scene.occurrence(handle).map(|layer| (handle, layer))) else {
@@ -625,6 +631,14 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
             .collect();
         controls.push(PropertyControl::new("blend", &l.text(MessageId::RESOURCES_BLEND_MODE), PropertyKind::Choice { options },
             EffectValue::Choice(layer.blend.code()), EffectValue::Choice(0)));
+        if let Some(source) = scene.paint_source(handle)
+            && doc.working.inspect_mask != Some(handle)
+            && !matches!(doc.working.target, Some(SourceTarget::Coverage(_))) {
+            let options = LAYER_COLOR_MODES.iter().map(|mode| art_layers::color_mode_label(*mode, l)).collect();
+            let value = LAYER_COLOR_MODES.iter().position(|mode| *mode == source.color_mode).unwrap() as u32;
+            controls.push(PropertyControl::new("color_mode", &l.text(MessageId::RESOURCES_LAYER_COLOR_MODE), PropertyKind::Choice { options },
+                EffectValue::Choice(value), EffectValue::Choice(0)));
+        }
         String::new()
     };
     LayerPropertiesView {
@@ -1183,6 +1197,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                         ("blend", EffectValue::Choice(value)) => {
                             self.layer_action(LayerAction::Blend { id, value })
+                        }
+                        ("color_mode", EffectValue::Choice(value)) if LAYER_COLOR_MODES.get(value as usize).is_some() => {
+                            self.layer_action(LayerAction::ColorMode { id, epoch: self.state.document_file.epoch, mode: LAYER_COLOR_MODES[value as usize] })
                         }
                         _ => Err(self.state.localization.text(MessageId::RESOURCES_ERROR_INVALID_LAYER_PROPERTY).to_string()),
                     };
