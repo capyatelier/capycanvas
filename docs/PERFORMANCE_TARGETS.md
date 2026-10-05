@@ -35,6 +35,15 @@ tables and hardware specifications.
     them, and no valid approximation exists.
   - Previewing at display resolution while a control moves counts as a valid
     approximation.
+- **Painting through a live filter has its own gate.** Cheap filters must keep
+  the tier rate using incremental evaluation. More expensive filters may qualify
+  for a lower rate of fresh filtered results only under the
+  [live-filter gate](performance/measuring.md#live-filter-performance-gates):
+  measured hardware costs, no adequate faster approach, bounded result age and
+  refinement, and responsive input/navigation. Fast/Medium/Slow are engineering
+  expectations, not automatic exemptions or user-selectable quality settings.
+  An accepted slower result is recorded as an exception, never as meeting the
+  ordinary tier target. Wasteful algorithms do not qualify for an exception.
 - **Hardware at or above a tier must meet that tier's targets.** To place a
   device, compare its memory bandwidth and GPU throughput with the
   [tier hardware](performance/hardware.md).

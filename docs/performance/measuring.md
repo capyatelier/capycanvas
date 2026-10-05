@@ -91,7 +91,190 @@ For scale, take a single full-resolution pass that reads and writes 8-byte
 - So per-frame full-resolution filtering cannot meet the mid or top tier target
   even for a pointwise adjustment. On the low tier, a pointwise adjustment fits
   only as a single pass.
-- Filter previews must therefore work at display resolution during motion.
+- Full-frame previews must therefore reduce work during motion. Display-resolution
+  evaluation is one option; native-resolution dirty regions can be cheaper for
+  local edits. Choose from the actual dependency footprint, not canvas size alone.
+
+## Live filter performance gates
+
+Every new or substantially changed filter needs a performance note before its
+algorithm is accepted, and measured results before release. Record the expected
+class, ordinary and demanding parameter sets, dependency/invalidation model,
+per-stage cost estimate, memory bound and proposed fallback. Update the note when
+the algorithm changes. It is implementation evidence, not an authored parameter,
+saved shader version or quality selector. The
+[illustration proposal](../development/illustration-filters-proposal.md#first-pass-filter-performance-classes)
+assigns initial classes by expected use; no class is a measured result.
+
+### Targets and conditional slower results
+
+All classes aim for the normal 60/90/120 tier rate. Fast means artists should
+expect immediate drawing through an ordinary setting; Medium covers meaningful
+neighborhood or multi-stage work; Slow covers substantial stylization or broad
+sampling. Do not relabel a cheap effect Slow to excuse its implementation.
+
+The following are initial release limits for the illustration work, not hardware
+predictions or permanent file-format promises. Tune them only with measured
+journeys and a reviewed product decision, not to make an individual failure pass.
+
+| Expected class | Normal goal, low / mid / top | Lowest conditional fresh filtered updates/s, low / mid / top | p95 age of latest filtered ink during drawing | p95 settle after an ordinary local stroke |
+| --- | --- | --- | --- | --- |
+| Fast | 60 / 90 / 120 | No slower allowance for ordinary settings | At most two normal tier frame periods | 250 ms |
+| Medium | 60 / 90 / 120 | 30 / 45 / 60 | 100 ms | 500 ms |
+| Slow | 60 / 90 / 120 | 15 / 22.5 / 30 | 150 ms | 1 s |
+
+At the qualified rate, require p99 gaps between fresh filtered completions of at
+most two periods of that rate, in addition to the age limit. A high average with
+bursts of stale frames fails. Measure age continuously during active input: the
+latest available input timestamp minus the newest input timestamp incorporated
+in the displayed filtered result; also report input-to-GPU-completion latency.
+Use presentation timestamps when available and label completion-only proxies.
+Count only revisions containing new authored input, never cursor motion,
+prediction-only redraws or repeatedly presenting the same filtered image.
+Completion must cover the visible affected output for that input revision; one
+fresh tile cannot stand in for stale required neighbors. Unchanged regions need
+not be reevaluated. During startup with no filtered result for the contact yet,
+measure elapsed time from pen down rather than age from an earlier stroke.
+
+Use the normal pen-down submission, filter-control response, navigation and
+interrupted-refinement limits from [Responsiveness](responsiveness.md) and
+[engineering budgets](../PERFORMANCE_TARGETS.md#engineering-budgets). First
+filtered ink must appear within the class's age limit; submitting unfiltered
+paint is not proof of filtered feedback. Input samples must all reach the
+committed paint. Derived
+renders may coalesce obsolete revisions, but the visible result must keep
+advancing and converge to the latest source. Never silently bypass the filter.
+
+The settle limits above apply to the recorded ordinary local-stroke fixture,
+not a full-canvas replacement. Record broad damage, initial application, cold
+preparation, Match/Update and exact export separately with their own predicted
+completion budgets and measured elapsed times. These jobs may take longer but
+must remain cancellable and must not delay resumed motion. A live filter that
+cannot bound ordinary settling cannot qualify by calling every stroke setup.
+
+A Medium/Slow allowance requires **all** of the following for that filter,
+parameter set, stack and tier:
+
+- The optimized dependency footprint and calibrated hardware model explain the
+  missed normal target. A busy GPU or the cost of a deliberately naïve algorithm
+  does not establish a hardware limit.
+- Dirty-region evaluation, reuse, a cheaper algorithm, and a faithful moving
+  approximation have been evaluated. If a suitable alternative meets the normal
+  target, use it. Do not reject a useful preview merely because it is not exact.
+- The lower rate, age/settle bounds, visual quality, memory admission and resumed
+  input limits all pass. Reduced-rate filtered results are permitted; reduced-rate
+  input processing, navigation or UI are not.
+- The tier table records **qualified slower filter**, its exact workload and
+  evidence, separately from **tier target met**. An unmeasured or unexplained
+  miss stays open; one tier's exception does not qualify another.
+
+### Painting workload and incremental correctness
+
+The primary workload paints into the filter's actual input: on its owner, inside
+a filtered group, or on paint below an adjustment that consumes that paint.
+Pair each run with the same graph with the filter disabled. A filtered static
+photo behind an unaffected front paint layer does not qualify this path.
+The existing Android runner's `blurred-base` workload is that latter case; extend
+the harness and revision/completion attribution before claiming filter coverage.
+Do not invent a command-line option for a workload that is not implemented.
+
+Use the normal reference canvas, workspace, warmup and repeated gestures. Cover
+a 64 px detail brush and the tier's guaranteed large G-Pen size, Fit and 100%
+zoom, interior strokes, tile crossings, separated dirty islands and source edges.
+Use visible non-default parameters, an erase/undo case and partial alpha; a
+zero-strength or empty-input early exit is a control, not a qualification run.
+Also measure expensive controls through the ordinary slider range, admitted
+extremes, a representative stack, and source/map/seed/parameter changes. Use at
+least 20 repeated pen-up/resume contacts for settling and interruption percentiles;
+report long-stroke settling separately from short-contact settling. Do not infer
+a p95 claim from three run medians.
+
+Record brush/source completion, fresh **filtered** completion, presentation,
+result age, p99 gaps, pen-up settling and interrupted settling separately.
+Measure end-to-end latency as well as shader time. If the disabled baseline
+already misses, report that shared gap and the incremental filter cost; do not
+claim either an absolute pass or a filter-specific hardware exception from it.
+
+Each stage must declare both directions of dependency: which input an output
+region samples, and which output an input edit invalidates. These differ for
+displacement, radial paths and directional shadows. Compose them across passes,
+masks and stacks, including halo growth, changed cell aggregates and off-frame
+content. A tile edge is never an image edge. A single maximum-radius field is
+not a substitute for a correct dependency model.
+
+Require incremental and full evaluation to agree within the same operation's
+tolerance after painting, erasing, undo, parameter changes and resource changes.
+Compare at identical quality, coordinates and seed; separately qualify preview
+approximation error. Updating one small region on a larger canvas must not
+silently trigger work proportional to the full canvas for a local algorithm.
+Trace dirty input/output pixels, processed pixels per stage/mip, reused work,
+dispatches, allocations and bytes. Include distant islands to catch wasteful
+bounding rectangles. A global algorithm must declare and budget its global
+dependency, use valid incremental summaries, or retain explicit Update results;
+downsampling a whole-layer analysis does not make it local.
+
+### Hardware cost and algorithm efficiency
+
+Model the smallest adequate algorithm before optimizing its shader. For each
+pass record processed pixels including repeated halos, texture formats and
+reads/writes, logical sample count, FLOPs, integer/special operations, atomics,
+intermediate storage, dispatches and cache lifetime. Distinguish logical texture
+taps from external-memory bytes; filtering and cache hits make them unequal.
+Use actual renderer formats, not an assumed RGBA8 buffer. Shared intermediates
+must have complete invalidation keys and bounded residency.
+
+For a pass with external traffic `B` and FP32 work `F`, a first optimistic bound
+is `max(B / peak_bandwidth, F / peak_FP32_throughput)`. Use consistent units and
+count a fused multiply-add as two FLOPs. For sequential stages, account for each
+stage on the critical path. This bound cannot predict texture throughput,
+integer-heavy connectivity, division/exp, divergent paths, register pressure,
+allocation or submission overhead. The
+[instruction Roofline research](https://amcr.lbl.gov/wp-content/uploads/2025/11/InstructionRooflineModel-PMBS19-.pdf)
+explains why floating-point throughput alone misses integer-heavy GPU bottlenecks;
+the [Arm counter reference](https://developer.arm.com/community/arm-community-blogs/b/mobile-graphics-and-gaming-blog/posts/mali-bifrost-family-performance-counters)
+distinguishes shader operations, texture traffic, cache misses and external bytes.
+These guide profiling; their device-specific throughput figures do not qualify
+another GPU or API.
+
+Calibrate with representative kernels, formats, tap counts and dirty sizes on
+each reference device, including short-dispatch overhead. Use the
+[tier sheet](hardware.md) as an initial ceiling, not measured sustained capacity.
+Compare observed stage timings/traffic and total filtered-stroke latency with the
+calibrated prediction. Costs more than 1.5× that estimate require investigation
+under the engineering-budget rule; an unexplained gap blocks qualification.
+Correct a deficient model from independent counters or matched microbenchmarks,
+not by fitting an arbitrary efficiency factor to the slow filter itself.
+Use bounded asynchronous diagnostics where counters are unavailable; never add
+a GPU wait on the input path to obtain them.
+
+The 12/8/6 ms GPU budgets cover painting, all filters, composition and presentation
+together. Each filter does not receive a separate full-frame budget. Measure
+stacks, memory pressure and sustained thermal behavior. Whole-document traffic
+is not the right lower bound for a small dirty edit; a fast isolated kernel is
+not evidence for a fast integrated stroke.
+
+Reject a candidate as wasteful, even if it barely meets FPS, when a tested
+alternative offers equivalent required quality with materially less work or
+memory and no compensating advantage. Specifically reject:
+
+- Full-layer recapture, upload, readback, histogram/tensor rebuilding or allocation
+  on every dab when only bounded regions or already saved results changed.
+- Recomputing unchanged upstream stages after only ink color, opacity or final
+  grain strength changes, or regenerating static noise/texture fills on painting.
+- Large brute-force two-dimensional Gaussian kernels instead of the appropriate
+  separable method, per-pixel re-summing of the same mosaic/Voronoi cell, or
+  radius/length-squared work where a validated cheaper method preserves intent.
+  Small direct kernels may win on dispatch cost; compare actual break-even points.
+- Treating exact disk morphology or nonlinear smoothing as separable without
+  proving the result, omitting halos to save time, or reducing preview detail
+  until ink, tone, thin lines or transparency no longer match the intended look.
+- Letting obsolete refinement queue without bound, monopolize the GPU, or publish
+  over newer artwork. A native-resolution export job is not a per-stroke strategy.
+
+Freeze a measured operating envelope and any justified exception before release.
+Failure of correctness, locality, efficiency or responsiveness remains a failure
+even if the average FPS passes. Improve or replace the algorithm; if the complete
+gate still fails, apply the proposal's explicit release cut rule.
 
 ## How to measure
 

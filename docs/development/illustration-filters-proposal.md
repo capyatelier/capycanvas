@@ -83,6 +83,7 @@ Navigation: [implementation decisions](#decisions-before-implementation),
 [filter inventory](#inventory-and-implementation-order),
 [claim-by-claim review](#assessment-of-the-review),
 [algorithm research](#algorithm-research-and-recommended-prototypes),
+[per-filter performance](#per-filter-performance-and-incremental-rendering),
 [GA work and acceptance](#revised-ga-work-and-acceptance).
 
 ## Decisions before implementation
@@ -222,8 +223,11 @@ smoothing. Qualify the actual filter under the tier rules, including permitted
 moving previews and settled/export quality, rather than assume native 61 MP
 recomputation at 120 fps is required for every intermediate pass.
 
-At the release cut, a filter that still misses quality or tier performance is
-explicitly deferred to 1.1 with its missing evidence recorded. Ship no unusable
+At the release cut, a filter that fails quality or its
+[performance gate](#per-filter-performance-and-incremental-rendering), including
+any explicitly qualified slower allowance, is deferred to 1.1 with its missing
+evidence recorded. A justified slower artistic result can pass that gate without
+being reported as meeting the ordinary tier FPS target. Ship no unusable
 stub, hidden unqualified mode or CPU painting fallback. This rule leaves the
 candidate list and controls intact today; it prevents one difficult algorithm
 from blocking otherwise qualified filters. Shared foundations still gate every
@@ -1796,47 +1800,179 @@ behavior. The [GIMP manual](https://docs.gimp.org/3.0/en/gimp-filter-color-to-al
 illustrates why color removal needs more than making nearby colors transparent.
 Use a direct per-pixel solution where possible; test saturated and extended colors.
 
-### GPU execution and qualification
+## Per-filter performance and incremental rendering
+
+Every delivered filter must pass the
+[live-filter performance gate](../performance/measuring.md#live-filter-performance-gates),
+including painting **into its changing input**, incremental correctness,
+algorithm efficiency, memory and responsiveness. Fast/Medium/Slow describe
+expected cost and tolerance for slower feedback, not permanent artistic contracts
+or controls shown to the user. Every class still aims for the tier rate.
+
+Cheap filters must meet the normal target at ordinary settings. More expensive
+ones can ship with a measured, explicitly qualified slower result only when the
+hardware model and comparison with adequate alternatives justify it. The gate
+specifies minimum fresh-filtered update rates, result-age limits and settling
+limits; a class name alone grants no exception. Repainting stale output at a high
+FPS does not count, and input/navigation must remain responsive in every class.
+
+### First-pass filter performance classes
+
+These are design expectations, not benchmark findings. “Ordinary” means the
+initial/default look and the main useful slider range, not zero strength or a
+tiny handpicked radius. Before prototyping, record concrete ordinary and demanding
+values for each mode; cover them on every tier. A more costly mode gets its own
+row and explanation. Never lower the expectation of a cheap mode to match a
+slower sibling. Large admitted values need a measured envelope, not silent
+clamping to the slider maximum.
+
+| Filter / mode | First-pass class | Why artists should expect this speed | Incremental strategy and expensive cases to qualify |
+| --- | --- | --- | --- |
+| Grayscale / improved Threshold / Decrease Color | Fast | Basic value conversion should feel immediate. | Pointwise mapping of changed pixels; fuse compatible adjustments. Binary alpha adds no global analysis. |
+| Brightness to Opacity | Fast | A simple paper-removal conversion should follow every stroke. | Pointwise color/coverage conversion. No whole-layer scan. |
+| Color to Alpha | Fast | Removing a chosen color should feel like a color adjustment. | Pointwise reconstruction; include extended-color and tolerance handling in the cost. |
+| Halftone / Tone | Fast | Drawing with a screen should feel like drawing with ink. | Stable analytic/rank patterns; update affected density cells and their outputs. Image-density aggregation and unusually large cells need separate rows. |
+| Dither, ordered or blue noise | Fast | A fixed screen is expected to update immediately. | Local rank lookup and color choice; retain rank assets. Error diffusion is outside this live gate until separately designed. |
+| Reduce Colors, fixed or stored automatic palette | Fast for small palettes; Medium candidate for large palettes | A chosen palette should remain responsive while drawing. | Local mapping/dither with exact palette membership; qualify small and largest ordinary palette counts. Compare an accelerated lookup with a full palette scan. |
+| Reduce Colors, Automatic Update | Slow preparation; then the mapping class above | An explicit palette calculation can take time; every stroke should not redo it. | Cancellable global reduction/quantization, atomic saved palette publication. Colors/Update changes invalidate mapping; ordinary strokes do not re-estimate the palette. |
+| Paper / Canvas Texture | Fast | A paper overlay should not slow the pen. | Retain image/mips; shade changed coverage. Texture import/preparation is separate from the live pass. |
+| Pattern Fill / Pattern Overlay | Fast | Repeated patterns behave like fills. | Reuse retained pattern samples; overlay updates changed source coverage. An unchanged standalone fill needs only dependent compositing, not regeneration. |
+| Procedural Texture Fill | Fast | Simple stripes, checks and clouds should behave like fills. | Stable coordinate evaluation or retained generated tiles. Seed/scale changes can invalidate the fill; painting on another layer cannot. Qualify clouds' octave cost. |
+| Film Grain / random variations | Fast | Grain is an overlay, not a new simulation per stroke. | Local deterministic noise and source modulation; no reshuffling, temporal history or full-image regeneration on input. |
+| Pixel Mosaic, Center and Average | Fast | Pixelation is a basic graphic operation. | Center invalidates cells whose sampled input changed; include any per-pixel coverage dependencies. Average updates aggregates for touched cells and republishes those cells. Very large cells can expand damage and need a Medium row if justified. |
+| Border | Fast at ordinary widths | Outlines on lettering should track editing immediately. | Continuous-coverage local morphology and cached coverage preparation. Wide borders may need a Medium case; avoid rebuilding an unbounded distance field per dab. |
+| Drop Shadow | Fast at ordinary blur/spread | A familiar layer shadow should not make ordinary drawing sluggish. | Local alpha growth/blur, displaced dirty output and composition. Broad spread/blur qualifies separately as Medium; color/opacity edits reuse alpha work. |
+| Outer Glow | Fast at ordinary size; Medium for broad glows | A small glow is a familiar layer style; a large glow touches more area. | Reuse alpha growth/blur and correct expanded bounds. Measure large soft halos and stacked glows. |
+| Inner Shadow | Fast at ordinary blur; Medium for broad shading | Simple inset shading should follow the shape quickly. | Bounded displaced/blurred coverage clipped once to the source; reuse preparation. |
+| Inner Glow | Fast at ordinary size; Medium for broad glows | A soft inner rim should feel like a layer style. | Bounded alpha falloff/blur; source coverage and masks determine damage. |
+| Long Shadow | Medium | A long graphic sweep reasonably costs more than a short shadow. | Directional dirty sweep and reusable/hierarchical reductions. Large Length may justify Slow; repeated full-length gathering per output pixel is not the default. |
+| Bevel / Relief | Medium | Height, normals and lighting involve more work than an outline. | Bound height/distance/normal preparation and blur support; cache across light/color-only edits. Broad relief needs a separate cost row. |
+| Satin | Medium | Interior folds combine multiple spatial stages. | Shifted blurred-alpha dependencies; share reusable blur work and recomposite color changes. |
+| Watercolor Border | Medium | A pigment-following rim needs more than a flat outline. | Local coverage/color preparation and rim finishing; test wide/soft rims. Target Fast if ordinary trials show simple morphology is enough. |
+| Adjust Line Width, ordinary Thicken/Thin | Fast for small Amount | Small ink cleanup should remain interactive. | Bounded grayscale morphology; reuse unchanged tiles. Wide disks need a separate Medium case and a radius-aware method. |
+| Adjust Line Width, Keep Thin Lines | Medium | Stroke preservation adds structural analysis. | A validated bounded preservation method or declared wider ridge/medial dependencies. Long connected strokes expose hidden global work; do not assume an ordinary morphology halo suffices. |
+| Remove Dust, Remove Marks / Fill Gaps | Medium | Small-mark cleanup should feel lighter than restyling a painting. | Size-bounded connectivity, fringe and hole-color dependencies. Qualify dense connected ink and boundary rejection; a whole-layer flood fill on each dab does not justify a Slow relabeling. |
+| Extract Lines | Medium | Coherent contour extraction can involve smoothing and line cleanup. | Reuse bounded orientation/smoothing/edge stages; invalidate through line thickness and fragment cleanup. Strong abstraction/cleanup needs a separate demanding row. |
+| Cartoon / Cel Shading | Medium | Color simplification plus lines is more than posterization. | Cache simplification and edge preparation; banding/color edits reuse them. Lines-off mode must not execute line stages. |
+| Hatching / Engraving | Fast | Regular graphic marks should feel like screens. | Analytic patterns with bounded tone input and antialiasing. Curved contour-following hatching is a later algorithm with its own gate. |
+| Stipple | Fast for ordinary dots; Medium for dense/large marks | A stable dot pattern should follow tone without an optimization pause. | Local progressive sites or binned dots; update affected tone regions. Count overlap/overdraw and site-query cost; no whole-image point relaxation on a stroke. |
+| Pencil / Charcoal | Medium | Coherent drawn marks and tone need several stages. | Reuse bounded lines/tone preparation and retained grain; grain/color-only edits do not rebuild structure. Compare the cheap sketch baseline before accepting a costlier look. |
+| Watercolor Look | Medium; Slow candidate for broad washes | Wash abstraction has visible value beyond blur and noise. | Bounded multi-scale simplification and pigment modulation; retain paper/grain resources. Large wash support must justify any Slow case. |
+| Painterly | Slow | Large coherent painted regions require substantial smoothing. | Bound tensor/orientation/smoothing footprints and cache by scale. A local edit updates their full composed support, not all canvas tiles. Small Brush Size should approach Medium. |
+| Oil Paint | Slow | Convincing brush marks and relief can require expensive preparation or overdraw. | Local abstraction or spatially binned marks with deterministic ordering; regenerate only affected marks/tiles. A whole-canvas stroke restamp per dab is wasteful. |
+| Crystallize | Medium | Irregular cells need neighborhood search and representative color. | Keep site layout stable; update touched cell aggregates and complete affected cells. Derive search and cell extents from maximum jitter; do not re-sum each cell for every output pixel. |
+| Zoom / Spin Blur | Medium; Slow for long paths | Long radial paths legitimately read distant content. | Backward sample paths and forward dirty influence, with hierarchical inputs where useful. Small local input damage can still affect a large output region; measure that region honestly. |
+| Lens Blur | Slow for broad bokeh; Medium for small radii | Broad shaped highlights need more work than an ordinary soft blur. | Aperture-support dirty expansion, normalized gather and bounded multi-resolution preparation. Compare adequate approximations; do not claim every pixel needs a brute-force aperture scan. |
+| Displacement Map | Fast for modest amounts; Medium for broad/minifying warps | A retained map usually means a small number of lookups. | Retain the raw map; source edits invalidate its possible preimage, map edits invalidate the mapped output. Large displacement expands dependencies even when sampling is cheap. |
+| Color Transfer, saved match | Fast | Once matched, painting should feel like a color adjustment. | Apply the saved LUT/transform only where source pixels changed. Never re-match on ordinary painting or on open. |
+| Color Transfer, Match | Slow preparation; then Fast | An explicit reference match can be a background job. | Cancellable source/reference reductions, mapping construction and atomic publication. Reference import and analysis have separate completion budgets. |
+
+Preset application takes the cost of its actual filter stack, including cold
+resource preparation. Separate Lines and Tones is an explicit creation job;
+subsequent painting through live outputs inherits their combined gate. Neither
+workflow is a free performance class or a reason to execute identical source
+preparation twice. Qualification includes useful combinations such as Border +
+Drop Shadow, Extract Lines + Halftone, and Pencil + Paper; two separately passing
+filters do not automatically make a passing stack.
+
+### Dependency and cache design before shader selection
+
+Start each prototype with the dirty-region plan. Record the forward affected
+output and backward required input for every stage, cache keys and invalidating
+controls, whether analysis is local or global, and the worst admitted working
+set. Reuse the renderer's existing
+[pass dependencies](../../crates/layer-render-wgpu/src/effects.rs) and
+[bounded windows](../../crates/layer-render-wgpu/src/scene/windows.rs), extending
+them where required for directional/mapped footprints and retained off-frame
+sources. Bounded windowing is a memory mechanism, not proof of good incremental
+cost or an excuse to keep current frame clipping.
+
+- **Pointwise:** repaint changed input/coverage regions and fuse compatible work.
+  Static pattern fills and imported texture preparation survive unrelated strokes.
+- **Neighborhood pipelines:** propagate support through every pass and update only
+  the necessary intermediate regions. Changing a finishing control reuses valid
+  preparation. Finite dependencies can still be expensive when halos overlap.
+- **Cell-based effects:** invalidate all output pixels whose shared cell statistic
+  changed; update/reduce each cell once. Region-only output is incorrect when the
+  rest of that cell still displays the old average.
+- **Warped/directional effects:** derive both sample requests and dirty influence.
+  A displaced source edit cannot be handled by copying its unshifted dirty box.
+- **Global/derived data:** retain explicit palette/Match results. If an artistic
+  algorithm truly requires automatic global analysis, declare it, keep its
+  preparation cancellable, and measure a valid update strategy; do not pretend
+  that its low-resolution guide has local dependencies.
+
+For an output tile of side `T` and a local support radius `r`, one required
+input window has area `(T + 2r)^2` before clipping to true source bounds. At
+`T=256`, `r=16` expands input area by about 1.27×; `r=128` expands it by 4×.
+This is input area for an already selected output tile. Expanding a source edit
+into affected output is a separate step; stacked passes compose both footprints.
+Measure duplicate halo work and tile/dispatch overhead before choosing a tile
+size. Reuse overlapping preparation where worthwhile; never eliminate required
+support to improve the timing.
+
+### First hardware estimates and reject criteria
+
+Use the cost model and efficiency checks in the
+[measurement guide](../performance/measuring.md#hardware-cost-and-algorithm-efficiency).
+The figures below use the exact tier canvas dimensions and planning peaks from
+[the hardware sheet](../performance/hardware.md). They assume all listed bytes
+reach external memory and arithmetic reaches the listed FP32 ceiling. They are
+optimistic lower bounds for those stated assumptions, not runtime forecasts.
+
+| Hypothetical whole-canvas work | Low | Mid | Top |
+| --- | ---: | ---: | ---: |
+| One RGBA16F read + write, 16 bytes/pixel | 13.37 ms | 22.46 ms | 14.34 ms |
+| One RGBA32F read + write, 32 bytes/pixel | 26.73 ms | 44.91 ms | 28.67 ms |
+| 100 ordinary FP32 FLOPs/pixel, arithmetic only | 13.22 ms | 18.75 ms | 3.56 ms |
+
+Do not add the arithmetic and traffic rows as though they cannot overlap, or
+assume every tap fetches uncached DRAM. Conversely, a bilinear lookup, atomic or
+transcendental is not a single ordinary FLOP. The current RGBA32Float page format
+cannot be budgeted as RGBA16F without a validated intermediate-format change.
+Precision reduction must preserve the relevant color/coverage contract.
+
+For contrast, a single 256×256 output tile with one RGBA16F read + write moves
+about 1.05 MB, an ideal 0.073 ms at the low tier's peak bandwidth, before halos,
+other stages, dispatches and painting/compositing. That difference explains why
+pointwise/short-support filters should be Fast despite a large canvas. A naïve
+whole-canvas implementation being bandwidth-bound is a reason to replace it,
+not evidence for a slower class. A tile count alone does not predict FPS either.
 
 All canvas pixel processing stays on the GPU. Shared Rust owns controls,
-validation, history, source capture and scheduling. Retain only authored results
-in the document; keep analysis and intermediates in renderer caches. Reuse the
-existing asynchronous guide lifecycle where applicable rather than create one
-blocking global-analysis path per new filter.
+validation, history and scheduling. Use asynchronous preparation with bounded
+caches and revision-safe publication; retain only authored results in artwork.
+No CPU canvas fallback, required subgroup-only/CUDA path, synchronous GPU
+readback or unbounded refinement queue belongs in the painting path.
 
-| Workload | Preferred execution shape | What must be measured |
-| --- | --- | --- |
-| Threshold, paper, pattern, noise, saved color match | Per-pixel evaluation, fuse compatible work | Full-frame reads/writes, conversions and stacking, not just ALU counts |
-| Ordered/blue-noise dither, small-palette mapping | Local threshold/color selection | Palette size scaling, stable pattern and output membership |
-| Lines, cartoon, pencil, watercolor | Reusable bounded smoothing/orientation preparation and local finish | Guide rebuild after strokes, detail loss, slider-specific cache reuse and refinement cancellation |
-| Painterly/Oil | Radius-aware/multi-scale filtering or bounded stroke rendering | Neighborhood taps, overdraw, intermediate memory, changed regions and large marks |
-| Border/blur/shadow/bevel | Alpha intermediates, finite halos and reusable spatial preparation | Maximum ordinary controls, expanded bounds, sparse art and multiple stacked styles |
-| Dust/preserved thinning | Bounded morphology/connectivity work or explicitly scheduled wider analysis | Worst-case connected artwork and faint/junction-heavy ink, not just random specks |
-| Palette/Match | Cancellable global GPU preparation, atomic authored-result publication | Initial completion, interruption by input, count/reference changes and undo consistency |
-| Lens/radial blur | Bounded gathers plus suitable multi-resolution acceleration | Point highlights, long paths, alpha edges, aliasing and final native refinement |
+Accept a slower artistic implementation only when its useful visual result,
+correct dependency work and measured cost justify it against simpler candidates.
+Reject avoidable full-frame rebuilds, redundant passes, repeated per-cell sums,
+large brute-force kernels with adequate cheaper alternatives, and unexplained
+cost beyond the calibrated model. Hitting a relaxed FPS floor does not excuse
+waste. Conversely, a slightly costlier method can be justified by better quality,
+less memory or lower latency; record that concrete tradeoff.
 
-At 12 MP, one hypothetical full RGBA16F read plus write is about 192 MB. At the
-low-tier's listed 14.4 GB/s peak bandwidth, transferring those bytes alone is
-about 13.3 ms, assuming they all reach memory. This illustrative lower bound
-excludes other work and does not account for cache/fusion savings; it is not a
-measurement or a performance waiver. It explains why “a few GPU passes” cannot
-be treated as automatically cheap. Prefer smaller alpha/guide formats where
-valid, retained intermediates and limited damaged regions.
+### Per-filter release evidence
 
-Use display-resolution previews during movement where the existing performance
-policy permits, then finish the native result asynchronously. The same artistic
-algorithm/seed/coordinate intent must survive refinement; approximate previews
-must converge without geometry shifts or missing marks. No full-resolution CPU
-fallback, mandatory subgroup-only path, CUDA dependency or GPU readback stall
-belongs on the painting path.
+Before a filter ships, its tier rows must identify the filter/mode and values,
+source graph, brush/size, input and affected-output areas, actual evaluated
+resolution/format, pass/tap/operation/byte counts, retained and peak memory,
+calibrated prediction, measured fresh-filtered rate/age/gaps, ordinary and broad
+settling, and interrupted-input behavior. Include the disabled baseline and a
+simpler adequate candidate. Record the verdict as target met, qualified slower
+filter with evidence, or open failure; keep raw traces in `artifacts/`.
 
-Measure low/mid/top targets of 12 MP at 60 fps, 24 MP at 90 fps and 61 MP at
-120 fps under the [actual target rules](../PERFORMANCE_TARGETS.md). Include a
-stroke through an active filter stack, control drags, pan/zoom/rotation, cancelled
-preparation, and exact export. Report finite accepted bounds, recommended slider
-ranges and tested workloads separately. Prototypes must produce an explicit accepted-range table before the relevant
-release freeze; slider tuning can follow measurements. An unmeasured algorithm
-does not justify an arbitrary permanent low maximum.
+Validate incremental/full equivalence and preview quality independently from
+speed. Include source/mask/seed/resource edits, undo, tile crossings, negative
+coordinates, retained off-frame content, and cache pressure. Hardware-qualified
+ordinary settings do not prove the entire accepted numeric domain is fast. Record
+expensive admitted cases explicitly; they must remain correct and responsive.
+
+If a filter misses its class expectation, first fix dependency waste, caching,
+shader scheduling or algorithm choice. A justified Medium/Slow exception follows
+the shared gate; an unexplained miss or unusable feedback invokes the release cut
+rule. No new filter is performance-qualified by this design document.
 
 ## Revised GA work and acceptance
 
@@ -1844,7 +1980,10 @@ does not justify an arbitrary permanent low maximum.
    policy to tests, implement object-layer image records/roles and off-frame
    evaluation, saved palette results, exact seeds and crop-compensated spatial
    references. Establish silhouette ownership and per-input invalidation.
-   Do not add unimplemented future fields or a shader-version archive.
+   Do not add unimplemented future fields or a shader-version archive. Define each
+   filter's expected performance class, dependency/invalidation plan and hardware
+   cost model before selecting its production algorithm. Extend the painting
+   benchmark to attribute fresh filtered results from a changing filter input.
 2. **Close existing correctness and usability gaps.** Improve Halftone, Threshold,
    Pixel Mosaic, Edge Detect/Extract Lines, Pencil, Painterly and Crosshatch.
    Build the independent edge/alpha/coverage examples that will also exercise
@@ -1868,8 +2007,10 @@ does not justify an arbitrary permanent low maximum.
 For every filter, keep a concise behavior note that states input/output coverage,
 main controls and units, coordinate/edge behavior, source dependencies, neutral
 states, authored resources/results, and tested operating ranges. Record the
-current algorithm and its costs as implementation documentation. Precise utility
-operations get mathematical references; evolving looks get visual intent and
+current algorithm, performance class and qualified operating envelope as
+implementation documentation. Apply the fresh-filtered drawing, incremental
+correctness and efficiency gates above to every new and improved filter. Precise
+utility operations get mathematical references; evolving looks get visual intent and
 quality examples rather than permanent equations for every aesthetic choice.
 
 Update the actual [built-in data contract fixture](../../crates/layer-core/src/package/codec/fixtures/builtin-contracts.json)
