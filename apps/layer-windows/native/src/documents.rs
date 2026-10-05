@@ -89,7 +89,7 @@ enum Job {
     DiscardOpening(Box<Opening>),
     Save {
         project: Box<ArtworkCapture>,
-        gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
+        gpu: Option<Box<layer_render_wgpu::snapshot::SnapshotGpu>>,
         path: PathBuf,
         expected:Option<layer_ui::DestinationExpectation>,
         changed_message:String,
@@ -781,7 +781,7 @@ impl DocumentService {
                     (
                         Job::Save {
                             project: Box::new(project),
-                            gpu: host.session.engine().backend().0.as_ref().map(|renderer| renderer.snapshot_gpu()),
+                            gpu: host.session.engine().backend().0.as_ref().map(|renderer| Box::new(renderer.snapshot_gpu())),
                             changed_message:layer_ui::DocumentDeliveryMessage::DestinationChanged.message(host.session.localization()),
                             expected:host.session.save_destination_expectation().filter(|expected|expected.location.uri==selected.uri),
                             path: PathBuf::from(path),
