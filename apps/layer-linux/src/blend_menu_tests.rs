@@ -211,6 +211,7 @@ fn native_layer_color_modes_and_add_filter() {
     let app = native_test_app("art.capycanvas.LayerModes");
     let w = fixture_workspace(&app); w.window.maximize(); w.window.present(); pump(1600);
     let owner = state(&w).layer_tools.editing_layer.unwrap().id;
+    w.dispatch(UiAction::Layer { action: LayerAction::Rename { id: owner, name: "Foreground details".into() } });
     assert!(find_named(w.layer_panel.root.upcast_ref(), "layer-color-mode").is_none());
     let mut input = RemoteInput::new().settle_ms(150); input.ready();
     for theme in [Theme::Light, Theme::Dark] {
@@ -221,10 +222,14 @@ fn native_layer_color_modes_and_add_filter() {
             super::effect_color::choose_curve_option(&w, &mut input, &color, value);
             until(|| state(&w).layer_properties.controls.iter().any(|c| c.key == "color_mode" && c.value == layer_core::EffectValue::Choice(value)), "color mode selected");
         }
-        save_widget(&w.effects.properties, &std::path::PathBuf::from(format!("../../artifacts/layer-modes/properties-{theme:?}.png")));
+        super::icons::capture_widget(&w.window, &w.effects.properties).save_to_png(format!("../../artifacts/layer-modes/properties-{theme:?}.png")).unwrap();
+        save_snapshot(&w, 150, || std::path::PathBuf::from(format!("../../artifacts/layer-modes/header-paint-{theme:?}.png")));
         for (index, filter) in ["Exposure", "Curves", "Levels"].into_iter().enumerate() {
             let panel = if index == 0 { Panel::Properties } else { Panel::Layers };
-            w.dispatch(UiAction::SelectPanelTab { group: state(&w).workspace.layout.panel_group(panel).unwrap(), panel }); pump(200);
+            if let Some(group) = w.resolved().groups.iter().find(|group| group.panels.contains(&panel) && group.active != panel) {
+                w.dispatch(UiAction::SelectPanelTab { group: group.id, panel });
+            }
+            pump(200);
             if index < 2 {
                 let add = named::<gtk::MenuButton>(w.window.upcast_ref(), if index == 0 { "properties-add-filter" } else { "layer-add-filter" });
                 input.click(screen_point(add.upcast_ref(), &w.window, [0.5, 0.5]));
@@ -246,6 +251,13 @@ fn native_layer_color_modes_and_add_filter() {
             until(|| state(&w).layer_tools.editing_layer.as_ref().is_some_and(|l| l.adjustment_effect), "local filter selected");
             let layers = state(&w).layers; let selected = layers.iter().find(|l| l.editing).unwrap();
             assert!(state(&w).layer_tools.connections.iter().any(|edge| edge.from == selected.id || edge.to == selected.id));
+            if index == 0 {
+                w.dispatch(UiAction::Layer { action: LayerAction::Rename { id: selected.id, name: "Foreground lighting and atmosphere".into() } });
+                pump(200);
+                super::icons::capture_widget(&w.window, &w.effects.properties).save_to_png(format!("../../artifacts/layer-modes/properties-filter-{theme:?}.png")).unwrap();
+                save_snapshot(&w, 150, || std::path::PathBuf::from(format!("../../artifacts/layer-modes/header-filter-{theme:?}.png")));
+                w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(150);
+            }
         }
         w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(250);
         w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(250);

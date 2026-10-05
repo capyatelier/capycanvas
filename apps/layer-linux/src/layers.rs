@@ -942,7 +942,8 @@ impl LayerPanel {
             reference,
             attachment,
             add_filter: {
-                let button = gtk::MenuButton::builder().icon_name("layer-adjustments-symbolic").build();
+                let button = gtk::MenuButton::new();
+                button.set_child(Some(&crate::icons::image("layer-add-filter-symbolic")));
                 button.add_css_class("layer-icon"); caption(&button, copy.borrow().layer.add_filter.as_ref()); button
             },
             delete: button("layer-delete-symbolic", copy.borrow().layer.delete_selected.as_ref()),

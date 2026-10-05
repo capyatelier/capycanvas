@@ -271,6 +271,8 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .filter-picker .filter-row { padding: 3px 6px; min-width: 0; min-height: 0; font-weight: normal; }
 .filter-category { margin: 8px; font-weight: bold; opacity: .55; }
 .effect-properties { margin: 6px; }
+.properties-header > label { font-size: .9em; }
+.properties-header > menubutton > button { min-height: 24px; padding: 0 6px; }
 .content-drawer .filter-types,
 .content-drawer .filter-picker-body,
 .content-drawer .effect-properties { margin: 8px; }

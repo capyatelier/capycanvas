@@ -52,6 +52,9 @@ pub struct EffectPanels {
     page: gtk::DropDown,
     property_actions: gtk::Box,
     add_filter: gtk::MenuButton,
+    add_filter_label: gtk::Label,
+    property_header: gtk::Box,
+    layer_type: gtk::Label,
     property_buttons: RefCell<Vec<(usize, gtk::Button)>>,
     property_groups: RefCell<Vec<(usize, gtk::MenuButton)>>,
     property_choice: RefCell<Option<gtk::DropDown>>,
@@ -175,10 +178,27 @@ impl EffectPanels {
         title.set_xalign(0.);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         title.add_css_class("heading");
+        title.set_widget_name("properties-layer-name");
         let body = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let page = crate::panel_controls::dropdown(&[]);
         page.set_widget_name("properties-page");
         properties.append(&title);
+        let property_header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        property_header.add_css_class("properties-header");
+        let layer_type = gtk::Label::builder().xalign(0.).hexpand(true).ellipsize(gtk::pango::EllipsizeMode::End).build();
+        layer_type.add_css_class("dim-label");
+        layer_type.set_widget_name("properties-layer-type");
+        let add_filter = gtk::MenuButton::builder().halign(gtk::Align::End).build();
+        add_filter.set_widget_name("properties-add-filter");
+        let add_filter_content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let add_filter_label = gtk::Label::new(None);
+        add_filter_content.append(&crate::icons::image("layer-add-filter-symbolic"));
+        add_filter_content.append(&add_filter_label);
+        add_filter_content.append(&crate::icons::image("layer-chevron-down-symbolic"));
+        add_filter.set_child(Some(&add_filter_content));
+        property_header.append(&layer_type);
+        property_header.append(&add_filter);
+        properties.append(&property_header);
         let property_toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         page.set_hexpand(true);property_toolbar.append(&page);
         let property_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -187,10 +207,6 @@ impl EffectPanels {
         tonal_histogram.root.set_widget_name("levels-histogram");tonal_histogram.root.set_visible(false);
         properties.append(&tonal_histogram.root);
         properties.append(&body);
-        let add_filter = gtk::MenuButton::builder().halign(gtk::Align::Start).build();
-        add_filter.add_css_class("panel-choice");
-        add_filter.set_widget_name("properties-add-filter");
-        properties.append(&add_filter);
         let stats = gtk::Box::new(gtk::Orientation::Vertical, 6);
         stats.add_css_class("renderer-stats");
         let recording_button = gtk::Button::with_label("Start stroke recording");
@@ -264,6 +280,9 @@ impl EffectPanels {
             page,
             property_actions,
             add_filter,
+            add_filter_label,
+            property_header,
+            layer_type,
             property_buttons: RefCell::default(),
             property_groups: RefCell::default(),
             property_choice: RefCell::default(),
@@ -661,7 +680,14 @@ impl EffectPanels {
         *self.property_localization.borrow_mut() = Some(localization);
         let view = &state.layer_properties;
         self.add_filter.set_visible(view.add_filter.is_some());
-        if let Some(menu) = &view.add_filter { self.add_filter.set_label(&menu.title); }
+        if let Some(menu) = &view.add_filter {
+            self.add_filter_label.set_text(&menu.title);
+            self.add_filter.set_tooltip_text(Some(&menu.title));
+            self.add_filter.update_property(&[gtk::accessible::Property::Label(&menu.title)]);
+        }
+        self.layer_type.set_text(&view.layer_type);
+        self.layer_type.set_tooltip_text(Some(&view.layer_type));
+        self.property_header.set_visible(!view.layer_type.is_empty() || view.add_filter.is_some());
         let document_changed=self.property_document.replace(state.document_file.epoch)!=state.document_file.epoch;
         self.properties_updating.set(true);
         if self.schema.borrow().as_ref().is_none_or(|old| document_changed || old.layer!=view.layer || old.actions.len()!=view.actions.len() || old.resource_label.is_some()!=view.resource_label.is_some()
@@ -755,8 +781,8 @@ impl EffectPanels {
         self.property_actions.set_hexpand(view.resource_label.is_some());
         self.property_toolbar.set_visible(view.pages.len()>1 || !view.actions.is_empty());
         self.tonal_histogram.root.set_visible(view.histogram);
-        self.title.set_text(&view.title);
-        self.title.set_tooltip_text(Some(&view.description));
+        self.title.set_text(&view.name);
+        self.title.set_tooltip_text(Some(&view.title));
         self.body.set_sensitive(view.enabled);
         self.properties_updating.set(true);
         if self.schema.borrow().as_ref().is_none_or(|old| old.pages != view.pages) {

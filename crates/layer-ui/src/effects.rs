@@ -391,6 +391,8 @@ pub struct LayerPropertiesView {
     pub epoch:u64,
     pub layer: Option<u64>,
     pub title: String,
+    pub name: String,
+    pub layer_type: String,
     pub description: String,
     pub resource_name: Option<String>,
     pub resource_label: Option<String>,
@@ -573,24 +575,27 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
         return LayerPropertiesView::default();
     };
     let layer_type = match layer.kind() {
-        LayerKind::Paint => None,
-        LayerKind::Group => Some(l.text(MessageId::RESOURCES_LAYER_TYPE_GROUP)),
-        LayerKind::Selection => Some(l.text(MessageId::RESOURCES_LAYER_TYPE_SELECTION)),
-        LayerKind::Effect => scene.effect(handle).map(|effect| resource_label(&effect.program.label, l)),
+        LayerKind::Paint => l.text(MessageId::RESOURCES_LAYER_TYPE_PAINT),
+        LayerKind::Group => l.text(MessageId::RESOURCES_LAYER_TYPE_GROUP),
+        LayerKind::Selection => l.text(MessageId::RESOURCES_LAYER_TYPE_SELECTION),
+        LayerKind::Effect => scene.effect(handle).map_or_else(|| Arc::from(""), |effect| resource_label(&effect.program.label, l)),
     };
-    let title = if let Some(kind) = layer_type.as_deref().filter(|kind| *kind != layer.name.as_ref()) {
+    let title = if layer.kind() != LayerKind::Paint && !layer_type.is_empty() && layer_type.as_ref() != layer.name.as_ref() {
         let mut args = FluentArgs::new();
         args.set("name", layer.name.as_ref());
-        args.set("type", kind);
+        args.set("type", layer_type.as_ref());
         l.format(MessageId::RESOURCES_PROPERTIES_LAYER_TITLE, &args)
     } else { layer.name.to_string() };
+    let header = LayerPropertiesView { title, name: layer.name.to_string(), layer_type: layer_type.to_string(), ..Default::default() };
     let token = occurrence_token(handle);
     if scene.effect(handle).is_some() && property_effect(doc, handle).is_none() {
-        return LayerPropertiesView {layer: Some(token), title, enabled: !doc.is_locked(handle), ..Default::default()};
+        return LayerPropertiesView {layer: Some(token), enabled: !doc.is_locked(handle), ..header};
     }
     if let OccurrenceContent::Selection(selection) = layer.content {
         let properties = doc.working.selection_overlays.properties.get(&selection).cloned().unwrap_or_default();
-        return super::selection_properties::properties(token, &title, &properties, painting, !doc.is_locked(handle), l);
+        let mut view = super::selection_properties::properties(token, &header.name, &properties, painting, !doc.is_locked(handle), l);
+        view.title = header.title;
+        return view;
     }
     let mut controls = Vec::new();
     let mut curve_max = None;
@@ -643,13 +648,12 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     };
     LayerPropertiesView {
         layer: Some(token),
-        title,
         description,
         enabled: !doc.is_locked(handle),
         controls,
         curve_max,
         curve_white,
-        ..LayerPropertiesView::default()
+        ..header
     }
 }
 pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,state:&mut PropertyEditorState,gesture:Option<&EffectGesture>,l:&Localizer) {
@@ -1261,7 +1265,15 @@ mod resource_tests {
                     }
                 };
                 *selected.artwork.occurrences.get_mut(fill).unwrap() = layer_core::authored::Occurrence::new(content, name);
-                assert_eq!(properties(&selected, Default::default(), &l).title, expected);
+                let view = properties(&selected, Default::default(), &l);
+                assert_eq!(view.title, expected);
+                assert_eq!(view.name, name);
+                assert_eq!(view.layer_type.as_str(), match kind {
+                    LayerKind::Paint => if language == UiLanguage::English { "Paint layer" } else { "ペイントレイヤー" },
+                    LayerKind::Effect => fill_type,
+                    LayerKind::Group => group_type,
+                    LayerKind::Selection => selection_type,
+                });
             }
         }
     }

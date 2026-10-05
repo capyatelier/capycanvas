@@ -51,6 +51,8 @@ pub(super) fn properties(
     LayerPropertiesView {
         layer: Some(id),
         title: title.into(),
+        name: title.into(),
+        layer_type: l.text(MessageId::RESOURCES_LAYER_TYPE_SELECTION).to_string(),
         description: String::new(),
         enabled,
         controls,

@@ -514,6 +514,7 @@ resources-lookup-original = Özgün
 resources-lookup-warm = Sıcak
 resources-lookup-cool = Soğuk
 resources-lookup-monochrome = Tek renk
+resources-layer-type-paint = Boya katmanı
 resources-layer-type-group = Grup
 resources-layer-type-selection = Seçim
 resources-properties-layer-title = { $name } ({ $type })

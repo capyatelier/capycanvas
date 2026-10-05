@@ -943,6 +943,7 @@ resources-lookup-original = Asli
 resources-lookup-warm = Hangat
 resources-lookup-cool = Sejuk
 resources-lookup-monochrome = Monokrom
+resources-layer-type-paint = Lapisan lukis
 resources-layer-type-group = Grup
 resources-layer-type-selection = Seleksi
 resources-properties-layer-title = { $name } ({ $type })

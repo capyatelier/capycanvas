@@ -5831,6 +5831,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(id) = self.state.layer_properties.layer.and_then(|id| occurrence_handle(id).ok()).and_then(|id| self.effect_analyses.status(id)) {
             let status = self.state.localization.text(id);
             self.state.layer_properties.title = format!("{} · {status}", self.state.layer_properties.title);
+            self.state.layer_properties.name = format!("{} · {status}", self.state.layer_properties.name);
             self.state.layer_properties.description = status.to_string();
         }
         if self.auto_levels.is_some() {

@@ -514,6 +514,7 @@ resources-lookup-original = Original
 resources-lookup-warm = Warm
 resources-lookup-cool = Kühl
 resources-lookup-monochrome = Monochrom
+resources-layer-type-paint = Malebene
 resources-layer-type-group = Gruppe
 resources-layer-type-selection = Auswahl
 resources-properties-layer-title = { $name } ({ $type })

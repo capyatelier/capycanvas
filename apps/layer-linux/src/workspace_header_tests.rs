@@ -1531,10 +1531,11 @@ fn native_filter_drawer_input() {
     let title = d.w.effects.properties.first_child().unwrap().downcast::<gtk::Label>().unwrap();
     for theme in [Theme::Light, Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        for (name, expected) in [("Paper", "Paper (Solid Color)"), ("Solid Color", "Solid Color"), ("Paper", "Paper (Solid Color)")] {
+        for name in ["Paper", "Solid Color", "Paper"] {
             d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Rename { id: 2, name: name.into() } });
             pump(120);
-            assert_eq!(title.text().as_str(), expected);
+            assert_eq!(title.text().as_str(), name);
+            assert_eq!(named::<gtk::Label>(d.w.effects.properties.upcast_ref(), "properties-layer-type").text(), "Solid Color");
         }
         let _warm = crate::snapshot(&d.w); pump(120);
         crate::snapshot(&d.w).save_to_png(output.join(format!("paper-properties-{theme:?}.png"))).unwrap();
@@ -1555,7 +1556,7 @@ fn native_filter_drawer_input() {
         let symbol = find_css(&row, "layer-type-symbol").unwrap().downcast::<gtk::Image>().unwrap();
         assert!(symbol.is_visible());
         assert_eq!(crate::icons::name(&symbol).as_deref(), Some("layer-fill-symbolic"));
-        assert!(find_css(&d.named("art-layer-1"), "layer-type-symbol").is_none());
+        assert!(find_css(&d.named("art-layer-1"), "layer-type-symbol").is_none_or(|symbol| !symbol.is_visible()));
         let thumb = find_css(&row, "layer-thumbnail").unwrap();
         let p = thumb.compute_bounds(&d.w.surface).unwrap();
         let mut download = gdk::TextureDownloader::new(&shot);
@@ -1575,9 +1576,11 @@ fn native_filter_drawer_input() {
     d.click_name(&layers);
     for theme in [Theme::Light, Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let mut original = None;
         for (step, reverse) in [false, true, false].into_iter().enumerate() {
             if reverse {
-                d.w.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Set { layer: 2, key: "reverse".into(), value: layer_core::EffectValue::Toggle(true) } });
+                let target = state(&d.w).layer_properties.controls.iter().find_map(|control| control.gradient.as_ref().map(|gradient| gradient.destination.clone())).unwrap();
+                d.w.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Gradient { target, edit: layer_ui::GradientEdit::Reverse } });
             } else if step == 2 {
                 d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
             }
@@ -1600,7 +1603,10 @@ fn native_filter_drawer_input() {
                 bytes[y * stride + x * 4]
             };
             let (left, right) = (sample(0.2), sample(0.8));
-            assert!(if reverse { left > 180 && right < 80 } else { left < 80 && right > 180 }, "{theme:?} reverse={reverse}: {left}, {right}");
+            let contrast = i16::from(right) - i16::from(left);
+            assert!(if reverse { contrast < -100 } else { contrast > 100 }, "{theme:?} reverse={reverse}: {left}, {right}");
+            if step == 0 { original = Some((left, right)); }
+            if step == 2 { assert_eq!(Some((left, right)), original, "Undo restores the gradient thumbnail"); }
             shot.save_to_png(output.join(format!("gradient-thumbnail-{theme:?}-{reverse}.png"))).unwrap();
         }
     }

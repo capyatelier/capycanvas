@@ -117,9 +117,8 @@ to relearn. Configurable layouts, controls and shortcuts let the app adapt to
 those habits while keeping the underlying commands consistent. These workflows
 are arrangements of a common editor rather than separate applications. Tool
 Settings follows the active tool, and Properties exposes the relevant effect
-parameters. Its heading shows the layer name followed by the localized filter,
-group or saved selection type when the name differs from that type. Ordinary
-paint layers keep their name alone. Shared Properties pages choose which
+parameters. Shared Properties copy identifies the layer name and localized type.
+Shared Properties pages choose which
 parameter controls are shown; hidden values remain active. Channel selection,
 automatic adjustment and sampling share one toolbar. Levels and Curves offer
 black, neutral and white points through one sampling menu; White Balance uses the
@@ -130,8 +129,12 @@ constrain later painting. Undo restores the previous pixels and mode; returning
 to Full color keeps the converted pixels. Reduced modes appear in the layer
 subtitle. Masks, selections and effect layers do not offer this control.
 
-**Add Filter** follows the controls in Properties and is also available in the
-Layers footer and each eligible layer's context menu. It opens the menu bar's filter categories and
+GTK Properties gives the layer name its own heading, with the smaller, muted
+layer type below it. **Add Filter** sits at the right of that second row with an
+**fx+** icon, its text label and a menu arrow. The Layers footer uses the same icon.
+Other hosts keep the type in parentheses after a differing name, omit it for paint
+layers, and place **Add Filter** after the Properties controls. It is also available
+in each eligible layer's context menu. It opens the menu bar's filter categories and
 adds a local filter above the owner's existing chain, so it runs last. Selecting
 a local filter keeps its owner as the destination. Paint layers and isolated
 groups accept local filters; locked owners and Pass Through groups do not.

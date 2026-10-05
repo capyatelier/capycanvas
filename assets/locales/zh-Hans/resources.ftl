@@ -631,6 +631,7 @@ resources-lookup-original = 原始
 resources-lookup-warm = 暖色
 resources-lookup-cool = 冷色
 resources-lookup-monochrome = 黑白
+resources-layer-type-paint = 绘画图层
 resources-layer-type-group = 图层组
 resources-layer-type-selection = 选区
 resources-properties-layer-title = { $name }（{ $type }）
