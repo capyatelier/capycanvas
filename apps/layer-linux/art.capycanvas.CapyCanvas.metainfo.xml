@@ -17,6 +17,14 @@
   <url type="vcs-browser">https://github.com/capyatelier/capycanvas</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.0.4" date="2026-10-05">
+      <description>
+        <p>A small update for Windows.</p>
+        <ul>
+          <li>The Windows uninstaller is signed, like the app and its setup program.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.3" date="2026-10-04">
       <description>
         <p>The first public beta of Capy Canvas, for Linux, Windows, macOS, iPad, Android tablets and the web.</p>
