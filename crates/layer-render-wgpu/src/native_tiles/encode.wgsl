@@ -38,8 +38,7 @@ fn quantize(value:f32)->u32 {
     }
     return low;
 }
-@compute @workgroup_size(8,8)
-fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
+fn encode_pixel(invocation:vec3<u32>) {
     PUBLICATION_GUARD
     if any(invocation.xy>=settings.region.zw) {return;}
     let pixel=invocation.xy+settings.region.xy;

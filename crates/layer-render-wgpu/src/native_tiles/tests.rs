@@ -558,3 +558,26 @@ fn float32_publication_retains_precision_range_and_rejects_unassociation_overflo
         assert!(read_status(&r,&status).is_err());
     }
 }
+
+#[test]
+fn writeback_shaders_validate_for_every_format_tile_count_and_mode() {
+    let formats = [
+        (Some(wgpu::TextureFormat::Rgba8Uint), "rgba8uint"),
+        (Some(wgpu::TextureFormat::Rgba16Uint), "rgba16uint"),
+        (Some(wgpu::TextureFormat::Rgba32Uint), "rgba32uint"),
+        (None, "gray_alpha"),
+    ];
+    for in_place in [false, true] {
+        for (format, name) in formats {
+            for count in 1..=2 {
+                let (_, source) = writeback_shader(format, name, count, in_place);
+                let module = naga::front::wgsl::parse_str(&source)
+                    .unwrap_or_else(|error| panic!("{name} x{count}: {}", error.emit_to_string(&source)));
+                naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                    .validate(&module)
+                    .unwrap_or_else(|error| panic!("{name} x{count}: {error:?}"));
+                assert_eq!(module.entry_points.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), ["main"]);
+            }
+        }
+    }
+}

@@ -185,6 +185,104 @@ impl NativeTileBatch {
     }
 }
 
+fn writeback_shader(output_format: Option<wgpu::TextureFormat>, output_name: &str, count: usize, in_place: bool) -> (Vec<wgpu::BindGroupLayoutEntry>, String) {
+    let bindings = if in_place { 2 } else { 3 };
+    let mut entries = Vec::new();
+    let mut textures = String::new();
+    let mut loads = String::new();
+    let mut stores = String::new();
+    let mut packed_stores = String::new();
+    for i in 0..count as u32 {
+        let base = i * bindings;
+        if in_place {
+            entries.push(crate::bindings::storage_texture(
+                base,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::TextureFormat::Rgba32Float,
+                wgpu::StorageTextureAccess::ReadWrite,
+            ));
+            textures.push_str(&format!("@group(0) @binding({base}) var working{i}:texture_storage_2d<rgba32float,read_write>;\n"));
+            loads.push_str(&format!(
+                "case {i}u: {{ return textureLoad(working{i},pixel); }}\n"
+            ));
+        } else {
+            entries.push(sampled_entry(base));
+            entries.push(storage_texture_entry(
+                base + 2,
+                wgpu::TextureFormat::Rgba32Float,
+            ));
+            textures.push_str(&format!("@group(0) @binding({base}) var working{i}:texture_2d<f32>;\n@group(0) @binding({}) var canonical{i}:texture_storage_2d<rgba32float,write>;\n", base + 2));
+            loads.push_str(&format!(
+                "case {i}u: {{ return textureLoad(working{i},pixel,0); }}\n"
+            ));
+        }
+        let destination = if in_place { "working" } else { "canonical" };
+        if let Some(format) = output_format {
+            entries.push(storage_texture_entry(base + 1, format));
+            textures.push_str(&format!("@group(0) @binding({}) var encoded{i}:texture_storage_2d<{output_name},write>;\n", base + 1));
+            stores.push_str(&format!("case {i}u: {{ textureStore(encoded{i},pixel,result); textureStore({destination}{i},pixel,linear); }}\n"));
+        } else {
+            entries.push(buffer_entry(base + 1, wgpu::BufferBindingType::Storage { read_only: false }, false, 256 * 256 * 2));
+            textures.push_str(&format!("@group(0) @binding({}) var<storage,read_write> encoded{i}:array<u32>;\n", base + 1));
+            stores.push_str(&format!("case {i}u: {{ let index=pixel.y*256u+pixel.x; if settings.maximum==255u {{ let shift=(index%2u)*16u; packed_mask|=65535u<<shift; packed_value|=(result.r|(result.a<<8u))<<shift; }} else if settings.maximum==0u && settings.scale==32u {{ encoded{i}[2u*index]=result.r; encoded{i}[2u*index+1u]=result.a; }} else {{ encoded{i}[index]=result.r|(result.a<<16u); }} textureStore({destination}{i},pixel,linear); }}\n"));
+            packed_stores.push_str(&format!("case {i}u: {{ if packed_mask==0xffffffffu {{ encoded{i}[index]=packed_value; }} else {{ encoded{i}[index]=(encoded{i}[index]&~packed_mask)|packed_value; }} }}\n"));
+        }
+    }
+    let shared = count as u32 * bindings;
+    entries.extend([
+        buffer_entry(
+            shared,
+            wgpu::BufferBindingType::Storage { read_only: true },
+            false,
+            transfer::TABLE_BYTES,
+        ),
+        buffer_entry(shared + 1, wgpu::BufferBindingType::Uniform, true, 48),
+        buffer_entry(
+            shared + 2,
+            wgpu::BufferBindingType::Storage { read_only: false },
+            false,
+            STATUS_BYTES,
+        ),
+    ]);
+    let mut body = include_str!("native_tiles/encode.wgsl")
+        .replace(
+            "PUBLICATION_GUARD",
+            if in_place {
+                "if atomicLoad(&status.invalid)!=0u {return;}"
+            } else {
+                ""
+            },
+        )
+        .replace("MODE_PROJECTION", if output_format.is_none() { "
+            var source_error=color_error(value);
+            if settings.maximum==0u {
+                if settings.scale==32u {source_error=float32_color_error(value);}
+                else {source_error=hdr_color_error(value);}
+            }
+            if source_error!=0u {atomicOr(&status.invalid,source_error);return;}
+            value=layer_color(value,settings.weights.rgb,settings.weights.a,select(sdr_decode_component(0.5,settings.curve),0.5,settings.maximum==0u));
+        " } else { "" })
+        .replace("TEXTURES", &textures)
+        .replace("LOADS", &loads)
+        .replace("STORES", &stores)
+        .replace("TRANSFER_BINDING", &shared.to_string())
+        .replace("SETTINGS_BINDING", &(shared + 1).to_string())
+        .replace("STATUS_BINDING", &(shared + 2).to_string());
+    body.push_str(&match output_format {
+        Some(_) => include_str!("native_tiles/encode_main.wgsl").to_string(),
+        None => include_str!("native_tiles/gray_alpha.wgsl").replace("PACKED_STORES", &packed_stores),
+    });
+    let source = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        include_str!("sdr_color.wgsl"),
+        include_str!("native_tiles/color_mode.wgsl"),
+        include_str!("native_tiles/validity.wgsl"),
+        include_str!("native_tiles/coverage.wgsl"),
+        body
+    );
+    (entries, source)
+}
+
 /// Compile while preparing the document mode, never on a brush/commit hot path.
 /// Pipelines are independent of working primaries, transfer curve and alpha.
 pub struct NativeTileEncoder {
@@ -216,7 +314,6 @@ impl NativeTileEncoder {
         Self::with_mode(device, true)
     }
     fn with_mode(device: &PipelineDevice, in_place: bool) -> Self {
-        let bindings = if in_place { 2 } else { 3 };
         let tiles_per_dispatch = 2usize
             .min(device.limits().max_sampled_textures_per_shader_stage as usize)
             .min(device.limits().max_storage_textures_per_shader_stage as usize / 2);
@@ -230,100 +327,8 @@ impl NativeTileEncoder {
             (None, "gray_alpha"),
         ] {
             for count in 1..=tiles_per_dispatch {
-                let mut entries = Vec::new();
-                let mut textures = String::new();
-                let mut loads = String::new();
-                let mut stores = String::new();
-                let mut packed_stores = String::new();
-                for i in 0..count as u32 {
-                    let base = i * bindings;
-                    if in_place {
-                        entries.push(crate::bindings::storage_texture(
-                            base,
-                            wgpu::ShaderStages::COMPUTE,
-                            wgpu::TextureFormat::Rgba32Float,
-                            wgpu::StorageTextureAccess::ReadWrite,
-                        ));
-                        textures.push_str(&format!("@group(0) @binding({base}) var working{i}:texture_storage_2d<rgba32float,read_write>;\n"));
-                        loads.push_str(&format!(
-                            "case {i}u: {{ return textureLoad(working{i},pixel); }}\n"
-                        ));
-                    } else {
-                        entries.push(sampled_entry(base));
-                        entries.push(storage_texture_entry(
-                            base + 2,
-                            wgpu::TextureFormat::Rgba32Float,
-                        ));
-                        textures.push_str(&format!("@group(0) @binding({base}) var working{i}:texture_2d<f32>;\n@group(0) @binding({}) var canonical{i}:texture_storage_2d<rgba32float,write>;\n", base + 2));
-                        loads.push_str(&format!(
-                            "case {i}u: {{ return textureLoad(working{i},pixel,0); }}\n"
-                        ));
-                    }
-                    let destination = if in_place { "working" } else { "canonical" };
-                    if let Some(format) = output_format {
-                        entries.push(storage_texture_entry(base + 1, format));
-                        textures.push_str(&format!("@group(0) @binding({}) var encoded{i}:texture_storage_2d<{output_name},write>;\n", base + 1));
-                        stores.push_str(&format!("case {i}u: {{ textureStore(encoded{i},pixel,result); textureStore({destination}{i},pixel,linear); }}\n"));
-                    } else {
-                        entries.push(buffer_entry(base + 1, wgpu::BufferBindingType::Storage { read_only: false }, false, 256 * 256 * 2));
-                        textures.push_str(&format!("@group(0) @binding({}) var<storage,read_write> encoded{i}:array<u32>;\n", base + 1));
-                        stores.push_str(&format!("case {i}u: {{ let index=pixel.y*256u+pixel.x; if settings.maximum==255u {{ let shift=(index%2u)*16u; packed_mask|=65535u<<shift; packed_value|=(result.r|(result.a<<8u))<<shift; }} else if settings.maximum==0u && settings.scale==32u {{ encoded{i}[2u*index]=result.r; encoded{i}[2u*index+1u]=result.a; }} else {{ encoded{i}[index]=result.r|(result.a<<16u); }} textureStore({destination}{i},pixel,linear); }}\n"));
-                        packed_stores.push_str(&format!("case {i}u: {{ if packed_mask==0xffffffffu {{ encoded{i}[index]=packed_value; }} else {{ encoded{i}[index]=(encoded{i}[index]&~packed_mask)|packed_value; }} }}\n"));
-                    }
-                }
-                let shared = count as u32 * bindings;
-                entries.extend([
-                    buffer_entry(
-                        shared,
-                        wgpu::BufferBindingType::Storage { read_only: true },
-                        false,
-                        transfer::TABLE_BYTES,
-                    ),
-                    buffer_entry(shared + 1, wgpu::BufferBindingType::Uniform, true, 48),
-                    buffer_entry(
-                        shared + 2,
-                        wgpu::BufferBindingType::Storage { read_only: false },
-                        false,
-                        STATUS_BYTES,
-                    ),
-                ]);
+                let (entries, source) = writeback_shader(output_format, output_name, count, in_place);
                 let layout = crate::bindings::layout(device, "native tile encoder inputs", &entries);
-                let mut body = include_str!("native_tiles/encode.wgsl")
-                    .replace(
-                        "PUBLICATION_GUARD",
-                        if in_place {
-                            "if atomicLoad(&status.invalid)!=0u {return;}"
-                        } else {
-                            ""
-                        },
-                    )
-                    .replace("MODE_PROJECTION", if output_format.is_none() { "
-                        var source_error=color_error(value);
-                        if settings.maximum==0u {
-                            if settings.scale==32u {source_error=float32_color_error(value);}
-                            else {source_error=hdr_color_error(value);}
-                        }
-                        if source_error!=0u {atomicOr(&status.invalid,source_error);return;}
-                        value=layer_color(value,settings.weights.rgb,settings.weights.a,select(sdr_decode_component(0.5,settings.curve),0.5,settings.maximum==0u));
-                    " } else { "" })
-                    .replace("TEXTURES", &textures)
-                    .replace("LOADS", &loads)
-                    .replace("STORES", &stores)
-                    .replace("TRANSFER_BINDING", &shared.to_string())
-                    .replace("SETTINGS_BINDING", &(shared + 1).to_string())
-                    .replace("STATUS_BINDING", &(shared + 2).to_string());
-                if output_format.is_none() {
-                    body = body.replace("@compute @workgroup_size(8,8)\nfn main(@builtin(global_invocation_id) invocation:vec3<u32>)", "fn encode_pixel(invocation:vec3<u32>)");
-                    body.push_str(&include_str!("native_tiles/gray_alpha.wgsl").replace("PACKED_STORES", &packed_stores));
-                }
-                let source = format!(
-                    "{}\n{}\n{}\n{}\n{}",
-                    include_str!("sdr_color.wgsl"),
-                    include_str!("native_tiles/color_mode.wgsl"),
-                    include_str!("native_tiles/validity.wgsl"),
-                    include_str!("native_tiles/coverage.wgsl"),
-                    body
-                );
                 let pipeline_layout =
                     device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("native SDR tile writeback"),
