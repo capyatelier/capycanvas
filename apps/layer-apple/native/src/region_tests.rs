@@ -26,6 +26,8 @@ fn region_app(platform: u32, gap: bool) -> App {
         })
         .collect();
     app.place_rgba("Outline", 64, 64, &pixels);
+    app.invoke("rasterize_layer");
+    app.draw_until_idle();
     app.action(json!({"type":"set_color","rgba":[0,0,1,1]}));
     app.draw_until_idle();
     app

@@ -343,7 +343,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             Log.e("CapyCanvas", "Native canvas operation failed", e)
             main.post {
                 if (canvas) failure = bootstrapForOwner?.getString("canvas_init_failed")
-                else notice = CanvasNotice(null, bootstrapForOwner?.getString("action_failed").orEmpty(), null)
+                else notice = CanvasNotice(null, bootstrapForOwner?.getString("action_failed").orEmpty(), emptyList())
             }
         }
     }
@@ -364,6 +364,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             main.post { continuation.resumeWith(result) }
         }) continuation.resumeWith(Result.failure(IllegalStateException(bootstrapForOwner?.getString("editor_closed"))))
     }
+    internal fun canvasChanged() = post { publish(false); wake() }
     internal fun documentChanged(complete: () -> Unit = {}) = post {
         refreshChrome(); publish(true); wake(); main.post { drawingTabs.refresh(); complete() }
     }
@@ -371,11 +372,11 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun clearActionError() { dialogError = null }
     internal fun dismissHostError() { hostError = null }
     /** Accept runs the core's action; declining, or the timeout, dismisses it. */
-    internal fun answerNotice(shown: CanvasNotice, accept: Boolean) {
+    internal fun answerNotice(shown: CanvasNotice, accept: Boolean, action: String? = null) {
         if (notice !== shown) return
         notice = null
         val id = shown.id ?: return
-        val answer = obj("type" to "notice", "id" to id, "accept" to accept)
+        val answer = obj("type" to "notice", "id" to id, "accept" to accept, "action" to (action ?: JSONObject.NULL))
         if (accept) dispatch(answer)
         else post { runCatching { Native.dispatch(handle, answer.toString()) }; publish(true) }
     }
@@ -383,7 +384,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val id = published?.getLong("id")
         if (id == publishedNotice) return
         publishedNotice = id
-        notice = published?.let { CanvasNotice(id, it.getString("text"), it.optJSONObject("action")?.getString("label")) }
+        notice = published?.let { notice ->
+            val actions = notice.optJSONArray("actions")
+            CanvasNotice(id, notice.getString("text"), (0 until (actions?.length() ?: 0)).map { index ->
+                val action = actions!!.getJSONObject(index)
+                CanvasNoticeAction(action.getString("id"), action.getString("label"), action.getBoolean("enabled"), action.optString("reason").takeUnless { action.isNull("reason") })
+            })
+        }
             ?: notice?.takeIf { it.id == null }
     }
     private fun publishHostError(error: String?) {
@@ -447,6 +454,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (tracing) android.os.Trace.beginSection("capy.query." + query.optString("type"))
         try {
             val serialized = Native.query(handle, query.toString())
+            if (Native.renderingPending(handle)) wake()
             if (tracing) android.os.Trace.beginSection("capy.query.parse")
             val value = try { org.json.JSONTokener(serialized).nextValue() }
                 finally { if (tracing) android.os.Trace.endSection() }

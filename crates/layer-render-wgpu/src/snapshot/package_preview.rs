@@ -17,11 +17,6 @@ impl SnapshotGpu {
         check()?;
         let artwork = &capture.artwork;
         let output = artwork.outputs.get(artwork.default_output).ok_or("Missing default output")?;
-        let composition = artwork.compositions.get(artwork.root).ok_or("Missing composition")?;
-        if output.composition != artwork.root || output.frame.is_some_and(|frame| frame != (composition.origin, composition.size))
-            || output.scale[0] != output.scale[1] {
-            return Err("Unsupported preview framing".into());
-        }
         for raster in artwork.paint.iter().map(|(_,_,p)| &p.raster).chain(artwork.coverage.iter().map(|(_,_,p)| &p.raster)) {
             raster.wait_data_cancellable(cancelled)?;
         }

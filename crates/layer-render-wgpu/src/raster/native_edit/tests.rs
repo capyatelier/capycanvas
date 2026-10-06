@@ -189,7 +189,7 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
             for kind in kinds {
                 live.append_raster_operation(id, RasterOperation {
                     placement: Affine::IDENTITY,
-                    coverage: reveal_all(live.document().composition().size, Point::default()),
+                    coverage: reveal_all(live.document().composition().size, [0, 0]),
                     kind: kind.clone(),
                 }).unwrap();
                 flush(&mut live);
@@ -1159,7 +1159,7 @@ fn native_gradient_dither_changes_integer_code_boundaries_without_bias() {
                 exported=Some(bytes);
             }
         } else {
-            live.append_raster_operation(id,RasterOperation {placement:Affine::IDENTITY,coverage:reveal_all([1024,128],Point::default()),kind}).unwrap();flush(&mut live);
+            live.append_raster_operation(id,RasterOperation {placement:Affine::IDENTITY,coverage:reveal_all([1024,128], [0, 0]),kind}).unwrap();flush(&mut live);
             tiles=Some(backing(&paint(live.document()).raster));
         }
         let mut actual=Vec::new();let mut plain=Vec::new();
@@ -1235,7 +1235,7 @@ fn layer_color_modes_convert_originals_constrain_edits_and_survive_history_and_r
             assert_eq!(reopened.backend_mut().readback_srgb_rgba8().unwrap(), live.backend_mut().readback_srgb_rgba8().unwrap());
             let id = target(reopened.document());
             reopened.append_raster_operation(id, layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
-                coverage: reveal_all([256; 2], layer_core::Point::default()), kind: layer_core::RasterOperationKind::Fill { color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
+                coverage: reveal_all([256; 2], [0, 0]), kind: layer_core::RasterOperationKind::Fill { color: [0.1, 0.8, 0.2, 0.8], alpha_locked: false } }).unwrap();
             flush(&mut reopened);
             let filled = reopened.backend_mut().readback_srgb_rgba8().unwrap();
             assert!(filled.chunks_exact(4).all(|p| (p[..3] == [0; 3] || p[..3] == [255; 3]) && p[3] == 255));

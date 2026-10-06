@@ -2,6 +2,8 @@
 //! native renderer, composite captures and pen strokes.
 #![allow(dead_code)]
 use layer_core::*;
+use layer_core::authored::{self, Affine64, ImageInterpolation, ImageObject};
+use layer_render::CanvasRenderer;
 use std::sync::{Arc, atomic::AtomicBool};
 use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
@@ -177,6 +179,18 @@ pub fn mask_edit(doc: &Document, handle: OccurrenceHandle, mut mask: CoverageSna
     Edit::Batch(vec![Edit::Coverage(coverage), occurrence_edit(doc, handle, |o| o.mask = Some(mask.use_))])
 }
 
+/// Adds a mask that stores `selection` as its coverage, as Add Mask does.
+pub fn add_selection_mask(engine: &mut Engine, owner: OccurrenceHandle, selection: Selection, default_coverage: f32) {
+    let document = engine.document();
+    let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), document.scene().local_extent(owner), [0, 0]);
+    mask.source.default_coverage = default_coverage;
+    let edit = mask_edit(document, owner, mask.clone());
+    let target = SourceTarget::Coverage(mask.target);
+    mask.selection = Some(selection);
+    let operation = RasterOperation { placement: Affine::IDENTITY, coverage: mask, kind: RasterOperationKind::Coverage };
+    engine.insert_with_operations(vec![edit], vec![(target, operation)], None).unwrap();
+}
+
 pub fn convert_group(doc: &Document, handle: OccurrenceHandle, children: &[OccurrenceHandle]) -> Edit {
     let stack = RecordChange::insert(&doc.artwork.stacks, Stack { entries: children.to_vec() });
     let mut edits = vec![occurrence_edit(doc, handle, |o| o.content = OccurrenceContent::Stack(stack.handle))];
@@ -220,3 +234,58 @@ pub fn reopen(bytes: &[u8]) -> Document {
     doc.working.target = active.and_then(|h| doc.scene().source_target(h));
     doc
 }
+
+/// A test photo whose color follows its pixel position, with `alpha`.
+pub fn photo(extent: [u32; 2], alpha: impl Fn(u32, u32) -> u8) -> authored::Image {
+    color::source::rgba8_source(extent, |x, y| [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) * 3 % 256) as u8, alpha(x, y)]).into()
+}
+
+/// A new top image layer holding `objects`, made the active layer.
+pub fn images(doc: &mut Document, objects: Vec<ImageObject>) -> OccurrenceHandle {
+    let (layer, edit) = doc.create_object_layer_edit("Images", None, 0).unwrap();
+    doc.apply(edit).unwrap();
+    for (index, object) in objects.into_iter().enumerate() {
+        let (_, edit) = doc.add_image_object_edit(layer, object, index).unwrap();
+        doc.apply(edit).unwrap();
+    }
+    doc.working.occurrence = Some(layer);
+    doc.working.target = None;
+    layer
+}
+
+/// `image` placed by `affine`, Nearest or Linear.
+pub fn placed(image: &authored::Image, affine: [f64; 6], nearest: bool) -> ImageObject {
+    let mut object = ImageObject::new(image.clone(), "Photo");
+    object.affine = Affine64(affine);
+    object.interpolation = if nearest { ImageInterpolation::Nearest } else { ImageInterpolation::Linear };
+    object
+}
+
+/// Pixels the capture worker evaluates for `capture`.
+pub fn captured(engine: &mut Engine, capture: ImageCapture) -> Option<(authored::Image, [i64; 2])> {
+    assert!(engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::Image(capture)).unwrap());
+    let result = loop {
+        if let Some(result) = engine.backend_mut().take_snapshot() { break result.unwrap(); }
+        std::thread::yield_now();
+    };
+    let layer_render::SnapshotResult::Image(image) = result else { panic!("captured image") };
+    image.map(|(samples, origin)| (authored::Image::new(samples), origin))
+}
+
+/// A bake that reads image objects publishes captured pixels; others bake in
+/// a frame.
+pub fn bake(engine: &mut Engine, plan: MergePlan) -> OccurrenceHandle {
+    let result = plan.result;
+    let extent = plan.edits.iter().find_map(|edit| match edit {
+        Edit::Paint(change) if SourceTarget::Paint(change.handle) == plan.target => change.value.as_ref().map(|paint| paint.domain), _ => None,
+    }).unwrap();
+    match plan.image_capture(extent, None) {
+        Some(capture) => {
+            let image = captured(engine, capture);
+            engine.insert_with_operations(plan.with_image(image).unwrap(), Vec::new(), None).unwrap();
+        }
+        None => engine.insert_with_operations(plan.edits, vec![(plan.target, plan.operation)], None).unwrap(),
+    }
+    result
+}
+

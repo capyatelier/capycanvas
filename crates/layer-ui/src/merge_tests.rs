@@ -119,16 +119,16 @@ mod merge_checks {
         invoke(&mut s, CommandId::FlattenImage);
         let notice = s.state.notice.clone().expect("a confirmation");
         assert_eq!(notice.text, "Flattening discards 1 hidden layer");
-        assert_eq!(notice.action.unwrap().label, "Flatten Image");
+        assert_eq!(notice.actions[0].label, "Flatten Image");
         s.set_localization(crate::Localizer::shared(crate::UiLanguage::German));
         let german = s.state.notice.clone().unwrap();
         let mut args = crate::FluentArgs::new(); args.set("count", 1);
         assert_eq!(german.id, notice.id);
         assert_eq!(german.text, s.localization().format(crate::MessageId::COMMANDS_FLATTEN_DISCARDS_HIDDEN_LAYERS, &args));
         assert_ne!(german.text, notice.text, "the notice follows the selected language");
-        assert_eq!(german.action.unwrap().label, CommandId::FlattenImage.localized_label(s.localization()).as_ref());
+        assert_eq!(german.actions[0].label, CommandId::FlattenImage.localized_label(s.localization()).as_ref());
         assert_eq!(s.engine.document().scene().order().len(), 3, "nothing changes before it is accepted");
-        s.dispatch(UiAction::Notice { id: notice.id, accept: true }).unwrap();
+        s.dispatch(UiAction::Notice { id: notice.id, accept: true, action: Some(NoticeActionId::Flatten) }).unwrap();
         assert_eq!(named(&s).len(), 1);
         assert!(s.engine.document().scene().occurrence(upper).is_none(), "the hidden layer is discarded");
     }

@@ -165,7 +165,7 @@ fn limited(source:ImmutableBacking,value:Value,preview:Option<Preview>,reason:St
         let mut wanted=ids.iter().take(ManifestLimits::default().graph.objects).filter_map(|id|resources::reference_id(id).ok()).collect::<std::collections::BTreeSet<_>>();
         for record in records {
             let Some(id)=record["id"].as_str().and_then(|id|id.parse().ok()) else {continue};
-            if record["type"]=="capy.output/1" && wanted.remove(&id) {
+            if record["type"]=="capy.output/2" && wanted.remove(&id) {
                 outputs.push(OutputInfo {id,name:record["data"]["name"].as_str().unwrap_or("").into()});
                 if resources::reference_id(&value["default_output"]).ok()==Some(id)
                     && preview.as_ref().is_some_and(|p|record["data"]["representation"]==json!({"member":"preview.png","size":p.size(),"color":"srgb"})) {matched=preview.clone();}

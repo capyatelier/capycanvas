@@ -432,7 +432,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc=self.engine.document();
         let Some(id)=self.selection_masks.artwork().or(doc.working.occurrence) else {return Vec::new();};
         let Some(layer)=doc.scene().occurrence(id) else {return Vec::new();};let mut items=Vec::new();
-        if layer.kind()==LayerKind::Paint {items.push(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_OPACITY).as_ref(),vec![self.coverage_menu_items(occurrence_token(id),false)]));}
+        if matches!(layer.kind(),LayerKind::Paint|LayerKind::Object) {items.push(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_OPACITY).as_ref(),vec![self.coverage_menu_items(occurrence_token(id),false)]));}
         if layer.mask.is_some() {items.push(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_MASK).as_ref(),vec![self.coverage_menu_items(occurrence_token(id),true)]));}
         items
     }
@@ -700,13 +700,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if group.kind() != LayerKind::Group || doc.is_locked(id) {
                         return Err("Choose an unlocked group".into());
                     }
-                    selection = selection
-                        .transformed(
-                            group.placement.as_affine().map(|map|map.then(layer_core::Affine::translation(doc.layer_offset(id))))
-                                .and_then(layer_core::Affine::inverse)
-                                .ok_or("Invalid group placement")?,
-                        )
-                        .map_err(error)?;
+                    selection = selection.translated(layer_core::offsets::point(doc.layer_offset(id).map(|v| -v)));
                 }
                 let doc=self.engine.document();
                 let saved=RecordChange::insert(&doc.artwork.selections,SavedSelection {selection});
@@ -752,13 +746,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             SelectionAction::LoadCoverage { id, mask, mode } => {
                 let doc = self.engine.document();
                 let layer = doc.scene().occurrence(occurrence_handle(id)?).ok_or("Unknown layer")?;
-                let target = if mask {
-                    SourceTarget::Coverage(layer.mask.as_ref().ok_or("This layer has no mask")?.source)
+                let source = if mask {
+                    layer_render::RegionSource::Coverage(SourceTarget::Coverage(layer.mask.as_ref().ok_or("This layer has no mask")?.source))
                 } else {
-                    if layer.kind() != LayerKind::Paint {
-                        return Err("Choose a drawable layer with content alpha".into());
+                    match layer.kind() {
+                        LayerKind::Paint => layer_render::RegionSource::Coverage(doc.scene().source_target(occurrence_handle(id)?).ok_or("Missing paint source")?),
+                        LayerKind::Object => layer_render::RegionSource::ObjectCoverage(occurrence_handle(id)?),
+                        LayerKind::Group | LayerKind::Effect | LayerKind::Selection => return Err("Choose a drawable layer with content alpha".into()),
                     }
-                    doc.scene().source_target(occurrence_handle(id)?).ok_or("Missing paint source")?
                 };
                 self.return_to_artwork()?;
                 let options = layer_render::SelectionRefinement {
@@ -775,7 +770,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     layer_render::RegionRequest {
                         enclosure: None, request_id: 0,
                         contiguous: false,
-                        source: layer_render::RegionSource::Coverage(target),
+                        source,
                         position: [0, 0],
                         tolerance: 0.,
                         refinement: Default::default(),

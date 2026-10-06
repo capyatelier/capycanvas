@@ -81,9 +81,9 @@ impl ChangedCells {
         let allowed=!packet.reset_layers && !packet.composite_all && packet.restore_rasters.is_empty()
             && scene::same_metadata(r,packet);
         let wanted:BTreeSet<_>=r.paint_layers.iter().filter(|l|allowed && cache.native_preview_input(packet,l.id)
-            && packet.scene.target_geometry(l.id).is_identity()).flat_map(|l|l.pages.iter().map(|p|(l.id,p.coordinate)))
+            && packet.scene.target_offset(l.id)==[0; 2]).flat_map(|l|l.pages.iter().map(|p|(l.id,p.coordinate)))
             .chain(tiles.iter().zip(packet.dab_batches).filter(|(_,b)|allowed && cache.native_preview_input(packet,b.target)
-                && packet.scene.target_geometry(b.target).is_identity()).flat_map(|(t,b)|t.iter().map(|t|(b.target,t.coordinate))))
+                && packet.scene.target_offset(b.target)==[0; 2]).flat_map(|(t,b)|t.iter().map(|t|(b.target,t.coordinate))))
             .chain(r.preview_layer_id.into_iter().filter(|id|!packet.commit_rasters && allowed && r.preview_contribution && cache.native_preview_input(packet,*id))
                 .flat_map(|id|r.preview_pages.iter().filter(|p|r.preview_contact_tiles.as_ref().is_none_or(|s|s.contains(&p.coordinate)))
                     .map(move |p|(id,p.coordinate)))).collect();

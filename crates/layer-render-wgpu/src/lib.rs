@@ -118,7 +118,6 @@ mod tonal;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
-#[cfg(not(target_arch = "wasm32"))]
 mod source_thumbnails;
 pub use present::{OverviewPlacement, ViewportPresenter};
 pub use present_screen::ScreenCheck;
@@ -132,6 +131,9 @@ const INITIAL_TARGET_RECORDS: usize = 257;
 const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 const WHITE_MASK_ASSET: &str = "builtin:brush-tip/solid-white-v1";
 const PAGE_SIZE: u32 = 256;
+const MOVING_IMAGE_IDLE_STEPS: usize = 32;
+const MOVING_IMAGE_INPUT_STEPS: usize = 2;
+const MOVING_IMAGE_PREFETCH: usize = 18;
 // Queries consume each group before its source slots can be reused. This also
 // fits the portable sixteen sampled-texture bindings per shader stage.
 const SOURCE_SLOTS: usize = 16;
@@ -253,6 +255,9 @@ pub struct GpuRasterMetrics {
     pub dabs: u64,
     pub raster_candidate_pixels: u64,
     pub composited_pixels: u64,
+    /// Texels that display level reductions read: four for each filtered
+    /// sample and one for each load.
+    pub display_reduction_reads: u64,
     pub frame_composited_pages: Vec<(u32, [u32; 2])>,
     pub paint_pages: u64,
     pub preview_pages: u64,
@@ -303,6 +308,8 @@ pub struct GpuRasterMetrics {
     /// paint, the full composite and driver allocations.
     pub image_window_submissions: u64,
     pub image_window_peak_bytes: u64,
+    /// Awaited exact object sampling submissions of snapshot captures.
+    pub object_drain_submissions: u64,
     pub native_effect_reuse_candidate_cells:u64,
     pub native_effect_forced_cells:u64,
 }
@@ -977,6 +984,7 @@ pub struct WgpuRasterizer {
     target_capacity: usize,
     target_upload: Vec<u8>,
     uploads: Uploads,
+    restore_uploads: Uploads,
     snapshot_job: Option<snapshot::SnapshotJob>,
     #[cfg(target_arch = "wasm32")]
     snapshot_worker_callback: Option<snapshot::BrowserSnapshot>,
@@ -1194,6 +1202,7 @@ impl WgpuRasterizer {
         );
 
         let uploads = Uploads::new(&device, 64 * 1024);
+        let restore_uploads = Uploads::new(&device, 64 * 1024);
         let layer_masks =
             layer_masks::MaskRenderer::new(&device, &style_layout, &target_layout, &texture_layout);
         let telemetry = telemetry::Telemetry::new(&device, &queue);
@@ -1333,6 +1342,7 @@ impl WgpuRasterizer {
             target_capacity,
             target_upload: Vec::with_capacity(target_stride as usize * target_capacity),
             uploads,
+            restore_uploads,
             snapshot_job: None,
             #[cfg(target_arch = "wasm32")]
             snapshot_worker_callback: None,
@@ -1597,9 +1607,6 @@ impl WgpuRasterizer {
         batches: &[DabBatch],
     ) -> Result<(), GpuRasterError> {
         for batch in batches {
-            if batch.style.brush_to_layer.inverse().is_none() {
-                return Err(GpuRasterError::InvalidTransform("Invalid brush target transform"));
-            }
             if batch.style.execution == BrushExecution::Liquify
                 && batch.style.deform.mode == LiquifyMode::Reconstruct
             {
@@ -1631,7 +1638,8 @@ impl WgpuRasterizer {
                 })
             })
         }) { self.artwork_frame = None; }
-        self.retain_native_backing(scene, resized);
+        let retained = source_access::retained_targets(scene);
+        self.retain_native_backing(&retained, resized);
         if resized {
             self.selection_clip.reset();
             self.document_extent = extent;
@@ -1653,11 +1661,7 @@ impl WgpuRasterizer {
             self.preview_requires_base = false;
             self.preview_contribution = false;
         }
-        self.update_target_geometry(scene, resized)?;
-        self.thumbnails.source_placements = scene.order().iter().filter_map(|&h| {
-            let source = scene.paint_source(h)?; source.base.as_ref()?;
-            Some((scene.source_target(h)?, scene.occurrence(h)?.placement.clone()))
-        }).collect();
+        self.update_target_geometry(&retained.iter().map(|(target, scene)| (*target, scene.target_extent(*target))).collect(), resized)?;
         self.tiled_sources.retain(|target, _| scene.paint_base(*target).is_some() && source_access::placed_targets(scene).any(|t|t==*target));
         for &handle in scene.order() {
             let Some(source) = scene.paint_source(handle).and_then(|p| p.base.as_ref()) else { continue; };
@@ -1666,8 +1670,8 @@ impl WgpuRasterizer {
                 self.tiled_sources.insert(target, source.clone());
             }
         }
-        self.paint_layers.retain(|stored| source_access::placed_targets(scene).any(|target| target == stored.id && matches!(target, SourceTarget::Paint(_))));
-        for target in source_access::placed_targets(scene).filter(|target| matches!(target, SourceTarget::Paint(_))) {
+        self.paint_layers.retain(|stored| retained.contains_key(&stored.id) && matches!(stored.id, SourceTarget::Paint(_)));
+        for &target in retained.keys().filter(|target| matches!(target, SourceTarget::Paint(_))) {
             if self.paint_layers.iter().all(|stored| stored.id != target) {
                 self.paint_layers.push(PaintLayer { id: target, pages: Vec::with_capacity(8), coverage_pages: Vec::with_capacity(4),
                     watercolor_wetness_pages: Vec::with_capacity(4), watercolor: None });
@@ -2192,7 +2196,10 @@ impl WgpuRasterizer {
         batch_tiles: &mut [Vec<BrushTile>],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        let records = packet.dab_batches.len() + packet.scene.order().len();
+        let removed_members: Vec<_> = source_access::pending_bakes(packet.scene)
+            .flat_map(|(snapshot, scope, _)| snapshot.with_scope(scope).order().iter().copied().filter(|h| packet.scene.occurrence(*h).is_none()).map(move |h| (h, snapshot)))
+            .collect();
+        let records = packet.dab_batches.len() + packet.scene.order().len() + removed_members.len();
         self.dab_upload.clear();
         self.dab_upload.extend(packet.dabs.iter().copied().map(DabGpu::from));
         for batch in packet.dab_batches {
@@ -2236,12 +2243,13 @@ impl WgpuRasterizer {
                 .copy_from_slice(style_bytes(&record));
         }
         self.layer_style_records.clear();
-        for (index, &handle) in packet.scene.order().iter().enumerate() {
+        let occurrences = packet.scene.order().iter().map(|&handle| (handle, packet.scene)).chain(removed_members);
+        for (index, (handle, scene)) in occurrences.enumerate() {
             let record_index = packet.dab_batches.len() + index;
             self.layer_style_records.insert(handle, record_index as u32);
-            let watercolor = packet.scene.source_target(handle).and_then(|target| self.watercolor_style(target, packet.dab_batches));
+            let watercolor = scene.source_target(handle).and_then(|target| self.watercolor_style(target, packet.dab_batches));
             let mut record = StyleGpu::layer(packet.document_extent, watercolor);
-            record.color_mode = layer_color_parameters(packet.scene.source_target(handle).map_or(Default::default(), |target| packet.scene.color_mode(target)), self.document_color());
+            record.color_mode = layer_color_parameters(scene.source_target(handle).map_or(Default::default(), |target| scene.color_mode(target)), self.document_color());
             let offset = record_index * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
@@ -3123,6 +3131,21 @@ impl WgpuRasterizer {
         let tile = scene::Scene::decode_prepared(self, encoder, &prepared.source, prepared.coordinate, pixels)?;
         Ok(Some(PreparedImageUpload {id:prepared.id, source:prepared.source, coordinate:prepared.coordinate, tile}))
     }
+    pub(crate) fn drain_image_decodes(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        self.drain_image_decode(encoder)?;
+        while self.moving_decode.as_ref().is_some_and(|(_, queue)| queue.ready()) { self.drain_image_decode(encoder)?; }
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn await_image_decode(&self) -> Result<(), GpuRasterError> {
+        while self.image_decode_waiting() {
+            if self.snapshot_cancelled.as_ref().is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
+            }
+            std::thread::sleep(std::time::Duration::from_micros(250));
+        }
+        Ok(())
+    }
     #[cfg(target_arch = "wasm32")]
     pub(crate) async fn await_image_decode(&self) -> Result<(), GpuRasterError> {
         std::future::poll_fn(|cx| {
@@ -3222,36 +3245,40 @@ impl WgpuRasterizer {
         self.prepare_moving_projection(packet)?;
         let mut images = std::mem::take(&mut self.moving_images);
         let completed = images.completed_images;
+        let budget = if packet.dab_batches.is_empty() && self.moving_layer.is_none() { MOVING_IMAGE_IDLE_STEPS } else { MOVING_IMAGE_INPUT_STEPS };
         let result = (|| {
-            let budget = self.source_tiles.borrow().mip_budget();
-            let plan = images.plan(self, &self.moving_projection.as_ref().unwrap().requests, budget, encoder)?;
+            let budget_bytes = self.source_tiles.borrow().mip_budget();
+            let plan = images.plan(self, &self.moving_projection.as_ref().unwrap().requests, budget_bytes, encoder)?;
             self.moving_images_waiting = plan.waiting;
             if !self.source_tiles.borrow_mut().reserve_mips(plan.bytes, encoder)? {
                 self.moving_images_waiting = true;
                 return Ok(false);
             }
             images.allocate(self, plan);
-            let mut built = false;
             if self.moving_decode.as_ref().is_some_and(|(space,_)| *space != self.device.working_space()) {
                 self.moving_decode = None;
                 #[cfg(target_arch = "wasm32")]
                 { self.browser_image_result = Default::default(); self.browser_image_wake = Default::default(); }
             }
-            if let Some(prepared) = self.drain_image_decode(encoder)? {
+            let mut steps = 0;
+            while steps < budget && let Some(prepared) = self.drain_image_decode(encoder)? {
                 if images.accepts_tile(prepared.id, &prepared.source, prepared.coordinate) {
                     images.write_tile(self, encoder, prepared.id, &prepared.source, prepared.coordinate, &prepared.tile.texture)?;
                 }
-                built = true;
+                steps += 1;
             }
-            if !built && let Some((id, source, coordinate)) = images.next_build() {
-                let cached = self.source_tiles.borrow().prepared_view(&source, coordinate).map(|view| view.texture().clone());
-                if let Some(texture) = cached {
+            while steps < budget {
+                if let Some((id, source, coordinate)) = images.next_build() {
+                    let cached = self.source_tiles.borrow().prepared_view(&source, coordinate).map(|view| view.texture().clone());
+                    let Some(texture) = cached else {
+                        for (id, source, coordinate) in images.upcoming(MOVING_IMAGE_PREFETCH) {
+                            if self.source_tiles.borrow().prepared_view(&source, coordinate).is_none() && !self.request_image_decode(id, source, coordinate)? { break; }
+                        }
+                        break;
+                    };
                     images.write_tile(self, encoder, id, &source, coordinate, &texture)?;
-                } else if self.metrics.submissions.is_multiple_of(2) {
-                    self.request_image_decode(id, source, coordinate)?;
-                }
-            } else if !built {
-                images.advance_coarse(self, encoder);
+                } else if !images.advance_coarse(self, encoder) { break; }
+                steps += 1;
             }
             Ok(images.completed_images != completed)
         })();
@@ -3370,6 +3397,9 @@ impl CanvasRenderer for WgpuRasterizer {
     fn take_retouch_miss(&mut self) -> Option<StrokeId> {
         self.retouch.as_mut()?.take_miss()
     }
+    fn retouch_waiting(&self) -> Option<StrokeId> {
+        self.retouch.as_ref()?.waiting()
+    }
     fn retire_stroke_sources(&mut self) {
         if let Some(retouch) = &mut self.retouch {
             retouch.retire_stroke();
@@ -3444,7 +3474,6 @@ impl CanvasRenderer for WgpuRasterizer {
             + m.composite_storage_bytes
             + self.thumbnails.storage_bytes()
             + self.portable_blend.byte_len()
-            + self.scene_pipelines.objects.transient_bytes()
             + 160 + self.dry_records.storage_bytes()
             + self.material_gather.as_ref().map_or(0, material_sources::Gather::storage_bytes)
             + self.device.effect_resources.lock().unwrap().bytes()
@@ -3689,7 +3718,7 @@ impl WgpuRasterizer {
         let object_damage = (!analysis_dirty && !packet.reset_layers && packet.restore_rasters.is_empty()
             && packet.dabs.is_empty() && packet.dab_batches.is_empty()).then(|| {
             let old = self.artwork_frame.as_ref()?;
-            if old.blend_space != packet.blend_space || old.time != packet.time_seconds { return None; }
+            if !old.same_evaluation(packet) { return None; }
             scene::Scene::object_edit_damage(old.scene.view().with_scope(&old.scope), packet.scene, packet.document_extent)
         }).flatten();
         if let Some(damage) = &object_damage { self.document_damage.extend(damage.regions.iter().copied()); }
@@ -3944,7 +3973,7 @@ impl WgpuRasterizer {
         let preview_level = self.scale_display.as_ref().filter(|_| new_preview_from_persistent
             && packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview && b.dab_count != 0)
                 .all(|b| dry_material::display_preview_eligible(&b.style)))
-            .map_or(0, |cache| new_preview_layer.map_or(0, |id| cache.preview_level(packet, id,preview_contribution)));
+            .map_or(0, |cache| new_preview_layer.map_or(0, |id| cache.preview_level(self, packet, id, preview_contribution)));
         preview_contribution &= preview_level>0;
         if !preview_contribution && new_preview_from_persistent {new_preview_requires_base=true;}
         if packet.commit_rasters {
@@ -4131,7 +4160,7 @@ impl WgpuRasterizer {
                 }
                 let bounds = operation
                     .bounds(self.target_extent(batch.target));
-                let offset = packet.scene.target_offset(batch.target);
+                let offset = layer_core::offsets::point(packet.scene.target_offset(batch.target));
                 dirty = dirty.union(pixel_rect(
                     layer_core::Rect {
                         min: layer_core::Point {
@@ -4492,7 +4521,7 @@ impl WgpuRasterizer {
         }
         for &(layer, bounds) in &self.transform_damage {
             let bounds = pixel_rect(
-                layer_core::target_geometry(packet.scene, layer).forward_bounds(bounds.to_rect()),
+                bounds.to_rect().translated(layer_core::offsets::point(packet.scene.target_offset(layer))),
                 packet.document_extent,
             );
             if let Some(tiles) = &mut composite_tiles {
@@ -4526,7 +4555,7 @@ impl WgpuRasterizer {
             // scene tiles after applying the target's document translation.
             for batch in original_batches {
                 if packet.scene.source_owner(batch.target).is_some() {
-                    let offset = packet.scene.target_offset(batch.target);
+                    let offset = layer_core::offsets::point(packet.scene.target_offset(batch.target));
                     let mut rect = batch.damage;
                     rect.min.x += offset.x;
                     rect.max.x += offset.x;
@@ -4709,10 +4738,6 @@ struct StyleGpu {
     contact_b: [f32; 4],
     contact_c: [f32; 4],
     bristles: [f32; 4],
-    brush_to_layer_linear: [f32; 4],
-    brush_to_layer_offset: [f32; 4],
-    layer_to_brush_linear: [f32; 4],
-    layer_to_brush_offset: [f32; 4],
     bristle_streak: [f32; 4],
     color_mode: [f32; 4],
 }
@@ -4770,10 +4795,6 @@ impl StyleGpu {
             bristles: [0.0; 4],
             bristle_streak: [0.0; 4],
             color_mode: [0.0; 4],
-            brush_to_layer_linear: [1., 0., 0., 1.],
-            brush_to_layer_offset: [0.; 4],
-            layer_to_brush_linear: [1., 0., 0., 1.],
-            layer_to_brush_offset: [0.; 4],
         }
     }
 
@@ -4803,12 +4824,6 @@ impl StyleGpu {
             .map(|grain| (grain.rotation_radians.cos(), grain.rotation_radians.sin()))
             .unwrap_or((1.0, 0.0));
         let mut result = Self::plain(extent, [0.0; 4], 1.0);
-        let forward = style.brush_to_layer.0;
-        let inverse = style.brush_to_layer.inverse().expect("validated brush geometry").0;
-        result.brush_to_layer_linear.copy_from_slice(&forward[..4]);
-        result.brush_to_layer_offset[..2].copy_from_slice(&forward[4..]);
-        result.layer_to_brush_linear.copy_from_slice(&inverse[..4]);
-        result.layer_to_brush_offset[..2].copy_from_slice(&inverse[4..]);
         result.grain = [
             grain.map_or(1.0, |grain| grain.scale),
             grain.map_or(0.0, |grain| grain.depth),
@@ -4919,7 +4934,7 @@ fn liquify_mode_code(mode: LiquifyMode) -> f32 {
 }
 
 fn batch_pixel_rect(batch: &DabBatch, extent: [u32; 2]) -> PixelRect {
-    let damage = pixel_rect(batch.style.brush_to_layer.bounds(batch.damage), extent);
+    let damage = pixel_rect(batch.damage, extent);
     let transport_radius = batch
         .style
         .transport
@@ -5266,7 +5281,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                     &working_color::shader(&device),
                     include_str!("advanced_brush.wgsl"),
-                    include_str!("brush_geometry.wgsl"),
                     include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
                     include_str!("contact.wgsl"),
                     include_str!("selection_clip.wgsl"),
@@ -6090,7 +6104,6 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
 
     pub(crate) fn test_style(execution: BrushExecution) -> DabStyle {
         DabStyle {
-            brush_to_layer: layer_core::Affine::IDENTITY,
             alpha_locked: false,
             selection: None,
             tip: BrushTip::AnalyticEllipse,
@@ -6202,7 +6215,7 @@ use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
     fn gpu_records_match_shader_layouts() {
         assert_eq!(mem::size_of::<Dab>(), 128);
         assert_eq!(mem::size_of::<DabGpu>(), 160);
-        assert_eq!(mem::size_of::<StyleGpu>(), 352);
+        assert_eq!(mem::size_of::<StyleGpu>(), 288);
         assert_eq!(mem::size_of::<TargetGpu>(), 32);
     }
 

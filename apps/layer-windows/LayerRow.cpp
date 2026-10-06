@@ -55,11 +55,11 @@ void ThumbnailEdge::update(std::shared_ptr<WorkspaceData> const& data,bool editi
     move(L"Opacity",fromOpacity,toOpacity);
     animation.Begin();
 }
-J LayerRow::model()const{return findId(array(data->state,L"layers"),id);}
+J LayerRow::model()const{return panelRow(data->state,id);}
 bool LayerRow::current()const{return epoch==epochOf(data)&&model().Size()!=0;}
 bool LayerRow::clickAllowed()const{auto view=owner.lock();return view&&(!view->pickup||!view->pickup->SuppressClick());}
 bool LayerRow::contextAllowed()const{auto view=owner.lock();return view&&(!view->pickup||!view->pickup->SuppressContext());}
-void LayerRow::action(J operation){if(!data->updating&&current())data->dispatchDocument(layerAction(operation),epoch);}
+void LayerRow::action(J operation){if(!data->updating&&current())data->dispatchDocument(image?imageAction(operation):layerAction(operation),epoch);}
 void LayerRow::context(bool isMask,UIElement const& anchor){if(current())if(auto view=owner.lock())view->context(id,isMask,anchor);}
 void LayerRow::editFill(){
     auto fill=object(model(),L"fill_color");
@@ -77,7 +77,61 @@ bool LayerRow::loadThumbnail(bool isMask){
         {L"shift",B((GetKeyState(VK_SHIFT)&0x8000)!=0)},{L"alt",B((GetKeyState(VK_MENU)&0x8000)!=0)}})}}),epoch);
     return true;
 }
+void LayerRow::initImage(){
+    auto weak=weak_from_this();root.Child(body);
+    root.MinHeight(40);root.Padding({6,2,6,2});root.BorderThickness({0});body.ColumnSpacing(0);body.VerticalAlignment(VerticalAlignment::Center);
+    AutomationProperties::SetAutomationId(root,L"image-row-"+to_hstring(uint64_t(id)));
+    for(auto width:{26.,26.,0.,5.,32.,0.,0.,0.,-1.,0.,0.,16.}){
+        ColumnDefinition column;column.Width({width<0?1:width,width<0?GridUnitType::Star:GridUnitType::Pixel});body.ColumnDefinitions().Append(column);
+    }
+    auto select=[weak]{if(auto self=weak.lock();self&&self->clickAllowed())self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},
+        {L"extend",B((GetKeyState(VK_SHIFT)&0x8000)!=0||(GetKeyState(VK_CONTROL)&0x8000)!=0)}}));};
+    eye=button(data,data->caption(L"layers",L"hide_image"),[weak]{if(auto self=weak.lock();self&&self->clickAllowed()){
+        auto row=self->model();if(flag(row,L"editable"))self->action(O({{L"op",S(L"visibility")},{L"id",N(self->id)},{L"visible",B(!flag(row,L"visible"))}}));
+    }});
+    eye.Width(24);eye.MinHeight(24);eye.VerticalAlignment(VerticalAlignment::Stretch);eye.HorizontalAlignment(HorizontalAlignment::Left);body.Children().Append(eye);
+    Grid::SetColumn(indent,2);body.Children().Append(indent);
+    content=button(data,L"",[]{});content.Width(30);content.Height(30);content.IsHitTestVisible(false);content.IsTabStop(false);
+    content.HorizontalAlignment(HorizontalAlignment::Left);content.UseSystemFocusVisuals(false);
+    content.CornerRadius({15*CornerFit,15*CornerFit,15*CornerFit,15*CornerFit});
+    contentThumbnail.Width(28);contentThumbnail.Height(28);contentThumbnail.IsHitTestVisible(false);contentThumbnail.IsTabStop(false);
+    contentThumbnail.HorizontalAlignment(HorizontalAlignment::Center);contentThumbnail.VerticalAlignment(VerticalAlignment::Center);
+    {Shapes::Path shape;shape.Width(28);shape.Height(28);shape.Data(squircleRectangle(28,28,{14,14,14,14}));
+        contentPreview.Stretch(Stretch::Fill);shape.Fill(contentPreview);contentThumbnail.Content(shape);}
+    contentTile.Width(30);contentTile.Height(30);contentSymbol.IsHitTestVisible(false);contentSymbol.Child(icon(L"image",data->theme(),16));
+    contentSymbol.HorizontalAlignment(HorizontalAlignment::Center);contentSymbol.VerticalAlignment(VerticalAlignment::Center);
+    contentTile.Children().Append(contentSymbol);contentTile.Children().Append(contentThumbnail);content.Content(contentTile);
+    Grid::SetColumn(content,4);body.Children().Append(content);
+    name=button(data,L"",select);
+    name.MinHeight(36);name.HorizontalAlignment(HorizontalAlignment::Stretch);name.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+    name.FontWeight(Windows::UI::Text::FontWeights::Normal());name.Padding({0});name.Margin({6,0,2,0});
+    title=label(data,L"");title.TextTrimming(TextTrimming::CharacterEllipsis);title.LineHeight(20);name.Content(title);
+    Grid::SetColumn(name,8);body.Children().Append(name);
+    name.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){
+        if(e.Key()!=Windows::System::VirtualKey::Application&&!(e.Key()==Windows::System::VirtualKey::F10&&(GetKeyState(VK_SHIFT)&0x8000)))return;
+        if(auto self=weak.lock()){self->context(false,self->name);e.Handled(true);}
+    });
+    grip=button(data,L"",[]{});grip.Width(16);grip.Height(16);grip.HorizontalAlignment(HorizontalAlignment::Left);grip.Opacity(.6);
+    grip.Content(icon(L"grip",data->theme()));copyName(data,grip,data->copyCaption(L"layers",L"move_image"));
+    Grid::SetColumn(grip,11);body.Children().Append(grip);
+    for(auto item:{std::pair{eye,L"visibility"},std::pair{name,L"name"},std::pair{grip,L"drag"}})
+        AutomationProperties::SetAutomationId(item.first,L"image-"+to_hstring(uint64_t(id))+L"-"+item.second);
+    AutomationProperties::SetAutomationId(contentThumbnail,L"image-"+to_hstring(uint64_t(id))+L"-thumbnail");
+    copyName(data,contentThumbnail,data->copyCaption(L"layers",L"preview"));
+    root.Tapped([weak,select](auto&&,TappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->clickAllowed()){
+        for(auto node=e.OriginalSource().try_as<DependencyObject>();node&&node!=self->root;node=VisualTreeHelper::GetParent(node))
+            if(node.try_as<Controls::Primitives::ButtonBase>())return;
+        select();e.Handled(true);
+    }});
+    root.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){
+        if(auto self=weak.lock();self&&self->contextAllowed())self->context(false,self->root);
+        e.Handled(true);
+    });
+    dropMark.IsHitTestVisible(false);dropMark.BorderBrush(accent(data));dropMark.Margin({-6,-2,-6,-2});
+    Grid::SetColumnSpan(dropMark,12);body.Children().Append(dropMark);
+}
 void LayerRow::init(){
+    if(image){initImage();return;}
     auto weak=weak_from_this();root.Child(swipeFrame);
     swipeDelete=button(data,data->copyCommon(L"delete"),[weak]{if(auto self=weak.lock()){self->swipe(0);self->action(O({{L"op",S(L"delete")},{L"id",N(self->id)}}));}});
     swipeDelete.HorizontalAlignment(HorizontalAlignment::Right);swipeDelete.VerticalAlignment(VerticalAlignment::Stretch);
@@ -107,7 +161,7 @@ void LayerRow::init(){
     }});
     // Include the two-DIP gaps only beside visible flex items. Empty mask and
     // indentation columns must not add their own gaps.
-    for(auto width:{26.,26.,0.,5.,32.,0.,12.,32.,-1.,14.,16.}){
+    for(auto width:{26.,26.,0.,5.,32.,0.,12.,32.,-1.,0.,14.,16.}){
         ColumnDefinition column;column.Width({width<0?1:width,width<0?GridUnitType::Star:GridUnitType::Pixel});
         body.ColumnDefinitions().Append(column);
     }
@@ -115,7 +169,7 @@ void LayerRow::init(){
         auto control=button(data,title,[weak,action=std::move(action)]{
             auto self=weak.lock();auto view=self?self->owner.lock():nullptr;
             if(view&&(!view->pickup||!view->pickup->SuppressClick()))action();
-        });control.Width(column==4||column==5||column==7?30:column==6?10:column==10?16:24);
+        });control.Width(column==4||column==5||column==7?30:column==6?10:column==11?16:24);
         control.Height(30);control.HorizontalAlignment(HorizontalAlignment::Left);Grid::SetColumn(control,column);body.Children().Append(control);return control;
     };
     eye=pick(data->caption(L"layers",L"visibility"),0,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"visibility")},{L"id",N(self->id)},{L"value",B(!flag(self->model(),L"visible"))}}));});
@@ -194,11 +248,14 @@ void LayerRow::init(){
             auto anchor=sender.template as<Button>();self->context(anchor==self->mask,anchor);e.Handled(true);
         }
     });
-    lockImage.Width(12);lockImage.Height(12);lockImage.HorizontalAlignment(HorizontalAlignment::Left);lockImage.IsHitTestVisible(false);Grid::SetColumn(lockImage,9);body.Children().Append(lockImage);
-    grip=pick(L"",10,[]{});grip.Height(16);grip.Content(icon(L"grip",data->theme()));grip.Opacity(.6);
+    expand=pick(L"",9,[weak]{if(auto self=weak.lock();self&&!self->data->updating&&self->current()){auto layer=self->model();
+        self->data->dispatchDocument(imageAction(O({{L"op",S(L"expand")},{L"layer",N(self->id)},{L"expanded",B(!flag(layer,L"expanded"))}})),self->epoch);}});
+    expand.Visibility(Visibility::Collapsed);
+    lockImage.Width(12);lockImage.Height(12);lockImage.HorizontalAlignment(HorizontalAlignment::Left);lockImage.IsHitTestVisible(false);Grid::SetColumn(lockImage,10);body.Children().Append(lockImage);
+    grip=pick(L"",11,[]{});grip.Height(16);grip.Content(icon(L"grip",data->theme()));grip.Opacity(.6);
     copyName(data,grip,data->copyCaption(L"layers",L"move_layer"));
     for(auto item:{std::pair{eye,L"visibility"},std::pair{check,L"selection"},std::pair{content,L"content"},
-        std::pair{load,L"load"},std::pair{mask,L"mask"},std::pair{link,L"link"},std::pair{name,L"name"},std::pair{grip,L"drag"}})
+        std::pair{load,L"load"},std::pair{mask,L"mask"},std::pair{link,L"link"},std::pair{name,L"name"},std::pair{expand,L"expand"},std::pair{grip,L"drag"}})
         AutomationProperties::SetAutomationId(item.first,L"layer-"+to_hstring(uint64_t(id))+L"-"+item.second);
     AutomationProperties::SetAutomationId(rename,L"layer-"+to_hstring(uint64_t(id))+L"-rename");
     copyName(data,contentThumbnail,data->copyCaption(L"layers",L"preview"));copyName(data,maskThumbnail,data->copyCaption(L"layers",L"mask_preview"));
@@ -218,9 +275,10 @@ void LayerRow::init(){
     });
     mask.RightTapped([weak](auto&&,RightTappedRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->contextAllowed())self->context(true,self->mask);e.Handled(true);});
     dropMark.IsHitTestVisible(false);dropMark.BorderBrush(accent(data));dropMark.Margin({-6,-2,-6,-2});
-    Grid::SetColumnSpan(dropMark,11);body.Children().Append(dropMark);
+    Grid::SetColumnSpan(dropMark,12);body.Children().Append(dropMark);
 }
 void LayerRow::swipe(double offset){
+    if(image){swipeOffset=0;return;}
     swipeOffset=std::clamp(offset,object(model(),L"right_swipe").Size()?-72.:0.,72.);swipeTransform.X(-swipeOffset);
     swipeDelete.Width(std::max(0.,swipeOffset));swipeDelete.Visibility(swipeOffset>0?Visibility::Visible:Visibility::Collapsed);
     if(auto view=owner.lock())view->connections();
@@ -238,8 +296,24 @@ void LayerRow::highlight(int position, bool attachment){
     content.BorderBrush(accent(data));content.BorderThickness(attachment||position==4?Thickness{2,2,2,2}:Thickness{0});
     AutomationProperties::SetHelpText(root,position==3?data->caption(L"layers",L"drop_into"):position==1?data->caption(L"layers",L"drop_above"):position==2?data->caption(L"layers",L"drop_below"):L"");
 }
+void LayerRow::refreshImage(J const& row){
+    root.Background(flag(row,L"selected")?selected(data):clear());root.Opacity(flag(row,L"visible")?1:.6);
+    auto label=str(row,L"label");title.Text(label);AutomationProperties::SetName(name,label);AutomationProperties::SetName(root,label);
+    AutomationProperties::SetItemStatus(name,flag(row,L"selected")?data->caption(L"layers",L"selected"):data->caption(L"layers",L"unselected"));
+    auto icons=data->theme()+(flag(row,L"visible")?L":eye":L":eye-hidden");
+    if(icons!=iconKey){iconKey=icons;eye.Content(icon(flag(row,L"visible")?L"eye":L"eye-hidden",data->theme()));grip.Content(icon(L"grip",data->theme()));
+        contentSymbol.Child(icon(L"image",data->theme(),16));}
+    hstring eyeName=flag(row,L"visible")?data->caption(L"layers",L"hide_image"):data->caption(L"layers",L"show_image");
+    if(AutomationProperties::GetName(eye)!=eyeName){AutomationProperties::SetName(eye,eyeName);CapyUi::tooltip(eye,eyeName);}
+    eye.IsEnabled(flag(row,L"editable"));eye.Opacity(eye.IsEnabled()?1:.36);
+    auto layer=findId(array(data->state,L"layers"),num(row,L"layer"));
+    body.ColumnDefinitions().GetAt(2).Width({std::min(24.,(num(layer,L"depth")+1)*8),GridUnitType::Pixel});
+    bool movable=flag(row,L"editable")&&(flag(row,L"can_raise")||flag(row,L"can_lower"));
+    grip.Visibility(movable?Visibility::Visible:Visibility::Collapsed);grip.IsEnabled(movable);
+}
 void LayerRow::refresh(){
     if(!current())return;auto layer=model();
+    if(image){refreshImage(layer);return;}
     root.Background(flag(layer,L"selected")?selected(data):clear());
     swipeDelete.IsEnabled(flag(layer,L"can_delete"));if((swipeOffset>0&&!flag(layer,L"can_delete"))||(swipeOffset<0&&!object(layer,L"right_swipe").Size())||renaming)swipe(0);
     title.Text(str(layer,L"label"));AutomationProperties::SetName(name,str(layer,L"label"));
@@ -294,8 +368,19 @@ void LayerRow::refresh(){
     lockImage.Opacity(flag(layer,L"locked")||flag(layer,L"alpha_locked")?1:0);
     AutomationProperties::SetName(lockImage,flag(layer,L"locked")?data->caption(L"layers",L"locked"):flag(layer,L"alpha_locked")?data->caption(L"layers",L"alpha_locked"):L"");
     AutomationProperties::SetAccessibilityView(lockImage,flag(layer,L"locked")||flag(layer,L"alpha_locked")?Automation::Peers::AccessibilityView::Content:Automation::Peers::AccessibilityView::Raw);
-    body.ColumnDefinitions().GetAt(9).Width({flag(layer,L"can_drop_below")?14.:12.,GridUnitType::Pixel});
-    body.ColumnDefinitions().GetAt(10).Width({flag(layer,L"can_drop_below")?16.:0.,GridUnitType::Pixel});
+    bool images=num(layer,L"object_count")>0;
+    expand.Visibility(images?Visibility::Visible:Visibility::Collapsed);
+    body.ColumnDefinitions().GetAt(9).Width({images?24.:0.,GridUnitType::Pixel});
+    if(images){
+        auto expandKey=data->theme()+(flag(layer,L"expanded")?L":open":L":closed");
+        if(expandKey!=imageKey){imageKey=expandKey;auto glyph=icon(L"chevron-down",data->theme(),12);glyph.RenderTransformOrigin({.5f,.5f});
+            RotateTransform turn;turn.Angle(flag(layer,L"expanded")?0:-90);glyph.RenderTransform(turn);expand.Content(glyph);}
+        hstring expandName=flag(layer,L"expanded")?data->caption(L"layers",L"collapse_images"):data->caption(L"layers",L"expand_images");
+        if(AutomationProperties::GetName(expand)!=expandName){AutomationProperties::SetName(expand,expandName);CapyUi::tooltip(expand,expandName);}
+        AutomationProperties::SetItemStatus(expand,flag(layer,L"expanded")?data->caption(L"layers",L"expanded"):data->caption(L"layers",L"collapsed"));
+    }
+    body.ColumnDefinitions().GetAt(10).Width({flag(layer,L"can_drop_below")?14.:12.,GridUnitType::Pixel});
+    body.ColumnDefinitions().GetAt(11).Width({flag(layer,L"can_drop_below")?16.:0.,GridUnitType::Pixel});
     grip.Visibility(flag(layer,L"can_drop_below")?Visibility::Visible:Visibility::Collapsed);
     grip.Opacity(flag(layer,L"can_drop_below")?.6:0);grip.IsEnabled(flag(layer,L"can_drop_below")&&!flag(layer,L"locked"));
     hstring details=str(layer,L"description");
@@ -318,12 +403,20 @@ void LayerRow::focusRename(){
 }
 void LayerRow::thumbnails(std::vector<LayerThumbnail>& visible){
     if(!current())return;auto layer=model();
+    if(image){
+        auto key=to_hstring(uint64_t(id));LayerThumbnail item{key,key,to_hstring(uint64_t(num(layer,L"thumbnail_revision"))),false};visible.push_back(item);
+        auto source=LayerThumbnailSource(data->thumbnails,epoch,item);
+        if(contentPreview.ImageSource()!=source)contentPreview.ImageSource(source);
+        contentSymbol.Visibility(source?Visibility::Collapsed:Visibility::Visible);
+        AutomationProperties::SetItemStatus(contentThumbnail,source?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));
+        return;
+    }
     for(bool isMask:{false,true}){
         if(isMask?!flag(layer,L"has_mask"):!flag(layer,L"has_thumbnail"))continue;
         auto item=thumbnail(layer,isMask);visible.push_back(item);
-        auto source=LayerThumbnailSource(data->thumbnails,epoch,item);auto image=isMask?maskThumbnail:contentThumbnail;
+        auto source=LayerThumbnailSource(data->thumbnails,epoch,item);auto shown=isMask?maskThumbnail:contentThumbnail;
         auto preview=isMask?maskPreview:contentPreview;
-        if(preview.ImageSource()!=source)preview.ImageSource(source);AutomationProperties::SetItemStatus(image,source?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));
+        if(preview.ImageSource()!=source)preview.ImageSource(source);AutomationProperties::SetItemStatus(shown,source?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));
     }
 }
 }

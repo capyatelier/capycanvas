@@ -4,7 +4,7 @@ import SwiftUI
     @Published private(set) var notice = JSON()
     private var shown: UInt64?
     private var timeout: DispatchWorkItem?
-    var answer: (UInt64, Bool) -> Void = { _, _ in }
+    var answer: (UInt64, Bool, String?) -> Void = { _, _, _ in }
     func publish(_ next: JSON) {
         guard !next.isNull else { hide(); shown = nil; return }
         let id = next["id"].uint
@@ -13,7 +13,7 @@ import SwiftUI
         timeout?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.shown == id, !self.notice.isNull else { return }
-            self.notice = JSON(); self.answer(id, false)
+            self.notice = JSON(); self.answer(id, false, nil)
         }
         timeout = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
@@ -22,9 +22,9 @@ import SwiftUI
         timeout?.cancel(); timeout = nil
         if !notice.isNull { notice = JSON() }
     }
-    func accept() {
+    func accept(_ action: String) {
         guard let id = shown, !notice.isNull else { return }
-        hide(); answer(id, true)
+        hide(); answer(id, true, action)
     }
 }
 
@@ -63,9 +63,12 @@ struct CanvasFloorLayer: View {
         HStack(spacing: 12) {
             Text(presence.notice["text"].string).fixedSize(horizontal: false, vertical: true)
                 .allowsHitTesting(false).accessibilityIdentifier("canvas-notice-text")
-            if !presence.notice["action"].isNull {
-                Button(presence.notice["action"]["label"].string) { presence.accept() }
-                    .focusable(false).accessibilityIdentifier("canvas-notice-action")
+            ForEach(presence.notice["actions"].array.indices, id: \.self) { index in
+                let action = presence.notice["actions"].array[index], token = action["id"].string
+                Button(action["label"].string) { presence.accept(token) }
+                    .focusable(false).disabled(!action["enabled"].bool)
+                    .help(action["reason"].string).accessibilityHint(action["reason"].string)
+                    .accessibilityIdentifier("canvas-notice-action-\(token)")
             }
         }.padding(.vertical, 8).padding(.horizontal, 14)
             .foregroundStyle(palette["text"])

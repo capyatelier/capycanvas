@@ -68,7 +68,7 @@ fn native_alpha_reuse_preserves_noops_and_forced_authored_changes() {
                     [gray, gray, gray, if (x / 13 + y / 7) % 2 == 0 { 37 } else { 193 }]
                 }))).map(|source|layer_core::authored::PaintBase::new(source.into())),
                 1 => doc.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.43,
-                2 => { coverage_mask(&mut doc, filter, layer_core::Point { x: 7., y: -3. }, Some(layer_core::Selection::polygon(vec![
+                2 => { coverage_mask(&mut doc, filter, [7, -3], Some(layer_core::Selection::polygon(vec![
                     layer_core::Point { x: 11., y: 23. }, layer_core::Point { x: 414., y: 23. },
                     layer_core::Point { x: 414., y: 204. }, layer_core::Point { x: 11., y: 204. },
                 ]).unwrap())); },

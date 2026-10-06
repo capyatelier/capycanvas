@@ -418,7 +418,11 @@ fn native_canvas_bar_warps_a_selection() {
     );
     let mesh = |w: &Workspace| {
         let g = w.gpu.borrow();
-        g.as_ref().unwrap().session.engine().transform_preview().unwrap().transform.placement.mesh.clone().unwrap()
+        let engine = g.as_ref().unwrap().session.engine();
+        engine.transform_preview().unwrap().transform.placement.mesh.clone().unwrap_or_else(|| {
+            let selected = engine.document().working.selection.as_ref().unwrap().bounds();
+            std::sync::Arc::new(layer_core::MeshMap::identity(selected, layer_core::MeshMap::PRESETS[0]).unwrap())
+        })
     };
     let revision = ui_session(&w).engine().document().revision;
     let node = |w: &Workspace, index: u32| {

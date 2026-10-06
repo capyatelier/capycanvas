@@ -11,7 +11,7 @@ small, inspectable indices, settings, effect definitions and UI commands.
   project ICC profiles and packed brush assets already use binary backing.
 - Web artwork worker transfers use the shared `package::transfer` descriptor,
   final manifest records and bounded transferable buffers. Shared current, saved
-  and initial selections travel once as little-endian word payloads. The editor
+  and operation selections travel once as little-endian word payloads. The editor
   yields after 4 MiB of copies; compression and archive integrity hashing stay in
   the file worker. Decoded masks never expand into JSON during save, recovery,
   opening or document conversion.
@@ -65,8 +65,8 @@ LAYER_DEVICE_CDP=http://127.0.0.1:9239 LAYER_WEB_URL=http://127.0.0.1:4215/ \
 ```
 
 Serve `apps/layer-web` and forward the test port and Chrome debugging socket to
-the device. The fixture contains generated 9504 × 6336 coverage shared by a
-saved selection and a layer mask, plus a valid 2 MiB RGB ICC profile shared by
+the device. The fixture contains a generated 9504 × 6336 saved selection and a
+full-size layer mask, plus a valid 2 MiB RGB ICC profile shared by
 proof and retained original samples. Its private data tag keeps the payload large
 while shared color validation still accepts the profile. The generator writes
 `binary-transfer-fixture.capy.icc` beside the package; serve both files. The

@@ -197,7 +197,7 @@ fn local_analysis_honors_frozen_lower_animation_phase_and_clarity_constant_ident
 #[test]
 fn cold_merge_prepares_retained_noncontiguous_members_and_preserves_group_offset() {
     let mut document=constant_document(RgbSpace::Srgb,0.5);
-    let group=occurrence(&document,"Lower root");document.artwork.occurrences.get_mut(group).unwrap().translation=Point{x:3.,y:2.};
+    let group=occurrence(&document,"Lower root");document.artwork.occurrences.get_mut(group).unwrap().offset= [3, 2];
     document.working.occurrence=Some(occurrence(&document,"Upper"));
     let mut engine=engine(document);assert!(engine.backend().effect_analyses.is_empty());
     let result=merge(&mut engine);
@@ -228,7 +228,7 @@ fn cold_frequency_detail_prepares_its_retained_adjustment_input() {
     edits.push(layer_core::Edit::Stack(RecordChange::replace(&document.artwork.stacks,root,draft.artwork.stacks.get(root).cloned()).unwrap()));
     let coverage=document.artwork.coverage.next_handle();
     let operation=|kind|layer_core::RasterOperation {placement:Affine::IDENTITY,
-        coverage:layer_core::CoverageSnapshot::reveal_all(coverage,[33,17],Point::default()),kind};
+        coverage:layer_core::CoverageSnapshot::reveal_all(coverage,[33,17], [0, 0]),kind};
     let mut engine=engine(document);
     engine.insert_with_operations(edits,vec![(low,operation(layer_core::RasterOperationKind::Bake {
         scene:scene.clone(),scope:SceneScope::Members(vec![original].into()),offset:Point::default()})),
@@ -312,7 +312,7 @@ fn cold_clone_reference_prepares_local_guides_without_a_settled_preview() {
     finish(&mut engine).unwrap();
     close(baked_pixel(&engine,target,20,10),output(f64::from(0.01125_f32),0.5,0.5),0.5,false);
     assert!(engine.backend().effect_analyses.is_empty(),"reference guides leaked into the live scene");
-    let mut moved=engine.document().artwork.occurrences.get(owner).unwrap().clone();moved.translation=Point{x:8.,y:0.};
+    let mut moved=engine.document().artwork.occurrences.get(owner).unwrap().clone();moved.offset= [8, 0];
     let change=RecordChange::replace(&engine.document().artwork.occurrences,owner,Some(moved)).unwrap();
     engine.apply_edit(layer_core::Edit::Occurrence(change)).unwrap();
     let mut source=layer_core::CloneSource::default();source.aligned=false;source.set(Point{x:3.,y:6.});engine.set_clone_source(source);
@@ -343,8 +343,8 @@ fn scoped_worker_transfer_keeps_required_geometry_phases_and_handles_without_unr
     let mut document=constant_document(RgbSpace::Srgb,0.5);
     let original=paint_occurrence(&document);let target=document.scene().source_target(original).unwrap();
     let group=occurrence(&document,"Lower root");let upper=occurrence(&document,"Upper");let lower=occurrence(&document,"Lower");
-    document.artwork.occurrences.get_mut(group).unwrap().translation=Point{x:17.,y:23.};
-    document.artwork.occurrences.get_mut(original).unwrap().placement=layer_core::LayerPlacement::from_affine(Affine([0.9,0.2,-0.2,0.9,7.,-1.]));
+    document.artwork.occurrences.get_mut(group).unwrap().offset= [17, 23];
+    document.artwork.occurrences.get_mut(original).unwrap().offset=[7,-1];
     let (above,above_target)=crate::test_support::add_paint(&mut document.artwork,"Above failed",[33,17]);
     let (pending,pending_target)=crate::test_support::add_paint(&mut document.artwork,"Above pending",[33,17]);
     let (hidden,hidden_target)=crate::test_support::add_paint(&mut document.artwork,"Hidden failed",[33,17]);
@@ -359,7 +359,7 @@ fn scoped_worker_transfer_keeps_required_geometry_phases_and_handles_without_unr
     let mut query=layer_core::ArtworkQuery::new(&document,ArtworkSource::EffectInput(upper));
     query.set_context(EvaluationContext {elapsed:42.,phases:vec![(document.scene().effect_handle(lower).unwrap(),3.25)].into()});
     let scene=SnapshotGpu::artwork_source_scene(&query).unwrap();
-    let geometry=scene.view().target_geometry(target);let context=scene.context.clone();
+    let geometry=scene.view().target_offset(target);let context=scene.context.clone();
     let artwork=SnapshotGpu::scoped_transfer_artwork(&scene,&[]);
     for source in [above_target,pending_target,hidden_target,SourceTarget::Paint(library)] {
         let SourceTarget::Paint(handle)=source else {unreachable!()};assert!(artwork.paint.get(handle).unwrap().raster.is_empty());
@@ -375,7 +375,7 @@ fn scoped_worker_transfer_keeps_required_geometry_phases_and_handles_without_unr
     let adopted=transfer.adopt_verified(Default::default(),&cancel).unwrap();
     let index=Arc::new(SceneIndex::build(&adopted.artwork).unwrap());
     let restored=SceneSnapshot::new((*adopted.artwork).clone(),index,scene.owner,scene.revision,context.clone()).with_scope(scene.scope.clone());
-    assert_eq!(restored.view().target_geometry(target),geometry);
+    assert_eq!(restored.view().target_offset(target),geometry);
     assert_eq!(restored.context,context);
     assert_eq!(restored.view().effect_handle(upper),scene.view().effect_handle(upper));
     assert_eq!(restored.view().order(),scene.view().order());

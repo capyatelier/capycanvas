@@ -46,19 +46,20 @@ impl MovingProjection {
             && identities.binary_search_by_key(id,|(id,_)|*id).ok().is_some_and(|index|source.ptr_eq(&identities[index].1)));
         let failed_tiles = &*failed;
         let mut requests = std::collections::BTreeMap::<_,object_image_mips::MovingRequest>::new();
-        for (id,source,level) in scene.order().iter().copied().filter(|owner| available && scene.visible(*owner))
+        for (id,source,level,nearest) in scene.order().iter().copied().filter(|owner| available && scene.visible(*owner))
             .filter_map(|owner| scene.object_layer(owner).map(|layer| (owner, layer)))
             .flat_map(|(owner, layer)| layer.children.iter().filter_map(move |handle| {
                 let object = scene.object(*handle)?;
-                if !object.visible || object.interpolation == ImageInterpolation::Nearest
+                if !object.visible
                     || failed_tiles.iter().any(|(id,source,_,context,_)| *id == object.image.id() && source.ptr_eq(&Arc::downgrade(object.image.storage())) && *context == space) { return None; }
                 let offset = scene.occurrence_offset64(owner);
                 let placement = Affine64([1., 0., 0., 1., offset[0], offset[1]]).compose(object.affine);
                 let inverse = placement.inverse()?.compose(surface_to_document).0;
-                Some((object.image.id(),object.image.storage(),object_image_mips::MovingImages::level(inverse)))
+                let nearest = object.interpolation == ImageInterpolation::Nearest;
+                Some((object.image.id(),object.image.storage(),if nearest {0} else {object_image_mips::MovingImages::level(inverse)},nearest))
             })) {
-            requests.entry(id).and_modify(|request|request.level=request.level.min(level))
-                .or_insert_with(||object_image_mips::MovingRequest {id,source:source.clone(),level});
+            requests.entry(id).and_modify(|request|{request.level=request.level.min(level);request.nearest|=nearest;})
+                .or_insert_with(||object_image_mips::MovingRequest {id,source:source.clone(),level,nearest});
         }
         let artwork = scene.artwork();
         *cache = Some(MovingProjection {artwork:artwork.id,root:artwork.root,objects:artwork.objects.clone(),layers:artwork.object_layers.clone(),

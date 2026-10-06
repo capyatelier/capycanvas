@@ -87,7 +87,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     source.domain = [256, 128];
     source.base = Some(layer_core::PaintBase::new((original.clone()).into()));
     let mask = project.allocate_coverage_handle();
-    let coverage = layer_core::CoverageSnapshot::reveal_all(mask, [256, 128], Point::default());
+    let coverage = layer_core::CoverageSnapshot::reveal_all(mask, [256, 128], [0, 0]);
     project.artwork.coverage.install(mask, coverage.source).unwrap();
     let mut occurrence = project.scene().occurrence(paint).unwrap().clone();
     occurrence.mask = Some(coverage.use_);

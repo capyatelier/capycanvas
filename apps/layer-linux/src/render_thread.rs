@@ -182,6 +182,7 @@ struct FrameReport {
     context: std::sync::RwLock<EvaluationContext>,
     pending_work: AtomicBool,
     retouch_miss: std::sync::atomic::AtomicU64,
+    retouch_waiting: std::sync::atomic::AtomicU64,
 }
 enum Reply {
     ColorAdopted(u64, HashMap<AssetId, BrushSource>, layer_render_wgpu::snapshot::SnapshotGpu, Option<layer_render_wgpu::ShaderActivity>),
@@ -771,6 +772,10 @@ impl CanvasRenderer for RenderWorker {
         let stroke = self.report.retouch_miss.swap(0, Ordering::AcqRel);
         (stroke != 0).then_some(layer_core::StrokeId(stroke))
     }
+    fn retouch_waiting(&self) -> Option<layer_core::StrokeId> {
+        let stroke = self.report.retouch_waiting.load(Ordering::Acquire);
+        (stroke != 0).then_some(layer_core::StrokeId(stroke))
+    }
     fn retire_stroke_sources(&mut self) {
         let _ = self.send(Command::RetireStrokeSources);
     }
@@ -1336,6 +1341,7 @@ impl Worker {
                         let result = self.renderer.prepare_thumbnail_batch(target).and_then(|ready| {
                             if ready { self.renderer.request_thumbnail(id, target).map(|_| true) } else { Ok(false) }
                         });
+                        self.report_frame(report);
                         match result {
                             Ok(false) => (),
                             Ok(true) => { pending_thumbnails.pop_front(); },
@@ -1723,6 +1729,7 @@ impl Worker {
         if let Some(stroke) = self.renderer.take_retouch_miss() {
             report.retouch_miss.store(stroke.0, Ordering::Release);
         }
+        report.retouch_waiting.store(self.renderer.retouch_waiting().map_or(0, |stroke| stroke.0), Ordering::Release);
         let pending = self.renderer.has_pending_work();
         if pending && !report.pending_work.swap(pending, Ordering::AcqRel) {
             wake_canvas(&self.area);

@@ -102,12 +102,12 @@ fn the_filter_drawer_masks_a_new_effect_but_never_the_one_it_replaces() {
     s.layer_edit(effect_test_selection_edit(s.engine.document(),Some(selection.clone()))).unwrap();
     insert_effect(&mut s, "brightness_contrast");
     let id = s.engine.document().working.occurrence.unwrap();
-    let mask=s.engine.document().scene().mask(id).map(|(use_,source)|(use_.clone(),source.clone())).expect("a new effect takes the selection");
-    assert_eq!(mask.1.initial.as_ref(), Some(&selection));
+    let mask=s.engine.document().scene().mask(id).map(|(use_,_)|use_.clone()).expect("a new effect takes the selection");
+    assert_eq!(crate::session::test_support::stored_selection(&mut s, mask.source), Some(selection.clone()));
     invoke(&mut s, CommandId::Reselect);
     insert_effect(&mut s, "curves");
     assert_eq!(s.engine.document().working.occurrence.unwrap(), id, "the drawer replaces the effect");
-    assert_eq!(s.engine.document().scene().mask(id).map(|(use_,source)|(use_.clone(),source.clone())), Some(mask), "and keeps its mask");
+    assert_eq!(s.engine.document().scene().mask(id).map(|(use_,_)|use_.clone()), Some(mask), "and keeps its mask");
     assert_eq!(s.engine.document().working.selection, Some(selection), "replacing leaves the selection");
 }
 
@@ -410,8 +410,9 @@ fn fill_layers_start_from_the_current_color_and_mask_to_the_selection() {
     let handle=doc.working.occurrence.unwrap();
     assert_eq!(doc.scene().effect(handle).unwrap().program.id.as_ref(), "gradient_fill");
     assert_eq!(row(&s, handle), None, "gradient fills open their gradient in Properties instead");
-    assert_eq!(doc.scene().mask(handle).unwrap().1.initial.as_ref(), Some(&selection), "the selection becomes the mask");
-    assert_eq!(doc.working.selection, None, "and is consumed");
+    let (mask, consumed) = (doc.scene().mask(handle).unwrap().0.source, doc.working.selection.is_none());
+    assert_eq!(crate::session::test_support::stored_selection(&mut s, mask), Some(selection.clone()), "the selection becomes the mask");
+    assert!(consumed, "and is consumed");
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().working.selection, Some(selection), "undo restores the selection");
 }

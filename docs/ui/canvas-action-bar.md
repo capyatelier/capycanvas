@@ -10,11 +10,11 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 
 | Context | Shown when | Items | Placement |
 | --- | --- | --- | --- |
-| Placement | Whole layers are being transformed, or photos placed or pasted | Mode, Original Size for affine photos, flips, quarter turns, Reset, Interpolation · Cancel, Apply | Beside the transformed layers |
-| Transform | Transform is open on paint, a mask or selected pixels | Mode (Free, Uniform, Distort, Warp), Perspective while distorting, Grid while warping, Flip H/V, Rotate 90° left/right, Reset, Interpolation · Cancel, Apply | Beside the transform box |
+| Placement | Images are placed or pasted, or whole layers and groups are being moved | For images: flips, quarter turns, Original Size and Nearest or Linear; for layers, the transform's Tool Options · Cancel, Apply | Beside the images or layers |
+| Transform | Transform is open on paint, a mask or selected pixels, or images are selected with Move | Mode (Free, Uniform, Distort, Warp), Perspective while distorting, Grid while warping, Flip H/V, Rotate 90° left/right, Reset, Interpolation · Cancel, Apply. For selected images: flips, quarter turns, Original Size, Nearest or Linear, Duplicate, Delete and Deselect, with no Cancel or Apply because each change is already one undo step | Beside the transform box or images |
 | Transform, labelled **Transform Outline** | Transform Outline is moving the selection outline | Mode (Free, Uniform), Flip H/V, Rotate 90° left/right, Reset · Cancel, Apply | Beside the outline's box |
 | Polygon | A polygon selection is under construction | Remove Last Point · Cancel, Finish | Bottom edge |
-| Crop | The Crop tool is active | Ratio ▾ (Free, Original, 1:1, 4:5, 2:3, 5:7, 16:9), Swap Orientation, Fit Content, Overlay ▾ (Thirds, Grid, Diagonal, Golden Ratio), Straighten, Delete Cropped Pixels, Reset · Cancel, Apply | Bottom edge |
+| Crop | The Crop tool is active | Ratio ▾ (Free, Original, 1:1, 4:5, 2:3, 5:7, 16:9), Swap Orientation, Fit Content, Overlay ▾ (Thirds, Grid, Diagonal, Golden Ratio), Straighten, Delete Cropped Paint Pixels, Reset · Cancel, Apply | Bottom edge |
 | Guide | A guide is selected with the Ruler or Move tool and guides are shown | Delete, Snap, Guides, and Straighten for a straight guide | Beside the guide's handles |
 | Clone source | The Clone Stamp's or Healing Brush's source disc was tapped | Aligned, Source ▾ (Reference layers, Editing layer), Flip H/V, Reset Offset, Set Source | Beside the disc |
 | Quick Mask | Quick Mask is on | "Quick Mask" · Invert, Fill, Clear, Refine ▾, Save as Selection Layer · Exit | Bottom edge |
@@ -49,11 +49,11 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 - **Copy Selection to New Layer** captures the placed layer and its mask into an
   unlocked layer, including selected pixels outside the canvas. The copy keeps
   opacity and blending, leaves clipping, and consumes the selection; Reselect
-  restores it. Copying a locked or warped source is allowed. Cutting requires an
-  unlocked, affine target because it also erases the source.
+  restores it. Copying a locked source or an image layer is allowed. Cutting
+  requires an unlocked paint target because it also erases the source.
 - **Crop:** Crop Canvas to Selection crops the canvas to the bounds of the selection's coverage, as metadata: pixels outside stay on their layers and reappear when the canvas grows. It is disabled, with a reason, for an inverted selection.
 - **Moving selected pixels:** a Move drag over a selection keeps the Selection context; the bar hides during the contact and returns beside the moved selection. Leave Copy is the Move toggle described in [Selections](selections.md#moving-selected-pixels).
-- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)), Layer › New › New Dodge & Burn Layer, Filter › Frequency Separation…, Revert to Original Photo, the merges (Merge Down, Merge Group, Merge Visible, Stamp Visible and Flatten Image) and Edit › Blending's Perceptual and Linear Light Blending have no bar item; menus and command search reach them.
+- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)), Layer › New › New Dodge & Burn Layer, Filter › Frequency Separation…, Discard Paint Edits, the merges (Merge Down, Merge Group, Merge Visible, Stamp Visible and Flatten Image) and Edit › Blending's Perceptual and Linear Light Blending have no bar item; menus and command search reach them.
 
 ## Placement
 
@@ -95,10 +95,10 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
 - **Pivot:** drag the crosshair to set the centre for numeric scale, rotation, flips and quarter turns without moving the artwork. Handle drags keep their opposite anchor; Alt uses the pivot.
 - **Snap:** off by default. Move and transform handles can align to the canvas edges and centre, visible layer or group bounds, and rulers. Moved layers and groups containing them are excluded. Clipped layers are not separate targets; an eligible containing group includes their clipping. Guides appear during the drag; numeric entry stays exact.
 - **Arrow keys** move by one document pixel, or ten with Shift, regardless of view zoom or rotation. Focused text fields keep their arrows. Holding an arrow in Move is one undo step, ending at key-up or loss of focus; Escape cancels it. Within Transform, nudges stay part of the open transform.
-- **Transform Again**, in Edit, repeats the last applied whole-layer move, scale, rotation or perspective change on the current eligible targets as one undo step. Warp bends and pixel-selection edits leave the previous repeat unchanged. It has no default shortcut and clears when the drawing is replaced.
+- **Transform Again**, in Edit, repeats the last applied layer transform on the current eligible targets as one undo step, resampling a paint layer's current pixels once more. Selected images repeat the last image transform of the same drawing; Undo makes it unavailable. Warp bends and pixel-selection edits leave the previous repeat unchanged. It has no default shortcut and clears when the drawing is replaced.
 - **Reset** returns to Free and the geometry the transform started with.
-- **Whole layers:** Apply retains original photo and paint pixels, perspective and mesh controls, and the sampling choice. Reopening Transform edits that geometry. Selected roots and supported group descendants transform together in one undo step, including hidden paint. Locked descendants, generators and Selection Layers refuse the whole operation; Warp requires one paint or photo layer.
-- **Masks:** linked masks follow their owner's geometry once; independent masks stay in place, including within selected groups. Copy Mask preserves the complete canvas geometry and linkage when pasted. A linked warped mask requires a destination with the same placed mesh; otherwise apply the transform to pixels first. Changing linkage on a perspective or warped result requires **Apply Transform to Pixels** first. Creating a mask from a selection on such a layer creates an independent mask in place.
+- **Whole layers:** Apply on one paint layer resamples its current pixels once, in the background with Cancel; exact flips and quarter turns keep the samples. Several layers and groups move by whole pixels only, including hidden paint, in one undo step. Locked descendants, generators and Selection Layers refuse the whole operation; Warp requires one paint layer. Image layers transform their images instead ([image layers](image-objects.md)).
+- **Masks:** a linked mask moves and resamples with its owner once; an unlinked mask stays in place, including within selected groups. Copy Mask keeps the mask's document position and linkage when pasted, and linking or unlinking never moves the mask.
 - **Applying a distorted pixel selection:** a soft or painted selection cannot follow a perspective map as metadata, so Apply first resamples its coverage on the GPU.
   - The transform stays open, and Apply reads "Applying the transform" until the coverage returns; the result is one undo step.
   - Cancel discards the pending coverage, and any further edit to the transform supersedes it.
@@ -143,8 +143,8 @@ The Crop tool (C; Shift+C in the GIMP keys) is in the Tools toolbar of the Photo
 - **Straighten:** it arms one line. Draw along something that should be level or upright (Shift snaps to 15°); the frame turns to match and shrinks to the largest frame of its shape inside the turned image. The angle can also be typed in Tool Options, up to 45° either way.
 - **Apply** (Enter) is one undo step, on locked layers too. The view keeps the image still.
   - Without a turn, only metadata changes: pixels outside the frame stay on their layers, hidden, and reappear when the canvas grows.
-  - With a turn, paint layers and their masks are resampled bicubically into a frame that holds the whole turned layer, so hidden corners are kept. Placed photos turn their placement and keep their original pixels. The selection, Selection Layers and guides turn with the image.
-  - **Delete Cropped Pixels** (off by default) drops the tiles outside the frame and erases the rest of the edge tiles, so nothing hidden remains on paint layers. Masks keep their coverage in the edge tiles, and placed photos keep their original.
+  - With a turn, paint layers and their masks are resampled bicubically into a frame that holds the whole turned layer, so hidden corners are kept. A photo layer with nothing painted on it keeps the photo's own color and depth, gaining transparency at the turned edges; one with paint on it, or a CMYK photo, is resampled with its paint into ordinary paint. Image layers turn their images, and the selection, Selection Layers and guides turn with the image.
+  - **Delete Cropped Paint Pixels** (off by default) drops the tiles outside the frame and erases the rest of the edge tiles, so nothing hidden remains on paint layers. A photo layer keeps only the photo samples inside the frame. Masks keep their coverage in the edge tiles, and image layers keep their whole images; rasterize one to trim it.
   - A crop that would exceed the drawing's tile or memory limits is refused before anything changes; the reason suggests Delete Cropped Pixels.
 - **Cancel** (Escape), Undo and switching tools close the crop and leave the drawing as it was. Losing window focus rolls back only a handle drag in progress.
 

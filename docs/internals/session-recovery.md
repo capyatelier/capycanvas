@@ -29,6 +29,13 @@ Checked layer rows, their range-selection anchor and Solo's previous visibility
 state live in `WorkingState`. Private checkpoints retain them on both sides of
 structural edits and visibility changes, so restart and undo/redo restore the
 same checked rows and Solo toggle. Row navigation does not add an undo step.
+The image selection and the canvas view origin live there too. The view origin
+is the signed integer frame shift accumulated by crops and grows; it replaces a
+saved composition origin. History records its change with each canvas edit, so
+Undo and Redo after recovery move the camera with the frame's top-left while
+artwork coordinates stay unchanged. Renderer rebuilds compare the canvas extent
+and source domains as well as the origin, so a right- or bottom-only crop also
+rebuilds.
 
 The [`private codec`](../../crates/layer-core/src/package/session.rs) shares the
 portable artwork record and resource adapters. It retains typed record identities,

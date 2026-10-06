@@ -5,9 +5,9 @@ use crate::test_support::{preimage, receive_request};
 use layer_core::{Affine, ImageTransform, Interpolation, LayerPlacement};
 
 fn operation(extent: [u32; 2], affine: Affine, selection: Option<Selection>) -> RasterOperation {
-    let mut coverage = reveal_all(extent, Point::default());
+    let mut coverage = reveal_all(extent, [0, 0]);
     coverage.source.default_coverage = if selection.is_some() { 0. } else { 1. };
-    coverage.source.initial = selection;
+    coverage.selection = selection;
     RasterOperation {
         placement: layer_core::Affine::IDENTITY,
         coverage,
@@ -48,9 +48,9 @@ pub(super) fn packed(extent: [u32; 2], count: u32, value: impl Fn(u32, u32) -> u
 /// Paint with coverage confined to `corners`.
 pub(super) fn masked(extent: [u32; 2], corners: [[f32; 2]; 4]) -> Document {
     let mut layer = paint_document(extent, "masked");
-    let mut mask = reveal_all(extent, Point::default());
+    let mut mask = reveal_all(extent, [0, 0]);
     mask.source.default_coverage = 0.;
-    mask.source.initial = Some(Selection::polygon(corners.map(|[x, y]| Point { x, y }).to_vec()).unwrap());
+    crate::test_support::materialize_mask(&mut mask.source, Selection::polygon(corners.map(|[x, y]| Point { x, y }).to_vec()).unwrap(), layer.composition().color);
     set_mask(&mut layer, mask);
     layer
 }
@@ -244,7 +244,7 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<LayerPlacement>, keep_source
     };
     for preset in [GPen, WatercolorWash] {
         let mut layer = paint_document(extent, "live transform");
-        occurrence_mut(&mut layer).translation = Point { x: 5., y: 7. };
+        occurrence_mut(&mut layer).offset = [5, 7];
         let mut b = batch(target(&layer));
         b.style = preset_style(preset);
         b.damage = Rect {
@@ -276,6 +276,7 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<LayerPlacement>, keep_source
             preview.transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Linear, ..map },
                 keep_source,
                 source_from_owner: None,
+                source_base: None,
             };
             r.set_transform_preview(Some(&preview)).unwrap();
             frame(&mut r, layers, extent, &[], &[], false);
@@ -354,7 +355,7 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [768, 512];
     let mut layer = paint_document(extent, "selected transform");
-    occurrence_mut(&mut layer).translation = Point { x: 5., y: 7. };
+    occurrence_mut(&mut layer).offset = [5, 7];
     let mut d = dab([1., 0., 0., 1.]);
     d.center = Point { x: 128., y: 128. };
     d.radii = [30.; 2];

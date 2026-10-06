@@ -100,4 +100,70 @@ class AndroidSessionRestartTest {
             }
         } finally {scenario.close()}
     }
+
+    @Test fun processRestartRetainsImageObjectsAndHistory() {
+        val arguments = InstrumentationRegistry.getArguments()
+        val phase = arguments.getString("restartPhase")
+        assumeTrue(phase in listOf("prepare","verify"))
+        require(arguments.getString("restartFixture") != null)
+        wakeDevice()
+        val scenario = launchCapy(120_000)
+        val host = scenario.activity().host
+        fun <T> native(block:(Long)->T):T = runBlocking {host.withNative(block)}
+        fun state(): JSONObject {
+            var result: JSONObject? = null
+            instrumentation.runOnMainSync {result = host.snapshot?.getJSONObject("state")?.copy()}
+            return checkNotNull(result)
+        }
+        fun objects() = native {JSONArray(Native.imageObjects(it))}.objects()
+        fun poses() = objects().associate {it.getString("id") to jsonValue(obj("image" to it.getString("image"),"affine" to it.getJSONArray("affine"),"visible" to it.getBoolean("visible")))}
+        fun flush() = runBlocking {withContext(Dispatchers.Main) {host.recovery.flush()}}
+        try {
+            if(phase == "prepare") {
+                arguments.getString("theme","light")!!.let {host.drain(obj("type" to "set_theme","theme" to it))}
+                host.newDocument(640,480)
+                for((name,color) in listOf("restart-red.png" to android.graphics.Color.RED,"restart-blue.png" to android.graphics.Color.BLUE)) {
+                    val file = File(device.root,name)
+                    val bitmap = android.graphics.Bitmap.createBitmap(160,120,android.graphics.Bitmap.Config.ARGB_8888)
+                    try {bitmap.eraseColor(color);file.outputStream().use {bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)}} finally {bitmap.recycle()}
+                    host.importImage(file)
+                    host.drain(obj("type" to "invoke","command" to "apply_transform"))
+                }
+                assertEquals(2,objects().size)
+                val moving = objects().first().getString("id")
+                native {
+                    Native.beginObjectMotion(it,JSONArray(listOf(moving)).toString())
+                    Native.previewObjectMotion(it,JSONArray(listOf(0.75,0.25,-0.25,0.75,41.125,-17.5)).toString())
+                    Native.finishObjectMotion(it,true)
+                }
+                val edited = poses()
+                host.drain(obj("type" to "invoke","command" to "undo"))
+                val undone = poses()
+                assertNotEquals(edited,undone)
+                assertTrue(flush())
+                File(device.root,"expected.json").writeText(obj("edited" to JSONObject(edited.mapValues {it.value.toString()}),"undone" to JSONObject(undone.mapValues {it.value.toString()}),
+                    "layers" to state().array("layers").length()).toString())
+                val manifest = device.recovery.walkTopDown().first {it.name == "session.json"}
+                val original = Native.sessionManifestRead(manifest.absolutePath)
+                val current = JSONObject(original)
+                Native.sessionManifestWrite(manifest.absolutePath,Native.sessionManifestUpdate(original,obj("type" to "stage","drawings" to current.getJSONArray("drawings"),"active" to current.getLong("active")).toString()))
+                println("RESTART_PREPARED ${device.root.name}")
+                android.os.Process.killProcess(android.os.Process.myPid())
+            } else {
+                val expected = JSONObject(File(device.root,"expected.json").readText())
+                fun expectedPoses(key:String) = expected.getJSONObject(key).let {poses -> poses.keys().asSequence().associateWith {poses.getString(it)}}
+                fun current() = poses().mapValues {it.value.toString()}
+                host.awaitMain("private drawings restored",120_000) {!host.recovery.working&&host.recovery.ready}
+                assertNull(host.recovery.candidate)
+                assertTrue(state().getJSONObject("document_file").getBoolean("recovered"))
+                assertEquals(expected.getInt("layers"),state().array("layers").length())
+                assertEquals("Restart keeps the undone binary64 poses and shared images",expectedPoses("undone"),current())
+                host.drain(obj("type" to "invoke","command" to "redo"))
+                assertEquals("Recovered Redo restores the edited pose",expectedPoses("edited"),current())
+                host.drain(obj("type" to "invoke","command" to "undo"))
+                assertEquals(expectedPoses("undone"),current())
+            }
+        } finally {scenario.close()}
+    }
+
 }

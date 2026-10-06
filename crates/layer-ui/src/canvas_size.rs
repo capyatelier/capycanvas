@@ -354,7 +354,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     /// Keep the image where it was on screen after the canvas origin moves.
-    pub(super) fn follow_canvas_origin(&mut self, origin: [i32; 2]) {
+    pub(super) fn follow_canvas_origin(&mut self, origin: [i64; 2]) {
         self.state.camera.follow_document_origin(origin.map(|v| v as f32));
         self.sync_camera();
     }

@@ -169,7 +169,7 @@ fn merge_group_keeps_the_groups_blend_and_opacity_and_bakes_its_mask() {
     let mut doc = document(&["Group", "Inside", "Hidden", "Outside"]);
     let group = nest(&mut doc, "Group", &["Inside", "Hidden"]);
     occurrence_mut(&mut doc, "Hidden").visible = false;
-    add_mask(&mut doc, group, [600, 400], Point::default());
+    add_mask(&mut doc, group, [600, 400], [0; 2]);
     occurrence_mut(&mut doc, "Group").opacity = 0.5;
     occurrence_mut(&mut doc, "Group").blend = LayerBlend::Screen;
     assert_eq!(doc.merge_refusal(MergeKind::Group), None);
@@ -262,7 +262,7 @@ fn stamp_visible_adds_a_top_layer_and_keeps_every_member() {
 #[test]
 fn bakes_keep_pixels_outside_the_canvas_on_whole_pages() {
     let mut doc = document(&["Upper", "Lower"]);
-    occurrence_mut(&mut doc, "Upper").translation = Point { x: -100., y: 30. };
+    occurrence_mut(&mut doc, "Upper").offset = [-100, 30];
     paint_mut(&mut doc, "Lower").domain = [900, 400];
     let plan = doc.merge_plan(MergeKind::Down).unwrap();
     let result = plan
@@ -281,19 +281,19 @@ fn bakes_keep_pixels_outside_the_canvas_on_whole_pages() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(result.translation, Point { x: -256., y: 0. });
+    assert_eq!(result.offset, [-256, 0]);
     assert_eq!(p.domain, [1156, 430]);
     let RasterOperationKind::Bake { scene, offset, .. } = &plan.operation.kind else { panic!("Bake") };
     assert_eq!(*offset, Point { x: 256., y: 0. });
-    assert_eq!(Affine::translation(*offset).map(scene.view().target_offset(target(&doc, "Upper"))), Point { x: 156., y: 30. });
-    assert_eq!(Affine::translation(*offset).map(scene.view().target_offset(target(&doc, "Lower"))), Point { x: 256., y: 0. });
+    assert_eq!(Affine::translation(*offset).map(offsets::point(scene.view().target_offset(target(&doc, "Upper")))), Point { x: 156., y: 30. });
+    assert_eq!(Affine::translation(*offset).map(offsets::point(scene.view().target_offset(target(&doc, "Lower")))), Point { x: 256., y: 0. });
     let mut after = doc.clone();
     merged(&mut after, MergeKind::Down);
     assert!(after.extents_cover_canvas());
     let flatten = doc.merge_plan(MergeKind::Flatten).unwrap();
-    assert!(flatten.edits.iter().any(|e| matches!(e,Edit::Paint(c) if c.value.as_ref().is_some_and(|p|p.domain==doc.composition().size))));
+    assert!(flatten.edits.iter().any(|e| matches!(e,Edit::Paint(c) if c.value.as_ref().is_some_and(|p|p.domain==[1156, 430]))), "Flatten keeps off-frame paint");
     assert!(flatten.edits.iter().any(
-        |e| matches!(e,Edit::Occurrence(c) if c.handle==flatten.result&&c.value.as_ref().is_some_and(|o|o.translation==Point::default()))
+        |e| matches!(e,Edit::Occurrence(c) if c.handle==flatten.result&&c.value.as_ref().is_some_and(|o|o.offset==[-256, 0]))
     ));
 }
 #[test]
@@ -315,14 +315,14 @@ fn bake_bounds_follow_content_photos_and_effects() {
         let scope = SceneScope::Members(members.iter().map(|n| id(doc, n)).collect::<Vec<_>>().into());
         RasterOperation {
             placement: Affine::IDENTITY,
-            coverage: CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), extent, Point::default()),
+            coverage: CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), extent, [0; 2]),
             kind: RasterOperationKind::Bake { scene: doc.snapshot(), scope, offset: Point { x: 100., y: 0. } },
         }
         .bounds(extent)
     };
     let mut doc = fixture::document(extent, &["Upper", "Lower"]);
     paint_mut(&mut doc, "Upper").raster = tiles(&[[1, 0]]);
-    occurrence_mut(&mut doc, "Upper").translation = Point { x: 10., y: 20. };
+    occurrence_mut(&mut doc, "Upper").offset = [10, 20];
     assert!(bounds(&doc, &["Lower"]).is_empty());
     let expected = Rect { min: Point { x: 366., y: 20. }, max: Point { x: 622., y: 276. } };
     assert_eq!(bounds(&doc, &["Upper", "Lower"]), expected);
@@ -337,7 +337,7 @@ fn bake_bounds_follow_content_photos_and_effects() {
     effect(&mut doc, "Levels", "gaussian_blur");
     assert_eq!(bounds(&doc, &["Levels", "Upper"]), expected.outset(18.));
     effect(&mut doc, "Levels", "solid_color");
-    assert_eq!(bounds(&doc, &["Levels", "Upper"]), Rect::from_extent(extent));
+    assert_eq!(bounds(&doc, &["Levels", "Upper"]), Rect { min: Point { x: 100., y: 0. }, max: Point { x: 1024., y: 768. } }, "a fill reaches its authored frame, not the whole bake");
 }
 #[test]
 fn bakes_above_the_publication_limit_are_refused_and_bakes_need_history_room() {

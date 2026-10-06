@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{ColorTransition, Document, Editor, Edit, Point, authored::*};
+use layer_core::{ColorTransition, Document, Editor, Edit, authored::*};
 
 const LIMIT: usize = 16 * 1024 * 1024;
 
@@ -76,10 +76,10 @@ fn fixture(color: DocumentColor) -> Document {
         }),
     });
     let coverage = artwork.coverage.insert(PortableId::random(), CoverageSource {
-        domain:[TILE_SIZE;2], initial:None, default_coverage:1., operations:Default::default(),
+        domain:[TILE_SIZE;2], default_coverage:1., operations:Default::default(),
         raster:RasterRevision::backed(RasterData {tiles:[(key(RasterPlane::Mask),RasterTile::backed_shared(scalar))].into(),watercolor:None}),
     }).unwrap();
-    let mask = MaskUse {source:coverage, enabled:true, linked:true, inverted:true, translation:Point{x:2.5,y:-1.}, placement:layer_core::Projective::IDENTITY};
+    let mask = MaskUse {source:coverage, enabled:true, linked:true, inverted:true, offset:[3,-1]};
     let rasterized = Arc::new(SourceImage {
         resolution: None,
         // Includes a complete tile outside the document, shared with paint.

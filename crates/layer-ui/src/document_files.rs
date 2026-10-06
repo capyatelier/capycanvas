@@ -169,9 +169,10 @@ pub enum DocumentRequest {
     ColorHistory { redo: bool },
     Place,
     Paste { mode: PasteMode },
-    /// Copy the active layer's pixels, or with `merged` the visible image;
-    /// `cut` erases them once the host reports the copy complete.
-    Copy { merged: bool, cut: bool },
+    /// Copy the active layer's pixels or selected images, with `merged` the
+    /// visible image, with `pixels` an image layer's pixels; `cut` erases them
+    /// once the host reports the copy complete.
+    Copy { merged: bool, cut: bool, pixels: bool },
     Properties,
     RepairSourceProfile { layer: u64 },
     RasterizeSource { layer: u64 },
@@ -206,6 +207,7 @@ impl DocumentRequest {
             Self::Paste { mode: PasteMode::Into } => MessageId::COMMAND_PASTE_INTO,
             Self::Copy { cut: true, .. } => MessageId::COMMAND_CUT,
             Self::Copy { merged: true, .. } => MessageId::COMMAND_COPY_MERGED,
+            Self::Copy { pixels: true, .. } => MessageId::COMMAND_COPY_PIXELS,
             Self::Copy { .. } => MessageId::COMMAND_COPY,
             Self::Properties => MessageId::DOCUMENTS_PROPERTIES,
             Self::RepairSourceProfile { .. } => MessageId::DOCUMENTS_REPAIR_SOURCE,
@@ -795,10 +797,12 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(crate) fn require_raster_snapshot(&self) -> Result<(), String> {
         if self.painted_selections.busy() { return Err(FileFailure::SelectionCapture.message(self.localization())); }
-        if self.sdr_gesture.is_some()
+        if self.input_held || self.sdr_gesture.is_some() || self.object_motion.is_some()
             || self.targeted_curve_busy() || self.auto_levels.is_some()
             || self.eyedropper.calibration.as_ref().is_some_and(|calibration| calibration.request.is_some())
             || self.operation.active()
+            || self.objects.placing()
+            || self.objects.dragging()
             || (self.region_tools.busy() && !self.refine_previewing())
             || !self.layer_interaction.path.is_empty()
         {
@@ -811,7 +815,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn document_interaction_idle_reason(&self) -> Option<DocumentIdleReason> {
         if !self.canvas_idle() { Some(DocumentIdleReason::CanvasInteraction) }
         else if self.content_bounds.baking() { Some(DocumentIdleReason::WaitTransform) }
-        else if self.operation.active() {
+        else if self.conversion_busy() { Some(DocumentIdleReason::CanvasOperation) }
+        else if self.operation.active() || self.objects.placing() {
             Some(if self.cropping() { DocumentIdleReason::ApplyCrop } else { DocumentIdleReason::ApplyTransform })
         } else if (self.region_tools.busy() && !self.refine_previewing())
             || self.targeted_curve_busy() || self.auto_levels.is_some()

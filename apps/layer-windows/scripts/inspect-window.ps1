@@ -19,8 +19,16 @@ $p.Refresh()
 $handle=if($WindowHandle){[IntPtr]$WindowHandle}else{$p.MainWindowHandle}
 if($handle -eq 0){throw 'The process has no main window yet.'}
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
-$nodes=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
-$names=foreach($node in $nodes){if($node.Current.Name){$node.Current.Name}}
+for($attempt=1;;$attempt++){
+    try{
+        $nodes=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+        $names=foreach($node in $nodes){if($node.Current.Name){$node.Current.Name}}
+        break
+    }catch{
+        if($attempt -ge 5){throw}
+        Start-Sleep -Milliseconds 200
+    }
+}
 [pscustomobject]@{title=$p.MainWindowTitle;responding=$p.Responding;elements=@($names)} | ConvertTo-Json -Depth 4
 [CapyWindowCapture]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 $rect=New-Object CapyWindowCapture+Rect

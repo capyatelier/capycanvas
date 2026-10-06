@@ -15,7 +15,7 @@ struct CachedStage {
     input_owned: bool,
     output: Image,
     mask: Option<Image>,
-    mask_offset: layer_core::Point,
+    mask_offset: Option<[i64; 2]>,
     time: f32,
     valid: bool,
     dependencies: Vec<OccurrenceHandle>,
@@ -90,7 +90,7 @@ pub(super) fn capture_window_cached(scene:SceneView<'_>,region:PixelRect,objects
 fn content_support(scene: SceneView<'_>, handle: OccurrenceHandle, level:u32, objects:&mut object_spatial::SpatialIndex) -> DocRect {
     if !scene.visible(handle) { return DocRect::default(); }
     scene.source_target(handle).map_or_else(|| objects.content(scene,handle).map_or_else(DocRect::default,|content|content.bounds_at(level)), |target|
-        DocRect::from_rect(scene.target_geometry(target).forward_bounds(layer_core::Rect::from_extent(scene.target_extent(target)))))
+        DocRect::from(PixelRect::full(scene.target_extent(target))).translated(scene.target_offset(target)))
 }
 
 fn support_map(scene: SceneView<'_>, level: u32, objects:&mut object_spatial::SpatialIndex) -> std::collections::HashMap<OccurrenceHandle, DocRect> {
@@ -364,8 +364,7 @@ impl Scene {
                 ||self.images.preview_layer.is_some_and(changed_target)||r.preview_layer_id.is_some_and(changed_target)
                 ||r.transform_damage.iter().any(|(t,_)|changed_target(*t))||packet.dab_batches.iter().any(|b|changed_target(b.target))) {
                 let sources = scale::Damage::from_regions(target.into_iter().chain(mask).flat_map(|target| {
-                    let geometry = scene.target_geometry(target);
-                    self.scale_sources.damage(target).map_or_else(||sparse.clone(),|source|source.map(|region|pixel_rect(geometry.forward_bounds(region.to_rect()),extent))).regions
+                    self.scale_sources.document_damage(scene, target).map_or_else(|| sparse.regions.clone(), |damage| damage.map(|region| region.in_frame(extent)).collect())
                 }));
                 sources.intersect(bounds)
             }else{scale::Damage::default()};
@@ -405,10 +404,7 @@ impl Scene {
                         input_owned: alias.is_none(),
                         output: Image::new(r, grid, "effect result cache"),
                         mask: None,
-                        mask_offset: layer_core::Point {
-                            x: f32::NAN,
-                            y: f32::NAN,
-                        },
+                        mask_offset: None,
                         time: f32::NAN,
                         valid: false,
                         dependencies: Vec::new(),
@@ -497,7 +493,7 @@ impl Scene {
                     let mask_offset = world_offset(scene, handle, true);
                     let mask_reset = !cached.valid
                         || cached.mask.is_none()
-                        || cached.mask_offset != mask_offset
+                        || cached.mask_offset != Some(mask_offset)
                         || reset
                         || self
                             .images
@@ -526,7 +522,7 @@ impl Scene {
                         }
                         self.encode_jobs(r, encoder)?;
                     }
-                    cached.mask_offset = mask_offset;
+                    cached.mask_offset = Some(mask_offset);
                 } else {
                     cached.mask = None;
                 }

@@ -1,8 +1,8 @@
-use crate::{Affine, BlendSpace, ColorMixSpace, ImageResolution, Interpolation, LayerBlend, LayerPlacement, MeshMap,
-    Point, Projective, Rect, ResolutionUnit, color::{ConversionOptions, DocumentColor, ProofRecipe,
+use crate::{Affine, BlendSpace, ColorMixSpace, ImageResolution, LayerBlend,
+    Point, ResolutionUnit, color::{ConversionOptions, DocumentColor, ProofRecipe,
     RenderingIntent, RgbColor, RgbSpace, SampleDepth, hdr::SdrRendition}};
 use serde_json::{Map, Value};
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DecodeError { Invalid(String), Unsupported(String) }
@@ -181,90 +181,6 @@ pub fn encode_affine(value: Affine) -> Result<Value, String> {
     if value.inverse().is_none() { return Err("Invalid affine transform".into()); }
     Ok(float_array(&value.0))
 }
-pub fn parse_projective(value: &Value) -> DecodeResult<Projective> {
-    let result = Projective(floats(value)?);
-    if Projective::invert(result.0.map(f64::from)).is_none() { return Err("Invalid projective transform".into()); }
-    if result.inverse().is_none() { return Err(DecodeError::Unsupported("Projective transform exceeds evaluator precision".into())); }
-    Ok(result)
-}
-pub fn encode_projective(value: Projective) -> Result<Value, String> {
-    if value.inverse().is_none() { return Err("Invalid projective transform".into()); }
-    Ok(float_array(&value.0))
-}
-pub fn parse_interpolation(value: &Value) -> DecodeResult<Interpolation> {
-    Ok(match string(value)? { "nearest" => Interpolation::Nearest, "linear" => Interpolation::Linear,
-        "bicubic" => Interpolation::Bicubic, "lanczos" => Interpolation::Lanczos,
-        name => return Err(unsupported("interpolation", name)) })
-}
-pub fn encode_interpolation(value: Interpolation) -> Value {
-    Value::from(match value { Interpolation::Nearest => "nearest", Interpolation::Linear => "linear",
-        Interpolation::Bicubic => "bicubic", Interpolation::Lanczos => "lanczos" })
-}
-pub fn parse_mesh(value: &Value) -> DecodeResult<MeshMap> {
-    let fields = object(value, &["frame", "breakpoints", "net"])?;
-    let axes = array(required(fields, "breakpoints")?, 2)?;
-    let mut breakpoints: [Arc<[f32]>; 2] = [Arc::from([]), Arc::from([])];
-    for (out, axis) in breakpoints.iter_mut().zip(axes) {
-        let values = axis.as_array().ok_or("Invalid mesh breakpoints")?;
-        if values.len() < 2 { return Err("Invalid mesh breakpoint count".into()); }
-        if values.len() > usize::from(MeshMap::MAX_CELLS) + 1 { return Err(DecodeError::Unsupported("Mesh exceeds the supported cell count".into())); }
-        *out = values.iter().map(finite_f32).collect::<DecodeResult<Vec<_>>>()?.into();
-        if out[0] != 0. || out[out.len()-1] != 1. || out.windows(2).any(|w|w[1]<=w[0]) { return Err("Invalid mesh breakpoints".into()); }
-    }
-    let values = required(fields, "net")?.as_array().ok_or("Invalid mesh net")?;
-    let expected = (3 * (breakpoints[0].len() - 1) + 1) * (3 * (breakpoints[1].len() - 1) + 1);
-    if values.len() != expected { return Err("Invalid mesh net size".into()); }
-    let mesh = MeshMap { frame: parse_affine(required(fields, "frame")?)?, breakpoints,
-        net: values.iter().map(parse_point).collect::<DecodeResult<Vec<_>>>()?.into() };
-    if !mesh.valid() { return Err(DecodeError::Unsupported("Mesh exceeds evaluator precision".into())); }
-    Ok(mesh)
-}
-pub fn encode_mesh(value: &MeshMap) -> Result<Value, String> {
-    if !value.valid() { return Err("Invalid mesh".into()); }
-    let net = value.net.iter().copied().map(encode_point).collect::<Result<Vec<_>, _>>()?;
-    Ok(serde_json::json!({"frame": encode_affine(value.frame)?, "breakpoints":value.breakpoints.each_ref().map(|axis| float_array(axis)), "net":net}))
-}
-pub fn parse_placement(value: &Value, source: Rect) -> DecodeResult<(Point, LayerPlacement)> {
-    let fields = object(value, &["translation", "projective", "mesh", "interpolation"])?;
-    let translation = optional(fields, "translation", Point::default(), parse_point)?;
-    let placement = LayerPlacement { outer: optional(fields, "projective", Projective::IDENTITY, parse_projective)?,
-        mesh: fields.get("mesh").map(parse_mesh).transpose()?.map(Arc::new),
-        interpolation: optional(fields, "interpolation", Interpolation::Linear, parse_interpolation)? };
-    admit_projective(placement.outer, placement.mesh.as_ref().map_or(source, |mesh| mesh.drawn_bounds()))?;
-    Ok((translation, placement))
-}
-pub fn encode_placement(translation: Point, value: &LayerPlacement, source: Rect) -> Result<Value, String> {
-    value.validate_for(source).map_err(|e| e.to_string())?;
-    let mut fields = placement_fields(translation, value.outer)?;
-    if let Some(mesh) = &value.mesh { fields.insert("mesh".into(), encode_mesh(mesh)?); }
-    if value.interpolation != Interpolation::Linear { fields.insert("interpolation".into(), encode_interpolation(value.interpolation)); }
-    Ok(Value::Object(fields))
-}
-fn placement_fields(translation: Point, outer: Projective) -> Result<Map<String, Value>, String> {
-    let mut fields = Map::new();
-    let translation_value = encode_point(translation)?;
-    if [translation.x.to_bits(), translation.y.to_bits()] != [0; 2] { fields.insert("translation".into(), translation_value); }
-    let projective = encode_projective(outer)?;
-    if outer.0.map(f32::to_bits) != Projective::IDENTITY.0.map(f32::to_bits) { fields.insert("projective".into(), projective); }
-    Ok(fields)
-}
-pub fn parse_mask_placement(value: &Value, source: Rect) -> DecodeResult<(Point, Projective)> {
-    let fields = object(value, &["translation", "projective"])?;
-    let translation = optional(fields, "translation", Point::default(), parse_point)?;
-    let projective = optional(fields, "projective", Projective::IDENTITY, parse_projective)?;
-    admit_projective(projective, source)?;
-    Ok((translation, projective))
-}
-fn admit_projective(projective: Projective, source: Rect) -> DecodeResult<()> {
-    if projective.weight_ratio(source).is_none() { return Err("Placement crosses its projective horizon".into()); }
-    if !projective.covers(source) { return Err(DecodeError::Unsupported("Placement exceeds evaluator precision".into())); }
-    Ok(())
-}
-pub fn encode_mask_placement(translation: Point, projective: Projective, source: Rect) -> Result<Value, String> {
-    if !projective.covers(source) { return Err("Invalid mask placement".into()); }
-    Ok(Value::Object(placement_fields(translation, projective)?))
-}
-
 pub fn parse_sdr(value: &Value) -> DecodeResult<SdrRendition> {
     let fields = object(value, &["exposure", "contrast", "headroom", "highlight_color", "balance"])?;
     let result = SdrRendition { exposure: optional(fields, "exposure", 0., finite_f32)?,
@@ -332,10 +248,6 @@ mod tests {
         assert_eq!(encode_frame(Point::default(), [11,17]).unwrap(), json!({"size":[11,17]}));
         assert_eq!(parse_sdr(&json!({})).unwrap(), SdrRendition { exposure:0., contrast:1., headroom:2.3004484, highlight_color:0.3, balance:0. });
         assert_eq!(encode_sdr(parse_sdr(&json!({})).unwrap()).unwrap(), json!({}));
-        let source = Rect::from_extent([11,17]);
-        assert_eq!(parse_placement(&json!({}), source).unwrap(), (Point::default(), LayerPlacement::IDENTITY));
-        assert_eq!(encode_placement(Point::default(), &LayerPlacement::IDENTITY, source).unwrap(), json!({}));
-        assert_eq!(parse_mask_placement(&json!({}), source).unwrap(), (Point::default(), Projective::IDENTITY));
         for space in RgbSpace::ALL {
             assert_eq!(parse_rgb_space(&encode_rgb_space(space)).unwrap(), space);
             for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
@@ -347,9 +259,6 @@ mod tests {
         assert_eq!(encode_layer_blend(LayerBlend::SoftLight), json!("soft_light"));
         assert_eq!(encode_layer_blend(LayerBlend::PassThrough), json!("pass_through"));
         for blend in BlendSpace::ALL { assert_eq!(parse_blend_space(&encode_blend_space(blend)).unwrap(), blend); }
-        for interpolation in [Interpolation::Nearest, Interpolation::Linear, Interpolation::Bicubic, Interpolation::Lanczos] {
-            assert_eq!(parse_interpolation(&encode_interpolation(interpolation)).unwrap(), interpolation);
-        }
         for unit in [ResolutionUnit::Inch, ResolutionUnit::Centimetre, ResolutionUnit::Metre] {
             let resolution = ImageResolution { unit, density:[[u32::MAX,123],[24001,80]] };
             assert_eq!(parse_resolution(&encode_resolution(resolution).unwrap()).unwrap(), resolution);
@@ -402,48 +311,12 @@ mod tests {
         let restored = parse_sdr(&wire(encode_sdr(sdr).unwrap())).unwrap();
         assert_eq!(restored.exposure.to_bits(),sdr.exposure.to_bits());
         assert_eq!(restored.balance.to_bits(),sdr.balance.to_bits());
-        let source = Rect::from_extent([11,17]);
-        let mut placement = LayerPlacement::IDENTITY;
-        placement.outer.0[1] = -0.;
-        let restored = parse_placement(&wire(encode_placement(origin,&placement,source).unwrap()),source).unwrap();
-        assert_eq!(restored.1.outer.0.map(f32::to_bits),placement.outer.0.map(f32::to_bits));
-        assert_eq!(restored.0.x.to_bits(),origin.x.to_bits());
-    }
-
-    #[test]
-    fn projective_and_mesh_validation_keeps_source_domain_constraints() {
-        let source = Rect::from_extent([100,80]);
-        let mesh = MeshMap::identity(source,[2,3]).unwrap().split(0,0.3).unwrap();
-        let placement = LayerPlacement { outer:Projective::from_affine(Affine([1.,0.25,-0.5,2.,7.,9.])),
-            mesh:Some(Arc::new(mesh)), interpolation:Interpolation::Lanczos };
-        let translation = Point { x:2.1234567, y:-0. };
-        let restored = parse_placement(&wire(encode_placement(translation,&placement,source).unwrap()),source).unwrap();
-        assert_eq!(restored.1,placement);
-        assert_eq!([restored.0.x.to_bits(),restored.0.y.to_bits()], [translation.x.to_bits(),translation.y.to_bits()]);
-        invalid(parse_placement(&json!({"projective":[1,0,0,2,0,0,0,0,1]}),source));
-        invalid(parse_placement(&json!({"projective":[1,0,0,0,1,0,-0.02,0,1]}),source));
-        invalid(parse_mask_placement(&json!({"projective":[1,0,0,0,1,0,-0.02,0,1]}),source));
-        unsupported(parse_mask_placement(&json!({"interpolation":"nearest"}),source));
-        unsupported(parse_mask_placement(&json!({"mesh":{}}),source));
-        unsupported(parse_placement(&json!({"interpolation":"future"}),source));
-        let mut bad_mesh = encode_mesh(placement.mesh.as_ref().unwrap()).unwrap();
-        bad_mesh["breakpoints"][0] = json!([0,0,1]);
-        invalid(parse_mesh(&bad_mesh));
-        let mut future_mesh = encode_mesh(placement.mesh.as_ref().unwrap()).unwrap();
-        future_mesh["gpu_grid"] = json!([1,1]);
-        unsupported(parse_mesh(&future_mesh));
     }
 
     #[test]
     fn finite_transform_precision_is_an_admission_limit() {
         unsupported(parse_affine(&json!([1e-40,0,0,1,0,0])));
         invalid(parse_affine(&json!([0,0,0,1,0,0])));
-        let mesh=MeshMap::identity(Rect::from_extent([16;2]),[2,1]).unwrap();
-        let mut value=encode_mesh(&mesh).unwrap();
-        value["breakpoints"][0]=json!([0,1e-7,1]);
-        unsupported(parse_mesh(&value));
-        value["breakpoints"][0]=json!([0,0,1]);
-        invalid(parse_mesh(&value));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! the renderer's paint pages after a preview are compared with the
 //! premultiplied source, the selection and each filter evaluated on the CPU.
 use super::*;
-use super::placement::{paint_document, occurrence_mut, paint_mut, target, set_source, reveal_all};
+use super::placement::{paint_document, paint_mut, target, set_source, reveal_all};
 use layer_core::{Document, RasterOperation, RasterOperationKind};
 use super::transforms::{mask_values, mask_target, masked, packed};
 use crate::pixel_transform::EXACT_TAPS;
@@ -385,6 +385,7 @@ fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
                 let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(affine) },
                     keep_source: true,
                 source_from_owner: None,
+                source_base: None,
                 };
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction,
@@ -897,7 +898,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let preview = largest_difference(reduced(&r).into_iter(), &expected);
     r.set_transform_preview(None).unwrap();
     submit(&mut r, &layer, &[], false);
-    let mut coverage = reveal_all(extent, Point::default());
+    let mut coverage = reveal_all(extent, [0, 0]);
     coverage.source.default_coverage = 1.;
     let operation = RasterOperation { placement: Affine::IDENTITY, coverage, kind: RasterOperationKind::Transform(transform) };
     let batch = DabBatch {
@@ -913,13 +914,17 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     assert!(preview > 0.1, "a moving preview averages at most four taps and aliases: {preview}");
     assert!(commit < 1e-3, "the commit averages the whole footprint: {commit} from the area reduction");
 
-    let mut document = paint_document([size; 2], "placed zone plate");
+    let mut document = paint_document([size; 2], "transformed zone plate");
+    let root = document.artwork.root;
+    document.artwork.compositions.get_mut(root).unwrap().color.depth = SampleDepth::F32;
     set_source(&mut document, zone_plate());
-    occurrence_mut(&mut document).placement = layer_core::LayerPlacement::from_affine(EIGHTH);
+    let plan = document.layer_transform_plan(target(&document), &LayerPlacement { interpolation: Interpolation::Bicubic, ..LayerPlacement::from_affine(EIGHTH) }, None, Default::default()).unwrap();
+    let output = pollster::block_on(r.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
+    document.apply(output).unwrap();
     let mut capture = r.snapshot_gpu().capture_scene(document.snapshot(), SceneScope::All, Default::default()).unwrap();
     let exported = capture.read_region([0, 0, size, size]).unwrap();
-    let placed = largest_difference(exported.iter().map(|p| p[0]), &expected);
-    assert!(placed < 1e-3, "exact capture of a photo placed at an eighth: {placed} from the area reduction");
+    let transformed = largest_difference(exported.iter().map(|p| p[0]), &expected);
+    assert!(transformed < 1e-3, "a photo transformed to an eighth: {transformed} from the area reduction");
 }
 
 fn check_pages(oracle: &Oracle, map: [f64; 9], interpolation: Interpolation, keep_source: bool,

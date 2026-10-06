@@ -49,11 +49,12 @@ pub struct WebApp {
     cursor: layer_ui::CanvasCursor,
     sequence: u64,
     startup: StartupProgress,
-    deferred_contacts: std::collections::BTreeSet<u64>,
+    deferred_contacts: layer_engine::DeferredContacts,
     overviews: std::collections::BTreeMap<u32, editor::NavigatorSurface>,
     header_drag: Option<layer_ui::HeaderDrag>,
     glass: Vec<layer_render_wgpu::BackdropRegion>,
     screen_presented_ms: f64,
+    thumbnails: layer_ui::ThumbnailRequests,
 }
 
 #[derive(Deserialize)]
@@ -188,6 +189,9 @@ impl WebApp {
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_menu(id, mask).map_err(js)?)
     }
+    pub fn object_menu(&self, id: u64) -> Result<JsValue, JsValue> {
+        serialize(&self.session.object_menu(id).map_err(js)?)
+    }
     pub fn layer_blend_menu(&self, id: u64) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_blend_menu(id).map_err(js)?)
     }
@@ -256,6 +260,10 @@ impl WebApp {
         )
     }
     pub fn request_layer_thumbnail(&mut self, request: u64, target: u64) -> Result<bool, JsValue> {
+        let target = layer_render::ThumbnailTarget::from_wire_id(target).ok_or_else(|| js("Invalid thumbnail identity"))?;
+        self.submit_thumbnail(Some((request, target)))
+    }
+    fn submit_thumbnail(&mut self, next: Option<(u64, layer_render::ThumbnailTarget)>) -> Result<bool, JsValue> {
         if !self.startup.canvas_ready || !self.session.background_readback_idle() {
             return Ok(false);
         }
@@ -263,23 +271,33 @@ impl WebApp {
         if !self.rasterizer()?.ui_readback_ready() {
             return Ok(false);
         }
-        let target = layer_render::ThumbnailTarget::from_wire_id(target).ok_or_else(|| js("Invalid thumbnail identity"))?;
-        match self.rasterizer()?.prepare_thumbnail_batch(target) {
-            Ok(true) => (),
-            Ok(false) | Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => return Ok(false),
-            Err(error) => return Err(js(error)),
-        }
-        match self.session.renderer_mut().request_thumbnail(request, target) {
-            Ok(()) => Ok(true),
+        let retry = self.thumbnails.retry(&self.session);
+        let Some((request, target)) = retry.or(next) else { return Ok(false) };
+        let submitted = match self.rasterizer()?.prepare_thumbnail_batch(target) {
+            Ok(true) => self.session.renderer_mut().request_thumbnail(request, target),
+            Ok(false) => return Ok(false),
+            Err(error) => Err(error),
+        };
+        match submitted {
+            Ok(()) => {
+                self.thumbnails.submitted(request, target, retry.is_some());
+                Ok(retry.is_none())
+            }
+            Err(error) if retry.is_some() => { self.thumbnails.refused(&self.session, matches!(error, layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_))); Ok(false) }
             Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => Ok(false),
             Err(error) => Err(js(error)),
         }
     }
+    pub fn canvas_work_pending(&self) -> bool {
+        self.session.engine().wants_continuous_frames()
+    }
     pub fn take_layer_thumbnail(&mut self) -> Result<JsValue, JsValue> {
+        self.submit_thumbnail(None)?;
         let Some(result) = self.session.renderer_mut().take_thumbnail() else {
             return Ok(JsValue::NULL);
         };
         let image = result.map_err(js)?;
+        self.thumbnails.completed(image.request_id);
         serialize(&(image.request_id, image.width, image.height, image.bytes))
     }
     /// Display-only hover data, independent of the high-rate paint queue.
@@ -359,6 +377,7 @@ impl WebApp {
             header_drag: None,
             glass: Vec::new(),
             screen_presented_ms: 0.,
+            thumbnails: Default::default(),
         })
     }
     pub fn gpu_ready(&self) -> bool {
@@ -533,6 +552,13 @@ impl WebGpu {
 }
 
 impl WebApp {
+    fn deliver(&mut self, event: PenEvent) -> Result<(), JsValue> {
+        if let Err(event) = self.session.pen(event) {
+            self.session.frame(event.timestamp_ns, event.timestamp_ns).map_err(js)?;
+            self.session.pen(event).map_err(|_| js("Pen queue remained full"))?;
+        }
+        Ok(())
+    }
     fn rasterizer(&mut self) -> Result<&mut WgpuRasterizer, JsValue> {
         self.session
             .renderer_mut()
@@ -905,34 +931,12 @@ impl WebApp {
         if !self.gpu_ready() && matches!(input, layer_ui::UiInput::Pointer { .. }) {
             return serialize(&layer_ui::InputReply::default());
         }
-        if let layer_ui::UiInput::Pointer { id, phase, kind, button, position, .. } = &input {
-            use layer_ui::ContactPhase;
-            if *phase == ContactPhase::Down {
-                if let Some(control) = self.tone.pending.take() { control.cancel(); }
-                self.deferred_contacts.remove(id);
-                // A preceding stroke/undo can change the revision before the
-                // next display callback. Refresh cached requirements now so a
-                // fully prepared tool does not lose the next quick contact.
-                if !self.brush_ready() {
-                    self.prepare_startup()?;
-                    self.startup = self.rasterizer()?.poll_startup().map_err(js)?;
-                }
-                if !self.brush_ready()
-                    && (*kind == layer_ui::PointerKind::Touch
-                        || self.session.pointer_contact_paints(*kind, *button, *position))
-                {
-                    self.deferred_contacts.insert(*id);
-                }
+        if let layer_ui::UiInput::Pointer { phase: layer_ui::ContactPhase::Down, .. } = &input {
+            if let Some(control) = self.tone.pending.take() { control.cancel(); }
+            if !self.brush_ready() {
+                self.prepare_startup()?;
+                self.startup = self.rasterizer()?.poll_startup().map_err(js)?;
             }
-            if self.deferred_contacts.contains(id) {
-                if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
-                    self.deferred_contacts.remove(id);
-                }
-                return serialize(&layer_ui::InputReply::default());
-            }
-        }
-        if matches!(input, layer_ui::UiInput::Blur) {
-            self.deferred_contacts.clear();
         }
         serialize(&self.session.input(input).map_err(js)?)
     }
@@ -1036,7 +1040,8 @@ impl WebApp {
 
     /// Packed history records: id, phase, x, y, pressure, tilt x/y, twist,
     /// timestamp milliseconds, flags, device kind (0 pen / 1 mouse / 2 eraser).
-    /// Returns consumed record count if the bounded input queue fills.
+    /// A contact that begins before painting is ready is held whole and
+    /// delivered once it is.
     pub fn pen(&mut self, records: &[f64], view_revision: u64) -> Result<u32, JsValue> {
         if !self.gpu_ready() {
             return Err(js("Drawing is unavailable until the GPU is connected"));
@@ -1044,7 +1049,7 @@ impl WebApp {
         if !records.len().is_multiple_of(11) {
             return Err(js("Invalid pen batch length"));
         }
-        for (index, item) in records.chunks_exact(11).enumerate() {
+        for item in records.chunks_exact(11) {
             if !item.iter().all(|n| n.is_finite()) {
                 return Err(js("Invalid pen sample"));
             }
@@ -1072,8 +1077,10 @@ impl WebApp {
             if event.phase == PenPhase::Down {
                 if let Some(control) = self.tone.pending.take() { control.cancel(); }
             }
-            if self.session.pen(event).is_err() {
-                return Ok(index as u32);
+            let admitted = self.deferred_contacts.admit(event, self.brush_ready(), web_time::Instant::now());
+            self.session.set_input_held(self.deferred_contacts.holding());
+            for event in admitted {
+                self.deliver(event)?;
             }
             self.sequence += 1;
         }
@@ -1096,6 +1103,7 @@ impl WebApp {
         )
     }
     pub fn frame(&mut self, now_ms: f64, presentation_ms: f64) -> Result<JsValue, JsValue> {
+        self.session.set_input_held(self.deferred_contacts.holding());
         if !self.gpu_ready() {
             return serialize(&layer_ui::UiChange::default());
         }
@@ -1106,6 +1114,11 @@ impl WebApp {
         } else {
             self.prepare_startup()?;
             self.startup = self.rasterizer()?.poll_startup().map_err(js)?;
+            let released = self.deferred_contacts.release(self.brush_ready(), web_time::Instant::now());
+            self.session.set_input_held(self.deferred_contacts.holding());
+            for event in released {
+                self.deliver(event)?;
+            }
             if self.startup.canvas_ready {
                 change = self
                     .session
@@ -1118,7 +1131,7 @@ impl WebApp {
         }
         // Compiler completions wake the browser explicitly. Once the brush is
         // usable, optional compilation does not require continuous redraws.
-        change.canvas_wake |= !self.startup.brush_ready;
+        change.canvas_wake |= !self.startup.brush_ready || !self.deferred_contacts.is_empty();
         let rendition = self.session.engine().document().composition().color.depth.is_float().then(|| self.session.effective_sdr_rendition());
         let hdr_output = self.hdr_output();
         let lut = self.proof.lut(&self.session);

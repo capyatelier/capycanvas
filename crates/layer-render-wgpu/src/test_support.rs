@@ -40,6 +40,33 @@ pub(crate) fn corrupt_tile(blob: layer_core::raster::TileBlob) -> layer_core::ra
     let bytes=Arc::from(spill.bytes.clone());spill.commit(Arc::new(Chunk(bytes))).unwrap();tile
 }
 
+/// Stores `selection` in a mask through the renderer's mask Coverage
+/// operation. Stored tiles keep precedence over the materialized pages.
+pub(crate) fn materialize_mask(source: &mut layer_core::authored::CoverageSource, selection: layer_core::Selection, color: layer_core::color::DocumentColor) {
+    use layer_core::{authored::*, raster::*, CoverageSnapshot, RasterOperation, RasterOperationKind};
+    let mut artwork = Artwork::new(source.domain).unwrap();
+    artwork.compositions.get_mut(artwork.root).unwrap().color = color;
+    let (owner, _) = add_paint(&mut artwork, "Mask owner", source.domain);
+    let mut coverage = CoverageSnapshot::reveal_all(artwork.coverage.next_handle(), source.domain, [0, 0]);
+    coverage.source.default_coverage = source.default_coverage;
+    coverage.selection = Some(selection);
+    let operation = RasterOperation { placement: layer_core::Affine::IDENTITY, coverage, kind: RasterOperationKind::Coverage };
+    let damage = operation.bounds(source.domain);
+    let raster = RasterRevision::pending();
+    let pending = CoverageSource { raster: raster.clone(), operations: Arc::new(vec![operation]), ..source.clone() };
+    let handle = artwork.coverage.insert(PortableId::random(), pending).unwrap();
+    artwork.occurrences.get_mut(owner).unwrap().mask = Some(MaskUse { source: handle, enabled: true, linked: true, inverted: false, offset: [0, 0] });
+    let document = layer_core::Document::from_artwork(artwork).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    let batch = DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
+        ..dab_batch(SourceTarget::Coverage(handle), crate::tests::test_style(BrushExecution::Dry), damage) };
+    r.submit(FramePacket { dab_batches: std::slice::from_ref(&batch), reset_layers: true, view: view([64; 2]),
+        ..packet(document.scene(), source.domain) }).unwrap();
+    let mut tiles = raster.wait_data().unwrap().tiles.clone();
+    if let Some(Ok(stored)) = source.raster.try_data() { tiles.extend(stored.tiles.iter().map(|(key, tile)| (*key, tile.clone()))); }
+    source.raster = RasterRevision::backed(RasterData { tiles, watercolor: None });
+}
+
 pub(crate) fn view(extent: [u32; 2]) -> ViewState {
     ViewState {
         width_px: extent[0],
@@ -224,4 +251,39 @@ pub(crate) fn wait_startup(renderer: &mut WgpuRasterizer, deadline: std::time::I
         assert!(std::time::Instant::now() < deadline, "{message}");
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// Both renderers' canonical composites agree in every working F32 sample.
+pub(crate) fn assert_same_canonical(actual: &mut WgpuRasterizer, expected: &mut WgpuRasterizer) {
+    let bits = |r: &mut WgpuRasterizer| canonical_pixels(r).into_iter().map(|p| p.map(f32::to_bits)).collect::<Vec<_>>();
+    let (actual, expected) = (bits(actual), bits(expected));
+    let differing = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
+    let first = actual.iter().zip(&expected).position(|(a, b)| a != b);
+    assert!(actual.len() == expected.len() && differing == 0, "{differing} canonical samples differ, first at {first:?}");
+}
+
+fn canonical_pixels(r: &mut WgpuRasterizer) -> Vec<[f32; 4]> {
+    let frame = r.artwork_frame.clone().unwrap();
+    let extent = r.document_extent;
+    let mut capture = crate::artwork::Capture::default();
+    let mut pixels = vec![[0.; 4]; extent[0] as usize * extent[1] as usize];
+    for coordinate in page_coordinates(PixelRect::full(extent)) {
+        let region = page_rect(coordinate).intersect(PixelRect::full(extent));
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let tile = loop {
+            match capture.region(r, frame.packet(extent), region, [PAGE_SIZE; 2], &mut encoder) {
+                Err(GpuRasterError::DeferredObjectWork) => scene::Scene::submit_chunk(r, &mut encoder, "canonical test capture").unwrap(),
+                result => break result.unwrap(),
+            }
+        };
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+        let samples = float_pixels(r, &tile.texture);
+        for y in 0..region.height() {
+            let row = (region.min_y() + y) as usize * extent[0] as usize + region.min_x() as usize;
+            let local = y as usize * PAGE_SIZE as usize;
+            pixels[row..row + region.width() as usize].copy_from_slice(&samples[local..local + region.width() as usize]);
+        }
+    }
+    pixels
 }

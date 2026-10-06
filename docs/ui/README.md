@@ -45,7 +45,8 @@ while file dialogs, focus and accessibility follow the platform.
   [command search](command-search.md),
   [selections](selections.md) with the [selection tools](selection-tools.md) and
   [tonal range](tonal-selection.md), [open and import](open-and-import.md),
-  [copy and paste](clipboard.md), and [GTK drawing tabs](gtk-document-tabs.md).
+  [image layers](image-objects.md), [copy and paste](clipboard.md), and
+  [GTK drawing tabs](gtk-document-tabs.md).
 - [Settings](settings.md), [numeric controls](numeric-controls.md),
   [theme colors](theme-colors.md), [panel transparency](panel-transparency.md)
   and [squircle corners](squircle-corners.md).

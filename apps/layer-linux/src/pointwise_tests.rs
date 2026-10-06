@@ -169,7 +169,7 @@ fn assert_source_scene(w: &Rc<Workspace>, before: &layer_core::Document) {
     assert_eq!(before_order,after_order);
     let original:serde_json::Value=serde_json::from_slice(&artwork_manifest(before)).unwrap();
     let current:serde_json::Value=serde_json::from_slice(&artwork_manifest(&after)).unwrap();
-    for object in original["objects"].as_array().unwrap().iter().filter(|object|object["type"]!="capy.output/1") {
+    for object in original["objects"].as_array().unwrap().iter().filter(|object|object["type"]!="capy.output/2") {
         assert_eq!(current["objects"].as_array().unwrap().iter().find(|entry|entry["id"]==object["id"]),Some(object),"original authored source/scene object retains exact portable content");
     }
     assert_eq!(after.artwork.paint.iter().count(),before.artwork.paint.iter().count());
@@ -357,7 +357,7 @@ fn native_pointwise_filters_controls_and_persistence() {
 
 #[allow(deprecated)]
 pub(super) fn import_lookup(w: &Rc<Workspace>, path: Option<&std::path::Path>, input: &mut RemoteInput) {
-    if let Some(notice)=state(w).notice {w.dispatch(UiAction::Notice {id:notice.id,accept:false});pump(100);}
+    if let Some(notice)=state(w).notice {w.dispatch(UiAction::Notice {id:notice.id,accept:false,action:None});pump(100);}
     lookup_action(w,input,|action|matches!(action,EffectAction::ImportLookup {..}));let dialog=super::new_photo::chooser();assert!(state(w).host_error.is_none(),"new native import clears preceding error");
     if let Some(path)=path {dialog.set_file(&gtk::gio::File::for_path(path)).unwrap();pump(250);dialog.response(gtk::ResponseType::Accept);} else {dialog.response(gtk::ResponseType::Cancel);}
     until(||!state(w).document_file.busy,"lookup worker finishes");if state(w).host_error.is_none() {ready(w);}

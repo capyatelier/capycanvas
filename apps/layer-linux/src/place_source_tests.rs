@@ -38,12 +38,12 @@ fn source_is(w: &Rc<Workspace>, expected: &SourceImage) {
     let gpu = w.gpu.borrow();
     let document = gpu.as_ref().unwrap().session.engine().document();
     assert_eq!(document.composition().color, Default::default());
-    let layer = active_paint(document);
-    assert_source_samples(layer.base.as_ref().map(|base|base.image.as_ref()).unwrap(), expected);
-    assert!(
-        layer.raster.is_empty(),
-        "retained import must not quantize to canvas precision"
-    );
+    let [image] = document.working.objects.iter().copied().collect::<Vec<_>>()[..] else { panic!("one selected placed image") };
+    assert_source_samples(document.scene().object(image).unwrap().image.as_ref(), expected);
+}
+
+fn placed_sources(document: &layer_core::Document) -> Vec<&SourceImage> {
+    document.artwork.objects.iter().map(|(_, _, object)| object.image.as_ref()).collect()
 }
 
 pub(super) fn wait_layer_thumbnail(w: &Rc<Workspace>, id: u64) -> gtk::gdk::Texture {
@@ -107,13 +107,9 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.CommonRaster");
     let w = Workspace::with_project(&app, Some((new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
-    let opened = Rc::new(RefCell::new(None));
-    let result = opened.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
-        result.replace(Some((project, location)));
-    }));
     w.window.present();
     ready(&w);
+    let drawing = w.documents.selected();
     for &(name, mime) in cases {
         let path = directory.join(name);
         let bytes = std::fs::read(&path).unwrap();
@@ -129,8 +125,9 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
         {
             let gpu = w.gpu.borrow();
             let document = gpu.as_ref().unwrap().session.engine().document();
-            assert_eq!(active_occurrence(document).name.contains("first frame"), photo.first_frame);
-            assert_eq!(active_occurrence(document).name.contains("primary image"), photo.primary_image);
+            let image = document.scene().object(*document.working.objects.iter().next().unwrap()).unwrap();
+            assert_eq!(image.name.contains("first frame"), photo.first_frame);
+            assert_eq!(image.name.contains("primary image"), photo.primary_image);
         }
         invoke(&w, CommandId::ApplyTransform);
         ready(&w);
@@ -138,7 +135,8 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
         wait_layer_thumbnail(&w, active);
         let saved = snapshot(&w);
         let reopened = open_native_document(std::io::Cursor::new(saved));
-        assert_source_samples(paint_at(&reopened, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &photo.source);
+        let [placed] = placed_sources(&reopened)[..] else { panic!("one placed image") };
+        assert_source_samples(placed, &photo.source);
         invoke(&w, CommandId::Undo);
         ready(&w);
         assert_eq!(ui_session(&w).engine().document().scene().order().len(), 2);
@@ -157,27 +155,30 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
         let file = chooser();
         file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
         pump(100);
+        let shown = Instant::now();
         file.response(gtk::ResponseType::Accept);
         finish(&w);
-        let (project, location) = opened.borrow_mut().take().expect("photo Open publishes a document");
-        assert!(location.is_none(), "Open must not make the original image the master target");
+        until(|| w.documents.selected() != drawing, "photo Open opens a drawing tab");
+        ready(&w);
+        let project = ui_session(&w).engine().document().clone();
+        assert!(state(&w).document_file.location.is_none(), "Open must not make the original image the master target");
         assert_eq!(project.composition().size, photo.source.extent);
         assert_source_samples(paint_at(&project, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &photo.source);
         assert_eq!(occurrence_at(&project, 0).name.contains("first frame"), photo.first_frame);
         assert_eq!(occurrence_at(&project, 0).name.contains("primary image"), photo.primary_image);
-        let photo_id = layer_ui::occurrence_token(project.scene().order()[0]);
-        let photo_window = Workspace::with_project(&app, Some((project, location)));
-        let shown = Instant::now();
-        photo_window.window.present();
-        ready(&photo_window);
-        wait_layer_thumbnail(&photo_window, photo_id);
+        wait_layer_thumbnail(&w, layer_ui::occurrence_token(project.scene().order()[0]));
         println!("{name}: source-sized Open canvas and visible layer thumbnail ready in {:.2} ms", shown.elapsed().as_secs_f64() * 1000.);
         if let Some(output) = std::env::var_os("LAYER_RASTER_UI_OUTPUT") {
             let output = std::path::PathBuf::from(output);
             std::fs::create_dir_all(&output).unwrap();
-            super::new_photo::capture_ui(&photo_window, &output, &format!("{name}.png"));
+            super::new_photo::capture_ui(&w, &output, &format!("{name}.png"));
         }
-        photo_window.window.destroy();
+        w.documents.select(&w, w.documents.selected(), true);
+        until(|| w.documents.len() == 1 && !w.documents.changing.get() || w.window.visible_dialog().is_some(), "closing the opened photo");
+        if w.window.visible_dialog().is_some() { super::new_photo::response(&w, "discard"); }
+        until(|| w.documents.len() == 1 && !w.documents.changing.get() && w.documents.selected() == drawing, "the original drawing returns");
+        ready(&w);
+        assert_eq!(ui_session(&w).engine().document().scene().order().len(), 2, "back on the original drawing");
         println!("{name}: native Open/Import/Paste and retained save/history passed");
     }
     w.window.destroy();
@@ -198,7 +199,7 @@ fn native_profiled_place_paste_and_source_history() {
     let output = output.canonicalize().unwrap();
     let path = output.join(format!("P3 reference-{}.png", std::process::id()));
     layer_color::photo::write_png(std::fs::File::create(&path).unwrap(), &source).unwrap();
-    let original = snapshot(&w);
+    let original = ui_session(&w).engine().document().clone();
     invoke(&w, CommandId::ImportImage);
     let file = chooser();
     file.set_file(&gtk::gio::File::for_path(&path)).unwrap();
@@ -224,14 +225,9 @@ fn native_profiled_place_paste_and_source_history() {
     invoke(&w, CommandId::CancelTransform);
     ready(&w);
     assert_eq!(snapshot(&w), placed);
-    invoke(&w, CommandId::ClearLayer);
+    invoke(&w, CommandId::ClearSelected);
     ready(&w);
-    assert!(
-        paint_at(ui_session(&w)
-            .engine()
-            .document(), 0).base
-            .is_none()
-    );
+    assert!(ui_session(&w).engine().document().artwork.objects.is_empty(), "Delete Images removes the placed image");
     let cleared = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 9892))
         .unwrap();
@@ -254,9 +250,7 @@ fn native_profiled_place_paste_and_source_history() {
             .document().scene().order().len(),
         2
     );
-    // Revision/counter identities can advance through history; source payload
-    // restoration remains exact and redo is a single layer-import history step.
-    assert_ne!(snapshot(&w), original);
+    assert_live_artwork_eq(ui_session(&w).engine().document(), &original);
     invoke(&w, CommandId::Redo);
     ready(&w);
     source_is(&w, &source);
@@ -284,17 +278,14 @@ fn native_profiled_place_paste_and_source_history() {
     source_is(&w, &source);
     invoke(&w, CommandId::ApplyTransform);
     ready(&w);
-    assert_eq!(
-        ui_session(&w)
-            .engine()
-            .document().scene().order().len(),
-        4
-    );
+    let document = ui_session(&w).engine().document().clone();
+    assert_eq!(document.scene().order().len(), 3, "the pasted image joins the active image layer");
+    assert_eq!(document.object_layer_children(document.working.occurrence.unwrap()).unwrap().len(), 2);
     let saved = snapshot(&w);
     let reopened =
         open_native_document(std::io::Cursor::new(saved.clone()));
-    assert_source_samples(paint_at(&reopened, 0).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
-    assert_source_samples(paint_at(&reopened, 1).base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
+    assert_eq!(placed_sources(&reopened).len(), 2);
+    for placed in placed_sources(&reopened) { assert_source_samples(placed, &source); }
     let restored = Workspace::with_project(&app, Some((reopened, None)));
     restored.window.present();
     ready(&restored);

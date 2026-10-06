@@ -129,12 +129,9 @@ impl Scene {
                     self.free(output);
                     output = detail;
                 }
-                if coverage.source.default_coverage != 1. || coverage.use_.inverted || coverage.source.initial.is_some()
+                if coverage.source.default_coverage != 1. || coverage.use_.inverted || coverage.selection.is_some()
                     || !coverage.source.raster.is_empty() || !coverage.source.operations.is_empty() {
-                    let geometry = layer_core::ImageTransform { placement: layer_core::LayerPlacement::from_projective(
-                        coverage.use_.placement.then(layer_core::Projective::from_affine(layer_core::Affine::translation(coverage.use_.translation)))
-                            .ok_or(GpuRasterError::InvalidTransform("Invalid bake coverage"))?), ..Default::default() };
-                    let mask = self.command_mask_at(r, coverage, geometry, *coordinate, command)?;
+                    let mask = self.command_mask_at(r, coverage, *coordinate, command);
                     let clipped = self.alloc(r, wgpu::Color::TRANSPARENT);
                     self.draw(r, clipped, self.pool[output].view.clone(), Some(self.pool[mask].view.clone()),
                         [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32], [3., 1., 0., 0.], false, Convert::None);

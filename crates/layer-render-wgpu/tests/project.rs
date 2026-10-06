@@ -138,7 +138,7 @@ fn preset_history(masked: bool) {
     let mut initial = fixture();
     if masked {
         let ink = initial.working.occurrence.unwrap();
-        let mut mask = CoverageSnapshot::reveal_all(initial.artwork.coverage.next_handle(), SIZE, Point::default());
+        let mut mask = CoverageSnapshot::reveal_all(initial.artwork.coverage.next_handle(), SIZE, [0, 0]);
         mask.source.default_coverage = 0.;
         let edit = support::mask_edit(&initial, ink, mask);
         initial.apply(edit).unwrap();

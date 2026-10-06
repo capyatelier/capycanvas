@@ -105,6 +105,13 @@ commands are in [macOS and iPadOS development](development/apple.md).
   `layer_drop` with epoch, raw target, fraction and hit surface. Guard replies
   against cancellation and document changes, and commit the raw release hit
   through shared `Drop` rather than reconstructing policy from the preview.
+- **Image rows.** An image layer's shared `objects` rows are present only while
+  it is `expanded`; show them after their layer row, keyed by their own `id`
+  namespace. Forward `object` actions (select with Shift/Command extend,
+  visibility, expand, and drops within the owning layer) and open `object_menu`
+  for the context gesture. Image rows have no swipe, mask or lock controls.
+  Request their previews through `layer_thumbnails` with the row `id` and
+  `thumbnail_revision`.
 - **Settings sub-pages.** macOS sheets have no title bar, so navigation titles
   and `.navigation` toolbar items inside Settings never appear. Put a sub-page's
   title and Back button in its content, as the shortcut page does.

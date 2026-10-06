@@ -338,6 +338,7 @@ color-properties-source = { $width } × { $height } px · { $bits } bit { $chann
 color-properties-retained-rasterized = Belge koordinatlarında pikselleştirilmiş.
 color-properties-retained-icc = Özgün örnekler ve gömülü ICC korundu.
 color-properties-retained-original = Özgün örnekler ve renk yorumlaması korundu.
+color-properties-retained-placed = Kendi örneklerini ve renk yorumunu koruyan yerleştirilmiş görsel.
 
 
 color-profile-select-imported = İçe aktarılmış bir profil seçin.

@@ -6,12 +6,11 @@ use std::sync::Weak;
 pub(super) struct MaskMetadata {
     pub use_: MaskUse,
     pub domain: [u32; 2],
-    pub initial: Option<layer_core::Selection>,
     pub default_coverage: f32,
 }
 pub(super) fn mask_metadata(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> Option<MaskMetadata> {
     scene.mask(handle).map(|(use_, source)| MaskMetadata {
-        use_: use_.clone(), domain: source.domain, initial: source.initial.clone(), default_coverage: source.default_coverage,
+        use_: use_.clone(), domain: source.domain, default_coverage: source.default_coverage,
     })
 }
 
@@ -19,7 +18,7 @@ pub(super) fn mask_metadata(scene: layer_core::SceneView<'_>, handle: Occurrence
 pub(super) struct Metadata {
     pub id: OccurrenceHandle,
     pub parent: Option<OccurrenceHandle>,
-    pub evaluation_offset: layer_core::Point,
+    pub evaluation_offset: [i64; 2],
     pub occurrence: Occurrence,
     pub effect: Option<Weak<EffectApplication>>,
     pub effect_contract: Option<(layer_core::EffectKind, layer_core::EffectSpace, bool)>,

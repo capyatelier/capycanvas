@@ -49,7 +49,7 @@ fn fixture(depth: SampleDepth) -> Artwork {
     let mut artwork=Artwork::new([256,256]).unwrap();
     let color=DocumentColor {space:RgbSpace::DisplayP3,depth};
     let composition=artwork.compositions.get_mut(artwork.root).unwrap();
-    composition.color=color; composition.origin=Point{x:-0.,y:1.125};
+    composition.color=color;
     composition.resolution=Some(crate::ImageResolution {unit:crate::ResolutionUnit::Inch,density:[[601,2],[300,1]]});
     let stack=composition.result;
     let paint=Arc::new(TileBlob::encode(color.paint_descriptor(),&paint_samples(depth)).unwrap());
@@ -69,11 +69,11 @@ fn fixture(depth: SampleDepth) -> Artwork {
     let first=artwork.paint.insert(identity(10),source.clone()).unwrap();
     let second=artwork.paint.insert(identity(11),source).unwrap();
     let selection=Selection::pixels(Arc::new(SelectionPixels::bytes([5,2],[0,0,5,2],vec![0xff804020,0x7f,0x804020ff,1]).unwrap()));
-    let mask=artwork.coverage.insert(identity(12),CoverageSource {operations:Default::default(),domain:[256;2],default_coverage:0.75,initial:Some(selection.clone()),
+    let mask=artwork.coverage.insert(identity(12),CoverageSource {operations:Default::default(),domain:[256;2],default_coverage:0.75,
         raster:RasterRevision::backed(RasterData {tiles:[(TileKey{plane:RasterPlane::Mask,coordinate:[0,0]},RasterTile::backed_shared(material))].into(),watercolor:None})}).unwrap();
     let mut occurrence=Occurrence::new(OccurrenceContent::Paint(first),"Original source");
-    occurrence.translation=Point{x:1.25,y:-0.}; occurrence.opacity=0.625; occurrence.locked=true;
-    occurrence.mask=Some(MaskUse {source:mask,enabled:true,linked:false,inverted:true,translation:Point{x:2.,y:3.},placement:crate::Projective::IDENTITY});
+    occurrence.offset=[-125,9]; occurrence.opacity=0.625; occurrence.locked=true;
+    occurrence.mask=Some(MaskUse {source:mask,enabled:true,linked:false,inverted:true,offset:[2,3]});
     let a=artwork.occurrences.insert(identity(20),occurrence).unwrap();
     let b=artwork.occurrences.insert(identity(21),Occurrence::new(OccurrenceContent::Paint(second),"Independent copy")).unwrap();
     let saved=artwork.selections.insert(identity(13),SavedSelection {selection,}).unwrap();
@@ -92,8 +92,7 @@ fn fixture(depth: SampleDepth) -> Artwork {
     artwork.metadata=Arc::new(PhotoMetadata {exif:Some(Resource::from(vec![0,255,17,5])),
         xmp:Some(Resource::from(b"<xmp>paint</xmp>".to_vec())),iptc:Some(Resource::from(vec![0x1c,2,120,0,1,42]))});
     let output=artwork.outputs.get_mut(artwork.default_output).unwrap();
-    output.name="Captured output".into(); output.scale=[0.5,0.75];
-    output.frame=Some((Point{x:-2.,y:3.5},[240,200])); output.sdr.exposure=0.5;
+    output.name="Captured output".into(); output.sdr.exposure=0.5;
     artwork
 }
 fn rewrite(bytes: &[u8], change: impl FnOnce(&mut Value)) -> Vec<u8> { rewrite_with(bytes,Vec::new(),change) }
@@ -215,10 +214,10 @@ fn unsupported_known_fields_future_objects_and_shared_sources_preserve_original_
 #[test]
 fn future_record_types_and_selection_descriptors_preserve_the_package() {
     let bytes=serialize(&prepare(&fixture(SampleDepth::U8),true));
-    for (collection,kind) in [("objects","capy.composition/1"),("objects","capy.stack/1"),
-        ("objects","capy.occurrence/2"),("objects","capy.occurrence/3"),("objects","capy.image/1"),("objects","capy.paint-source/2"),("objects","capy.coverage-source/1"),
+    for (collection,kind) in [("objects","capy.composition/2"),("objects","capy.stack/1"),
+        ("objects","capy.occurrence/3"),("objects","capy.image/1"),("objects","capy.paint-source/2"),("objects","capy.coverage-source/2"),
         ("objects","capy.effect/2"),("objects","capy.selection/1"),
-        ("objects","capy.guides/1"),("objects","capy.output/1"),("resources","capy.raster-tile/1"),
+        ("objects","capy.guides/1"),("objects","capy.output/2"),("resources","capy.raster-tile/1"),
         ("resources","capy.selection-coverage/1"),("resources","capy.icc/1"),
         ("resources","capy.photo-metadata/1"),("resources","capy.lut3d/1")] {
         let changed=rewrite(&bytes,|manifest| {
@@ -302,7 +301,7 @@ fn outputless_artwork_is_preserved_after_validating_its_known_records() {
     let bytes=rewrite(&bytes,|manifest| {
         manifest["outputs"]=json!([]);
         manifest.as_object_mut().unwrap().remove("default_output");
-        manifest["objects"].as_array_mut().unwrap().retain(|record|record["type"]!="capy.output/1");
+        manifest["objects"].as_array_mut().unwrap().retain(|record|record["type"]!="capy.output/2");
     });
     let cancel=AtomicBool::new(false);
     let OpenOutcome::Preserved{source,outputs,..}=open(backing(bytes.clone()),Default::default(),&cancel).unwrap() else {panic!("Outputless artwork must be preserved")};
@@ -490,7 +489,7 @@ fn valid_preview_remains_independent_when_its_png_is_corrupt_or_mismatched() {
         OpenOutcome::Candidate {preview,..}=>assert!(preview.is_none()), outcome=>panic!("preview corruption damaged authored content: {outcome:?}"),
     }
     let mismatched=rewrite(&bytes,|manifest| {
-        manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["type"]=="capy.output/1").unwrap()["data"]["representation"]["size"]=json!([1,1]);
+        manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["type"]=="capy.output/2").unwrap()["data"]["representation"]["size"]=json!([1,1]);
     });
     match open(backing(mismatched),Default::default(),&AtomicBool::new(false)).unwrap() {
         OpenOutcome::Candidate {preview,..}=>assert!(preview.is_none()), outcome=>panic!("mismatched preview replaced authored content: {outcome:?}"),

@@ -8,14 +8,12 @@
   "objects": [
     {
       "id": "00000000000000000000000000000001",
-      "type": "capy.composition/1",
+      "type": "capy.composition/2",
       "data": {
-        "frame": {
-          "size": [
-            64,
-            64
-          ]
-        },
+        "size": [
+          64,
+          64
+        ],
         "result": {
           "object": {
             "ref": "00000000000000000000000000000002"
@@ -37,7 +35,7 @@
     },
     {
       "id": "00000000000000000000000000000005",
-      "type": "capy.output/1",
+      "type": "capy.output/2",
       "data": {
         "source": {
           "object": {
@@ -49,7 +47,7 @@
     },
     {
       "id": "00000000000000000000000000000003",
-      "type": "capy.occurrence/2",
+      "type": "capy.occurrence/3",
       "data": {
         "name": "Ink",
         "content": {
@@ -78,7 +76,7 @@
     },
     {
       "id": "00000000000000000000000000000006",
-      "type": "capy.coverage-source/1",
+      "type": "capy.coverage-source/2",
       "data": {
         "domain": {
           "size": [

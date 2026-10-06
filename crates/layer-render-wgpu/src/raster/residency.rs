@@ -63,14 +63,12 @@ impl WgpuRasterizer {
         }
     }
 
-    pub(crate) fn retain_native_backing(&mut self, scene: SceneView<'_>, reset: bool) {
+    pub(crate) fn retain_native_backing(&mut self, retained: &std::collections::BTreeMap<SourceTarget, SceneView<'_>>, reset: bool) {
         if let Some(native) = &mut self.native_edit {
             if reset {
                 native.backing.clear();
             }
-            native.backing.retain(|id, _| {
-                source_access::placed_targets(scene).any(|target| target == *id)
-            });
+            native.backing.retain(|id, _| retained.contains_key(id));
         }
     }
 

@@ -164,17 +164,17 @@ fn permanent_schema_fixtures_keep_structural_classification_and_visible_referenc
             let id: PortableId = object["id"].as_str().unwrap().parse().unwrap();
             let data = &object["data"];
             let shape = match object["type"].as_str().unwrap() {
-                "capy.composition/1" => Shape::Composition { result: reference(&data["result"]["object"]) },
+                "capy.composition/2" => Shape::Composition { result: reference(&data["result"]["object"]) },
                 "capy.stack/1" => Shape::Stack { entries: data.get("entries").map_or(Vec::new(), |v| v.as_array().unwrap().iter().map(reference).collect()) },
-                "capy.occurrence/2" => {
+                "capy.occurrence/3" => {
                     let content = &data["content"];
                     let content = if let Some(paint) = content.get("paint") { Content::Paint(reference(paint)) }
                         else { Content::Group(reference(&content["stack"])) };
                     Shape::Occurrence { content, mask: data.get("mask").map(|m| reference(&m["source"])) }
                 }
                 "capy.paint-source/2" => Shape::Paint {image:None},
-                "capy.coverage-source/1" => Shape::Coverage,
-                "capy.output/1" => Shape::Output { composition: reference(&data["source"]["object"]) },
+                "capy.coverage-source/2" => Shape::Coverage,
+                "capy.output/2" => Shape::Output { composition: reference(&data["source"]["object"]) },
                 _ => Shape::Unknown { ancillary: object["ancillary"].as_bool().unwrap_or(false), references: crate::package::references(data, 1000).unwrap() },
             };
             assert!(graph.objects.insert(id, shape).is_none());

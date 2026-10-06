@@ -16,7 +16,7 @@ export async function measureSessionRestart({call,evaluate,settle}) {
       let completed=false;const before=await store.read(key),retained=new Set([...(before?.current.resources??[]),...(before?.previous?.resources??[])]),begin=performance.now();sessionPerf.active++;
       try {const result=await write(key,...args),end=performance.now();sessionPerf.active--;completed=true;const after=await store.read(key),newIds=after.current.resources.filter(id=>!retained.has(id));
         const blocks=await store.resources(key,newIds),resources=blocks.reduce((sum,bytes)=>sum+bytes.byteLength,0),metadata=new TextEncoder().encode(JSON.stringify(after)).byteLength;
-        sessionPerf.writes.push({captured,begin,end,resources,metadata,logical_bytes:resources+metadata,publication_ms:end-begin,durable_age_ms:end-captured,canvas:JSON.parse(after.current.metadata).objects.filter(object=>object.record.type==='capy.composition/1').map(object=>object.record.data)});return result;
+        sessionPerf.writes.push({captured,begin,end,resources,metadata,logical_bytes:resources+metadata,publication_ms:end-begin,durable_age_ms:end-captured,canvas:JSON.parse(after.current.metadata).objects.filter(object=>object.record.type==='capy.composition/2').map(object=>object.record.data)});return result;
       }finally{if(!completed)sessionPerf.active--;}
     };return capture;};
     sessionPerf.frame=layerApp.app.frame.bind(layerApp.app);layerApp.app.frame=(...args)=>{const begin=performance.now();try{return sessionPerf.frame(...args)}finally{sessionPerf.frames.push({time:args[0],duration:performance.now()-begin,writing:sessionPerf.active>0});}};
@@ -45,6 +45,7 @@ export async function measureSessionRestart({call,evaluate,settle}) {
       report.runs.push({duration_ms:6000,callback_intervals_ms:summary(intervals),host_frame_ms:summary(observed.frames.map(frame=>frame.duration)),input_submission_ms:summary(observed.inputs),frames_while_writing:observed.frames.filter(frame=>frame.writing).length,write_bytes:summary(observed.writes.map(write=>write.logical_bytes)),durable_age_ms:summary(observed.writes.map(write=>write.durable_age_ms)),...observed});
     }
     assert.ok(report.runs.every(run=>run.writes.length>0),'Each motion run publishes a complete checkpoint');
+    assert.ok(report.runs.every(run=>run.writes.every(write=>write.canvas.length===1&&write.canvas[0].size?.length===2)),'Each checkpoint records its composition');
     assert.ok(report.runs.every(run=>run.frames.length>100&&run.inputs.length>400),'Real pen input and rendering continue throughout each motion window');
     report.checkpoint_overlap_frames=report.runs.reduce((count,run)=>count+run.frames_while_writing,0);
     const before=await evaluate('sessionPerf.writes.length');await evaluate('layerApp.documents.autosave()');assert.equal(await evaluate('sessionPerf.writes.length'),before,'Unchanged drawing does not write another checkpoint');

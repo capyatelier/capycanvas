@@ -15,6 +15,8 @@ pub fn occurrence_handle(token: u64) -> Result<OccurrenceHandle, String> {
 }
 #[path = "art_layers.rs"]
 mod art_layers;
+#[path = "object_motion.rs"]
+mod object_motion;
 #[path = "color_picker_session.rs"]
 mod color_picker_session;
 #[path = "effect_analysis.rs"]
@@ -84,6 +86,8 @@ mod notices;
 mod selection_pixels;
 #[path = "merges.rs"]
 mod merges;
+#[path = "layer_conversions.rs"]
+mod layer_conversions;
 #[path = "blending.rs"]
 mod blending;
 #[path = "retouch_layers.rs"]
@@ -94,8 +98,12 @@ mod selection_refine;
 pub use selection_refine::{RefineKind, SelectionRefineView};
 #[path = "clipboard.rs"]
 mod clipboard;
+#[path = "object_editing.rs"]
+mod object_editing;
+pub use object_editing::{ObjectAction, ObjectRow, object_handle, object_token};
+pub use source_edit::SourceUse;
 pub use clipboard::{ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
-pub use notices::{Notice, NoticeAction};
+pub use notices::{Notice, NoticeAction, NoticeActionId};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
     GradientToolSettings, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropHint, LayerDropPosition, LayerDropSurface, LayersView, RegionSource,
@@ -124,6 +132,7 @@ pub use filter_previews::{FilterPreviewCache, FilterPreviewStatus, FilterPreview
 mod filter_loading;
 #[path = "renderer_lifecycle.rs"]
 mod renderer_lifecycle;
+pub use renderer_lifecycle::ThumbnailRequests;
 pub use document_files::*;
 pub use effects::{
     GradientDestination, GradientEdit, GradientControls, AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
@@ -210,6 +219,7 @@ pub struct UiSession<R: CanvasRenderer> {
     auto_levels:Option<calibration::AutoLevels>,
     targeted_curve:Option<targeted_curve::TargetedCurve>,
     localization_generation: u64,
+    renderer_generation: u64,
     preferences_revision: u64,
     panel_copy: Vec<(Panel, std::sync::Arc<customization::PanelCopy>)>,
     customization_copy: std::cell::RefCell<CustomizationCopy>,
@@ -223,10 +233,12 @@ pub struct UiSession<R: CanvasRenderer> {
     input_pending: bool,
     host_requests_changed: bool,
     pen_contact: bool,
+    input_held: bool,
     rendering_suspended: bool,
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
     effect_gesture: Option<effects::EffectGesture>,
+    object_motion: Option<object_motion::ObjectMotion>,
     property_editor:effects::PropertyEditorState,
     sdr_gesture: Option<layer_core::color::hdr::SdrRendition>,
     last_proof_mode: Option<ProofMode>,
@@ -242,9 +254,11 @@ pub struct UiSession<R: CanvasRenderer> {
     image_size: Option<image_size::ImageSizeDraft>,
     frequency_separation: Option<retouch_layers::SeparationDraft>,
     content_bounds: image_geometry::ContentBounds,
+    conversion: Option<layer_conversions::PendingConversion>,
     rulers: rulers::RulerInteraction,
     retouch: clone_source::RetouchState,
     operation: operation::Operation,
+    objects: object_editing::ObjectEditing,
     system_theme: Theme,
     system_accent: Option<HexColor>,
     platform_prediction_available: Option<bool>,
@@ -319,6 +333,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn localization_generation(&self) -> u64 { self.localization_generation }
+    pub fn renderer_generation(&self) -> u64 { self.renderer_generation }
     pub fn preferences_revision(&self) -> u64 { self.preferences_revision }
 
     pub fn localization_input_busy(&self) -> bool {
@@ -393,6 +408,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             auto_levels:None,
             targeted_curve:None,
             localization_generation: 0,
+            renderer_generation: 0,
             preferences_revision: 0,
             panel_copy: Default::default(),
             customization_copy: Default::default(),
@@ -402,10 +418,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             input_pending: false,
             host_requests_changed: false,
             pen_contact: false,
+            input_held: false,
             rendering_suspended: false,
             touch: TouchGesture::default(),
             navigator_drag: None,
             effect_gesture: None,
+            object_motion: None,
             property_editor:Default::default(),
             sdr_gesture: None,
             last_proof_mode: None,
@@ -421,9 +439,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             image_size: None,
             frequency_separation: None,
             content_bounds: Default::default(),
+            conversion: None,
             rulers: Default::default(),
             retouch: Default::default(),
             operation: Default::default(),
+            objects: Default::default(),
             system_theme: Theme::Light,
             system_accent: None,
             platform_prediction_available: None,
@@ -1290,7 +1310,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     reply.change = merge_change(reply.change, change);
                     reply.handled |= changed;
                 }
-                if self.transform_nudge(&key, pressed, hold_allowed && self.state.preferences.capture.is_none(), modifiers)? {
+                if self.object_nudge(&key, pressed, hold_allowed && self.state.preferences.capture.is_none(), modifiers)?
+                    || self.transform_nudge(&key, pressed, hold_allowed && self.state.preferences.capture.is_none(), modifiers)? {
                     self.refresh_commands();
                     reply.change = self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true);
                     reply.handled = true;
@@ -1340,6 +1361,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                             self.interaction.pointer = None;
                             reply.cancel_paint = true;
                             reply.change = self.changed(regions::DOCUMENT, true);
+                            reply.handled = true;
+                        } else if self.clear_object_selection()? {
+                            reply.change = self.changed(regions::DOCUMENT | regions::COMMANDS, true);
                             reply.handled = true;
                         } else if self.selection_masks.target().is_some()
                             && self.command_flags(CommandId::ReturnToArtwork).0
@@ -2253,8 +2277,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         } else if id == CommandId::SoftProof {
             self.state.localization.text(MessageId::COMMAND_SOFT_PROOF_TOGGLE)
+        } else if let Some(label) = self.object_command_label(id) {
+            label
         } else if id == CommandId::MergeDown {
             self.merge_down_label()
+        } else if id == CommandId::ApplyLayerMask && self.engine.document().working.occurrence
+            .and_then(|h| self.engine.document().scene().occurrence(h)).is_some_and(|o| o.kind() == LayerKind::Object) {
+            self.state.localization.text(MessageId::COMMAND_RASTERIZE_AND_APPLY_MASK)
         } else {
             id.localized_label(&self.state.localization)
         }
@@ -2298,6 +2327,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let scene = document.scene();
         let editable = active.and_then(|handle| scene.occurrence(handle)).is_some_and(|occurrence| occurrence.kind() == LayerKind::Paint);
         let idle = self.canvas_idle();
+        if let Some(enabled) = self.object_command_enabled(id) {
+            return (enabled, self.object_command_selected(id).unwrap_or(false));
+        }
 
         let enabled = match id {
             CommandId::SearchCommands => idle && !self.state.settings_open && !self.state.customization.blocks_shortcuts() && !self.state.customization.header_editing,
@@ -2349,8 +2381,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::RepairSourceProfile | CommandId::RasterizeSource => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
                     && !matches!(document.working.target, Some(SourceTarget::Coverage(_)))
-                    && self.can_edit_original(active.unwrap_or_default())
+                    && if id == CommandId::RepairSourceProfile { self.active_source_use().is_some_and(|target| self.can_repair_source(target)) }
+                        else { self.can_edit_original(active.unwrap_or_default()) }
             }
+            CommandId::RasterizeLayer | CommandId::ConvertToObject => self.conversion_refusal(id).is_none(),
             CommandId::ExportAgain => self.files.last_export.is_some() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::PasteInPlace | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
@@ -2358,7 +2392,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::PasteInto => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy && self.paste_into_refusal().is_none()
             }
-            CommandId::Copy | CommandId::Cut | CommandId::CopyMerged => {
+            CommandId::Copy | CommandId::Cut | CommandId::CopyMerged | CommandId::CopyPixels => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy && self.copy_refusal(id).is_none()
             }
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
@@ -2392,7 +2426,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 idle && self.straighten_to_guide_refusal().is_none()
                     && (self.cropping() || self.require_document_idle().is_ok())
             }
-            CommandId::PlacementOriginalSize => idle && self.operation.original_size_available(),
+            CommandId::PlacementOriginalSize => false,
             CommandId::ApplyTransform => {
                 idle && self.operation.active() && !self.region_tools.applying_transform()
             }
@@ -2450,8 +2484,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::CloneFlipHorizontal
             | CommandId::CloneFlipVertical
             | CommandId::CloneResetOffset => self.clone_command_enabled(id),
-            CommandId::Undo => idle && (self.operation.placing() || self.cropping() || self.engine.can_undo()),
-            CommandId::Redo => idle && !self.cropping() && self.engine.can_redo(),
+            CommandId::Undo => idle && (self.operation.placing() || self.objects.placing() || self.cropping() || self.engine.can_undo()),
+            CommandId::Redo => idle && !self.cropping() && !self.objects.placing() && self.engine.can_redo(),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
             CommandId::Deselect | CommandId::InvertSelection => {
                 self.require_document_idle().is_ok() && self.has_selection()
@@ -2463,11 +2497,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.require_document_idle().is_ok()
                     && self.selection_to_layer_refusal(id == CommandId::CutSelectionToLayer).is_none()
             }
-            CommandId::ApplyTransformPixels => {
-                self.require_document_idle().is_ok() && self.transform_pixels_refusal().is_none()
-            }
-            CommandId::RevertToOriginal => {
-                self.require_document_idle().is_ok() && self.revert_to_original_refusal().is_none()
+            CommandId::DiscardPaintEdits => {
+                self.require_document_idle().is_ok() && self.discard_paint_edits_refusal().is_none()
             }
             CommandId::MergeDown
             | CommandId::MergeGroup
@@ -2506,7 +2537,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::ClearLayer | CommandId::FillSelection => {
                 self.require_document_idle().is_ok()
-                    && editable
+                    && (editable || self.image_content())
                     && !matches!(document.working.target, Some(SourceTarget::Coverage(_)))
                     && !document.is_locked(active.unwrap_or_default())
                     && (id == CommandId::ClearLayer || document.working.selection.is_some())
@@ -2644,8 +2675,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let UiAction::CanvasBarEdit { context, action } = action {
             return self.canvas_bar_edit(context, *action);
         }
-        if let UiAction::Notice { id, accept } = action {
-            return self.notice_action(id, accept);
+        if let UiAction::Notice { id, accept, action } = action {
+            return self.notice_action(id, accept, action);
         }
         if self.defer_selection_action(&action) {
             return Ok(self.changed(0, true));
@@ -2979,6 +3010,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.frequency_separation_action(action)?;
                 (if radius { 0 } else { DOCUMENT | BRUSH | COMMANDS }, true)
+            }
+            UiAction::Object { action } => {
+                self.require_idle()?;
+                self.object_action(action)?;
+                self.refresh_document();
+                self.refresh_commands();
+                (DOCUMENT | BRUSH | COMMANDS, true)
             }
             UiAction::Layer { action } => {
                 self.require_idle()?;
@@ -4352,6 +4390,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.frequency_separation.as_ref().is_some_and(|d| d.unpublished())
             || self.painted_selections.busy()
             || self.content_bounds.busy()
+            || self.conversion_busy()
             || self.notices.publishing()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
@@ -4364,6 +4403,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         changed |= self.poll_selection_paint()?;
         let tool_before=self.layer_interaction.tool;
         changed |= self.poll_content_bounds();
+        changed |= self.poll_conversion();
         if self.finish_tool_slot_request(tool_before) {changed|=regions::CUSTOMIZATION;}
         self.sync_selection_overlay();
         self.sync_crop_overlay();
@@ -4467,6 +4507,15 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
+        if let Some(result) = self.object_command(command) {
+            result?;
+            return Ok((DOCUMENT | BRUSH | COMMANDS, true));
+        }
+        if self.objects.placing() && matches!(command, CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::ResetTransform | CommandId::Undo) {
+            if command == CommandId::ResetTransform { self.reset_object_session()?; }
+            else { self.finish_object_placement(command == CommandId::ApplyTransform)?; }
+            return Ok((BRUSH | DOCUMENT | COMMANDS, true));
+        }
         match command {
             CommandId::SearchCommands => {
                 self.open_command_search()?;
@@ -4532,13 +4581,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request_document(DocumentRequest::ChangeColor { operation })?;
                 Ok((DOCUMENT | HOST, false))
             }
+            CommandId::RasterizeLayer => {
+                let layer = self.engine.document().working.occurrence.ok_or("Select a layer")?;
+                self.rasterize_layer(layer, false)?;
+                Ok((DOCUMENT | COMMANDS, true))
+            }
+            CommandId::ConvertToObject => {
+                self.convert_to_object()?;
+                Ok((DOCUMENT | COMMANDS, true))
+            }
             CommandId::RasterizeSource | CommandId::RepairSourceProfile => {
                 let id = self.engine.document().working.occurrence.ok_or("Select a layer")?;
-                self.request_source_edit(id, if command == CommandId::RasterizeSource {
-                    DocumentRequest::RasterizeSource { layer: occurrence_token(id) }
+                if command == CommandId::RasterizeSource {
+                    self.request_source_edit(source_edit::SourceUse::Paint(id), DocumentRequest::RasterizeSource { layer: occurrence_token(id) })?;
                 } else {
-                    DocumentRequest::RepairSourceProfile { layer: occurrence_token(id) }
-                })?;
+                    let target = self.active_source_use().ok_or("Select a layer")?;
+                    self.request_source_edit(target, DocumentRequest::RepairSourceProfile { layer: target.token() })?;
+                }
                 Ok((DOCUMENT | HOST, false))
             }
             CommandId::ImportImage => {
@@ -4553,7 +4612,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((DOCUMENT | HOST, false))
             }
-            CommandId::Copy | CommandId::Cut | CommandId::CopyMerged => {
+            CommandId::Copy | CommandId::Cut | CommandId::CopyMerged | CommandId::CopyPixels => {
                 self.request_copy(command)?;
                 Ok((DOCUMENT | HOST, false))
             }
@@ -4680,10 +4739,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.warp_command(command)?;
                 Ok((DOCUMENT | COMMANDS | BRUSH, true))
             }
-            CommandId::PlacementOriginalSize => {
-                self.placement_original_size()?;
-                Ok((BRUSH | DOCUMENT, true))
-            }
+            CommandId::PlacementOriginalSize => Err(self.localization().text(MessageId::COMMANDS_ORIGINAL_SIZE_SELECT_IMAGES).to_string()),
             CommandId::Ruler => {
                 self.layer_action(LayerAction::Tool {
                     tool: LayerCanvasTool::Ruler {
@@ -4786,9 +4842,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_to_layer(command == CommandId::CutSelectionToLayer)?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
-            CommandId::ApplyTransformPixels => { self.apply_transform_pixels()?; Ok((DOCUMENT | BRUSH | COMMANDS, true)) }
-            CommandId::RevertToOriginal => {
-                self.revert_to_original()?;
+            CommandId::DiscardPaintEdits => {
+                self.discard_paint_edits()?;
                 Ok((DOCUMENT | COMMANDS, true))
             }
             CommandId::MergeDown
@@ -4967,7 +5022,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok((DOCUMENT | HOST, false));
                 }
                 self.canvas_bar.history_step();
-                let origin = self.engine.history_canvas_origin(redo);
+                let origin = self.engine.history_view_origin_shift(redo);
                 if redo { self.engine.redo() } else { self.engine.undo() }.map_err(error)?;
                 if let Some(origin) = origin {
                     self.follow_canvas_origin(origin);
@@ -5339,7 +5394,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (_, Some(TransformChoice::Interpolation(_))) => !self.operation.outline(),
                 (_, Some(TransformChoice::Cells(_))) => self.warp_cells().is_some(),
                 (CommandId::WarpSplitVertical | CommandId::WarpSplitHorizontal | CommandId::WarpSplitCross | CommandId::WarpSelectPoints | CommandId::WarpResetGrid, _) => self.warp_cells().is_some(),
-                (CommandId::PlacementOriginalSize, _) => self.operation.original_size_available(),
+                (CommandId::PlacementOriginalSize, _) => false,
                 (CommandId::TransformDistort | CommandId::TransformWarp, _) => !self.operation.outline(),
                 (CommandId::TransformPerspective, _) => {
                     self.transform_mode().is_some_and(|(mode, _)| mode == operation::TransformMode::Distort)
@@ -5476,7 +5531,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Whether a finger at `position` lands on a canvas object it drags
     /// rather than navigating: a transform or crop handle, or the source disc.
     pub(super) fn object_touch_hit(&self, position: [f32; 2]) -> bool {
-        self.transform_touch_hit(position) || self.clone_disc_hit(position)
+        self.transform_touch_hit(position) || self.clone_disc_hit(position) || self.object_touch_target(position)
+    }
+    /// Whether the host holds canvas samples until painting is ready. A
+    /// document snapshot such as Save waits for them.
+    pub fn set_input_held(&mut self, held: bool) {
+        if std::mem::replace(&mut self.input_held, held) != held { self.refresh_commands(); }
     }
     fn paint_contact_busy(&self) -> bool {
         self.pen_contact || (!self.engine.backend().has_pending_submission() && (self.input_pending || self.engine.has_active_stroke()))
@@ -5485,10 +5545,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         !self.painted_selections.has_contact()
             && !self.paint_contact_busy()
             && self.effect_gesture.is_none()
+            && self.object_motion.is_none()
             && self.layer_interaction.gradient_before.is_none()
             && self.selection_masks.quick_property_gesture.is_none()
             && self.sdr_gesture.is_none()
             && self.layer_interaction.path.is_empty()
+            && !self.objects.dragging()
     }
     fn require_idle(&self) -> Result<(), String> {
         self.canvas_idle().then_some(()).ok_or_else(|| "Finish the canvas interaction first".into())
@@ -5671,6 +5733,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_document(&mut self) {
+        self.sync_object_session();
         self.reconcile_selection_mask();
         let doc = self.engine.document();
         self.layer_interaction.collapsed.retain(|id| doc.scene().occurrence(*id).is_some_and(|o| o.kind() == LayerKind::Group));
@@ -5711,6 +5774,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let collapsed = &self.layer_interaction.collapsed;
         let drawing_target = doc.drawing_target();
         let drawing_owner = if self.selection_masks.target().is_some() { None } else { drawing_target.and_then(|id| doc.target_owner(id)) };
+        let object_rows: std::collections::BTreeMap<_, _> = self.objects.expanded.iter().map(|id| (*id, self.object_rows(*id))).collect();
         let layer_state = |id: layer_core::authored::OccurrenceHandle| {
             let scene = doc.scene();
             let l = scene.occurrence(id).expect("placed occurrence");
@@ -5721,7 +5785,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             selection_layer: l.kind() == LayerKind::Selection,
             quick_mask: false,
             can_rename: !doc.is_locked(id),
-            has_thumbnail: matches!(l.kind(), LayerKind::Paint | LayerKind::Selection)
+            has_thumbnail: matches!(l.kind(), LayerKind::Paint | LayerKind::Object | LayerKind::Selection)
                 || scene.effect(id).is_some_and(|fx| fx.program.kind == layer_core::EffectKind::Generator),
             content_icon: scene.effect(id).map(|fx| {
                 format!(
@@ -5735,6 +5799,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             description: {
                 let mut parts = Vec::new();
                 if let Some(paint) = scene.paint_source(id).filter(|p| p.color_mode != layer_core::color::LayerColorMode::FullColor) { parts.push(art_layers::color_mode_label(paint.color_mode, &self.state.localization).to_string()); }
+                if let Some(layer) = scene.object_layer(id) {
+                    let mut args = crate::localization::FluentArgs::new();
+                    args.set("count", layer.children.len() as i64);
+                    parts.push(self.state.localization.format(MessageId::OBJECTS_IMAGE_COUNT, &args));
+                }
                 if l.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.blend, &self.state.localization).to_string()); }
                 if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
                 parts.join(" · ")
@@ -5801,6 +5870,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .wrapping_add(u64::from(m.inverted))
             }),
             mask_id: l.mask.as_ref().map(|m| layer_core::authored::SourceTarget::Coverage(m.source).wire_id()),
+            object_count: scene.object_layer(id).map_or(0, |layer| layer.children.len() as u32),
+            expanded: self.objects.expanded.contains(&id),
+            objects: object_rows.get(&id).cloned().unwrap_or_default(),
         }};
         self.state.layer_tools.editing_layer = doc.working.occurrence.filter(|id| doc.scene().occurrence(*id).is_some()).map(layer_state);
         self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting, self.localization());
@@ -5823,6 +5895,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 can_drop_below: false, depth: 0, collapsed: false, blend: layer_core::LayerBlend::Normal.code(),
                 blend_label: effects::blend_label(layer_core::LayerBlend::Normal, &self.state.localization).to_string(),
                 paint_revision: self.selection_masks.preview_revision(None), mask_revision: 0, mask_id: None, fill_color: None,
+                object_count: 0, expanded: false, objects: Vec::new(),
             };
             self.state.layer_tools.editing_layer = Some(row.clone());
             self.state.layers.insert(0, row);
@@ -7938,11 +8011,11 @@ mod tests {
             let mut edits = vec![Edit::Stack(RecordChange::replace(&document.artwork.stacks, root, Some(stack)).unwrap())];
             if masked {
                 let coverage = RecordChange::insert(&document.artwork.coverage, CoverageSource {
-                    domain: document.composition().size, initial: None, default_coverage: 0.,
+                    domain: document.composition().size, default_coverage: 0.,
                     raster: Default::default(), operations: Default::default(),
                 });
                 occurrence.mask = Some(MaskUse { source: coverage.handle, enabled: true, linked: true,
-                    inverted: false, translation: Point::default(), placement: layer_core::Projective::IDENTITY });
+                    inverted: false, offset: [0, 0] });
                 edits.push(Edit::Coverage(coverage));
             }
             edits.push(Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, handle, Some(occurrence)).unwrap()));
@@ -8055,7 +8128,7 @@ mod tests {
         let id = s.engine.document().working.occurrence.unwrap();
         let target=s.engine.document().scene().source_target(id).unwrap();
         let mut occurrence=s.engine.document().scene().occurrence(id).unwrap().clone();
-        occurrence.translation=Point{x:8.,y:12.};
+        occurrence.offset=[8, 12];
         let edit=Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences,id,Some(occurrence)).unwrap());
         s.layer_edit(edit).unwrap();
         s.frame(4, 4).unwrap();
@@ -8093,7 +8166,7 @@ mod tests {
         assert!(s.frame(6, 6).unwrap().canvas_wake);
         let operation = &s.engine.document().target_operations(target).unwrap()[0];
         assert_eq!(
-            operation.coverage.source.initial,
+            operation.coverage.selection,
             Some(Selection::pixels(coverage.clone()).translated(Point { x: -8., y: -12. })),
             "document-space placed pixels convert to target-local coverage once"
         );
@@ -8345,7 +8418,7 @@ mod tests {
         let id=s.engine.document().working.occurrence.unwrap();
         let target=s.engine.document().scene().source_target(id).unwrap();
         let mut layer=s.engine.document().scene().occurrence(id).unwrap().clone();
-        layer.translation = Point { x: 10., y: 20. };
+        layer.offset = [10, 20];
         layer.alpha_locked = true;
         let edit=Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences,id,Some(layer)).unwrap());
         s.layer_edit(edit).unwrap();
@@ -8546,7 +8619,7 @@ mod tests {
         let id=s.engine.document().working.occurrence.unwrap();
         let target=s.engine.document().scene().source_target(id).unwrap();
         let mut layer=s.engine.document().scene().occurrence(id).unwrap().clone();
-        layer.translation = Point { x: 10.0, y: 20.0 };
+        layer.offset = [10, 20];
         layer.alpha_locked = true;
         let edit=Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences,id,Some(layer)).unwrap());
         s.layer_edit(edit).unwrap();
@@ -8609,7 +8682,7 @@ mod tests {
         }
         assert_eq!(shape,layer_core::GradientShape::Reflected);assert!(alpha_locked);assert!(!reverse);assert_eq!(opacity,0.4);
         assert_eq!(gradient.stops[0].color,s.state.colors.foreground);assert_eq!(gradient.stops[1].color,s.state.colors.background);
-        let selection = operations[0].coverage.source.initial.as_ref().unwrap();
+        let selection = operations[0].coverage.selection.as_ref().unwrap();
 
         let first = selection.contours()[0][0];
         assert_eq!(selection.affine.map(first), Point::default());
@@ -8726,11 +8799,12 @@ mod tests {
             invoke(&mut s, CommandId::ApplyTransform);
             s.frame(2, 2).unwrap();
             let after = s.engine.document().scene();
-            assert_eq!(after.raster(paint).unwrap().identity() != before.scene().raster(paint).unwrap().identity(), linked);
-            assert_ne!(after.raster(mask).unwrap().identity(), before.scene().raster(mask).unwrap().identity());
-            assert!(after.operations(mask).unwrap().is_empty());
-            assert_eq!(s.engine.backend().pending_operations.len(), 1 + usize::from(linked));
-            assert!(s.engine.backend().pending_operations.iter().all(|(_, op)| matches!(op.kind, RasterOperationKind::Transform(_))));
+            let shift = layer_core::offsets::checked_sub(after.target_origin(mask), before.scene().target_origin(mask)).unwrap();
+            assert!(shift != [0, 0] && shift[1] == 0, "a whole-pixel move changes only the mask offset: {shift:?}");
+            assert_eq!(after.target_origin(paint) != before.scene().target_origin(paint), linked, "a linked mask moves its paint");
+            assert_eq!(after.raster(paint).unwrap().identity(), before.scene().raster(paint).unwrap().identity());
+            assert_eq!(after.raster(mask).unwrap().identity(), before.scene().raster(mask).unwrap().identity());
+            assert!(s.engine.backend().pending_operations.iter().all(|(_, op)| !matches!(op.kind, RasterOperationKind::Transform(_))));
             invoke(&mut s, CommandId::Undo);
             assert_live_artwork_eq(s.engine.document(), &before);
             s.layer_edit({ let mut working = s.engine.document().working.clone(); working.target = Some(paint); working.inspect_mask = None; layer_core::Edit::Working(working) }).unwrap();
@@ -10221,64 +10295,32 @@ mod tests {
     }
 
     #[test]
-    fn copied_masks_keep_full_canvas_geometry_and_linkage_across_placed_owners() {
-        use layer_core::{Affine, Projective, LayerPlacement};
-        for linked in [false, true] { for perspective in [false, true] {
+    fn copied_masks_keep_full_canvas_geometry_and_linkage_across_offset_owners() {
+        for linked in [false, true] {
             let mut s = session(Platform::Gtk);
             layer(&mut s, LayerAction::AddMask { id: 1, replace: false });
             let source = occurrence_handle(1).unwrap();
-            let outer = if perspective { Projective([1.4, 0.1, 13., -0.2, 0.9, 17., 0.0001, -0.0002, 1.]) }
-                else { Projective::from_affine(Affine([1.4, 0.1, -0.2, 0.9, 13., 17.])) };
             let mut original = s.engine.document().scene().occurrence(source).unwrap().clone();
-            original.translation = Point { x: 23., y: -11. };
-            original.placement = LayerPlacement::from_projective(outer);
+            original.offset = [23, -11];
             let mask = original.mask.as_mut().unwrap();
-            mask.translation = Point { x: 39., y: 8. }; mask.linked = linked; mask.enabled = false; mask.inverted = true;
-            mask.placement = Projective::from_affine(Affine([0.8, 0.1, -0.1, 1.1, -3., 7.]));
+            mask.offset = [39, 8]; mask.linked = linked; mask.enabled = false; mask.inverted = true;
             s.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, source, Some(original.clone())).unwrap())).unwrap();
-            let geometry = s.engine.document().target_geometry(SourceTarget::Coverage(original.mask.as_ref().unwrap().source));
+            let geometry = s.engine.document().target_offset(SourceTarget::Coverage(original.mask.as_ref().unwrap().source));
             layer(&mut s, LayerAction::CopyMask { id: 1 });
             layer(&mut s, LayerAction::New { group: false, clipped: false });
             let target = s.engine.document().working.occurrence.unwrap();
             let mut destination = s.engine.document().scene().occurrence(target).unwrap().clone();
-            destination.translation = Point { x: -17., y: 31. };
-            destination.placement = LayerPlacement::from_projective(Projective([0.7, -0.1, -15., 0.2, 1.3, 21., -0.00015, 0.0001, 1.]));
+            destination.offset = [-17, 31];
             s.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, target, Some(destination)).unwrap())).unwrap();
             let before = s.engine.document().clone();
             layer(&mut s, LayerAction::PasteMask { id: occurrence_token(target) });
             let doc = s.engine.document(); let copy = doc.scene().occurrence(target).unwrap().mask.as_ref().unwrap();
             assert_eq!((copy.linked, copy.enabled, copy.inverted), (linked, false, true));
             assert_ne!(copy.source, original.mask.as_ref().unwrap().source);
-            for p in [Point { x: 20., y: 10. }, Point { x: 80., y: 60. }] {
-                let a = geometry.map(p).unwrap(); let b = doc.target_geometry(SourceTarget::Coverage(copy.source)).map(p).unwrap();
-                assert!((a.x-b.x).hypot(a.y-b.y)<0.001, "{a:?} != {b:?}");
-            }
+            assert_eq!(doc.target_offset(SourceTarget::Coverage(copy.source)), geometry);
             let accepted = doc.clone(); s.engine.undo().unwrap(); test_support::assert_live_artwork_eq(s.engine.document(), &before);
             s.engine.redo().unwrap(); test_support::assert_live_artwork_eq(s.engine.document(), &accepted);
-        }}
-    }
-
-    #[test]
-    fn copied_warped_mask_refuses_incompatible_destination_without_history() {
-        let mut s = session(Platform::Gtk);
-        layer(&mut s, LayerAction::AddMask { id: 1, replace: false });
-        let source = occurrence_handle(1).unwrap();
-        let mut original = s.engine.document().scene().occurrence(source).unwrap().clone();
-        original.placement.mesh = Some(std::sync::Arc::new(layer_core::MeshMap::identity(layer_core::Rect::from_extent([800, 600]), [3, 3]).unwrap().move_node(5, Point { x: 20., y: -8. }).unwrap()));
-        s.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, source, Some(original.clone())).unwrap())).unwrap();
-        layer(&mut s, LayerAction::CopyMask { id: 1 });
-        layer(&mut s, LayerAction::New { group: false, clipped: false });
-        let target = s.engine.document().working.occurrence.unwrap();
-        let action = UiAction::Layer { action: LayerAction::PasteMask { id: occurrence_token(target) } };
-        let before = s.engine.document().clone();
-        let entry = s.command_catalog().into_iter().find(|entry| entry.id == command_catalog::identity(&action)).unwrap();
-        assert!(!entry.enabled); assert_eq!(entry.disabled_reason.as_deref(), Some(s.localization().text(MessageId::COMMANDS_APPLY_TRANSFORM_BEFORE_EDITING).as_ref()));
-        assert!(s.dispatch(action).is_err()); assert_eq!(s.engine.document(), &before);
-        let mut destination = before.scene().occurrence(target).unwrap().clone(); destination.placement = original.placement.clone();
-        s.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&before.artwork.occurrences, target, Some(destination)).unwrap())).unwrap();
-        layer(&mut s, LayerAction::PasteMask { id: occurrence_token(target) });
-        let doc=s.engine.document();let mask=doc.scene().occurrence(target).unwrap().mask.as_ref().unwrap();
-        assert_eq!(doc.target_geometry(SourceTarget::Coverage(mask.source)),doc.target_geometry(SourceTarget::Coverage(original.mask.as_ref().unwrap().source)));
+        }
     }
 
     #[test]
@@ -10297,7 +10339,7 @@ mod tests {
         }
         s.frame(30_000_000, 38_000_000).unwrap();
         let mut source = s.engine.document().scene().occurrence(occurrence_handle(1).unwrap()).unwrap().clone();
-        source.mask.as_mut().unwrap().translation = Point { x: 11., y: 17. };
+        source.mask.as_mut().unwrap().offset = [11, 17];
         s.engine
             .apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, occurrence_handle(1).unwrap(), Some(source.clone())).unwrap()))
             .unwrap();
@@ -10312,7 +10354,7 @@ mod tests {
         );
         let parent = s.engine.document().working.occurrence.unwrap();
         let mut group = s.engine.document().scene().occurrence(parent).unwrap().clone();
-        group.translation = Point { x: 30., y: 50. };
+        group.offset = [30, 50];
         s.engine
             .apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, parent, Some(group)).unwrap()))
             .unwrap();
@@ -10329,7 +10371,7 @@ mod tests {
         let original = doc.scene().occurrence(occurrence_handle(1).unwrap()).unwrap().mask.as_ref().unwrap();
         let copy = doc.scene().occurrence(target).unwrap().mask.as_ref().unwrap();
         assert_ne!(original.source, copy.source);
-        assert_eq!(doc.target_geometry(layer_core::authored::SourceTarget::Coverage(original.source)).projective(), doc.target_geometry(layer_core::authored::SourceTarget::Coverage(copy.source)).projective());
+        assert_eq!(doc.target_offset(layer_core::authored::SourceTarget::Coverage(original.source)), doc.target_offset(layer_core::authored::SourceTarget::Coverage(copy.source)));
         assert!(!doc.artwork.coverage.get(original.source).unwrap().raster.is_empty());
         assert_eq!(doc.artwork.coverage.get(original.source).unwrap().raster.identity(), doc.artwork.coverage.get(copy.source).unwrap().raster.identity());
         s.engine.undo().unwrap();
@@ -10510,7 +10552,7 @@ mod tests {
         let edit = s
             .engine
             .document()
-            .move_target_edit(Point { x: 50., y: 90. })
+            .move_target_edit([50, 90])
             .unwrap();
         s.engine.apply_edit(edit).unwrap();
         s.layer_action(LayerAction::Reparent {
@@ -10520,10 +10562,10 @@ mod tests {
         })
         .unwrap();
         let doc = s.engine.document();
-        assert_eq!(doc.layer_offset(occurrence_handle(id).unwrap()), Point::default());
+        assert_eq!(doc.layer_offset(occurrence_handle(id).unwrap()), [0, 0]);
         assert_eq!(
             doc.target_offset(layer_core::authored::SourceTarget::Coverage(doc.scene().occurrence(occurrence_handle(id).unwrap()).unwrap().mask.as_ref().unwrap().source)),
-            Point::default()
+            [0, 0]
         );
         let rows = doc.ordered_layers();
         let g = rows.iter().position(|id| *id == group).unwrap();

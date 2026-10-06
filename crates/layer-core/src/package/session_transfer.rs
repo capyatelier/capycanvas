@@ -143,7 +143,7 @@ fn decode_history(current:&Artwork,current_working:&WorkingState,mut previous_ch
         }}}
         for record in &record.changes {match super::registry::descriptor(&record.kind).map(|record|record.kind) {
             Some(RecordKind::Composition)=>change!(record,compositions,Composition),Some(RecordKind::Stack)=>change!(record,stacks,Stack),
-            Some(RecordKind::OccurrenceLegacy|RecordKind::Occurrence)=>change!(record,occurrences,Occurrence),Some(RecordKind::PaintSource)=>change!(record,paint,Paint),
+            Some(RecordKind::Occurrence)=>change!(record,occurrences,Occurrence),Some(RecordKind::PaintSource)=>change!(record,paint,Paint),
             Some(RecordKind::CoverageSource)=>change!(record,coverage,Coverage),Some(RecordKind::Effect)=>change!(record,effects,Effect),
             Some(RecordKind::ObjectLayer)=>change!(record,object_layers,ObjectLayer),Some(RecordKind::ImageObject)=>change!(record,objects,ImageObject),Some(RecordKind::Selection)=>change!(record,selections,SavedSelection),
             Some(RecordKind::Guides)=>change!(record,guides,Guides),Some(RecordKind::Output)=>change!(record,outputs,Output),
@@ -213,20 +213,20 @@ mod tests {
         receiver.finish().unwrap().adopt_verified(ProjectLimits::default(),&cancel).unwrap()
     }
     #[test]
-    fn undo_only_image_dependencies_and_mixed_occurrence_versions_survive_incremental_transfer() {
+    fn undo_only_image_dependencies_and_occurrence_offsets_survive_incremental_transfer() {
         let mut original=editor();let target=original.document.working.target.unwrap();let SourceTarget::Paint(paint)=target else{unreachable!()};
         let image=Image::new(crate::color::source::rgba8_source([19,11],|_,_|[91,42,71,255]));
         original.document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(image.clone()));
         let occurrence=original.document.working.occurrence.unwrap();
-        let mut value=original.document.artwork.occurrences.get(occurrence).unwrap().clone();value.translation=crate::Point {x:0.25,y:0.};
+        let mut value=original.document.artwork.occurrences.get(occurrence).unwrap().clone();value.offset=[-3,0];
         original.perform(Edit::Occurrence(RecordChange::replace(&original.document.artwork.occurrences,occurrence,Some(value)).unwrap())).unwrap();
         let mut value=original.document.artwork.paint.get(paint).unwrap().clone();value.base=None;
         original.perform(Edit::Paint(RecordChange::replace(&original.document.artwork.paint,paint,Some(value)).unwrap())).unwrap();
         let prepared=transfer(&original);assert!(prepared.descriptor.artwork.manifest["objects"].as_array().unwrap().iter().any(|r|r["type"]=="capy.image/1"));
         let mut restored=receive(&prepared).editor;assert!(restored.document.artwork.paint.get(paint).unwrap().base.is_none());
         restored.undo().unwrap();let restored_image=restored.document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.clone();assert_eq!(restored_image.id(),image.id());
-        assert_eq!(restored.document.artwork.occurrences.get(occurrence).unwrap().translation.x,0.25);
-        restored.undo().unwrap();assert_eq!(restored.document.artwork.occurrences.get(occurrence).unwrap().translation.x,0.);
+        assert_eq!(restored.document.artwork.occurrences.get(occurrence).unwrap().offset,[-3,0]);
+        restored.undo().unwrap();assert_eq!(restored.document.artwork.occurrences.get(occurrence).unwrap().offset,[0,0]);
         assert!(restored_image.same_owner(&restored.document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image));
         restored.redo().unwrap();restored.redo().unwrap();assert!(restored.document.artwork.paint.get(paint).unwrap().base.is_none());
     }

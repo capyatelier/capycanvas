@@ -59,6 +59,8 @@ def main():
     p.add_argument("--blending", choices=["linear", "perceptual"], help="Document blend space; default uses the imported document")
     p.add_argument("--photo-layers", type=int, default=1, help="Photo layer count, with translucent duplicates")
     p.add_argument("--paint-layer-index", type=int, default=0, help="Paint layer index from the top, above the opaque base photo")
+    p.add_argument("--paint-layer-name", help="Paint on this authored fixture layer instead of a new empty one")
+    p.add_argument("--fixture-layers", type=int, help="Layer count of an authored fixture after setup, when it differs from the photo-layer model")
     p.add_argument("--color-mode", choices=["full_color", "grayscale", "two_tone"], default="full_color")
     p.add_argument("--workload", choices=["ordinary", "clipped", "blurred-base", "objects", "objects-effects"], default="ordinary")
     p.add_argument("--image-count", type=int, default=4)
@@ -126,6 +128,8 @@ def main():
             requested.update(image_count=args.image_count, image_sources=args.image_sources)
         if args.canvas_width is not None:
             requested["canvas"] = [args.canvas_width, args.canvas_height]
+        if args.fixture_layers is not None:
+            requested["fixture_layers"] = args.fixture_layers
         if args.navigation_between_strokes:
             requested.update(navigation_between_strokes=True, navigation_settle_ms=args.navigation_settle_ms)
         if args.live_filter:
@@ -167,6 +171,8 @@ def main():
                     "-e", "liveFilterDisabled", str(args.live_filter_disabled).lower()]
         if args.paint_load is not None:
             cmd += ["-e", "paintLoad", str(args.paint_load)]
+        if args.paint_layer_name:
+            cmd += ["-e", "paintLayerName", args.paint_layer_name]
         if args.zoom is not None:
             cmd += ["-e", "zoom", str(args.zoom)]
         if args.blending is not None:

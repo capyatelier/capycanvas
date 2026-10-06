@@ -82,11 +82,7 @@ fn descriptor(device: &wgpu::Device, mode: u32, pages: &[[u32; 2]]) -> wgpu::Buf
 /// Coverage lies in [0,1], so each step includes both zero and full displacement.
 /// The shader still computes the exact nonlinear coordinate for every pixel.
 fn sample_bounds(batch: &DabBatch, dabs: &[Dab], at: [u32; 2], extent: [u32; 2]) -> PixelRect {
-    let to_local = batch.style.brush_to_layer;
-    let Some(to_brush) = to_local.inverse() else {
-        return PixelRect::full(extent);
-    };
-    let mut bounds = to_brush.bounds(Rect {
+    let mut bounds = Rect {
         min: Point {
             x: (at[0] * PAGE_SIZE) as f32,
             y: (at[1] * PAGE_SIZE) as f32,
@@ -95,7 +91,7 @@ fn sample_bounds(batch: &DabBatch, dabs: &[Dab], at: [u32; 2], extent: [u32; 2])
             x: ((at[0] + 1) * PAGE_SIZE) as f32,
             y: ((at[1] + 1) * PAGE_SIZE) as f32,
         },
-    });
+    };
     for dab in dabs.iter().rev() {
         let shift = if batch.style.execution == BrushExecution::Smudge {
             let pull = dab.material[1].clamp(0., 1.);
@@ -152,7 +148,7 @@ fn sample_bounds(batch: &DabBatch, dabs: &[Dab], at: [u32; 2], extent: [u32; 2])
     if batch.style.execution == BrushExecution::Smudge {
         bounds = expand(bounds, batch.style.wet_mix.blur.clamp(0., 1.) * 4.);
     }
-    let local = expand(to_local.bounds(bounds), 1.); // Manual bilinear neighbors.
+    let local = expand(bounds, 1.); // Manual bilinear neighbors.
     if [local.min.x, local.min.y, local.max.x, local.max.y]
         .into_iter()
         .any(|v| !v.is_finite())

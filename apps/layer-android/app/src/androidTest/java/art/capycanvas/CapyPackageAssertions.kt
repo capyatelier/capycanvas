@@ -25,7 +25,7 @@ internal fun JSONObject.packageData(id: String): JSONObject = packageRecord(id).
 internal fun JSONObject.compositionData(): JSONObject = packageData(getJSONObject("root").getString("ref"))
 internal fun JSONObject.outputData(): JSONObject = packageData(getJSONObject("default_output").getString("ref"))
 internal fun JSONObject.compositionColor(): JSONObject = compositionData().optJSONObject("color") ?: JSONObject()
-internal fun JSONObject.compositionSize(): JSONArray = compositionData().getJSONObject("frame").getJSONArray("size")
+internal fun JSONObject.compositionSize(): JSONArray = compositionData().getJSONArray("size")
 internal fun JSONObject.occurrenceRecords(): JSONArray {
     val result = JSONArray()
     fun stack(id: String) {
@@ -38,7 +38,7 @@ internal fun JSONObject.occurrenceRecords(): JSONArray {
     return result
 }
 internal fun JSONObject.paintData(occurrence: String): JSONObject = packageData(packageData(occurrence).getJSONObject("content").getJSONObject("paint").getString("ref"))
-internal fun JSONObject.artworkRecords(): JSONArray = JSONArray(getJSONArray("objects").objects().filter {it.getString("type") !in listOf("capy.composition/1","capy.output/1")})
+internal fun JSONObject.artworkRecords(): JSONArray = JSONArray(getJSONArray("objects").objects().filter {it.getString("type") !in listOf("capy.composition/2","capy.output/2")})
 internal fun JSONObject.paintRecords(): JSONArray = JSONArray(getJSONArray("objects").objects().filter { it.getString("type") == "capy.paint-source/2" })
 internal fun JSONObject.paintBaseBindings(): JSONArray = JSONArray(occurrenceRecords().objects().mapNotNull {
     val source = it.getJSONObject("data").getJSONObject("content").optJSONObject("paint") ?: return@mapNotNull null
@@ -66,13 +66,6 @@ internal fun JSONObject.resolvedResourceBindings(value: Any): Any = when (value)
 }
 internal fun JSONObject.originalTileIdentity(image: JSONObject): String = resolvedResourceBindings(image.getJSONArray("tiles")).toString()
 internal fun JSONObject.originalIdentity(): String = originalImages().objects().map { resolvedResourceBindings(it).toString() }.sorted().toString()
-internal fun JSONObject.authoredPlacement(): JSONObject = optJSONObject("placement") ?: JSONObject()
-internal fun JSONObject.authoredAffine(): JSONArray {
-    val placement = authoredPlacement()
-    check(placement.isNull("mesh"))
-    val outer = placement.optJSONArray("projective") ?: JSONArray(listOf(1,0,0,0,1,0,0,0,1))
-    check(outer.getDouble(6) == 0.0 && outer.getDouble(7) == 0.0 && outer.getDouble(8) == 1.0)
-    val translation = optJSONArray("offset") ?: placement.optJSONArray("translation") ?: JSONArray(listOf(0,0))
-    return JSONArray(listOf(outer.getDouble(0),outer.getDouble(3),outer.getDouble(1),outer.getDouble(4),
-        outer.getDouble(2)+translation.getDouble(0),outer.getDouble(5)+translation.getDouble(1)))
-}
+internal fun JSONObject.imageObjectRecords(): List<JSONObject> = getJSONArray("objects").objects().filter { it.getString("type") == "capy.image-object/1" }
+internal fun JSONObject.objectImages(): JSONArray = JSONArray(imageObjectRecords().map { packageData(it.getJSONObject("data").getJSONObject("image").getString("ref")) })
+internal fun JSONObject.objectImageIdentity(): String = objectImages().objects().map { resolvedResourceBindings(it).toString() }.sorted().toString()

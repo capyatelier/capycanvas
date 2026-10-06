@@ -110,6 +110,9 @@ impl PixelRect {
             region.max_y - window.min_y,
         )
     }
+    pub fn translated(self, by: [u32; 2]) -> Self {
+        Self::new(self.min_x + by[0], self.min_y + by[1], self.max_x + by[0], self.max_y + by[1])
+    }
     /// Non-overlapping top, bottom, left and right regions of self - other.
     pub fn subtract(self, other: Self) -> [Self; 4] {
         let overlap = self.intersect(other);
@@ -177,6 +180,9 @@ impl DocRect {
         Self { min: self.min.map(|v| v.saturating_sub(i64::from(radius))), max: self.max.map(|v| v.saturating_add(i64::from(radius))) }
     }
     pub fn is_empty(self) -> bool { (0..2).any(|i| self.min[i] >= self.max[i]) }
+    pub fn translated(self, by: [i64; 2]) -> Self {
+        Self { min: [self.min[0] + by[0], self.min[1] + by[1]], max: [self.max[0] + by[0], self.max[1] + by[1]] }
+    }
     pub fn size(self) -> Result<[u32; 2], super::GpuRasterError> {
         if self.is_empty() { return Ok([0; 2]); }
         let side = |i: usize| self.max[i].checked_sub(self.min[i]).and_then(|v| u32::try_from(v).ok()).ok_or(super::GpuRasterError::SizeOverflow);
@@ -216,9 +222,15 @@ impl DocRect {
         if other.is_empty() { return self; }
         Self { min: std::array::from_fn(|i| self.min[i].min(other.min[i])), max: std::array::from_fn(|i| self.max[i].max(other.max[i])) }
     }
-    pub fn from_rect(rect: layer_core::Rect) -> Self {
-        if rect.is_empty() { return Self::default(); }
-        Self { min: [rect.min.x.floor() as i64, rect.min.y.floor() as i64], max: [rect.max.x.ceil() as i64, rect.max.y.ceil() as i64] }
+    pub fn subtract(self, other: Self) -> [Self; 4] {
+        let overlap = self.intersect(other);
+        if overlap.is_empty() { return [self, Self::default(), Self::default(), Self::default()]; }
+        [
+            Self { min: self.min, max: [self.max[0], overlap.min[1]] },
+            Self { min: [self.min[0], overlap.max[1]], max: self.max },
+            Self { min: [self.min[0], overlap.min[1]], max: [overlap.min[0], overlap.max[1]] },
+            Self { min: [overlap.max[0], overlap.min[1]], max: [self.max[0], overlap.max[1]] },
+        ]
     }
     pub fn in_frame(self, extent: [u32; 2]) -> PixelRect {
         DocRect::from(PixelRect::full(extent)).local(self)

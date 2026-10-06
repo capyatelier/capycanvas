@@ -936,6 +936,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
         }
         let mut edits = Vec::new();
+        let mut operations = Vec::new();
         let application = EffectApplication::new(instance.program, instance.values, doc.composition().size);
         let effect_handle = if replacing {
             let handle = scene.effect_handle(current.unwrap()).ok_or("Missing adjustment")?;
@@ -953,7 +954,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         occurrence.content = OccurrenceContent::Effect(effect_handle);
         if masked {
-            let (coverage, mask) = self.selection_mask(&occurrence, false, parent, if replacing { scene.local_extent(current.unwrap()) } else { doc.composition().size })?;
+            let (coverage, mask, operation) = self.selection_mask(&occurrence, false, parent, if replacing { scene.local_extent(current.unwrap()) } else { doc.composition().size })?;
+            operations.extend(operation.map(|operation| (layer_core::authored::SourceTarget::Coverage(mask.source), operation)));
             edits.push(Edit::Coverage(coverage)); occurrence.mask = Some(mask);
         }
         let handle = if replacing {
@@ -969,7 +971,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         working.layer_selection = [handle].into(); working.layer_anchor = Some(handle);
         if masked { working.selection = None; }
         edits.push(Edit::Working(working));
-        self.layer_edit(Edit::Batch(edits))?;
+        self.layer_edit_with(Edit::Batch(edits), operations)?;
         if !choosing {
             self.state.customization.expanded = None;
             self.state.workspace.layout.reveal_after(Panel::Properties, Panel::Adjustments)?;

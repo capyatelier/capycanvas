@@ -29,9 +29,9 @@ pub struct Stats {
     /// Recipe actually used by this presented frame, for local-tone latency.
     pub hdr_views: Vec<(u64, Option<layer_core::color::hdr::SdrRendition>)>,
     /// GTK owner delivery ns, source layer id, surface point, resulting pose.
-    pub photo_inputs: Vec<(u64, u64, [f32; 2], layer_core::LayerPlacement)>,
+    pub photo_inputs: Vec<(u64, u64, [f32; 2], [i64; 2])>,
     /// Frame id, source layer id and its submitted placement for presentation correlation.
-    pub photo_frames: Vec<(u64, u64, layer_core::LayerPlacement)>,
+    pub photo_frames: Vec<(u64, u64, [i64; 2])>,
     /// Frame id, cumulative recomposited pixels, display bytes, source tile misses,
     /// and this canvas frame's source misses (excludes background thumbnail work).
     pub camera_work: Vec<[u64; 5]>,
@@ -88,7 +88,7 @@ impl Timing {
     pub fn photo_frame(&self, scene: layer_core::authored::SceneView<'_>) {
         self.stats.lock().unwrap().photo_frames.extend(scene.order().iter().copied()
             .filter(|h| scene.paint_source(*h).is_some_and(|p| p.base.is_some()))
-            .map(|h| (self.id, layer_ui::occurrence_token(h), scene.occurrence(h).unwrap().placement.clone())));
+            .map(|h| (self.id, layer_ui::occurrence_token(h), scene.occurrence(h).unwrap().offset)));
     }
     pub fn camera_view(&self, view: layer_render::ViewState, renderer: &WgpuRasterizer) {
         let mut stats = self.stats.lock().unwrap();

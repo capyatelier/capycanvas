@@ -91,8 +91,11 @@ try {
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null
  Chord @(0x11,0x10) 0x56;Settled
  try{Wait-Until {(Layers) -eq $count+1} 'Paste in Place did not paste the image from another application'}catch{throw "$_ formats=$((Formats) -join ',') notice=$((Model).state.notice|ConvertTo-Json -Compress -Depth 4) requests=$(Requests)"}
+ if((Model).state.layer_tools.editing_layer.object_count -ne 1){throw 'The image from another application did not become an image layer'}
  Invoke 'Undo' -Name;Wait-Until {(Layers) -eq $count} 'One Undo did not remove the pasted image'
  $checks.foreign_image_paste_in_place='passed'
+ (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x42)
+ Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected -and @((Model).state.tool_settings).Count} 'B did not return to the brush after the image paste'
  Sta {[Windows.Forms.Clipboard]::SetText('clipboard sentinel')}|Out-Null
  $entry=Control ('tool-setting-'+@((Model).state.tool_settings)[0].id)
  $entry.SetFocus();Wait-Until {$entry.Current.HasKeyboardFocus} 'The brush size field did not take focus'

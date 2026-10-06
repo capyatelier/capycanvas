@@ -139,7 +139,7 @@ fn native_mask_restoration_keeps_existing_scalar_path() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut document = restore_document(color);
-    set_mask(&mut document,reveal_all([9504,6336],layer_core::Point::default()));
+    set_mask(&mut document,reveal_all([9504,6336], [0, 0]));
     let source = SourceTarget::Coverage(document.scene().mask(document.scene().order()[0]).unwrap().0.source);
     r.ensure_document_metadata([9504, 6336],document.scene()).unwrap();
     let first = data(color, 33, &[RasterPlane::Mask], 1);
@@ -155,4 +155,24 @@ fn native_mask_restoration_keeps_existing_scalar_path() {
                 f32::from(u16::from_le_bytes(expected.try_into().unwrap())) / 65535.);
         }
     }
+}
+
+#[test]
+fn a_native_restore_inside_a_frame_leaves_the_frame_uploads_submittable() {
+    let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
+    let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    r.source_tiles.get_mut().admit(0);
+    let document = restore_document(color);
+    r.ensure_document_metadata([9504, 6336], document.scene()).unwrap();
+    let working = create_color_target(&r.device, [PAGE_SIZE; 2], "restore candidate").0;
+    let page = create_color_target(&r.device, [PAGE_SIZE; 2], "frame upload").0;
+    let pixels: Vec<u8> = (0..PAGE_SIZE.pow(2)).flat_map(|_| [0.25f32, 0.5, 0.75, 1.].into_iter().flat_map(f32::to_le_bytes)).collect();
+    let mut frame = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    r.uploads.write_texture(&mut frame, &page, PAGE_SIZE * 16, |mapped| mapped.copy_from_slice(&pixels)).unwrap();
+    let restored = Arc::new(blob(color, RasterPlane::Color, 3));
+    r.restore_native_tiles(&[crate::native_tiles::NativeTileRestore { blob: &restored, working: &working, space: color.space, destination: color.space }]).unwrap();
+    r.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    r.uploads.finish(&frame);
+    frame.submit(&r.queue);
+    assert_eq!(crate::layer_tests::page_bytes(&r, &page), pixels, "the frame's upload survives a restore submitted before it");
 }

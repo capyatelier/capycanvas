@@ -577,7 +577,7 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
         let mut resident = renderer(&a, u64::MAX);
         let mut cold = renderer(&b, 0);
         let before = image(&cold);
-        let mut coverage = CoverageSnapshot::reveal_all(a.artwork.coverage.next_handle(), EXTENT, Point::default());
+        let mut coverage = CoverageSnapshot::reveal_all(a.artwork.coverage.next_handle(), EXTENT, [0, 0]);
         if matches!(kind, RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. }) {
             coverage.source.default_coverage = 0.5;
         }

@@ -164,8 +164,7 @@ impl Compositor for Tile<'_> {
     fn fade(&mut self, front: usize, back: usize, index: OccurrenceHandle) -> Result<usize, GpuRasterError> {
         let group = self.packet.scene.occurrence(index).unwrap();
         let output = if let Some((mask, source)) = self.packet.scene.mask(index).filter(|(m, _)| m.enabled) {
-            let coverage = self.scene.mask_at(self.r, mask, source, self.packet.scene.target_geometry(SourceTarget::Coverage(mask.source)),
-                source.domain, self.coordinate)?;
+            let coverage = self.scene.mask_at(self.r, mask, source, self.packet.scene.target_offset(SourceTarget::Coverage(mask.source)), self.coordinate);
             let change = self.weighted_sum(front, back, [1., -1.]);
             let masked = self.scene.reserve(self.r);
             self.scene.draw(self.r, masked, self.scene.pool[change].view.clone(), Some(self.scene.pool[coverage].view.clone()),

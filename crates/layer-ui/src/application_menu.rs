@@ -169,12 +169,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             M::Edit => ContextMenu { title: menu.localized_label(self.localization()).to_string(), sections: vec![
                 vec![command(CommandId::SearchCommands)],
                 [CommandId::Undo, CommandId::Redo].map(command).into(),
-                [CommandId::Cut, CommandId::Copy, CommandId::CopyMerged, CommandId::PasteImage, CommandId::PasteInPlace, CommandId::PasteInto]
+                [CommandId::Cut, CommandId::Copy, CommandId::CopyPixels, CommandId::CopyMerged, CommandId::PasteImage, CommandId::PasteInPlace, CommandId::PasteInto]
                     .into_iter()
                     .filter(|id| id.available_on(self.state.platform))
                     .map(command)
                     .collect(),
-                [CommandId::ApplyTransformPixels, CommandId::RasterizeSource, CommandId::RevertToOriginal, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
+                [CommandId::RasterizeSource, CommandId::DiscardPaintEdits, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
                 vec![command(CommandId::ScaleRotate), command(CommandId::TransformAgain)],
                 vec![ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_IMAGE), vec![
                     [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize, CommandId::ImageSize].map(command).into(),

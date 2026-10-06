@@ -108,21 +108,15 @@ function Read-Preview([string]$Id,[scriptblock]$Read){
         & $Read $bitmap $r $window
     }finally{$bitmap.Dispose()}
 }
-function Preview-Hash([string]$Id,[string]$Save=''){
+function Preview-Samples([string]$Id,[string]$Save=''){
     Read-Preview $Id {param($bitmap,$r,$window)
-        $area=[Drawing.Rectangle]::new([int]($r.X-$window.left+$r.Width/4),[int]($r.Y-$window.top+$r.Height/4),[int]($r.Width/2),[int]($r.Height/2))
-        $crop=$bitmap.Clone($area,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
-        $sha=[Security.Cryptography.SHA256]::Create()
-        try{
-            if($Save){$crop.Save((Join-Path $run ($Save+'-pixels.png')));$bitmap.Save((Join-Path $run ($Save+'-window.png')));@{preview=$r;window=$window}|ConvertTo-Json|Set-Content (Join-Path $run ($Save+'-bounds.json'))}
-            $data=$crop.LockBits([Drawing.Rectangle]::new(0,0,$crop.Width,$crop.Height),[Drawing.Imaging.ImageLockMode]::ReadOnly,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
-            try{
-                $stride=$crop.Width*4;$pixels=[byte[]]::new($stride*$crop.Height)
-                for($y=0;$y -lt $crop.Height;$y++){[Runtime.InteropServices.Marshal]::Copy([IntPtr]::Add($data.Scan0,$y*$data.Stride),$pixels,$y*$stride,$stride)}
-                [Convert]::ToBase64String($sha.ComputeHash($pixels))
-            }finally{$crop.UnlockBits($data)}
-        }
-        finally{$crop.Dispose();$sha.Dispose()}
+        $samples=[Collections.Generic.List[int]]::new()
+        foreach($j in 8..23){foreach($i in 8..23){
+            $samples.Add($bitmap.GetPixel([int][Math]::Floor($r.X-$window.left+($i+.5)*$r.Width/32),[int][Math]::Floor($r.Y-$window.top+($j+.5)*$r.Height/32)).ToArgb())
+        }}
+        if($Save){$bitmap.Save((Join-Path $run ($Save+'-window.png')));@{preview=$r;window=$window;samples=$samples}|ConvertTo-Json -Depth 3|Set-Content (Join-Path $run ($Save+'-bounds.json'))}
+        $samples -join ','
+
     }
 }
 function Thumbnail-Pixels([string]$Id){
@@ -180,15 +174,15 @@ try {
     $paint=(Model).state.layer_tools.editing_layer.id
     Test-LayerModes
     Wait-Until {(Find ("layer-$paint-thumbnail")).Current.ItemStatus -eq 'Ready'} 'Paint thumbnail not ready' 20
-    $original=Wait-StablePixels {Preview-Hash "layer-$paint-thumbnail" 'original'};if(!$original){throw 'No initial thumbnail pixels'}
+    $original=Wait-StablePixels {Preview-Samples "layer-$paint-thumbnail" 'original'};if(!$original){throw 'No initial thumbnail pixels'}
     $identity=(Control "layer-$paint-name").GetRuntimeId() -join ':'
     Capture 'initial'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
     Wait-Until {(Model).state.document_file.modified} 'Stroke not acknowledged'
-    Wait-Until {$hash=Preview-Hash "layer-$paint-thumbnail";$hash -and $hash -ne $original} 'Thumbnail did not reflect paint' 15
+    Wait-Until {$samples=Preview-Samples "layer-$paint-thumbnail";$samples -and $samples -ne $original} 'Thumbnail did not reflect paint' 15
     Invoke 'Undo' -Name
     Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore checkpoint'
-    Wait-Until {(Preview-Hash "layer-$paint-thumbnail" 'undo') -eq $original} 'Thumbnail pixels did not restore after Undo' 15
+    Wait-Until {(Preview-Samples "layer-$paint-thumbnail" 'undo') -eq $original} 'Thumbnail pixels did not restore after Undo' 15
     if(((Control "layer-$paint-name").GetRuntimeId() -join ':') -ne $identity){throw 'Painting replaced the layer row'}
     $opacitySlider=Control 'layer-opacity-slider'
     $opacitySlider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.72)

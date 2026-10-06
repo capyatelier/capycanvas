@@ -226,7 +226,7 @@ impl RawRegions {
         if self.progress.is_some() { return Ok(()); }
         let frame = match request.source.raw_source() {
             layer_render::RegionSource::Composite => Some(r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?),
-            layer_render::RegionSource::Objects(handle) => {
+            layer_render::RegionSource::Objects(handle) | layer_render::RegionSource::ObjectCoverage(handle) => {
                 let mut frame = (**r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?).clone();
                 frame.scope = SceneScope::RawObjects(*handle);
                 Some(Arc::new(frame))
@@ -311,7 +311,7 @@ impl RawRegions {
             _ => None,
         };
         let placed = layer.is_some_and(|id| r.artwork_frame.as_ref().is_none_or(|frame|
-            !frame.scene.view().target_geometry(id).is_identity() || id.is_coverage()));
+            frame.scene.view().target_offset(id) != [0; 2] || id.is_coverage()));
         let frame = self.progress.as_ref().unwrap().frame.clone();
         let tone = if let layer_render::RegionSource::Tonal(t) = &request.source {
             Some(t.as_ref())
@@ -375,8 +375,8 @@ impl RawRegions {
             });
         }
         let cached = self.tonal_cache.as_ref().is_some_and(|c| c.ready);
-        let coverage =
-            tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_));
+        let coverage = tone.is_some()
+            || matches!(request.source, layer_render::RegionSource::Coverage(_) | layer_render::RegionSource::ObjectCoverage(_));
         if let Some(t) = tone.filter(|_| self.progress.as_ref().unwrap().batch == 0) {
             let mut data = [0u32; TONAL_PARAMETER_WORDS];
             data[84..88].copy_from_slice(&[
@@ -710,7 +710,7 @@ fn opaque_photo(r: &WgpuRasterizer, frame: &artwork::Frame, extent: [u32; 2]) ->
     let base = scene.paint_base(target)?;
     let source = &base.image;
     if visible.next().is_some() || occurrence.opacity != 1. || occurrence.mask.is_some() || scene.parent(handle).is_some()
-        || occurrence.translation != layer_core::Point::default() || occurrence.placement != layer_core::LayerPlacement::IDENTITY
+        || occurrence.offset != [0; 2]
         || occurrence.attachment.is_clip() || occurrence.blend != layer_core::LayerBlend::Normal
         || source.interpretation.channels != layer_core::color::source::SourceChannels::Rgb
         || base.offset != [0;2] || source.extent[0] < extent[0] || source.extent[1] < extent[1]
@@ -724,7 +724,7 @@ mod tests {
     use super::*;
     use crate::artwork_sample_tests::{add_group, effect_draft, set_effect};
     use layer_core::authored::{CoverageSource, MaskUse, PortableId};
-    use layer_core::{BlendSpace, Document, DocumentNames, EffectValue, LayerBlend, Point, Projective, Rect, Selection};
+    use layer_core::{BlendSpace, Document, DocumentNames, EffectValue, LayerBlend, Rect, Selection};
     use layer_render::{RegionRequest, RegionSource};
 
     #[test]
@@ -739,18 +739,17 @@ mod tests {
         set_effect(&mut document, fill, effect);
         let inner = add_group(&mut document, vec![fill], 1);
         let outer = add_group(&mut document, vec![inner], 1);
-        let coverage = document.artwork.coverage.insert(PortableId::random(), CoverageSource {
-            domain:extent, raster:Default::default(), initial:Some(Selection::polygon(Rect::from_extent([32,64]).corners().to_vec()).unwrap()),
-            default_coverage:0., operations:Arc::default(),
-        }).unwrap();
-        let mask = MaskUse {source:coverage,linked:false,enabled:true,inverted:true,translation:Point::default(),placement:Projective::IDENTITY};
+        let mut source = CoverageSource { domain:extent, raster:Default::default(), default_coverage:0., operations:Arc::default() };
+        crate::test_support::materialize_mask(&mut source, Selection::polygon(Rect::from_extent([32,64]).corners().to_vec()).unwrap(), document.composition().color);
+        let coverage = document.artwork.coverage.insert(PortableId::random(), source).unwrap();
+        let mask = MaskUse {source:coverage,linked:false,enabled:true,inverted:true,offset:[0,0]};
         for handle in [fill,inner,outer] {
             let occurrence = document.artwork.occurrences.get_mut(handle).unwrap();
             occurrence.visible = false;
             occurrence.opacity = 0.;
             occurrence.blend = LayerBlend::Multiply;
             occurrence.mask = Some(mask.clone());
-            occurrence.translation = Point {x:901.,y:-777.};
+            if occurrence.positioned() { occurrence.offset = [901, -777]; }
         }
         let authored = document.snapshot();
         let mut normalized = authored.as_ref().clone();
@@ -764,7 +763,7 @@ mod tests {
         let scope = SceneScope::Members(vec![fill].into());
         assert_eq!(normalized.view().with_scope(&scope).evaluation_parent(fill), None);
         assert!(normalized.view().with_scope(&scope).visible(fill));
-        assert_eq!(normalized.view().occurrence(fill).unwrap().translation, authored.view().occurrence(fill).unwrap().translation);
+        assert_eq!(normalized.view().layer_origin(Some(fill)), authored.view().layer_origin(Some(fill)));
         let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         r.submit(FramePacket {blend_space:BlendSpace::Linear,..crate::test_support::packet(document.scene(),extent)}).unwrap();
         let mut capture = r.snapshot_gpu().capture_scene(normalized.clone(), scope.clone(), Default::default()).unwrap();

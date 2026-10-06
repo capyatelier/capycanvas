@@ -44,7 +44,7 @@ fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() 
     assert!(s.state.layer_tools.canvas_size.is_none());
     let doc = s.engine.document();
     assert_eq!(doc.composition().size, [1200, 1100]);
-    assert_eq!(doc.scene().occurrence(paint).unwrap().translation, Point::default(), "a top-left anchor keeps the origin");
+    assert_eq!(doc.scene().occurrence(paint).unwrap().offset, [0, 0], "a top-left anchor keeps the origin");
     assert_eq!(on_screen(&s, [10., 20.]), screen);
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().composition().size, [1000, 1000]);
@@ -57,7 +57,7 @@ fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() 
     let screen = on_screen(&s, [10., 20.]);
     canvas_size(&mut s, CanvasSizeAction::Apply);
     let doc = s.engine.document();
-    assert_eq!(doc.scene().occurrence(paint).unwrap().translation, Point { x: 300. - 512., y: 150. - 256. }, "rebased by whole tiles");
+    assert_eq!(doc.scene().occurrence(paint).unwrap().offset, [300 - 512, 150 - 256], "rebased by whole tiles");
     assert!(doc.extents_cover_canvas());
     assert_eq!(on_screen(&s, [310., 170.]), screen, "the image stays where it was");
     assert_eq!(s.engine.view().document_to_surface, s.state.camera.document_to_surface());
@@ -98,7 +98,7 @@ fn canvas_size_converts_percent_and_relative_values_and_validates_limits() {
     canvas_size(&mut s, CanvasSizeAction::Apply);
     let doc = s.engine.document();
     assert_eq!(doc.composition().size, [500, 1000]);
-    assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().translation, Point { x: -250., y: 0. }, "centered");
+    assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().offset, [-250, 0], "centered");
     assert_eq!(doc.scene().local_extent(doc.working.occurrence.unwrap()), [1000, 1000], "the cropped pixels stay");
     invoke(&mut s, CommandId::CanvasSize);
     canvas_size(&mut s, CanvasSizeAction::Cancel);
@@ -152,7 +152,7 @@ fn crop_canvas_to_selection_uses_the_coverage_bounds_and_refuses_inverted_select
     s.dispatch(UiAction::CanvasBarEdit { context: bar.context, action: Box::new(UiAction::Invoke { command: crop }) }).unwrap();
     let doc = s.engine.document();
     assert_eq!(doc.composition().size, [201, 200]);
-    assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().translation, Point { x: -100., y: -50. });
+    assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().offset, [-100, -50]);
     assert_eq!(doc.working.selection, before.working.selection.as_ref().map(|sel| sel.translated(Point { x: -100., y: -50. })));
     assert_eq!(on_screen(&s, [50., 50.]), screen);
     assert!(doc.scene().raster(doc.working.target.unwrap()) == before.scene().raster(before.working.target.unwrap()), "a crop changes only metadata");
@@ -201,7 +201,7 @@ fn unselected_paint_operations_stay_inside_the_canvas_window() {
     s.paint_operation(None, fill.clone(), &[]).unwrap();
     s.frame(3, 3).unwrap();
     let (_, operation) = s.renderer_mut().pending_operations[0].clone();
-    assert!(operation.coverage.source.initial.is_none(), "a layer without hidden pixels needs no bound");
+    assert!(operation.coverage.selection.is_none(), "a layer without hidden pixels needs no bound");
     rectangle_selection(&mut s, [0., 0., 400., 400.]);
     invoke(&mut s, CommandId::CropCanvasToSelection);
     invoke(&mut s, CommandId::Deselect);

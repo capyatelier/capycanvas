@@ -26,10 +26,11 @@ fn notice_text(w: &Workspace) -> Option<String> {
         .then(|| w.notice.root.first_child().and_downcast::<gtk::Label>().unwrap().text().to_string())
 }
 
-fn notice_action(w: &Workspace) -> gtk::Button {
-    find_named(w.notice.root.upcast_ref(), "canvas-notice-action")
+fn notice_action(w: &Workspace) -> Option<gtk::Button> {
+    find_named(w.notice.root.upcast_ref(), "canvas-notice-actions")
+        .filter(|actions| actions.is_visible())
+        .and_then(|actions| actions.first_child())
         .and_downcast::<gtk::Button>()
-        .unwrap()
 }
 
 fn start(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
@@ -69,7 +70,7 @@ fn native_notice_move_on_locked_layer() {
         || notice_text(&w).as_deref() == Some("The active layer is locked"),
         "Move on a locked layer shows the notice",
     );
-    assert!(!notice_action(&w).is_visible(), "the refusal has no action");
+    assert!(notice_action(&w).is_none(), "the refusal has no action");
     assert!(!w.status.is_visible(), "refusals are not host errors");
     let first = state(&w).notice.unwrap().id;
     input.click(point);
@@ -112,7 +113,7 @@ fn native_notice_wand_offers_a_reference() {
     );
     assert!(!w.restart_canvas.is_visible(), "the canvas keeps running");
     assert!(!w.status.is_visible());
-    let button = notice_action(&w);
+    let button = notice_action(&w).expect("the notice offers its action");
     assert!(button.is_visible());
     assert_eq!(button.label().as_deref(), Some("Use Current ink as Reference"));
     assert!(w.area.has_focus());

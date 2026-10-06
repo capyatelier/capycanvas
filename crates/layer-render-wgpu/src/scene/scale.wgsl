@@ -80,6 +80,70 @@ fn reduce(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(output, vec2<i32>(region.origin + id.xy), sum / f32(weight));
 }
 
+fn phased_load(page: u32, texel: vec2<i32>) -> vec4<f32> {
+    switch page {
+        case 0u: { return textureLoad(source, texel, 0); }
+        case 1u: { return textureLoad(base, texel, 0); }
+        case 2u: { return textureLoad(source_preview, texel, 0); }
+        default: { return textureLoad(base_preview, texel, 0); }
+    }
+}
+fn phased_sample(page: u32, texel: vec2<f32>) -> vec4<f32> {
+    switch page {
+        case 0u: { return textureSampleLevel(source, area_sampler, texel / vec2<f32>(textureDimensions(source)), 0.); }
+        case 1u: { return textureSampleLevel(base, area_sampler, texel / vec2<f32>(textureDimensions(base)), 0.); }
+        case 2u: { return textureSampleLevel(source_preview, area_sampler, texel / vec2<f32>(textureDimensions(source_preview)), 0.); }
+        default: { return textureSampleLevel(base_preview, area_sampler, texel / vec2<f32>(textureDimensions(base_preview)), 0.); }
+    }
+}
+// Level pixels lie `opacity.xy` pixels after the layer's own, so a level page
+// spans four layer pages; `paper` holds each page's level, or none. Each
+// thread reduces a texel between `opacity.z` and `opacity.w` (16-bit pairs):
+// over reduced predictions from the prediction texels nearest its pixels,
+// otherwise with filtered taps inside a page or pixel by pixel across edges.
+@compute @workgroup_size(8, 8)
+fn reduce_phased(@builtin(global_invocation_id) id: vec3<u32>) {
+    let texel = vec2(bitcast<u32>(region.opacity.z) & 0xffffu, bitcast<u32>(region.opacity.z) >> 16u) + id.xy;
+    if any(texel >= vec2(bitcast<u32>(region.opacity.w) & 0xffffu, bitcast<u32>(region.opacity.w) >> 16u)) { return; }
+    let side = region.side;
+    let first = texel * side;
+    let size = min(vec2(side), region.extent - first);
+    let start = vec2<i32>(256u - vec2(bitcast<u32>(region.opacity.x), bitcast<u32>(region.opacity.y)) + first);
+    let words = bitcast<vec4<u32>>(region.paper);
+    let full = all(size == vec2(side));
+    let cell = 1u << select(0u, max(max(words.x, words.y), max(words.z, words.w)) & 15u, full);
+    let page = start / 256;
+    var sum = vec4(0.);
+    var count: f32;
+    if cell == 1u && (region.flags & 2u) == 0u && full && all(page == (start + vec2<i32>(size) - 1) / 256) {
+        let index = u32(page.y * 2 + page.x);
+        count = f32(side * side / 4u);
+        if (bitcast<u32>(region.paper[index]) & 16u) != 0u {
+            let at = vec2<f32>(start - page * 256) + 1.;
+            for (var y = 0u; y < side; y += 2u) {
+                for (var x = 0u; x < side; x += 2u) { sum += phased_sample(index, at + vec2<f32>(vec2(x, y))); }
+            }
+        }
+    } else {
+        let snapped = (start + i32(cell / 2u)) & vec2(-i32(cell));
+        let units = (size + cell - 1u) / cell;
+        for (var y = 0u; y < units.y; y++) {
+            for (var x = 0u; x < units.x; x++) {
+                let local = snapped + vec2<i32>(vec2(x, y) * cell);
+                let at = local / 256;
+                let index = u32(at.y * 2 + at.x);
+                let word = bitcast<u32>(region.paper[index]);
+                if (word & 16u) == 0u { continue; }
+                var value = phased_load(index, (local - at * 256 + i32(cell / 2u)) >> vec2(word & 15u));
+                if (region.flags & 2u) != 0u { value = working_encode(value); }
+                sum += value;
+            }
+        }
+        count = f32(units.x * units.y);
+    }
+    textureStore(output, vec2<i32>(region.origin + texel), sum / count);
+}
+
 @compute @workgroup_size(8, 8)
 fn reduce_pair(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= region.size) { return; }

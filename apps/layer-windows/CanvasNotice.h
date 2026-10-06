@@ -22,7 +22,7 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
     Shapes::Path surface;
     Grid row;
     TextBlock text{nullptr};
-    Button action{nullptr};
+    StackPanel actions;
     WorkspaceShadow shadow;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timeout{nullptr};
     std::optional<double> shown;
@@ -33,13 +33,12 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
         host=root;auto weak=weak_from_this();
         text=label(data,L"");text.TextWrapping(TextWrapping::Wrap);text.VerticalAlignment(VerticalAlignment::Center);
         text.IsHitTestVisible(false);AutomationProperties::SetAutomationId(text,L"canvas-notice-text");
-        action=button(data,L"",[weak]{if(auto self=weak.lock())self->accept();});
-        action.Padding({12,5,12,5});action.MinHeight(34);action.Margin({0,-6,-8,-6});action.VerticalAlignment(VerticalAlignment::Center);
-        action.AllowFocusOnInteraction(false);action.IsTabStop(false);action.Visibility(Visibility::Collapsed);
-        AutomationProperties::SetAutomationId(action,L"canvas-notice-action");
+        actions.Orientation(Orientation::Horizontal);actions.Spacing(4);actions.Margin({0,-6,-8,-6});
+        actions.VerticalAlignment(VerticalAlignment::Center);actions.Visibility(Visibility::Collapsed);
+        AutomationProperties::SetAutomationId(actions,L"canvas-notice-actions");
         for(auto width:{GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto}}){ColumnDefinition column;column.Width(width);row.ColumnDefinitions().Append(column);}
-        row.ColumnSpacing(12);row.Padding({14,8,14,8});Grid::SetColumn(action,1);
-        row.Children().Append(text);row.Children().Append(action);
+        row.ColumnSpacing(12);row.Padding({14,8,14,8});Grid::SetColumn(actions,1);
+        row.Children().Append(text);row.Children().Append(actions);
         surface.IsHitTestVisible(false);frame.Children().Append(surface);frame.Children().Append(row);
         frame.Background(nullptr);
         AutomationProperties::SetAutomationId(frame,L"canvas-notice");
@@ -61,9 +60,18 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
         if(shown==id)return;
         shown=id;
         text.Text(str(notice,L"text"));AutomationProperties::SetName(frame,str(notice,L"text"));
-        auto offer=object(notice,L"action");
-        action.Content(box_value(str(offer,L"label")));AutomationProperties::SetName(action,str(offer,L"label"));
-        action.Visibility(offer.Size()?Visibility::Visible:Visibility::Collapsed);
+        actions.Children().Clear();
+        auto weak=weak_from_this();
+        for(auto value:array(notice,L"actions")){
+            auto offer=value.GetObject();auto token=str(offer,L"id");
+            auto choice=button(data,str(offer,L"label"),[weak,token]{if(auto self=weak.lock())self->accept(token);});
+            choice.Padding({12,5,12,5});choice.MinHeight(34);choice.VerticalAlignment(VerticalAlignment::Center);
+            choice.AllowFocusOnInteraction(false);choice.IsTabStop(false);choice.IsEnabled(flag(offer,L"enabled"));
+            AutomationProperties::SetAutomationId(choice,L"canvas-notice-action-"+token);AutomationProperties::SetName(choice,str(offer,L"label"));
+            if(auto reason=str(offer,L"reason");!reason.empty()){ToolTipService::SetToolTip(choice,box_value(reason));AutomationProperties::SetHelpText(choice,reason);}
+            actions.Children().Append(choice);
+        }
+        actions.Visibility(actions.Children().Size()?Visibility::Visible:Visibility::Collapsed);
         surface.Fill(data->brush(L"panel"));text.Foreground(data->brush(L"text"));
         visible=true;present();
         timeout.Stop();timeout.Start();
@@ -76,10 +84,10 @@ struct CanvasNotice:std::enable_shared_from_this<CanvasNotice>{
         timeout.Stop();
         if(visible){visible=false;present();}
     }
-    void accept(){
+    void accept(hstring const& token){
         if(!shown||!visible)return;
         Hide();
-        data->dispatch(O({{L"type",S(L"notice")},{L"id",N(*shown)},{L"accept",B(true)}}));
+        data->dispatch(O({{L"type",S(L"notice")},{L"id",N(*shown)},{L"accept",B(true)},{L"action",S(token)}}));
     }
     void expire(){
         if(!shown||!visible)return;

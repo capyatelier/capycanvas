@@ -125,7 +125,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         if let Err(reason)=result.and_then(|()|if ready {self.advance_targeted_curve().map_err(CalibrationFailure::Diagnostic)} else {Ok(())}) {
             let _=self.cancel_targeted_contact();match reason {
                 CalibrationFailure::Message(message)=>self.raise_message_notice(message),
-                CalibrationFailure::Diagnostic(reason)=>self.raise_notice(reason,None),
+                CalibrationFailure::Diagnostic(reason)=>self.notify(reason),
             }return regions::DOCUMENT;
         }
         if ready {regions::DOCUMENT|regions::BRUSH|regions::COMMANDS} else {0}

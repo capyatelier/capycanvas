@@ -531,12 +531,12 @@ mod selection_tools_checks {
         let notice = s.state.notice.clone().expect("a notice instead of a failed frame");
         assert_ne!(change.regions & regions::HOST, 0);
         assert_eq!(notice.text, "This tool samples reference layers, and none is marked");
-        assert_eq!(notice.action.as_ref().unwrap().label, "Use Current ink as Reference");
+        assert_eq!(notice.actions[0].label, "Use Current ink as Reference");
         assert!(s.command(CommandId::UseReferenceBelow).enabled);
 
-        assert!(s.dispatch(UiAction::Notice { id: notice.id + 1, accept: true }).is_err());
+        assert!(s.dispatch(UiAction::Notice { id: notice.id + 1, accept: true, action: None }).is_err());
         let before = s.engine.document().clone();
-        let change = s.dispatch(UiAction::Notice { id: notice.id, accept: true }).unwrap();
+        let change = s.dispatch(UiAction::Notice { id: notice.id, accept: true, action: None }).unwrap();
         assert_ne!(change.regions & regions::HOST, 0);
         assert_eq!(s.state.notice, None);
         assert_eq!(s.engine.document().scene().references(), [layer_core::authored::OccurrenceHandle::from_index(0)].into());
@@ -570,7 +570,7 @@ mod selection_tools_checks {
         invoke(&mut s, CommandId::SelectionReference);
         click(&mut s, [48., 72.]);
         let notice = s.state.notice.clone().unwrap();
-        assert_eq!(notice.action, None, "nothing below to offer");
+        assert!(notice.actions.is_empty(), "nothing below to offer");
         assert_eq!(notice.text, "This tool samples reference layers. Mark one in the Layers panel first.");
         s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
         s.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: 1, value: false } }).unwrap();

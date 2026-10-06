@@ -49,7 +49,7 @@ mod tests {
         let (mut document,target)=document(SourceChannels::Rgb);
         let SourceTarget::Paint(handle)=target else {unreachable!()};
         let mut paint=document.scene().paint(handle).unwrap().clone();
-        paint.operations=vec![RasterOperation {placement:Affine::IDENTITY,coverage:CoverageSnapshot::reveal_all(document.allocate_coverage_handle(),[1024;2],Point::default()),kind:RasterOperationKind::Erase {alpha_locked:false}}].into();
+        paint.operations=vec![RasterOperation {placement:Affine::IDENTITY,coverage:CoverageSnapshot::reveal_all(document.allocate_coverage_handle(),[1024;2],[0;2]),kind:RasterOperationKind::Erase {alpha_locked:false}}].into();
         document.apply(Edit::Paint(RecordChange::replace(&document.artwork.paint,handle,Some(paint)).unwrap())).unwrap();
         assert!(document.scene().raster(target).unwrap().is_empty());
         assert_eq!(ContentBoundsRequest::new(&document,ContentScope::Target(target)).known_bounds(),None);

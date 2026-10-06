@@ -443,8 +443,8 @@ fn retouch_strokes_refuse_masks_and_offer_a_reference_for_an_empty_layer() {
     stroke(&mut s, 20);
     let notice = s.state.notice.clone().unwrap();
     assert_eq!(notice.text, "This layer is empty, and no reference layer below it is marked");
-    assert_eq!(notice.action.as_ref().unwrap().label, "Use Current ink as Reference");
-    s.dispatch(UiAction::Notice { id: notice.id, accept: true }).unwrap();
+    assert_eq!(notice.actions[0].label, "Use Current ink as Reference");
+    s.dispatch(UiAction::Notice { id: notice.id, accept: true, action: None }).unwrap();
     assert_eq!(s.engine.document().scene().references(), [OccurrenceHandle::from_index(0)].into());
     let revision = s.engine.document().revision;
     stroke(&mut s, 30);
@@ -520,14 +520,14 @@ fn notices_reject_stale_answers_and_clear_at_the_next_contact() {
     layer(&mut s, LayerAction::Lock { id: 1, value: true });
     stroke(&mut s, 1);
     let id = s.state.notice.as_ref().unwrap().id;
-    assert_eq!(s.state.notice.as_ref().unwrap().action, None);
-    assert!(s.dispatch(UiAction::Notice { id: id + 1, accept: false }).is_err());
-    assert!(s.dispatch(UiAction::Notice { id: id - 1, accept: true }).is_err());
+    assert!(s.state.notice.as_ref().unwrap().actions.is_empty());
+    assert!(s.dispatch(UiAction::Notice { id: id + 1, accept: false, action: None }).is_err());
+    assert!(s.dispatch(UiAction::Notice { id: id - 1, accept: true, action: None }).is_err());
     assert!(s.state.notice.is_some());
-    let change = s.dispatch(UiAction::Notice { id, accept: false }).unwrap();
+    let change = s.dispatch(UiAction::Notice { id, accept: false, action: None }).unwrap();
     assert_ne!(change.regions & regions::HOST, 0);
     assert_eq!(s.state.notice, None);
-    assert!(s.dispatch(UiAction::Notice { id, accept: false }).is_err(), "a dismissed notice is stale");
+    assert!(s.dispatch(UiAction::Notice { id, accept: false, action: None }).is_err(), "a dismissed notice is stale");
 
     stroke(&mut s, 10);
     assert!(s.state.notice.is_some());

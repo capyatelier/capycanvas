@@ -64,6 +64,7 @@ pub struct CapyHost {
     test_display: Option<crate::display::Display>,
     presenter_key: Option<(layer_core::color::DocumentColor, layer_render_wgpu::SdrSurfaceColor)>,
     target: Option<wgpu::SurfaceTexture>,
+    pacing: crate::frame_pacing::FramePacing,
     surface: wgpu::Surface<'static>,
     config: Option<wgpu::SurfaceConfiguration>,
     presenter: Option<ViewportPresenter>,
@@ -148,6 +149,7 @@ impl CapyHost {
             test_display: None,
             presenter_key: None,
             target: None,
+            pacing: Default::default(),
             surface,
             config: None,
             presenter: None,
@@ -343,6 +345,7 @@ impl CapyHost {
         }
         self.gpu = gpu_state;
         self.gpu_generation = self.gpu_generation.saturating_add(1);
+        self.pacing = Default::default();
         self.native.invalidate_snapshot();
         self.native.startup = Default::default();
         self.presenter = Some(presenter);
@@ -415,6 +418,7 @@ impl CapyHost {
             surround,
         ).map_err(err)?;
         gpu.queue().present(target);
+        self.pacing.submitted(gpu.queue());
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
         self.gpu.check()?;
@@ -970,6 +974,9 @@ pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
         }
         if host.target.is_some() {
             return Ok(1);
+        }
+        if !host.pacing.ready(host.native.session.engine().backend().0.as_ref().unwrap().device()).map_err(err)? {
+            return Ok(0);
         }
         host.target = match host.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)

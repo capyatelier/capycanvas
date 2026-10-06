@@ -117,6 +117,7 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
     renderer.set_snapshot_worker(Rc::new(|request, control| Box::pin(async move {
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         let mut transform = None;
+        let mut additional = Vec::new();
         let (scene, selection, task) = match request {
             layer_render::SnapshotRequest::LevelsStatistics(query) => {
                 let (scene, source) = query_scene(&query)?;
@@ -132,14 +133,25 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
             }
             layer_render::SnapshotRequest::Bounds(request) => (layer_render_wgpu::snapshot::SnapshotGpu::bounds_source_scene(&request)?,request.selection,SnapshotTask::Bounds(request.scope)),
             layer_render::SnapshotRequest::TransformPixels(plan) => {
-                let task = SnapshotTask::TransformPixels {target:plan.target, interpolation:plan.geometry.placement.interpolation};
+                let task = SnapshotTask::TransformPixels {target:plan.target, map:plan.map.clone(), source:plan.source};
+                additional.extend(plan.paint.map(layer_core::SourceTarget::Paint).into_iter().chain(plan.coverage.map(layer_core::SourceTarget::Coverage)));
                 transform = Some((plan.output, plan.paint, plan.coverage));
                 let scene=std::sync::Arc::new((*plan.scene).clone().with_scope(layer_core::SceneScope::Raw(plan.target)));
                 (scene, None, task)
             }
+            layer_render::SnapshotRequest::Image(capture) => {
+                let scene = std::sync::Arc::new((*capture.scene).clone().with_scope(capture.scope.clone()));
+                let selection = capture.selection.as_deref().cloned();
+                (scene, selection, SnapshotTask::Image {offset:capture.offset, extent:capture.extent, window:capture.window, trim:capture.trim})
+            }
+            layer_render::SnapshotRequest::Remap(plan) => {
+                additional.extend(plan.targets());
+                let first = *additional.first().ok_or("Missing moved layers")?;
+                let scene = std::sync::Arc::new((*plan.scene).clone().with_scope(layer_core::SceneScope::Raw(first)));
+                (scene, None, SnapshotTask::Remap(plan.specs.to_vec()))
+            }
         };
         let frozen = FrozenScene::new(&scene);
-        let additional:Vec<_>=transform.as_ref().into_iter().flat_map(|(_,paint,coverage)|paint.map(layer_core::SourceTarget::Paint).into_iter().chain(coverage.map(layer_core::SourceTarget::Coverage))).collect();
         let artwork=layer_render_wgpu::snapshot::SnapshotGpu::scoped_transfer_artwork(&scene,&additional);
         let mut packing = std::pin::pin!(artwork_transfer::pack_scene(artwork, selection));
         let packed = std::future::poll_fn(|cx| {
@@ -170,6 +182,26 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
                 let (mut output, paint, coverage) = transform.ok_or("Missing transform output")?;
                 install_transformed_rasters(&mut output, &artwork, paint, coverage)?;
                 Ok(layer_render::SnapshotResult::TransformPixels(output))
+            }
+            SnapshotTask::Image {..} => {
+                if result.is_null() { return Ok(layer_render::SnapshotResult::Image(None)); }
+                let (metadata, buffers) = packed_parts(&result).map_err(|e| format!("{e:?}"))?;
+                let artwork = artwork_transfer::unpack(&metadata, buffers).await.map_err(|e| format!("{e:?}"))?;
+                let base = artwork.paint.iter().find_map(|(_, _, paint)| paint.base.clone()).ok_or("Missing captured image")?;
+                Ok(layer_render::SnapshotResult::Image(Some((base.image.storage().clone(), base.offset.map(i64::from)))))
+            }
+            SnapshotTask::Remap(specs) => {
+                let (metadata, buffers) = packed_parts(&result).map_err(|e| format!("{e:?}"))?;
+                let artwork = artwork_transfer::unpack(&metadata, buffers).await.map_err(|e| format!("{e:?}"))?;
+                specs.iter().map(|spec| {
+                    let (raster, base) = match spec.target {
+                        layer_core::SourceTarget::Paint(h) => artwork.paint.get(h).map(|p| (p.raster.clone(), p.base.as_ref())),
+                        layer_core::SourceTarget::Coverage(h) => artwork.coverage.get(h).map(|c| (c.raster.clone(), None)),
+                        layer_core::SourceTarget::Selection(_) => None,
+                    }.ok_or("Missing moved layer")?;
+                    let image = spec.base.and(base).map(|base| base.image.clone());
+                    Ok((spec.target, image, raster))
+                }).collect::<Result<Vec<_>, String>>().map(layer_render::SnapshotResult::Remap)
             }
         }
     })));
@@ -353,7 +385,9 @@ enum SnapshotTask {
     ArtworkStatistics {source:SnapshotSource, preview:bool, selection:bool, waveform:bool},
     ArtworkSample {source:SnapshotSource, position:[f32;2], width:u32},
     Bounds(layer_core::ContentScope),
-    TransformPixels {target:layer_core::SourceTarget, interpolation:layer_core::Interpolation},
+    TransformPixels {target:layer_core::SourceTarget, map:layer_core::LayerPlacement, source:Option<layer_core::Rect>},
+    Image {offset:layer_core::Point, extent:[u32;2], window:[u32;4], trim:Option<layer_core::SourceTarget>},
+    Remap(Vec<layer_core::RemapSpec>),
 }
 fn install_transformed_rasters(edit:&mut layer_core::Edit, artwork:&layer_core::Artwork,
     paint:Option<layer_core::PaintHandle>, coverage:Option<layer_core::CoverageHandle>) -> Result<(), String> {
@@ -423,13 +457,47 @@ pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> R
             let result = gpu.content_bounds(layer_core::ContentBoundsRequest {snapshot:scene,scope,selection},Default::default()).await.map_err(js)?;
             serialize(&result)
         }
-        SnapshotTask::TransformPixels {target,interpolation} => {
+        SnapshotTask::Image {offset,extent,window,trim} => {
+            let scope = scene.scope.clone();
+            let capture = layer_core::ImageCapture {scene, scope, offset, extent, window, trim, selection:selection.map(std::sync::Arc::new)};
+            let Some((image, origin)) = gpu.image_capture(capture,Default::default()).await.map_err(js)? else { return Ok(JsValue::NULL); };
+            let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
+            let root=document.artwork.root; document.artwork.compositions.get_mut(root).unwrap().color=image_color(&image);
+            let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
+            let offset = origin.map(|v| u32::try_from(v).map_err(js)).into_iter().collect::<Result<Vec<_>,_>>()?;
+            document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase {image:image.into(),offset:[offset[0],offset[1]],policy:layer_core::authored::PaintBasePolicy::WorkingPixels});
+            let stack=document.composition().result; document.artwork.stacks.get_mut(stack).unwrap().entries.truncate(1);
+            artwork_transfer::pack(document.artwork).await
+        }
+        SnapshotTask::Remap(specs) => {
+            let plan = layer_core::RemapPlan {scene: scene.clone(), specs: specs.into()};
+            let results = gpu.remap(plan, Default::default()).await.map_err(js)?;
+            let mut artwork = scene.artwork.clone();
+            for (target, image, raster) in results {
+                match target {
+                    layer_core::SourceTarget::Paint(h) => {
+                        let source = artwork.paint.get_mut(h).ok_or_else(|| js("Missing moved layer"))?;
+                        if let (Some(image), Some(base)) = (image, source.base.as_mut()) { base.image = image; }
+                        source.raster = raster;
+                    }
+                    layer_core::SourceTarget::Coverage(h) => artwork.coverage.get_mut(h).ok_or_else(|| js("Missing moved mask"))?.raster = raster,
+                    layer_core::SourceTarget::Selection(_) => return Err(js("Missing moved layer")),
+                }
+            }
+            artwork_transfer::pack(artwork).await
+        }
+        SnapshotTask::TransformPixels {target,map,source} => {
             let mut document = layer_core::Document::from_artwork(scene.artwork.clone()).map_err(js)?;
-            let mut plan = document.transform_pixels_plan(target,interpolation,Default::default()).map_err(js)?;
+            let mut plan = document.layer_transform_plan(target,&map,source,Default::default()).map_err(js)?;
             plan.scene = scene;
             let output = gpu.transform_pixels(plan,Default::default()).await.map_err(js)?;
             document.apply(output).map_err(js)?;
             artwork_transfer::pack(document.artwork).await
         }
     }
+}
+
+fn image_color(image:&layer_core::color::source::SourceImage)->layer_core::color::DocumentColor {
+    let layer_core::color::ColorProfile::Builtin(space)=image.interpretation.profile else {return Default::default();};
+    layer_core::color::DocumentColor {space,depth:image.interpretation.depth}
 }

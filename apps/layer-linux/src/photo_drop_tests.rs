@@ -9,196 +9,6 @@ use std::path::{Path, PathBuf};
 mod workflow;
 pub(super) use workflow::frames;
 
-#[test]
-#[ignore = "private Wayland display and hardware GPU"]
-fn native_photo_transform_pixels_workflow() {
-    let app = native_test_app("art.capycanvas.PhotoTransformPixels");
-    let theme = match std::env::var("CAPY_NATIVE_TEST_THEME").as_deref().unwrap_or("dark") {
-        "light" => layer_ui::Theme::Light,
-        "dark" => layer_ui::Theme::Dark,
-        _ => panic!("CAPY_NATIVE_TEST_THEME must be light or dark"),
-    };
-    let mut project = new_drawing(200, 150, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    let id = project.working.occurrence.unwrap();
-    active_paint_mut(&mut project).domain = [320, 240];
-    active_paint_mut(&mut project).base = Some(layer_core::PaintBase::new((layer_core::color::source::rgba8_source([320, 240], |x, y| {
-        if (x / 16 + y / 16) % 2 == 0 { [230, 40, 80, 255] } else { [20, 160, 220, 255] }
-    })).into()));
-    project.artwork.occurrences.get_mut(id).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.5, 0., 0., 0.5, 20., 15.]));
-    let w = Workspace::with_project(&app, Some((project, None)));
-    w.window.maximize();
-    w.window.present();
-    ready(&w);
-    w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-    pump(100);
-    assert_eq!(state(&w).theme, theme);
-    let narrow=std::env::var("LAYER_MOTION_VIEWPORT").as_deref()==Ok("640x480");
-    if narrow {
-        for panel in layer_ui::Panel::ALL.into_iter().filter(|panel| !matches!(panel,layer_ui::Panel::Toolbar|layer_ui::Panel::Commands|layer_ui::Panel::ToolSettings)) {
-            w.dispatch(UiAction::Customize {action:layer_ui::CustomizationAction::SetPanelVisible{panel,visible:false}});
-        }
-        ready(&w);
-    }
-    invoke(&w,CommandId::FitCanvas);ready(&w);
-    let current = || ui_session(&w).engine().document().clone();
-    let capture = |name: &str| {
-        if let Some(path) = std::env::var_os("LAYER_IMAGE_CAPTURE_DIR") {
-            let directory = std::path::PathBuf::from(path);
-            std::fs::create_dir_all(&directory).unwrap();
-            super::new_photo::capture_ui(&w, &directory, name);
-        }
-    };
-    invoke(&w, CommandId::ScaleRotate);
-    until(|| state(&w).commands.iter().any(|c| c.id == CommandId::PlacementOriginalSize && c.enabled), "photo transform preparation");
-    w.dispatch(UiAction::SetToolSetting { id: "transform_width".into(), value: 0.6 });
-    invoke(&w, CommandId::ApplyTransform);
-    ready(&w);
-    invoke(&w, CommandId::Brush);
-    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::WetWatercolor as u32 });
-    w.dispatch(UiAction::SetBrushSize { value: 30. });
-    w.dispatch(UiAction::SetColor { rgba: [0.15, 0.25, 0.9, 1.] });
-    ready(&w);
-    assert_eq!(ui_session(&w).engine().brush().wet_mix.wetness, 0.);
-    native_pen_path(&w, &[[50., 65.], [75., 65.], [100., 65.]]);
-    ready(&w);
-    let raw = current();
-    w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::AddMask {id:layer_ui::occurrence_token(id),replace:false}});
-    w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::Select {id:layer_ui::occurrence_token(id),mask:false}});
-    invoke(&w,CommandId::ScaleRotate);
-    until(|| state(&w).canvas_bar.is_some_and(|bar|matches!(bar.context.kind,layer_ui::CanvasBarKind::Transform|layer_ui::CanvasBarKind::Placement)),"retained Transform opens");
-    invoke(&w,CommandId::TransformDistort);
-    let mut native=super::canvas_bar_tests::remote_input();
-    let corner=ui_session(&w).engine().document().target_geometry(ui_session(&w).engine().document().scene().source_target(id).unwrap()).map(Point{x:320.,y:0.}).unwrap();
-    let corner=super::canvas_bar_tests::canvas_point(&w,[corner.x,corner.y]);
-    let area=w.area.compute_bounds(&w.window).unwrap();
-    assert!(corner[0]>area.x()+12. && corner[0]<area.x()+area.width()-12.
-        && corner[1]>area.y()+12. && corner[1]<area.y()+area.height()-12.,"Distort handle is visible: {corner:?} in {area:?}");
-    native.perform(json!([{"point":corner},{"down":true},{"wait_ms":40},
-        {"point":[corner[0]-25.,corner[1]+12.]},{"wait_ms":30},{"down":false}]));
-    invoke(&w,CommandId::ApplyTransform);ready(&w);
-    assert!(active_occurrence(&current()).placement.as_affine().is_none(),"Distort persists a homography");
-    invoke(&w,CommandId::ScaleRotate);
-    until(|| state(&w).canvas_bar.is_some_and(|bar|matches!(bar.context.kind,layer_ui::CanvasBarKind::Transform|layer_ui::CanvasBarKind::Placement)),"retained Distort reopens");
-    invoke(&w,CommandId::TransformWarp);
-    let preview=|| ui_session(&w).engine().document().target_geometry(ui_session(&w).engine().document().scene().source_target(id).unwrap());
-    let map=preview();let mesh=layer_core::MeshMap::identity(layer_core::Rect::from_extent(current().scene().local_extent(id)),layer_core::MeshMap::PRESETS[0]).unwrap();let cells=mesh.cells();
-    let split=map.map(mesh.frame.map(Point {x:0.37,y:0.61})).unwrap();
-    invoke(&w,CommandId::WarpSplitCross);
-    native.click(super::canvas_bar_tests::canvas_point(&w,[split.x,split.y]));
-    until(|| preview().placement.mesh.as_ref().is_some_and(|mesh|mesh.cells()==[cells[0]+1,cells[1]+1]),"Cross inserts two nonuniform grid lines");
-    let node=|index| {let map=preview();let p=map.placement.outer.map(map.placement.mesh.as_ref().unwrap().node(index).unwrap()).unwrap();
-        super::canvas_bar_tests::canvas_point(&w,[p.x,p.y])};
-    let width=u32::from(preview().placement.mesh.as_ref().unwrap().cells()[0])+1;
-    let indices=[width+1,width+2];
-    invoke(&w,CommandId::WarpSelectPoints);
-    for index in indices {native.click(node(index));}
-    invoke(&w,CommandId::WarpSelectPoints);
-    let before=indices.map(node);let from=before[0];
-    native.perform(json!([{"point":from},{"down":true},{"wait_ms":40},
-        {"point":[from[0]+18.,from[1]+12.]},{"wait_ms":30},{"down":false}]));
-    until(|| indices.into_iter().zip(before).all(|(index,p)| {let now=node(index);(now[0]-p[0]).hypot(now[1]-p[1])>10.}),"selected Warp points move together");
-    capture("retained-warp.png");
-    invoke(&w,CommandId::ApplyTransform);ready(&w);
-    assert!(active_occurrence(&current()).placement.mesh.is_some());
-    assert_eq!(active_paint(&current()).raster,active_paint(&raw).raster,"retained geometry keeps raw material immutable");
-    assert_eq!(active_paint(&current()).base,active_paint(&raw).base,"retained geometry keeps the original photo");
-    let retained = current();
-    let material = active_paint(&retained).raster.wait_data().unwrap();
-    let planes = |data: &layer_core::raster::RasterData| data.tiles.keys().map(|key| key.plane)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(planes(&material), std::collections::BTreeSet::from([
-        layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::WatercolorWetness]));
-    assert!(material.watercolor.is_some());
-    assert_ne!(active_occurrence(&retained).placement, layer_core::LayerPlacement::IDENTITY);
-    w.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels });
-    assert!(state(&w).commands.iter().any(|c| c.id == CommandId::CancelTransform && c.enabled));
-    w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
-    pump(300);
-    assert_live_artwork_eq(&current(), &retained);
-    w.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels });
-    capture("applying.png");
-    until(|| active_paint(&current()).base.is_none(), "bake worker publishes native pixels");
-    ready(&w);
-    let baked = current();
-    assert_eq!(active_occurrence(&baked).placement, layer_core::LayerPlacement::IDENTITY);
-    assert!(!active_paint(&baked).raster.is_empty());
-    let baked_material = active_paint(&baked).raster.wait_data().unwrap();
-    assert_eq!(planes(&baked_material), planes(&material));
-    assert_eq!(baked_material.watercolor, material.watercolor);
-    invoke(&w, CommandId::Pen);
-    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 });
-    w.dispatch(UiAction::SetBrushSize { value: 15. });
-    w.dispatch(UiAction::SetColor { rgba: [1., 0., 1., 1.] });
-    native_pen_path(&w, &[[50., 65.], [75., 65.], [100., 65.]]);
-    ready(&w);
-    let painted = current();
-    assert_ne!(active_paint(&painted).raster, active_paint(&baked).raster);
-    capture("editing.png");
-    if std::env::var_os("LAYER_IMAGE_CAPTURE_DIR").is_some()
-        && narrow {
-        assert!(w.window.is_maximized());
-        assert_eq!((w.surface.width(), w.surface.height()), (640, 480));
-        invoke(&w, CommandId::ScaleRotate);
-        until(|| state(&w).canvas_bar.is_some_and(|bar| matches!(bar.context.kind,layer_ui::CanvasBarKind::Transform|layer_ui::CanvasBarKind::Placement))
-            && super::canvas_bar_tests::shown(&w), "narrow transform bar is visible");
-        let bounds = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
-        assert!(bounds.x() >= 0. && bounds.y() >= 0.
-            && bounds.x() + bounds.width() <= 640. && bounds.y() + bounds.height() <= 480.,
-            "narrow transform bar must fit the allocated window: {bounds:?}");
-        capture("narrow-transform.png");
-        let more = super::canvas_bar_tests::bar_widget(&w, "canvas-bar-more");
-        let more_point=super::canvas_bar_tests::center(&w,&more);
-        native.click(more_point);
-        until(|| w.canvas_bar.menu_open(), "narrow More menu opens");
-        capture("narrow-more.png");
-        native.key(0xff1b);
-        until(|| !w.canvas_bar.menu_open(), "Escape closes narrow More");
-        let cancel = super::canvas_bar_tests::bar_widget(&w, "canvas-bar-CancelTransform");
-        native.click(super::canvas_bar_tests::center(&w, &cancel));
-        until(|| state(&w).layer_tools.tool != LayerCanvasTool::Transform, "narrow Cancel returns to editing");
-        ready(&w);
-        assert_live_artwork_eq(&current(), &painted);
-        capture("narrow-editing.png");
-        w.window.maximize();
-        pump(350);
-        ready(&w);
-    }
-    invoke(&w, CommandId::Liquify);
-    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::LiquifyTwirl as u32 });
-    w.dispatch(UiAction::SetBrushSize { value: 40. });
-    native_pen_path(&w, &[[80., 70.], [95., 75.], [110., 80.]]);
-    ready(&w);
-    let liquified = current();
-    assert_ne!(active_paint(&liquified).raster, active_paint(&painted).raster);
-    invoke(&w, CommandId::Undo); ready(&w); assert_live_artwork_eq(&current(), &painted);
-    invoke(&w, CommandId::Undo); ready(&w); assert_live_artwork_eq(&current(), &baked);
-    invoke(&w, CommandId::Undo); ready(&w); assert_live_artwork_eq(&current(), &retained);
-    invoke(&w, CommandId::Redo); ready(&w); assert_live_artwork_eq(&current(), &baked);
-    let saved = super::place_source::snapshot(&w);
-    let reopened = open_native_document(std::io::Cursor::new(saved));
-    assert_eq!(artwork_manifest(&reopened), artwork_manifest(&baked));
-    let portable = baked.artwork.occurrences.id(id).unwrap();
-    let restored = reopened.artwork.occurrences.resolve(portable).unwrap();
-    let restored_layer = reopened.scene().occurrence(restored).unwrap();
-    let restored_source = reopened.scene().paint_source(restored).unwrap();
-    assert_eq!(restored_layer, active_occurrence(&baked));
-    assert!(restored_source.base.is_none());
-    let digests = |source: &layer_core::authored::PaintSource| source.raster.wait_data().unwrap().tiles.iter()
-        .map(|(key, tile)| (*key, tile.wait_backing().unwrap().content_digest().unwrap())).collect::<Vec<_>>();
-    assert_eq!(digests(restored_source), digests(active_paint(&baked)));
-    assert_eq!(restored_source.raster.wait_data().unwrap().watercolor, material.watercolor);
-    let before = glib::MainContext::default().block_on(read_canvas_pixels(&w, 9981)).unwrap();
-    w.window.destroy(); pump(100);
-    let restored = Workspace::with_project(&app, Some((reopened, None)));
-    restored.window.maximize(); restored.window.present(); ready(&restored);
-    restored.dispatch(UiAction::SetTheme { theme: Some(theme) });
-    pump(100);
-    assert_eq!(state(&restored).theme, theme);
-    let after = glib::MainContext::default().block_on(read_canvas_pixels(&restored, 9982)).unwrap();
-    assert!(before.bytes == after.bytes, "baked artwork survives native reopen");
-    restored.window.destroy(); pump(100);
-}
-
 fn publish(path: &Path, value: &Value) {
     let temporary = path.with_extension("tmp");
     std::fs::write(&temporary, serde_json::to_vec(value).unwrap()).unwrap();
@@ -206,6 +16,24 @@ fn publish(path: &Path, value: &Value) {
 }
 fn read(path: &Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+/// The image layer a placement made active and its images, front to back.
+fn placed_images(doc: &layer_core::Document) -> (layer_core::authored::OccurrenceHandle, Vec<layer_core::authored::ImageObjectHandle>) {
+    let layer = doc.working.occurrence.unwrap();
+    (layer, doc.object_layer_children(layer).expect("placed images are in an image layer").to_vec())
+}
+
+/// The rendered document composite at a document pixel.
+fn document_pixel(w: &Workspace, [x, y]: [usize; 2]) -> [u8; 4] {
+    let image = ui_session(w).engine().backend().document_pixels(7001).unwrap();
+    image.bytes[y * image.stride as usize + x * 4..][..4].try_into().unwrap()
+}
+
+fn image_names(doc: &layer_core::Document, images: &[layer_core::authored::ImageObjectHandle]) -> Vec<String> {
+    let mut names: Vec<String> = images.iter().map(|h| doc.scene().object(*h).unwrap().name.to_string()).collect();
+    names.sort();
+    names
 }
 
 /// This helper is launched by the receiving test. It has its own GDK display
@@ -413,7 +241,7 @@ impl FileDrag {
         self.input.click(point);
         if name != "canvas-bar-PlacementOriginalSize" {
             until(
-                || !w.canvas_bar.root.is_visible(),
+                || !w.canvas_bar.root.is_visible() || state(w).canvas_bar.is_none_or(|bar| bar.context.kind != layer_ui::CanvasBarKind::Placement),
                 "placement controls retire after native click",
             );
         }
@@ -483,14 +311,13 @@ fn native_multiple_photo_import_chooser() {
         finish(&w);
         ready(&w);
         let imported = ui_session(&w).engine().document().clone();
-        let photos: Vec<_> = imported.scene().order().iter().copied().filter(|h| imported.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).collect();
-        assert_eq!(imported.scene().order().len(), before.scene().order().len() + 2);
-        assert_eq!(photos.iter().map(|h| imported.scene().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(),
-            ["First photo", "Second photo"]);
-        for h in photos {
-            let paint = imported.scene().paint_source(h).unwrap();
-            assert_source_samples(paint.base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
-            assert!(paint.raster.is_empty());
+        assert_eq!(imported.scene().order().len(), before.scene().order().len() + 1, "both photos enter one new image layer");
+        let (layer, images) = placed_images(&imported);
+        assert_eq!(imported.scene().position(layer), Some(0), "above the painted layer");
+        assert_eq!(image_names(&imported, &images), ["First photo", "Second photo"]);
+        assert_eq!(imported.working.objects, images.iter().copied().collect(), "placement selects the new images");
+        for h in images {
+            assert_source_samples(imported.scene().object(h).unwrap().image.as_ref(), &source);
         }
         driver.click_placement(&w, if apply { "canvas-bar-ApplyTransform" } else { "canvas-bar-CancelTransform" });
         ready(&w);
@@ -498,7 +325,7 @@ fn native_multiple_photo_import_chooser() {
             let saved = super::place_source::snapshot(&w);
             let reopened = open_native_document(std::io::Cursor::new(saved));
             assert_eq!(artwork_manifest(&reopened), artwork_manifest(&imported));
-            let pixel = super::photo_edit::shown(&w, [100., 75.]);
+            let pixel = document_pixel(&w, [100, 75]);
             assert!(pixel[0] > 180 && pixel[2] < 100, "photos cover the paint below: {pixel:?}");
             invoke(&w, CommandId::AddLayer);
             invoke(&w, CommandId::Pen);
@@ -507,7 +334,7 @@ fn native_multiple_photo_import_chooser() {
             ready(&w);
             let above = ui_session(&w).engine().document().working.occurrence.unwrap();
             assert!(!ui_session(&w).engine().document().scene().paint_source(above).unwrap().raster.is_empty());
-            let pixel = super::photo_edit::shown(&w, [100., 75.]);
+            let pixel = document_pixel(&w, [100, 75]);
             assert!(pixel[2] > 180 && pixel[0] < 100, "paint covers the photos above: {pixel:?}");
             let saved = super::place_source::snapshot(&w);
             let reopened = open_native_document(std::io::Cursor::new(saved));
@@ -532,7 +359,7 @@ fn native_photo_file_drops() {
     let ink = project.working.occurrence.unwrap();
     let nested = project.artwork.stacks.insert(layer_core::PortableId::random(), layer_core::Stack { entries: vec![ink] }).unwrap();
     let mut row = layer_core::Occurrence::new(layer_core::OccurrenceContent::Stack(nested), "Photo destination");
-    row.translation = Point { x: 40., y: -10. };
+    row.offset = [40, -10];
     let group = project.artwork.occurrences.insert(layer_core::PortableId::random(), row).unwrap();
     let root = project.composition().result;
     project.artwork.stacks.get_mut(root).unwrap().entries[0] = group;
@@ -606,23 +433,16 @@ fn native_photo_file_drops() {
             .engine()
             .document()
             .clone();
-        assert_eq!(doc.scene().order().len(), original.scene().order().len() + 2);
-        let photos: Vec<_> = doc.scene().order().iter().copied().filter(|h| doc.scene().paint_source(*h).is_some_and(|p| p.base.is_some())).collect();
-        assert_eq!(
-            photos.iter().map(|h| doc.scene().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(),
-            ["First photo", "Second – photo"]
-        );
-        for photo in photos {
-            let paint = doc.scene().paint_source(photo).unwrap();
-            assert_source_samples(paint.base.as_ref().map(|base|base.image.as_ref()).unwrap(), &source);
-            let actual = doc
-                .target_geometry(doc.scene().source_target(photo).unwrap())
-                .map(Point { x: 600., y: 400. }).unwrap();
+        assert_eq!(doc.scene().order().len(), original.scene().order().len() + 1, "both photos enter one new image layer");
+        let (_, images) = placed_images(&doc);
+        assert_eq!(image_names(&doc, &images), ["First photo", "Second – photo"]);
+        for image in images {
+            assert_source_samples(doc.scene().object(image).unwrap().image.as_ref(), &source);
+            let actual = doc.object_document_affine(image).unwrap().map([600., 400.]);
             assert!(
-                (actual.x - center.x).abs() < 0.5 && (actual.y - center.y).abs() < 0.5,
+                (actual[0] - f64::from(center.x)).abs() < 0.5 && (actual[1] - f64::from(center.y)).abs() < 0.5,
                 "drop camera mapping {actual:?} != {center:?}"
             );
-            assert!(paint.raster.is_empty());
         }
         assert!(
             state(&w)
@@ -676,13 +496,11 @@ fn native_photo_file_drops() {
             .engine()
             .document()
             .clone();
-        let photo = doc.working.occurrence.unwrap();
+        let (photo, images) = placed_images(&doc);
         assert_eq!(doc.scene().parent(photo), parent);
-        assert_eq!(
-            doc.target_geometry(doc.scene().source_target(photo).unwrap())
-                .map(Point { x: 600., y: 400. }).unwrap(),
-            Point { x: 100., y: 75. }
-        );
+        assert_eq!(images.len(), 1);
+        let centre = doc.object_document_affine(images[0]).unwrap().map([600., 400.]);
+        assert!((centre[0] - 100.).abs() < 1e-9 && (centre[1] - 75.).abs() < 1e-9, "the row drop centres the image on the canvas: {centre:?}");
         let expected = if fraction < 0.2 {
             0
         } else if fraction < 0.8 {
@@ -864,11 +682,11 @@ fn native_photo_transform_reference_pivot_snap_and_nudge() {
     let mut project = new_drawing(300, 220, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let id = project.working.occurrence.unwrap();
     active_paint_mut(&mut project).base = Some(layer_core::PaintBase::new((layer_core::color::source::rgba8_source([120, 80], |_, _| [40, 120, 200, 255])).into()));
-    project.artwork.occurrences.get_mut(id).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x: 40., y: 50. }));
+    project.artwork.occurrences.get_mut(id).unwrap().offset = [40, 50];
     let domain = project.composition().size;
     let paint = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource { color_mode: Default::default(), domain, raster: Default::default(), base: Some(layer_core::PaintBase::new((layer_core::color::source::rgba8_source([20, 80], |_, _| [200, 80, 40, 255])).into())), operations: Default::default() }).unwrap();
     let mut neighbor = layer_core::Occurrence::new(layer_core::OccurrenceContent::Paint(paint), "Snap reference");
-    neighbor.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point { x: 180., y: 50. }));
+    neighbor.offset = [180, 50];
     let neighbor = project.artwork.occurrences.insert(layer_core::PortableId::random(), neighbor).unwrap();
     let root = project.composition().result; project.artwork.stacks.get_mut(root).unwrap().entries.push(neighbor);
     let working = project.working.clone();
@@ -889,7 +707,15 @@ fn native_photo_transform_reference_pivot_snap_and_nudge() {
     std::fs::create_dir_all(&output).unwrap();
     let mapped = |name: &str| widgets(w.window.upcast_ref()).find(|widget| widget.widget_name() == name && widget.is_mapped()).unwrap_or_else(|| panic!("mapped {name}"));
     let number = |name: &str| state(&w).tool_settings.iter().find(|field| field.id == name).unwrap().value;
-    let geometry = || ui_session(&w).engine().document().target_geometry(ui_session(&w).engine().document().scene().source_target(id).unwrap());
+    let geometry = || {
+        let session = ui_session(&w);
+        let document = session.engine().document();
+        (document.target_offset(document.scene().source_target(id).unwrap()), session.engine().transform_preview().map(|preview| preview.transform.placement.clone()))
+    };
+    let place = |(offset, preview): &([i64; 2], Option<layer_core::LayerPlacement>), point: Point| {
+        let local = preview.as_ref().map_or(point, |map| map.map(point).unwrap());
+        Point { x: local.x + offset[0] as f32, y: local.y + offset[1] as f32 }
+    };
     let unchanged = geometry();
     for index in [1, 2, 3, 0] {
         let modes = mapped("canvas-bar-choice-transform-mode");
@@ -944,7 +770,7 @@ fn native_photo_transform_reference_pivot_snap_and_nudge() {
         native.key(0xff0d); ready(&w);
     };
     type_number(&mut native, "transform_x", "45");
-    assert!((geometry().map(Point::default()).unwrap().x - 45.).abs() < 0.01);
+    assert!((place(&geometry(), Point::default()).x - 45.).abs() < 0.01);
     type_number(&mut native, "transform_x", "40");
     assert_eq!(geometry(), unchanged);
     let pivot = super::canvas_bar_tests::canvas_point(&w, [100., 90.]);
@@ -952,12 +778,12 @@ fn native_photo_transform_reference_pivot_snap_and_nudge() {
     native.perform(json!([{"point":pivot,"down":true},{"point":custom},{"down":false}]));
     assert_eq!(geometry(), unchanged, "moving the pivot does not move pixels");
     type_number(&mut native, "transform_angle", "30");
-    let fixed = geometry().map(Point { x: 40., y: 25. }).unwrap();
+    let fixed = place(&geometry(), Point { x: 40., y: 25. });
     assert!((fixed.x - 80.).hypot(fixed.y - 75.) < 0.02, "numeric rotation uses the dragged pivot: {fixed:?}");
-    let corner = geometry().map(Point { x: 120., y: 80. }).unwrap();
+    let corner = place(&geometry(), Point { x: 120., y: 80. });
     let corner = super::canvas_bar_tests::canvas_point(&w, [corner.x, corner.y]);
     native.perform(json!([{"key":0xffe9,"down":true},{"point":corner,"down":true},{"point":[corner[0]+15.,corner[1]+10.]},{"down":false},{"key":0xffe9,"down":false}]));
-    let fixed = geometry().map(Point { x: 40., y: 25. }).unwrap();
+    let fixed = place(&geometry(), Point { x: 40., y: 25. });
     assert!((fixed.x - 80.).hypot(fixed.y - 75.) < 0.05, "Alt scaling keeps the dragged pivot: {fixed:?}");
     super::new_photo::capture_ui(&w, &output, "transform-custom-pivot.png");
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"transform-custom-pivot"}])); }
@@ -971,7 +797,7 @@ fn native_photo_transform_reference_pivot_snap_and_nudge() {
     let target = super::canvas_bar_tests::canvas_point(&w, [180., 50.]);
     assert!((edge[0]-target[0]).abs() <= 6., "native snap contact is within its logical-pixel threshold");
     native.perform(json!([{"point":from,"down":true},{"point":to}]));
-    let right = geometry().map(Point { x: 120., y: 0. }).unwrap();
+    let right = place(&geometry(), Point { x: 120., y: 0. });
     assert!((right.x - 180.).abs() < 0.05, "native body drag snaps to the neighboring source: {right:?}");
     super::new_photo::capture_ui(&w, &output, "transform-snap-guides.png");
     native.perform(json!([{"down":false}]));

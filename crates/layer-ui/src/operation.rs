@@ -4,7 +4,7 @@ use super::{error, refused};
 use crate::*;
 use crate::localization::MessageId;
 use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerKind, MeshMap, Point, Projective, Rect, Selection, LayerPlacement};
-use layer_core::authored::{OccurrenceHandle, SourceTarget, SelectionHandle, RecordChange};
+use layer_core::authored::{OccurrenceHandle, SourceTarget, RecordChange};
 use std::sync::Arc;
 use std::collections::BTreeSet;
 use layer_engine::{PenEvent, PenPhase};
@@ -14,8 +14,7 @@ mod placement;
 use placement::Placement;
 #[path = "operation/snapping.rs"]
 mod snapping;
-use snapping::Snapping;
-pub(crate) use placement::PlacementInsertion;
+pub(crate) use snapping::Snapping;
 
 /// Translate, rotate, shear x by y, then scale, all about the box centre.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -133,7 +132,11 @@ struct Drag {
 /// drag of the selected pixels by whole layer pixels, applied on release.
 struct Transaction {
     placement: Option<Placement>,
-    request: TransformPreview,
+    serial: u64,
+    target: Option<SourceTarget>,
+    selection: Option<Selection>,
+    transform: ImageTransform,
+    moving: bool,
     revision: u64,
     basis: Affine,
     bounds: Rect,
@@ -149,7 +152,7 @@ struct Transaction {
     drag: Option<Drag>,
     outline: Option<Selection>,
     pixel_move: bool,
-    retained_move: bool,
+    layer_move: bool,
     keep_source: bool,
     reference: CanvasAnchor,
 }
@@ -179,10 +182,10 @@ impl Operation {
         self.transforming() || self.crop.is_some()
     }
     pub fn transforming(&self) -> bool {
-        self.current.as_ref().is_some_and(|t| !t.pixel_move && !t.retained_move)
+        self.current.as_ref().is_some_and(|t| !t.pixel_move && !t.layer_move)
     }
     pub fn moving_layer(&self) -> bool {
-        self.current.as_ref().is_some_and(|t| t.retained_move)
+        self.current.as_ref().is_some_and(|t| t.layer_move)
     }
     pub fn nudging(&self) -> bool { self.nudging.is_some() }
     pub fn moving_pixels(&self) -> bool {
@@ -193,12 +196,6 @@ impl Operation {
     }
     pub fn warp_available(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.outline.is_none() && t.placement.as_ref().is_none_or(Placement::single_leaf))
-    }
-    pub fn original_size_available(&self) -> bool {
-        self.current.as_ref().and_then(|t| t.placement.as_ref())
-            .is_some_and(|placement| placement.members.iter().all(|(h, o)| placement.source.view().paint_source(*h).is_some_and(|p| p.base.is_some())
-                && o.placement.as_affine().is_some()))
-            && self.current.as_ref().is_some_and(|t| t.map().is_some_and(|map| map.as_affine().is_some()))
     }
     pub fn outline(&self) -> bool {
         self.current.as_ref().is_some_and(|t| t.outline.is_some())
@@ -278,6 +275,13 @@ pub(super) const HANDLES: [[f32; 2]; 8] = [
 
 
 fn source_frame(doc: &Document, target: OccurrenceHandle) -> Rect {
+    if let Some(children) = doc.object_layer_children(target) {
+        let origin = doc.scene().layer_origin(Some(target)).map(|v| v as f64);
+        return doc.object_document_bounds(children.iter().copied()).map_or(Rect::EMPTY, |[min, max]| Rect {
+            min: Point { x: (min[0] - origin[0]) as f32, y: (min[1] - origin[1]) as f32 },
+            max: Point { x: (max[0] - origin[0]) as f32, y: (max[1] - origin[1]) as f32 },
+        });
+    }
     doc.scene().paint_source(target).and_then(|paint| paint.base.as_ref()).map_or_else(
         || Rect::from_extent(doc.scene().local_extent(target)),
         |base| Rect { min: Point {x:base.offset[0] as f32,y:base.offset[1] as f32},
@@ -290,37 +294,40 @@ impl<R: CanvasRenderer> UiSession<R> {
         let roots = doc.layer_roots(self.selected_layers());
         if roots.is_empty() { doc.working.occurrence.into_iter().collect() } else { roots }
     }
-    pub(super) fn retained_transforming(&self) -> bool {
+    pub(super) fn layer_transforming(&self) -> bool {
         let doc = self.engine.document();
         !matches!(doc.working.target, Some(SourceTarget::Coverage(_))) && doc.working.selection.is_none()
     }
+    pub(super) fn transform_target(&self) -> Option<SourceTarget> {
+        let doc = self.engine.document();
+        if !self.layer_transforming() { return doc.active_target(); }
+        let roots = self.transform_roots();
+        (roots.len() == 1).then(|| doc.scene().source_target(roots[0])).flatten().filter(|t| matches!(t, SourceTarget::Paint(_)))
+    }
     pub(super) fn can_transform(&self) -> bool {
         let doc = self.engine.document();
-        if self.retained_transforming() {
-            return doc.retained_transform_targets(&self.transform_roots()).is_ok();
+        let Some(target) = self.transform_target() else { return false; };
+        let Some(owner) = doc.target_owner(target) else { return false; };
+        !doc.is_locked(owner) && match target {
+            SourceTarget::Coverage(_) => doc.scene().occurrence(owner).is_some_and(|o| o.mask.is_some()),
+            _ => self.layer_transforming() || doc.scene().paint_source(owner).is_some_and(|p| p.base.is_some() || !p.raster.is_empty() || !p.operations.is_empty()),
         }
-        let Some(target) = doc.active_target() else { return false; };
-        self.transform_roots().len() == 1 && doc.target_owner(target).is_some_and(|h| !doc.is_locked(h))
-            && doc.affine_edit_transform(target).is_some()
-            && doc.working.occurrence.is_some_and(|h| doc.scene().occurrence(h).is_some_and(|o|
-                if matches!(target, SourceTarget::Coverage(_)) { o.mask.is_some() }
-                else { o.kind() == LayerKind::Paint && doc.scene().paint_source(h).is_some_and(|p|
-                    p.base.is_some() || !p.raster.is_empty() || !p.operations.is_empty()) }))
+    }
+    pub(super) fn transform_refusal(&self) -> Option<Arc<str>> {
+        let doc = self.engine.document();
+        let roots = self.transform_roots();
+        if self.layer_transforming() && (roots.len() > 1 || roots.iter().any(|h| doc.scene().occurrence(*h).is_some_and(|o| o.kind() != LayerKind::Paint))) {
+            return Some(self.localization().text(MessageId::COMMANDS_TRANSFORM_GROUPS_MOVE_ONLY));
+        }
+        if roots.len() > 1 { return Some("Clear the pixel selection to transform several layers".into()); }
+        (!self.can_transform()).then(|| "Select unlocked paint content or a layer mask".into())
     }
     pub(super) fn begin_transform(&mut self) -> Result<(), String> {
         self.require_idle()?;
         if self.cropping() {
             return Err("Apply or cancel the crop first".into());
         }
-        if self.retained_transforming() {
-            self.engine.document().retained_transform_targets(&self.transform_roots()).map_err(error)?;
-        } else if self.transform_roots().len() > 1 {
-            return Err("Clear the pixel selection to transform several layers".into());
-        } else if self.engine.document().active_target().and_then(|t| self.engine.document().affine_edit_transform(t)).is_none() {
-            return Err(self.localization().text(MessageId::COMMANDS_APPLY_TRANSFORM_BEFORE_EDITING).to_string());
-        } else if !self.can_transform() {
-            return Err("Select unlocked paint content or a layer mask".into());
-        }
+        refused(self.transform_refusal())?;
         if self.operation.active() {
             return Ok(());
         }
@@ -328,13 +335,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.measured_target_bounds().is_none() {
             return self.request_content_bounds(super::image_geometry::ContentUse::Transform);
         }
-        if !matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_)))
-            && self.engine.document().working.selection.is_none()
-        {
-            return self.begin_layer_placement(None);
-        }
         let t = self.pixel_transaction()?;
-        self.operation.serial = t.request.transaction;
+        self.operation.serial = t.serial;
         self.operation.current = Some(t);
         self.layer_interaction.tool = LayerCanvasTool::Transform;
         self.state.layer_tools.tool = LayerCanvasTool::Transform;
@@ -346,8 +348,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// selected pixels.
     pub(super) fn move_refusal(&self) -> Option<&'static str> {
         let doc = self.engine.document();
-        if self.retained_transforming() {
-            return doc.retained_transform_targets(&self.transform_roots()).err().map(|reason| match reason {
+        if self.layer_transforming() {
+            return doc.layer_move_targets(&self.transform_roots()).err().map(|reason| match reason {
                 layer_core::DocumentError::ProtectedOccurrence(h) if Some(h) == doc.working.occurrence => "The active layer is locked",
                 _ => "The selected layers cannot be moved together",
             });
@@ -372,7 +374,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn begin_move_transform(&mut self, p: Point, keep_source: bool) -> Result<(), String> {
         let snapping = self.transform_snapping();
         if !self.moves_selected_pixels() {
-            self.begin_retained_placement(None, true)?;
+            self.begin_layer_move()?;
             let t = self.operation.current.as_mut().unwrap();
             let press = t.basis.inverse().ok_or("Invalid layer placement")?.map(p);
             t.drag = Some(Drag { handle: Handle::Move, press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping });
@@ -390,7 +392,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         t.pixel_move = true;
         t.keep_source = keep_source;
         t.drag = Some(Drag { handle: Handle::Move, press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping });
-        self.operation.serial = t.request.transaction;
+        self.operation.serial = t.serial;
         self.operation.current = Some(t);
         self.layer_interaction.path = vec![press];
         self.update_transform()
@@ -398,12 +400,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// A transform of the active target's pixels, bounded by the selection.
     fn pixel_transaction(&self) -> Result<Transaction, String> {
         let doc = self.engine.document();
-        let target = doc.active_target().ok_or("Select a paint layer or mask first")?;
-        let basis = doc.affine_edit_transform(target).ok_or("Apply Transform to Pixels before editing this layer")?;
+        let target = self.transform_target().ok_or("Select a paint layer or mask first")?;
+        let basis = Affine::translation(layer_core::offsets::point(doc.target_offset(target)));
         let inverse = basis.inverse().ok_or("Invalid layer placement")?;
         let selection = doc.working.selection.as_ref().map(|s| s.transformed(inverse)).transpose().map_err(error)?;
         let serial = self.operation.serial.wrapping_add(1);
-        let mut t = Transaction::new(serial, target, selection, doc.revision, basis, self.measured_target_bounds().ok_or("The content bounds are still being measured")?, Pose::identity());
+        let mut t = Transaction::new(serial, Some(target), selection, doc.revision, basis, self.measured_target_bounds().ok_or("The content bounds are still being measured")?, Pose::identity());
         t.geometry.interpolation = self.operation.interpolation;
         t.start = t.geometry.clone();
         t.accepted = t.geometry.clone();
@@ -449,7 +451,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         bounds.max.x = bounds.max.x.max(bounds.min.x + 1.);
         bounds.max.y = bounds.max.y.max(bounds.min.y + 1.);
         let serial = self.operation.serial.wrapping_add(1);
-        let t = Transaction::new(serial, doc.active_target().unwrap_or(SourceTarget::Selection(SelectionHandle::INVALID)), None, doc.revision, Affine::IDENTITY, bounds, Pose::identity());
+        let t = Transaction::new(serial, doc.active_target(), None, doc.revision, Affine::IDENTITY, bounds, Pose::identity());
         self.operation.serial = serial;
         self.operation.current = Some(Transaction { outline: Some(selection), ..t });
         self.layer_interaction.tool = LayerCanvasTool::Transform;
@@ -482,10 +484,44 @@ impl<R: CanvasRenderer> UiSession<R> {
             if self.queue_transform_selection() {
                 return Ok(());
             }
+            if self.operation.current.as_ref().is_some_and(|t| !t.pixel_move && t.selection.is_none()) {
+                return self.commit_layer_transform();
+            }
             self.engine.commit_transform(None).map_err(error)?;
         }
         self.cancel_transform()?;
         Ok(())
+    }
+    fn commit_layer_transform(&mut self) -> Result<(), String> {
+        let t = self.operation.current.as_ref().ok_or("Start a transform first")?;
+        let map = t.map().ok_or("Invalid transform")?;
+        let target = t.target.ok_or("Select a paint layer")?;
+        let source = t.source;
+        let world = Projective::from_affine(t.basis.inverse().ok_or("Invalid transform basis")?).then(map.outer)
+            .and_then(|map| map.then(Projective::from_affine(t.basis)));
+        if map.mesh.is_none() && let Some(delta) = map.as_affine().filter(|a| a.0[..4] == Affine::IDENTITY.0[..4])
+            .and_then(|a| layer_core::offsets::exact(Point { x: a.0[4], y: a.0[5] })) {
+            if delta != [0; 2] {
+                let mut candidate = self.engine.document().clone();
+                let edit = candidate.translate_target_edit(target, delta).map_err(error)?;
+                candidate.apply(edit.clone()).map_err(error)?;
+                let owner = candidate.target_owner(target).ok_or("The transformed layer was removed")?;
+                let targets: Vec<_> = candidate.scene().source_target(owner).into_iter()
+                    .chain(candidate.scene().mask(owner).map(|(mask, _)| SourceTarget::Coverage(mask.source))).collect();
+                let mut edits = vec![edit];
+                edits.extend(candidate.paint_extent_plan(&targets, self.engine.geometry_limits()).map_err(error)?);
+                self.layer_edit(layer_core::Edit::Batch(edits))?;
+                self.operation.last_transform = world;
+            }
+            self.cancel_transform()?;
+            return Ok(());
+        }
+        self.operation.last_transform = map.mesh.is_none().then_some(world).flatten();
+        if let Some(started) = self.start_exact_layer_transform(target, &map) {
+            return started;
+        }
+        let plan = self.engine.document().layer_transform_plan(target, &map, Some(source), Default::default())?;
+        self.start_layer_transform(plan)
     }
     pub(super) fn apply_transform_selection(
         &mut self,
@@ -496,7 +532,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn cancel_transform(&mut self) -> Result<bool, String> {
-        if self.cancel_content_bounds() { return Ok(true); }
+        if self.cancel_content_bounds() || self.cancel_conversion() { return Ok(true); }
         if self.cropping() {
             self.finish_crop(false)?;
             return Ok(true);
@@ -540,19 +576,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn update_transform(&mut self) -> Result<(), String> {
-        let request = self.operation.current.as_ref().map(|t| t.request.clone());
+        let request = self.operation.current.as_ref().map(|t| (t.transform.clone(), t.moving));
         let result = self.preview_transform();
         if let Some(t) = &mut self.operation.current {
             if result.is_ok() { t.accepted = t.geometry.clone(); }
             else {
                 t.geometry = t.accepted.clone();
-                t.request = request.unwrap();
+                (t.transform, t.moving) = request.unwrap();
             }
         }
         result
     }
 
     fn preview_transform(&mut self) -> Result<(), String> {
+        let moves_only = self.localization().text(MessageId::COMMANDS_TRANSFORM_GROUPS_MOVE_ONLY);
         let Some(t) = &mut self.operation.current else {
             return Ok(());
         };
@@ -560,19 +597,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             placement: t.map().ok_or("Invalid transform")?,
             keep_source: t.keep_source,
             source_from_owner: None,
+            source_base: None,
         };
-        if transform != t.request.transform && self.region_tools.applying_transform() {
+        if transform != t.transform && self.region_tools.applying_transform() {
             self.region_tools.cancel();
         }
-        t.request.transform = transform;
+        t.transform = transform;
         let moving = t.drag.is_some();
-        t.request.moving = moving;
+        t.moving = moving;
         let placing = t.placement.is_some();
         if t.outline.is_some() {
             self.sync_selection_overlay();
         } else if let Some(placement) = &t.placement {
             let mut edits = Vec::new();
-            for (handle, occurrence) in placement.preview_occurrences(self.engine.document(), &t.request.transform.placement, t.geometry.interpolation)? {
+            for (handle, occurrence) in placement.preview_occurrences(self.engine.document(), &t.transform.placement, &moves_only)? {
                 if self.engine.document().is_locked(handle) {
                     return Err("The destination layer is locked".into());
                 }
@@ -591,7 +629,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             t.revision = self.engine.document().revision;
         } else {
             self.engine
-                .set_transform_preview(Some(t.request.clone()))
+                .set_transform_preview(t.preview())
                 .map_err(error)?;
         }
         if !moving {
@@ -750,12 +788,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             "arrowup" => Point { x: 0., y: -step }, "arrowdown" => Point { x: 0., y: step },
             _ => return Ok(false),
         };
-        if self.operation.current.is_none() && (self.layer_interaction.tool != LayerCanvasTool::Move || !self.retained_transforming()) {
+        if self.operation.current.is_none() && (self.layer_interaction.tool != LayerCanvasTool::Move || !self.layer_transforming()) {
             return Ok(false);
         }
         self.require_idle()?;
         if self.operation.nudging.as_deref().is_some_and(|held| held != key) { self.finish_transform_nudge(true)?; }
-        if self.operation.current.is_none() { self.begin_retained_placement(None, true)?; }
+        if self.operation.current.is_none() { self.begin_layer_move()?; }
         let t = self.operation.current.as_mut().unwrap();
         let inverse = t.basis.inverse().ok_or("Invalid transform basis")?;
         let delta = sub(inverse.map(delta), inverse.map(Point::default()));
@@ -766,23 +804,40 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn transform_again_refusal(&self) -> Option<Arc<str>> {
         let l = self.localization();
-        if self.operation.last_transform.is_none() { return Some(l.text(MessageId::COMMANDS_TRANSFORM_AGAIN_EMPTY)); }
-        if !self.retained_transforming() { return Some(l.text(MessageId::COMMANDS_TRANSFORM_AGAIN_WHOLE_LAYER)); }
-        self.engine.document().retained_transform_targets(&self.transform_roots()).err().map(|reason| reason.to_string().into())
+        let Some(delta) = self.operation.last_transform else { return Some(l.text(MessageId::COMMANDS_TRANSFORM_AGAIN_EMPTY)); };
+        if !self.layer_transforming() { return Some(l.text(MessageId::COMMANDS_TRANSFORM_AGAIN_WHOLE_LAYER)); }
+        let doc = self.engine.document();
+        let roots = self.transform_roots();
+        if let Err(reason) = doc.layer_move_targets(&roots) { return Some(reason.to_string().into()); }
+        let translation = delta.as_affine().filter(|a| a.0[..4] == Affine::IDENTITY.0[..4]).is_some();
+        (!translation && (roots.len() != 1 || doc.scene().occurrence(roots[0]).is_some_and(|o| o.kind() != LayerKind::Paint)))
+            .then(|| l.text(MessageId::COMMANDS_TRANSFORM_GROUPS_MOVE_ONLY))
     }
     pub(super) fn transform_again(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
         refused(self.transform_again_refusal())?;
         let delta = self.operation.last_transform.unwrap();
         let roots = self.transform_roots();
-        let mut candidate = self.engine.document().clone();
-        let targets = candidate.retained_transform_targets(&roots).map_err(error)?;
-        let edit = candidate.retained_transform_edit(&roots, delta).map_err(error)?;
-        candidate.apply(edit.clone()).map_err(error)?;
-        let mut edits = vec![edit];
-        let sources: Vec<_> = targets.iter().flat_map(|h| [candidate.scene().source_target(*h), candidate.scene().occurrence(*h).and_then(|o| o.mask.as_ref()).map(|m| SourceTarget::Coverage(m.source))]).flatten().collect();
-        edits.extend(candidate.paint_extent_plan(&sources, self.engine.geometry_limits()).map_err(error)?);
-        self.layer_edit(layer_core::Edit::Batch(edits))
+        let doc = self.engine.document();
+        if let Some(offset) = delta.as_affine().filter(|a| a.0[..4] == Affine::IDENTITY.0[..4]).and_then(|a| layer_core::offsets::rounded(Point { x: a.0[4], y: a.0[5] })) {
+            let mut candidate = doc.clone();
+            let targets = candidate.layer_move_targets(&roots).map_err(error)?;
+            let edit = candidate.move_layers_edit(&roots, offset).map_err(error)?;
+            candidate.apply(edit.clone()).map_err(error)?;
+            let mut edits = vec![edit];
+            let sources: Vec<_> = targets.iter().flat_map(|h| [candidate.scene().source_target(*h), candidate.scene().occurrence(*h).and_then(|o| o.mask.as_ref()).map(|m| SourceTarget::Coverage(m.source))]).flatten().collect();
+            edits.extend(candidate.paint_extent_plan(&sources, self.engine.geometry_limits()).map_err(error)?);
+            return self.layer_edit(layer_core::Edit::Batch(edits));
+        }
+        let target = doc.scene().source_target(roots[0]).ok_or("Select a paint layer")?;
+        let basis = Projective::from_affine(Affine::translation(layer_core::offsets::point(doc.target_offset(target))));
+        let local = basis.then(delta).and_then(|map| map.then(basis.inverse()?)).ok_or("Invalid transform")?;
+        let map = LayerPlacement { interpolation: self.operation.interpolation.unwrap_or_default(), ..LayerPlacement::from_projective(local) };
+        if let Some(started) = self.start_exact_layer_transform(target, &map) {
+            return started;
+        }
+        let plan = self.engine.document().layer_transform_plan(target, &map, None, Default::default())?;
+        self.start_layer_transform(plan)
     }
     pub(super) fn set_transform_reference(&mut self, reference: CanvasAnchor) -> Result<(), String> {
         let t = self.operation.current.as_mut().ok_or("Start a transform first")?;
@@ -791,7 +846,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn transform_extra(&self) -> Vec<ToolOption> {
-        let Some(t) = self.operation.current.as_ref().filter(|t| !t.pixel_move && !t.retained_move && t.mode != TransformMode::Warp) else { return Vec::new(); };
+        let Some(t) = self.operation.current.as_ref().filter(|t| !t.pixel_move && !t.layer_move && t.mode != TransformMode::Warp) else { return Vec::new(); };
         vec![ToolOption::Choice { id: "transform-reference", label: self.localization().text(MessageId::TOOLS_TRANSFORM_REFERENCE),
             segmented: true, columns: Some(3), beside: Some("transform_x"), items: CanvasAnchor::ALL.into_iter().map(|reference| ToolSetItem { enabled: true,
                 label: reference.localized_label(self.localization()),
@@ -807,7 +862,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         };
         let pixel_move = t.pixel_move;
-        let retained_move = t.retained_move;
+        let layer_move = t.layer_move;
         let p = t.basis.inverse().ok_or("Invalid layer placement")?.map(p);
         if t.split.is_some() {
             t.split_hover(Some(p));
@@ -853,7 +908,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.layer_interaction.path.clear();
                 }
                 let update = self.update_transform();
-                if retained_move && event.phase == PenPhase::Up {
+                if layer_move && event.phase == PenPhase::Up {
                     if let Err(cause) = update { self.notify(cause); }
                     return self.finish_layer_placement(true);
                 }
@@ -863,7 +918,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.cancel_transform()?;
                 }
             }
-            PenPhase::Cancel if pixel_move || retained_move => {
+            PenPhase::Cancel if pixel_move || layer_move => {
                 self.cancel_transform()?;
             }
             PenPhase::Cancel => {
@@ -946,8 +1001,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let next = (self.moves_selected_pixels() && self.move_refusal().is_none())
             .then(|| {
                 let target = target?;
-                let inverse = doc.affine_edit_transform(target)?.inverse()?;
-                Some((target, doc.working.selection.as_ref()?.transformed(inverse).ok()?))
+                Some((target, doc.working.selection.as_ref()?.translated(layer_core::offsets::point(doc.target_offset(target).map(|v| -v)))))
             })
             .flatten();
         if self.operation.moving_pixels != next {
@@ -1124,7 +1178,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 from: map(*from), to: map(*to), distance: 0., marker: 0., scale: 1.,
             }));
         }
-        if t.retained_move || t.pixel_move { return; }
+        if t.layer_move || t.pixel_move { return; }
         let map = self.transform_surface_map(t);
         let reach = self.ruler_reach();
         let mut line = |a, b, solid| {
@@ -1255,17 +1309,18 @@ pub(super) fn inside_convex(quad: &[Point; 4], p: Point) -> bool {
     sides.iter().all(|s| *s >= 0.) || sides.iter().all(|s| *s <= 0.)
 }
 impl Transaction {
-    fn new(transaction: u64, target: SourceTarget, selection: Option<Selection>, revision: u64, basis: Affine, bounds: Rect, pose: Pose) -> Self {
+    fn preview(&self) -> Option<TransformPreview> {
+        Some(TransformPreview { transaction: self.serial, moving: self.moving, target: self.target?, selection: self.selection.clone(), transform: self.transform.clone() })
+    }
+    fn new(serial: u64, target: Option<SourceTarget>, selection: Option<Selection>, revision: u64, basis: Affine, bounds: Rect, pose: Pose) -> Self {
         let geometry = Geometry { pose, exact_affine: None, inner: None, mesh: None, frame: bounds, pivot: center(bounds), interpolation: None, nodes: BTreeSet::new() };
         Self {
             placement: None,
-            request: TransformPreview {
-                transaction,
-                moving: false,
-                target,
-                selection,
-                transform: ImageTransform::default(),
-            },
+            serial,
+            target,
+            selection,
+            transform: ImageTransform::default(),
+            moving: false,
             revision,
             basis,
             bounds,
@@ -1281,7 +1336,7 @@ impl Transaction {
             drag: None,
             outline: None,
             pixel_move: false,
-            retained_move: false,
+            layer_move: false,
             keep_source: false,
             reference: CanvasAnchor::Center,
         }
@@ -1303,8 +1358,7 @@ impl Transaction {
         self.mapped_mesh().map_or(self.bounds, |mesh| mesh.bounds())
     }
     fn mapped_mesh(&self) -> Option<&Arc<MeshMap>> {
-        self.geometry.mesh.as_ref().filter(|mesh| !(self.placement.is_some()
-            && self.start.mesh.is_none() && mesh.cells() == MeshMap::PRESETS[0]
+        self.geometry.mesh.as_ref().filter(|mesh| !(self.start.mesh.is_none() && mesh.cells() == MeshMap::PRESETS[0]
             && mesh.can_refine(MeshMap::PRESETS[0]) && mesh.is_identity()))
     }
     fn outer(&self) -> Option<Projective> { self.geometry.outer() }
@@ -1444,10 +1498,7 @@ impl Transaction {
         self.split = None;
     }
     fn reset(&mut self) {
-        if let Some(placement) = &mut self.placement {
-            placement.reset();
-            if !placement.single_leaf() { self.bounds = self.start.frame; }
-        }
+        if self.placement.as_ref().is_some_and(|placement| !placement.single_leaf()) { self.bounds = self.start.frame; }
         self.geometry = self.start.clone();
         self.node = self.geometry.nodes.last().copied();
         self.split = None;
@@ -1715,7 +1766,7 @@ mod tests {
             min: Point { x: 20., y: 40. },
             max: Point { x: 240., y: 190. },
         };
-        Transaction::new(1, SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(1)), None, 0, Affine::translation(Point { x: 7., y: 11. }), bounds, Pose::identity())
+        Transaction::new(1, Some(SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(1))), None, 0, Affine::translation(Point { x: 7., y: 11. }), bounds, Pose::identity())
     }
     fn near(a: Point, b: Point) {
         assert!((a.x - b.x).hypot(a.y - b.y) < 0.001, "{a:?} != {b:?}");

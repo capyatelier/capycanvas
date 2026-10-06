@@ -14,17 +14,26 @@ export function createNotice({ workspace, element, button, answer, layout, bar,
   root.setAttribute("role", "status"); root.setAttribute("aria-label", "Canvas notice");
   root.hidden = true;
   const text = element("span", "canvas-notice-text");
-  const action = button("", accept, "canvas-notice-action");
-  action.tabIndex = -1; action.hidden = true;
-  root.append(text, action); workspace.append(root);
+  const actions = element("span", "canvas-notice-actions");
+  actions.hidden = true;
+  root.append(text, actions); workspace.append(root);
   root.addEventListener("mousedown", e => e.preventDefault());
   root.addEventListener("contextmenu", e => e.preventDefault());
   let shown = null, timer = 0, transform = "", width = "";
 
-  function accept() {
+  function accept(action) {
     if (shown === null || root.hidden) return;
     hide();
-    answer(shown, true);
+    answer(shown, true, action);
+  }
+  function show(list) {
+    actions.replaceChildren(...list.map(({ id, label, enabled, reason }) => {
+      const node = button(label, () => accept(id), "canvas-notice-action");
+      node.tabIndex = -1; node.disabled = !enabled;
+      if (reason) node.title = reason;
+      return node;
+    }));
+    actions.hidden = list.length === 0;
   }
   function hide() {
     clearTimer(timer); timer = 0;
@@ -42,8 +51,7 @@ export function createNotice({ workspace, element, button, answer, layout, bar,
   function publish(notice) {
     if (!notice) { hide(); shown = null; return; }
     text.textContent = notice.text;
-    action.textContent = notice.action?.label ?? "";
-    action.hidden = !notice.action;
+    show(notice.actions ?? []);
     if (shown === notice.id) return;
     const id = shown = notice.id;
     root.hidden = false;

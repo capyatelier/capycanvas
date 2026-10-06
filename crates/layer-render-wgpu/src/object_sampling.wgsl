@@ -29,8 +29,13 @@ fn weight(p: vec2<i32>, q: vec2<f32>) -> f32 {
     let high = vec2<i32>(ceil(q+parameters.radius.xy-vec2(0.5)));
     let begin = low.y+i32(parameters.window.z);
     let end = min(high.y+1,begin+i32(parameters.window.w));
+    let origin = parameters.source.xy;
+    let extent = parameters.source.zw;
     var total = 0.;
-    for(var y=begin;y<end;y++) { for(var x=low.x;x<=high.x;x++) { total+=weight(vec2(x,y),q); } }
+    for(var y=begin;y<end;y++) { for(var x=low.x;x<=high.x;x++) {
+        let p = vec2(x,y);
+        if any(p<origin) || any(p>=origin+extent) { total+=weight(p,q); }
+    } }
     accumulation[index].weight.x+=total;
 }
 @compute @workgroup_size(8,8) fn contribute(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -66,12 +71,14 @@ fn weight(p: vec2<i32>, q: vec2<f32>) -> f32 {
     let begin = max(low.y,kernel_low.y+i32(parameters.window.z));
     let end = min(high.y,kernel_low.y+i32(parameters.window.z+parameters.window.w));
     var sum = vec4(0.);
+    var total = 0.;
     for(var y=begin;y<end;y++) { for(var x=low.x;x<high.x;x++) {
         let p = vec2(x,y);
         let w = weight(p,q);
-        if w>0. { sum+=textureLoad(source,p-origin,0)*w; }
+        if w>0. { sum+=textureLoad(source,p-origin,0)*w; total+=w; }
     }}
     accumulation[index].color+=sum;
+    accumulation[index].weight.x+=total;
 }
 @compute @workgroup_size(8,8) fn normalize(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy>=parameters.work.zw) { return; }

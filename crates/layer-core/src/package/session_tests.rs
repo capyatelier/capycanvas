@@ -2,8 +2,8 @@ use crate::package::{session::{PreparedSession, open}, session_transfer::{Prepar
 use crate::{authored::*, color::{ColorProfile, RgbColor, RgbSpace, ProofRecipe, hdr::SdrRendition},
     raster::{RasterData, RasterPlane, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey, TILE_SIZE},
     BlendSpace, Document, DocumentNames, Edit, Editor, EffectInstance, EffectValue, ImageResolution,
-    Interpolation, LayerBlend, LayerPlacement, Lut3d, MeshMap, PhotoMetadata, Point, Projective,
-    ProjectLimits, Rect, RulerGeometry, Selection, SelectionMaskProperties, SelectionPixels};
+    LayerBlend, Lut3d, PhotoMetadata, Point,
+    ProjectLimits, RulerGeometry, Selection, SelectionMaskProperties, SelectionPixels};
 use serde_json::json;
 use std::{collections::BTreeSet, sync::{Arc, atomic::AtomicBool}};
 
@@ -30,12 +30,11 @@ fn fixture()->Editor {
     let original=crate::color::source::rgba8_source([19,11],|x,y|[x as u8,y as u8,73,255]);
     *art.paint.get_mut(paint).unwrap()=PaintSource {color_mode:Default::default(),domain:[19,11],raster:raster(RasterPlane::Color,23,true),base:Some(PaintBase::new(Image::new(original))),operations:Arc::default()};
     let coverage=art.coverage.insert(PortableId::random(),CoverageSource {domain:[19,11],raster:raster(RasterPlane::Mask,127,false),
-        initial:Some(Selection::polygon(vec![Point{x:1.,y:2.},Point{x:15.,y:2.},Point{x:1.,y:9.}]).unwrap()),default_coverage:0.375,operations:Arc::default()}).unwrap();
+        default_coverage:0.375,operations:Arc::default()}).unwrap();
     *art.occurrences.get_mut(ink).unwrap()=Occurrence {content:OccurrenceContent::Paint(paint),name:"Ink 色".into(),visible:false,
         opacity:0.625,blend:LayerBlend::Multiply,locked:true,alpha_locked:true,reference:true,attachment:Attachment::None,
-        translation:Point{x:2.,y:3.},placement:LayerPlacement {outer:Projective([1.,0.,1.,0.,1.,2.,0.,0.,1.]),
-            mesh:Some(Arc::new(MeshMap::fit(Rect::from_extent([19,11]),[1,1],|p|Some(Point{x:p.x+0.01*p.y*p.y,y:p.y})).unwrap())),interpolation:Interpolation::Bicubic},
-        mask:Some(MaskUse {source:coverage,enabled:false,linked:false,inverted:true,translation:Point{x:3.,y:1.},placement:Projective([1.,0.,2.,0.,1.,0.,0.,0.,1.])})};
+        offset:[2,-3],
+        mask:Some(MaskUse {source:coverage,enabled:false,linked:false,inverted:true,offset:[3,1]})};
     let saved=art.selections.insert(PortableId::random(),SavedSelection {selection:pixels(),}).unwrap();
     let selection=art.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Selection(saved),"Selected 色")).unwrap();
     let program=crate::bundled_effect_catalog().get("color_lookup").unwrap().program();
@@ -52,7 +51,7 @@ fn fixture()->Editor {
         visibility:[(selection,false)].into(),properties:[(saved,SelectionMaskProperties {
             color:RgbColor {space:RgbSpace::DisplayP3,rgba:[0.25,0.5,0.75,1.],linear_rgb:None},opacity:0.75})].into()},
         layer_selection:[ink,selection].into(),layer_anchor:Some(ink),solo_visibility:Some([(ink,true),(selection,false)].into()),
-        occurrence:Some(ink),target:Some(SourceTarget::Coverage(coverage)),inspect_mask:Some(ink)};
+        occurrence:Some(ink),target:Some(SourceTarget::Coverage(coverage)),inspect_mask:Some(ink),view_origin:[-300,17],objects:Default::default()};
     Editor::new(document)
 }
 fn edit_family(edit:&Edit)->&'static str {
@@ -80,7 +79,7 @@ fn perform_all(editor:&mut Editor) {
     let lookup=art.effects.iter().find(|(_,_,e)|e.program.id.as_ref()=="color_lookup").unwrap().0;
     let output=art.default_output;
     let composition=art.compositions.get(root).unwrap();
-    let composition=Composition {size:[23,17],origin:Point{x:-2.,y:3.},color:composition.color,blend:BlendSpace::Linear,
+    let composition=Composition {size:[23,17],color:composition.color,blend:BlendSpace::Linear,
         resolution:Some(ImageResolution::ppi(240)),result:stack};
     change!(compositions,Composition,root,composition);
     let mut entries=editor.document().artwork.stacks.get(stack).unwrap().entries.clone();entries.rotate_left(1);
@@ -89,7 +88,7 @@ fn perform_all(editor:&mut Editor) {
     change!(occurrences,Occurrence,ink,occurrence);
     change!(paint,Paint,paint,PaintSource {color_mode:Default::default(),domain:[19,11],raster:raster(RasterPlane::Color,37,true),
         base:Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|x,y|[y as u8,x as u8,97,255])))),operations:Arc::default()});
-    change!(coverage,Coverage,coverage,CoverageSource {domain:[19,11],raster:raster(RasterPlane::Mask,79,false),initial:Some(pixels()),default_coverage:0.625,operations:Arc::default()});
+    change!(coverage,Coverage,coverage,CoverageSource {domain:[19,11],raster:raster(RasterPlane::Mask,79,false),default_coverage:0.625,operations:Arc::default()});
     let mut program=crate::effect_catalog::custom_program("color_lookup");
     Arc::make_mut(&mut Arc::make_mut(&mut program).parameters).iter_mut().find(|parameter|parameter.key.as_ref()=="resource").unwrap().dimension=Dimension::Normalized;
     let mut effect=EffectInstance::new(program);effect.set("resource",EffectValue::Lut3d(Some(lut(0.75)))).unwrap();
@@ -98,7 +97,7 @@ fn perform_all(editor:&mut Editor) {
     change!(guides,Guides,guides,Guides {rulers:vec![(PortableId::random(),RulerGeometry::Radial {center:Point{x:7.,y:5.}})]});
     let mut proof=ProofRecipe::new("Print 色".into(),ColorProfile::Builtin(RgbSpace::AdobeRgb));proof.simulate_paper=true;
     change!(outputs,Output,output,Output {composition:root,name:"Output 色".into(),context:EvaluationContext {elapsed:0.,phases:Arc::new(vec![(lookup,0.625)])},
-        frame:Some((Point{x:-1.,y:2.},[17,9])),scale:[1.5,0.75],sdr:SdrRendition {exposure:0.5,contrast:1.25,headroom:2.,highlight_color:0.25,balance:0.125},proof:Some(proof)});
+        sdr:SdrRendition {exposure:0.5,contrast:1.25,headroom:2.,highlight_color:0.25,balance:0.125},proof:Some(proof)});
     let mut working=editor.document().working.clone();working.selection=Some(Selection::polygon(vec![Point{x:1.,y:1.},Point{x:8.,y:1.},Point{x:8.,y:7.}]).unwrap());
     perform!(Edit::Working(working));
     perform!(Edit::SetRaster {target:SourceTarget::Paint(paint),revision:raster(RasterPlane::Color,59,true)});

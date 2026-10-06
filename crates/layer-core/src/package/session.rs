@@ -1,6 +1,6 @@
 use super::registry::{self,RecordKind};
 use super::{archive::{self, Directory, InputMember, Member}, artwork_records, manifest::{Manifest, ManifestLimits, ManifestRead}, resources::{self, ResourceInventory, ResourceReader, PreparedResources}, selection_records, transfer::TransferLayout, transport::BackingReader, ImmutableBacking};
-use crate::{authored::{Artwork, ArtworkCapture, CaptureCheckpoint, Handle, OccurrenceHandle, PortableId, SourceTarget, Support, WorkingState}, Document, Edit, Editor, HistoryEntry, ProjectLimits};
+use crate::{authored::{Artwork, ArtworkCapture, CaptureCheckpoint, Handle, ImageObjectHandle, OccurrenceHandle, PortableId, SourceTarget, Support, WorkingState}, Document, Edit, Editor, HistoryEntry, ProjectLimits};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, io::{Cursor, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
@@ -70,17 +70,17 @@ fn active(cancel:&AtomicBool)->Result<(),String> {if cancel.load(Ordering::Relax
 pub(crate) struct WorkingRecord {
     pub(crate) generation:u64, selection:Option<Value>, selection_overlays:crate::authored::SelectionOverlays,
     layer_selection:BTreeSet<OccurrenceHandle>,layer_anchor:Option<OccurrenceHandle>,solo_visibility:Option<BTreeMap<OccurrenceHandle,bool>>,
-    occurrence:Option<OccurrenceHandle>,target:Option<SourceTarget>,inspect_mask:Option<OccurrenceHandle>,
+    occurrence:Option<OccurrenceHandle>,target:Option<SourceTarget>,inspect_mask:Option<OccurrenceHandle>,view_origin:[i64;2],objects:BTreeSet<ImageObjectHandle>,
 }
 impl WorkingRecord {
     pub(crate) fn capture(working:&WorkingState,resources:&mut ResourceInventory)->Result<Self,String> {
-        let WorkingState {generation,selection,selection_overlays,layer_selection,layer_anchor,solo_visibility,occurrence,target,inspect_mask}=working;
+        let WorkingState {generation,selection,selection_overlays,layer_selection,layer_anchor,solo_visibility,occurrence,target,inspect_mask,view_origin,objects}=working;
         Ok(Self {generation:*generation,selection:selection.as_ref().map(|s|selection_records::encode_selection(s,resources)).transpose()?,
-            selection_overlays:selection_overlays.clone(),layer_selection:layer_selection.clone(),layer_anchor:*layer_anchor,solo_visibility:solo_visibility.clone(),occurrence:*occurrence,target:*target,inspect_mask:*inspect_mask})
+            selection_overlays:selection_overlays.clone(),layer_selection:layer_selection.clone(),layer_anchor:*layer_anchor,solo_visibility:solo_visibility.clone(),occurrence:*occurrence,target:*target,inspect_mask:*inspect_mask,view_origin:*view_origin,objects:objects.clone()})
     }
     pub(crate) fn decode(&self,reader:&mut ResourceReader<'_>)->Result<WorkingState,String> {
         Ok(WorkingState {generation:self.generation,selection:self.selection.as_ref().map(|s|selection_records::decode_selection(s,reader)).transpose().map_err(|e|e.to_string())?,
-            selection_overlays:self.selection_overlays.clone(),layer_selection:self.layer_selection.clone(),layer_anchor:self.layer_anchor,solo_visibility:self.solo_visibility.clone(),occurrence:self.occurrence,target:self.target,inspect_mask:self.inspect_mask})
+            selection_overlays:self.selection_overlays.clone(),layer_selection:self.layer_selection.clone(),layer_anchor:self.layer_anchor,solo_visibility:self.solo_visibility.clone(),occurrence:self.occurrence,target:self.target,inspect_mask:self.inspect_mask,view_origin:self.view_origin,objects:self.objects.clone()})
     }
 }
 const RASTER_INDEX_CHUNK:usize=64;
@@ -283,7 +283,7 @@ fn intern_artwork(art:&mut Artwork,state:&StateRecord,objects:&[ObjectVersion],d
                     *art.$store.get_mut(h).ok_or("Missing session record")?=value;}};
             }
             match object["type"].as_str().and_then(registry::descriptor).map(|record|record.kind) {
-                Some(RecordKind::Composition)=>reuse!(compositions),Some(RecordKind::Stack)=>reuse!(stacks),Some(RecordKind::OccurrenceLegacy|RecordKind::Occurrence)=>reuse!(occurrences),
+                Some(RecordKind::Composition)=>reuse!(compositions),Some(RecordKind::Stack)=>reuse!(stacks),Some(RecordKind::Occurrence)=>reuse!(occurrences),
                 Some(RecordKind::PaintSource)=>reuse!(paint),Some(RecordKind::CoverageSource)=>reuse!(coverage),Some(RecordKind::Effect)=>reuse!(effects),
                 Some(RecordKind::ObjectLayer)=>reuse!(object_layers),Some(RecordKind::ImageObject)=>reuse!(objects),Some(RecordKind::Image)=>{},
                 Some(RecordKind::Selection)=>reuse!(selections),Some(RecordKind::Guides)=>reuse!(guides),Some(RecordKind::Output)=>reuse!(outputs),_=>return Err("Unsupported interned session record".into()),
@@ -474,16 +474,12 @@ mod tests {
     #[test]
     fn unchanged_history_records_are_stored_once_and_interned_after_read() {
         let mut original=editor();let paint=match original.document.working.target.unwrap(){SourceTarget::Paint(h)=>h,_=>unreachable!()};
-        let paper=original.document.artwork.occurrences.iter().find(|(handle,_,_)|Some(*handle)!=original.document.working.occurrence).unwrap().0;
-        original.document.artwork.occurrences.get_mut(paper).unwrap().placement.mesh=Some(Arc::new(crate::MeshMap::fit(crate::Rect::from_extent([19,11]),[1,1],Some).unwrap()));
         original.document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(Image::new(crate::color::source::rgba8_source([19,11],|x,y|[x as u8,y as u8,80,255]))));
         for i in 0..20 {rename(&mut original,&format!("name {i}"));}
         let capture=prepared(&original);let value:Value=serde_json::from_slice(capture.metadata()).unwrap();
         assert_eq!(value["objects"].as_array().unwrap().iter().filter(|v|v["record"]["type"]=="capy.paint-source/2").count(),1);
         let mut restored=reopen(&capture).editor;let first=restored.document.artwork.paint.get(paint).unwrap().base.clone().unwrap();
-        let mesh=restored.document.artwork.occurrences.get(paper).unwrap().placement.mesh.clone().unwrap();
-        for _ in 0..20 {restored.undo().unwrap();assert!(first.image.same_owner(&restored.document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image));
-            assert!(Arc::ptr_eq(&mesh,restored.document.artwork.occurrences.get(paper).unwrap().placement.mesh.as_ref().unwrap()));}
+        for _ in 0..20 {restored.undo().unwrap();assert!(first.image.same_owner(&restored.document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image));}
         prepared(&restored);
     }
     #[test]

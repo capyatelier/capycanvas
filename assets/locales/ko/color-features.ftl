@@ -334,6 +334,7 @@ color-properties-source = { $width } × { $height } px · { $bits }비트 { $cha
 color-properties-retained-rasterized = 문서 좌표로 래스터화되었습니다.
 color-properties-retained-icc = 원본 픽셀 값과 포함된 ICC가 보존됩니다.
 color-properties-retained-original = 원본 픽셀 값과 색 해석이 보존됩니다.
+color-properties-retained-placed = 자체 샘플과 색상 해석을 유지하는 배치 이미지입니다.
 
 
 color-profile-select-imported = 가져온 프로파일을 선택하세요.

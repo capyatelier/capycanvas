@@ -49,6 +49,7 @@ impl ClipTask {
             .gpu
             .capture_scene(capture.scene.clone(), capture.scope.clone(), control)
             .map_err(|e| e.to_string())?;
+        if let Some((origin, extent)) = capture.window { renderer.capture_window(origin, extent).map_err(|e| e.to_string())?; }
         let (source, png) =
             renderer.write_clip(capture.crop, capture.coverage.as_ref(), capture.original.is_none(), limit)?;
         drop(renderer);
@@ -172,7 +173,7 @@ mod tests {
         let document = other.session.engine().document();
         let pasted = crate::test_support::active_source(document);
         assert_eq!(pasted.base.as_ref().unwrap().policy, layer_core::authored::PaintBasePolicy::SourceProfile, "another colour mode converts");
-        assert_eq!(document.target_geometry(document.working.target.unwrap()).as_affine().unwrap().0[4..], [10., 8.]);
+        assert_eq!(document.target_offset(document.working.target.unwrap()), [10, 8]);
         drop((host, other));
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }
@@ -194,6 +195,40 @@ mod tests {
         assert!((127..=129).contains(&copied[3][3]), "half coverage: {:?}", &copied[3][..8]);
         assert_eq!(copied[3][7], 255, "full coverage");
         assert_eq!(clip.name, "Merged copy");
+        drop(host);
+        layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+
+    #[test]
+    fn copied_images_render_their_signed_window_without_changing_the_frame() {
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        crate::test_support::hide_paper(&mut document);
+        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
+        document.apply(edit).unwrap();
+        let mut object = layer_core::ImageObject::new(photo([8, 6], |x, y| [(x * 30) as u8, (y * 40) as u8, 90, 255]).into(), "Photo");
+        object.affine = layer_core::Affine64([1., 0., 0., 1., -5., -3.]);
+        let (handle, edit) = document.add_image_object_edit(layer, object, 0).unwrap();
+        document.apply(edit).unwrap();
+        let mut working = document.working.clone();
+        working.occurrence = Some(layer);
+        working.target = None;
+        working.objects = [handle].into();
+        document.apply(layer_core::Edit::Working(working)).unwrap();
+        let mut host = host(document);
+        host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Tool { tool: layer_ui::LayerCanvasTool::Move } }).unwrap();
+        host.session.frame(0, 0).unwrap();
+        let clip = copy(&mut host, CommandId::Copy);
+        assert_eq!(clip.origin, [-5, -3]);
+        assert_eq!(clip.source.extent, [8, 6]);
+        assert_eq!(clip.objects.as_ref().unwrap().objects.len(), 1);
+        let copied = rows(&clip.source);
+        for (y, row) in copied.iter().enumerate() {
+            for (x, pixel) in row.chunks_exact(4).enumerate() {
+                let expected = [(x * 30) as u8, (y * 40) as u8, 90, 255];
+                assert!(pixel.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "({x},{y}) {pixel:?} {expected:?}");
+            }
+        }
+        assert_eq!(host.session.engine().document().composition().size, [64, 48]);
         drop(host);
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }

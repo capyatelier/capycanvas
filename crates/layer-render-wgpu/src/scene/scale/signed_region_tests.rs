@@ -33,14 +33,14 @@ fn coarse_graph_retains_negative_effect_inputs_and_matches_larger_reference() {
     let source = crate::test_support::depth_source([64, 32], SampleDepth::F32, color.space, 1 << 20,
         |x, y| if (20..32).contains(&x) && (8..24).contains(&y) { [0.7, 0.2, 0.1, 1.] } else { [0.; 4] });
     for watercolor in [false, true] {
-        let make = |extent, translation| {
+        let make = |extent, offset| {
             let mut doc = crate::tests::native_effects::empty_document(extent, color);
             let mut blur = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
             Arc::make_mut(&mut blur.program).resolution = layer_core::EffectResolution::Display;
             blur.set("sigma", layer_core::EffectValue::Number(4.)).unwrap();
             crate::tests::native_effects::insert_effect(&mut doc, blur);
             let paint = crate::tests::native_effects::insert_source(&mut doc, "retained source", source.clone());
-            doc.artwork.occurrences.get_mut(paint).unwrap().translation = translation;
+            doc.artwork.occurrences.get_mut(paint).unwrap().offset = offset;
             if watercolor {
                 use layer_core::raster::*;
                 let layer_core::SourceTarget::Paint(handle) = doc.scene().source_target(paint).unwrap() else { panic!("paint target"); };
@@ -54,8 +54,8 @@ fn coarse_graph_retains_negative_effect_inputs_and_matches_larger_reference() {
             crate::tests::native_effects::refresh(&mut doc);
             doc
         };
-        let document = make([32, 32], layer_core::Point { x: -32., y: 0. });
-        let reference = make([96, 64], layer_core::Point { x: 0., y: 16. });
+        let document = make([32, 32], [-32, 0]);
+        let reference = make([96, 64], [0, 16]);
         let evaluate = |doc: &layer_core::Document| {
             let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
             let mut packet = crate::test_support::packet(doc.scene(), doc.composition().size);

@@ -15,6 +15,14 @@ inline J layerAction(J const& operation){return O({{L"type",S(L"layer")},{L"acti
 inline hstring epochOf(std::shared_ptr<WorkspaceData> const& data){
     return to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch")));
 }
+inline bool imageId(double id){return id>=0&&(uint64_t(id)>>32)==3;}
+inline J panelRow(J const& state,double id){
+    auto layers=array(state,L"layers");
+    if(!imageId(id))return findId(layers,id);
+    for(auto value:layers)if(auto row=findId(array(value.GetObject(),L"objects"),id);row.Size())return row;
+    return J{};
+}
+inline J imageAction(J operation){return O({{L"type",S(L"object")},{L"action",operation}});}
 struct LayersView;
 struct ThumbnailEdge {
     Shapes::Path base,outline;
@@ -29,6 +37,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     std::weak_ptr<LayersView> owner;
     std::shared_ptr<WorkspaceData> data;
     double id=0;
+    bool image=false;
     hstring epoch;
     Border root;
     Grid body,swipeFrame;
@@ -36,7 +45,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     TranslateTransform swipeTransform;
     double swipeOffset=0;
     void swipe(double offset);
-    Button eye{nullptr},check{nullptr},content{nullptr},load{nullptr},mask{nullptr},link{nullptr},name{nullptr},grip{nullptr};
+    Button eye{nullptr},check{nullptr},content{nullptr},load{nullptr},mask{nullptr},link{nullptr},name{nullptr},expand{nullptr},grip{nullptr};
     Border indent,dropMark,contentSymbol,groupMode;
     Grid contentTile,maskTile;
     Image lockImage;
@@ -56,7 +65,9 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     bool contextAllowed()const;
     void action(J operation);
     void init();
+    void initImage();
     void refresh();
+    void refreshImage(J const& row);
     void thumbnails(std::vector<LayerThumbnail>& visible);
     void commit(bool cancel);
     void context(bool mask,UIElement const& anchor);
@@ -102,6 +113,7 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     J view()const{return object(data->state,L"layer_tools");}
     J editing()const{return object(view(),L"editing_layer");}
     void action(J operation){if(!data->updating)data->dispatchDocument(layerAction(operation),epochOf(data));}
+    void imageDispatch(J operation){if(!data->updating)data->dispatchDocument(imageAction(operation),epochOf(data));}
     void init();
     void refresh();
     void preview();

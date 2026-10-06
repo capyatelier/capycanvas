@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    Affine, BlendSpace, Document, Edit, Editor, LayerPlacement, ProjectLimits, SelectionShape,
+    Affine, BlendSpace, Document, Edit, Editor, ProjectLimits, SelectionShape,
     color::{ProofRecipe, source::SourceBuilder},
 };
 
@@ -46,7 +46,6 @@ fn native(color: DocumentColor) -> Artwork {
             identity(12),
             CoverageSource {
                 domain: [512, 256],
-                initial: None,
                 default_coverage: 1.,
                 operations: Arc::default(),
                 raster: RasterRevision::backed(RasterData {
@@ -62,8 +61,7 @@ fn native(color: DocumentColor) -> Artwork {
         enabled: true,
         linked: true,
         inverted: false,
-        translation: Point::default(),
-        placement: crate::Projective::IDENTITY,
+        offset: [0; 2],
     });
     let occurrence = artwork.occurrences.insert(identity(20), occurrence).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
@@ -331,30 +329,29 @@ fn source_fixture() -> Artwork {
     artwork
 }
 #[test]
-fn persistent_placement_preserves_sources_overrides_and_independent_history() {
+fn persistent_offsets_preserve_sources_overrides_and_independent_history() {
     let artwork = source_fixture();
     let document = Document::from_artwork(artwork).unwrap();
     let paint = document.artwork.paint.resolve(identity(10)).unwrap();
     let occurrence = document.artwork.occurrences.resolve(identity(20)).unwrap();
     let original = document.artwork.paint.get(paint).unwrap().base.clone().unwrap().image;
-    let placement = LayerPlacement::from_affine(Affine::around(Point::default(), [1. / 3.; 2], 0.3, Point { x: -45., y: 8. }));
     let mut value = document.artwork.occurrences.get(occurrence).unwrap().clone();
-    value.placement = placement.clone();
+    value.offset = [-45, 8];
     let edit = Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, occurrence, Some(value)).unwrap());
     let mut editor = Editor::new(document);
     editor.perform(edit).unwrap();
     assert!(editor.document().artwork.paint.get(paint).unwrap().raster.is_empty());
     assert!(editor.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.same_owner(&original));
     editor.undo().unwrap();
-    assert_eq!(editor.document().artwork.occurrences.get(occurrence).unwrap().placement, LayerPlacement::IDENTITY);
+    assert_eq!(editor.document().artwork.occurrences.get(occurrence).unwrap().offset, [0, 0]);
     editor.redo().unwrap();
     let mut loaded = editable(serialize(&prepare(&editor.document().artwork, false)));
     let occurrence = loaded.occurrences.resolve(identity(20)).unwrap();
-    assert_eq!(loaded.occurrences.get(occurrence).unwrap().placement, placement);
-    assert_eq!(loaded.occurrences.get(loaded.occurrences.resolve(identity(21)).unwrap()).unwrap().placement, LayerPlacement::IDENTITY);
+    assert_eq!(loaded.occurrences.get(occurrence).unwrap().offset, [-45, 8]);
+    assert_eq!(loaded.occurrences.get(loaded.occurrences.resolve(identity(21)).unwrap()).unwrap().offset, [0, 0]);
     let paint = loaded.paint.resolve(identity(10)).unwrap();
     assert_eq!(&loaded.paint.get(paint).unwrap().base.as_ref().unwrap().image, &original);
-    loaded.occurrences.get_mut(occurrence).unwrap().placement = LayerPlacement::IDENTITY;
+    loaded.occurrences.get_mut(occurrence).unwrap().offset = [0, 0];
     assert_eq!(&loaded.paint.get(paint).unwrap().base.as_ref().unwrap().image, &original);
     let key = TileKey { plane: RasterPlane::Color, coordinate: [1, 0] };
     let descriptor = loaded.compositions.get(loaded.root).unwrap().color.paint_descriptor();
@@ -408,7 +405,7 @@ fn native_sources_preserve_u16_profiles_hidden_rgb_and_shared_ownership() {
     assert!(weak.upgrade().is_none());
 }
 #[test]
-fn photo_selection_roundtrips_shared_binary_coverage() {
+fn photo_selection_roundtrips_binary_coverage() {
     let extent = [9504, 6336];
     let mut artwork = Artwork::new(extent).unwrap();
     let pixels = Arc::new(
@@ -420,19 +417,6 @@ fn photo_selection_roundtrips_shared_binary_coverage() {
     let occurrence = artwork.occurrences.insert(identity(22), Occurrence::new(OccurrenceContent::Selection(saved), "Saved")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
-    artwork
-        .coverage
-        .insert(
-            identity(12),
-            CoverageSource {
-                domain: extent,
-                initial: Some(selection.clone()),
-                raster: Default::default(),
-                default_coverage: 1.,
-                operations: Arc::default(),
-            },
-        )
-        .unwrap();
     let bytes = serialize(&prepare(&artwork, false));
     let directory = Directory::read(&mut Cursor::new(&bytes), 262144, 64 * 1024 * 1024).unwrap();
     let metadata_bytes=directory.member("manifest.json").unwrap().length;
@@ -440,11 +424,8 @@ fn photo_selection_roundtrips_shared_binary_coverage() {
     eprintln!("61MP authored manifest: {metadata_bytes} bytes; decoded coverage: {} bytes",extent[0] as u64*extent[1] as u64);
     let restored = editable(bytes.clone());
     let saved = &restored.selections.get(restored.selections.resolve(identity(13)).unwrap()).unwrap().selection;
-    let mask = restored.coverage.get(restored.coverage.resolve(identity(12)).unwrap()).unwrap().initial.as_ref().unwrap();
     assert_eq!(saved, &selection);
-    assert_eq!(mask, &selection);
-    let (SelectionShape::Pixels(a), SelectionShape::Pixels(b)) = (&saved.shape, &mask.shape) else { panic!() };
-    assert!(Arc::ptr_eq(a,b));
+    let SelectionShape::Pixels(a) = &saved.shape else { panic!() };
     let limit = a.words().len() as u64 * 4;
     Document::from_artwork(restored).unwrap().validate(ProjectLimits { raster_bytes: limit, ..Default::default() }).unwrap();
     assert!(!matches!(

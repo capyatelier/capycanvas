@@ -53,7 +53,7 @@ impl<B: CanvasRenderer> UiSession<B> {
         let doc = self.engine.document();
         let id = doc.drawing_content()?;
         let layer = doc.scene().occurrence(doc.target_owner(id)?)?;
-        let offset = doc.target_offset(id);
+        let offset = layer_core::offsets::point(doc.target_offset(id));
         let local = |p: Point| Point {
             x: p.x - offset.x,
             y: p.y - offset.y,

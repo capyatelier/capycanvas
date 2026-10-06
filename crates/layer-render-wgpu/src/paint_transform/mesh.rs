@@ -237,26 +237,6 @@ impl MeshGeometry {
             }
         }
     }
-    pub fn forward_bounds(&self, source: layer_core::Rect, source_from_owner: Option<layer_core::Projective>) -> layer_core::Rect {
-        let _span=crate::performance_trace::Span::new(c"Capy mesh material bounds");
-        if source.is_empty() {return layer_core::Rect::EMPTY;}
-        let source=if let Some(adapter)=source_from_owner {
-            let Some(source)=adapter.inverse().and_then(|map|map.bounds(source)) else {
-                return layer_core::Rect::around(self.vertices.iter().map(|v|layer_core::Point {x:v[0],y:v[1]}));
-            };source
-        } else {source};
-        let mut bounds=layer_core::Rect::EMPTY;
-        for triangle in self.triangles() {
-            let (corners,count)=clip(triangle.map(|index| {
-                let index=index as usize;let [x,y,u,v]=self.vertices[index];let w=self.weights[index];
-                [u,v,x*w,y*w,w]
-            }),[source.min.x,source.min.y,source.max.x,source.max.y]);
-            if corners[..count].iter().any(|point|point[4]<=0.) {return layer_core::Rect::UNBOUNDED;}
-            bounds=bounds.union(layer_core::Rect::around(corners[..count].iter().map(|point|
-                layer_core::Point {x:point[2]/point[4],y:point[3]/point[4]})));
-        }
-        bounds
-    }
 }
 
 /// The part of a triangle of destination x, y and source x, y vertices within
@@ -433,7 +413,6 @@ impl MeshBuffers {
         self.vertices.as_ref().map_or(0, wgpu::Buffer::size) + self.indices.as_ref().map_or(0, wgpu::Buffer::size)
     }
     pub fn range_for_region(&self,region:layer_core::Rect)->Range<u32> {self.uploaded.as_ref().map_or(0..0,|g|g.range_for_region(region))}
-    pub fn matches(&self,geometry:&Arc<MeshGeometry>)->bool {self.uploaded.as_ref().is_some_and(|held|Arc::ptr_eq(held,geometry))}
     pub fn drawing(&self,triangles:Range<u32>)->MeshDraw {MeshDraw {vertices:self.vertices.as_ref().unwrap().clone(),indices:self.indices.as_ref().unwrap().clone(),triangles}}
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, triangles: Range<u32>) {
         if triangles.is_empty() { return; }
@@ -627,12 +606,8 @@ impl Positions {
         encoder: &mut crate::submission::CommandEncoder,
         page: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        self.draw_offset(r,encoder,page,[0;2])
-    }
-    pub fn draw_offset(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,page:[u32;2],offset:[i32;2])->Result<(),GpuRasterError> {
-        let world=std::array::from_fn(|i|page[i] as i32-offset[i]/PAGE_SIZE as i32);
-        let triangles=self.buffers.uploaded.as_ref().map_or(0..0,|g|g.window(world));
-        let origin=std::array::from_fn(|i|(page[i]*PAGE_SIZE) as f32-offset[i] as f32-1.);
+        let triangles=self.buffers.uploaded.as_ref().map_or(0..0,|g|g.window(page.map(|v| v as i32)));
+        let origin=page.map(|v|(v*PAGE_SIZE) as f32-1.);
         self.draw_window(r,encoder,triangles,origin,layer_core::Affine::IDENTITY,1.)
     }
     fn draw_window(
@@ -891,7 +866,7 @@ mod tests {
         let geometry=Arc::new(MeshGeometry::new(&mesh,outer,None));
         let placement=LayerPlacement {outer,mesh:Some(mesh),interpolation:Interpolation::Bicubic};
         let adapter=Projective([1.,0.02,7.,-0.01,1.,3.,0.0001,0.,1.]);
-        let transform=ImageTransform {placement:placement.clone(),source_from_owner:Some(adapter),keep_source:false};
+        let transform=ImageTransform {placement:placement.clone(),source_from_owner:Some(adapter),keep_source:false,source_base:None};
         let inverse=Projective::invert(outer.0.map(f64::from)).unwrap();
         let mut negative=0;let mut sampled=0;
         for triangle in geometry.triangles().step_by((geometry.indices.len()/96).max(1)) {
@@ -913,7 +888,7 @@ mod tests {
         let mask = Projective([1.,0.,0.,0.,1.,0.,0.004,0.,1.]);
         let linked = ImageTransform {placement:LayerPlacement {outer:Projective::IDENTITY,
             mesh:Some(owner.clone()),interpolation:Interpolation::Nearest},
-            source_from_owner:Some(mask.inverse().unwrap()),keep_source:false};
+            source_from_owner:Some(mask.inverse().unwrap()),keep_source:false,source_base:None};
         let region = Rect::from_extent([256;2]);
         let bounds = crate::paint_transform::snapshot::source_region(&linked,region,[256;2],
             Some(Arc::new(MeshGeometry::new(&owner,Projective::IDENTITY,None)))).unwrap();
@@ -973,34 +948,6 @@ mod tests {
             eprintln!("split={split}, frame={frame:?}, bound={bound}, dense/drawn={largest}");
             assert!(largest<=bound,"the source footprint covers independent finite differences and every drawn triangle");
         }}
-    }
-
-    #[test]
-    fn mapped_material_bounds_clip_the_owner_source_before_outer_perspective() {
-        use layer_core::Projective;
-        let mesh=MeshMap::identity(Rect::from_extent([9504,6336]),[3;2]).unwrap()
-            .move_node(5,Point {x:-120./0.1653409,y:-80./0.1653409}).unwrap();
-        let source=Rect {min:Point{x:2200.,y:1400.},max:Point{x:3400.,y:2400.}};
-        for outer in [Projective::IDENTITY,Projective([1.,0.02,-300.,-0.01,1.,-120.,0.000005,-0.000003,1.])] {
-            let geometry=MeshGeometry::new(&mesh,outer,None);
-            for adapter in [None,Some(Projective([1.,0.,-40.,0.,1.,30.,0.00001,0.,1.]))] {
-                let bounds=geometry.forward_bounds(source,adapter);
-                assert!(!bounds.is_empty());
-                assert!((bounds.max.x-bounds.min.x)*(bounds.max.y-bounds.min.y)<9504.*6336./8.,"a small wet patch must not become full-canvas work: {bounds:?}");
-                let mut witnessed=0;
-                for triangle in geometry.triangles() {
-                    let vertices=triangle.map(|i|geometry.vertices[i as usize]);
-                    let owner=Point{x:vertices.iter().map(|v|v[2]).sum::<f32>()/3.,y:vertices.iter().map(|v|v[3]).sum::<f32>()/3.};
-                    let Some(target)=adapter.map_or(Some(owner),|map|map.map(owner)) else {continue;};
-                    if target.x<source.min.x || target.y<source.min.y || target.x>source.max.x || target.y>source.max.y {continue;}
-                    let weights=triangle.map(|i|geometry.weights[i as usize]);let sum=weights.iter().sum::<f32>();
-                    let p=Point{x:vertices.iter().zip(weights).map(|(v,w)|v[0]*w).sum::<f32>()/sum,y:vertices.iter().zip(weights).map(|(v,w)|v[1]*w).sum::<f32>()/sum};
-                    assert!(p.x>=bounds.min.x && p.y>=bounds.min.y && p.x<=bounds.max.x && p.y<=bounds.max.y,"mapped pigment {p:?} outside {bounds:?}");
-                    witnessed+=1;
-                }
-                assert!(witnessed>100);
-            }
-        }
     }
 
     #[test]

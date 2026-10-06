@@ -68,7 +68,7 @@ pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
 pub use session::tonal_selection::{TonalAction, TonalOptions};
-pub use session::{occurrence_token, occurrence_handle, FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
+pub use session::{ThumbnailRequests, occurrence_token, occurrence_handle, object_token, object_handle, ObjectAction, ObjectRow, SourceUse, FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod color;
 mod tool_settings;
 mod toolbar_components;
@@ -166,7 +166,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericError, WorkspaceValidationError, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
-pub use session::{Notice, NoticeAction};
+pub use session::{Notice, NoticeAction, NoticeActionId};
 pub use session::{ScreenChip, ScreenDetails, ScreenState};
 pub use session::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSizeUnit, CanvasSizeView, CanvasUnitChoice};
 pub use session::{ImageResample, ImageResampleChoice, ImageSizeAction, ImageSizeView};
@@ -431,6 +431,8 @@ command_ids! {
     ChangeBitDepth,
     RepairSourceProfile,
     RasterizeSource,
+    RasterizeLayer,
+    ConvertToObject,
     NewDocument,
     OpenDocument,
     SaveDocument,
@@ -563,8 +565,7 @@ command_ids! {
     CopySelectionToLayer,
     CutSelectionToLayer,
     ActualPixels,
-    RevertToOriginal,
-    ApplyTransformPixels,
+    DiscardPaintEdits,
     LoadSelectionLayer,
     InvertSelectionLayer,
     InvertLayerMask,
@@ -613,6 +614,7 @@ command_ids! {
     Copy,
     Cut,
     CopyMerged,
+    CopyPixels,
     PasteInPlace,
     PasteInto,
     MergeDown,
@@ -692,7 +694,7 @@ impl CommandId {
             Self::SdrRendition | Self::PreviewSdr | Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => "image",
             Self::Histogram => "stats",
             Self::Waveform => "waveform",
-            Self::ImportImage | Self::RasterizeSource => "image",
+            Self::ImportImage | Self::RasterizeSource | Self::RasterizeLayer | Self::ConvertToObject => "image",
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties | Self::RepairSourceProfile => "info",
             Self::NewDocument => "new-document",
             Self::OpenDocument => "open-document",
@@ -821,8 +823,7 @@ impl CommandId {
             Self::CopySelectionToLayer => "copy-to-layer",
             Self::CutSelectionToLayer => "cut-to-layer",
             Self::ActualPixels => "actual-pixels",
-            Self::RevertToOriginal => "reset",
-            Self::ApplyTransformPixels => "image",
+            Self::DiscardPaintEdits => "reset",
             Self::LoadSelectionLayer => "selection-load",
             Self::InvertSelectionLayer | Self::InvertLayerMask => "invert-selection",
             Self::LayerMaskEnabled => "eye",
@@ -866,6 +867,7 @@ impl CommandId {
             Self::Copy => "copy",
             Self::Cut => "cut",
             Self::CopyMerged => "copy-merged",
+            Self::CopyPixels => "copy",
             Self::PasteImage => "paste",
             Self::PasteInPlace => "paste-in-place",
             Self::PasteInto => "paste-into",
@@ -943,6 +945,8 @@ impl CommandId {
             Self::ChangeBitDepth => MessageId::COMMAND_CHANGE_BIT_DEPTH,
             Self::RepairSourceProfile => MessageId::COMMAND_REPAIR_SOURCE_PROFILE,
             Self::RasterizeSource => MessageId::COMMAND_RASTERIZE_SOURCE,
+            Self::RasterizeLayer => MessageId::COMMAND_RASTERIZE_LAYER,
+            Self::ConvertToObject => MessageId::COMMAND_CONVERT_TO_OBJECT,
             Self::NewDocument => MessageId::COMMAND_NEW_DOCUMENT,
             Self::OpenDocument => MessageId::COMMAND_OPEN_DOCUMENT,
             Self::SaveDocument => MessageId::COMMAND_SAVE_DOCUMENT,
@@ -1083,8 +1087,7 @@ impl CommandId {
             Self::CopySelectionToLayer => MessageId::COMMAND_COPY_SELECTION_TO_LAYER,
             Self::CutSelectionToLayer => MessageId::COMMAND_CUT_SELECTION_TO_LAYER,
             Self::ActualPixels => MessageId::COMMAND_ACTUAL_PIXELS,
-            Self::RevertToOriginal => MessageId::COMMAND_REVERT_TO_ORIGINAL,
-            Self::ApplyTransformPixels => MessageId::COMMAND_APPLY_TRANSFORM_PIXELS,
+            Self::DiscardPaintEdits => MessageId::COMMAND_DISCARD_PAINT_EDITS,
             Self::LoadSelectionLayer => MessageId::COMMAND_LOAD_SELECTION_LAYER,
             Self::InvertSelectionLayer => MessageId::COMMAND_INVERT_SELECTION_LAYER,
             Self::InvertLayerMask => MessageId::COMMAND_INVERT_LAYER_MASK,
@@ -1133,6 +1136,7 @@ impl CommandId {
             Self::Copy => MessageId::COMMAND_COPY,
             Self::Cut => MessageId::COMMAND_CUT,
             Self::CopyMerged => MessageId::COMMAND_COPY_MERGED,
+            Self::CopyPixels => MessageId::COMMAND_COPY_PIXELS,
             Self::PasteInPlace => MessageId::COMMAND_PASTE_IN_PLACE,
             Self::PasteInto => MessageId::COMMAND_PASTE_INTO,
             Self::MergeDown => MessageId::COMMAND_MERGE_DOWN,
@@ -1230,6 +1234,9 @@ pub struct LayerState {
     pub mask_revision: u64,
     pub mask_id: Option<u64>,
     pub fill_color: Option<LayerFillColor>,
+    pub object_count: u32,
+    pub expanded: bool,
+    pub objects: Vec<ObjectRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1351,6 +1358,9 @@ pub enum UiAction {
     },
     Layer {
         action: LayerAction,
+    },
+    Object {
+        action: ObjectAction,
     },
     /// Native caption controls reserve left/right widths and a height in DIPs.
     MeasureTitlebar {
@@ -1479,6 +1489,8 @@ pub enum UiAction {
     Notice {
         id: u64,
         accept: bool,
+        #[serde(default)]
+        action: Option<NoticeActionId>,
     },
     ColorPicker {
         action: ColorPickerAction,

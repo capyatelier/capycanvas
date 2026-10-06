@@ -877,7 +877,7 @@ fn toolbar_choices_preserve_segmented_modes_and_list_sources() {
 
 #[test]
 fn transform_position_reference_projects_beside_x_and_floating_modes_are_joined() {
-    let mut s = placed_photo("position anchor metadata");
+    let mut s = transformed_photo("position anchor metadata");
     s.frame(1, 1).unwrap();
     let options = s.state().tool_options();
     let reference = options.iter().find(|option| matches!(option, ToolOption::Choice { id: "transform-reference", .. })).unwrap();

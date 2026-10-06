@@ -52,13 +52,16 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             if(pointer&&captured.PointerId()==pointer.PointerId())return true;
         return false;
     }
+    bool movable(J const& row)const{
+        return imageId(id)?flag(row,L"editable")&&(flag(row,L"can_raise")||flag(row,L"can_lower")):flag(row,L"can_drop_below")&&!flag(row,L"locked");
+    }
     bool current()const{
         auto owner=view.lock();if(!owner||epoch!=epochOf(owner->data)||!surface.IsLoaded()||list.Visibility()!=Visibility::Visible)return false;
-        auto row=findId(array(owner->data->state,L"layers"),id);
+        auto row=panelRow(owner->data->state,id);
         if(!row.Size())return false;
         auto rename=owner->view().GetNamedValue(L"rename_layer",JsonValue::CreateNullValue());
         if(rename.ValueType()==JsonValueType::Number&&rename.GetNumber()==id)return false;
-        if(dragging&&(flag(row,L"locked")||!flag(row,L"can_drop_below")))return false;
+        if(dragging&&!movable(row))return false;
         if(!held&&!dragging){auto item=source.lock();if(!item||!item->root.IsLoaded())return false;}
         return true;
     }
@@ -173,7 +176,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         auto at=surface.TransformToVisual(list).TransformPoint(position);
         if(at.X<0||at.Y<0||at.X>list.ActualWidth()||at.Y>list.ActualHeight())return {};
         if(auto owner=view.lock())for(auto const& [element,row]:owner->rows){
-            if(!row->current()||!row->root.IsLoaded())continue;
+            if(!row->current()||!row->root.IsLoaded()||row->image!=imageId(id))continue;
             auto bounds=row->root.TransformToVisual(list).TransformBounds({0,0,float(row->root.ActualWidth()),float(row->root.ActualHeight())});
             if(at.X>=bounds.X&&at.X<bounds.X+bounds.Width&&at.Y>=bounds.Y&&at.Y<bounds.Y+bounds.Height&&bounds.Height>0){
                 auto thumb=row->content.TransformToVisual(list).TransformBounds({0,0,float(row->content.ActualWidth()),float(row->content.ActualHeight())});
@@ -186,16 +189,24 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     void complete(){
         if(!finishing||busy||hit!=answered)return;
         bool commit=current()&&focus()&&hit&&!placement.empty();
-        auto owner=view.lock();auto destination=hit;auto document=epoch;auto sourceId=id;
+        auto owner=view.lock();auto destination=hit;auto document=epoch;auto sourceId=id;bool below=placement==L"below";
         if(trace)lastRelease=O({{L"source",N(id)},{L"commit",B(commit)},{L"generation",N(double(generation))},
             {L"target",normalizedTarget>=0?N(normalizedTarget):JsonValue::CreateNullValue()},{L"surface",S(hit&&hit->thumbnail?L"thumbnail":L"row")},{L"position",S(placement)}});
         clear(true);
-        if(commit&&owner)owner->data->dispatchDocument(layerAction(O({{L"op",S(L"drop")},{L"id",N(sourceId)},
+        if(commit&&owner&&imageId(sourceId))owner->data->dispatchDocument(imageAction(O({{L"op",S(L"drop")},{L"id",N(sourceId)},
+            {L"target",N(destination->id)},{L"below",B(below)}})),document);
+        else if(commit&&owner)owner->data->dispatchDocument(layerAction(O({{L"op",S(L"drop")},{L"id",N(sourceId)},
             {L"target",N(destination->id)},{L"fraction",N((destination->zone+.5)/4)},{L"surface",S(destination->thumbnail?L"thumbnail":L"row")}})),document);
     }
     void query(){
         if(!dragging||busy||!hit||hit==answered){complete();return;}
         auto owner=view.lock();if(!owner)return;
+        if(imageId(id)){
+            auto state=owner->data->state;auto dragged=panelRow(state,id),target=panelRow(state,hit->id);
+            bool accepted=hit->id!=id&&flag(target,L"editable")&&num(target,L"layer")==num(dragged,L"layer");
+            answered=hit;placement=accepted?(hit->zone>=2?L"below":L"above"):L"";normalizedTarget=accepted?hit->id:-1;effectOwner=-1;
+            marks();evidence();complete();return;
+        }
         auto version=generation,modelVersion=revision;auto requested=*hit;busy=true;
         auto request=O({{L"type",S(L"layer_drop")},{L"epoch",N(std::stod(to_string(epoch)))},
             {L"id",N(id)},{L"target",N(requested.id)},{L"fraction",N((requested.zone+.5)/4)},{L"surface",S(requested.thumbnail?L"thumbnail":L"row")}});
@@ -233,8 +244,8 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
                 }else{cancel(L"early_motion");return;}
             }
             if(swiping){if(auto row=source.lock())row->swipe(initialSwipe>0?std::max(0.,initialSwipe-(position.X-origin.X)):initialSwipe-(position.X-origin.X));e.Handled(true);return;}
-            auto owner=view.lock();auto row=owner?findId(array(owner->data->state,L"layers"),id):J{};
-            if(!flag(row,L"can_drop_below")||flag(row,L"locked")){cancel(L"source_locked");return;}
+            auto owner=view.lock();auto row=owner?panelRow(owner->data->state,id):J{};
+            if(!movable(row)){cancel(L"source_locked");return;}
             if(!claim())return;
             dragging=true;ignoreClick=true;suppressContext=true;hideMenu();
             if(auto item=source.lock()){sourceOpacity=item->root.Opacity();item->root.Opacity(.55);}

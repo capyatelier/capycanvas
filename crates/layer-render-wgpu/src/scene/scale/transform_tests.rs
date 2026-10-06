@@ -204,15 +204,15 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
         (true, layer_core::LayerBlend::Difference),
         (true, layer_core::LayerBlend::Luminosity),
     ] {
-    for placement in [Affine::IDENTITY, Affine([0.45, 0.1, -0.1, 0.45, 200., 10.])] {
+    for offset in [[0, 0], [200, 10]] {
         for selection in [None, Some(all.clone()), Some(selected.clone())] {
             let mut doc = document();
             let id = source_at(&doc,0);
             occurrence_mut(&mut doc,0).opacity = 0.8;
             occurrence_mut(&mut doc,0).blend = blend;
-            occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(placement);
+            occurrence_mut(&mut doc,0).offset = offset;
             if stacked {
-                let below=copy_paint(&mut doc,0);let occurrence=doc.artwork.occurrences.get_mut(below).unwrap();occurrence.opacity=1.;occurrence.placement=LayerPlacement::from_affine(Affine::IDENTITY);
+                let below=copy_paint(&mut doc,0);let occurrence=doc.artwork.occurrences.get_mut(below).unwrap();occurrence.opacity=1.;occurrence.offset=[0,0];
                 let above=copy_paint(&mut doc,0);let mut occurrence=doc.artwork.occurrences.get(below).unwrap().clone();let content=doc.artwork.occurrences.get(above).unwrap().content.clone();occurrence.content=content;occurrence.opacity=0.23;occurrence.blend=layer_core::LayerBlend::Multiply;*doc.artwork.occurrences.get_mut(above).unwrap()=occurrence;
                 insert_occurrence(&mut doc,above,0);insert_occurrence(&mut doc,below,2);
             }
@@ -239,7 +239,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
                 let exact_pixels = pixels(&exact, crate::test_support::document_texture(&exact));
                 let error = quality_linear(&displayed, &exact_pixels, r.scale_display.as_ref().unwrap().plan,
                     |color| linear_color(color, space, doc.composition().color.space));
-                eprintln!("{space:?} placement={placement:?} selection={} step={step} error={error:?}", selection.is_some());
+                eprintln!("{space:?} offset={offset:?} selection={} step={step} error={error:?}", selection.is_some());
                 assert!(error[0] < 0.004 && error[1] < 0.06, "transform reduction quality {error:?}");
                 let a = r.readback_srgb_rgba8().unwrap();
                 let b = exact.readback_srgb_rgba8().unwrap();
@@ -321,13 +321,13 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
         if moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r)); }
         let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
         assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} moving={moving} {error:?}");
-        assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
+        crate::test_support::assert_same_canonical(&mut r, &mut exact);
         assert_eq!(r.test.source_captures.get(), 1);
         if !moving { assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact))); }
     }
     let expected = exact.readback_srgb_rgba8().unwrap();
-    let mut coverage=CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),extent,Point::default());
-    coverage.source.default_coverage=0.;coverage.source.initial=Some(selection);
+    let mut coverage=CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),extent, [0, 0]);
+    coverage.source.default_coverage=0.;coverage.selection=Some(selection);
     let operation = layer_core::RasterOperation { placement: Affine::IDENTITY, coverage,
         kind: layer_core::RasterOperationKind::Transform(preview.transform) };
     let batch = layer_render::DabBatch { kind: layer_render::DabBatchKind::RasterOperation(0), dab_count: 0,
@@ -349,7 +349,7 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
         let owner=doc.scene().order()[0];let paint=source_at(&doc,0);let base=copy_paint(&mut doc,0);doc.artwork.occurrences.get_mut(base).unwrap().opacity=0.73;
         occurrence_mut(&mut doc,0).blend=layer_core::LayerBlend::Multiply;
         let initial=Selection::polygon([[20.,10.],[230.,20.],[190.,120.],[30.,90.]].map(|[x,y]|Point{x,y}).to_vec()).unwrap();
-        let mask=coverage_mask(&mut doc,owner,Point{x:13.,y:-4.},Some(initial));doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.23;doc.artwork.occurrences.get_mut(owner).unwrap().mask.as_mut().unwrap().linked=linked;
+        let mask=coverage_mask(&mut doc,owner,[13, -4],Some(initial));doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.23;doc.artwork.occurrences.get_mut(owner).unwrap().mask.as_mut().unwrap().linked=linked;
         let id=if mask_target{SourceTarget::Coverage(mask)}else{paint};
         set_attachment(occurrence_mut(&mut doc,0), true);
         let group=stack_occurrence(&mut doc,"group",vec![owner,base]);doc.artwork.occurrences.get_mut(group).unwrap().opacity=0.71;set_root_entries(&mut doc,vec![group]);
@@ -369,7 +369,7 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
             assert!(r.scale_display.is_some());
             let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
             assert!(error[0] < 0.004 && error[1] < 0.06, "mask={mask_target} linked={linked} {error:?}");
-            assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
+            crate::test_support::assert_same_canonical(&mut r, &mut exact);
         }
         r.set_transform_preview(None).unwrap(); r.submit(frame).unwrap();
         assert_eq!(original, display_pixels(&r));
@@ -454,7 +454,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
         for map in maps {
             for keep_source in [false,true] {
                 let preview = layer_render::TransformPreview { transaction: 1, target: id, moving: true,
-                    selection: selection.clone(), transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..map.clone() }, keep_source, source_from_owner:None } };
+                    selection: selection.clone(), transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..map.clone() }, keep_source, source_from_owner:None, source_base:None } };
                 for renderer in [&mut r,&mut exact] {
                     renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
                 }
@@ -466,7 +466,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
                 }
                 let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
                 assert!(error[0] < 0.004 && error[1] < 0.06, "map={map:?} keep={keep_source} selection={} {error:?}",selection.is_some());
-                assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
+                crate::test_support::assert_same_canonical(&mut r, &mut exact);
                 assert_eq!(r.test.source_captures.get(),1);
             }
         }
@@ -498,7 +498,7 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     assert_eq!(r.test.reduced_pages.get(),reduced);
     for offset in [0.,64.,-32.] {
         let preview=layer_render::TransformPreview {transaction:7,target: id,moving:true,selection:Some(part.clone()),
-            transform:ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})) },keep_source:true,source_from_owner:None}};
+            transform:ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})) },keep_source:true,source_from_owner:None,source_base:None}};
         for renderer in [&mut r,&mut exact] {renderer.set_transform_preview(Some(&preview)).unwrap();renderer.submit(frame).unwrap();}
         assert_eq!(r.test.source_captures.get(),captures);
         assert_eq!(r.test.reduced_pages.get(),reduced);

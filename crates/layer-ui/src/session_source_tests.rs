@@ -52,11 +52,18 @@ fn image_placement_context_keeps_drop_point_and_rejects_changed_targets() {
     let context = session.image_placement_context(None, None).unwrap();
     session.state.document_file.epoch += 1;
     assert!(session.validate_image_placement(&context).is_err());
+    let (images, edit) = session.engine.document().create_object_layer_edit("Images", None, 0).unwrap();
+    session.engine.apply_edit(edit).unwrap();
+    session.engine.apply_edit(session.engine.document().select_occurrence_edit(images).unwrap()).unwrap();
+    let context = session.image_placement_context(None, None).unwrap();
+    assert_eq!(session.engine.document().active_target(), None);
+    session.engine.apply_edit(session.engine.document().select_occurrence_edit(paper).unwrap()).unwrap();
+    assert_eq!(session.engine.document().active_target(), None);
+    assert!(session.validate_image_placement(&context).is_err(), "choosing another layer without paint still retires the import");
 }
 
 #[test]
-fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_together() {
-    use layer_core::Affine;
+fn image_batch_placement_is_atomic_ordered_and_shares_one_object_layer() {
     let source = |extent| Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [255; 4]));
     let first = source([600, 400]);
     let second = source([100, 300]);
@@ -67,40 +74,26 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     session.set_selected_layers(session.engine.document().scene().order().iter().copied().collect()).unwrap();
     let selected = session.engine.document().working.layer_selection.clone();
     let original = session.engine.document().clone();
-    assert!(session.place_layer_sources(vec![("First".into(), first.clone()), ("bad\nname".into(), second.clone())],
+    assert!(session.place_layer_sources(vec![("First".into(), first.clone()), ("\n".into(), second.clone())],
         None, None).is_err());
     assert_eq!(session.engine.document(), &original, "failed batch reserves no live IDs and inserts nothing");
     let images = || vec![("First".into(), first.clone()), ("Second".into(), second.clone())];
     session.place_layer_sources(images(), Some(Point { x: 75., y: 55. }), None).unwrap();
     let doc = session.engine.document();
-    let ids: Vec<_> = doc.scene().order()[..2].to_vec();
-    assert_eq!(session.engine.backend().moving_layer, doc.working.occurrence);
-    assert_eq!(ids.iter().map(|h| doc.scene().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(), ["First", "Second"]);
-    assert_eq!(session.engine.document().working.layer_selection, ids.iter().copied().collect());
+    let layer = doc.working.occurrence.unwrap();
+    let children = doc.object_layer_children(layer).unwrap().to_vec();
+    assert_eq!(session.engine.backend().moving_layer, Some(layer));
+    assert_eq!(children.iter().map(|h| doc.scene().object(*h).unwrap().name.as_ref()).collect::<Vec<_>>(), ["First", "Second"]);
+    assert_eq!(doc.working.layer_selection, [layer].into());
+    assert_eq!(doc.working.objects, children.iter().copied().collect());
     assert!(!session.engine.can_undo());
-    let before: Vec<_> = ids.iter().map(|h| doc.scene().occurrence(*h).unwrap().clone()).collect();
-    let sources: Vec<_> = ids.iter().map(|h| doc.scene().paint_source(*h).unwrap().clone()).collect();
-    session.set_transform_control("transform_x", 95.).unwrap();
-    session.set_transform_control("transform_width", 2.).unwrap();
-    for (i, handle) in ids.iter().enumerate() {
-        let doc = session.engine.document();
-        let occurrence = doc.scene().occurrence(*handle).unwrap();
-        let source = doc.scene().paint_source(*handle).unwrap();
-        assert_eq!(source.base, sources[i].base);
-        assert_eq!(occurrence.placement.as_affine().unwrap().map(Point {
-            x: source.base.as_ref().unwrap().image.storage().extent[0] as f32 / 2.,
-            y: source.base.as_ref().unwrap().image.storage().extent[1] as f32 / 2.,
-        }), Point { x: 95., y: 55. });
-        assert!((occurrence.placement.as_affine().unwrap().0[0] - before[i].placement.as_affine().unwrap().0[0] * 2.).abs() < 0.00001);
-        assert!(source.raster.is_empty());
-    }
-    invoke(&mut session, CommandId::PlacementOriginalSize);
-    let original_size: Vec<_> = ids.iter().map(|h| session.engine.document().scene().occurrence(*h).unwrap().clone()).collect();
-    for occurrence in &original_size { assert_eq!(&occurrence.placement.as_affine().unwrap().0[..4], &Affine::IDENTITY.0[..4]); }
-    invoke(&mut session, CommandId::PlacementOriginalSize);
-    assert_eq!(ids.iter().map(|h| session.engine.document().scene().occurrence(*h).unwrap().clone()).collect::<Vec<_>>(), original_size, "Original Size does not apply the batch delta twice");
+    let before: Vec<_> = children.iter().map(|h| doc.scene().object(*h).unwrap().affine).collect();
+    let third = 1. / 3.;
+    assert_eq!(before, [layer_core::Affine64([third, 0., 0., third, 75. - 600. * third * 0.5, 55. - 400. * third * 0.5]), layer_core::Affine64([0.5, 0., 0., 0.5, 50., -20.])]);
+    invoke(&mut session, CommandId::TransformFlipHorizontal);
+    assert!(children.iter().zip(&before).all(|(h, start)| session.engine.document().scene().object(*h).unwrap().affine != *start));
     invoke(&mut session, CommandId::ResetTransform);
-    assert_eq!(ids.iter().map(|h| session.engine.document().scene().occurrence(*h).unwrap().clone()).collect::<Vec<_>>(), before, "Reset restores exact initial member maps after Original Size");
+    assert_eq!(children.iter().map(|h| session.engine.document().scene().object(*h).unwrap().affine).collect::<Vec<_>>(), before, "Reset restores exact initial affines");
     assert!(!session.engine.can_undo(), "provisional reset adds no history");
     invoke(&mut session, CommandId::CancelTransform);
     assert_eq!(session.engine.backend().moving_layer, None);
@@ -109,8 +102,8 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     assert!(!session.engine.can_undo());
 
     session.place_layer_sources(images(), None, None).unwrap();
-    let committed = session.engine.document().clone();
     invoke(&mut session, CommandId::ApplyTransform);
+    let committed = session.engine.document().clone();
     assert_eq!(session.engine.backend().moving_layer, None);
     invoke(&mut session, CommandId::Undo);
     assert_live_artwork_eq(session.engine.document(), &original);
@@ -118,15 +111,12 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     invoke(&mut session, CommandId::Redo);
     assert_live_artwork_eq(session.engine.document(), &committed);
     let restored = reopen_capture(&session.capture_artwork().unwrap());
-    for &h in committed.scene().order() {
-        let portable = committed.artwork.occurrences.id(h).unwrap();
-        let restored_handle = restored.artwork.occurrences.resolve(portable).unwrap();
-        let occurrence = restored.scene().occurrence(restored_handle).unwrap();
-        let old = committed.scene().occurrence(h).unwrap();
-        assert_eq!((&occurrence.name, &occurrence.placement, occurrence.translation), (&old.name, &old.placement, old.translation));
-        assert_eq!(restored.scene().paint_source(restored_handle), committed.scene().paint_source(h));
+    for (h, portable, object) in committed.artwork.objects.iter() {
+        let restored = restored.scene().object(restored.artwork.objects.resolve(portable).unwrap()).unwrap();
+        assert_eq!((&restored.name, restored.affine.0.map(f64::to_bits)), (&object.name, object.affine.0.map(f64::to_bits)), "{h:?}");
+        assert_eq!(restored.image.as_ref(), object.image.as_ref());
     }
-    assert_eq!(restored.artwork.metadata, original.artwork.metadata, "placing photos keeps the document's own metadata");
+    assert_eq!(restored.artwork.metadata, original.artwork.metadata, "placing images keeps the document's own metadata");
 }
 
 #[test]
@@ -138,7 +128,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     let paper = doc.scene().order()[1];
     let nested = doc.artwork.stacks.insert(PortableId::random(), Stack { entries: vec![ink] }).unwrap();
     let mut group = Occurrence::new(OccurrenceContent::Stack(nested), "Group");
-    group.translation = Point { x: 40., y: -10. };
+    group.offset = [40, -10];
     let group_id = doc.artwork.occurrences.insert(PortableId::random(), group).unwrap();
     let canvas = doc.composition().size;
     let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { color_mode: Default::default(), domain: canvas, raster: Default::default(), base: None, operations: Arc::default() }).unwrap();
@@ -157,8 +147,10 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     assert_eq!(session.image_layer_drop_hint(occurrence_token(clipped_id), 0.1), Some(LayerDropPosition::Above));
     assert!(session.image_placement_context(None,Some(ImageLayerDestination{target:group_id,position:LayerDropPosition::Attach})).is_err());
     let original = session.engine.document().clone();
+    let placed_layer = |session: &UiSession<Recorder>| session.engine.document().working.occurrence.unwrap();
     session.place_layer_sources(vec![("Outside import".into(), source.clone())], None,
         Some(ImageLayerDestination { target: clipped_id, position: LayerDropPosition::Above })).unwrap();
+    assert!(session.engine.document().scene().object_layer(placed_layer(&session)).is_some());
     assert_eq!(session.engine.document().scene().occurrence(session.engine.document().working.occurrence.unwrap()).unwrap().attachment, layer_core::Attachment::None);
     invoke(&mut session, CommandId::CancelTransform);
     assert_live_artwork_eq(session.engine.document(), &original);
@@ -170,8 +162,10 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     invoke(&mut session, CommandId::CancelTransform);
     assert_live_artwork_eq(session.engine.document(), &original);
     session.place_layer_sources(vec![("Menu import".into(), source.clone())], None, None).unwrap();
-    assert_eq!(session.engine.document().scene().occurrence(session.engine.document().scene().order()[1]).unwrap().name.as_ref(), "Menu import",
-        "default Import goes above the complete clipped stack");
+    let menu = session.engine.document().scene().order()[1];
+    assert_eq!(menu, placed_layer(&session), "default Import goes above the complete clipped stack");
+    let child = session.engine.document().object_layer_children(menu).unwrap()[0];
+    assert_eq!(session.engine.document().scene().object(child).unwrap().name.as_ref(), "Menu import");
     assert_eq!(session.engine.document().scene().occurrence(session.engine.document().scene().order()[2]).unwrap().attachment, layer_core::Attachment::Clip);
     invoke(&mut session, CommandId::CancelTransform);
     assert_live_artwork_eq(session.engine.document(), &original);
@@ -181,7 +175,8 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
         let doc = session.engine.document();
         assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().attachment, layer_core::Attachment::None);
         assert_eq!(doc.scene().parent(doc.working.occurrence.unwrap()), (position == LayerDropPosition::Into).then_some(group_id));
-        assert_eq!(doc.affine_edit_transform(doc.working.target.unwrap()).unwrap().map(Point { x: 1., y: 0.5 }), Point { x: 100., y: 75. });
+        let object = *doc.working.objects.iter().next().unwrap();
+        assert_eq!(doc.object_document_affine(object).unwrap().map([1., 0.5]), [100., 75.]);
         assert_eq!(doc.scene().position(doc.working.occurrence.unwrap()).unwrap(),
             if position == LayerDropPosition::Into { 1 } else { 3 });
         invoke(&mut session, CommandId::CancelTransform);
@@ -207,7 +202,7 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
     let before = session.engine.document().clone();
     let selected = session.engine.document().working.layer_selection.clone();
     let tool = session.layer_interaction.tool;
-    assert!(session.begin_layer_placement(None).is_err());
+    assert!(session.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate }).is_err());
     assert!(!session.operation.active());
     assert_eq!(session.layer_interaction.tool, tool);
     assert_eq!(session.engine.document().working.layer_selection, selected);
@@ -216,65 +211,46 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
 }
 
 #[test]
-fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
-    use layer_core::Affine;
+fn image_placement_centres_cancel_apply_and_one_step_history() {
     let source = u16_source([600, 400], Default::default(), false, 8 * 1024 * 1024, &[255; 600 * 8]);
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         Document::new(layer_core::authored::PortableId::random(), 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
     let original = session.engine.document().clone();
     session.place_layer_source("Photo", source.clone(), None).unwrap();
-    let placed = session.engine.document().scene().occurrence(session.engine.document().working.occurrence.unwrap()).unwrap();
-    let id = session.engine.document().working.occurrence.unwrap();
-    let matrix = placed.placement.as_affine().unwrap();
-    assert!((matrix.0[0] - 1. / 3.).abs() < 0.00001);
-    assert_eq!(matrix.map(Point { x: 300., y: 200. }), Point { x: 100., y: 75. });
-    assert!(session.operation.placing());
+    let object = *session.engine.document().working.objects.iter().next().unwrap();
+    let third = 1. / 3.;
+    assert_eq!(session.engine.document().scene().object(object).unwrap().affine, layer_core::Affine64([third, 0., 0., third, 100. - 600. * third * 0.5, 75. - 400. * third * 0.5]));
+    assert!(session.objects.placing());
     assert!(!session.engine.can_undo(), "provisional import has no artwork history");
     assert!(session.capture_artwork().is_err(), "pending placement cannot enter recovery/save");
-    assert!(session.state.tool_actions.iter().any(|a| a.command == CommandId::PlacementOriginalSize));
     invoke(&mut session, CommandId::CancelTransform);
     assert_live_artwork_eq(session.engine.document(), &original);
     assert_eq!(session.engine.document().working.occurrence.unwrap(), original.working.occurrence.unwrap());
     assert!(!session.engine.can_undo());
 
-    session.place_layer_source("Photo", source.clone(), Some(Point { x: 60., y: 80. })).unwrap();
-    let id2 = session.engine.document().working.occurrence.unwrap();
-    assert_ne!(id, id2, "cancelled IDs are never reused");
-    let placed = session.engine.document().scene().occurrence(id2).unwrap().clone();
+    session.place_layer_source("Photo", source.clone(), Some(Point { x: 60.5, y: 80.5 })).unwrap();
+    let second = *session.engine.document().working.objects.iter().next().unwrap();
+    assert_ne!(session.engine.document().artwork.objects.id(second), original.artwork.objects.iter().next().map(|(_, id, _)| id), "cancelled IDs are never reused");
+    let placed = session.engine.document().scene().object(second).unwrap().clone();
+    assert_eq!(placed.affine, layer_core::Affine64([third, 0., 0., third, 60.5 - 600. * third * 0.5, 80.5 - 400. * third * 0.5]));
     invoke(&mut session, CommandId::ApplyTransform);
-    assert!(!session.operation.active());
-    assert!(session.engine.document().scene().paint_source(id2).unwrap().raster.is_empty());
+    assert!(!session.objects.placing());
     invoke(&mut session, CommandId::Undo);
     assert_live_artwork_eq(session.engine.document(), &original);
     assert!(!session.engine.can_undo(), "insertion and placement are one history entry");
     invoke(&mut session, CommandId::Redo);
-    assert_eq!(session.engine.document().scene().occurrence(id2).unwrap(), &placed);
+    assert_eq!(session.engine.document().scene().object(second).unwrap(), &placed);
 
-    let portable = session.engine.document().artwork.occurrences.id(id2).unwrap();
-    let mut restored = reopen_capture(&session.capture_artwork().unwrap());
-    let id2 = restored.artwork.occurrences.resolve(portable).unwrap();
-    restored.apply(restored.select_occurrence_edit(id2).unwrap()).unwrap();
-    let mut reopened = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, restored, [800, 600], Platform::Gtk).unwrap();
-    let thumbnail_revision = reopened.state.layers.iter().find(|l| l.id == occurrence_token(id2)).unwrap().paint_revision;
-    let reopened_layer = reopened.engine.document().scene().occurrence(id2).unwrap().clone();
-    invoke(&mut reopened, CommandId::ScaleRotate);
-    invoke(&mut reopened, CommandId::PlacementOriginalSize);
-    invoke(&mut reopened, CommandId::ApplyTransform);
-    let layer = reopened.engine.document().scene().occurrence(id2).unwrap();
-    assert_eq!(&layer.placement.as_affine().unwrap().0[..4], &Affine::IDENTITY.0[..4]);
-    let paint = reopened.engine.document().scene().paint_source(id2).unwrap();
-    assert_eq!(paint.base.as_ref().map(|base|base.image.as_ref()), Some(&source));
-    assert!(paint.raster.is_empty());
-    assert!(paint.operations.is_empty());
-    assert!(reopened.engine.transform_preview().is_none(), "whole photo placement bypasses raster transforms");
-    assert_eq!(layer.placement.as_affine().unwrap().map(Point { x: 300., y: 200. }), Point { x: 60., y: 80. });
-    assert_ne!(reopened.state.layers.iter().find(|l| l.id == occurrence_token(id2)).unwrap().paint_revision,
-        thumbnail_revision, "accepted geometry invalidates the host's cached preview");
-    let accepted_revision = reopened.state.layers.iter().find(|l| l.id == occurrence_token(id2)).unwrap().paint_revision;
-    invoke(&mut reopened, CommandId::Undo);
-    assert_eq!(reopened.engine.document().scene().occurrence(id2), Some(&reopened_layer));
-    assert_ne!(reopened.state.layers.iter().find(|l| l.id == occurrence_token(id2)).unwrap().paint_revision,
-        accepted_revision, "undo invalidates the accepted preview and restores the exact layer");
+    let portable = session.engine.document().artwork.objects.id(second).unwrap();
+    let restored = reopen_capture(&session.capture_artwork().unwrap());
+    let restored = restored.scene().object(restored.artwork.objects.resolve(portable).unwrap()).unwrap().clone();
+    assert_eq!(restored.affine.0.map(f64::to_bits), placed.affine.0.map(f64::to_bits));
+    assert_eq!((restored.image.extent, restored.image.interpretation.clone()), (source.extent, source.interpretation.clone()));
+    let rows = |image: &layer_core::color::source::SourceImage| {
+        let mut reader = image.rows();
+        (0..image.extent[1]).map(|y| { let mut row = vec![0; image.row_bytes()]; reader.read(y, &mut row).unwrap(); row }).collect::<Vec<_>>()
+    };
+    assert_eq!(rows(&restored.image), rows(&source), "the reopened image keeps its exact samples");
 }
 
 #[test]
@@ -380,14 +356,14 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     corrected.interpretation.profile_assumed = false;
     let before = session.engine.document().clone();
     let mut invalid = corrected.clone(); invalid.extent[0] += 1;
-    assert!(session.repair_layer_source(id, &original, invalid).is_err());
+    assert!(session.repair_layer_source(SourceUse::Paint(id), &original, invalid).is_err());
     assert_eq!(session.engine.document(), &before);
-    let mut preview = session.preview_layer_source(id, &original, corrected.clone()).unwrap();
+    let mut preview = session.preview_layer_source(SourceUse::Paint(id), &original, corrected.clone()).unwrap();
     assert_eq!(session.engine.document(), &before, "preview does not mutate live content or IDs");
     let original_image = before.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id();
     assert_ne!(preview.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id(), original_image);
     let original_preview_revision = session.state.layers.iter().find(|layer| layer.id == token).unwrap().paint_revision;
-    assert_eq!(session.repair_layer_source(id, &original, corrected.clone()).unwrap(), id);
+    assert_eq!(session.repair_layer_source(SourceUse::Paint(id), &original, corrected.clone()).unwrap(), SourceUse::Paint(id));
     let accepted_image = session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.id();
     assert_ne!(accepted_image, original_image);
     let base = preview.artwork.paint.get_mut(paint).unwrap().base.as_mut().unwrap();
@@ -399,7 +375,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     let after = session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
     assert_eq!(after.interpretation, corrected.interpretation);
     assert!(Arc::ptr_eq(after.tiles.values().next().unwrap(), original.tiles.values().next().unwrap()));
-    assert!(session.repair_layer_source(id, &original, corrected.clone()).unwrap_err().contains("source changed"));
+    assert!(session.repair_layer_source(SourceUse::Paint(id), &original, corrected.clone()).unwrap_err().contains("source changed"));
     invoke(&mut session, CommandId::Undo);
     assert!(Arc::ptr_eq(session.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage(), &original));
     invoke(&mut session, CommandId::Redo);
@@ -408,9 +384,9 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     assert_ne!(session.state.layers.iter().find(|layer| layer.id == token).unwrap().paint_revision, corrected_preview_revision, "Undo must refresh the restored source interpretation");
     let document = session.engine.document();
     let mut occurrence = document.scene().occurrence(id).unwrap().clone();
-    occurrence.translation = Point { x: 4., y: 9. };
-    let coverage = RecordChange::insert(&document.artwork.coverage, CoverageSource { domain: original.extent, raster: Default::default(), initial: None, default_coverage: 1., operations: Default::default() });
-    occurrence.mask = Some(MaskUse { source: coverage.handle, enabled: true, linked: true, inverted: false, translation: Point::default(), placement: layer_core::Projective::IDENTITY });
+    occurrence.offset = [4, 9];
+    let coverage = RecordChange::insert(&document.artwork.coverage, CoverageSource { domain: original.extent, raster: Default::default(), default_coverage: 1., operations: Default::default() });
+    occurrence.mask = Some(MaskUse { source: coverage.handle, enabled: true, linked: true, inverted: false, offset: [0, 0] });
     let descriptor = document.composition().color.paint_descriptor();
     let bytes = vec![55; descriptor.byte_len([TILE_SIZE; 2]).unwrap()];
     let key = TileKey { plane: RasterPlane::Color, coordinate: [0, 0] };
@@ -419,7 +395,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     let edit = Edit::Batch(vec![Edit::Coverage(coverage), Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, id, Some(occurrence.clone())).unwrap()), Edit::Paint(RecordChange::replace(&document.artwork.paint, paint, Some(source.clone())).unwrap())]);
     session.engine.apply_edit(edit).unwrap();
     let original_document = session.engine.document().clone();
-    let (preview, edit) = session.prepare_source_edit(id, &original, Arc::new(corrected.clone()), false).unwrap();
+    let (preview, edit) = session.prepare_source_edit(SourceUse::Paint(id), &original, Arc::new(corrected.clone()), false).unwrap();
     assert_eq!(session.engine.document(), &original_document);
     let next_id = preview.working.occurrence.unwrap();
     assert_ne!(next_id, id);
@@ -430,7 +406,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     assert_eq!(doc.artwork.paint.get(paint).unwrap(), &source, "baked pixels and retained source stay intact");
     let next = doc.scene().occurrence(next_id).unwrap();
     let next_paint = match next.content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
-    assert_eq!(next.translation, occurrence.translation);
+    assert_eq!(next.offset, occurrence.offset);
     assert_eq!(doc.artwork.paint.get(next_paint).unwrap().base.as_ref().map(|base|base.image.as_ref()), Some(&corrected));
     assert!(doc.artwork.paint.get(next_paint).unwrap().raster.is_empty());
     assert!(next.mask.is_none());
@@ -466,9 +442,9 @@ fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
     let mut occurrence = document.scene().occurrence(id).unwrap().clone();
     let paint = match occurrence.content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
     let original = document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage().clone();
-    occurrence.translation = Point { x: -550., y: 3.5 };
-    let coverage = RecordChange::insert(&document.artwork.coverage, CoverageSource { domain: original.extent, raster: Default::default(), initial: None, default_coverage: 1., operations: Default::default() });
-    occurrence.mask = Some(MaskUse { source: coverage.handle, enabled: true, linked: true, inverted: false, translation: Point { x: 17., y: 3. }, placement: layer_core::Projective::IDENTITY });
+    occurrence.offset = [-550, 3];
+    let coverage = RecordChange::insert(&document.artwork.coverage, CoverageSource { domain: original.extent, raster: Default::default(), default_coverage: 1., operations: Default::default() });
+    occurrence.mask = Some(MaskUse { source: coverage.handle, enabled: true, linked: true, inverted: false, offset: [17, 3] });
     let key = TileKey { plane: RasterPlane::Color, coordinate: [0, 0] };
     let mut source = document.artwork.paint.get(paint).unwrap().clone();
     source.raster = RasterRevision::backed(RasterData { tiles: [(key, RasterTile::backed(TileBlob::encode(document.composition().color.paint_descriptor(), &vec![51; 256 * 256 * 4]).unwrap()))].into(), watercolor: None });
@@ -508,7 +484,7 @@ fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
     let mask = restored.scene().occurrence(restored_occurrence).unwrap().mask.as_ref().unwrap();
     let expected_mask = occurrence.mask.as_ref().unwrap();
     assert_eq!(mask.enabled, expected_mask.enabled); assert_eq!(mask.linked, expected_mask.linked); assert_eq!(mask.inverted, expected_mask.inverted);
-    assert_eq!(mask.translation, expected_mask.translation); assert_eq!(mask.placement, expected_mask.placement);
+    assert_eq!(mask.offset, expected_mask.offset);
     assert_eq!(restored.artwork.coverage.id(mask.source), session.engine.document().artwork.coverage.id(expected_mask.source));
     assert_eq!(restored.artwork.coverage.get(mask.source), session.engine.document().artwork.coverage.get(expected_mask.source));
     session.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
@@ -546,20 +522,20 @@ fn source_admission_counts_aggregate_ownership_before_mutating_document_or_ids()
     let program_bytes = fill.program.wgsl.sources().unwrap().iter().map(|source| source.len() as u64).sum::<u64>();
     let limits = ProjectLimits { asset_bytes: source.resident_bytes() as u64 + program_bytes + 1024, ..Default::default() };
     session.engine.backend_mut().tiled_sources = true;
-    session.import_sources(vec![("First".into(), source.clone())], limits, false, None, None).unwrap();
+    session.import_sources(vec![("First".into(), source.clone())], limits).unwrap();
     session.engine.set_layer_opacity(session.engine.document().working.occurrence.unwrap(), 0.5).unwrap();
     session.engine.undo().unwrap();
     let before = session.engine.document().clone();
     let checkpoint = session.engine.checkpoint();
     assert!(session.engine.can_redo());
-    let error = session.import_sources(vec![("Independent allocation".into(), fixture())], limits, false, None, None).unwrap_err();
+    let error = session.import_sources(vec![("Independent allocation".into(), fixture())], limits).unwrap_err();
     assert!(error.contains("memory limit"), "{error}");
     assert_eq!(session.engine.document(), &before);
     assert_eq!(session.engine.checkpoint(), checkpoint);
     assert!(session.engine.can_redo());
     // Identical bytes in a different allocation count twice; shared tile backing
     // counts once even when separate layers own different image-index objects.
-    session.import_sources(vec![("Shared backing".into(), source)], limits, false, None, None).unwrap();
+    session.import_sources(vec![("Shared backing".into(), source)], limits).unwrap();
     session.document_snapshot().unwrap().validate(limits).unwrap();
     let before = session.engine.document().clone();
     let handle = before.working.occurrence.unwrap();
@@ -654,25 +630,11 @@ fn unchanged_source_profile_on_painted_layer_does_not_claim_to_add_a_layer() {
 #[test]
 fn window_blur_keeps_an_image_placement_open() {
     let mut session = placed_photo("blur placement");
-    assert!(session.operation.placing());
+    assert!(session.objects.placing());
     session.input(UiInput::Blur).unwrap();
-    assert!(session.operation.placing(), "losing window focus keeps the placement");
+    assert!(session.objects.placing(), "losing window focus keeps the placement");
     invoke(&mut session, CommandId::CancelTransform);
-    assert!(!session.operation.active());
-}
-
-#[test]
-fn skewed_photo_placements_reopen_with_their_skew() {
-    let mut session = placed_photo("skew placement");
-    let skew = |s: &UiSession<Recorder>| s.state.tool_settings.iter().find(|f| f.id == "transform_skew").unwrap().value;
-    session.dispatch(UiAction::SetToolSetting { id: "transform_skew".into(), value: 0.4 }).unwrap();
-    invoke(&mut session, CommandId::ApplyTransform);
-    let placement = session.engine.document().scene().occurrence(session.engine.document().working.occurrence.unwrap()).unwrap().placement.as_affine().unwrap();
-    assert!((placement.0[2] / placement.0[3]).abs() > 0.3, "the placement keeps its shear: {placement:?}");
-    invoke(&mut session, CommandId::ScaleRotate);
-    assert!(session.operation.placing(), "a skewed placement can be edited again");
-    assert!((skew(&session) - 0.4).abs() < 1e-4);
-    invoke(&mut session, CommandId::CancelTransform);
+    assert!(!session.objects.placing());
 }
 
 #[test]

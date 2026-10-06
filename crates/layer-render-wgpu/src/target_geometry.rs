@@ -20,11 +20,10 @@ impl WgpuRasterizer {
 
     pub(super) fn update_target_geometry(
         &mut self,
-        scene: SceneView<'_>,
+        targets: &BTreeMap<SourceTarget, [u32; 2]>,
         resized: bool,
     ) -> Result<(), GpuRasterError> {
-        let targets: BTreeMap<_, _> = source_access::placed_targets(scene).map(|target| (target, scene.target_extent(target))).collect();
-        if !resized && targets == self.target_geometry.targets {
+        if !resized && *targets == self.target_geometry.targets {
             return Ok(());
         }
         let mut bases = BTreeMap::new();
@@ -79,7 +78,7 @@ impl WgpuRasterizer {
         }
         self.queue
             .write_buffer(&self.target_buffer, 0, &self.target_upload);
-        self.target_geometry = TargetGeometry { targets, bases };
+        self.target_geometry = TargetGeometry { targets: targets.clone(), bases };
         Ok(())
     }
 

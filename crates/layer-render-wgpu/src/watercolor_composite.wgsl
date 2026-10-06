@@ -11,7 +11,7 @@ struct Style {
     render_mode: vec4<f32>,
     transport_a: vec4<f32>,
     transport_b: vec4<f32>,
-    unused_brush_material: array<vec4<f32>, 9>,
+    unused_brush_material: array<vec4<f32>, 5>,
     color_mode: vec4<f32>,
 }
 

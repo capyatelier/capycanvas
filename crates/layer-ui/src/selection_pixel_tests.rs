@@ -34,8 +34,11 @@ mod selection_pixel_checks {
         let source = layer_core::color::source::rgba8_source([40, 30], |_, _| [200; 4]);
         let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
             Document::new(layer_core::authored::PortableId::random(), 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
-        s.place_layer_source("Photo", Arc::unwrap_or_clone(source), None).unwrap();
-        invoke(&mut s, CommandId::ApplyTransform);
+        s.import_layer_source("Photo", Arc::unwrap_or_clone(source)).unwrap();
+        let photo = s.engine.document().working.occurrence.unwrap();
+        let mut occurrence = s.engine.document().scene().occurrence(photo).unwrap().clone();
+        occurrence.offset = [80, 60];
+        s.layer_edit(layer_core::Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences, photo, Some(occurrence)).unwrap())).unwrap();
         s.frame(1, 1).unwrap();
         s
     }
@@ -65,7 +68,7 @@ mod selection_pixel_checks {
             let [(target, operation)] = &operations[..] else { panic!("one operation: {operations:?}") };
             assert_eq!(*target,s.engine.document().scene().source_target(layer).unwrap());
             assert!(erase(operation), "{:?}", operation.kind);
-            let coverage = operation.coverage.source.initial.as_ref().unwrap();
+            let coverage = operation.coverage.selection.as_ref().unwrap();
             assert_eq!(coverage.inverted, erased_outside, "{command:?}");
             assert_eq!(coverage.shape, selection.shape, "soft coverage is kept");
             assert_eq!(operation.bounds(extent), bounds, "{command:?} rewrites only the pages it can change");
@@ -117,7 +120,7 @@ mod selection_pixel_checks {
     }
 
     #[test]
-    fn clearing_a_placed_photo_keeps_its_original_and_clear_entire_layer_discards_it() {
+    fn clearing_pixels_keeps_the_photo_and_clear_entire_layer_removes_it() {
         let mut s = photo_session();
         let layer = s.engine.document().working.occurrence.unwrap();
         let source = paint(s.engine.document(),layer).base.as_ref().unwrap().image.storage().clone();
@@ -133,17 +136,17 @@ mod selection_pixel_checks {
         assert_eq!(CommandId::ClearLayer.label().as_ref(), "Clear Entire Layer");
         assert!(crate::customization::canonical_tool_choice(ToolbarControl::Command { command: CommandId::ClearLayer })
             .description
-            .contains("placed photo"));
+            .contains("including a photo"));
         invoke(&mut s, CommandId::ClearLayer);
         assert!(paint(s.engine.document(),layer).base.is_none());
         assert!(s.state.settings.keys(&CommandId::ClearLayer.shortcut_id()).is_empty(), "Clear Entire Layer stays unbound");
     }
 
     #[test]
-    fn revert_to_original_discards_photo_edits_in_one_step_and_keeps_the_rest() {
+    fn discard_paint_edits_discards_photo_edits_in_one_step_and_keeps_the_rest() {
         let mut s = photo_session();
         let id = s.engine.document().working.occurrence.unwrap();
-        let reason = |s: &UiSession<Recorder>| s.command_disabled_reason(CommandId::RevertToOriginal);
+        let reason = |s: &UiSession<Recorder>| s.command_disabled_reason(CommandId::DiscardPaintEdits);
         assert_eq!(reason(&s).as_deref(), Some("This photo has no edits"));
         let source = paint(s.engine.document(),id).base.as_ref().unwrap().image.storage().clone();
         select(&mut s, rectangle([20., 20., 60., 50.]));
@@ -154,6 +157,9 @@ mod selection_pixel_checks {
         s.dispatch(UiAction::Layer { action: LayerAction::Select { id: crate::session::occurrence_token(id), mask: false } }).unwrap();
         s.dispatch(UiAction::Layer { action: LayerAction::Blend { id: crate::session::occurrence_token(id), value: 2 } }).unwrap();
         s.set_layer_opacity(Some(crate::session::occurrence_token(id)), 0.5).unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::ColorMode { id: crate::session::occurrence_token(id), epoch: s.state.document_file.epoch, mode: layer_core::color::LayerColorMode::Grayscale } }).unwrap();
+        submitted(&mut s);
+        assert_eq!(paint(s.engine.document(),id).color_mode, layer_core::color::LayerColorMode::Grayscale);
         let edited = s.engine.document().scene().occurrence(id).unwrap().clone();
         let edited_paint=paint(s.engine.document(),id).clone();
         assert!(!edited_paint.operations.is_empty() || !edited_paint.raster.is_empty());
@@ -162,23 +168,24 @@ mod selection_pixel_checks {
         let labels = |sections: &[Vec<ContextMenuItem>]| sections.iter().flatten().map(|i| i.label.clone()).collect::<Vec<_>>();
         let edit = labels(&edit_menu.sections);
         let rasterize = edit.iter().position(|l| l == "Rasterize Source…").unwrap();
-        assert_eq!(edit[rasterize + 1], "Revert to Original Photo");
+        assert_eq!(edit[rasterize + 1], "Discard Paint Edits");
         let layer_menu = s.layer_menu(crate::session::occurrence_token(id), false).unwrap();
         let settings = layer_menu.sections.iter().flatten().find(|i| i.label == "Layer Settings").unwrap();
         let settings = labels(&settings.sections);
         let rasterize = settings.iter().position(|l| l == "Rasterize Source…").unwrap();
-        assert_eq!(settings[rasterize + 1], "Revert to Original Photo");
+        assert_eq!(settings[rasterize + 1], "Discard Paint Edits");
 
-        invoke(&mut s, CommandId::RevertToOriginal);
+        invoke(&mut s, CommandId::DiscardPaintEdits);
         let reverted = s.engine.document().scene().occurrence(id).unwrap().clone();
         let expected=edited.clone();
         let mut expected_paint=edited_paint.clone();expected_paint.raster=Default::default();expected_paint.operations=Arc::default();
         assert_eq!(paint(s.engine.document(),id),&expected_paint);
-        assert_eq!(reverted, expected, "only the edits go; placement, mask, opacity and blend stay");
+        assert_eq!(paint(s.engine.document(),id).color_mode, layer_core::color::LayerColorMode::Grayscale, "the layer keeps its color mode");
+        assert_eq!(reverted, expected, "only the paint edits go; offset, mask, opacity and blend stay");
         assert!(Arc::ptr_eq(paint(s.engine.document(),id).base.as_ref().unwrap().image.storage(), &source), "the original is shared, not copied");
         assert_eq!(reason(&s).as_deref(), Some("This photo has no edits"));
         assert_eq!(
-            s.dispatch(UiAction::Invoke { command: CommandId::RevertToOriginal }).unwrap_err(),
+            s.dispatch(UiAction::Invoke { command: CommandId::DiscardPaintEdits }).unwrap_err(),
             "This photo has no edits"
         );
         invoke(&mut s, CommandId::Undo);
@@ -199,14 +206,14 @@ mod selection_pixel_checks {
         assert_eq!(reason(&s).as_deref(), Some("Return to the artwork first"));
         invoke(&mut s, CommandId::ReturnToArtwork);
         s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
-        assert_eq!(reason(&s).as_deref(), Some("Select a placed photo layer"));
+        assert_eq!(reason(&s).as_deref(), Some("Select a photo layer"));
         s.dispatch(UiAction::SelectLayer { id: crate::session::occurrence_token(id) }).unwrap();
         let mut rasterized=paint(s.engine.document(),id).clone();
         let converted = (*source).clone();
         rasterized.base = Some(layer_core::PaintBase {image:layer_core::Image::new(Arc::new(converted)),offset:[0;2],policy:layer_core::PaintBasePolicy::WorkingPixels});
         let SourceTarget::Paint(handle)=s.engine.document().scene().source_target(id).unwrap() else {unreachable!()};
         s.engine.apply_edit(layer_core::Edit::Paint(RecordChange::replace(&s.engine.document().artwork.paint,handle,Some(rasterized)).unwrap())).unwrap();
-        assert_eq!(reason(&s).as_deref(), Some("A rasterized photo has no original to return to"));
+        assert_eq!(reason(&s).as_deref(), Some("This photo is already part of the layer's pixels"));
     }
 
     #[test]
@@ -231,21 +238,20 @@ mod selection_pixel_checks {
             assert!(copy.attachment == layer_core::Attachment::None && copy.mask.is_none());
             assert_eq!(doc.scene().parent(copy_id),before.scene().parent(base));
             assert!(paint(doc,copy_id).base.is_none());
-            assert_eq!(copy.placement, layer_core::LayerPlacement::IDENTITY);
             assert!(Arc::ptr_eq(paint(doc,base).base.as_ref().unwrap().image.storage(),paint(&before,base).base.as_ref().unwrap().image.storage()));
             assert!(doc.working.selection.is_none(), "the selection moves into the new layer");
-            let origin = copy.translation;
+            let origin = layer_core::offsets::point(copy.offset);
             let copy=doc.scene().source_target(copy_id).unwrap();
             let operations = submitted(&mut s);
             assert_eq!(operations.len(), 1 + usize::from(cut));
             assert_eq!(operations[0].0, copy);
             assert!(matches!(operations[0].1.kind, layer_core::RasterOperationKind::Bake { .. }));
-            assert!(!operations[0].1.coverage.source.initial.as_ref().unwrap().inverted, "Bake visits only the selected pixels");
-            assert_eq!(operations[0].1.coverage.source.initial, Some(selection.translated(Point { x: -origin.x, y: -origin.y })));
+            assert!(!operations[0].1.coverage.selection.as_ref().unwrap().inverted, "Bake visits only the selected pixels");
+            assert_eq!(operations[0].1.coverage.selection, Some(selection.translated(Point { x: -origin.x, y: -origin.y })));
             if cut {
                 assert_eq!(operations[1].0,s.engine.document().scene().source_target(base).unwrap());
                 assert!(erase(&operations[1].1));
-                assert!(!operations[1].1.coverage.source.initial.as_ref().unwrap().inverted, "Cut erases it from the source");
+                assert!(!operations[1].1.coverage.selection.as_ref().unwrap().inverted, "Cut erases it from the source");
             }
             assert!(s.command(CommandId::Reselect).enabled);
             invoke(&mut s, CommandId::Undo);
@@ -333,9 +339,9 @@ mod selection_pixel_checks {
             let before = s.engine.document().clone();
             let effect = insert(&mut s);
             let mask = effect.mask.as_ref().expect("the selection becomes the effect's mask");
-            let coverage=s.engine.document().artwork.coverage.get(mask.source).unwrap();
-            assert_eq!(coverage.initial.as_ref(), Some(&selection));
-            assert_eq!(coverage.default_coverage, f32::from(selection.inverted));
+            let default_coverage=s.engine.document().artwork.coverage.get(mask.source).unwrap().default_coverage;
+            assert_eq!(crate::session::test_support::stored_selection(&mut s, mask.source), Some(selection.clone()));
+            assert_eq!(default_coverage, f32::from(selection.inverted));
             assert!(mask.enabled && !mask.inverted);
             assert!(s.engine.document().working.selection.is_none(), "the mask consumes the selection");
             invoke(&mut s, CommandId::Undo);
@@ -456,11 +462,11 @@ mod selection_pixel_checks {
         assert_eq!(pixels(&s), untouched);
     }
     #[test]
-    fn copying_hidden_placed_pixels_keeps_their_full_domain_and_document_origin() {
+    fn copying_hidden_offset_pixels_keeps_their_full_domain_and_document_origin() {
         let mut s = photo_session();
         let id = s.engine.document().working.occurrence.unwrap();
         let mut owner = s.engine.document().scene().occurrence(id).unwrap().clone();
-        owner.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([10., 0., 0., 10., -100., -80.]));
+        owner.offset = [-100, -80];
         owner.opacity = 0.65;
         owner.blend = layer_core::LayerBlend::Multiply;
         s.engine.apply_edit(layer_core::Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences,id,Some(owner)).unwrap())).unwrap();
@@ -473,9 +479,8 @@ mod selection_pixel_checks {
         let doc = s.engine.document();
         let copy_id=doc.working.occurrence.unwrap();
             let copy = doc.scene().occurrence(copy_id).unwrap();
-        assert_eq!(copy.translation, origin);
+        assert_eq!(layer_core::offsets::point(copy.offset), origin);
         assert_eq!(paint(doc,copy_id).domain,extent);
-        assert_eq!(copy.placement, layer_core::LayerPlacement::IDENTITY);
         assert_eq!(copy.opacity, before.scene().occurrence(id).unwrap().opacity);
         assert_eq!(copy.blend, before.scene().occurrence(id).unwrap().blend);
         assert_eq!(doc.scene().occurrence(id).unwrap(), before.scene().occurrence(id).unwrap());
@@ -487,8 +492,8 @@ mod selection_pixel_checks {
         assert_eq!(*offset,Point{x:-origin.x,y:-origin.y});
         assert!(matches!(scope,SceneScope::Members(members) if members.contains(&id)));
         assert!(Arc::ptr_eq(scene.view().paint_source(id).unwrap().base.as_ref().unwrap().image.storage(),paint(&before,id).base.as_ref().unwrap().image.storage()));
-        assert_eq!(scene.view().occurrence(id).unwrap().placement,before.scene().occurrence(id).unwrap().placement);
-        assert_eq!(operations[0].1.coverage.source.initial, Some(selection.translated(Point { x: -origin.x, y: -origin.y })));
+        assert_eq!(scene.view().occurrence(id).unwrap().offset,before.scene().occurrence(id).unwrap().offset);
+        assert_eq!(operations[0].1.coverage.selection, Some(selection.translated(Point { x: -origin.x, y: -origin.y })));
         invoke(&mut s, CommandId::Undo);
         assert_live_artwork_eq(s.engine.document(),&before);
     }

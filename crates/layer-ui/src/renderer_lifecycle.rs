@@ -1,6 +1,48 @@
 //! Renderer replacement keeps CPU document/session ownership in place.
 use super::*;
 
+/// Accepted layer-preview requests of one drawing. After a renderer
+/// replacement, unfinished requests are submitted again under their original
+/// ids before new ones.
+#[derive(Default)]
+pub struct ThumbnailRequests {
+    drawing: (u64, u64),
+    renderer: u64,
+    in_flight: Vec<(u64, layer_render::ThumbnailTarget)>,
+    resubmit: std::collections::VecDeque<(u64, layer_render::ThumbnailTarget)>,
+}
+impl ThumbnailRequests {
+    pub fn retry<R: CanvasRenderer>(&mut self, session: &UiSession<R>) -> Option<(u64, layer_render::ThumbnailTarget)> {
+        let (drawing, renderer) = ((session.engine.document().owner, session.state.document_file.epoch), session.renderer_generation);
+        if self.drawing != drawing {
+            *self = Self { drawing, renderer, ..Default::default() };
+        } else if self.renderer != renderer {
+            self.renderer = renderer;
+            let lost = std::mem::take(&mut self.in_flight);
+            self.resubmit.extend(lost);
+        }
+        self.resubmit.front().copied()
+    }
+    pub fn submitted(&mut self, request: u64, target: layer_render::ThumbnailTarget, retry: bool) {
+        if retry { self.resubmit.pop_front(); }
+        self.in_flight.push((request, target));
+    }
+    pub fn refused<R: CanvasRenderer>(&mut self, session: &UiSession<R>, unavailable: bool) {
+        let Some(&(_, target)) = self.resubmit.front() else { return };
+        let scene = session.engine.document().scene();
+        let exists = match target {
+            layer_render::ThumbnailTarget::Occurrence(handle) => scene.occurrence(handle).is_some(),
+            layer_render::ThumbnailTarget::Source(SourceTarget::Paint(handle)) => scene.paint(handle).is_some(),
+            layer_render::ThumbnailTarget::Source(SourceTarget::Coverage(handle)) => scene.coverage(handle).is_some(),
+            layer_render::ThumbnailTarget::Source(SourceTarget::Selection(handle)) => scene.artwork().selections.get(handle).is_some(),
+            layer_render::ThumbnailTarget::Object(handle) => scene.object(handle).is_some(),
+            layer_render::ThumbnailTarget::QuickMask => true,
+        };
+        if !unavailable || !exists { self.resubmit.pop_front(); }
+    }
+    pub fn completed(&mut self, request: u64) { self.in_flight.retain(|(id, _)| *id != request); }
+}
+
 impl<R: CanvasRenderer> UiSession<R> {
     /// The host has no modal work and must wait for this boundary before normal
     /// parking. Failed renderers remain navigable/saveable/closeable.
@@ -19,6 +61,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn discard_render_requests(&mut self) {
         self.cancel_content_bounds();
         self.content_bounds = Default::default();
+        self.resubmit_conversion();
         self.cancel_picker();
         self.eyedropper.renderer_replaced();
         self.cancel_tonal();
@@ -283,6 +326,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.discard_render_requests();
         self.cancel_effect_analyses();
         let previous = self.engine.replace_backend(renderer).map_err(error)?;
+        self.renderer_generation = self.renderer_generation.wrapping_add(1);
         self.input_pending = self.engine.has_pending_input();
         self.refresh_file_state();
         self.sync_renderer_telemetry();
@@ -310,6 +354,36 @@ mod tests {
 
     fn source(pixel: [u8; 4]) -> layer_core::color::source::SourceImage {
         std::sync::Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([1, 1], |_, _| pixel))
+    }
+
+    #[test]
+    fn thumbnail_requests_lost_to_a_replaced_renderer_are_retried_in_order_once() {
+        let mut session = UiSession::blank(sources(), [800, 600], Platform::Web).unwrap();
+        let target = |id| layer_render::ThumbnailTarget::Occurrence(occurrence_handle(id).unwrap());
+        let ink = session.state().layers[0].id;
+        let mut requests = ThumbnailRequests::default();
+        assert_eq!(requests.retry(&session), None);
+        for (request, retry) in [(7, false), (8, false), (9, false)] { requests.submitted(request, target(ink), retry); }
+        requests.completed(8);
+        assert_eq!(requests.retry(&session), None, "the same renderer still owns its requests");
+        session.replace_renderer(sources()).unwrap();
+        assert_eq!(requests.retry(&session), Some((7, target(ink))));
+        requests.submitted(7, target(ink), true);
+        assert_eq!(requests.retry(&session), Some((9, target(ink))));
+        requests.refused(&session, true);
+        assert_eq!(requests.retry(&session), Some((9, target(ink))), "an unavailable renderer keeps the request queued");
+        requests.refused(&session, false);
+        assert_eq!(requests.retry(&session), None, "each lost request is retried once");
+        session.replace_renderer(sources()).unwrap();
+        assert_eq!(requests.retry(&session), Some((7, target(ink))), "a resubmitted request is retried again after another loss");
+        requests.submitted(7, target(ink), true);
+        requests.completed(7);
+        session.replace_renderer(sources()).unwrap();
+        assert_eq!(requests.retry(&session), None, "completed requests are not retried");
+        requests.submitted(10, target(ink), false);
+        session.state.document_file.epoch += 1;
+        session.replace_renderer(sources()).unwrap();
+        assert_eq!(requests.retry(&session), None, "another drawing discards the old requests");
     }
 
     #[test]

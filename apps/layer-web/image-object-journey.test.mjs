@@ -8,7 +8,7 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
   assert.ok(urls.length,'Set LAYER_OBJECT_FIXTURE_URLS to valid-profile object packages');
   const wait=async condition=>{
     const deadline=Date.now()+130000;
-    for(;;)try{return await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function poll(){if(${condition})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1200)));else setTimeout(poll,30)}poll()})`);}
+    for(;;)try{return await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function poll(){if(${condition})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+JSON.stringify({busy:layerApp.documents.busy(),file:layerApp.state().document_file,requests:layerApp.state().requests,brush:layerApp.app.brush_ready(),error:layerApp.state().host_error,dialog:document.querySelector('dialog[open]')?.innerText?.slice(0,300)},(_,v)=>typeof v==='bigint'?String(v):v)));else setTimeout(poll,30)}poll()})`);}
     catch(error){if(!/navigated|context/i.test(String(error))||Date.now()>deadline)throw error;await new Promise(resolve=>setTimeout(resolve,50));}
   };
   const idle=()=>wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');

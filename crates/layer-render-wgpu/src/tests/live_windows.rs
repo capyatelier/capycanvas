@@ -68,9 +68,9 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                 document.artwork.occurrences.get_mut(first).unwrap().opacity = 0.63;
                 document.artwork.occurrences.get_mut(first).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
                 document.artwork.occurrences.get_mut(second).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
-                let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, Point { x: 7., y: -9. });
+                let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, [7, -9]);
                 mask.source.default_coverage = 0.;
-                mask.source.initial = Some(Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 760., y: 99. }, Point { x: 440., y: 533. }]).unwrap());
+                crate::test_support::materialize_mask(&mut mask.source, Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 760., y: 99. }, Point { x: 440., y: 533. }]).unwrap(), document.composition().color);
                 let inside = effect(&mut document, true, false);
                 let outside = effect(&mut document, true, false);
                 set_entries(&mut document, vec![first, second, inside, outside]);

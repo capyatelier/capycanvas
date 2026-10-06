@@ -167,7 +167,7 @@ impl WgpuRasterizer {
 
 fn bake_needs_masks(scene: &Arc<SceneSnapshot>, scope: &SceneScope) -> bool {
     snapshot::capture_targets(scene.view().with_scope(scope), scope).into_iter().any(|target| match target {
-        SourceTarget::Coverage(handle) => scene.view().coverage(handle).is_some_and(|coverage| coverage.initial.is_some() || !coverage.raster.is_empty()),
+        SourceTarget::Coverage(handle) => scene.view().coverage(handle).is_some_and(|coverage| !coverage.raster.is_empty()),
         _ => false,
     })
 }

@@ -88,7 +88,7 @@ pub enum EffectSpace {
     #[default]
     Linear,
     /// Encoded values in Perceptual documents, linear ones in Linear light
-    /// documents. Pointwise fusion keeps programs with matching spaces together.
+    /// documents.
     Blending,
 }
 impl EffectSpace {
@@ -182,7 +182,8 @@ impl EffectSampling {
                 padding,
             } => match effect.parameter(key)? {
                 (_, EffectValue::Number(value)) => {
-                    ((*value * scale).ceil() as u32).checked_add(*padding)
+                    let radius = (f64::from(*value) * f64::from(*scale)).ceil();
+                    (radius.is_finite() && (0.0..=f64::from(u32::MAX)).contains(&radius)).then_some(radius as u32)?.checked_add(*padding)
                 }
                 _ => None,
             },
@@ -368,6 +369,15 @@ impl<'a> EffectView<'a> {
     pub fn with_spatial(mut self, spatial: Option<&'a crate::authored::EffectSpatialReference>) -> Self {
         self.spatial = spatial;
         self
+    }
+    /// How far the filter's output reaches beyond its input, or none when a
+    /// sampling radius can't be represented. A whole-image pass resamples
+    /// within its input's support.
+    pub fn support_radius(&self) -> Option<u32> {
+        self.program.passes.iter().try_fold(0u32, |radius, pass| radius.checked_add(match pass.sampling {
+            EffectSampling::Document => 0,
+            _ => self.spatial_radius(pass.sampling.radius(*self)?)?,
+        }))
     }
     pub fn spatial_radius(self, radius: u32) -> Option<u32> {
         let scale=self.spatial.map_or(1.,|spatial| {

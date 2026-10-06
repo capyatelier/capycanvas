@@ -26,7 +26,13 @@ interrupted; this is admission between jobs, not preemption.
 Readiness continues after initial startup. Shared `UiSession` wakes the host
 when a UI-only brush change needs preparation. Native readiness snapshots use
 the current dependencies, so a previous tool's ready flag cannot authorize the
-new tool. Contacts begun before readiness remain suppressed through release.
+new tool. A contact begun before readiness is held whole and delivered once its
+shaders are ready; every host, the browser included, admits paint samples through
+`layer_engine::DeferredContacts`, which discards only a contact held longer than
+5 s or beyond 4096 samples. Hosts report whether samples are held with
+`UiSession::set_input_held`; until they are delivered or the contact is cancelled,
+document snapshots such as Save wait, so a save never misses a stroke or drag
+already drawn. Other commands are not held back.
 `ShaderDocument` memoizes the dependency-relevant document state: ordinary
 raster/parameter edits do not invalidate readiness or trigger effect preparation.
 Effect-chain inspection now borrows layers; only compiler jobs clone their
@@ -37,6 +43,9 @@ startup. Android also stops packaging that redundant asset copy. GTK still
 accepts explicit `CAPY_FILTERS_DIR` / `CAPY_FILTERS_MODE` overrides; runtime
 package installation and atomic validation remain available. Identical library
 refreshes are no-ops on all three hosts. Existing native pipeline caches remain;
-there is no additional platform cache or compiler worker. Current native cache
+there is no additional platform cache or compiler worker. A renderer created
+while another still holds the startup cache, such as a restored or opened
+document's, starts from the saved cache read-only; only the holder cleans or
+replaces it. Current native cache
 saving still closes the initial cache after required startup work; this change
 does not add persistence for later first-use variants.

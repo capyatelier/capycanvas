@@ -42,19 +42,7 @@ impl crate::WgpuRasterizer {
         if requests.is_empty() {
             return Ok(());
         }
-        let mut scene = self
-            .scene
-            .take()
-            .unwrap_or_else(|| crate::scene::Scene::new(self));
-        let mut encoder = crate::submission::CommandEncoder::new(&self.device, &Default::default());
-        let result = scene.restore_native_scalars(self, requests, &mut encoder);
-        self.scene = Some(scene);
-        self.uploads.finish(&encoder);
-        if result.is_ok() {
-            self.last_submission = Some(encoder.submit(&self.queue));
-            self.metrics.native_restore_submissions += 1;
-        }
-        result
+        self.submit_restore(|r, scene, encoder| scene.restore_native_scalars(r, requests, encoder))
     }
 }
 pub(crate) fn restore_upload(

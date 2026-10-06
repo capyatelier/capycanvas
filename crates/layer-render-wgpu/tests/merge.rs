@@ -24,7 +24,7 @@ fn operate(engine: &mut Engine, id: OccurrenceHandle, kind: RasterOperationKind)
     engine
         .append_raster_operation(target, RasterOperation {
             placement: Affine::IDENTITY,
-            coverage: CoverageSnapshot::reveal_all(coverage, domain, Point::default()),
+            coverage: CoverageSnapshot::reveal_all(coverage, domain, [0, 0]),
             kind,
         })
         .unwrap();
@@ -57,23 +57,18 @@ fn painted(space: BlendSpace) -> (Engine, InputProducer<PenEvent>) {
     gradient(&mut engine, "Lower", [[0.9, 0.3, 0.1, 1.], [0.1, 0.6, 0.8, 0.4]], false);
     stroke(&mut engine, &mut input, "Lower", [0.1, 0.1, 0.8, 1.], Point { x: 20., y: 200. }, Point { x: 360., y: 40. }, 1_000_000_000);
     stroke(&mut engine, &mut input, "Upper", [0.9, 0.8, 0.1, 0.9], Point { x: 30., y: 30. }, Point { x: 350., y: 220. }, 2_000_000_000);
-    let mut coverage = CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(), SIZE, Point::default());
-    coverage.source.default_coverage = 0.;
-    coverage.source.initial = Some(Selection::polygon(vec![
+    let upper = id(&engine, "Upper");
+    engine.apply_edit(occurrence_edit(engine.document(), upper, |o| o.opacity = 0.6)).unwrap();
+    add_selection_mask(&mut engine, upper, Selection::polygon(vec![
         Point { x: 0., y: 0. },
         Point { x: 300., y: 20. },
         Point { x: 250., y: 256. },
-    ]).unwrap());
-    let coverage_change = RecordChange::insert(&engine.document().artwork.coverage, coverage.source);
-    coverage.use_.source = coverage_change.handle;
-    let owner_change = occurrence_edit(engine.document(), id(&engine, "Upper"), |o| {
-        o.opacity = 0.6;
-        o.mask = Some(coverage.use_);
-    });
-    engine.apply_edit(Edit::Batch(vec![Edit::Coverage(coverage_change), owner_change])).unwrap();
+    ]).unwrap(), 0.);
     (engine, input)
 }
 
+/// Over a transparent backdrop: a translucent merge stored in 8 bits and
+/// composited over opaque paper can round one code further.
 #[test]
 fn merge_down_keeps_the_composite_in_one_undo_step() {
     for space in BlendSpace::ALL {
@@ -82,6 +77,7 @@ fn merge_down_keeps_the_composite_in_one_undo_step() {
 }
 fn merge_down_in(space: BlendSpace) {
     let (mut engine, _input) = painted(space);
+    edit(&mut engine, "Paper", |o| o.visible = false);
     let original = image(&mut engine, 3_000_000_000);
     let result = merge(&mut engine, MergeKind::Down);
     let merged = image(&mut engine, 4_000_000_000);
@@ -229,7 +225,7 @@ fn an_effect_applies_to_the_layer_below() {
 fn pixels_outside_the_canvas_survive_a_merge() {
     let (mut engine, _input) = painted(BlendSpace::Linear);
     edit(&mut engine, "Upper", |layer| {
-        layer.translation = Point { x: -120., y: 40. };
+        layer.offset = [-120, 40];
         layer.mask = None;
     });
     let grow = CanvasGeometry::crop(CanvasRect { origin: [-200, -64], size: [SIZE[0] + 400, SIZE[1] + 128] });
@@ -255,7 +251,7 @@ fn placed_photos_and_watercolor_in(space: BlendSpace) {
         [(x * 5 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8, 255]
     })).into()));
     paint_mut(&mut doc, photo).domain = [300, 200];
-    doc.artwork.occurrences.get_mut(photo).unwrap().placement = layer_core::LayerPlacement::from_affine(Affine([0.9, 0.2, -0.2, 0.9, 40., 10.]));
+    doc.artwork.occurrences.get_mut(photo).unwrap().offset = [40, 10];
     let (mut engine, mut input) = engine(doc);
     let mut brush = default_brush(DefaultBrushPreset::WetWatercolor);
     brush.diameter = 60.;
@@ -266,9 +262,8 @@ fn placed_photos_and_watercolor_in(space: BlendSpace) {
     let original = image(&mut engine, 2_000_000_000);
     let result = merge(&mut engine, MergeKind::Down);
     image(&mut engine, 3_000_000_000).assert_near(&original, TOLERANCE, "merged photo and wash");
-    let layer = engine.document().scene().occurrence(result).unwrap();
     let source = paint(engine.document(), result);
-    assert!(source.base.is_none() && layer.placement == layer_core::LayerPlacement::IDENTITY);
+    assert!(source.base.is_none());
     let data = source.raster.wait_data().unwrap();
     assert!(data.watercolor.is_none() && data.tiles.keys().all(|k| k.plane == raster::RasterPlane::Color), "no wet state remains");
 }

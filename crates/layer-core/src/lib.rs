@@ -56,6 +56,7 @@ pub use figures::{Figure, FigurePaint, FigureShape, ellipse_outline};
 mod rulers;
 pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
 mod affine;
+pub mod offsets;
 pub use affine::{Affine, ImageTransform, Interpolation, LayerPlacement};
 mod projective;
 pub use projective::{Projective, clip_convex};
@@ -65,7 +66,8 @@ mod project;
 mod transform_pixels;
 pub use transform_pixels::{TransformPixelsPlan, TransformPixelsRefusal, TransformPixelsScope};
 mod canvas_geometry;
-pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation};
+pub mod sample_remap;
+pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPlan, CanvasRect, GeometryLimits, ImageOrientation, BaseRemap, RemapPlan, RemapResult, RemapSpec};
 mod content_bounds;
 pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope};
 mod artwork_query;
@@ -75,7 +77,9 @@ mod operation_test_support;
 #[cfg(test)]
 mod artwork_query_tests;
 mod merge;
-pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal};
+pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal, Reach, SupportBounds, object_support, output_support};
+mod conversions;
+pub use conversions::{ConversionRefusal, ImageCapture, ObjectConversion};
 mod retouch_layers;
 pub use retouch_layers::{RetouchLayerPlan, RetouchLayerRefusal, SeparationFilters};
 mod history_budget;
@@ -190,6 +194,10 @@ impl Rect {
         bounds
     }
 
+    pub fn translated(self, by: Point) -> Self {
+        if self.is_empty() { return self; }
+        Self { min: Point { x: self.min.x + by.x, y: self.min.y + by.y }, max: Point { x: self.max.x + by.x, y: self.max.y + by.y } }
+    }
     pub fn outset(self, amount: f32) -> Self {
         Self {
             min: Point {
@@ -1261,7 +1269,8 @@ impl Stroke {
 }
 
 pub use authored::{
-    Affine64, Affine64Error, Image, ImageInterpolation, ImageObject, ImageObjectHandle, ObjectLayer, ObjectLayerHandle, PaintBase, PaintBasePolicy,
+    Affine64, Affine64Error, Image, ImageInterpolation, ImageObject, ImageObjectHandle, ObjectLayer, ObjectLayerHandle, ObjectOrder, PaintBase, PaintBasePolicy, placed_bounds,
+    MAX_NAME_BYTES, MAX_NAME_CHARS, bounded_name,
     Attachment, Artwork, ArtworkCapture, CaptureCheckpoint, Composition, CompositionHandle, CoverageHandle,
     CoverageSource, EffectApplication, EffectHandle,
     EvaluationContext, Guides, Handle, MaskUse, Occurrence, OccurrenceContent, OccurrenceDropPlan, OccurrenceDropPosition, OccurrenceHandle,
@@ -1450,6 +1459,14 @@ impl Document {
             self.revision = next_revision;
             return Ok(inverse);
         }
+        if edit.presents_same_images(self) {
+            let mut candidate = self.clone();
+            let inverse = candidate.apply_records(edit.clone())?;
+            edit.validate_presentation(&candidate)?;
+            candidate.revision = next_revision;
+            *self = candidate;
+            return Ok(inverse);
+        }
         let resources=edit.requires_history_admission(self);
         let mut candidate = self.clone();
         let relationships = edit.changes_relationships(self);
@@ -1578,6 +1595,9 @@ impl Document {
         self.working.target = target;
         self.working.inspect_mask = inspect;
         self.working.layer_selection.retain(|h| self.artwork.occurrences.get(*h).is_some());
+        let objects = std::mem::take(&mut self.working.objects);
+        let scene = self.scene();
+        self.working.objects = objects.into_iter().filter(|h| occurrence.is_some() && scene.object_owner(*h) == occurrence).collect();
         self.working.layer_anchor = self.working.layer_anchor.filter(|h| self.artwork.occurrences.get(*h).is_some());
         if let Some(visibility) = &mut self.working.solo_visibility {
             visibility.retain(|h, _| self.artwork.occurrences.get(*h).is_some());
@@ -1598,9 +1618,6 @@ impl Document {
         };
         for (_, _, c) in self.artwork.compositions.iter() {
             extent(c.size)?;
-            if !c.origin.x.is_finite() || !c.origin.y.is_finite() {
-                return Err(invalid("Invalid composition origin"));
-            }
             if c.blend == BlendSpace::Perceptual
                 && let Some(reason) = BlendSpace::unavailable_reason(c.color.depth)
             {
@@ -1636,9 +1653,6 @@ impl Document {
             if !s.default_coverage.is_finite() || !(0.0..=1.).contains(&s.default_coverage) {
                 return Err(invalid("Invalid default coverage"));
             }
-            if let Some(initial) = &s.initial {
-                initial.validate()?;
-            }
             if let Some(Ok(data)) = s.raster.try_data() {
                 data.validate_index(s.domain, true, color)
                     .map_err(DocumentError::InvalidArtwork)?;
@@ -1648,16 +1662,19 @@ impl Document {
             }
         }
         for (h, _, o) in self.artwork.occurrences.iter() {
-            if !o.opacity.is_finite()
-                || !(0.0..=1.).contains(&o.opacity)
-                || !o.translation.x.is_finite()
-                || !o.translation.y.is_finite()
-            {
+            if !o.opacity.is_finite() || !(0.0..=1.).contains(&o.opacity) || o.name.len() > MAX_NAME_BYTES {
                 return Err(invalid("Invalid occurrence value"));
             }
-            o.placement
-                .validate_for(Rect::from_extent(self.scene().local_extent(h)))?;
-            if matches!(o.content,OccurrenceContent::Objects(_)) && !self.scene().object_geometry_supported(h) {return Err(invalid("Object layers and their parent groups require integer offsets"));}
+            if !o.positioned() && o.offset != [0; 2] {
+                return Err(invalid("Effects and selections have no layer offset"));
+            }
+            if o.alpha_locked && !matches!(o.content, OccurrenceContent::Paint(_)) {
+                return Err(invalid("Only paint layers lock transparency"));
+            }
+            if !offsets::admitted(o.offset) || !offsets::admitted(self.scene().layer_origin(Some(h)))
+                || o.mask.as_ref().is_some_and(|mask| !offsets::admitted(mask.offset) || !self.scene().mask_origin(h).is_some_and(offsets::admitted)) {
+                return Err(invalid("A layer offset exceeds the editor's range"));
+            }
             if o.blend == LayerBlend::PassThrough
                 && !matches!(o.content, OccurrenceContent::Stack(_))
             {
@@ -1672,20 +1689,7 @@ impl Document {
                 return Err(invalid("Selection Layers cannot contain artwork"));
             }
             if let Some(mask) = &o.mask {
-                let source =
-                    self.artwork
-                        .coverage
-                        .get(mask.source)
-                        .ok_or(DocumentError::MissingTarget(SourceTarget::Coverage(
-                            mask.source,
-                        )))?;
-                if !mask.translation.x.is_finite()
-                    || !mask.translation.y.is_finite()
-                    || mask.placement.inverse().is_none()
-                    || !mask.placement.covers(Rect::from_extent(source.domain))
-                {
-                    return Err(invalid("Invalid mask placement"));
-                }
+                self.artwork.coverage.get(mask.source).ok_or(DocumentError::MissingTarget(SourceTarget::Coverage(mask.source)))?;
             }
         }
         for (_, _, e) in self.artwork.effects.iter() {
@@ -1699,8 +1703,7 @@ impl Document {
             o.sdr
                 .validate()
                 .map_err(|_| invalid("Invalid SDR rendition"))?;
-            if o.scale.iter().any(|v| !v.is_finite() || *v <= 0.)
-                || !o.context.elapsed.is_finite()
+            if !o.context.elapsed.is_finite()
                 || o.context
                     .phases
                     .iter()
@@ -1744,17 +1747,13 @@ impl Edit {
             _ => current,
         }
     }
-    pub fn canvas_origin_from(&self, current: Point) -> Option<[i32; 2]> {
-        let origin = self.resulting_origin(current);
-        (origin != current)
-            .then_some([(origin.x - current.x) as i32, (origin.y - current.y) as i32])
+    pub fn view_origin_shift(&self, current: [i64; 2]) -> Option<[i64; 2]> {
+        offsets::checked_sub(self.resulting_view_origin(current), current).filter(|shift| *shift != [0; 2])
     }
-    fn resulting_origin(&self, current: Point) -> Point {
+    fn resulting_view_origin(&self, current: [i64; 2]) -> [i64; 2] {
         match self {
-            Self::Composition(c) => c.value.as_ref().map_or(current, |c| c.origin),
-            Self::Batch(es) => es
-                .iter()
-                .fold(current, |origin, e| e.resulting_origin(origin)),
+            Self::Working(working) => working.view_origin,
+            Self::Batch(es) => es.iter().fold(current, |origin, e| e.resulting_view_origin(origin)),
             _ => current,
         }
     }
@@ -1775,8 +1774,8 @@ impl Edit {
     pub fn changes_image(&self,document:&Document)->bool {
         match self {
             Self::Guides(_)|Self::Output(_)|Self::SavedSelection(_)|Self::Working(_)=>false,
-            Self::Composition(c)=>c.value.as_ref().zip(document.artwork.compositions.get(c.handle)).is_none_or(|(a,b)|a.size!=b.size||a.origin!=b.origin||a.color!=b.color||a.blend!=b.blend||a.result!=b.result),
-            Self::Occurrence(c)=>c.value.as_ref().zip(document.artwork.occurrences.get(c.handle)).is_none_or(|(a,b)|a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.attachment!=b.attachment||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask),
+            Self::Composition(c)=>c.value.as_ref().zip(document.artwork.compositions.get(c.handle)).is_none_or(|(a,b)|a.size!=b.size||a.color!=b.color||a.blend!=b.blend||a.result!=b.result),
+            Self::Occurrence(c)=>c.value.as_ref().zip(document.artwork.occurrences.get(c.handle)).is_none_or(|(a,b)|a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.attachment!=b.attachment||a.offset!=b.offset||a.mask!=b.mask),
             Self::Batch(es)=>{
                 let mut current=document.clone();
                 for edit in es {
@@ -1843,7 +1842,23 @@ impl Edit {
             _ => false,
         }
     }
+    fn presents_same_images(&self, document: &Document) -> bool {
+        match self {
+            Self::ImageObject(c) => c.value.as_ref().zip(document.artwork.objects.get(c.handle)).is_some_and(|(next, current)| next.same_image(current)),
+            Self::Batch(edits) => !edits.is_empty() && edits.iter().all(|edit| matches!(edit, Self::ImageObject(_)) && edit.presents_same_images(document)),
+            _ => false,
+        }
+    }
+    fn validate_presentation(&self, document: &Document) -> Result<(), DocumentError> {
+        match self {
+            Self::ImageObject(c) => document.artwork.objects.get(c.handle).ok_or(DocumentError::InvalidLayerOperation("Choose an image object"))?
+                .validate_presentation().map_err(DocumentError::InvalidArtwork),
+            Self::Batch(edits) => edits.iter().try_for_each(|edit| edit.validate_presentation(document)),
+            _ => Ok(()),
+        }
+    }
     fn requires_history_admission(&self, document: &Document) -> bool {
+        if self.presents_same_images(document) { return false; }
         macro_rules! previous {
             ($store:ident,$variant:ident,$change:expr) => {{
                 let c=$change;
@@ -1901,12 +1916,7 @@ impl Edit {
                     out.program(&e.program);
                 }
             }
-            Self::Occurrence(c) => {
-                out.record_ids.push(c.id);
-                if let Some(o) = &c.value {
-                    out.meshes.extend(o.placement.mesh.iter());
-                }
-            }
+            Self::Occurrence(c) => out.record_ids.push(c.id),
             Self::SavedSelection(c) => {
                 out.record_ids.push(c.id);
                 if let Some(s) = &c.value {
@@ -2072,9 +2082,6 @@ impl<'a> RootInventory<'a> {
         for (_, _, s) in artwork.coverage.iter() {
             self.coverage(s);
         }
-        for (_, _, o) in artwork.occurrences.iter() {
-            self.meshes.extend(o.placement.mesh.iter());
-        }
         for (_, _, e) in artwork.effects.iter() {
             self.values(&e.values);
             self.program(&e.program);
@@ -2097,7 +2104,6 @@ impl<'a> RootInventory<'a> {
     }
     fn coverage(&mut self, s: &'a CoverageSource) {
         self.rasters.push(&s.raster);
-        self.selections.extend(s.initial.iter());
         if !s.operations.is_empty() {self.operations.push(&s.operations);}
         for op in s.operations.iter() {
             self.operation(op);
@@ -2126,6 +2132,7 @@ impl<'a> RootInventory<'a> {
     fn operation(&mut self, operation: &'a RasterOperation) {
         if self.authored_only {return;}
         self.coverage(&operation.coverage.source);
+        self.selections.extend(operation.coverage.selection.iter());
         match &operation.kind {
             RasterOperationKind::Transform(t) => self.meshes.extend(t.placement.mesh.iter()),
             RasterOperationKind::Bake { scene, .. }
@@ -2182,7 +2189,7 @@ fn edit_metadata(edit: &Edit) -> usize {
             .iter()
             .map(edit_metadata)
             .fold(0usize, usize::saturating_add),
-        Edit::Working(w)=>w.selection_overlays.metadata_bytes().saturating_add(w.layer_selection.len().saturating_add(w.solo_visibility.as_ref().map_or(0, |v| v.len())).saturating_mul(64)),
+        Edit::Working(w)=>w.selection_overlays.metadata_bytes().saturating_add(w.layer_selection.len().saturating_add(w.objects.len()).saturating_add(w.solo_visibility.as_ref().map_or(0, |v| v.len())).saturating_mul(64)),
         Edit::Stack(c) => c.value.as_ref().map_or(0, |s| {
             s.entries.len() * std::mem::size_of::<OccurrenceHandle>()
         }),
@@ -2223,6 +2230,9 @@ impl Editor {
     }
     pub fn checkpoint(&self) -> u64 {
         self.checkpoint
+    }
+    pub fn history_reaches(&self, checkpoint: u64) -> bool {
+        self.checkpoint == checkpoint || self.undo.iter().any(|entry| entry.checkpoint == checkpoint)
     }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
@@ -2966,18 +2976,18 @@ mod tests {
         assert!(other.working.selection.is_none());
     }
     #[test]
-    fn canvas_origin_history_uses_relative_signed_displacements() {
+    fn view_origin_history_uses_relative_signed_displacements() {
         let mut d=document([64;2]);
-        for shift in [[11.,-5.],[7.,3.]] {
-            let before=d.composition().origin;
-            let mut composition=d.composition().clone();
-            composition.origin=Point{x:before.x+shift[0],y:before.y+shift[1]};
-            let edit=Edit::Composition(RecordChange::replace(&d.artwork.compositions,d.artwork.root,Some(composition)).unwrap());
-            assert_eq!(edit.canvas_origin_from(before),Some(shift.map(|v|v as i32)));
+        for shift in [[11,-5],[7,3]] {
+            let before=d.working.view_origin;
+            let mut working=d.working.clone();
+            working.view_origin=offsets::checked_add(before,shift).unwrap();
+            let edit=Edit::Batch(vec![Edit::Working(working)]);
+            assert_eq!(edit.view_origin_shift(before),Some(shift));
             let inverse=d.apply(edit).unwrap();
-            assert_eq!(inverse.canvas_origin_from(d.composition().origin),Some(shift.map(|v|-v as i32)));
+            assert_eq!(inverse.view_origin_shift(d.working.view_origin),Some(shift.map(|v|-v)));
         }
-        assert_eq!(blend(&d,BlendSpace::Perceptual).canvas_origin_from(d.composition().origin),None);
+        assert_eq!(blend(&d,BlendSpace::Perceptual).view_origin_shift(d.working.view_origin),None);
     }
     #[test]
     fn brush_colors_preserve_finite_extended_rgb_and_validate_coverage_separately() {
@@ -3007,4 +3017,4 @@ mod tests {
     }
 }
 #[cfg(test)]
-mod retained_geometry_tests;
+mod layer_geometry_tests;

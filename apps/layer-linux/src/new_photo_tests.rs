@@ -38,7 +38,7 @@ pub(crate) fn ready(w: &Rc<Workspace>) {
                     && g.session.engine().backend().paint_ready(
                         g.session.engine().document(),
                         g.session.engine().configured_brush(),
-                        false,
+                        g.session.engine().transform_preview().is_some(),
                     )
                     && !g.session.state().filter_load.pending
                     && !g.session.engine().has_pending_document_edits()

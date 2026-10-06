@@ -7,6 +7,24 @@ pub(super) fn placed_targets(scene: SceneView<'_>) -> impl Iterator<Item=SourceT
     scene.targets().filter(move |target|scene.source_owner(*target).is_some())
 }
 
+pub(super) fn pending_bakes<'a>(scene: SceneView<'a>) -> impl Iterator<Item=(SceneView<'a>, &'a layer_core::SceneScope, Option<SourceTarget>)> + 'a {
+    placed_targets(scene).filter_map(move |target| scene.operations(target)).flatten().filter_map(|operation| match &operation.kind {
+        layer_core::RasterOperationKind::Bake { scene, scope, .. } => Some((scene.view(), scope, None)),
+        layer_core::RasterOperationKind::FrequencyDetail { scene, scope, low, .. } => Some((scene.view(), scope, Some(SourceTarget::Paint(*low)))),
+        _ => None,
+    })
+}
+
+pub(super) fn retained_targets(scene: SceneView<'_>) -> std::collections::BTreeMap<SourceTarget, SceneView<'_>> {
+    let mut targets: std::collections::BTreeMap<_, _> = placed_targets(scene).map(|target| (target, scene)).collect();
+    for (snapshot, scope, low) in pending_bakes(scene) {
+        for target in crate::snapshot::capture_targets(snapshot.with_scope(scope), scope).into_iter().chain(low) {
+            targets.entry(target).or_insert(snapshot);
+        }
+    }
+    targets
+}
+
 pub(super) struct RawTile {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,

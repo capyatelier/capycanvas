@@ -4,7 +4,7 @@
 use crate::{DocumentColorOperation, DocumentRequest, HostRequestKind, UiChange, UiSession, Localizer, MessageId};
 use layer_color::DocumentColorChange;
 use layer_core::{
-    ColorTransition, Document, Edit, EvaluationContext, RecordChange, PreparedColorTransition, authored::{OccurrenceHandle, OccurrenceContent},
+    ColorTransition, Document, Edit, EvaluationContext, RecordChange, PreparedColorTransition, authored::{OccurrenceContent},
     color::{ColorProfile, ConversionOptions, DocumentColor, source::SourceImage},
 };
 use layer_render::CanvasRenderer;
@@ -256,7 +256,7 @@ pub struct SourceWorkflow {
     pub context: EvaluationContext,
     pub project: Document,
     pub original: Arc<SourceImage>,
-    layer: OccurrenceHandle,
+    target: crate::session::SourceUse,
     rasterize: bool,
     adds_layer: bool,
     converted: Option<Arc<SourceImage>>,
@@ -266,29 +266,34 @@ pub struct SourceWorkflow {
 impl SourceWorkflow {
     pub fn begin<R: CanvasRenderer>(s: &UiSession<R>, id: u32) -> Result<Self, String> {
         let identity = CandidateIdentity::capture(s, id)?;
-        let (layer, rasterize) = match &s.state().requests.iter().find(|r| r.id == id).unwrap().kind
+        let (target, rasterize) = match &s.state().requests.iter().find(|r| r.id == id).unwrap().kind
         {
             HostRequestKind::Document {
                 request: DocumentRequest::RepairSourceProfile { layer },
-            } => (crate::session::occurrence_handle(*layer)?, false),
+            } => (crate::session::SourceUse::from_token(*layer)?, false),
             HostRequestKind::Document {
                 request: DocumentRequest::RasterizeSource { layer },
-            } => (crate::session::occurrence_handle(*layer)?, true),
+            } => (crate::session::SourceUse::Paint(crate::session::occurrence_handle(*layer)?), true),
             _ => return Err(WorkflowFailure::NotSourceRequest.message(s.localization())),
         };
         let project = s.document_snapshot()?;
-        let occurrence = project.scene().occurrence(layer).ok_or_else(|| WorkflowFailure::MissingSourceLayer.message(s.localization()))?;
-        let OccurrenceContent::Paint(paint) = occurrence.content else { return Err(WorkflowFailure::MissingSource.message(s.localization())); };
-        let source = project.artwork.paint.get(paint).ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
-        let original = source.base.as_ref().map(|base| base.image.storage().clone()).ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
-        let adds_layer = !rasterize && crate::session::source_edit::baked(source);
+        let original = target.original(&project).cloned().ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
+        let adds_layer = match target {
+            crate::session::SourceUse::Paint(layer) => {
+                let occurrence = project.scene().occurrence(layer).ok_or_else(|| WorkflowFailure::MissingSourceLayer.message(s.localization()))?;
+                let OccurrenceContent::Paint(paint) = occurrence.content else { return Err(WorkflowFailure::MissingSource.message(s.localization())); };
+                let source = project.artwork.paint.get(paint).ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
+                !rasterize && crate::session::source_edit::baked(source)
+            }
+            crate::session::SourceUse::Object(_) => false,
+        };
         Ok(Self {
             localization: s.localization().clone(),
             identity,
             context: s.engine().scene_snapshot().context.clone(),
             project,
             original,
-            layer,
+            target,
             rasterize,
             adds_layer,
             converted: None,
@@ -355,7 +360,7 @@ impl SourceWorkflow {
         self.compared = false;
         self.converted = None;
         self.prepared = None;
-        let (project, edit) = s.prepare_source_edit(self.layer, &self.original, source.clone(), self.rasterize)?;
+        let (project, edit) = s.prepare_source_edit(self.target, &self.original, source.clone(), self.rasterize)?;
         self.prepared = Some(edit);
         self.converted = Some(source);
         Ok(project)

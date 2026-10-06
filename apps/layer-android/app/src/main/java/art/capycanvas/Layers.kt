@@ -21,9 +21,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.collapse
+import androidx.compose.ui.semantics.expand
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
@@ -36,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -76,6 +80,7 @@ private suspend fun CanvasHost.layerQuery(value: JSONObject): JSONObject? = susp
 }
 private data class PreviewRequest(val id: Long, val key: String, val target: Long, val revision: Long)
 private data class LayerThumbnail(val hit: Rect, val anchor: Rect)
+private data class ObjectDrag(val id: Long, val pointer: Offset, val target: Long? = null, val below: Boolean = false)
 private data class LayerDrag(val id: Long, val pointer: Offset, val target: Long? = null, val fraction: Float = 0f, val surface: String = "row", val hintTarget: Long? = null, val position: String? = null, val effectOwner: Long? = null)
 private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-symbolic")
 
@@ -96,14 +101,18 @@ internal class LayerSwipe {
     val active = view.objectOrNull("editing_layer")
     val controls = view.getJSONObject("controls")
     val layers = state.array("layers").objects()
+    val objectRows = layers.associate { it.getLong("id") to it.array("objects").objects() }
     var headerHeight by remember { mutableFloatStateOf(0f) }
     var footerHeight by remember { mutableFloatStateOf(0f) }
     var rowHeight by remember { mutableFloatStateOf(40f) }
     val fixedHeight = headerHeight + footerHeight
     val measured = if (headerHeight > 0f && footerHeight > 0f)
-        PanelContentSize(fixedHeight + layers.size * rowHeight, fixedHeight, rowHeight) else null
+        PanelContentSize(fixedHeight + (layers.size + objectRows.values.sumOf { it.size }) * rowHeight, fixedHeight, rowHeight) else null
     SideEffect { measured?.let(onContent) }
     val currentLayers by rememberUpdatedState(layers)
+    val currentObjects by rememberUpdatedState(objectRows)
+    val objectBounds = remember { mutableMapOf<Long, Rect>() }
+    var objectDrag by remember { mutableStateOf<ObjectDrag?>(null) }
     val list = rememberLazyListState()
     val epoch = state.getJSONObject("document_file").optLong("epoch")
     val images = remember(epoch) { mutableStateMapOf<String, ImageBitmap>() }
@@ -116,7 +125,7 @@ internal class LayerSwipe {
     var menu by remember { mutableStateOf<JSONObject?>(null) }
     var menuRequest by remember { mutableStateOf<JSONObject?>(null) }
     var menuGeneration by remember { mutableIntStateOf(0) }
-    LaunchedEffect(epoch) { host.layerSwipe.close(); dragGeneration++; drag = null; menuGeneration++; menu = null; menuRequest = null }
+    LaunchedEffect(epoch) { host.layerSwipe.close(); dragGeneration++; drag = null; objectDrag = null; menuGeneration++; menu = null; menuRequest = null }
     var contactHeld by remember { mutableStateOf(false) }
     var menuPoint by remember { mutableStateOf(Offset.Zero) }
     fun contextMenu(layer: JSONObject, mask: Boolean, point: Offset) {
@@ -128,6 +137,26 @@ internal class LayerSwipe {
         host.query(query) {
             if (request == menuGeneration && host.menuEpoch() == epoch && drag == null) { menuRequest = query; menu = it as? JSONObject; menuPoint = point - panelOrigin }
         }
+    }
+    fun objectMenu(id: Long, point: Offset) {
+        if (drag != null || objectDrag != null) return
+        val request = ++menuGeneration
+        val query = obj("type" to "object_menu", "id" to id)
+        host.query(query) {
+            if (request == menuGeneration && host.menuEpoch() == epoch && objectDrag == null) { menuRequest = query; menu = it as? JSONObject; menuPoint = point - panelOrigin }
+        }
+    }
+    fun moveObject(row: JSONObject, point: Offset, finished: Boolean, cancelled: Boolean) {
+        val id = row.getLong("id")
+        val siblings = currentObjects[row.getLong("layer")].orEmpty()
+        val to = siblings.find { it.getLong("id") != id && it.getBoolean("editable") && objectBounds[it.getLong("id")]?.contains(point) == true }
+        val below = to?.let { point.y > objectBounds[it.getLong("id")]!!.center.y } ?: false
+        if (finished) objectDrag = null else {
+            if (objectDrag == null) { menuGeneration++; menu = null }
+            objectDrag = ObjectDrag(id, point, to?.getLong("id"), below)
+        }
+        if (finished && !cancelled && to != null)
+            host.dispatch(obj("type" to "object", "action" to obj("op" to "drop", "id" to id, "target" to to.getLong("id"), "below" to below)))
     }
     fun moveLayer(id: Long, point: Offset, finished: Boolean, cancelled: Boolean) {
         val ticket = ++dragGeneration
@@ -158,15 +187,16 @@ internal class LayerSwipe {
         while (isActive) {
             delay(120)
             val visible = list.layoutInfo.visibleItemsInfo.map { it.key }.toSet()
-            val requests = currentLayers.filter { it.getLong("id") in visible }.flatMap { layer ->
+            fun request(key: String, target: Long, revision: Long) =
+                if (revisions[key] == revision || pending.values.any { it.key == key }) null else PreviewRequest(++next, key, target, revision)
+            val requests = (currentLayers.filter { it.getLong("id") in visible }.flatMap { layer ->
                 listOf(false, true).mapNotNull { mask ->
                     if (if (mask) !layer.getBoolean("has_mask") else !layer.getBoolean("has_thumbnail")) return@mapNotNull null
-                    val key = "${layer.getLong("id")}:$mask"
-                    val revision = layer.getLong(if (mask) "mask_revision" else "paint_revision")
-                    if (revisions[key] == revision || pending.values.any { it.key == key }) null
-                    else PreviewRequest(++next, key, layer.getLong(if (mask) "mask_id" else "id"), revision)
+                    request("${layer.getLong("id")}:$mask", layer.getLong(if (mask) "mask_id" else "id"), layer.getLong(if (mask) "mask_revision" else "paint_revision"))
                 }
-            }.take((8-pending.size).coerceAtLeast(0))
+            } + currentObjects.values.flatten().filter { it.getLong("id") in visible }.mapNotNull { row ->
+                request("${row.getLong("id")}:false", row.getLong("id"), row.getLong("thumbnail_revision"))
+            }).take((8-pending.size).coerceAtLeast(0))
             val response = host.layerQuery(obj("type" to "layer_thumbnails", "requests" to JSONArray(requests.map { JSONArray(listOf(it.id,it.target)) }))) ?: continue
             val accepted = response.array("accepted").values().map { (it as Number).toLong() }.toSet()
             requests.filter { it.id in accepted }.forEach { pending[it.id] = it }
@@ -182,7 +212,7 @@ internal class LayerSwipe {
                 }
                 images[request.key] = bitmap; revisions[request.key] = request.revision
             }
-            val ids = currentLayers.map { it.getLong("id").toString() }.toSet()
+            val ids = (currentLayers.map { it.getLong("id") } + currentObjects.values.flatten().map { it.getLong("id") }).map { it.toString() }.toSet()
             images.keys.filter { it.substringBefore(':') !in ids }.forEach { images.remove(it); revisions.remove(it) }
         }
     }
@@ -230,7 +260,8 @@ internal class LayerSwipe {
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 LazyColumn(Modifier.fillMaxSize().testTag("layer-rows"),state=list) {
-                    items(layers,key={it.getLong("id")}) { layer ->
+                    for (layer in layers) {
+                    item(key=layer.getLong("id")) {
                         val id=layer.getLong("id")
                         val highlight=drag?.takeIf { it.hintTarget==id }?.position
                         LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,attachment=drag?.effectOwner==id,
@@ -238,6 +269,14 @@ internal class LayerSwipe {
                             contentBounds={rect,shift -> if(rect==null) { thumbnails.remove(id);bounds.remove(id) } else thumbnails[id]=LayerThumbnail(rect,rect.translate(Offset(shift.roundToInt().toFloat(),0f)))},
                             held={contactHeld=it},cancelContext={menuGeneration++; menu=null},
                             drag={point,finished,cancelled -> moveLayer(id,point,finished,cancelled)})
+                    }
+                    items(objectRows[layer.getLong("id")].orEmpty(),key={it.getLong("id")}) { row ->
+                        val id=row.getLong("id")
+                        ImageObjectRow(host,row,layer.getInt("depth")+1,images,Modifier.onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { objectBounds[id]=it.boundsInRoot() },
+                            highlight=objectDrag?.takeIf { it.target==id }?.let { if(it.below) "below" else "above" },
+                            context={point -> objectMenu(id,point)},held={contactHeld=it},cancelContext={menuGeneration++; menu=null},
+                            drag={point,finished,cancelled -> moveObject(row,point,finished,cancelled)},forget={ objectBounds.remove(id) })
+                    }
                     }
                 }
                 LayerConnections(layers,view.array("connections").objects(),thumbnails,Modifier.matchParentSize())
@@ -256,6 +295,11 @@ internal class LayerSwipe {
                 LayerButton(host,"more-small",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("actions")) { active?.let { contextMenu(it,it.getBoolean("mask_selected"),panelOrigin+Offset(0f,40f)) } }
             }
         }
+        objectDrag?.let { d -> objectRows.values.flatten().find { it.getLong("id")==d.id }?.let { row ->
+            val depth=layers.find { it.getLong("id")==row.getLong("layer") }?.getInt("depth") ?: 0
+            ImageObjectRow(host,row,depth+1,images,Modifier.testTag("image-object-drag-preview").offset { IntOffset(0,(d.pointer.y-panelOrigin.y-20*density.density).roundToInt()) }
+                .alpha(.7f).background(colors.panel),preview=true)
+        } }
         drag?.let { d -> layers.find { it.getLong("id")==d.id }?.let { layer ->
             LayerRow(host,layer,-1,images,Modifier.testTag("layer-drag-preview").offset { IntOffset(0,(d.pointer.y-panelOrigin.y-20*density.density).roundToInt()) }
                 .alpha(.7f).background(colors.panel),preview=true)
@@ -512,8 +556,101 @@ internal class LayerSwipe {
             val meta=layer.getString("description")
             if(meta.isNotEmpty())Text(meta,color=colors.secondary,fontSize=LocalTextStyle.current.fontSize*.83333f,lineHeight=LocalTextStyle.current.lineHeight*.83333f,maxLines=1,overflow=TextOverflow.Ellipsis)
         }
+        if(layer.optInt("object_count")>0) {
+            val expanded=layer.getBoolean("expanded")
+            val action=obj("type" to "object","action" to obj("op" to "expand","layer" to id,"expanded" to !expanded))
+            LayerButton(host,"chevron-down",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(expanded) "collapse_images" else "expand_images"),
+                Modifier.testTag("layer-expand-$id").rotate(if(expanded) 0f else -90f).semantics { if(expanded) collapse { host.dispatch(action); true } else expand { host.dispatch(action); true } },action=action)
+        }
         SharedIcon(if(layer.getBoolean("locked"))"lock" else "alpha-lock",null,Modifier.size(12.dp).alpha(if(layer.getBoolean("locked") || layer.getBoolean("alpha_locked"))1f else 0f))
         SharedIcon("grip",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("move_layer"),Modifier.size(16.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
+        }
+    }
+}
+
+@Composable private fun ImageObjectRow(host:CanvasHost,row:JSONObject,depth:Int,images:Map<String,ImageBitmap>,modifier:Modifier=Modifier,highlight:String?=null,
+    preview:Boolean=false,context:(Offset)->Unit={},held:(Boolean)->Unit={},cancelContext:()->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->},forget:()->Unit={}) {
+    val colors=LocalPalette.current
+    val copy=host.catalog.getJSONObject("native_copy").getJSONObject("layers")
+    val id=row.getLong("id")
+    val label=row.getString("label")
+    val latest by rememberUpdatedState(row)
+    DisposableEffect(id) { onDispose { forget() } }
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    var press by remember { mutableStateOf(Offset.Zero) }
+    var extend by remember { mutableStateOf(false) }
+    val focused=LocalWindowInfo.current.isWindowFocused
+    val density=LocalDensity.current.density
+    val movable=row.getBoolean("editable") && (row.getBoolean("can_raise") || row.getBoolean("can_lower"))
+    fun select(add:Boolean=extend)=host.dispatch(obj("type" to "object","action" to obj("op" to "select","id" to id,"extend" to add)))
+    Box(modifier.onPreviewKeyEvent { extend=it.keyShiftPressed || it.keyCtrlPressed || it.keyMetaPressed; false }
+        .semantics { contentDescription=label; selected=row.getBoolean("selected") }
+        .fillMaxWidth().heightIn(min=40.dp).clipToBounds().then(if(preview) Modifier else Modifier.testTag("image-object-row-$id"))
+        .onGloballyPositioned { origin=it.boundsInRoot().topLeft }
+        .drawWithContent {
+            drawContent()
+            when(highlight) { "above" -> drawLine(colors.accent,Offset.Zero,Offset(size.width,0f),2*density)
+                "below" -> drawLine(colors.accent,Offset(0f,size.height),Offset(size.width,size.height),2*density) }
+        }.then(if(preview) Modifier else Modifier.pointerInput(id,focused) {
+            if (!focused) return@pointerInput
+            awaitEachGesture {
+                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial); press=down.position
+                val keys=currentEvent.keyboardModifiers
+                extend=keys.isShiftPressed || keys.isCtrlPressed || keys.isMetaPressed
+                val secondary=currentEvent.buttons.isSecondaryPressed
+                val mouse=down.type==PointerType.Mouse
+                val directDrag=mouse || down.position.x>=size.width-20*density
+                var longPressed=false
+                var dragging=false
+                var released=false
+                var remaining=viewConfiguration.longPressTimeoutMillis
+                var eventTime=down.uptimeMillis
+                held(true)
+                if (secondary) { context(origin+press); down.consume() }
+                try { do {
+                    val event=if (!longPressed && !dragging && !mouse) withTimeoutOrNull(remaining) { awaitPointerEvent(PointerEventPass.Initial) }
+                        else awaitPointerEvent(PointerEventPass.Initial)
+                    if (event==null) { longPressed=true; context(origin+press); continue }
+                    val change=event.changes.find { it.id==down.id } ?: break
+                    remaining=(remaining-(change.uptimeMillis-eventTime)).coerceAtLeast(1)
+                    eventTime=change.uptimeMillis
+                    if (!change.pressed && change.isConsumed) break
+                    val moved=(change.position-down.position).getDistance()>viewConfiguration.touchSlop
+                    if (!secondary && movable && (directDrag || longPressed) && !dragging && change.pressed && moved && latest.getBoolean("editable")) { dragging=true; cancelContext() }
+                    if (dragging) { change.consume(); drag(origin+change.position,!change.pressed,false); if(!change.pressed)dragging=false }
+                    if (longPressed) change.consume()
+                    if (!change.pressed) { released=true; break }
+                } while(true) } finally {
+                    if(dragging)drag(origin+down.position,true,true)
+                    if(!released)cancelContext()
+                    held(false)
+                }
+            }
+        }.combinedClickable(onClick={select()},onLongClick={context(origin+press)}))) {
+        Row(Modifier.fillMaxWidth().heightIn(min=40.dp)
+            .background(if(row.getBoolean("selected")) colors.active else Color.Transparent)
+            .alpha(if(row.getBoolean("visible")) 1f else .6f)
+            .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
+            LayerButton(host,if(row.getBoolean("visible")) "eye" else "eye-hidden",copy.getString(if(row.getBoolean("visible")) "hide_image" else "show_image"),
+                Modifier.testTag("image-object-eye-$id"),enabled=row.getBoolean("editable"),
+                action=obj("type" to "object","action" to obj("op" to "visibility","id" to id,"visible" to !row.getBoolean("visible"))))
+            Spacer(Modifier.width(24.dp))
+            Spacer(Modifier.width((depth*8).coerceAtMost(32).dp+3.dp))
+            Box(Modifier.size(30.dp).drawWithCache {
+                val edge=Path().apply {
+                    fillType=PathFillType.EvenOdd
+                    for(inset in listOf(0f,1.dp.toPx())) {
+                        val radius=size.minDimension/2-inset
+                        addSquircle(Rect(inset,inset,size.width-inset,size.height-inset),radius,radius,radius,radius)
+                    }
+                }
+                onDrawWithContent { drawContent(); drawPath(edge,colors.text.copy(alpha=.1f)) }
+            },contentAlignment=Alignment.Center) {
+                images["$id:false"]?.let { Image(it,null,Modifier.size(28.dp).clip(TileShape).testTag("image-object-thumbnail-$id")) }
+                    ?: SharedIcon("image",null,Modifier.size(20.dp).alpha(.5f),tint=colors.text)
+            }
+            Text(label,Modifier.weight(1f).padding(start=6.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
+            SharedIcon("grip",copy.getString("move_image"),Modifier.size(16.dp).alpha(if(movable) .6f else 0f))
         }
     }
 }

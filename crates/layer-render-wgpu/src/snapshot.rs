@@ -179,7 +179,7 @@ pub struct SnapshotRenderer {
     scene: Arc<SceneSnapshot>,
     scope: SceneScope,
     offset: layer_core::Point,
-    raw_geometry: Option<layer_core::ImageTransform>,
+    raw_plan: Option<layer_core::TransformPixelsPlan>,
     analysis_ready: std::collections::HashSet<OccurrenceHandle>,
     pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
@@ -243,7 +243,7 @@ impl SnapshotRenderer {
         let blend_space = composition.blend;
         #[cfg(not(target_arch = "wasm32"))]
         let output_metadata = layer_color::photo::DeliveryMetadata {resolution: composition.resolution, photo: (*scene.artwork.metadata).clone(), policy: Default::default()};
-        Ok(Self {scene, scope, offset: Default::default(), raw_geometry: None, analysis_ready: Default::default(), sdr_rendition, local_tone: None, gpu_local_tone: None,
+        Ok(Self {scene, scope, offset: Default::default(), raw_plan: None, analysis_ready: Default::default(), sdr_rendition, local_tone: None, gpu_local_tone: None,
             renderer, backing, resident: HashMap::new(), extent,
             #[cfg(not(target_arch = "wasm32"))] output_extent: extent,
             #[cfg(not(target_arch = "wasm32"))] output_metadata,
@@ -276,8 +276,7 @@ impl SnapshotRenderer {
         let occurrence = scene.occurrence(handle)?;
         let source_target = scene.source_target(handle)?;
         if self.offset != layer_core::Point::default() || visible.next().is_some() || !matches!(source_target, SourceTarget::Paint(_)) || occurrence.opacity != 1.
-            || scene.parent(handle).is_some() || occurrence.translation != layer_core::Point::default()
-            || occurrence.placement != layer_core::LayerPlacement::IDENTITY || occurrence.blend != layer_core::LayerBlend::Normal
+            || scene.parent(handle).is_some() || occurrence.offset != [0; 2] || occurrence.blend != layer_core::LayerBlend::Normal
             || occurrence.attachment.is_clip() || occurrence.mask.as_ref().is_some_and(|m| m.enabled) || !self.backing[&source_target].tiles.is_empty() { return None; }
         let base = scene.paint_base(source_target)?;
         let source = base.image.storage();
@@ -290,6 +289,13 @@ impl SnapshotRenderer {
 
     pub fn extent(&self) -> [u32; 2] {
         self.extent
+    }
+    pub fn capture_window(&mut self, origin: [i64; 2], extent: [u32; 2]) -> Result<(), GpuRasterError> {
+        Arc::make_mut(&mut self.scene).offset = origin.map(|v| -(v as f64));
+        self.extent = extent;
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.output_extent = extent; }
+        self.renderer.ensure_document_metadata(extent, self.scene.view().with_scope(&self.scope).with_offset(self.offset)).map(|_| ())
     }
     pub fn color(&self) -> layer_core::color::DocumentColor {
         self.renderer.document_color()
@@ -485,14 +491,13 @@ impl SnapshotRenderer {
         let window = scene::Scene::capture_window(view, region, self.extent);
         // Composition operates in page-sized tiles, including translated masks
         // and neighboring watercolor pigment. Restore their complete footprints.
-        let pages = window.to_rect();
         let mut selected = HashMap::new();
         let mut masks = HashMap::new();
         let material_pages = if self.backing.values().any(|data| data.watercolor.is_some()) {
             scene::Scene::MATERIAL_CACHE_PAGES as u64
         } else { 0 };
         let mut planned = scene::Scene::capture_image_bound(view, window)
-            .saturating_add(scene::Scene::geometry_bytes(view,self.renderer.scene.as_ref()))
+            .saturating_add(scene::Scene::geometry_bytes(self.renderer.scene.as_ref()))
             .saturating_add(reserved_bytes)
             .saturating_add(self.renderer.analysis_bytes())
             .saturating_add(region.area().saturating_mul(32)) // output and mapping
@@ -502,21 +507,16 @@ impl SnapshotRenderer {
                 let extent = view.target_extent(id);
                 let original = &self.backing[&id];
                 let halo = if mask { 0. } else { original.watercolor.map_or(0., |style| 2. * style.edge_width.clamp(1., 16.)) };
-                let geometry = match (&self.raw_geometry, &self.scope) {
-                    (Some(geometry), SceneScope::Raw(target)) if *target == id => geometry.clone(),
-                    _ => view.target_geometry(id),
-                };
-                let local = paint_transform::snapshot::source_region(&geometry,
-                    pages.outset(halo), extent, self.renderer.scene.as_ref().and_then(|scene|scene.mesh_geometry(&geometry)))?.expand(if mask { 1 } else { PAGE_SIZE }, extent);
+                let local = match &self.raw_plan {
+                    Some(plan) => {
+                        let geometry = plan.plane_geometry(id);
+                        paint_transform::snapshot::source_region(&geometry, window.to_rect().outset(halo), extent,
+                            self.renderer.scene.as_ref().and_then(|scene| scene.mesh_geometry(&geometry)))?
+                    }
+                    None => window.expand(halo.ceil() as u32).translated(view.target_offset(id).map(|v| -v)).in_frame(extent),
+                }.expand(if mask { 1 } else { PAGE_SIZE }, extent);
                 if mask {
                     masks.insert(id, local);
-                    if matches!(id, SourceTarget::Coverage(h) if view.coverage(h).is_some_and(|m| m.initial.is_some())) {
-                        let prepared = page_coordinates(local).fold(PixelRect::EMPTY, |r, c| r.union(page_rect(c)))
-                            .intersect(PixelRect::full(extent));
-                        planned = planned.saturating_add(prepared.area() / 2 + 64);
-                        planned = planned
-                            .saturating_add(page_coordinates(local).count() as u64 * 256 * 256 * 5);
-                    }
                 }
                 let data = RasterData {
                     watercolor: original.watercolor,
@@ -958,6 +958,8 @@ pub(crate) mod sample;
 pub(crate) mod statistics;
 pub(crate) mod levels;
 mod transform_pixels;
+mod image_capture;
+mod resample_image;
 mod jobs;
 #[cfg(test)]
 #[path="query_capture_tests.rs"]

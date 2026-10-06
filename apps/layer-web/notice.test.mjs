@@ -25,7 +25,7 @@ function harness({ bar = null } = {}) {
   const element = (tag, className, text) => { const node = new FakeElement(tag, className); if (text != null) node.textContent = text; return node; };
   const button = (text, click, className = "") => { const node = element("button", className, text); node.addEventListener("click", click); return node; };
   const notice = createNotice({
-    workspace, element, button, answer: (id, accept) => answers.push([id, accept]),
+    workspace, element, button, answer: (id, accept, action) => answers.push(action === undefined ? [id, accept] : [id, accept, action]),
     layout: () => layout, bar: () => barBounds,
     setTimer: (callback, ms) => { const timer = { id: timers.length + 1, callback, at: clock + ms }; timers.push(timer); return timer.id; },
     clearTimer: id => { const timer = timers.find(t => t.id === id); if (timer) timer.cleared = true; },
@@ -34,11 +34,17 @@ function harness({ bar = null } = {}) {
     clock += ms;
     for (const timer of timers.filter(t => !t.cleared && !t.fired && t.at <= clock)) { timer.fired = true; timer.callback(); }
   };
-  const [text, action] = notice.root.children;
-  return { notice, workspace, answers, advance, text, action, setBar: b => { barBounds = b; }, pending: () => timers.filter(t => !t.cleared && !t.fired) };
+  const [text, actions] = notice.root.children;
+  return { notice, workspace, answers, advance, text, actions, get action() { return actions.children[0] ?? { hidden: true, click() {}, dispatch: () => ({}) }; },
+    setBar: b => { barBounds = b; }, pending: () => timers.filter(t => !t.cleared && !t.fired) };
 }
-const refusal = id => ({ id, text: "The active layer is locked", action: null });
-const offer = id => ({ id, text: "This tool samples reference layers, and none is marked", action: { label: "Use Photo as Reference" } });
+const refusal = id => ({ id, text: "The active layer is locked", actions: [] });
+const offer = id => ({ id, text: "This tool samples reference layers, and none is marked", actions: [{ id: "use_reference", label: "Use Photo as Reference", enabled: true, reason: null }] });
+const objects = id => ({ id, text: "“Images” holds placed images, not paint.", actions: [
+  { id: "add_mask", label: "Add Mask", enabled: true, reason: null },
+  { id: "new_paint_layer", label: "New Paint Layer", enabled: true, reason: null },
+  { id: "rasterize_layer", label: "Rasterize Layer", enabled: false, reason: "The active layer is locked" },
+] });
 
 test("a notice shows its text over the canvas without an action or a popover", () => {
   const h = harness();
@@ -60,16 +66,16 @@ test("a notice shows its text over the canvas without an action or a popover", (
 test("the action accepts its notice once, without taking focus", () => {
   const h = harness();
   h.notice.publish(offer(3n));
-  assert.equal(h.action.hidden, false);
+  assert.equal(h.actions.hidden, false);
   assert.equal(h.action.textContent, "Use Photo as Reference");
   assert.equal(h.action.tabIndex, -1, "the button stays out of the tab order");
   assert.equal(h.action.dispatch("mousedown").defaultPrevented, true, "a press does not move focus from the canvas");
   h.action.click();
   assert.equal(h.notice.root.hidden, true);
-  assert.deepEqual(h.answers, [[3n, true]]);
+  assert.deepEqual(h.answers, [[3n, true, "use_reference"]]);
   h.action.click();
   h.advance(TIMEOUT_MS);
-  assert.deepEqual(h.answers, [[3n, true]], "neither a second tap nor the timeout answers again");
+  assert.deepEqual(h.answers, [[3n, true, "use_reference"]], "neither a second tap nor the timeout answers again");
   h.notice.publish(offer(3n));
   assert.equal(h.notice.root.hidden, true, "the core clears an accepted notice; a republished id is not shown again");
 });
@@ -78,7 +84,7 @@ test("a relocalized notice updates its text in place without restarting it", () 
   const h = harness();
   h.notice.publish(offer(4n));
   const timers = h.pending().length;
-  h.notice.publish({ id: 4n, text: "Dieses Werkzeug nutzt Referenzebenen", action: { label: "Foto als Referenz verwenden" } });
+  h.notice.publish({ id: 4n, text: "Dieses Werkzeug nutzt Referenzebenen", actions: [{ id: "use_reference", label: "Foto als Referenz verwenden", enabled: true, reason: null }] });
   assert.equal(h.text.textContent, "Dieses Werkzeug nutzt Referenzebenen");
   assert.equal(h.action.textContent, "Foto als Referenz verwenden");
   assert.equal(h.pending().length, timers, "the same notice keeps its timeout");
@@ -121,7 +127,7 @@ test("a replacement notice restarts the timeout, and only the current id is answ
   h.advance(TIMEOUT_MS - 100);
   h.notice.publish(refusal(11n));
   assert.equal(h.text.textContent, "The active layer is locked");
-  assert.equal(h.action.hidden, true, "the replacement has no action");
+  assert.equal(h.actions.hidden, true, "the replacement has no action");
   assert.equal(h.pending().length, 1);
   h.advance(TIMEOUT_MS - 1);
   assert.equal(h.notice.root.hidden, false);
@@ -130,7 +136,19 @@ test("a replacement notice restarts the timeout, and only the current id is answ
   h.notice.publish(offer(12n));
   h.notice.publish(offer(13n));
   h.action.click();
-  assert.deepEqual(h.answers, [[11n, false], [13n, true]]);
+  assert.deepEqual(h.answers, [[11n, false], [13n, true, "use_reference"]]);
+});
+
+test("ordered actions keep their tokens, and a disabled choice shows its reason", () => {
+  const h = harness();
+  h.notice.publish(objects(20n));
+  const [mask, paint, rasterize] = h.actions.children;
+  assert.deepEqual([mask.textContent, paint.textContent, rasterize.textContent], ["Add Mask", "New Paint Layer", "Rasterize Layer"]);
+  assert.equal(rasterize.disabled, true);
+  assert.equal(rasterize.title, "The active layer is locked");
+  assert.equal(paint.tabIndex, -1);
+  paint.click();
+  assert.deepEqual(h.answers, [[20n, true, "new_paint_layer"]]);
 });
 
 test("the notice sits above a canvas action bar along the bottom edge and fits the work area", () => {

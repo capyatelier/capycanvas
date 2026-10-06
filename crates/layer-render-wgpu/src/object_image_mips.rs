@@ -7,6 +7,7 @@ pub(crate) struct MovingRequest {
     pub id: PortableId,
     pub source: Arc<SourceImage>,
     pub level: u32,
+    pub nearest: bool,
 }
 #[derive(Clone)]
 pub(crate) struct MovingSource {
@@ -74,7 +75,7 @@ impl MovingImages {
         let major=((a+d).hypot(b-c)+(a-d).hypot(b+c))*0.5;
         let minor=(a*d-b*c).abs()/major;
         if !minor.is_finite() {return 1;}
-        minor.max(1.).log2().floor().clamp(1.,f64::from(display_mips::MAX_LEVEL)) as u32
+        minor.max(1.).log2().round().clamp(1.,f64::from(display_mips::MAX_LEVEL)) as u32
     }
     pub(crate) fn storage_bytes(&self)->u64 {self.entries.iter().map(Entry::storage_bytes).sum::<u64>()+self.retired.iter().map(|retired|retired.entry.storage_bytes()).sum::<u64>()}
     pub(crate) fn pending(&self)->bool {self.allocation_waiting || !self.retired.is_empty() || self.entries.iter().any(|entry|!entry.ready || !entry.valid.load(Ordering::Acquire))}
@@ -85,7 +86,7 @@ impl MovingImages {
         let changed=self.context!=Some(context);
         let mut retained=Vec::new();
         for entry in self.entries.drain(..) {
-            if !changed && requests.iter().any(|request|entry.matches(request.id,&request.source)) {retained.push(entry);}
+            if !changed && requests.iter().any(|request|entry.matches(request.id,&request.source) && (!request.nearest || entry.image.plan.level==0)) {retained.push(entry);}
             else {
                 self.evictions+=1;
                 let complete=Arc::new(AtomicBool::new(false));
@@ -101,7 +102,9 @@ impl MovingImages {
             if self.entries.iter().any(|entry|entry.matches(request.id,&request.source))
                 || targets.iter().any(|target|target.request.id==request.id && Arc::ptr_eq(&target.request.source,&request.source)) {continue;}
             let extent=padded_extent(request.source.extent);
-            let level=request.level.clamp(1,display_mips::MAX_LEVEL).max((0..=display_mips::MAX_LEVEL).find(|&level|extent.iter().all(|n|n.div_ceil(1<<level)<=r.device.limits().max_texture_dimension_2d)).ok_or(GpuRasterError::ExtentUnsupported)?);
+            let fits=(0..=display_mips::MAX_LEVEL).find(|&level|extent.iter().all(|n|n.div_ceil(1<<level)<=r.device.limits().max_texture_dimension_2d)).ok_or(GpuRasterError::ExtentUnsupported)?;
+            if request.nearest && fits>0 {continue;}
+            let level=if request.nearest {0} else {request.level.clamp(1,display_mips::MAX_LEVEL).max(fits)};
             let plan=display_mips::Plan::at(extent,level);
             let last=display_mips::MAX_LEVEL.min(level+plan.size.into_iter().max().unwrap().next_power_of_two().ilog2());
             targets.push(Planned {request:request.clone(),plan,last});
@@ -109,7 +112,11 @@ impl MovingImages {
         loop {
             let bytes=self.retired.iter().map(|retired|retired.entry.storage_bytes()).sum::<u64>()+self.entries.iter().map(|entry|estimate(&r.device,entry.image.plan,entry.image.last_level()).max(entry.storage_bytes())).sum::<u64>()+targets.iter().map(|target|estimate(&r.device,target.plan,target.last)).sum::<u64>();
             if bytes<=budget {return Ok(MipPlan {targets,bytes,waiting:false});}
-            let Some(target)=targets.iter_mut().filter(|target|target.plan.level<display_mips::MAX_LEVEL).max_by_key(|target|estimate(&r.device,target.plan,target.last)) else {
+            let Some(target)=targets.iter_mut().filter(|target|!target.request.nearest && target.plan.level<display_mips::MAX_LEVEL).max_by_key(|target|estimate(&r.device,target.plan,target.last)) else {
+                if let Some(index)=targets.iter().enumerate().filter(|(_,target)|target.request.nearest).max_by_key(|(_,target)|estimate(&r.device,target.plan,target.last)).map(|(index,_)|index) {
+                    targets.swap_remove(index);
+                    continue;
+                }
                 if !self.retired.is_empty() {
                     self.allocation_waiting=true;
                     return Ok(MipPlan {targets:Vec::new(),bytes:self.storage_bytes(),waiting:true});
@@ -142,7 +149,6 @@ impl MovingImages {
         let view=entry.image.texture.create_view(&wgpu::TextureViewDescriptor {base_mip_level:level-entry.image.plan.level,mip_level_count:Some(1),..Default::default()});
         Some(MovingSource {view,level,extent:source.extent.map(|v|v.div_ceil(1<<level))})
     }
-    pub(crate) fn admitted(&self,id:PortableId,source:&Arc<SourceImage>)->bool {self.entries.iter().any(|entry|entry.matches(id,source))}
     pub(crate) fn next_build(&mut self)->Option<(PortableId,Arc<SourceImage>,[u32;2])> {
         for entry in &mut self.entries {
             if !entry.valid.load(Ordering::Acquire) {entry.cursor=0;entry.coarse=0;entry.ready=false;entry.valid=Arc::new(std::sync::atomic::AtomicBool::new(true));}
@@ -152,6 +158,18 @@ impl MovingImages {
             return Some((entry.id,source,[entry.cursor%columns,entry.cursor/columns]));
         }
         None
+    }
+    pub(crate) fn upcoming(&self,count:usize)->Vec<(PortableId,Arc<SourceImage>,[u32;2])> {
+        let mut tiles=Vec::with_capacity(count);
+        for entry in self.entries.iter().filter(|entry|!entry.ready && entry.valid.load(Ordering::Acquire)) {
+            let Some(source)=entry.source.upgrade() else {continue;};
+            let columns=entry.image.plan.extent[0].div_ceil(PAGE_SIZE);
+            for cursor in entry.cursor..entry.tiles() {
+                if tiles.len()==count {return tiles;}
+                tiles.push((entry.id,source.clone(),[cursor%columns,cursor/columns]));
+            }
+        }
+        tiles
     }
     pub(crate) fn accepts_tile(&self,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2])->bool {
         self.entries.iter().any(|entry|entry.matches(id,source) && !entry.ready && entry.valid.load(Ordering::Acquire)
@@ -238,6 +256,7 @@ pub(crate) struct PreparedMipTile {
     pub coordinate:[u32;2],
     pub pixels:Result<crate::scene::sources::PreparedSourcePixels,String>,
 }
+type DecodeKey = (PortableId, Weak<SourceImage>, [u32;2]);
 pub(crate) struct MipDecodeQueue {
     #[cfg(not(target_arch="wasm32"))]
     requests:std::sync::mpsc::SyncSender<MipDecodeRequest>,
@@ -247,86 +266,102 @@ pub(crate) struct MipDecodeQueue {
     external:Option<MipDecodeRequest>,
     #[cfg(target_arch="wasm32")]
     completed:Option<PreparedImageWork>,
-    ready:Arc<AtomicBool>,
-    pending:bool,
+    ready:Arc<std::sync::atomic::AtomicUsize>,
+    outstanding:Vec<Option<DecodeKey>>,
+    capacity:usize,
+}
+#[cfg(not(target_arch="wasm32"))]
+fn prepare_request(request:MipDecodeRequest,destination:RgbSpace,cache:&layer_core::raster::DecodedTileCache,decoders:&mut std::collections::VecDeque<(Weak<SourceImage>,layer_color::WorkingDecoder)>)->PreparedImageWork {
+    match request {
+        MipDecodeRequest::Coordinates(request) => {
+            let pixels=if request.destination.strong_count()==0 {Err("Coordinate request cancelled".into())}
+                else {crate::object_sampling::prepare_nearest_coordinates(request.inverse,request.size,request.first,request.count)};
+            PreparedImageWork::Coordinates {destination:request.destination,pixels}
+        },
+        MipDecodeRequest::Image(request) => {
+            let pixels=(|| {
+                if matches!(request.source.interpretation.profile,layer_core::color::ColorProfile::Builtin(_)) {
+                    return prepare_image_tile(&request.source,request.coordinate,destination,cache,None);
+                }
+                let weak=Arc::downgrade(&request.source);
+                let index=if let Some(index)=decoders.iter().position(|(source,_)|source.ptr_eq(&weak)) {index} else {
+                    let decoder=layer_color::WorkingDecoder::new(&request.source.interpretation,destination,Default::default())?;
+                    if decoders.len()==4 {decoders.pop_front();}
+                    decoders.push_back((weak,decoder));decoders.len()-1
+                };
+                let decoder=decoders.remove(index).unwrap();
+                let decoded=prepare_image_tile(&request.source,request.coordinate,destination,cache,Some(&decoder.1));
+                decoders.push_back(decoder);
+                decoded
+            })();
+            PreparedImageWork::Image(PreparedMipTile {id:request.id,source:request.source,coordinate:request.coordinate,pixels})
+        },
+    }
 }
 impl MipDecodeQueue {
     pub(crate) fn new(device:&PipelineDevice)->Self {
         #[cfg(not(target_arch="wasm32"))]
         {Self::native(device.source_samples.clone(),device.working_space())}
         #[cfg(target_arch="wasm32")]
-        {let _=device;Self {external:None,completed:None,ready:Arc::new(AtomicBool::new(false)),pending:false}}
+        {let _=device;Self {external:None,completed:None,ready:Default::default(),outstanding:Vec::new(),capacity:1}}
     }
     #[cfg(not(target_arch="wasm32"))]
     fn native(cache:Arc<layer_core::raster::DecodedTileCache>,destination:RgbSpace)->Self {
-        let ready=Arc::new(AtomicBool::new(false));
-            let (requests,receive)=std::sync::mpsc::sync_channel::<MipDecodeRequest>(1);
-            let (send,results)=std::sync::mpsc::sync_channel(1);
-            let completion=ready.clone();
-            std::thread::Builder::new().name("capy-image-prefilter".into()).spawn(move || {
-                let mut decoders=std::collections::VecDeque::<(Weak<SourceImage>,layer_color::WorkingDecoder)>::new();
-                while let Ok(request)=receive.recv() {
-                    let result=match request {
-                    MipDecodeRequest::Coordinates(request) => {
-                        let pixels=if request.destination.strong_count()==0 {Err("Coordinate request cancelled".into())}
-                            else {crate::object_sampling::prepare_nearest_coordinates(request.inverse,request.size,request.first,request.count)};
-                        PreparedImageWork::Coordinates {destination:request.destination,pixels}
-                    },
-                    MipDecodeRequest::Image(request) => {
-                    let pixels=(|| {
-                        if matches!(request.source.interpretation.profile,layer_core::color::ColorProfile::Builtin(_)) {
-                            return prepare_image_tile(&request.source,request.coordinate,destination,&cache,None);
-                        }
-                        let weak=Arc::downgrade(&request.source);
-                        let index=if let Some(index)=decoders.iter().position(|(source,_)|source.ptr_eq(&weak)) {index} else {
-                            let decoder=layer_color::WorkingDecoder::new(&request.source.interpretation,destination,Default::default())?;
-                            if decoders.len()==4 {decoders.pop_front();}
-                            decoders.push_back((weak,decoder));decoders.len()-1
-                        };
-                        let decoder=decoders.remove(index).unwrap();
-                        let decoded=prepare_image_tile(&request.source,request.coordinate,destination,&cache,Some(&decoder.1));
-                        decoders.push_back(decoder);
-                        decoded
-                    })();
-                    PreparedImageWork::Image(PreparedMipTile {id:request.id,source:request.source,coordinate:request.coordinate,pixels})
-                    },
-                    };
-                    completion.store(true,Ordering::Release);
+        let workers=std::thread::available_parallelism().map_or(1,|count|count.get().saturating_sub(2).clamp(1,3));
+        let capacity=workers*6;
+        let ready=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (requests,receive)=std::sync::mpsc::sync_channel::<MipDecodeRequest>(capacity);
+        let (send,results)=std::sync::mpsc::sync_channel(capacity);
+        let receive=Arc::new(std::sync::Mutex::new(receive));
+        for worker in 0..workers {
+            let (receive,send,cache,completion)=(receive.clone(),send.clone(),cache.clone(),ready.clone());
+            std::thread::Builder::new().name(format!("capy-image-prefilter-{worker}")).spawn(move || {
+                let mut decoders=std::collections::VecDeque::new();
+                loop {
+                    let Ok(request)=receive.lock().unwrap().recv() else {break;};
+                    let result=prepare_request(request,destination,&cache,&mut decoders);
+                    completion.fetch_add(1,Ordering::AcqRel);
                     if send.send(result).is_err() {break;}
                 }
             }).expect("Immutable image preparation worker");
-            Self {requests,results,ready,pending:false}
+        }
+        Self {requests,results,ready,outstanding:Vec::new(),capacity}
     }
     pub(crate) fn request(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2])->bool {
-        self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {id,source,coordinate}))
+        let weak=Arc::downgrade(&source);
+        if self.outstanding.iter().flatten().any(|(owner,stored,tile)|*owner==id && stored.ptr_eq(&weak) && *tile==coordinate) {return true;}
+        self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {id,source,coordinate}),Some((id,weak,coordinate)))
     }
     pub(crate) fn request_coordinates(&mut self,inverse:[f64;6],size:[u32;2],first:u32,count:u32,destination:CoordinateDestination)->bool {
-        self.enqueue(MipDecodeRequest::Coordinates(CoordinateRequest {inverse,size,first,count,destination}))
+        self.enqueue(MipDecodeRequest::Coordinates(CoordinateRequest {inverse,size,first,count,destination}),None)
     }
-    fn enqueue(&mut self,request:MipDecodeRequest)->bool {
-        if self.pending {return false;}
-        self.ready.store(false,Ordering::Release);
+    fn enqueue(&mut self,request:MipDecodeRequest,key:Option<DecodeKey>)->bool {
+        if self.outstanding.len()>=self.capacity {return false;}
         #[cfg(not(target_arch="wasm32"))]
         if self.requests.try_send(request).is_err() {return false;}
         #[cfg(target_arch="wasm32")]
         {self.external=Some(request);}
-        self.pending=true;true
+        self.outstanding.push(key);true
     }
     pub(crate) fn poll(&mut self)->Option<PreparedImageWork> {
         #[cfg(not(target_arch="wasm32"))]
         let result=self.results.try_recv().ok()?;
         #[cfg(target_arch="wasm32")]
         let result=self.completed.take()?;
-        self.pending=false;
-        self.ready.store(false,Ordering::Release);
+        self.ready.fetch_sub(1,Ordering::AcqRel);
+        let index=match &result {
+            PreparedImageWork::Image(tile)=>self.outstanding.iter().position(|key|key.as_ref().is_some_and(|(id,source,coordinate)|*id==tile.id && source.ptr_eq(&Arc::downgrade(&tile.source)) && *coordinate==tile.coordinate)),
+            PreparedImageWork::Coordinates {..}=>self.outstanding.iter().position(Option::is_none),
+        };
+        if let Some(index)=index {self.outstanding.swap_remove(index);}
         Some(result)
     }
-    pub(crate) fn pending(&self)->bool {self.pending}
-    pub(crate) fn ready(&self)->bool {self.ready.load(Ordering::Acquire)}
+    pub(crate) fn pending(&self)->bool {!self.outstanding.is_empty()}
+    pub(crate) fn ready(&self)->bool {self.ready.load(Ordering::Acquire)>0}
     #[cfg(target_arch="wasm32")]
     pub(crate) fn take_external(&mut self)->Option<MipDecodeRequest> {self.external.take()}
     #[cfg(target_arch="wasm32")]
-    pub(crate) fn complete_external(&mut self,result:PreparedImageWork) {self.completed=Some(result);self.ready.store(true,Ordering::Release);}
+    pub(crate) fn complete_external(&mut self,result:PreparedImageWork) {self.completed=Some(result);self.ready.store(1,Ordering::Release);}
 }
 
 #[cfg(test)]
@@ -335,39 +370,53 @@ mod tests {
     use crate::test_support::{page_texture,upload_page};
     #[cfg(not(target_arch="wasm32"))]
     #[test]
-    fn preparation_queue_serializes_geometry_and_image_work_without_retaining_cancelled_geometry() {
-        fn result(queue:&mut MipDecodeQueue)->PreparedImageWork {
+    fn preparation_workers_bound_outstanding_tiles_deduplicate_requests_and_drop_cancelled_geometry() {
+        fn drain(queue:&mut MipDecodeQueue,count:usize)->Vec<PreparedImageWork> {
             let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
-            loop {
-                if let Some(result)=queue.poll() {return result;}
+            let mut results=Vec::new();
+            while results.len()<count {
+                if let Some(result)=queue.poll() {results.push(result);continue;}
                 assert!(std::time::Instant::now()<deadline,"prepared work must complete");
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
+            results
         }
-        let cache=Arc::new(layer_core::raster::DecodedTileCache::new(2*1024*1024));
+        let cache=Arc::new(layer_core::raster::DecodedTileCache::new(64*1024*1024));
         let mut queue=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb);
-        let source=layer_core::color::source::rgba8_source([8;2],|_,_|[255,128,0,255]);
+        let source=layer_core::color::source::rgba8_source([2048;2],|x,y|[(x%256) as u8,(y%256) as u8,0,255]);
+        let id=PortableId::random();
+        let tiles:Vec<[u32;2]>=(0..64).map(|index|[index%8,index/8]).collect();
+        let mut accepted=Vec::new();
+        for tile in &tiles {
+            if !queue.request(id,source.clone(),*tile) {break;}
+            assert!(queue.request(id,source.clone(),*tile),"an outstanding tile is not requested twice");
+            accepted.push(*tile);
+        }
+        assert!(accepted.len()>=1 && accepted.len()<tiles.len(),"outstanding preparation is bounded: {}",accepted.len());
+        assert_eq!(queue.outstanding.len(),accepted.len());
+        let mut prepared:Vec<_>=drain(&mut queue,accepted.len()).into_iter().map(|result|{
+            let PreparedImageWork::Image(tile)=result else {panic!("Image request must return image samples");};
+            assert_eq!(tile.id,id);assert!(Arc::ptr_eq(&tile.source,&source));
+            let crate::scene::sources::PreparedSourcePixels::NativeSamples(samples)=tile.pixels.unwrap() else {panic!("Builtin samples retain native precision");};
+            assert_eq!(&samples[..4],&[0,0,0,255]);
+            tile.coordinate
+        }).collect();
+        prepared.sort();accepted.sort();assert_eq!(prepared,accepted);
+        assert!(!queue.pending());assert_eq!(cache.stats().misses,accepted.len() as u64);
         let destination=Arc::new(std::sync::Mutex::new(None));
         let weak=Arc::downgrade(&destination);
         assert!(queue.request_coordinates([1.,0.,0.,1.,3.,-2.],[256;2],17,4,weak.clone()));
-        assert!(!queue.request(PortableId::random(),source.clone(),[0;2]));
-        let PreparedImageWork::Coordinates {destination:completed,pixels}=result(&mut queue) else {panic!("Geometry request must return geometry");};
+        let PreparedImageWork::Coordinates {destination:completed,pixels}=drain(&mut queue,1).pop().unwrap() else {panic!("Geometry request must return geometry");};
         assert!(completed.ptr_eq(&weak));
         assert_eq!(pixels.unwrap().as_slice(),[20_i32,-2,21,-2,22,-2,23,-2].into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>());
-        assert_eq!(cache.stats().misses,0,"geometry must not read image samples");
-        let id=PortableId::random();assert!(queue.request(id,source.clone(),[0;2]));
-        let PreparedImageWork::Image(prepared)=result(&mut queue) else {panic!("Image request must return image samples");};
-        assert_eq!(prepared.id,id);assert!(Arc::ptr_eq(&prepared.source,&source));assert_eq!(prepared.coordinate,[0;2]);
-        let crate::scene::sources::PreparedSourcePixels::NativeSamples(samples)=prepared.pixels.unwrap() else {panic!("Builtin samples retain native precision");};
-        assert_eq!(&samples[..4],&[255,128,0,255]);assert_eq!(cache.stats().misses,1);
         assert!(queue.request_coordinates([1.,0.,0.,1.,0.,0.],[256;2],0,65536,weak));
         drop(destination);
-        let PreparedImageWork::Coordinates {destination:completed,..}=result(&mut queue) else {panic!("Cancelled geometry retains its typed result");};
+        let PreparedImageWork::Coordinates {destination:completed,..}=drain(&mut queue,1).pop().unwrap() else {panic!("Cancelled geometry retains its typed result");};
         assert!(completed.upgrade().is_none(),"queued work must not keep a deleted object pose alive");
-        assert!(!queue.pending());
+        assert!(!queue.pending());assert!(!queue.ready());
     }
     fn moving_request()->MovingRequest {
-        MovingRequest {id:PortableId::random(),source:layer_core::color::source::rgba8_source([256;2],|x,y|{let value=if (x+y)%2==0 {0} else {255};[value,value,value,255]}),level:1}
+        MovingRequest {id:PortableId::random(),source:layer_core::color::source::rgba8_source([256;2],|x,y|{let value=if (x+y)%2==0 {0} else {255};[value,value,value,255]}),level:1,nearest:false}
     }
     #[test]
     fn shared_worker_preparation_preserves_native_codes_and_premultiplies_embedded_profile_pixels() {
@@ -503,7 +552,7 @@ mod tests {
         assert!(plan.targets.is_empty());
         assert!(!plan.waiting);
         images.allocate(&r,plan);
-        assert!(!images.admitted(unadmitted.id,&unadmitted.source));
+        assert!(images.lookup(unadmitted.id,&unadmitted.source,1).is_none() && images.entries.is_empty());
         assert!(!images.pending());
         encoder.submit(&r.queue);
     }

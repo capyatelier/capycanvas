@@ -50,6 +50,11 @@ fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
     panic!("object display preparation must settle");
 }
 
+fn canonical_request(r: &WgpuRasterizer, scene: &mut Scene, doc: &layer_core::Document, owner: OccurrenceHandle, window: ObjectWindow) -> super::objects::CollectionJob {
+    let content = scene.object_spatial.content(doc.scene(), owner).unwrap();
+    scene.collection_job(r, packet(doc.scene(), doc.composition().size), owner, content, window)
+}
+
 #[test]
 fn object_only_native_and_display_composite_ordered_children_and_raw_queries() {
     let mut front = ImageObject::new(image([8; 2], [0, 0, 255, 128]), "Blue");
@@ -74,9 +79,16 @@ fn object_only_native_and_display_composite_ordered_children_and_raw_queries() {
     let raw_frame = packet(doc.scene().with_scope(&scoped), doc.composition().size);
     let (target, _) = create_color_target(&r.device, [16; 2], "raw hidden images");
     let mut scene = r.scene.take().unwrap();
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    scene.capture_region(&mut r, raw_frame, &target, PixelRect::full([16; 2]), Output::Objects(owner), &mut encoder).unwrap();
-    r.uploads.finish(&encoder); encoder.submit(&r.queue); r.scene = Some(scene);
+    let mut captured = false;
+    for _ in 0..5000 {
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let result = scene.capture_region_prepared(&mut r, raw_frame, &target, PixelRect::full([16; 2]), Output::Objects(owner), &mut encoder);
+        if let Err(error) = &result { assert!(matches!(error, GpuRasterError::DeferredObjectWork), "{error:?}"); }
+        r.uploads.finish(&encoder); encoder.submit(&r.queue); r.wait_idle().unwrap();
+        if result.is_ok() { captured = true; break; }
+    }
+    r.scene = Some(scene);
+    assert!(captured, "hidden raw images complete through the deferred query path");
     assert!(crate::test_support::max_error(&native_pixels, &float_pixels(&r, &target)) < 2e-5);
 }
 
@@ -130,21 +142,24 @@ fn affine_edits_clear_vacated_bounds_and_keep_shared_source_residency() {
 fn object_read_mapping_preserves_f64_relative_coordinates_and_requested_density() {
     let mut object = ImageObject::new(image([2; 2], [255, 0, 0, 255]), "Far image");
     object.affine.0[4] = 1_048_576.125;
-    let (doc, owner, children) = document([16; 2], vec![object]);
+    let (doc, owner, _) = document([16; 2], vec![object]);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.document_extent = [16; 2];
     let mut scene = Scene::new(&r);
-    let key = ObjectKey::new(doc.scene(), owner, children[0]);
     for side in [0.25, 0.5, 1., 2.] {
-        let (texture, view) = create_color_target(&r.device, [8; 2], "object explicit density");
-        scene.object_image(&r, doc.scene(), &key, ObjectWindow { origin: [1_048_576.125, 0.], side, size: [8; 2] }, view).unwrap();
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        scene.encode_jobs(&mut r, &mut encoder).unwrap(); r.uploads.finish(&encoder); encoder.submit(&r.queue);
-        let pixels = float_pixels(&r, &texture);
+        let request = canonical_request(&r, &mut scene, &doc, owner, ObjectWindow { origin: [1_048_576.125, 0.], side, size: [8; 2] });
+        let mut cache = super::super::object_cache::ObjectCache::default();
+        let view = loop {
+            if let Some(view) = cache.resolve_collection(&r, doc.scene(), &request).unwrap() { break view; }
+            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            cache.advance(&mut r, &mut scene, &mut encoder, true).unwrap();
+            r.uploads.finish(&encoder); encoder.submit(&r.queue); r.wait_idle().unwrap();
+        };
+        let pixels = float_pixels(&r, view.texture());
         assert!(pixels[0][0] > 0. && pixels[0][3] > 0.);
         assert!(pixels.iter().all(|pixel| pixel.iter().all(|v| v.is_finite())));
     }
 }
-
 #[test]
 fn private_canonical_jobs_yield_and_cancel_before_publication() {
     let mut object = ImageObject::new(image([512; 2], [255, 0, 0, 255]), "Reduced image");
@@ -154,19 +169,19 @@ fn private_canonical_jobs_yield_and_cancel_before_publication() {
     r.document_extent = [64; 2];
     let mut compositor=Scene::new(&r);
     let mut cache = super::super::object_cache::ObjectCache::default();
-    let key = ObjectKey::new(doc.scene(), owner, children[0]);
-    let job=ObjectJob {key:key.clone(),source:doc.scene().object(children[0]).unwrap().image.storage().clone(),inverse:[16.,0.,0.,16.,0.,0.],size:[16;2],nearest:false,output:r.empty_view.clone(),preview:false,live:true};
-    assert!(cache.resolve_job(&r,&job).unwrap().is_none());
+    let request = canonical_request(&r, &mut compositor, &doc, owner, ObjectWindow { origin: [0.; 2], side: 1., size: [16; 2] });
+    assert!(cache.resolve_collection(&r,doc.scene(),&request).unwrap().is_none());
     let mut complete = None;
     for _ in 0..300 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         r.prepare_moving_images(packet(doc.scene(), [64; 2]), &mut encoder).unwrap();
         let passes = encoder.pass_count();
-        cache.advance(&mut r, &mut compositor, &mut encoder).unwrap();
-        assert!(encoder.pass_count() - passes <= 12, "canonical refinement has a bounded per-frame pass count");
+        let taps = cache.advance(&mut r, &mut compositor, &mut encoder, true).unwrap();
+        let limit = super::super::object_cache::INTERACTIVE_TAPS + crate::object_sampling::DISPATCH_TAPS;
+        assert!(taps <= limit && (encoder.pass_count() - passes) * super::super::object_cache::PASS_TAPS <= limit, "canonical refinement has a bounded per-frame workload");
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
         if !cache.pending() {
-            complete = cache.resolve_job(&r,&job).unwrap();
+            complete = cache.resolve_collection(&r,doc.scene(),&request).unwrap();
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -175,18 +190,17 @@ fn private_canonical_jobs_yield_and_cancel_before_publication() {
     let pixels = float_pixels(&r, view.texture());
     assert!(pixels[8 * 16 + 8][0] > 0.999);
     assert!(cache.bytes() < 64 * 1024);
-    let reused = cache.resolve_job(&r,&job).unwrap().unwrap();
+    let reused = cache.resolve_collection(&r,doc.scene(),&request).unwrap().unwrap();
     assert_eq!(view, reused, "multiple consumers share the completed result within one submission");
     assert!(!cache.pending());
     let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    cache.take_job(&job);cache.flush_retired(&encoder); r.uploads.finish(&encoder); r.last_submission = Some(encoder.submit(&r.queue)); r.wait_idle().unwrap();
-    assert!(cache.resolve_job(&r,&job).unwrap().is_none());
+    cache.flush_retired(&encoder); r.uploads.finish(&encoder); r.last_submission = Some(encoder.submit(&r.queue)); r.wait_idle().unwrap();
+    assert!(cache.resolve_collection(&r,doc.scene(),&request).unwrap().is_none(), "a query cache releases encoded results");
     doc.artwork.objects.get_mut(children[0]).unwrap().affine.0[4] = 32.;
     cache.retain(doc.scene(),layer_core::BlendSpace::Linear,r.device.working_space());
     assert!(!cache.pending(), "obsolete affine work cannot publish");
     assert!(cache.bytes() < 64 * 1024);
 }
-
 #[test]
 fn object_masks_attached_effects_and_clipping_follow_both_stack_evaluators() {
     let (mut doc, owner, _) = document([64; 2], vec![ImageObject::new(image([16; 2], [255, 0, 0, 255]), "Base")]);
@@ -289,29 +303,23 @@ fn simultaneous_photo_results_bound_batches_and_survive_deferred_retries() {
         ImageObject::new(image([4000, 3000], [0, 255, 0, 255]), "Green"),
         ImageObject::new(image([4000, 3000], [0, 0, 255, 255]), "Blue")];
     for object in &mut objects { object.affine = Affine64([1. / 7., 0., 0., 1. / 7., 0., 0.]); }
-    let (doc, owner, handles) = document([768; 2], objects);
+    let (doc, owner, _) = document([768; 2], objects);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.document_extent = [768; 2];
     let mut compositor=Scene::new(&r);
     let mut cache = super::super::object_cache::ObjectCache::default();
-    let jobs: Vec<_> = handles.into_iter().map(|handle| {
-        let object = doc.scene().object(handle).unwrap();
-        ObjectJob { key: ObjectKey::new(doc.scene(), owner, handle), source: object.image.storage().clone(),
-            inverse: [7., 0., 0., 7., 0., 0.], size: [256; 2], nearest: false,
-            output: r.empty_view.clone(), preview: false, live: false }
-    }).collect();
-    for job in &jobs {
-        assert!(requires_refinement(job.inverse, job.size, false, job.source.extent).unwrap());
-        assert!(!live_ready(&mut r, job).unwrap(), "cold Fit work must not enter the eager live encoder");
-        assert!(cache.resolve_job(&r, job).unwrap().is_none());
-    }
+    let requests: Vec<_> = [[0., 0.], [256., 0.], [0., 256.], [256., 256.]].into_iter()
+        .map(|origin| canonical_request(&r, &mut compositor, &doc, owner, ObjectWindow { origin, side: 1., size: [256; 2] })).collect();
+    for request in &requests { assert!(cache.resolve_collection(&r, doc.scene(), request).unwrap().is_none()); }
     let mut complete = false;
     for _ in 0..4000 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        cache.advance(&mut r, &mut compositor, &mut encoder).unwrap();
-        let passes = encoder.pass_count();
-        cache.advance(&mut r, &mut compositor, &mut encoder).unwrap();
-        assert_eq!(encoder.pass_count(), passes, "a cache has only one batch in flight");
+        r.drain_image_decode(&mut encoder).unwrap();
+        let before = encoder.pass_count();
+        cache.advance(&mut r, &mut compositor, &mut encoder, true).unwrap();
+        let passes = encoder.pass_count() - before;
+        cache.advance(&mut r, &mut compositor, &mut encoder, true).unwrap();
+        assert_eq!(encoder.pass_count() - before, passes, "a cache has only one batch in flight");
         assert!(passes <= 24, "sampling and source preparation remain bounded: {passes}");
         assert!(cache.bytes() <= 64 * 1024 * 1024);
         if let Some(report) = r.device.generate_allocator_report() {
@@ -321,16 +329,13 @@ fn simultaneous_photo_results_bound_batches_and_survive_deferred_retries() {
         if !cache.pending() { complete = true; break; }
     }
     assert!(complete, "all four private results make bounded progress");
-    let views: Vec<_> = jobs.iter().map(|job| cache.take_job(job).unwrap()).collect();
+    let views: Vec<_> = requests.iter().map(|request| cache.resolve_collection(&r, doc.scene(), request).unwrap().unwrap()).collect();
     cache.reset_used();
-    let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    cache.flush_retired(&encoder);
-    for (job, view) in jobs.iter().zip(&views) {
-        assert!(cache.has_job(job), "a deferred frame retains every completed result");
-        assert_eq!(&cache.take_job(job).unwrap(), view);
+    for (request, view) in requests.iter().zip(&views) {
+        assert_eq!(&cache.resolve_collection(&r, doc.scene(), request).unwrap().unwrap(), view, "a deferred frame retains every completed result");
     }
     let (destination, _) = create_color_target(&r.device, [256; 2], "retained object result consumer");
-    let mut encoder = encoder;
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     for view in &views { encoder.copy_texture_to_texture(view.texture().as_image_copy(), destination.as_image_copy(),
         wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 }); }
     cache.flush_retired(&encoder);
@@ -338,7 +343,6 @@ fn simultaneous_photo_results_bound_batches_and_survive_deferred_retries() {
     r.uploads.finish(&encoder); r.last_submission = Some(encoder.submit(&r.queue)); r.wait_idle().unwrap();
     assert!(cache.bytes() < 64 * 1024);
 }
-
 #[test]
 fn tablet_fit_photo_scene_completes_many_private_windows_within_cache_budget() {
     let shared = image([4000, 3000], [255, 0, 0, 255]);
@@ -442,27 +446,6 @@ fn tablet_fit_shared_photos_with_paint_above_remain_admitted_during_strokes() {
 }
 
 #[test]
-fn deferred_object_encoding_releases_abandoned_native_scratch() {
-    let mut object = ImageObject::new(image([64;2],[255;4]),"Nearest");
-    object.interpolation = ImageInterpolation::Nearest;
-    let (doc,owner,children) = document([64;2],vec![object]);
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let mut scene = Scene::new(&r);
-    scene.object_query = true;
-    let key = ObjectKey::new(doc.scene(),owner,children[0]);
-    for _ in 0..12 {
-        let target = scene.reserve(&r);
-        let view = scene.pool[target].view.clone();
-        scene.object_image(&r,doc.scene(),&key,ObjectWindow {origin:[0.;2],side:1.,size:[64;2]},view).unwrap();
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        assert!(matches!(scene.encode_jobs(&mut r,&mut encoder),Err(GpuRasterError::DeferredObjectWork)));
-        assert!(scene.jobs.is_empty());
-        assert!(scene.used.iter().all(|used| !used),"an abandoned output cannot pin scratch across retries");
-        assert_eq!(scene.pool.len(),1,"cold retries reuse the same scratch allocation");
-    }
-}
-
-#[test]
 fn live_object_read_defers_without_inline_decode_then_returns_canonical_pixels() {
     let mut object = ImageObject::new(image([512; 2], [255, 0, 0, 255]), "Reference");
     object.affine = Affine64([1. / 7., 0., 0., 1. / 7., 0., 0.]);
@@ -494,6 +477,30 @@ fn live_object_read_defers_without_inline_decode_then_returns_canonical_pixels()
     let pixels = float_pixels(&r, &target);
     assert!((pixels[32 * 64 + 32][0] - 1.).abs() < 2e-5);
     assert!((pixels[32 * 64 + 32][3] - 1.).abs() < 2e-5);
+}
+
+#[test]
+fn cold_object_reads_advance_every_finished_tile_and_the_idle_budget_per_attempt() {
+    let mut object = ImageObject::new(image([2048; 2], [255, 0, 0, 255]), "Reference");
+    object.affine = Affine64([1. / 16., 0., 0., 1. / 16., 0., 0.]);
+    let (doc, owner, _) = document([128; 2], vec![object]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.document_extent = [128; 2];
+    let mut scene = Scene::new(&r);
+    let (target, _) = create_color_target(&r.device, [128; 2], "prepared reference read");
+    let frame = packet(doc.scene(), [128; 2]);
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        assert!(attempts < 32, "a read of 64 source tiles and 2^24 taps completes in a few host polls");
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let result = scene.capture_region_prepared(&mut r, frame, &target, PixelRect::full([128; 2]), Output::Objects(owner), &mut encoder);
+        if let Err(error) = &result { assert!(matches!(error, GpuRasterError::DeferredObjectWork), "{error:?}"); }
+        r.uploads.finish(&encoder); r.last_submission = Some(encoder.submit(&r.queue)); r.wait_idle().unwrap();
+        if result.is_ok() { break; }
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+    assert!((float_pixels(&r, &target)[64 * 128 + 64][0] - 1.).abs() < 2e-5);
 }
 
 fn cold_query_renderer(doc: &layer_core::Document) -> WgpuRasterizer {
@@ -604,15 +611,16 @@ fn overlapping_collection_consumes_children_with_bounded_residency_and_preserves
         let mut scene=Scene::new(&r);
         let content=scene.object_spatial.content(doc.scene(),owner).unwrap();
         let frame=FramePacket {blend_space:blend,..packet(doc.scene(),[256;2])};
-        let request=scene.collection_job(&r,frame,owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]},false);
+        let request=scene.collection_job(&r,frame,owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]});
         let mut cache=super::super::object_cache::ObjectCache::default();
         assert!(cache.resolve_collection(&r,doc.scene(),&request).unwrap().is_none());
         let start=std::time::Instant::now();let mut peak=0;let view=loop {
             assert!(start.elapsed()<std::time::Duration::from_secs(40),"ordered collection must make bounded progress");
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-            r.drain_image_decode(&mut encoder).unwrap();cache.advance(&mut r,&mut scene,&mut encoder).unwrap();
+            r.drain_image_decode(&mut encoder).unwrap();let taps=cache.advance(&mut r,&mut scene,&mut encoder,true).unwrap();
             peak=peak.max(cache.bytes());assert!(peak<16*1024*1024,"one child plus isolated prefix: {peak}");
-            assert!(encoder.pass_count()<=12,"sampling plus bounded source preparation");
+            let limit=super::super::object_cache::INTERACTIVE_TAPS+crate::object_sampling::DISPATCH_TAPS;
+            assert!(taps<=limit && encoder.pass_count()*super::super::object_cache::PASS_TAPS<=limit+16*super::super::object_cache::PASS_TAPS,"sampling work and passes per batch are bounded");
             r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
             if let Some(view)=cache.resolve_collection(&r,doc.scene(),&request).unwrap() {break view;}
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -641,9 +649,9 @@ fn unfinished_collection_cancels_changed_content_and_display_visibility_but_keep
     let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();r.document_extent=[256;2];
     let mut scene=Scene::new(&r);scene.object_display=true;
     let content=scene.object_spatial.content(doc.scene(),owner).unwrap();
-    let request=scene.collection_job(&r,packet(doc.scene(),[256;2]),owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]},false);
+    let request=scene.collection_job(&r,packet(doc.scene(),[256;2]),owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]});
     let mut cache=super::super::object_cache::ObjectCache::default();cache.resolve_collection(&r,doc.scene(),&request).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());cache.advance(&mut r,&mut scene,&mut encoder).unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());cache.advance(&mut r,&mut scene,&mut encoder,true).unwrap();
     r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
     doc.artwork.occurrences.get_mut(owner).unwrap().visible=false;
     cache.retain(doc.scene(),request.blend,request.context);assert!(!cache.pending(),"hidden display owner cancels unfinished work");
@@ -655,12 +663,12 @@ fn unfinished_collection_cancels_changed_content_and_display_visibility_but_keep
     doc.artwork.object_layers.get_mut(collection).unwrap().children.reverse();
     cache.retain(doc.scene(),raw.blend,raw.context);assert!(!cache.pending(),"reordering cancels the captured child cursor");
     let content=scene.object_spatial.content(doc.scene(),owner).unwrap();
-    raw=scene.collection_job(&r,packet(doc.scene(),[256;2]),owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]},false);raw.display=false;
+    raw=scene.collection_job(&r,packet(doc.scene(),[256;2]),owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]});raw.display=false;
     cache.resolve_collection(&r,doc.scene(),&raw).unwrap();
     doc.artwork.objects.get_mut(handles[0]).unwrap().affine.0[4]=0.5;
     cache.retain(doc.scene(),raw.blend,raw.context);assert!(!cache.pending(),"pose changes cancel a captured source mapping");
     let content=scene.object_spatial.content(doc.scene(),owner).unwrap();
-    raw=scene.collection_job(&r,packet(doc.scene(),[256;2]),owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]},false);raw.display=false;
+    raw=scene.collection_job(&r,packet(doc.scene(),[256;2]),owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]});raw.display=false;
     cache.resolve_collection(&r,doc.scene(),&raw).unwrap();
     cache.retain(doc.scene(),layer_core::BlendSpace::Perceptual,raw.context);assert!(!cache.pending(),"blend changes retire the previous color domain");
     cache.resolve_collection(&r,doc.scene(),&raw).unwrap();
@@ -699,4 +707,220 @@ fn deferred_collection_construction_discards_unencoded_prefix_and_reuses_scratch
         assert_eq!(scene.pool.len(),1,"abandoned composition prefix remains reusable");
         assert!(scene.object_results.pending(),"private collection progress remains scheduled");
     }
+}
+
+fn tablet_scene(distinct: bool, count: usize, blur: bool) -> (layer_core::Document, OccurrenceHandle, Vec<ImageObjectHandle>, layer_render::ViewState) {
+    let extent = [4248, 2832];
+    let photo = AuthoredImage::new(rgba8_source(extent, |x, y| [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) % 256) as u8, 255]));
+    let objects = (0..count).map(|index| {
+        let phase = index as f64 / count as f64 * std::f64::consts::TAU;
+        let source = if distinct { AuthoredImage::new(rgba8_source(extent, move |x, y| [((x + index as u32 * 31) % 256) as u8, (y % 256) as u8, 90, 255])) } else { photo.clone() };
+        let mut object = ImageObject::new(source, "Image");
+        object.affine = Affine64([0.55, 0., 0., 0.55, f64::from(extent[0]) * (0.225 + 0.08 * phase.cos()), f64::from(extent[1]) * (0.225 + 0.08 * phase.sin())]);
+        object
+    }).collect();
+    let (mut doc, owner, handles) = document(extent, objects);
+    doc.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.35;
+    let (base, target) = crate::test_support::add_paint(&mut doc.artwork, "Photo", extent);
+    let SourceTarget::Paint(target) = target else { unreachable!() };
+    doc.artwork.paint.get_mut(target).unwrap().base = Some(PaintBase { image: photo, offset: [0; 2], policy: PaintBasePolicy::SourceProfile });
+    let stack = doc.composition().result;
+    let mut entries = vec![owner, base];
+    if blur {
+        let instance = layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
+        let mut application = EffectApplication::new(instance.program, instance.values, extent);
+        let sigma = application.program.parameters.iter().position(|parameter| parameter.key.as_ref() == "sigma").unwrap();
+        application.values[sigma] = layer_core::EffectValue::Number(8.);
+        let application = doc.artwork.effects.insert(PortableId::random(), application).unwrap();
+        let mut effect = Occurrence::new(OccurrenceContent::Effect(application), "Blur"); effect.attachment = layer_core::Attachment::Effect;
+        entries.insert(0, doc.artwork.occurrences.insert(PortableId::random(), effect).unwrap());
+    }
+    doc.artwork.stacks.get_mut(stack).unwrap().entries = entries;
+    let doc = layer_core::Document::from_artwork(doc.artwork).unwrap();
+    let zoom = (1920. / 4248f32).min(1200. / 2832.);
+    let view = layer_render::ViewState { width_px: 1920, height_px: 1200,
+        document_to_surface: [zoom, 0., 0., zoom, (1920. - 4248. * zoom) / 2., (1200. - 2832. * zoom) / 2.] };
+    (doc, owner, handles, view)
+}
+
+fn settle_frames(r: &mut WgpuRasterizer, frame: FramePacket<'_>, limit: usize) -> usize {
+    r.submit(FramePacket { composite_all: true, reset_layers: true, ..frame }).unwrap();
+    for submitted in 1..=limit {
+        r.wait_idle().unwrap();
+        if !r.has_pending_work() { return submitted; }
+        r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
+    }
+    panic!("object scene must settle within {limit} submissions");
+}
+
+#[test]
+fn moving_blurred_object_layer_publishes_every_pose_without_queueing_canonical_work() {
+    for distinct in [false, true] {
+        let (mut doc, owner, handles, view) = tablet_scene(distinct, 4, true);
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 2000);
+        layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
+        let original = doc.scene().object(handles[0]).unwrap().affine;
+        for step in 0..24 {
+            let mut affine = original; affine.0[4] += 200. * (f64::from(step) * 0.1).sin(); affine.0[5] += 150. * (f64::from(step) * 0.1).cos();
+            doc.apply(doc.set_image_object_affine_edit(handles[0], affine).unwrap()).unwrap();
+            let (revision, composited) = (r.composite_revision, r.metrics.composited_pixels);
+            r.submit(FramePacket { view, composite_all: true, time_seconds: f32::from(step as u8) / 60., ..packet(doc.scene(), [4248, 2832]) }).unwrap();
+            r.wait_idle().unwrap();
+            assert!(r.composite_revision != revision && !r.object_deferred, "pose {step} publishes a fresh preview (distinct={distinct})");
+            let full = r.scale_display.as_ref().unwrap().plan.size.into_iter().map(u64::from).product::<u64>();
+            assert!(step == 0 || (r.metrics.composited_pixels - composited) * 2 < full, "an advancing frame clock without animated effects keeps bounded object damage");
+            assert!(!r.scene.as_ref().unwrap().object_results.pending(), "a moving layer never starts canonical work for a superseded pose");
+        }
+        layer_render::CanvasRenderer::prepare_moving_layer(&mut r, None);
+        settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 2000);
+        let display = r.scale_display.as_ref().unwrap();
+        assert!(display.plan.level > 0);
+        let bytes = r.scene.as_ref().unwrap().object_results.bytes();
+        assert!(bytes <= 64 * 1024 * 1024, "settled canonical windows stay within one private allowance: {bytes}");
+    }
+}
+
+#[test]
+fn cold_tablet_object_previews_and_canonical_results_settle_in_bounded_submissions() {
+    let (doc, _, _, mut view) = tablet_scene(false, 4, false);
+    let zoom = 0.1597f32;
+    view.document_to_surface = [zoom, 0., 0., zoom, (1920. - 4248. * zoom) / 2., (1200. - 2832. * zoom) / 2.];
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let passes = r.metrics.command_passes;
+    settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
+    assert!(r.metrics.command_passes - passes < 4000, "exact canonical tent windows need one dispatch per source tile and child part plus boundary denominators: {}", r.metrics.command_passes - passes);
+    let (doc, _, _, view) = tablet_scene(true, 4, false);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let submissions = settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
+    assert_eq!(r.moving_images.completed_images, 4);
+    eprintln!("cold tablet submissions={submissions}");
+    assert!(submissions < 400, "four cold 12MP previews and canonical windows settle in {submissions} submissions");
+}
+
+#[test]
+fn moving_collection_preview_composes_ordered_children_across_source_batches() {
+    let colors: Vec<[u8; 4]> = (0..10u8).map(|index| [20 + index * 23, 200 - index * 17, 60 + index * 9, 40 + index * 7]).collect();
+    let images: Vec<_> = colors.iter().map(|color| image([64; 2], *color)).collect();
+    let objects = (0..20).map(|index| {
+        let mut object = ImageObject::new(images[index % 10].clone(), "Translucent");
+        object.affine = Affine64([1., 0., 0., 1., f64::from((index % 5) as u32 * 4), f64::from((index / 5) as u32 * 4)]);
+        object
+    }).collect();
+    let (doc, owner, _) = document([128; 2], objects);
+    for blend in [layer_core::BlendSpace::Linear, layer_core::BlendSpace::Perceptual] {
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
+        let mut frame = FramePacket { blend_space: blend, ..packet(doc.scene(), [128; 2]) };
+        frame.view.width_px = 32; frame.view.height_px = 32; frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        settle_frames(&mut r, frame, 2000);
+        assert!(!r.scene.as_ref().unwrap().object_results.pending(), "a moving layer composes previews without canonical work");
+        let display = r.scale_display.as_ref().unwrap();
+        assert_eq!(display.plan.level, 2);
+        let pixels = float_pixels(&r, display.texture());
+        let mut expected = [0f64; 4];
+        for index in (0..20).rev() {
+            let color = colors[index % 10];
+            let alpha = f64::from(color[3]) / 255.;
+            for axis in 0..3 {
+                let value = f64::from(color[axis]) / 255.;
+                let value = if blend == layer_core::BlendSpace::Linear { layer_core::color::RgbSpace::Srgb.decode(value) } else { value };
+                expected[axis] = value * alpha + expected[axis] * (1. - alpha);
+            }
+            expected[3] = alpha + expected[3] * (1. - alpha);
+        }
+        let covered = pixels[(10 * display.plan.size[0] + 10) as usize];
+        for (actual, expected) in covered.iter().zip(expected) { assert!((f64::from(*actual) - expected).abs() < 2e-3, "{blend:?}: {actual} != {expected}"); }
+        assert_eq!(pixels[(30 * display.plan.size[0] + 30) as usize], [0.; 4]);
+    }
+}
+
+#[test]
+fn moving_nearest_objects_publish_level_zero_poses_with_and_without_effects() {
+    let mut builder = SourceBuilder::new([64; 2], SourceInterpretation { channels: SourceChannels::Rgba,
+        depth: SampleDepth::U8, profile: Default::default(), profile_assumed: false }, 1024 * 1024).unwrap();
+    for y in 0..64 { builder.push_row(&(0..64).flat_map(|x| { let value = if (x + y) % 2 == 0 { 255 } else { 0 }; [value, value, value, 255] }).collect::<Vec<_>>()).unwrap(); }
+    let checker = AuthoredImage::new(Arc::new(builder.finish().unwrap()));
+    for blur in [false, true] {
+        let mut object = ImageObject::new(checker.clone(), "Nearest checker");
+        object.interpolation = ImageInterpolation::Nearest;
+        object.affine = Affine64([0.75, 0., 0., 0.75, 64., 64.]);
+        let (mut doc, owner, handles) = document([256; 2], vec![object]);
+        if blur {
+            let instance = layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
+            let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication::new(instance.program, instance.values, [256; 2])).unwrap();
+            let mut effect = Occurrence::new(OccurrenceContent::Effect(application), "Blur"); effect.attachment = layer_core::Attachment::Effect;
+            let effect = doc.artwork.occurrences.insert(PortableId::random(), effect).unwrap();
+            let stack = doc.composition().result;
+            doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, effect);
+            doc = layer_core::Document::from_artwork(doc.artwork).unwrap();
+        }
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let view = layer_render::ViewState { width_px: 64, height_px: 64, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+        settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [256; 2]) }, 2000);
+        layer_render::CanvasRenderer::prepare_moving_layer(&mut r, Some(owner));
+        for step in 0..12 {
+            let mut affine = doc.scene().object(handles[0]).unwrap().affine; affine.0[4] += 1.37; affine.0[5] -= 0.61;
+            doc.apply(doc.set_image_object_affine_edit(handles[0], affine).unwrap()).unwrap();
+            let revision = r.composite_revision;
+            r.submit(FramePacket { view, composite_all: false, ..packet(doc.scene(), [256; 2]) }).unwrap();
+            r.wait_idle().unwrap();
+            assert!(r.composite_revision != revision && !r.object_deferred, "Nearest pose {step} publishes (blur={blur})");
+            assert!(!r.scene.as_ref().unwrap().object_results.pending(), "Nearest motion queues no canonical work");
+            if !blur {
+                let pixels = float_pixels(&r, r.scale_display.as_ref().unwrap().texture());
+                assert!(pixels.iter().all(|pixel| [[0., 0., 0., 1.], [1.; 4], [0.; 4]].contains(pixel)), "Nearest previews never average source texels");
+                assert!(pixels.iter().any(|pixel| *pixel == [1.; 4]) && pixels.iter().any(|pixel| *pixel == [0., 0., 0., 1.]));
+            }
+        }
+    }
+}
+
+#[test]
+fn overlapping_canonical_windows_sample_only_their_uncovered_content() {
+    let (doc, owner, _, _) = tablet_scene(false, 4, false);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.document_extent = [4248, 2832];
+    let mut scene = Scene::new(&r);
+    scene.object_spatial.prepare(doc.scene());
+    let content = scene.object_spatial.content(doc.scene(), owner).unwrap();
+    let evaluate = |r: &mut WgpuRasterizer, scene: &mut Scene, origin: [f64; 2]| {
+        let frame = packet(doc.scene(), [4248, 2832]);
+        let mut request = scene.collection_job(r, frame, owner, content.clone(), ObjectWindow { origin, side: 4., size: [256; 2] });
+        request.live = true; request.display = true;
+        let mut taps = 0;
+        for _ in 0..2000 {
+            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            r.drain_image_decodes(&mut encoder).unwrap();
+            if let Some(pieces) = scene.canonical_cover(r, frame, &content, &request).unwrap() {
+                r.uploads.finish(&encoder); encoder.submit(&r.queue);
+                return (taps, pieces.into_iter().map(|(_, bounds)| bounds).collect::<Vec<_>>());
+            }
+            let mut cache = std::mem::take(&mut scene.object_results);
+            taps += cache.advance(r, scene, &mut encoder, false).unwrap();
+            scene.object_results = cache;
+            r.uploads.finish(&encoder); encoder.submit(&r.queue); r.wait_idle().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("canonical window completes");
+    };
+    let (first, pieces) = evaluate(&mut r, &mut scene, [600., 400.]);
+    assert_eq!(pieces.len(), 1);
+    let (shifted, pieces) = evaluate(&mut r, &mut scene, [1112., 400.]);
+    assert!(pieces.len() == 2 && pieces.iter().all(|bounds| !bounds.intersect(DocRect { min: [1112, 400], max: [2136, 1424] }).is_empty()));
+    let mut empty = Scene::new(&r);
+    let (fresh, _) = evaluate(&mut r, &mut empty, [1112., 400.]);
+    assert!(shifted * 3 < fresh * 2, "half of the shifted window is reused: {shifted} of {fresh} taps (first {first})");
+    let (covered, _) = evaluate(&mut r, &mut scene, [856., 400.]);
+    assert_eq!(covered, 0, "a window inside completed results samples nothing");
+}
+
+#[test]
+fn eight_distinct_sources_settle_in_few_frames_with_a_tablet_sized_source_cache() {
+    let (doc, _, _, mut view) = tablet_scene(true, 8, false);
+    view.document_to_surface = [0.1597, 0., 0., 0.1597, 670.09, 445.26];
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.source_tiles.get_mut().admit(400 * 4 * (1 << 20));
+    let frames = settle_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
+    assert!(frames < 400, "decoding stays ahead of eight sources' mip and canonical work: {frames} frames");
 }

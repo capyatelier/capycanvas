@@ -31,6 +31,9 @@ command-change-bit-depth = Ubah Kedalaman Bit…
 command-repair-source-profile = Perbaiki Profil Sumber…
 
 command-rasterize-source = Rasterisasi Sumber…
+command-rasterize-layer = Rasterisasi Lapisan
+command-convert-to-object = Ubah ke Lapisan Gambar
+command-rasterize-and-apply-mask = Rasterisasi dan Terapkan Mask
 
 command-new-document = Baru…
 
@@ -296,7 +299,7 @@ command-cut-selection-to-layer = Potong Seleksi ke Lapisan Baru
 
 command-actual-pixels = Piksel Aktual
 
-command-revert-to-original = Kembalikan ke Foto Asli
+command-discard-paint-edits = Buang Suntingan Lukisan
 
 command-load-selection-layer = Muat Lapisan Seleksi
 
@@ -360,7 +363,8 @@ command-crop-cycle-overlay = Beralih hamparan pangkas
 
 command-crop-straighten = Luruskan
 
-command-crop-delete-cropped-pixels = Hapus Piksel Terpangkas
+command-crop-delete-cropped-pixels = Hapus Piksel Lukisan Terpangkas
+commands-canvas-change-drawing-changed = Gambar berubah sebelum perubahan kanvas selesai; coba lagi
 
 command-straighten-to-guide = Luruskan Gambar ke Garis Bantu
 
@@ -391,6 +395,7 @@ command-copy = Salin
 command-cut = Potong
 
 command-copy-merged = Salin Gabungan
+command-copy-pixels = Salin Piksel
 
 command-paste-in-place = Tempel di Tempat
 
@@ -562,25 +567,25 @@ commands-help-clone-flip-horizontal = Cerminkan piksel yang disalin terhadap cak
 
 commands-help-clone-reset-offset = Mulai goresan berikutnya dengan menyalin dari cakram sumber lagi.
 
-commands-help-clear-layer = Hapus semua isi lapisan aktif. Foto asli yang ditempatkan juga dibuang.
+commands-help-clear-layer = Hapus semua isi lapisan aktif, termasuk foto di dalamnya.
 
-commands-help-clear-selected = Hapus piksel terpilih di lapisan aktif; tepi lembut dihapus sebagian. Foto yang ditempatkan mempertahankan aslinya.
+commands-help-clear-selected = Hapus piksel terpilih di lapisan aktif; tepi lembut dihapus sebagian. Buang Suntingan Lukisan mengembalikan foto yang terhapus.
 
 commands-help-clear-outside = Hapus piksel lapisan aktif di luar seleksi.
 
-commands-help-copy-selection-to-layer = Salin piksel terpilih ke lapisan baru di atas, pada posisi yang sama. Tanpa seleksi, duplikat lapisan.
+commands-help-copy-selection-to-layer = Salin piksel terpilih ke lapisan baru di atasnya, di tempat yang sama. Tanpa seleksi, duplikasi lapisan. Pada lapisan gambar, duplikasi gambar yang dipilih.
 
 commands-help-cut-selection-to-layer = Pindahkan piksel terpilih dari lapisan aktif ke lapisan baru di atas, pada posisi yang sama.
 
-commands-help-revert-to-original = Buang lukisan, penghapusan, dan mask yang diterapkan pada foto yang ditempatkan, dengan mempertahankan posisi, mask, opasitas, dan mode baurnya.
+commands-help-discard-paint-edits = Buang lukisan, penghapusan, dan mask yang diterapkan pada lapisan foto, dengan mempertahankan foto, mask, opasitas, mode baur, dan mode warnanya.
 
-commands-help-merge-down = Gabungkan lapisan aktif ke lapisan di bawah. Dasar kliping menggabungkan lapisan terklipingnya, dan lapisan efek hanya diterapkan pada lapisan di bawah. Foto yang ditempatkan menjadi piksel dokumen.
+commands-help-merge-down = Gabungkan lapisan aktif ke lapisan di bawah. Dasar kliping menggabungkan lapisan terklipingnya, dan lapisan efek hanya diterapkan pada lapisan di bawah. Lapisan gambar menjadi cat, dan piksel di luar kanvas tetap disimpan.
 
-commands-help-merge-group = Gabungkan grup aktif menjadi satu lapisan dengan mode baur dan opasitas grup, serta buang lapisan tersembunyinya. Foto yang ditempatkan menjadi piksel dokumen.
+commands-help-merge-group = Gabungkan grup aktif menjadi satu lapisan dengan mode baur dan opasitas grup, serta buang lapisan tersembunyinya. Lapisan gambar menjadi cat, dan piksel di luar kanvas tetap disimpan.
 
-commands-help-merge-visible = Gabungkan semua lapisan terlihat menjadi satu, dengan mempertahankan lapisan tersembunyi. Foto yang ditempatkan menjadi piksel dokumen.
+commands-help-merge-visible = Gabungkan semua lapisan terlihat menjadi satu, dengan mempertahankan lapisan tersembunyi. Lapisan gambar menjadi cat, dan piksel di luar kanvas tetap disimpan.
 
-commands-help-flatten-image = Gabungkan semua lapisan terlihat menjadi satu di atas kertas dan buang lapisan tersembunyi serta piksel di luar kanvas. Foto yang ditempatkan menjadi piksel dokumen.
+commands-help-flatten-image = Gabungkan semua lapisan terlihat menjadi satu di atas kertas dan buang lapisan tersembunyi. Lapisan gambar menjadi cat, dan piksel di luar kanvas tetap disimpan.
 
 commands-flatten-discards-hidden-layers = Meratakan gambar akan membuang { $count } lapisan tersembunyi
 
@@ -622,7 +627,7 @@ commands-help-smooth-selection = Isi lekukan dan hapus tonjolan yang lebih sempi
 
 commands-help-transform-selection-outline = Pindahkan, skalakan, putar, atau balik garis seleksi; piksel tetap di tempatnya.
 
-commands-help-crop = Seret pegangan pangkas, pilih rasio atau luruskan, lalu terapkan. Piksel terpangkas tetap tersembunyi di lapisannya kecuali Hapus Piksel Terpangkas aktif; menyeret melewati kanvas menambah kanvas transparan.
+commands-help-crop = Seret pegangan pangkas, pilih rasio atau luruskan, lalu terapkan. Piksel terpangkas tetap tersembunyi di lapisannya kecuali Hapus Piksel Lukisan Terpangkas aktif; menyeret melewati kanvas menambah kanvas transparan.
 
 commands-help-crop-swap-orientation = Tukar pangkasan antara lanskap dan potret.
 
@@ -630,13 +635,13 @@ commands-help-crop-cycle-overlay = Tampilkan garis bantu pangkas berikutnya: sep
 
 commands-help-crop-straighten = Gambar garis sepanjang sesuatu yang seharusnya datar atau tegak; pangkasan diputar untuk mencocokkannya.
 
-commands-help-crop-delete-cropped-pixels = Buang piksel di luar pangkasan saat diterapkan, alih-alih mempertahankannya tersembunyi. Foto yang ditempatkan mempertahankan aslinya.
+commands-help-crop-delete-cropped-pixels = Buang piksel lukisan di luar pangkasan saat diterapkan, alih-alih mempertahankannya tersembunyi. Gambar yang ditempatkan tetap utuh; rasterisasi lapisan gambar untuk memangkasnya.
 
 commands-help-straighten-to-guide = Mulai pangkasan yang diputar agar sejajar dengan garis bantu lurus terpilih.
 
 commands-help-crop-fit-content = Atur pangkasan ke batas piksel terlihat, termasuk yang berada di luar kanvas.
 
-commands-help-image-size = Skalakan seluruh gambar ke ukuran baru dalam piksel atau persen, atau ubah hanya resolusinya. Sampel lapisan cat diambil ulang; foto yang ditempatkan mempertahankan piksel aslinya.
+commands-help-image-size = Skalakan seluruh gambar ke ukuran baru dalam piksel atau persen, atau ubah hanya resolusinya. Sampel lapisan cat diambil ulang sekali; lapisan gambar menskalakan gambarnya tanpa mengambil ulang sampel.
 
 commands-help-rotate-image-left = Putar seluruh gambar beserta seleksi dan garis bantunya. Piksel berpindah tanpa pengambilan sampel ulang.
 
@@ -648,17 +653,18 @@ commands-help-reveal-all = Perbesar kanvas untuk menampilkan piksel semua lapisa
 
 commands-help-move-leave-copy = Saat Pindahkan menyeret piksel terpilih, tempatkan salinan dan pertahankan aslinya di tempat. Menahan Alt saat mulai menyeret melakukan kebalikannya.
 
-commands-help-copy = Salin piksel lapisan aktif di dalam seleksi, sebelum opasitas, mask, dan efeknya. Tanpa seleksi, salin seluruh lapisan di dalam kanvas.
+commands-help-copy = Salin piksel milik lapisan aktif di dalam seleksi, sebelum opasitas, mask, dan efeknya. Tanpa seleksi, salin seluruh lapisan di dalam kanvas. Pada lapisan gambar, salin gambar yang dipilih.
 
-commands-help-cut = Salin piksel terpilih lapisan aktif, lalu hapus dari lapisan.
+commands-help-cut = Salin piksel terpilih pada lapisan aktif, lalu hapus dari lapisan. Pada lapisan gambar, salin gambar yang dipilih, lalu hapus.
 
 commands-help-copy-merged = Salin gambar terlihat dalam seleksi, sebagaimana hasil ekspor.
+commands-help-copy-pixels = Salin piksel lapisan aktif di dalam seleksi, sebelum opasitas, mask, dan efeknya. Pada lapisan gambar, gambarnya disalin sebagai piksel.
 
-commands-help-paste-image = Tambah isi papan klip sebagai lapisan baru. Salinan dari Capy Canvas mempertahankan posisinya jika terlihat; gambar dari aplikasi lain dibuka dengan pegangan penempatan.
+commands-help-paste-image = Tambahkan isi papan klip. Piksel yang disalin di Capy Canvas menjadi lapisan cat di posisi salinannya jika terlihat, dan gambar yang disalin tetap menjadi gambar. Gambar dari aplikasi lain terbuka dengan pegangan penempatan.
 
-commands-help-paste-in-place = Tambah isi papan klip sebagai lapisan baru di posisi asal salinan, tanpa pegangan penempatan. Gambar dari aplikasi lain dipusatkan dengan ukuran penuh.
+commands-help-paste-in-place = Tambahkan isi papan klip di posisi asal salinan, tanpa pegangan penempatan. Gambar dari aplikasi lain ditempatkan sebagai gambar di tengah dengan ukuran penuh.
 
-commands-help-paste-into = Tambah isi papan klip di posisi asal salinan sebagai lapisan baru yang masknya hanya menampilkan seleksi.
+commands-help-paste-into = Tambahkan isi papan klip sebagai gambar di lapisan gambar baru yang masknya hanya menampilkan seleksi. Pindahkan gambar untuk mengubah bagian yang terlihat.
 
 commands-help-new-dodge-burn-layer = Tambah lapisan Cahaya Lembut berwarna abu-abu netral di atas lapisan aktif. Lukis putih untuk menerangkan dan hitam untuk menggelapkan.
 
@@ -760,7 +766,6 @@ commands-already-editing-the-layer-mask = Mask lapisan sudah sedang diedit
 
 commands-already-editing-the-layer-content = Isi lapisan sudah sedang diedit
 
-commands-place-an-image-first = Tempatkan gambar terlebih dahulu
 
 commands-deselect-before-restoring-the-previous-selection = Batalkan seleksi sebelum memulihkan seleksi sebelumnya
 
@@ -784,7 +789,7 @@ commands-the-layout-already-matches-its-starting-state = Tata letak sudah sesuai
 
 commands-return-to-the-layer-s-artwork-first = Kembali ke karya lapisan terlebih dahulu
 
-commands-select-an-unlocked-retained-image-layer = Pilih lapisan gambar asli yang disimpan dan tidak dikunci
+commands-select-an-unlocked-photo-or-image = Pilih lapisan foto atau gambar yang tidak dikunci
 
 commands-applying-the-transform = Menerapkan transformasi
 
@@ -794,7 +799,6 @@ commands-start-a-transform-first = Mulai transformasi terlebih dahulu
 
 commands-choose-warp-first = Pilih Lengkungkan terlebih dahulu
 
-commands-placed-photos-keep-their-original-pixels = Foto yang ditempatkan mempertahankan piksel aslinya
 
 commands-show-rulers-first = Tampilkan penggaris terlebih dahulu
 
@@ -1015,9 +1019,9 @@ commands-refusal-selection-pixels-an-effect-layer-has-no-pixels-of-its-own = Lap
 
 commands-refusal-selection-pixels-the-layer-s-group-is-locked = Grup lapisan dikunci
 
-commands-refusal-source-edit-select-a-placed-photo-layer = Pilih lapisan foto yang ditempatkan
+commands-refusal-source-edit-select-a-photo-layer = Pilih lapisan foto
 
-commands-refusal-source-edit-a-rasterized-photo-has-no-original-to-return-to = Foto yang sudah dirasterisasi tidak memiliki foto asli untuk dipulihkan
+commands-refusal-source-edit-the-photo-is-already-pixels = Foto ini sudah menjadi bagian dari piksel lapisan
 
 commands-refusal-source-edit-this-photo-has-no-edits = Foto ini belum diedit
 
@@ -1027,7 +1031,6 @@ commands-refusal-canvas-size-an-inverted-selection-has-no-bounds-to-crop-to = Se
 
 commands-refusal-crop-select-a-straight-guide-first = Pilih garis bantu lurus terlebih dahulu
 
-commands-refusal-operation-select-all-then-transform-to-distort-this-photo-s-pixels = Pilih Semua, lalu Transformasi, untuk mendistorsi piksel foto ini
 
 commands-refusal-operation-a-selection-outline-can-be-moved-scaled-rotated-and-skewed-use-transform-to-distort-or-warp-the-pixels = Garis seleksi dapat dipindahkan, diskalakan, diputar, dan dimiringkan; gunakan Transformasi untuk mendistorsi atau melengkungkan piksel
 
@@ -1067,7 +1070,6 @@ commands-refusal-notices-this-layer-is-empty-and-there-s-no-layer-below-it-to-co
 
 commands-refusal-notices-choose-where-to-copy-from-first = Pilih sumber salinan terlebih dahulu
 
-commands-refusal-notices-this-layer-is-scaled-or-rotated-so-it-can-t-be-retouched-directly-retouch-on-a-new-layer-above-it = Lapisan ini diskalakan atau diputar sehingga tidak dapat diretus langsung. Retus pada lapisan baru di atasnya.
 
 commands-refusal-notices-the-layer-below-is-already-a-reference = Lapisan di bawah sudah menjadi acuan
 
@@ -1104,6 +1106,10 @@ commands-refusal-merges-no-visible-layers-to-merge = Tidak ada lapisan terlihat 
 commands-refusal-merges-move-the-selection-layers-out-of-the-group-first = Pindahkan lapisan seleksi keluar dari grup terlebih dahulu
 
 commands-refusal-merges-the-merged-layer-would-exceed-the-1-gib-limit-for-one-edit = Lapisan gabungan akan melebihi batas 1 GiB untuk satu pengeditan
+commands-refusal-merges-a-filter-reaches-too-far = Filter di sini menjangkau terlalu jauh untuk digabungkan tanpa kehilangan piksel
+commands-refusal-conversions-select-an-image-layer = Pilih lapisan gambar
+commands-refusal-conversions-too-large = Isi lapisan terlalu besar untuk diubah dalam satu pengeditan
+commands-refusal-conversions-layer-changed = Lapisan berubah saat sedang diubah
 
 commands-refusal-retouch-layers-select-a-paint-layer-first = Pilih lapisan cat terlebih dahulu
 
@@ -1125,17 +1131,13 @@ commands-refusal-art-layers-only-a-paint-layer-s-mask-can-be-applied = Hanya mas
 
 commands-refusal-blending-float-documents-blend-in-linear-light = Dokumen pecahan mengambang dibaurkan dalam cahaya linear
 
-command-apply-transform-pixels = Terapkan Transformasi ke Piksel
 
 transform-applying = Menerapkan transformasi…
 
-commands-help-apply-transform-pixels = Terapkan transformasi lapisan ke pikselnya, dengan mempertahankan cat dan mask yang dapat diedit.
 
 commands-wait-for-transform = Tunggu hingga transformasi selesai, atau batalkan
 
-commands-transform-pixels-select-layer = Pilih lapisan cat atau foto
 
-commands-transform-pixels-unchanged = Lapisan ini tidak memiliki transformasi untuk diterapkan
 
 commands-wait-for-current-edit = Tunggu pengeditan saat ini
 
@@ -1145,11 +1147,11 @@ commands-transform-pixels-unexpected-result = Tidak dapat menerapkan piksel yang
 
 commands-transform-pixels-layer-changed = Lapisan yang ditransformasi berubah
 
-commands-apply-transform-before-editing = Terapkan Transformasi ke Piksel sebelum mengedit lapisan ini
 
 commands-transform-single-warp = Pilih satu lapisan cat atau foto untuk dilengkungkan
+commands-transform-groups-move-only = Grup dan beberapa lapisan berpindah per piksel utuh; transformasikan satu lapisan cat untuk mengubah ukuran, memutar, atau melengkungkannya
 
-commands-transform-original-affine = Ukuran Asli memerlukan foto tanpa Distorsi atau Lengkungkan
+commands-original-size-select-images = Pilih gambar untuk memulihkan ukuran aslinya
 
 commands-warp-reset-grid = Atur Ulang Kisi untuk mengganti bentuk lengkung saat ini
 
@@ -1177,7 +1179,7 @@ command-transform-again = Transformasikan lagi
 command-transform-snapping = Lekatkan
 commands-transform-again-help = Terapkan transformasi lapisan terakhir pada lapisan yang dipilih
 commands-transform-snapping-help = Lekatkan ke kanvas, lapisan lain, dan penggaris
-commands-transform-again-empty = Terapkan transformasi lapisan terlebih dahulu
+commands-transform-again-empty = Belum ada transformasi untuk diulang
 commands-transform-again-whole-layer = Batalkan seleksi piksel dan pilih lapisan secara utuh
 
 commands-show-histogram = Tampilkan Histogram

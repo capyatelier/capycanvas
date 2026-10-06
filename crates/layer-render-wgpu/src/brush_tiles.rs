@@ -82,8 +82,8 @@ impl FanRegion {
         }
     }
 
-    /// The layer-space bounds of this region within one tile, if any.
-    fn clip(&self, tile: layer_core::Rect, layer_to_brush: layer_core::Affine, brush_to_layer: layer_core::Affine) -> Option<layer_core::Rect> {
+    /// The bounds of this region within one tile, if any.
+    fn clip(&self, tile: layer_core::Rect) -> Option<layer_core::Rect> {
         let corners = [
             tile.min,
             layer_core::Point { x: tile.max.x, y: tile.min.y },
@@ -92,16 +92,13 @@ impl FanRegion {
         ];
         let mut polygon: Vec<[f64; 2]> = corners
             .iter()
-            .map(|&p| {
-                let p = layer_to_brush.map(p);
-                [f64::from(p.x), f64::from(p.y)]
-            })
+            .map(|p| [f64::from(p.x), f64::from(p.y)])
             .collect();
         for plane in &self.edges {
             polygon = clip_polygon(&polygon, *plane);
         }
         polygon.iter().fold(None, |result: Option<layer_core::Rect>, p| {
-            let q = brush_to_layer.map(layer_core::Point { x: p[0] as f32, y: p[1] as f32 });
+            let q = layer_core::Point { x: p[0] as f32, y: p[1] as f32 };
             let rect = layer_core::Rect { min: q, max: q };
             Some(result.map_or(rect, |r| r.union(rect)))
         })
@@ -247,8 +244,8 @@ impl ContactHull {
             radius: expansion * stretch + 1. / axes[0].min(axes[1]),
         }
     }
-    fn touches(&self, tile: layer_core::Rect, layer_to_brush: layer_core::Affine) -> bool {
-        let transform = layer_to_brush.then(self.transform);
+    fn touches(&self, tile: layer_core::Rect) -> bool {
+        let transform = self.transform;
         let corners = [
             tile.min,
             layer_core::Point {
@@ -342,7 +339,6 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
     }
     let contact = batch.style.contact.as_ref();
     let fan = contact.is_some_and(|c| c.bristles.is_some());
-    let inverse = batch.style.brush_to_layer.inverse();
     let mut tiles = std::collections::BTreeMap::<_, BrushTile>::new();
     for (index, dab) in dabs.iter().enumerate() {
         let radius = contact.filter(|_| !fan).map_or(0., |contact| contact_radius(*dab, contact));
@@ -356,23 +352,20 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
         } else {
             dab.bounds()
         };
-        let bounds =
-            pixel_rect(batch.style.brush_to_layer.bounds(footprint), extent).intersect(damage);
+        let bounds = pixel_rect(footprint, extent).intersect(damage);
         if bounds.is_empty() {
             continue;
         }
         let index = batch.first_dab + index as u32;
         for coordinate in page_coordinates(bounds) {
             let mut clipped = bounds;
-            if let Some(region) = &region
-                && let Some(inverse) = inverse
-            {
+            if let Some(region) = &region {
                 let tile = page_rect(coordinate);
                 let rect = layer_core::Rect {
                     min: layer_core::Point { x: tile.min_x() as f32, y: tile.min_y() as f32 },
                     max: layer_core::Point { x: tile.max_x() as f32, y: tile.max_y() as f32 },
                 };
-                let Some(area) = region.clip(rect, inverse, batch.style.brush_to_layer) else {
+                let Some(area) = region.clip(rect) else {
                     continue;
                 };
                 let area = layer_core::Rect {
@@ -384,12 +377,10 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
                     continue;
                 }
             }
-            if let Some(hull) = &hull
-                && let Some(inverse) = inverse
-            {
+            if let Some(hull) = &hull {
                 let tile = page_rect(coordinate);
                 let rect = tile.to_rect();
-                if !hull.touches(rect, inverse) {
+                if !hull.touches(rect) {
                     continue;
                 }
             }
@@ -425,8 +416,8 @@ pub(super) fn document_damage(
     local: PixelRect,
     extent: [u32; 2],
 ) -> PixelRect {
-    let transform = scene.target_geometry(id);
-    if transform.is_identity() {
+    let offset = scene.target_offset(id);
+    if offset == [0; 2] {
         return local.intersect(PixelRect::full(extent));
     }
     if local.is_empty() {
@@ -434,7 +425,7 @@ pub(super) fn document_damage(
     }
     let halo = PAGE_SIZE as f32;
     pixel_rect(
-        transform.forward_bounds(layer_core::Rect {
+        (layer_core::Rect {
             min: layer_core::Point {
                 x: local.min_x() as f32 - halo,
                 y: local.min_y() as f32 - halo,
@@ -443,7 +434,7 @@ pub(super) fn document_damage(
                 x: local.max_x() as f32 + halo,
                 y: local.max_y() as f32 + halo,
             },
-        }),
+        }).translated(layer_core::offsets::point(offset)),
         extent,
     )
 }

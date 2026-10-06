@@ -43,7 +43,10 @@ extension XCTestCase {
             let place = app.buttons["canvas-bar-action-apply_transform"]
             XCTAssertTrue(place.waitForExistence(timeout: 20)); workspaceActivate(place)
             XCTAssertTrue(place.waitForNonExistence(timeout: 10))
-            XCTAssertTrue(app.staticTexts[url.deletingPathExtension().lastPathComponent].firstMatch.waitForExistence(timeout: 15))
+            workspaceActivate(app.buttons["layer-Layer actions"])
+            let rasterize = app.buttons["menu-action-Rasterize Layer"]
+            XCTAssertTrue(rasterize.waitForExistence(timeout: 5)); workspaceActivate(rasterize)
+            XCTAssertTrue(rasterize.waitForNonExistence(timeout: 10))
             return try pixels()
         }
         var exportIndex = 0

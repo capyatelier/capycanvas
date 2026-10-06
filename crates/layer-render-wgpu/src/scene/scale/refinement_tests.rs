@@ -363,7 +363,7 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
         preview.moving = moving;
         for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap(); }
         if !moving { assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact))); }
-        assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
+        crate::test_support::assert_same_canonical(&mut r, &mut exact);
     }
     for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(None).unwrap(); renderer.submit(frame).unwrap(); }
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
@@ -556,15 +556,17 @@ fn animated_display_invalidates_retained_pixels_when_time_changes() {
 }
 
 #[test]
-fn idle_display_refines_placement_windows_and_reuses_exact_overlap() {
+fn idle_display_refines_paused_transform_windows_and_reuses_exact_overlap() {
     for space in layer_core::BlendSpace::ALL {
-        let mut doc = document_at([1541, 771]);
+        let doc = document_at([1541, 771]);
         let extent = doc.composition().size;
-        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(Affine::around(Point { x: 770., y: 385. }, [0.9, 0.8], 0.17, Point::default()));
+        let preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc, 0), moving: false, selection: None,
+            transform: layer_core::ImageTransform::affine(Affine::around(Point { x: 770., y: 385. }, [0.9, 0.8], 0.17, Point::default())) };
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         r.set_complete_display_allowance(0);
         let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
+        for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(Some(&preview)).unwrap(); }
         let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.composite_all = false;
@@ -620,7 +622,7 @@ fn idle_display_refines_spatial_effects_and_invalidates_committed_paint() {
         let paint = source_at(&doc, 0);
         let effect=effect_occurrence(&mut doc,EffectInstance::new(crate::tests::fixture("gaussian_blur").program()),"blur");
         set_effect_value(&mut doc,effect,"sigma",EffectValue::Number(7.));
-        let mask=coverage_mask(&mut doc,effect,Point::default(),None);
+        let mask=coverage_mask(&mut doc,effect,[0, 0],None);
         doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.7;
         insert_occurrence(&mut doc,effect,0);
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();

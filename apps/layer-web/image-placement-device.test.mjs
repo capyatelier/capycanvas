@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import {paintBaseImage,packageOccurrences,packageObject} from './package-fixture.test.mjs';
+import {packageObject,packageObjects} from './package-fixture.test.mjs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {measurePlacedPhotos,placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
+import {measurePlacedPhotos,placementSave,imageIdentity} from './image-placement-motion.test.mjs';
 
 // Tablet Chrome cannot select desktop paths. Fetch the original encoded files
 // from the test server, then use the normal picker/document request controller.
@@ -37,18 +37,20 @@ export async function checkDeviceImagePlacement({call,evaluate,settle}) {
     await invoke('import_image');await idle();await placed();await press('cancel_transform');
     assert.equal(await evaluate('layerApp.state().layers.length'),base);
     const start=Date.now();await invoke('import_image');await idle();await placed();await press('apply_transform');const loadingMs=Date.now()-start;
-    const baseline=await save(),sources=sourceIdentity(baseline);
-    const originals=packageOccurrences(baseline).filter(o=>o.data.content.paint&&paintBaseImage(baseline,o.data.content.paint));
-    for(const occurrence of originals){
-      const [w,h]=paintBaseImage(baseline,occurrence.data.content.paint).extent,pose=occurrence.data.placement?.projective??[1,0,0,0,1,0,0,0,1];
-      assert.ok(Math.abs(pose[0]-Math.min(1,2000/w,1500/h))<1e-6);
+    const baseline=await save(),sources=imageIdentity(baseline);
+    for(const object of packageObjects(baseline,'capy.image-object/1')){
+      const [w,h]=packageObject(baseline,object.data.image).data.extent;
+      assert.ok(Math.abs(object.data.affine[0]-Math.min(1,2000/w,1500/h))<1e-6);
     }
     await invoke('undo');assert.equal(await evaluate('layerApp.state().layers.length'),base);
-    await invoke('redo');assert.equal(await evaluate('layerApp.state().layers.length'),base+2);
+    await invoke('redo');assert.equal(await evaluate('layerApp.state().layers.length'),base+1);
     await evaluate(`placementTest.photos=placementTest.files;placementTest.files=[new File([placementTest.saved],'tablet-placement.capy')]`);
-    await invoke('open_document');await idle();assert.deepEqual(sourceIdentity(await save()),sources);
-    await invoke('scale_rotate');await press('placement_original_size');await press('apply_transform');
-    assert.equal((packageOccurrences(await save())[0].data.placement?.projective??[1,0,0,0,1,0,0,0,1])[0],1);
+    await invoke('open_document');await idle();assert.deepEqual(imageIdentity(await save()),sources);
+    const first=packageObjects(baseline,'capy.image-object/1')[0].data.name;
+    const layer=await evaluate('Number(layerApp.state().layers.find(l=>l.object_count>0).id)');
+    await invoke('move');await evaluate(`layerApp.dispatch({type:'object',action:{op:'expand',layer:${layer},expanded:true}});layerApp.dispatch({type:'object',action:{op:'select',id:Number(layerApp.state().layers.find(l=>l.object_count>0).objects.find(o=>o.label===${JSON.stringify(first)}).id),extend:false}})`);await settle();
+    await press('placement_original_size');
+    assert.equal(packageObjects(await save(),'capy.image-object/1').find(o=>o.data.name===first).data.affine[0],1);
     await evaluate('placementTest.files=placementTest.photos');
     const hardware=await evaluate(`(async()=>{const a=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,platform:await navigator.userAgentData?.getHighEntropyValues(['model','architecture','platform']),gpu:{vendor:a.info.vendor,architecture:a.info.architecture,description:a.info.description},viewport:[innerWidth,innerHeight],device_memory_gib:navigator.deviceMemory}})()`);
     const readMemory=async()=>{

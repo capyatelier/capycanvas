@@ -1,5 +1,5 @@
 use super::*;
-use crate::{EffectView, LayerKind, Point, ImageTransform, Affine, Projective, LayerPlacement, raster::RasterRevision};
+use crate::{EffectView, LayerKind, Point, raster::RasterRevision};
 use std::{collections::BTreeSet,sync::Arc};
 
 #[derive(Clone,Debug,Default,PartialEq)]
@@ -113,7 +113,7 @@ impl SceneSnapshot {
         let coverage:Vec<_>=artwork.coverage.iter().map(|(h,_,_)|h).filter(|h|!required.contains(&SourceTarget::Coverage(*h))).collect();
         for handle in coverage {
             let source=artwork.coverage.get_mut(handle).unwrap();
-            source.raster=Default::default();source.initial=None;source.operations=Arc::default();
+            source.raster=Default::default();source.operations=Arc::default();
         }
         artwork
     }
@@ -154,16 +154,6 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn paint_base(self,t:SourceTarget)->Option<&'a PaintBase>{match t{SourceTarget::Paint(h)=>self.paint(h)?.base.as_ref(),_=>None}}
     pub fn object_layer(self,h:OccurrenceHandle)->Option<&'a ObjectLayer>{match self.occurrence(h)?.content{OccurrenceContent::Objects(h)=>self.artwork.object_layers.get(h),_=>None}}
-    pub fn object_geometry_supported(self,h:OccurrenceHandle)->bool {
-        if self.object_layer(h).is_none() {return false;}
-        let mut current=Some(h);
-        while let Some(h)=current {
-            let Some(o)=self.occurrence(h) else{return false;};
-            if !o.translation.x.is_finite() || !o.translation.y.is_finite() || o.translation.x.fract()!=0. || o.translation.y.fract()!=0. || o.placement.as_affine()!=Some(Affine::IDENTITY) {return false;}
-            current=self.parent(h);
-        }
-        true
-    }
     pub fn object_owner(self,h:ImageObjectHandle)->Option<OccurrenceHandle>{self.index.object_uses.get(h.index() as usize).copied().flatten()}
     pub fn object(self,h:ImageObjectHandle)->Option<&'a ImageObject>{self.artwork.objects.get(h)}
     pub fn artwork(self)->&'a Artwork{self.artwork}
@@ -274,25 +264,30 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn effect_input(self)->Option<OccurrenceHandle>{match self.scope{Some(SceneScope::EffectInput(h))=>Some(*h),_=>None}}
     #[inline]
-    pub fn occurrence_offset(self,h:OccurrenceHandle)->Point {
-        let offset=self.occurrence_offset64(h);Point {x:offset[0] as f32,y:offset[1] as f32}
+    pub fn occurrence_offset(self,h:OccurrenceHandle)->[i64;2] {
+        self.framed(self.layer_origin(Some(h)))
     }
     pub fn occurrence_offset64(self,h:OccurrenceHandle)->[f64;2] {
-        let mut offset=self.offset;let mut current=Some(h);
-        while let Some(h)=current {let Some(o)=self.occurrence(h) else{break;};offset[0]+=f64::from(o.translation.x);offset[1]+=f64::from(o.translation.y);current=self.parent(h);}offset
+        let offset=self.layer_origin(Some(h));[self.offset[0]+offset[0] as f64,self.offset[1]+offset[1] as f64]
     }
-    pub fn target_geometry(self,t:SourceTarget)->ImageTransform {
-        let Some(h)=self.source_owner(t) else{return ImageTransform::default();};let owner=self.occurrence(h).unwrap();let world=self.occurrence_offset(h);
-        if matches!(t,SourceTarget::Coverage(_)) {
-            let Some((mask,_))=self.mask(h) else{return ImageTransform::default();};let mut geometry=mask.geometry_in_parent(owner);
-            let parent=Point{x:world.x-owner.translation.x,y:world.y-owner.translation.y};
-            geometry.placement=geometry.placement.post(Projective::from_affine(Affine::translation(parent))).unwrap_or_else(||LayerPlacement::from_projective(Projective([f32::NAN;9])));geometry
-        } else {ImageTransform {placement:owner.placement.post(Projective::from_affine(Affine::translation(world))).unwrap_or_else(||LayerPlacement::from_projective(Projective([f32::NAN;9]))),..Default::default()}}
+    pub fn layer_origin(self,h:Option<OccurrenceHandle>)->[i64;2] {
+        let mut origin=[0i64;2];let mut current=h;
+        while let Some(h)=current {let Some(o)=self.occurrence(h) else{break;};origin=[origin[0]+o.offset[0],origin[1]+o.offset[1]];current=self.parent(h);}origin
     }
-    pub fn target_offset(self,t:SourceTarget)->Point {
-        let Some(h)=self.source_owner(t) else{return Point::default();};let mut offset=self.occurrence_offset(h);
-        if matches!(t,SourceTarget::Coverage(_)) && let Some((mask,_))=self.mask(h) {let owner=self.occurrence(h).unwrap();offset.x+=mask.translation.x-owner.translation.x;offset.y+=mask.translation.y-owner.translation.y;}offset
+    pub fn mask_origin(self,h:OccurrenceHandle)->Option<[i64;2]> {
+        let owner=self.occurrence(h)?;let mask=owner.mask.as_ref()?;
+        let frame=if mask.linked {self.layer_origin(Some(h))} else {self.layer_origin(self.parent(h))};
+        Some([frame[0]+mask.offset[0],frame[1]+mask.offset[1]])
     }
+    pub fn target_origin(self,t:SourceTarget)->[i64;2] {
+        let Some(h)=self.source_owner(t) else{return [0;2];};
+        if matches!(t,SourceTarget::Coverage(_)) {self.mask_origin(h).unwrap_or_default()} else {self.layer_origin(Some(h))}
+    }
+    /// Where pixel (0, 0) of `t` lies in the frame this view evaluates.
+    pub fn target_offset(self,t:SourceTarget)->[i64;2] {
+        self.framed(self.target_origin(t))
+    }
+    fn framed(self,origin:[i64;2])->[i64;2] {[origin[0]+self.offset[0] as i64,origin[1]+self.offset[1] as i64]}
     pub fn references(self)->BTreeSet<OccurrenceHandle>{self.order().iter().copied().filter(|h|self.occurrence(*h).is_some_and(|o|o.reference)).collect()}
 }
 impl Occurrence {
@@ -300,6 +295,8 @@ impl Occurrence {
     pub fn kind(&self)->LayerKind {match self.content{OccurrenceContent::Paint(_)=>LayerKind::Paint,OccurrenceContent::Objects(_)=>LayerKind::Object,OccurrenceContent::Stack(_)=>LayerKind::Group,OccurrenceContent::Effect(_)=>LayerKind::Effect,OccurrenceContent::Selection(_)=>LayerKind::Selection}}
     #[inline]
     pub fn is_artwork(&self)->bool{!matches!(self.content,OccurrenceContent::Selection(_))}
+    #[inline]
+    pub fn positioned(&self)->bool{matches!(self.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Stack(_))}
     #[inline]
     pub fn passes_through(&self)->bool{matches!(self.content,OccurrenceContent::Stack(_)) && self.blend==crate::LayerBlend::PassThrough}
 }
@@ -309,6 +306,10 @@ impl SourceTarget {
     pub fn from_wire_id(value:u64)->Option<Self>{let index=u32::try_from(value&u64::from(u32::MAX)).ok()?.checked_sub(1)?;Some(match value>>32{0=>Self::Paint(PaintHandle::from_index(index)),1=>Self::Coverage(CoverageHandle::from_index(index)),2=>Self::Selection(SelectionHandle::from_index(index)),_=>return None})}
     #[inline]
     pub fn is_coverage(self)->bool{matches!(self,Self::Coverage(_))}
+}
+impl super::Handle<super::ImageObject> {
+    pub fn wire_id(self)->u64{(3u64<<32)|(u64::from(self.index())+1)}
+    pub fn from_wire_id(value:u64)->Option<Self>{(value>>32==3).then(||u32::try_from(value&u64::from(u32::MAX)).ok()?.checked_sub(1)).flatten().map(Self::from_index)}
 }
 
 #[derive(Clone,Debug,PartialEq)]
@@ -343,7 +344,7 @@ mod tests {
         doc.artwork.occurrences.get_mut(fill).unwrap().attachment = crate::Attachment::Clip;
         assert!(doc.scene().constant_backdrop().is_empty());
         doc.artwork.occurrences.get_mut(fill).unwrap().attachment = crate::Attachment::None;
-        let coverage=doc.allocate_coverage_handle();let mask=crate::CoverageSnapshot::reveal_all(coverage,[16,16],Point::default());
+        let coverage=doc.allocate_coverage_handle();let mask=crate::CoverageSnapshot::reveal_all(coverage,[16,16],[0;2]);
         doc.artwork.coverage.install(coverage,mask.source).unwrap();doc.artwork.occurrences.get_mut(fill).unwrap().mask=Some(mask.use_);
         assert!(doc.scene().constant_backdrop().is_empty());
         doc.artwork.occurrences.get_mut(fill).unwrap().mask.as_mut().unwrap().enabled=false;
@@ -377,7 +378,7 @@ mod tests {
         let mut doc=crate::Document::new(PortableId::random(),16,16,crate::DocumentNames{paint:"Ink".into(),paper:"White fill".into()});
         let fill=doc.scene().children(None)[1];doc.working.occurrence=Some(fill);doc.working.target=None;
         assert_eq!(doc.try_drawing_target(),Err(crate::DrawingRefusal::Fill));
-        let coverage=doc.allocate_coverage_handle();let mask=crate::CoverageSnapshot::reveal_all(coverage,[16,16],Point::default());
+        let coverage=doc.allocate_coverage_handle();let mask=crate::CoverageSnapshot::reveal_all(coverage,[16,16],[0;2]);
         doc.artwork.coverage.install(coverage,mask.source).unwrap();doc.artwork.occurrences.get_mut(fill).unwrap().mask=Some(mask.use_);
         doc.scene_index=Arc::new(SceneIndex::build(&doc.artwork).unwrap());
         assert_eq!(doc.try_drawing_target(),Ok(SourceTarget::Coverage(coverage)));

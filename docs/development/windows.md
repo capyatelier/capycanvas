@@ -142,6 +142,15 @@ and their undo history in both themes, alongside the existing pickup fixture var
 The default layers fixture closes with a focused opacity draft, reopens the same
 private profile, and verifies the saved draft and its clean Undo checkpoint.
 
+Image layers list their images as child rows after the layer row while the shared
+state marks them expanded. Child rows carry the shared object IDs, previews from the
+object thumbnail target, visibility, selection, the shared image menu and grip
+reordering within their layer; they have no mask, lock or swipe controls. Their menu
+uses the layer-menu query with the image ID, answered by the shared `object_menu` query. `exercise-image-rows.ps1` pastes two
+images and checks rows, previews, additive selection, the menu, visibility, reordering,
+collapsing, the painting refusal's actions and Rasterize Layer with mouse and touch
+in the dark theme and with mouse in the light theme.
+
 ### Where files live
 
 [App storage](../internals/storage.md) describes each kind of file. The Rust

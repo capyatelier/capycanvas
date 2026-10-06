@@ -1,4 +1,4 @@
-use crate::{ArtworkSampleRequest, ArtworkSource, Document, DocumentNames, Edit, Point, authored::*};
+use crate::{ArtworkSampleRequest, ArtworkSource, Document, DocumentNames, Edit, authored::*};
 use std::sync::Arc;
 use crate::operation_test_support as fixture;
 fn document() -> Document {
@@ -18,7 +18,7 @@ fn change_paint(document: &mut Document, handle: PaintHandle, mutate: impl FnOnc
 }
 fn change_mask(document: &mut Document, handle: OccurrenceHandle, value: f32) {
     let target = document.artwork.coverage.next_handle();
-    let mut coverage = crate::CoverageSnapshot::reveal_all(target, document.composition().size, Point::default());
+    let mut coverage = crate::CoverageSnapshot::reveal_all(target, document.composition().size, [0; 2]);
     coverage.source.default_coverage = value;
     let mut occurrence = document.artwork.occurrences.get(handle).unwrap().clone();
     occurrence.mask = Some(coverage.use_);
@@ -85,7 +85,7 @@ fn frozen_artwork_identity_ignores_names_and_detects_pixel_dependencies() {
     let mutations: [fn(&mut Occurrence); 3] = [
         |o| o.visible = false,
         |o| o.opacity = 0.5,
-        |o| o.placement = crate::LayerPlacement::from_affine(crate::Affine::translation(Point { x: 1., y: 2. })),
+        |o| o.offset = [1, 2],
     ];
     for mutate in mutations {
         let mut changed = doc.clone();
@@ -149,7 +149,7 @@ fn artwork_sample_identity_rejects_unpublished_pixel_commands() {
     let request = ArtworkSampleRequest::new(&doc, ArtworkSource::Visible, [0.; 2], 5);
     let mut changed = doc.clone();
     let coverage =
-        crate::CoverageSnapshot::reveal_all(changed.artwork.coverage.next_handle(), changed.composition().size, Point::default());
+        crate::CoverageSnapshot::reveal_all(changed.artwork.coverage.next_handle(), changed.composition().size, [0; 2]);
     change_paint(&mut changed, target, |p| {
         Arc::make_mut(&mut p.operations).push(crate::RasterOperation {
             placement: crate::Affine::IDENTITY,
@@ -197,10 +197,9 @@ fn effect_input_key_ignores_upper_changes_and_own_consuming_values() {
     let upper = fixture::id(&doc, "Upper");
     let ink = fixture::id(&doc, "Ink");
     let query = crate::ArtworkQuery::new(&doc, ArtworkSource::EffectInput(target));
-    let mutations: [fn(&mut Document, OccurrenceHandle); 5] = [
+    let mutations: [fn(&mut Document, OccurrenceHandle); 4] = [
         |d, h| change_occurrence(d, h, |o| o.opacity = 0.4),
         |d, h| change_occurrence(d, h, |o| o.blend = crate::LayerBlend::Multiply),
-        |d, h| change_occurrence(d, h, |o| o.translation = Point { x: 4., y: 7. }),
         |d, h| change_mask(d, h, 0.25),
         change_effect,
     ];
@@ -209,7 +208,7 @@ fn effect_input_key_ignores_upper_changes_and_own_consuming_values() {
         mutate(&mut changed, upper);
         assert!(query.matches_source(&changed), "upper");
     }
-    for mutate in [mutations[0], mutations[1], mutations[3], mutations[4]] {
+    for mutate in mutations {
         let mut changed = doc.clone();
         mutate(&mut changed, target);
         assert!(query.matches_source(&changed), "own consuming state");
@@ -316,7 +315,7 @@ fn effect_input_key_tracks_noncontiguous_group_contributors_and_clipping() {
             let query = crate::ArtworkQuery::new(&doc, ArtworkSource::EffectInput(target));
             let mutations: [fn(&mut Document, OccurrenceHandle); 3] = [
                 |d, h| change_occurrence(d, h, |o| o.opacity = 0.4),
-                |d, h| change_occurrence(d, h, |o| o.translation = Point { x: 1., y: 2. }),
+                |d, h| change_occurrence(d, h, |o| o.offset = [1, 2]),
                 |d, h| change_mask(d, h, 0.2),
             ];
             for mutate in mutations {
@@ -391,7 +390,7 @@ fn effect_input_key_distinguishes_isolated_and_pass_through_ancestor_backdrops()
             change_occurrence(&mut changed, backdrop, |o| o.opacity = 0.25);
             assert_eq!(query.matches_source(&changed), !pass_through || attached, "pass-through={pass_through} attached={attached}");
             let mut changed = doc.clone();
-            change_occurrence(&mut changed, group, |o| o.translation = Point { x: 2., y: 3. });
+            change_occurrence(&mut changed, group, |o| o.offset = [2, 3]);
             assert!(!query.matches_source(&changed));
             let mut changed = doc.clone();
             change_occurrence(&mut changed, group, |o| {
@@ -516,10 +515,10 @@ fn raw_object_queries_track_owner_and_ancestor_placement_without_layer_appearanc
     change_occurrence(&mut doc,layer,|o|{o.opacity=0.2;o.visible=false;});
     change_occurrence(&mut doc,group,|o|{o.opacity=0.3;o.visible=false;});
     assert_current(&query,&doc,true);
-    change_occurrence(&mut doc,layer,|o|o.translation=Point{x:3.,y:-7.});
+    change_occurrence(&mut doc,layer,|o|o.offset=[3, -7]);
     assert_current(&query,&doc,false);
     let query=crate::ArtworkQuery::new(&doc,ArtworkSource::Objects(layer));
-    change_occurrence(&mut doc,group,|o|o.translation=Point{x:-11.,y:5.});
+    change_occurrence(&mut doc,group,|o|o.offset=[-11, 5]);
     assert_current(&query,&doc,false);
 }
 

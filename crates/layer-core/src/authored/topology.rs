@@ -53,9 +53,9 @@ impl Shape {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct GraphLimits { pub objects: usize, pub edges: usize, pub depth: usize }
+pub struct GraphLimits { pub objects: usize, pub edges: usize, pub depth: usize, pub layer_objects: usize }
 impl Default for GraphLimits {
-    fn default() -> Self { Self { objects: 65_536, edges: 262_144, depth: 128 } }
+    fn default() -> Self { Self { objects: 65_536, edges: 262_144, depth: 128, layer_objects: 4096 } }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,6 +150,7 @@ impl GraphShape {
                     }
                 }
                 Shape::ObjectLayer { children } => {
+                    if children.len() > limits.layer_objects { return Err(GraphError::Unsupported("Image layer object limit exceeded")); }
                     for child in children {
                         expect(*child, |s|matches!(s,Shape::ImageObject { .. }))?;
                         if *memberships.entry(*child).or_default()!=0 {return Err("Drawable belongs to multiple collection slots".into());}

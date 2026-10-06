@@ -189,11 +189,43 @@ impl SourceThumbnails {
         mut tile_limit: usize,
     ) -> Result<bool, GpuRasterError> {
         let base = r.tiled_sources[&layer].clone();
-        let source = base.image.storage();
         // The layer's finite local backing, including original pixels beyond
         // the canvas. Placement changes only the display pass.
         let extent = r.target_extent(layer);
-        let weak = Arc::downgrade(source);
+        let overview = self.overview(r, &base, extent, encoder, &mut tile_limit)?;
+        let ready = overview.remaining.is_empty()
+            && self.prepare_paint(r, layer, &overview, encoder, tile_limit)?;
+        self.retain(overview);
+        Ok(ready)
+    }
+    /// Prepare the complete image of a placed object, independent of its placement.
+    pub fn prepare_image(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        base: &layer_core::authored::PaintBase,
+        encoder: &mut crate::submission::CommandEncoder,
+        mut tile_limit: usize,
+    ) -> Result<bool, GpuRasterError> {
+        let overview = self.overview(r, base, base.image.extent, encoder, &mut tile_limit)?;
+        let ready = overview.remaining.is_empty();
+        self.retain(overview);
+        Ok(ready)
+    }
+    fn retain(&mut self, overview: Overview) {
+        self.cache.push_back(overview);
+        while self.cache.len() > OVERVIEWS {
+            self.cache.pop_front();
+        }
+    }
+    fn overview(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        base: &layer_core::authored::PaintBase,
+        extent: [u32; 2],
+        encoder: &mut crate::submission::CommandEncoder,
+        tile_limit: &mut usize,
+    ) -> Result<Overview, GpuRasterError> {
+        let weak = Arc::downgrade(base.image.storage());
         self.cache.retain(|c| {
             c.source.strong_count() > 0 && c.valid.load(std::sync::atomic::Ordering::Acquire)
         });
@@ -205,7 +237,7 @@ impl SourceThumbnails {
             self.cache.remove(index).unwrap()
         } else {
             let pixels = overview_buffer(&r.device);
-            let (tiles, bytes) = contribution_layout(&base, extent)?;
+            let (tiles, bytes) = contribution_layout(base, extent)?;
             let contributions = r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("compact original tile thumbnail contributions"),
                 size: bytes.max(16),
@@ -225,13 +257,13 @@ impl SourceThumbnails {
         };
         if !overview.remaining.is_empty() {
             let write = crate::submission::CacheWrite::new();
-            while tile_limit > 0 {
+            while *tile_limit > 0 {
                 let Some(coordinate) = overview.remaining.pop_front() else {
                     break;
                 };
-                tile_limit -= 1;
+                *tile_limit -= 1;
                 let tile = r
-                    .paint_base_tile(&base, coordinate, encoder)?
+                    .paint_base_tile(base, coordinate, encoder)?
                     .unwrap();
                 self.integrate(
                     r,
@@ -248,13 +280,7 @@ impl SourceThumbnails {
             write.track(encoder);
             overview.valid = write.validity();
         }
-        let ready = overview.remaining.is_empty()
-            && self.prepare_paint(r, layer, &overview, encoder, tile_limit)?;
-        self.cache.push_back(overview);
-        while self.cache.len() > OVERVIEWS {
-            self.cache.pop_front();
-        }
-        Ok(ready)
+        Ok(overview)
     }
     fn prepare_paint(
         &mut self,
@@ -310,14 +336,26 @@ impl SourceThumbnails {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PageSurface, GpuRasterError> {
         self.prepare(r, layer, encoder, usize::MAX)?;
-        let prepared = self.prepared.back().unwrap();
-        let placement = r
-            .thumbnails
-            .source_placements
-            .get(&layer)
-            .cloned()
-            .unwrap_or_default();
-        let mapping = overview_mapping(prepared.extent, placement.as_affine().ok_or(GpuRasterError::InvalidTransform("Nonlinear thumbnail requires placed pixels"))?);
+        let pixels = self.prepared.back().unwrap().pixels.clone();
+        self.display(r, &pixels, encoder)
+    }
+    pub fn render_image(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        base: &layer_core::authored::PaintBase,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<PageSurface, GpuRasterError> {
+        self.prepare_image(r, base, encoder, usize::MAX)?;
+        let pixels = self.cache.back().unwrap().pixels.clone();
+        self.display(r, &pixels, encoder)
+    }
+    fn display(
+        &self,
+        r: &mut WgpuRasterizer,
+        pixels: &wgpu::Buffer,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<PageSurface, GpuRasterError> {
+        let mapping = [1f32, 0., 0., 1.];
         r.uploads.write(
             encoder,
             &self.display_parameters,
@@ -327,7 +365,7 @@ impl SourceThumbnails {
                 .collect::<Vec<_>>(),
         )?;
         let binding = crate::bindings::group(&r.device, "photo overview display", &self.display_layout, [
-            prepared.pixels.as_entire_binding(), self.display_parameters.as_entire_binding(),
+            pixels.as_entire_binding(), self.display_parameters.as_entire_binding(),
         ]);
         let result = create_page_surface(
             &r.device,
@@ -406,16 +444,6 @@ impl SourceThumbnails {
 /// and uniform scale cancel under content framing, as with paint thumbnails.
 /// Compute in f64 so large/small valid placements do not overflow intermediate
 /// bounds. Only this disposable display overview is resampled.
-fn overview_mapping(extent: [u32; 2], placement: layer_core::Affine) -> [f32; 4] {
-    let [a, b, c, d, _, _] = placement.0.map(f64::from);
-    let [width, height] = extent.map(f64::from);
-    let side = (a.abs() * width + c.abs() * height).max(b.abs() * width + d.abs() * height);
-    let factor = side / width.max(height) / (a * d - b * c);
-    // Extremely thin valid content can collapse below a preview pixel. Keep
-    // shader coordinates finite even then; off-overview samples are transparent.
-    let limit = f64::from(f32::MAX) / 64.;
-    [d, -b, -c, a].map(|v| (v * factor).clamp(-limit, limit) as f32)
-}
 fn contribution_layout(
     base: &layer_core::authored::PaintBase,
     extent: [u32; 2],

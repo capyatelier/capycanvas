@@ -81,6 +81,9 @@ impl CanvasRenderer for AttachedRenderer {
     fn take_retouch_miss(&mut self) -> Option<layer_core::StrokeId> {
         self.0.as_mut()?.take_retouch_miss()
     }
+    fn retouch_waiting(&self) -> Option<layer_core::StrokeId> {
+        self.0.as_ref()?.retouch_waiting()
+    }
     fn retire_stroke_sources(&mut self) {
         if let Some(gpu) = self.0.as_mut() {
             gpu.retire_stroke_sources();

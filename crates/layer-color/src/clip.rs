@@ -68,7 +68,7 @@ pub fn write_clip_rows(
                 y,
                 &mut pixels[..rows * width],
                 builder.is_some().then(|| &mut source[..rows * source_bytes]),
-                &mut png[..rows * png_bytes],
+                Some(&mut png[..rows * png_bytes]),
             )?;
             if let Some(builder) = &mut builder {
                 for row in source[..rows * source_bytes].chunks_exact(source_bytes) {
@@ -89,6 +89,50 @@ pub fn write_clip_rows(
         })
         .transpose()?;
     Ok((source, bytes))
+}
+
+/// The document-depth source of a rectangle, written from bands of linear
+/// premultiplied working rows, without the PNG `write_clip_rows` encodes.
+pub struct SourceRows<'a> {
+    clip: ClipRows<'a>,
+    target: SourceInterpretation,
+    builder: SourceBuilder,
+    row: Vec<u8>,
+    y: u32,
+}
+impl<'a> SourceRows<'a> {
+    pub fn new(clip: ClipRows<'a>) -> Result<Self, String> {
+        let target = SourceInterpretation {
+            channels: SourceChannels::Rgba,
+            depth: clip.color.depth,
+            profile: ColorProfile::Builtin(clip.color.space),
+            profile_assumed: false,
+        };
+        let builder = SourceBuilder::new(clip.extent, target.clone(), clip.limit)?;
+        BandEncoders::new(&clip, &target)?;
+        Ok(Self { clip, target, builder, row: Vec::new(), y: 0 })
+    }
+    /// The next whole rows, top to bottom.
+    pub fn push(&mut self, pixels: &mut [[f32; 4]]) -> Result<(), String> {
+        let width = self.clip.extent[0] as usize;
+        if pixels.len() % width != 0 || self.y as usize + pixels.len() / width > self.clip.extent[1] as usize {
+            return Err("Rows outside the converted rectangle".into());
+        }
+        let row_bytes = self.target.pixel_bytes() * width;
+        for band in pixels.chunks_mut(width * BAND_ROWS) {
+            let rows = band.len() / width;
+            self.row.resize(rows * row_bytes, 0);
+            BandEncoders::new(&self.clip, &self.target)?.encode(self.y, band, Some(&mut self.row), None)?;
+            for row in self.row.chunks_exact(row_bytes) { self.builder.push_row(row)?; }
+            self.y += rows as u32;
+        }
+        Ok(())
+    }
+    pub fn finish(self) -> Result<SourceImage, String> {
+        let mut source = self.builder.finish()?;
+        source.resolution = self.clip.resolution;
+        Ok(source)
+    }
 }
 
 /// The sRGB PNG of an untouched photo copied whole, read straight from its
@@ -123,7 +167,7 @@ pub fn source_png(
 struct BandPart<'a> {
     y: u32,
     pixels: &'a mut [[f32; 4]],
-    png: &'a mut [u8],
+    png: Option<&'a mut [u8]>,
     source: Option<&'a mut [u8]>,
 }
 
@@ -152,19 +196,20 @@ impl<'a> BandEncoders<'a> {
     }
 
     /// Encode the band of `pixels` whose first row is copy row `y`.
-    fn encode(&self, y: u32, pixels: &mut [[f32; 4]], source: Option<&mut [u8]>, png: &mut [u8]) -> Result<(), String> {
+    fn encode(&self, y: u32, pixels: &mut [[f32; 4]], source: Option<&mut [u8]>, png: Option<&mut [u8]>) -> Result<(), String> {
         let width = self.clip.extent[0] as usize;
         let rows = pixels.len() / width;
         let per_thread = rows.div_ceil(self.threads);
-        let source_bytes = source.as_ref().map_or(0, |s| s.len() / rows);
-        let mut sources: Vec<Option<&mut [u8]>> = match source {
-            Some(source) => source.chunks_mut(per_thread * source_bytes).map(Some).collect(),
-            None => (0..rows.div_ceil(per_thread)).map(|_| None).collect(),
-        };
+        fn split(bytes: Option<&mut [u8]>, rows: usize, per_thread: usize) -> Vec<Option<&mut [u8]>> {
+            match bytes {
+                Some(bytes) => { let row = bytes.len() / rows; bytes.chunks_mut(per_thread * row).map(Some).collect() }
+                None => (0..rows.div_ceil(per_thread)).map(|_| None).collect(),
+            }
+        }
         let parts: Vec<_> = pixels
             .chunks_mut(per_thread * width)
-            .zip(png.chunks_mut(per_thread * width * 4))
-            .zip(sources.iter_mut().map(Option::take))
+            .zip(split(png, rows, per_thread))
+            .zip(split(source, rows, per_thread))
             .enumerate()
             .map(|(part, ((pixels, png), source))| BandPart { y: y + (part * per_thread) as u32, pixels, png, source })
             .collect();
@@ -177,17 +222,21 @@ impl<'a> BandEncoders<'a> {
         })
     }
 
-    fn encode_rows(&self, BandPart { y, pixels, png, mut source }: BandPart<'_>) -> Result<(), String> {
+    fn encode_rows(&self, BandPart { y, pixels, mut png, mut source }: BandPart<'_>) -> Result<(), String> {
         let [document, srgb] = self.encoders()?;
         let clip = self.clip;
         let width = clip.extent[0] as usize;
         let mapper = clip.rendition.map(|(r, guide)| (r.mapper(clip.color.space, clip.color.space), guide));
-        let source_bytes = source.as_ref().map_or(0, |s| s.len() / (pixels.len() / width));
-        for (row, (line, output)) in pixels.chunks_exact_mut(width).zip(png.chunks_exact_mut(width * 4)).enumerate() {
+        let rows = pixels.len() / width;
+        let source_bytes = source.as_ref().map_or(0, |s| s.len() / rows);
+        for (row, line) in pixels.chunks_exact_mut(width).enumerate() {
             let origin = [clip.origin[0], clip.origin[1] + y + row as u32];
+            for pixel in line.iter_mut().filter(|pixel| pixel[3] > 1.) { pixel[3] = 1.; }
             if let Some(source) = source.as_deref_mut() {
                 document.encode_premultiplied(line, &mut source[row * source_bytes..(row + 1) * source_bytes], None, origin)?;
             }
+            let Some(png) = png.as_deref_mut() else { continue; };
+            let output = &mut png[row * width * 4..(row + 1) * width * 4];
             if let Some((mapper, guide)) = &mapper {
                 for (x, pixel) in line.iter_mut().enumerate() {
                     let position = [(origin[0] + x as u32) as f32 + 0.5, origin[1] as f32 + 0.5];
@@ -232,6 +281,19 @@ mod tests {
         photo.rows().read(0, &mut row).unwrap();
         assert_eq!(row[3], 128, "half coverage");
         assert_eq!(&row[4..8], &[0; 4], "transparent");
+    }
+
+    #[test]
+    fn filter_rounding_past_full_coverage_encodes_as_opaque() {
+        let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
+        let mut rows = SourceRows::new(ClipRows { extent: [1, 1], origin: [0, 0], color, resolution: None, rendition: None, source: true, limit: 1 << 20 }).unwrap();
+        rows.push(&mut [[0.5, 0.25, 0., 1.000_000_1]]).unwrap();
+        let source = rows.finish().unwrap();
+        let mut row = vec![0; source.row_bytes()];
+        source.rows().read(0, &mut row).unwrap();
+        assert_eq!(u16::from_le_bytes([row[6], row[7]]), 65535);
+        let mut rows = SourceRows::new(ClipRows { extent: [1, 1], origin: [0, 0], color, resolution: None, rendition: None, source: true, limit: 1 << 20 }).unwrap();
+        assert!(rows.push(&mut [[f32::NAN, 0., 0., 1.]]).is_err(), "non-finite samples stay errors");
     }
 
     #[test]

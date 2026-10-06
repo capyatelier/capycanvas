@@ -60,8 +60,7 @@ fn main() -> Result<(), String> {
     let stack = artwork.compositions.get(artwork.root).ok_or("Missing fixture composition")?.result;
     artwork.stacks.get_mut(stack).ok_or("Missing fixture stack")?.entries.insert(0, occurrence);
     let target = artwork.coverage.next_handle();
-    let mut coverage = CoverageSnapshot::reveal_all(target, [width, height], Point::default());
-    coverage.source.initial = Some(selection);
+    let coverage = CoverageSnapshot::reveal_all(target, [width, height], [0; 2]);
     artwork.coverage.insert(PortableId::random(), coverage.source)?;
     artwork.occurrences.get_mut(ink).ok_or("Missing fixture occurrence")?.mask = Some(coverage.use_);
     let proof = color::ProofRecipe::new(

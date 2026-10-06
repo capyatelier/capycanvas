@@ -42,7 +42,7 @@ pub(super) fn shader_source(device: &PipelineDevice, target: Target, material: &
     compose_wgsl(&[
         &working_color::shader(device), include_str!("blend_modes.wgsl"), &shader_destination(target), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), include_str!("retouch_sample.wgsl"), material,
         include_str!("brush_footprint.wgsl"),
-        tracking, include_str!("brush_geometry.wgsl"), include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
+        tracking, include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
         include_str!("contact.wgsl"), include_str!("bristle.wgsl"), include_str!("selection_clip.wgsl"),
     ])
 }

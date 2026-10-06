@@ -81,7 +81,7 @@ fn native_pointwise_alpha_runs_before_reduction_and_settles_exact_stacks() {
                     set_effect_value(&mut doc, filter, "colors", EffectValue::Choice(2));
                 }
                 if state == 2 {
-                    coverage_mask(&mut doc, filter, layer_core::Point { x: 11., y: -7. },
+                    coverage_mask(&mut doc, filter, [11, -7],
                         Some(layer_core::Selection::polygon(vec![
                             layer_core::Point { x: 109., y: 37. }, layer_core::Point { x: 501., y: 91. },
                             layer_core::Point { x: 411., y: 257. }, layer_core::Point { x: 7., y: 199. },
@@ -107,7 +107,7 @@ fn native_pointwise_alpha_runs_before_reduction_and_settles_exact_stacks() {
                             assert!(error[2] < 2e-5, "{name} {space:?} state={state} level={level} offset={offset} must convert before reduction: {error:?}");
                         }
                         assert_settled(&mut r, frame, &reference);
-                        assert_eq!(r.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
+                        crate::test_support::assert_same_canonical(&mut r, &mut exact);
                     }
                 }
             }
@@ -192,7 +192,7 @@ fn native_level_pointwise_chains_and_fusion_boundaries_match_full_native_windows
         let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap(); exact.test.reference = true;
         for state in 0..3 {
             if state == 1 {
-                coverage_mask(&mut doc, last, layer_core::Point { x: 17., y: -9. }, Some(layer_core::Selection::polygon(vec![
+                coverage_mask(&mut doc, last, [17, -9], Some(layer_core::Selection::polygon(vec![
                     layer_core::Point { x: 269., y: 77. }, layer_core::Point { x: 991., y: 101. },
                     layer_core::Point { x: 511., y: 501. },
                 ]).unwrap()));
@@ -269,7 +269,7 @@ fn attached_pointwise_alpha_filters_update_only_changed_contact_regions() {
             r.submit(frame).unwrap();
             let plan = r.scale_display.as_ref().unwrap().plan;
             assert_eq!(r.metrics.composited_pixels, plan.size.into_iter().map(u64::from).product::<u64>(), "cold output must initialize every pixel");
-            assert_eq!(r.scale_display.as_ref().unwrap().preview_level(frame, paint,false), 0);
+            assert_eq!(r.scale_display.as_ref().unwrap().preview_level(&r, frame, paint,false), 0);
             if level > 0 { assert!(r.scene.as_ref().unwrap().scale_sources.entries[&paint].levels.is_empty()); }
             let work = r.metrics.composited_pixels;
             r.submit(FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
@@ -527,7 +527,7 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
         blur_chain(&mut doc);
         occurrence_mut(&mut doc, 2).attachment = Attachment::Effect;
         let masked=doc.scene().order()[1];
-        coverage_mask(&mut doc,masked,layer_core::Point { x: 17., y: -9. },Some(layer_core::Selection::polygon(vec![
+        coverage_mask(&mut doc,masked,[17, -9],Some(layer_core::Selection::polygon(vec![
             layer_core::Point { x: 270., y: 170. }, layer_core::Point { x: 1700., y: 270. },
             layer_core::Point { x: 1600., y: 1290. }, layer_core::Point { x: 310., y: 1250. },
         ]).unwrap()));
@@ -606,7 +606,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     let application=effect_handle(&doc,adjustment);
     let authored=doc.artwork.effects.get_mut(application).unwrap();
     *authored=layer_core::EffectApplication::new(authored.program.clone(),authored.values.clone(),extent);
-    coverage_mask(&mut doc,adjustment,Default::default(),Some(layer_core::Selection::polygon(vec![
+    coverage_mask(&mut doc,adjustment,[0, 0],Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 63., y: 37. }, layer_core::Point { x: 410., y: 37. },
         layer_core::Point { x: 410., y: 206. }, layer_core::Point { x: 63., y: 206. },
     ]).unwrap()));
@@ -623,7 +623,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
             set_effect_at(&mut doc,0,"exposure", EffectValue::Number(state as f32 * 0.1));
             set_attachment_at(&mut doc, 1, state % 2 == 0);
             occurrence_mut(&mut doc,1).mask.as_mut().unwrap().inverted = state >= 2;
-            occurrence_mut(&mut doc,1).mask.as_mut().unwrap().translation.x = if state == 3 { 17. } else { 0. };
+            occurrence_mut(&mut doc,1).mask.as_mut().unwrap().offset[0] = if state == 3 { 17 } else { 0 };
             let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
             let scale = 1. / (1 << level) as f32;
@@ -672,7 +672,7 @@ fn window_effects_preserve_document_coordinates_and_shifted_masks() {
     let application=effect_handle(&doc,adjustment);
     let authored=doc.artwork.effects.get_mut(application).unwrap();
     *authored=layer_core::EffectApplication::new(authored.program.clone(),authored.values.clone(),extent);
-    coverage_mask(&mut doc,adjustment,layer_core::Point { x: 17., y: -9. },Some(layer_core::Selection::polygon(vec![
+    coverage_mask(&mut doc,adjustment,[17, -9],Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 260., y: 130. }, layer_core::Point { x: 1300., y: 170. },
         layer_core::Point { x: 1100., y: 920. }, layer_core::Point { x: 310., y: 850. },
     ]).unwrap()));
@@ -787,7 +787,7 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
         for masked in [false, true] {
             let mut faded=doc.clone();occurrence_mut(&mut faded,0).opacity=0.4;
             if masked {
-                let mask=coverage_mask(&mut faded,group,Default::default(),None);
+                let mask=coverage_mask(&mut faded,group,[0, 0],None);
                 faded.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.3;
             }
             let amount = if masked { 0.12 } else { 0.4 };
@@ -848,7 +848,7 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
     let mut doc = document();
     let extent = doc.composition().size;
     let blur = effect(&mut doc,"gaussian_blur");
-    let mask=coverage_mask(&mut doc,blur,Default::default(),None);
+    let mask=coverage_mask(&mut doc,blur,[0, 0],None);
     doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.4;
     doc.artwork.occurrences.get_mut(blur).unwrap().opacity=0.7;
     insert_occurrence(&mut doc,blur,0);
@@ -901,7 +901,7 @@ fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coord
         let paint=source_at(&doc, 0);
         let curves=effect(&mut doc,"curves");
         doc.artwork.occurrences.get_mut(curves).unwrap().opacity=0.7;
-        coverage_mask(&mut doc,curves,layer_core::Point{x:17.,y:-9.},Some(layer_core::Selection::polygon(vec![
+        coverage_mask(&mut doc,curves,[17, -9],Some(layer_core::Selection::polygon(vec![
             layer_core::Point{x:230.,y:140.},layer_core::Point{x:1750.,y:220.},
             layer_core::Point{x:1680.,y:1310.},layer_core::Point{x:270.,y:1240.},
         ]).unwrap()));
@@ -1286,7 +1286,7 @@ fn native_gaussian_windows_masks_and_clipping_match_full_rebuild() {
     let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
     for (step,(zoom,x,clipped)) in [(0.5,-384.,false),(1.,-1000.,false),(0.125,0.,true)].into_iter().enumerate() {
         let handle=doc.scene().order()[0];
-        let mask=coverage_mask(&mut doc,handle,Default::default(),None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.25;
+        let mask=coverage_mask(&mut doc,handle,[0, 0],None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.25;
         occurrence_mut(&mut doc,0).opacity=0.6;set_attachment_at(&mut doc, 0, clipped);
         let mut frame=packet(doc.scene(),extent);frame.view.width_px=96;frame.view.height_px=64;frame.view.document_to_surface=[zoom,0.,0.,zoom,x,-32.];
         window.submit(frame).unwrap();exact.submit(frame).unwrap();
@@ -1313,7 +1313,7 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
         if adjustment.value("amount").is_some() {set(&mut adjustment,"amount",61.);}
         let mut doc=base.clone();
         let handle=effect_occurrence(&mut doc,adjustment,id);insert_occurrence(&mut doc,handle,0);
-        let mask=coverage_mask(&mut doc,handle,Default::default(),None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.25;
+        let mask=coverage_mask(&mut doc,handle,[0, 0],None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.25;
         let occurrence=doc.artwork.occurrences.get_mut(handle).unwrap();occurrence.opacity=0.6;set_attachment(occurrence, true);reindex(&mut doc);
         let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
         let mut frame=packet(doc.scene(),extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];

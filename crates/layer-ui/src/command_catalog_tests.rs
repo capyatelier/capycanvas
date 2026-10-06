@@ -633,7 +633,7 @@ fn static_refusal_providers_retain_cached_reasons_before_published_comparison() 
         CommandId::BorderSelection, CommandId::SmoothSelection, CommandId::CropCanvasToSelection,
         CommandId::PasteInto, CommandId::TransformSelectionOutline, CommandId::UseReferenceBelow,
         CommandId::ClearSelected, CommandId::ClearOutside, CommandId::CutSelectionToLayer,
-        CommandId::RevertToOriginal, CommandId::MergeGroup, CommandId::StraightenToGuide] {
+        CommandId::DiscardPaintEdits, CommandId::MergeGroup, CommandId::StraightenToGuide] {
         assert!(!s.command(command).enabled, "{command:?}");
         let direct = s.disabled_reason_unchecked(command);
         assert!(std::sync::Arc::ptr_eq(&direct, &s.disabled_reason_unchecked(command)), "{command:?}");

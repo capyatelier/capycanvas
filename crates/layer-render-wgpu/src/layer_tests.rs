@@ -87,7 +87,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
     let buffered = make_target();
     let shared_again = make_target();
     let mut document = paint_document([1024; 2], "scene paint");
-    set_mask(&mut document, reveal_all([1024; 2], Point::default()));
+    set_mask(&mut document, reveal_all([1024; 2], [0, 0]));
     let camera = ViewState { width_px: 512, height_px: 512,
         ..view() };
     let mut retained = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
@@ -175,9 +175,9 @@ pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8>
     bytes
 }
 fn left_mask() -> CoverageSnapshot {
-    let mut m = reveal_all([128; 2], Point::default());
+    let mut m = reveal_all([128; 2], [0, 0]);
     m.source.default_coverage = 0.;
-    m.source.initial = Some(
+    crate::test_support::materialize_mask(&mut m.source,
         Selection::polygon(vec![
             Point { x: 0., y: 0. },
             Point { x: 64., y: 0. },
@@ -185,6 +185,7 @@ fn left_mask() -> CoverageSnapshot {
             Point { x: 0., y: 128. },
         ])
         .unwrap(),
+        Default::default(),
     );
     m
 }
@@ -192,7 +193,6 @@ fn left_mask() -> CoverageSnapshot {
 pub(crate) fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
     let brush = layer_core::default_brush(preset);
     DabStyle {
-        brush_to_layer: layer_core::Affine::IDENTITY,
         alpha_locked: false,
         selection: None,
         tip: brush.tip,
@@ -259,9 +259,9 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
             let mut geometry = outside.translated(delta);
             geometry.inverted = inverted;
             let mut document = paint_document(extent, "scanline reference");
-            let mut mask = reveal_all(extent, Point::default());
+            let mut mask = reveal_all(extent, [0, 0]);
             mask.source.default_coverage = f32::from(inverted);
-            mask.source.initial = Some(geometry.clone());
+    crate::test_support::materialize_mask(&mut mask.source, geometry.clone(), document.composition().color);
             set_mask(&mut document, mask);
             let mut b = batch(target(&document));
             b.damage = Rect {

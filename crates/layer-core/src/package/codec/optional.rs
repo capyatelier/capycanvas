@@ -8,7 +8,7 @@ fn unknown_or_unusable_representations_do_not_gate_editable_artwork() {
         json!({"member":"preview-large.png","size":[2,1],"color":"srgb"}),
         json!({"ref":"opaque future preview identifier"}),json!(null)] {
         let changed=rewrite(&bytes,|manifest| {
-            let output=manifest["objects"].as_array_mut().unwrap().iter_mut().find(|r|r["type"]=="capy.output/1").unwrap();
+            let output=manifest["objects"].as_array_mut().unwrap().iter_mut().find(|r|r["type"]=="capy.output/2").unwrap();
             output["data"]["representation"]=representation;
         });
         assert!(matches!(open(backing(changed),Default::default(),&AtomicBool::new(false)).unwrap(),OpenOutcome::Candidate {preview:None,..}));

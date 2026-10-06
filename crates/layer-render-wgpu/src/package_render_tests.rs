@@ -1,6 +1,6 @@
 use crate::{WgpuRasterizer, snapshot::SnapshotGpu};
 use crate::tests::native_effects::{empty_document, insert_source, insert_effect, refresh};
-use layer_core::{SceneScope, Document, EffectInstance, LayerBlend, Interpolation, LayerPlacement, MeshMap, Point, Rect,
+use layer_core::{SceneScope, Document, EffectInstance, LayerBlend,
     color::{DocumentColor, RgbSpace, SampleDepth}, authored::{Occurrence, OccurrenceContent, PortableId, Stack},
     raster::{RasterData, RasterPlane, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey}};
 use std::{collections::BTreeMap, sync::Arc};
@@ -67,17 +67,6 @@ fn cases(saved: &Document) -> BTreeMap<String,(Document,bool)> {
         let group=document.artwork.occurrences.insert(PortableId::random(),group).unwrap();
         document.artwork.stacks.get_mut(root).unwrap().entries=vec![group,bottom];
         refresh(&mut document);cases.insert(format!("blend/{blend:?}"),(document,false));
-    }
-    for interpolation in [Interpolation::Nearest,Interpolation::Linear,Interpolation::Bicubic,Interpolation::Lanczos] {
-        for mesh in [false,true] {
-            let mut document=base(SampleDepth::F32,false);
-            let h=document.scene().order()[0];let occurrence=document.artwork.occurrences.get_mut(h).unwrap();
-            occurrence.translation=Point {x:0.35,y:-0.7};
-            occurrence.placement=LayerPlacement {interpolation,mesh:mesh.then(||Arc::new(MeshMap::fit(Rect::from_extent(EXTENT),[2,2],|p| {
-                Some(Point {x:p.x+2.*(p.y/24.)*(1.-p.y/24.),y:p.y+1.5*(p.x/32.).powi(2)})
-            }).unwrap())),..Default::default()};
-            refresh(&mut document);cases.insert(format!("placement/{interpolation:?}/mesh={mesh}"),(document,false));
-        }
     }
     let mut watercolor=base(SampleDepth::U8,false);
     let material=saved.artwork.paint.iter().find_map(|(_,_,p)|p.raster.try_data()?.ok()?.watercolor).unwrap();

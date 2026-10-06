@@ -1,13 +1,12 @@
 #[test]
-fn retained_move_uses_only_checked_geometry_source_frame_and_mask_linkage() {
-    for warped in [false,true] {
+fn layer_move_uses_only_checked_layers_whole_pixels_and_mask_linkage() {
+    {
         let mut s=session(Platform::Gtk);
         let checked=occurrence_handle(1).unwrap();
         layer(&mut s,LayerAction::AddMask{id:1,replace:false});
         let mut occurrence=s.engine.document().scene().occurrence(checked).unwrap().clone();
-        occurrence.placement=layer_core::LayerPlacement::from_projective(layer_core::Projective([1.2,0.1,12.,-0.1,0.8,17.,0.0002,-0.0001,1.]));
+        occurrence.offset=[12,17];
         occurrence.mask.as_mut().unwrap().linked=false;
-        if warped {occurrence.placement.mesh=Some(std::sync::Arc::new(layer_core::MeshMap::identity(layer_core::Rect::from_extent([37,29]),[3,3]).unwrap().move_node(5,Point{x:2.,y:-1.}).unwrap()));}
         s.engine.apply_edit(layer_core::Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences,checked,Some(occurrence.clone())).unwrap())).unwrap();
         let paint=s.engine.document().scene().source_target(checked).unwrap();
         let SourceTarget::Paint(paint)=paint else{panic!("paint")};
@@ -31,14 +30,15 @@ fn retained_move_uses_only_checked_geometry_source_frame_and_mask_linkage() {
         let after=s.engine.document().clone();
         assert_eq!(after.scene().occurrence(active),before.scene().occurrence(active));
         assert_eq!(after.scene().occurrence(checked).unwrap().mask,occurrence.mask);
-        assert_ne!(after.scene().occurrence(checked).unwrap().placement,occurrence.placement);
+        let moved=after.scene().occurrence(checked).unwrap().offset;
+        assert_ne!(moved,[12,17]);assert_eq!(after.scene().occurrence(checked).unwrap().mask,occurrence.mask);
         invoke(&mut s,CommandId::Undo);assert_live_artwork_eq(s.engine.document(),&before);
         invoke(&mut s,CommandId::Redo);assert_live_artwork_eq(s.engine.document(),&after);
     }
 }
 
 #[test]
-fn retained_transform_measures_sole_checked_layer_instead_of_unchecked_active_layer() {
+fn layer_transform_measures_sole_checked_layer_instead_of_unchecked_active_layer() {
     let mut s=session(Platform::Gtk);
     layer(&mut s,LayerAction::New{group:false,clipped:false});let active=s.engine.document().working.occurrence.unwrap();
     layer(&mut s,LayerAction::ToggleSelection{id:1});layer(&mut s,LayerAction::ToggleSelection{id:occurrence_token(active)});
@@ -117,7 +117,7 @@ fn renderer_replacement_discards_cached_and_pending_bounds_for_the_same_document
 }
 
 #[test]
-fn smaller_transparent_imports_keep_original_photo_frames_and_original_size_handles() {
+fn transparent_image_placements_frame_their_full_extent_without_alpha_queries() {
     let transparent = |extent| std::sync::Arc::unwrap_or_clone(
         layer_core::color::source::rgba8_source(extent, |_, _| [0; 4]));
     for batch in [false, true] {
@@ -126,24 +126,12 @@ fn smaller_transparent_imports_keep_original_photo_frames_and_original_size_hand
         let mut sources = vec![("Small transparent photo".into(), transparent([20, 10]))];
         if batch { sources.push(("Tall transparent photo".into(), transparent([8, 30]))); }
         s.place_layer_sources(sources, Some(Point { x: 75., y: 55. }), None).unwrap();
-        let expected = if batch { [65., 40., 85., 70.] } else { [65., 50., 85., 60.] };
-        assert_eq!(s.transform_document_bounds(), Some(expected), "the provisional frame uses the original source extent");
-        assert!(!s.content_bounds.busy(), "transparent imports retain their full original frame without an alpha query");
+        let expected = if batch { [[65., 40.], [85., 70.]] } else { [[65., 50.], [85., 60.]] };
+        let doc = s.engine.document();
+        assert_eq!(doc.object_document_bounds(doc.working.objects.iter().copied()), Some(expected), "the frame uses each image's full extent");
+        assert!(!s.content_bounds.busy(), "transparent images need no alpha query");
         assert!(s.engine.backend().bounds_requests.is_empty());
-        assert_eq!(s.engine.document().target_extent(s.engine.document().working.target.unwrap()), [200, 150],
-            "the editable extent is larger than the original photo frame");
-        let original_sources: Vec<_> = s.engine.document().artwork.paint.iter().filter_map(|(_, _, p)| p.base.clone()).collect();
-        s.set_transform_control("transform_width", 2.).unwrap();
-        assert_ne!(s.transform_document_bounds(), Some(expected));
         assert!(s.command(CommandId::PlacementOriginalSize).enabled);
-        invoke(&mut s, CommandId::PlacementOriginalSize);
-        assert_eq!(s.transform_document_bounds(), Some(expected), "Original Size restores the photo or batch handle frame");
-        for &handle in s.engine.document().scene().order() {
-            let Some(source) = s.engine.document().scene().paint_source(handle).filter(|p| p.base.is_some()) else { continue; };
-            assert_eq!(s.engine.document().scene().occurrence(handle).unwrap().placement.as_affine().unwrap().0[..4], [1., 0., 0., 1.]);
-            assert!(source.raster.is_empty());
-        }
-        assert_eq!(s.engine.document().artwork.paint.iter().filter_map(|(_, _, p)| p.base.clone()).collect::<Vec<_>>(), original_sources);
         assert!(!s.engine.can_undo(), "provisional placement publishes no history");
         assert_eq!(s.engine.document().composition().size, [200, 150]);
     }
@@ -155,8 +143,7 @@ fn cached_empty_photo_bounds_keep_repeated_transform_refused_without_history() {
         Document::new(PortableId::random(), 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
     let original = s.engine.document().clone();
     let source = layer_core::color::source::rgba8_source([20, 10], |_, _| [0; 4]);
-    s.place_layer_source("Transparent photo", std::sync::Arc::unwrap_or_clone(source), None).unwrap();
-    invoke(&mut s, CommandId::ApplyTransform);
+    s.import_layer_source("Transparent photo", std::sync::Arc::unwrap_or_clone(source)).unwrap();
     assert!(!s.operation.active());
     let accepted = s.engine.document().clone();
     s.begin_transform().unwrap();
@@ -191,16 +178,20 @@ fn linked_bounds_session(primary_mask: bool) -> UiSession<Recorder> {
             RasterTile::backed(TileBlob::encode(RasterPlane::Color.descriptor(document.composition().color), &bytes).unwrap()))].into(),
         ..Default::default()
     });
+    let mut coverage = vec![0; (TILE_SIZE * TILE_SIZE) as usize];
+    for y in 80..100 { for x in 80..100 { coverage[(y * TILE_SIZE + x) as usize] = 255; } }
     let mask = document.artwork.coverage.insert(PortableId::random(), CoverageSource {
-        domain: document.composition().size, raster: Default::default(), initial: Some(rectangle([80., 80., 100., 100.])),
-        default_coverage: 0., operations: Default::default(),
+        domain: document.composition().size, default_coverage: 0., operations: Default::default(),
+        raster: RasterRevision::backed(RasterData {
+            tiles: [(TileKey { plane: RasterPlane::Mask, coordinate: [0, 0] },
+                RasterTile::backed(TileBlob::encode(RasterPlane::Mask.descriptor(document.composition().color), &coverage).unwrap()))].into(),
+            ..Default::default()
+        }),
     }).unwrap();
     let owner = document.working.occurrence.unwrap();
     let occurrence = document.artwork.occurrences.get_mut(owner).unwrap();
-    occurrence.translation = Point { x: 10., y: 12. };
-    occurrence.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([1.5, 0., 0., 0.75, 0., 0.]));
-    occurrence.mask = Some(MaskUse { source: mask, enabled: true, linked: true, inverted: false,
-        translation: Point { x: 24., y: 30. }, placement: layer_core::Projective::from_affine(layer_core::Affine([0.75, 0., 0., 1.5, 0., 0.])) });
+    occurrence.offset = [10, 12];
+    occurrence.mask = Some(MaskUse { source: mask, enabled: true, linked: true, inverted: false, offset: [14, 18] });
     document.working.target = Some(if primary_mask { SourceTarget::Coverage(mask) } else { SourceTarget::Paint(paint) });
     document.working.inspect_mask = primary_mask.then_some(owner);
     if !primary_mask { document.working.selection = Some(layer_core::Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 200., y: 0. }, Point { x: 200., y: 200. }, Point { x: 0., y: 200. }]).unwrap()); }
@@ -222,7 +213,7 @@ fn linked_transform_waits_for_both_actual_bounds_and_warp_covers_the_registered_
         let mask_bounds = layer_core::Rect { min: Point { x: 80., y: 80. }, max: Point { x: 100., y: 100. } };
         let tight = if primary_mask { mask_bounds } else { paint_bounds };
         let other = if primary_mask { paint_bounds } else { mask_bounds };
-        let to = doc.affine_edit_transform(companion).unwrap().then(doc.affine_edit_transform(primary).unwrap().inverse().unwrap());
+        let to = doc.local_to_document(companion).then(doc.local_to_document(primary).inverse().unwrap());
         let expected = tight.union(to.bounds(other));
         s.begin_transform().unwrap();
         assert_eq!(s.engine.backend().bounds_requests.last().unwrap().scope, layer_core::ContentScope::Target(primary));
@@ -238,8 +229,11 @@ fn linked_transform_waits_for_both_actual_bounds_and_warp_covers_the_registered_
         assert_eq!(s.measured_target_bounds(), Some(expected));
         s.set_transform_mode(super::operation::TransformMode::Warp, false).unwrap();
         s.frame(102, 102).unwrap();
+        assert!(s.engine.backend().transform.as_ref().unwrap().transform.placement.mesh.is_none(), "entering Warp keeps the accepted transform");
+        s.set_warp_cells(layer_core::MeshMap::PRESETS[1]).unwrap();
+        s.frame(103, 103).unwrap();
         let preview = s.engine.backend().transform.as_ref().unwrap();
-        let mesh = preview.transform.placement.mesh.as_ref().expect("Warp must emit a mesh");
+        let mesh = preview.transform.placement.mesh.as_ref().expect("a Warp grid emits a mesh");
         assert_eq!(mesh.frame.bounds(layer_core::Rect::from_extent([1, 1])), expected,
             "the mesh domain contains both independently measured targets in primary-local coordinates");
         let paired = preview.companion(s.engine.document().scene()).unwrap();
@@ -250,16 +244,16 @@ fn linked_transform_waits_for_both_actual_bounds_and_warp_covers_the_registered_
 }
 
 #[test]
-fn retained_whole_photo_bounds_do_not_query_a_linked_destructive_companion() {
+fn whole_photo_transform_measures_the_photo_and_its_linked_mask() {
     let mut document = Document::new(PortableId::random(), 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let photo = document.working.target.unwrap();
     let owner = document.working.occurrence.unwrap();
     let mask = document.artwork.coverage.insert(PortableId::random(), CoverageSource {
-        domain: document.composition().size, raster: Default::default(), initial: None, default_coverage: 1., operations: Default::default(),
+        domain: document.composition().size, raster: Default::default(), default_coverage: 1., operations: Default::default(),
     }).unwrap();
     let mask_id = SourceTarget::Coverage(mask);
     document.artwork.occurrences.get_mut(owner).unwrap().mask = Some(MaskUse { source: mask, enabled: true, linked: true,
-        inverted: false, translation: Point::default(), placement: layer_core::Projective::IDENTITY });
+        inverted: false, offset: [0, 0] });
     let SourceTarget::Paint(paint) = photo else { panic!("paint") };
     document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::PaintBase::new(layer_core::Image::new(layer_core::color::source::rgba8_source([20, 10], |_, _| [0; 4]))));
     let working = document.working.clone();
@@ -268,11 +262,10 @@ fn retained_whole_photo_bounds_do_not_query_a_linked_destructive_companion() {
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [800, 600], Platform::Gtk).unwrap();
     s.begin_transform().unwrap();
     reply_bounds(&mut s, [2., 2., 18., 8.]);
-    assert!(s.operation.placing());
-    assert!(!s.content_bounds.busy());
-    assert_eq!(s.engine.backend().bounds_requests.len(), 1);
+    if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 0., 0.]); }
+    assert!(s.operation.transforming() && !s.operation.placing());
     assert_eq!(s.engine.backend().bounds_requests[0].scope, layer_core::ContentScope::Target(photo));
-    assert!(s.engine.backend().bounds_requests.iter().all(|r| r.scope != layer_core::ContentScope::Target(mask_id)));
+    assert!(s.engine.backend().bounds_requests.iter().all(|r| [layer_core::ContentScope::Target(photo), layer_core::ContentScope::Target(mask_id)].contains(&r.scope)));
 }
 
 #[test]
@@ -324,7 +317,7 @@ fn changing_active_target_during_companion_query_rejects_the_frozen_pair() {
 }
 
 #[test]
-fn four_child_group_bounds_complete_once_include_hidden_paint_and_cancel_stale_inputs() {
+fn four_child_group_move_bounds_complete_once_include_hidden_paint_and_cancel_stale_inputs() {
     let seeded = linked_bounds_session(false);
     let mut document = seeded.engine.document().clone();
     document.working.selection = None;
@@ -336,15 +329,15 @@ fn four_child_group_bounds_complete_once_include_hidden_paint_and_cancel_stale_i
     document.artwork.occurrences.change(old, old_id, None).unwrap();
     let nested = document.artwork.stacks.insert(PortableId::random(), Stack::default()).unwrap();
     let mut group = Occurrence::new(OccurrenceContent::Stack(nested), "Group");
-    group.translation = Point { x: 50., y: 10. };
+    group.offset = [50, 10];
     let group_id = document.artwork.occurrences.insert(PortableId::random(), group).unwrap();
     let mut children = Vec::new();
     let mut targets = Vec::new();
-    for (index, offset) in [[0., 0.], [40., 10.], [-10., 80.], [70., -20.]].into_iter().enumerate() {
+    for (index, offset) in [[0, 0], [40, 10], [-10, 80], [70, -20]].into_iter().enumerate() {
         let paint = document.artwork.paint.insert(PortableId::random(), source.clone()).unwrap();
         let mut child = template.clone();
         child.content = OccurrenceContent::Paint(paint);
-        child.translation = Point { x: offset[0], y: offset[1] };
+        child.offset = offset;
         child.visible = index != 2;
         let handle = document.artwork.occurrences.insert(PortableId::random(), child).unwrap();
         children.push(handle);
@@ -365,41 +358,40 @@ fn four_child_group_bounds_complete_once_include_hidden_paint_and_cancel_stale_i
     let make = || {
         let mut session = UiSession::new(Recorder::default(), document.clone(), [800, 600], Platform::Gtk).unwrap();
         session.set_selected_layers(std::collections::BTreeSet::from([group_id])).unwrap();
+        session.layer_interaction.tool = LayerCanvasTool::Move;
         session
     };
     let mut s = make();
     let before = s.engine.document().clone();
-    s.begin_transform().unwrap();
+    s.request_content_bounds(super::image_geometry::ContentUse::PrepareMove).unwrap();
     for count in 1..=4 {
         assert!(s.content_bounds.busy());
         assert_eq!(s.engine.backend().bounds_requests.len(), count);
         reply_bounds(&mut s, [20., 20., 40., 40.]);
-        assert_eq!(s.operation.active(), count == 4);
+        assert_eq!(s.measured_target_bounds().is_some(), count == 4);
     }
     assert!(!s.content_bounds.busy());
     assert_eq!(s.engine.backend().bounds_requests.iter().map(|request| request.scope).collect::<Vec<_>>(),
         targets.iter().copied().map(layer_core::ContentScope::Target).collect::<Vec<_>>());
-    assert_eq!(s.measured_target_bounds(), Some(layer_core::Rect { min: Point { x: 70., y: 5. }, max: Point { x: 180., y: 120. } }));
-    invoke(&mut s, CommandId::CancelTransform);
+    assert_eq!(s.measured_target_bounds(), Some(layer_core::Rect { min: Point { x: 60., y: 10. }, max: Point { x: 160., y: 130. } }));
     assert_eq!(s.engine.document(), &before);
-    s.begin_transform().unwrap();
-    assert!(s.operation.active());
+    s.request_content_bounds(super::image_geometry::ContentUse::PrepareMove).unwrap();
+    assert!(s.measured_target_bounds().is_some());
     assert_eq!(s.engine.backend().bounds_requests.len(), 4, "all member measurements remain cached together");
-    invoke(&mut s, CommandId::CancelTransform);
 
     let mut stale = make();
-    stale.begin_transform().unwrap();
+    stale.request_content_bounds(super::image_geometry::ContentUse::PrepareMove).unwrap();
     reply_bounds(&mut stale, [20., 20., 40., 40.]);
     let mut changed = stale.engine.document().scene().occurrence(children[3]).unwrap().clone();
     changed.opacity = 0.5;
     stale.engine.apply_edit(layer_core::Edit::Occurrence(RecordChange::replace(&stale.engine.document().artwork.occurrences, children[3], Some(changed)).unwrap())).unwrap();
     reply_bounds(&mut stale, [20., 20., 40., 40.]);
-    assert!(!stale.operation.active());
+    assert!(stale.measured_target_bounds().is_none());
     assert!(!stale.content_bounds.busy());
     assert_eq!(stale.engine.backend().bounds_requests.len(), 2);
 
     let mut selection_stale = make();
-    selection_stale.begin_transform().unwrap();
+    selection_stale.request_content_bounds(super::image_geometry::ContentUse::PrepareMove).unwrap();
     reply_bounds(&mut selection_stale, [20., 20., 40., 40.]);
     let old_document = selection_stale.engine.document().clone();
     selection_stale.dispatch(UiAction::Layer { action: LayerAction::ToggleSelection { id: occurrence_token(outside_id) } }).unwrap();
@@ -407,7 +399,7 @@ fn four_child_group_bounds_complete_once_include_hidden_paint_and_cancel_stale_i
     assert_eq!(selection_stale.selected_layers(), &std::collections::BTreeSet::from([group_id, outside_id]));
     assert_eq!(selection_stale.engine.document().working.occurrence, old_document.working.occurrence);
     reply_bounds(&mut selection_stale, [20., 20., 40., 40.]);
-    assert!(!selection_stale.operation.active());
+    assert!(selection_stale.measured_target_bounds().is_none());
     assert!(!selection_stale.content_bounds.busy());
     assert!(!selection_stale.engine.can_undo());
     assert_eq!(selection_stale.engine.backend().bounds_requests.len(), 2);

@@ -123,7 +123,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.eyedropper.calibration = Some(calibration);
                 match reason {
                     CalibrationFailure::Message(message) => self.raise_message_notice(message),
-                    CalibrationFailure::Diagnostic(reason) => self.raise_notice(reason, None),
+                    CalibrationFailure::Diagnostic(reason) => self.notify(reason),
                 }
                 regions::BRUSH | regions::COMMANDS | regions::COLOR_PREVIEW
             }
@@ -184,7 +184,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             None=>{self.auto_levels=Some(task);0},
             Some(result)=>{if let Err(reason)=result {match reason {
                 CalibrationFailure::Message(message)=>self.raise_message_notice(message),
-                CalibrationFailure::Diagnostic(reason)=>self.raise_notice(reason,None),
+                CalibrationFailure::Diagnostic(reason)=>self.notify(reason),
             }}self.refresh_document();regions::DOCUMENT},
         }
     }

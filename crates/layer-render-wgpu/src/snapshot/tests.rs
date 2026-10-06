@@ -74,12 +74,7 @@ fn package_previews_preserve_capture_color_alpha_sdr_and_source_only_fallback() 
         assert_eq!(reopened.size(),[1024,4]);
         assert_eq!(artwork.outputs.get(artwork.default_output).unwrap().sdr.exposure,-1.);
         assert!(gpu().package_preview(&saved,&AtomicBool::new(true)).is_none());
-        let mut unsupported = saved.clone();
-        let artwork = Arc::make_mut(&mut unsupported.artwork);
-        artwork.outputs.get_mut(artwork.default_output).unwrap().frame = Some((Point::default(),[7,3]));
-        let preview = gpu().package_preview(&unsupported, &cancelled);
-        assert!(preview.is_none());
-        assert_eq!(PreparedPackage::prepare(&unsupported,preview,&cancelled).unwrap().preview_status,PreviewStatus::Unavailable);
+        assert_eq!(PreparedPackage::prepare(&saved,None,&cancelled).unwrap().preview_status,PreviewStatus::Unavailable);
     }
 }
 
@@ -494,7 +489,7 @@ fn rich_document(color: DocumentColor, mask_kind: u32) -> Document {
     let mut project = source_document(color, [641, 389]);
     let doc = &mut project;
     let coverage=doc.artwork.coverage.next_handle();
-    let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,[641,389],Point{x:13.,y:-7.});
+    let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,[641,389], [13, -7]);
     mask.source.default_coverage = 0.;
     let mut selection = if mask_kind == 0 {
         Selection::polygon(vec![
@@ -524,7 +519,7 @@ fn rich_document(color: DocumentColor, mask_kind: u32) -> Document {
         .unwrap()
     };
     selection.inverted = mask_kind == 2;
-    mask.source.initial = Some(selection);
+    crate::test_support::materialize_mask(&mut mask.source, selection, color);
     let scalar = match color.depth {
                 SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
         SampleDepth::U8 => vec![123; 65536],
@@ -577,7 +572,7 @@ fn rich_document(color: DocumentColor, mask_kind: u32) -> Document {
     let paint=paint_occurrence(doc);
     let occurrence=doc.artwork.occurrences.get_mut(paint).unwrap();
     occurrence.mask=Some(mask.use_);
-    occurrence.translation=Point {x:-11.,y:9.};
+    occurrence.offset= [-11, 9];
     let mut program = (*crate::tests::fixture("exposure").program()).clone();
     program.id = "snapshot_material_blur".into();
     program.label = "Snapshot blur".into();
@@ -592,7 +587,7 @@ fn rich_document(color: DocumentColor, mask_kind: u32) -> Document {
     let effect=insert_effect(doc,EffectInstance::new(Arc::new(program)),0);
     let group=add_group(doc,vec![effect,paint],0);
     let occurrence=doc.artwork.occurrences.get_mut(group).unwrap();
-    occurrence.translation=Point{x:3.,y:5.};occurrence.opacity=0.73;
+    occurrence.offset= [3, 5];occurrence.opacity=0.73;
     project
 }
 
@@ -740,7 +735,7 @@ fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries
     let mut project = rich_document(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 }, 1);
     project.artwork.compositions.get_mut(project.artwork.root).unwrap().size[0]=2053;
     let paint=paint_occurrence(&project);
-    project.artwork.occurrences.get_mut(paint).unwrap().placement.outer.0[2]+=800.;
+    project.artwork.occurrences.get_mut(paint).unwrap().offset[0]+=800;
     let (live, expected) = frame(&project);
     let mut capture = live.snapshot_gpu().capture_scene(project.snapshot(),SceneScope::All,Default::default()).unwrap();
     let mut actual = Vec::new();
@@ -761,7 +756,7 @@ fn gpu_tone_snapshot_matches_composited_masked_filtered_document() {
     let mut project = rich_document(color,1);
     project.artwork.compositions.get_mut(project.artwork.root).unwrap().size[0]=2053;
     let paint=paint_occurrence(&project);
-    project.artwork.occurrences.get_mut(paint).unwrap().placement.outer.0[2]+=800.;
+    project.artwork.occurrences.get_mut(paint).unwrap().offset[0]+=800;
     let extent = project.composition().size;
     let (live,pixels) = frame(&project);
     let mut cpu = layer_core::color::hdr::LocalToneBuilder::new(extent,color.space).unwrap();
@@ -1168,7 +1163,37 @@ fn flattened_copy_preserves_complete_composition_precision_extent_and_resolution
 }
 
 #[test]
-fn applying_projective_pixels_from_linked_coverage_keeps_paired_paint_and_source_handles() {
+fn a_perspective_folding_beyond_the_stroke_resamples_only_the_stroke() {
+    let mut document = Document::new(PortableId::random(), 2000, 1500, layer_core::DocumentNames {
+        paint: "Stroke".into(), paper: "Paper".into(),
+    });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F32;
+    let paint = paint_id(&document);
+    let color = document.composition().color;
+    let rgba = [0.375_f32, 0.125, 0.0625, 1.];
+    let mut data = RasterData::default();
+    data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [0; 2] },
+        RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &rgba.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>().repeat(65536)).unwrap()));
+    document.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(data);
+    refresh(&mut document);
+    let stroke = layer_core::Rect { min: Point { x: 100., y: 100. }, max: Point { x: 160., y: 140. } };
+    let map = layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(stroke,
+        [[100., 100.], [160., 119.], [160., 121.], [100., 140.]].map(|[x, y]| Point { x, y })).unwrap());
+    assert!(document.layer_transform_plan(SourceTarget::Paint(paint), &map, None, Default::default()).is_err());
+    let plan = document.layer_transform_plan(SourceTarget::Paint(paint), &map, Some(stroke), Default::default()).unwrap();
+    let origin = plan.origin;
+    let output = pollster::block_on(gpu().transform_pixels(plan, Default::default())).unwrap();
+    document.apply(output).unwrap();
+    let data = document.target_raster(SourceTarget::Paint(paint)).unwrap().wait_data().unwrap();
+    let [x, y] = [110 - origin[0], 120 - origin[1]].map(|v| v as usize);
+    let tile = data.tiles[&TileKey { plane: RasterPlane::Color, coordinate: [(x / 256) as u32, (y / 256) as u32] }].wait_backing().unwrap().decode().unwrap();
+    let start = ((y % 256) * 256 + x % 256) * 16;
+    let pixel: [f32; 4] = std::array::from_fn(|channel| f32::from_le_bytes(tile[start + channel * 4..start + channel * 4 + 4].try_into().unwrap()));
+    assert_eq!(pixel, rgba, "the stroke lands where the perspective puts it");
+}
+
+#[test]
+fn projective_layer_transforms_keep_linked_coverage_paired_with_paint_and_source_handles() {
     let extent = [33, 17];
     let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames {
         paint: "Paired paint".into(), paper: "Paper".into(),
@@ -1183,7 +1208,7 @@ fn applying_projective_pixels_from_linked_coverage_keeps_paired_paint_and_source
         RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &rgba.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>().repeat(65536)).unwrap()));
     document.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(data);
     let coverage = document.artwork.coverage.next_handle();
-    let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, extent, Point::default());
+    let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, extent, [0, 0]);
     mask.source.default_coverage = 0.;
     let mut data = RasterData::default();
     data.tiles.insert(TileKey { plane: RasterPlane::Mask, coordinate: [0; 2] },
@@ -1192,13 +1217,13 @@ fn applying_projective_pixels_from_linked_coverage_keeps_paired_paint_and_source
     assert_eq!(document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap(), coverage);
     let occurrence = document.artwork.occurrences.get_mut(owner).unwrap();
     occurrence.mask = Some(mask.use_);
-    occurrence.placement = layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(
+    refresh(&mut document);
+    let mut map = layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(
         layer_core::Rect::from_extent(extent), [[4., 3.], [30., 5.], [29., 15.], [2., 14.]].map(|[x, y]| Point { x, y }),
     ).unwrap());
-    refresh(&mut document);
-    let target = SourceTarget::Coverage(coverage);
-    let plan = document.transform_pixels_plan(target, layer_core::Interpolation::Nearest, Default::default()).unwrap();
-    assert_eq!(plan.target, target);
+    map.interpolation = layer_core::Interpolation::Nearest;
+    let plan = document.layer_transform_plan(SourceTarget::Paint(paint), &map, None, Default::default()).unwrap();
+    assert_eq!(plan.target, SourceTarget::Paint(paint));
     assert_eq!(plan.paint, Some(paint));
     assert_eq!(plan.coverage, Some(coverage));
     let output = pollster::block_on(gpu().transform_pixels(plan, Default::default())).unwrap();
@@ -1214,7 +1239,7 @@ fn applying_projective_pixels_from_linked_coverage_keeps_paired_paint_and_source
         f32::from_le_bytes(paint_bytes[start..start + 4].try_into().unwrap())
     });
     assert_eq!(pixel, rgba);
-    let mask_bytes = bytes(target, RasterPlane::Mask);
+    let mask_bytes = bytes(SourceTarget::Coverage(coverage), RasterPlane::Mask);
     assert_eq!(u16::from_le_bytes(mask_bytes[offset * 2..offset * 2 + 2].try_into().unwrap()), 16384);
     assert_eq!(document.scene().source_target(owner), Some(SourceTarget::Paint(paint)));
     assert_eq!(document.scene().mask(owner).unwrap().0.source, coverage);

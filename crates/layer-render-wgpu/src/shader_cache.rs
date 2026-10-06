@@ -42,8 +42,9 @@ impl Cache {
             None
         });
         log(&format!(
-            "load bytes={} generation={generation}",
+            "load bytes={} generation={generation}{}",
             data.as_ref().map_or(0, Vec::len),
+            if store.lock.is_some() { "" } else { " shared" },
         ));
         // SAFETY: Only bytes produced by get_data are written to this app-private
         // store. Its generation, length and checksum are checked before use.
@@ -66,7 +67,7 @@ impl Cache {
     pub fn finish(&self) {
         // Detach before serializing. Later runtime filter compilations cannot
         // grow this startup cache indefinitely. Existing pipelines remain live.
-        let Some((pipeline, mut store)) = self.active.lock().unwrap().take() else {
+        let Some((pipeline, mut store)) = self.active.lock().unwrap().take().filter(|(_, store)| store.lock.is_some()) else {
             return;
         };
         let start = std::time::Instant::now();
@@ -91,9 +92,9 @@ struct Store {
     directory: PathBuf,
     key: u64,
     budget: u64,
-    // Held through background save. A second renderer skips caching instead of
-    // racing a retiring renderer's cleanup or write. OS releases it on death.
-    _lock: File,
+    // Held through background save. A renderer created while another holds it
+    // reads the published data but never cleans or writes. OS releases it on death.
+    lock: Option<File>,
 }
 impl Store {
     fn open(directory: &Path, key: u64, budget: u64) -> io::Result<Self> {
@@ -103,14 +104,18 @@ impl Store {
             .truncate(false)
             .write(true)
             .open(directory.join("lock"))?;
-        try_lock(&lock)?;
+        let lock = match try_lock(&lock) {
+            Ok(()) => Some(lock),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => None,
+            Err(e) => return Err(e),
+        };
         let store = Self {
             directory: directory.into(),
             key,
             budget,
-            _lock: lock,
+            lock,
         };
-        store.clean()?;
+        if store.lock.is_some() { store.clean()?; }
         Ok(store)
     }
     fn path(&self) -> PathBuf {
@@ -156,14 +161,19 @@ impl Store {
             && u32::from_le_bytes(bytes[24..28].try_into().unwrap())
                 == crc32fast::hash(&bytes[HEADER as usize..]);
         if !valid {
-            fs::remove_file(self.path())?;
-            log("discarded incompatible, oversized or corrupt data");
+            if self.lock.is_some() {
+                fs::remove_file(self.path())?;
+                log("discarded incompatible, oversized or corrupt data");
+            }
             return Ok(None);
         }
         bytes.drain(..HEADER as usize);
         Ok(Some(bytes))
     }
     fn save(&mut self, data: &[u8]) -> io::Result<bool> {
+        if self.lock.is_none() {
+            return Ok(false);
+        }
         self.clean()?;
         let size = data.len() as u64 + HEADER;
         if size > self.budget {
@@ -292,14 +302,23 @@ mod tests {
         assert!(!store.path().exists());
     }
     #[test]
-    fn concurrent_renderer_cannot_clean_or_overwrite_active_store() {
+    fn concurrent_renderer_reads_but_cannot_clean_or_overwrite_active_store() {
         let temp = Temp::new();
         let mut store = Store::open(&temp.0, 1, 128).unwrap();
         store.save(b"first renderer").unwrap();
-        assert!(Store::open(&temp.0, 2, 128).is_err());
+        fs::write(temp.0.join("old-driver.bin"), [0; 8]).unwrap();
+        let mut second = Store::open(&temp.0, 1, 128).unwrap();
+        assert_eq!(second.load().unwrap().unwrap(), b"first renderer", "a second renderer starts from the published data");
+        assert!(!second.save(b"second renderer").unwrap());
+        assert!(temp.0.join("old-driver.bin").exists(), "only the owner cleans");
+        let mut other = Store::open(&temp.0, 2, 128).unwrap();
+        assert!(other.load().unwrap().is_none());
+        assert!(store.path().exists(), "only the owner discards incompatible data");
         assert_eq!(store.load().unwrap().unwrap(), b"first renderer");
-        drop(store);
-        assert!(Store::open(&temp.0, 2, 128).is_ok());
+        drop((store, second, other));
+        let mut owner = Store::open(&temp.0, 2, 128).unwrap();
+        assert!(owner.load().unwrap().is_none());
+        assert!(owner.save(b"next owner").unwrap());
     }
 
     #[test]

@@ -316,6 +316,21 @@ manual save checkpoints and undo/redo after an actual process death.
     `object_fixture` from a small photo. Run with `-e theme light` and `dark`.
     It verifies shared paint/object image identity, exact affine undo/redo,
     save/open, private history recovery and pixels after replacing the GPU.
+  - `#imageObjectsCancelPasteIntoConversionsAndRecovery` cancels placement and
+    a transform without history, pastes an external image into a selection,
+    moves it behind the fixed mask, rasterizes the masked half-opacity image
+    layer and converts painted ink to an image layer with unchanged pixels and
+    one-step undo, then checks save/reopen, private recovery, recovered Redo and
+    GPU replacement in both themes, and that image-layer and image-row previews
+    arrive before and after the GPU is replaced. `#imageObjectClipboardCopyCutPasteNonceAndOtherDocument`
+    copies, cuts and pastes images through the system clipboard, pastes another
+    app's image when the nonce does not match and pastes the copy into a new
+    drawing. `AndroidSessionRestartTest#processRestartRetainsImageObjectsAndHistory`
+    takes the same `restartFixture`/`restartPhase` arguments as the other
+    restart case and checks binary64 poses and recovered Undo/Redo after the
+    process is killed. `AndroidInteractionTest#imageRowsTouchPickingMenusAndRefusalActions`
+    drives the image rows, their menu and drag order, finger picking, two-finger
+    navigation and the image paint refusal.
   - `#drawingTabsRestoreMultipleInactiveDrawingsWithoutPrompt` restores order,
     active tab, camera, saved checkpoints and independent undo/redo history.
     `#failedInactiveSessionRetriesWithoutLosingNewDrawing` preserves a failed
@@ -347,7 +362,9 @@ manual save checkpoints and undo/redo after an actual process death.
   fields. `AndroidTextCompositionTest#curveCoordinatesKeepNativeCompositionAndUnchangedPrecision`
   checks composition ownership and unchanged numeric commits through the native
   InputConnection. `AndroidRasterTest#imagePlacementBatchHistoryAndStaleRequests`
-  includes Position anchor, pivot, held nudges and Transform Again.
+  places a batch of images as image objects, then covers Position anchor,
+  pivot, held nudges, Transform Again and committed paint transforms of a
+  watercolor layer.
 - `AndroidHostTest#pointwiseColorPagesUseNativeControlsAndRetainHiddenValues`
   checks Hue range pages, Colorize, Brightness to Opacity, Threshold and Photo Filter controls and
   slider history in both themes. Run with and without `-e presentationNarrow true`.
@@ -493,34 +510,20 @@ APK calls, so test-APK benchmarks use the unminified build.
   project through the ordinary loader instead of creating a canvas. For paired
   retained-photo translation, use `-e acceptedPhoto true`,
   `-e labels photo-translate-drag`, and add `-e materialWatercolor true` to paint
-  a sparse wet-watercolor stroke before Transform. That run verifies and saves
-  the retained source and native watercolor planes alongside its motion report.
+  a sparse wet-watercolor stroke on the rasterized photo before Transform. That
+  run verifies and saves the photo base and native watercolor planes alongside
+  its motion report.
   `-e translationRepeats 4` saves the first translation and three more gestures
   in the same session, keeping cold-start and warm results separate.
   `-e transformSnapping true` enables snapping for the translation measurement.
   `-e labels photo-retained-distort-drag` or
-  `-e labels photo-retained-warp-drag` measures retained corner or mesh-node
-  motion on the same input and repeats it in the same session.
-  `-e saveRetainedDiagnostic true` uses a one-way retained drag, accepts its
-  geometry, and saves `retained-diagnostic.capy` and its manifest for reproduction.
-  This changes the motion path; keep it separate from qualification runs.
-  `-e finalBake true` accepts a translated watercolor photo, applies Transform
-  to Pixels, samples job memory, and verifies native backing after save/reopen.
-  For a smaller command-memory diagnostic, `AndroidRasterTest`'s
-  `imagePlacementBatchHistoryAndStaleRequests` accepts
-  `-e imagePlacementAffineSmoke true -e affineSmokeDrags 4` and
-  `-e affineSmokeWatercolor true`; it records process maps after each drag,
-  idle, and Apply without reopening between gestures.
-  `-e imagePlacementCanvasWidth 9504 -e imagePlacementCanvasHeight 6336`
-  opens `-e imagePlacementPhotos photo.jpg` from this test app's private files
-  directory as the initial document and verifies its extent, then imports another
-  occurrence. Each smoke drag selects a live image contact clear of the action
-  bar and records its bounds in `validation/pixel-bake/input-probes/`. `-e affineSmokeIdleMs 120000`
-  waits after Apply, records memory before and after idle, then verifies a resumed
-  drag and Apply. Each stage also records PSS, RSS, system memory and GPU
-  allocations in `validation/pixel-bake/maps/*-memory.json`; motion records are
-  in `validation/pixel-bake/motion-affine.json`. This measures large accepted
-  resources and their retention; renderer submission chunks still bound commands.
+  `-e labels photo-retained-warp-drag` measures the paint transform's corner or
+  mesh-node preview on the same input and repeats it in the same session.
+  `-e saveRetainedDiagnostic true` uses a one-way drag, commits it and saves
+  `retained-diagnostic.capy` and its manifest for reproduction. This changes
+  the motion path; keep it separate from qualification runs.
+  `-e finalBake true` commits a seven-degree rotation of the watercolor photo
+  layer, samples job memory, and verifies native backing after save/reopen.
   `-e memory true` records tracked renderer allocation; `-e rendererProfile true`
   records CPU submission and GPU observations. These rates exclude presented
   input latency. Each scenario records the initial camera and its input window in
@@ -545,6 +548,7 @@ APK calls, so test-APK benchmarks use the unminified build.
   previews drawn. `-e refine grow` (or `shrink`, `border`) picks another
   operation, `-e refineSpan` the fraction of the track, and `-e refineBar off`
   hides the canvas action bar. `crop` drags a crop handle over a placed photo.
+  Scenarios that edit a placed photo's pixels rasterize its image layer first.
   `move` drags the selected pixels of a placed `width` × `height` photo with
   Move: all of it, the middle half, and the middle half with Leave Copy.
   `merge` paints eight layers over a placed photo and times Merge Visible and

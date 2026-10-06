@@ -53,16 +53,30 @@ struct PixelBake {
     submitted: bool,
 }
 
+enum RemapCompletion {
+    Canvas { geometry: CanvasGeometry, then: Vec<Edit> },
+    Layer(layer_core::CanvasGeometryPlan),
+}
+
+struct CanvasRemap {
+    epoch: u64,
+    revision: u64,
+    completion: RemapCompletion,
+    plan: layer_core::RemapPlan,
+    submitted: bool,
+}
+
 #[derive(Default)]
 pub(super) struct ContentBounds {
     cache: ContentBoundsCache,
     job: Option<ContentJob>,
     bake: Option<PixelBake>,
+    remap: Option<CanvasRemap>,
     pub(super) moving: Option<PendingMove>,
 }
 impl ContentBounds {
-    pub(super) fn busy(&self) -> bool { self.job.is_some() || self.bake.is_some() }
-    pub(super) fn baking(&self) -> bool { self.bake.is_some() }
+    pub(super) fn busy(&self) -> bool { self.job.is_some() || self.baking() }
+    pub(super) fn baking(&self) -> bool { self.bake.is_some() || self.remap.is_some() }
 }
 
 fn same_destination(actual: &Edit, expected: &Edit) -> bool {
@@ -103,13 +117,83 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.operation.placing() {
             return Err(CanvasGeometryError::Unsupported("Apply or cancel the photo placement first"));
         }
-        self.engine.apply_canvas_geometry_with(geometry, then)?;
+        let plan = self.engine.canvas_geometry_plan(geometry)?;
+        if let Some(plan) = plan.remap_plan(self.engine.document()) {
+            return self.start_remap(plan, RemapCompletion::Canvas { geometry: *geometry, then })
+                .map_err(|e| CanvasGeometryError::Document(layer_core::DocumentError::InvalidArtwork(e)));
+        }
+        self.engine.apply_canvas_plan(plan, then)?;
+        self.follow_canvas_geometry(geometry)
+    }
+
+    /// Flip or turn a photo layer exactly, on the worker, when `map` allows it.
+    pub(super) fn start_exact_layer_transform(&mut self, target: SourceTarget, map: &layer_core::LayerPlacement) -> Option<Result<(), String>> {
+        let plan = self.engine.document().exact_layer_transform_plan(target, map, self.engine.geometry_limits())?;
+        Some(plan.and_then(|plan| {
+            let remap = plan.remap_plan(self.engine.document()).ok_or("The layer has nothing to move")?;
+            self.start_remap(remap, RemapCompletion::Layer(plan))
+        }))
+    }
+
+    fn start_remap(&mut self, plan: layer_core::RemapPlan, completion: RemapCompletion) -> Result<(), String> {
+        self.cancel_auto_levels();
+        self.yield_histogram();
+        let submitted = self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::Remap(plan.clone())).map_err(error)?;
+        self.content_bounds.remap = Some(CanvasRemap { epoch: self.state.document_file.epoch, revision: self.engine.document().revision, completion, plan, submitted });
+        self.refresh_tools();
+        self.refresh_commands();
+        Ok(())
+    }
+
+    fn follow_canvas_geometry(&mut self, geometry: &CanvasGeometry) -> Result<(), CanvasGeometryError> {
         let to_canvas = geometry.to_canvas();
         if let Some(reselect) = &mut self.selection_masks.reselect {
             *reselect = reselect.transformed(to_canvas)?;
         }
         self.follow_canvas_map(to_canvas);
         Ok(())
+    }
+
+    fn poll_canvas_remap(&mut self) -> u32 {
+        let l = self.localization().clone();
+        let Some(remap) = self.content_bounds.remap.as_mut() else { return 0; };
+        let result = if remap.epoch != self.state.document_file.epoch || remap.revision != self.engine.document().revision {
+            self.engine.backend_mut().cancel_snapshot();
+            Err(l.text(MessageId::COMMANDS_CANVAS_CHANGE_DRAWING_CHANGED).to_string())
+        } else if !remap.submitted {
+            match self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::Remap(remap.plan.clone())).map_err(error) {
+                Ok(accepted) => { remap.submitted = accepted; return 0; }
+                Err(error) => Err(error),
+            }
+        } else {
+            match self.engine.backend_mut().take_snapshot() {
+                None => return 0,
+                Some(result) => result.map_err(error),
+            }
+        };
+        let remap = self.content_bounds.remap.take().unwrap();
+        let result = result.and_then(|result| {
+            let layer_render::SnapshotResult::Remap(results) = result else { return Err(l.text(MessageId::COMMANDS_CANVAS_CHANGE_DRAWING_CHANGED).to_string()); };
+            match remap.completion {
+                RemapCompletion::Canvas { geometry, then } => {
+                    let plan = self.engine.canvas_geometry_plan(&geometry).map_err(|e| e.to_string())?.with_remapped(results)?;
+                    self.engine.apply_canvas_plan(plan, then).map_err(|e| e.to_string())?;
+                    self.follow_canvas_geometry(&geometry).map_err(|e| e.to_string())?;
+                }
+                RemapCompletion::Layer(plan) => {
+                    if self.operation.transforming() { let _ = self.cancel_transform(); }
+                    let plan = plan.with_remapped(results)?;
+                    self.source_edit_candidates(&Edit::Batch(plan.edits.clone()), Default::default())?;
+                    self.engine.apply_edit(Edit::Batch(plan.edits)).map_err(error)?;
+                }
+            }
+            self.refresh_document();
+            Ok(())
+        });
+        if let Err(message) = result { self.notify(message); }
+        self.refresh_tools();
+        self.refresh_commands();
+        regions::DOCUMENT | regions::COMMANDS | regions::HOST
     }
 
     /// Keep the image where it was on screen after the canvas moves through
@@ -143,6 +227,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             ContentUse::PrepareSnap(_) => None,
             ContentUse::FitContent => (!self.cropping()).then_some(l.text(MessageId::COMMANDS_CHOOSE_THE_CROP_TOOL_FIRST)),
             ContentUse::Trim | ContentUse::RevealAll => self.canvas_geometry_refusal(),
+            ContentUse::Move | ContentUse::PrepareMove if self.layer_transforming() =>
+                self.engine.document().layer_move_targets(&self.transform_roots()).err().map(|_| l.text(MessageId::COMMANDS_SELECT_UNLOCKED_PAINT_CONTENT_OR_A_LAYER_MASK)),
             ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove => (!self.can_transform()).then_some(l.text(MessageId::COMMANDS_SELECT_UNLOCKED_PAINT_CONTENT_OR_A_LAYER_MASK)),
         }
     }
@@ -195,8 +281,8 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn bounds_targets(&self) -> Vec<SourceTarget> {
         let doc = self.engine.document();
-        if self.retained_transforming() {
-            return doc.retained_transform_targets(&self.transform_roots()).unwrap_or_default().into_iter()
+        if self.layer_transforming() {
+            return doc.layer_move_targets(&self.transform_roots()).unwrap_or_default().into_iter()
                 .filter_map(|h| doc.scene().paint_source(h).and_then(|_| doc.scene().source_target(h))).collect();
         }
         doc.active_target().into_iter().chain(self.bounds_companion()).collect()
@@ -204,7 +290,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn snap_target_ids(&self) -> Vec<OccurrenceHandle> {
         let doc = self.engine.document();
         let scene = doc.scene();
-        let roots = self.transform_roots();
+        let roots = self.object_target().map_or_else(|| self.transform_roots(), |layer| vec![layer]);
         let mut excluded = doc.layer_subtrees(&roots);
         for root in roots {
             let mut parent = scene.parent(root);
@@ -215,7 +301,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let mut ids: Vec<_> = scene.order().iter().copied().filter(|h| {
             let Some(occurrence) = scene.occurrence(*h) else { return false; };
-            if !matches!(occurrence.kind(), layer_core::LayerKind::Paint | layer_core::LayerKind::Group)
+            if !matches!(occurrence.kind(), layer_core::LayerKind::Paint | layer_core::LayerKind::Group | layer_core::LayerKind::Object)
                 || excluded.contains(h) { return false; }
             let mut current = Some(*h);
             while let Some(handle) = current {
@@ -231,7 +317,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn measured_snap_bounds(&self) -> Vec<(OccurrenceHandle, Rect)> {
         let doc = self.engine.document();
         self.snap_target_ids().into_iter().filter_map(|id| {
-            self.content_bounds.cache.current(doc, ContentScope::PlacedTarget(id))
+            self.object_layer_bounds(id).or_else(|| self.content_bounds.cache.current(doc, ContentScope::PlacedTarget(id)))
                 .filter(|bounds| !bounds.is_empty()).map(|bounds| (id, bounds))
         }).collect()
     }
@@ -244,13 +330,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.operation.dragging() || self.operation.nudging() || self.content_bounds.busy() || !self.canvas_idle()
             || (!self.operation.transforming() && self.layer_interaction.tool != LayerCanvasTool::Move) { return Ok(()); }
-        if self.layer_interaction.tool == LayerCanvasTool::Move && self.retained_transforming()
+        if self.layer_interaction.tool == LayerCanvasTool::Move && self.layer_transforming()
             && self.measured_target_bounds().is_none() {
             return self.request_content_bounds(ContentUse::PrepareMove);
         }
         let doc = self.engine.document();
-        if let Some(id) = self.snap_target_ids().into_iter().find(|id|
-            self.content_bounds.cache.current(doc, ContentScope::PlacedTarget(*id)).is_none()) {
+        if let Some(id) = self.snap_target_ids().into_iter().find(|id| doc.scene().object_layer(*id).is_none()
+            && self.content_bounds.cache.current(doc, ContentScope::PlacedTarget(*id)).is_none()) {
             self.request_content_bounds(ContentUse::PrepareSnap(id))?;
         }
         Ok(())
@@ -262,16 +348,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.content_bounds.cache.get(&request).or_else(|| request.known_bounds())
         };
         let targets = self.bounds_targets();
-        if self.retained_transforming() && (targets.len() != 1 || self.transform_roots() != targets.iter().filter_map(|t| doc.scene().source_owner(*t)).collect::<Vec<_>>()) {
+        if self.layer_transforming() && (targets.len() != 1 || self.transform_roots() != targets.iter().filter_map(|t| doc.scene().source_owner(*t)).collect::<Vec<_>>()) {
             return targets.into_iter().try_fold(Rect::EMPTY, |bounds, id|
-                Some(bounds.union(doc.target_geometry(id).forward_bounds(measured(id)?))));
+                Some(bounds.union(measured(id)?.translated(layer_core::offsets::point(doc.target_offset(id))))));
         }
         let target = targets.first().copied()?;
         let bounds = measured(target)?;
         if bounds.is_empty() { return Some(bounds); }
         if Some(target) != doc.active_target() { return Some(bounds); }
         let Some(companion) = self.bounds_companion() else { return Some(bounds); };
-        let to = doc.affine_edit_transform(companion)?.then(doc.affine_edit_transform(doc.active_target()?)?.inverse()?);
+        let [from, into] = [doc.target_offset(companion), doc.target_offset(doc.active_target()?)];
+        let to = layer_core::Affine::translation(layer_core::offsets::point(layer_core::offsets::checked_sub(from, into)?));
         let other = measured(companion)?;
         Some(if other.is_empty() { bounds } else { bounds.union(to.bounds(other)) })
     }
@@ -292,35 +379,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.pending_tool_drawer = None;
         self.content_bounds.moving = None;
         let job = self.content_bounds.job.take();
-        let bake = self.content_bounds.bake.take().is_some();
+        let bake = self.content_bounds.bake.take().is_some() | self.content_bounds.remap.take().is_some();
         if job.is_none() && !bake { return false; }
         self.engine.backend_mut().cancel_content_bounds();
         bake || job.is_some_and(|job| !matches!(job.purpose, ContentUse::PrepareSnap(_)))
     }
 
-    pub(super) fn transform_pixels_refusal(&self) -> Option<std::sync::Arc<str>> {
-        use layer_core::TransformPixelsRefusal::*;
-        let doc = self.engine.document();
-        let l = self.localization();
-        if self.selection_masks.target().is_some() { return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST)); }
-        doc.active_target().map_or(Some(layer_core::TransformPixelsRefusal::Target), |t| doc.transform_pixels_refusal(t)).map(|reason| l.text(match reason {
-            Target => MessageId::COMMANDS_TRANSFORM_PIXELS_SELECT_LAYER,
-            Locked => MessageId::COMMANDS_THE_LAYER_IS_LOCKED,
-            Unchanged => MessageId::COMMANDS_TRANSFORM_PIXELS_UNCHANGED,
-            Pending => MessageId::COMMANDS_WAIT_FOR_CURRENT_EDIT,
-        }))
-    }
-
-    pub(super) fn apply_transform_pixels(&mut self) -> Result<(), String> {
-        self.require_document_idle()?;
-        refused(self.transform_pixels_refusal())?;
-        self.cancel_content_bounds();
-        let doc = self.engine.document();
-        let target = doc.active_target().ok_or("Select a layer or mask first")?;
-        let interpolation = doc.target_geometry(target).placement.interpolation;
-        let plan = doc.transform_pixels_plan(target, interpolation, Default::default())?;
+    pub(super) fn start_layer_transform(&mut self, plan: layer_core::TransformPixelsPlan) -> Result<(), String> {
         self.engine.validate_edit(&plan.reserved_edit()).map_err(error)?;
-        let mut bake = PixelBake { epoch: self.state.document_file.epoch, revision: doc.revision, plan, submitted: false };
+        let mut bake = PixelBake { epoch: self.state.document_file.epoch, revision: self.engine.document().revision, plan, submitted: false };
         self.cancel_auto_levels();self.yield_histogram();
         bake.submitted = self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::TransformPixels(bake.plan.clone())).map_err(error)?;
         self.content_bounds.bake = Some(bake);
@@ -349,11 +416,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         let bake = self.content_bounds.bake.take().unwrap();
+        if self.operation.transforming() { let _ = self.cancel_transform(); }
         let result = result.and_then(|result| {
             let layer_render::SnapshotResult::TransformPixels(edit) = result else { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_UNEXPECTED_RESULT).to_string()); };
             if !same_destination(&edit, &bake.plan.output) { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_LAYER_CHANGED).to_string()); }
-            self.require_document_idle()?;
-            refused(self.transform_pixels_refusal())?;
+            if let Some(reason) = self.engine.document().layer_transform_refusal(bake.plan.target) { return Err(reason.to_string()); }
             self.source_edit_candidates(&edit, Default::default())?;
             self.engine.apply_edit(edit).map_err(error)?;
             self.refresh_document();
@@ -366,6 +433,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn poll_content_bounds(&mut self) -> u32 {
+        if self.content_bounds.remap.is_some() { return self.poll_canvas_remap(); }
         if self.content_bounds.baking() { return self.poll_transform_pixels(); }
         self.content_bounds.cache.discard_changed(self.engine.document());
         let Some(job) = &self.content_bounds.job else { return 0 };

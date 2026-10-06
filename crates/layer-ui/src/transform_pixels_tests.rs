@@ -47,13 +47,11 @@ fn bake_session(linked: bool) -> UiSession<Recorder> {
     p.base = Some(layer_core::PaintBase::new(layer_core::Image::new(std::sync::Arc::new(source.finish().unwrap()))));
     p.domain = [16, 8];
     p.raster = raw_revision(color, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 20);
-    doc.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 3., -17., 13.]));
+    doc.artwork.occurrences.get_mut(owner).unwrap().offset = [-17, 13];
     let mask_handle = doc.artwork.coverage.next_handle();
-    let mut mask = layer_core::CoverageSnapshot::reveal_all(mask_handle, [16, 8], Point { x: 5., y: 7. });
+    let mut mask = layer_core::CoverageSnapshot::reveal_all(mask_handle, [16, 8], [5, 7]);
     mask.use_.linked = linked;
-    mask.use_.placement = layer_core::Projective::from_affine(layer_core::Affine([1., 0., 0., 2., 11., 13.]));
     mask.source.raster = raw_revision(color, &[RasterPlane::Mask], 90);
-    mask.source.initial = Some(layer_core::Selection::polygon(vec![Point { x: 2., y: 3. }, Point { x: 7., y: 3. }, Point { x: 7., y: 9. }]).unwrap());
     assert_eq!(doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap(),mask_handle);
     doc.artwork.occurrences.get_mut(owner).unwrap().mask = Some(mask.use_);
     let working = doc.working.clone();
@@ -62,6 +60,13 @@ fn bake_session(linked: bool) -> UiSession<Recorder> {
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
     s
+}
+
+fn start_bake(s: &mut UiSession<Recorder>) -> Result<(), String> {
+    invoke(s, CommandId::ScaleRotate);
+    if s.content_bounds.busy() { reply_bounds(s, [0., 0., 16., 8.]); }
+    s.set_transform_control("transform_width", 2.)?;
+    s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransform }).map(drop)
 }
 
 fn frozen_plan(s: &UiSession<Recorder>) -> layer_core::TransformPixelsPlan {
@@ -104,16 +109,40 @@ fn bake_reply(s: &mut UiSession<Recorder>, reply: Result<layer_render::SnapshotR
 }
 
 #[test]
-fn apply_transform_pixels_is_pending_then_one_atomic_undo_restores_all_native_roots() {
+fn a_distorted_stroke_commits_though_its_perspective_folds_beyond_the_layer() {
+    use layer_core::raster::RasterPlane;
+    let mut doc = Document::new(PortableId::random(), 2000, 1500, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let color = doc.composition().color;
+    doc.artwork.paint.get_mut(bake_paint_handle(&doc)).unwrap().raster = raw_revision(color, &[RasterPlane::Color], 20);
+    let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
+    s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
+    invoke(&mut s, CommandId::FitCanvas);
+    s.frame(1, 1).unwrap();
+    s.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate }).unwrap();
+    reply_bounds(&mut s, [100., 100., 160., 140.]);
+    invoke(&mut s, CommandId::TransformDistort);
+    for (corner, to) in [(1, Point { x: 160., y: 115. }), (2, Point { x: 160., y: 125. })] {
+        let from = s.operation.quad()[corner];
+        s.transform_pen(event(&s, 1, PenPhase::Down, 1.), from).unwrap();
+        s.transform_pen(event(&s, 2, PenPhase::Move, 1.), to).unwrap();
+        s.transform_pen(event(&s, 3, PenPhase::Up, 1.), to).unwrap();
+    }
+    s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransform }).unwrap();
+    let plan = frozen_plan(&s);
+    assert_eq!(plan.source, Some(layer_core::Rect { min: Point { x: 100., y: 100. }, max: Point { x: 160., y: 140. } }));
+    assert!(plan.extent.iter().all(|n| *n <= 4000), "the output covers the moved content, not the folded layer: {:?}", plan.extent);
+}
+
+#[test]
+fn layer_transform_is_pending_then_one_atomic_undo_restores_all_native_roots() {
     for linked in [false, true] {
         let mut s = bake_session(linked);
         let before = s.engine.document().clone();
-        assert!(s.command(CommandId::ApplyTransformPixels).enabled);
-        s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels }).unwrap();
+        start_bake(&mut s).unwrap();
         assert!(s.content_bounds.busy());
+        assert!(s.operation.transforming(), "the preview stays until the resampled pixels arrive");
         assert_eq!(s.engine.document(), &before);
         assert!(!s.engine.can_undo());
-        assert!(s.engine.backend().bounds_requests.is_empty());
         let plan = frozen_plan(&s);
         let output = completed_bake(&plan);
         bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output.clone())));
@@ -121,7 +150,8 @@ fn apply_transform_pixels_is_pending_then_one_atomic_undo_restores_all_native_ro
         let mut expected = before.clone();
         expected.apply(output).unwrap();
         assert_live_artwork_eq(s.engine.document(), &expected);
-        assert!(!s.command(CommandId::ApplyTransformPixels).enabled);
+        assert!(!s.operation.transforming());
+        assert!(bake_paint(s.engine.document()).base.is_none());
         let after = s.engine.document().clone();
         assert!(s.engine.undo().unwrap());
         assert_live_artwork_eq(s.engine.document(), &before);
@@ -133,11 +163,11 @@ fn apply_transform_pixels_is_pending_then_one_atomic_undo_restores_all_native_ro
 }
 
 #[test]
-fn apply_transform_pixels_retries_unaccepted_work_and_cancel_discards_late_result() {
+fn layer_transform_retries_unaccepted_work_and_cancel_discards_late_result() {
     let mut s = bake_session(true);
     let before = s.engine.document().clone();
     s.engine.backend_mut().snapshot_wait = true;
-    s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels }).unwrap();
+    start_bake(&mut s).unwrap();
     s.frame(2, 2).unwrap();
     assert!(s.content_bounds.busy());
     assert!(s.engine.backend().snapshot_requests.is_empty());
@@ -154,10 +184,10 @@ fn apply_transform_pixels_retries_unaccepted_work_and_cancel_discards_late_resul
 }
 
 #[test]
-fn apply_transform_pixels_rejects_stale_target_and_renderer_results() {
+fn layer_transform_rejects_stale_target_and_renderer_results() {
     for invalidation in 0..4 {
         let mut s = bake_session(true);
-        s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels }).unwrap();
+        start_bake(&mut s).unwrap();
         let output = completed_bake(&frozen_plan(&s));
         match invalidation {
             0 => { s.replace_renderer(Recorder { tiled_sources: true, ..Default::default() }).unwrap(); },
@@ -186,7 +216,7 @@ fn apply_transform_pixels_rejects_stale_target_and_renderer_results() {
 }
 
 #[test]
-fn apply_transform_pixels_failures_preserve_existing_redo_and_original_backing() {
+fn layer_transform_failures_preserve_existing_redo_and_original_backing() {
     for failure in 0..5 {
         let mut s = bake_session(true);
         rename_bake(&mut s);
@@ -195,7 +225,7 @@ fn apply_transform_pixels_failures_preserve_existing_redo_and_original_backing()
         let before = s.engine.document().clone();
         if failure == 0 { s.engine.backend_mut().snapshot_fails = true; }
         if failure == 1 { s.engine.backend_mut().snapshot_wait = true; }
-        let started = s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels });
+        let started = start_bake(&mut s);
         if failure == 0 { assert!(started.is_err()); } else { started.unwrap(); }
         if failure == 1 {
             s.engine.backend_mut().snapshot_fails = true;
@@ -210,6 +240,7 @@ fn apply_transform_pixels_failures_preserve_existing_redo_and_original_backing()
             bake_reply(&mut s, result);
         }
         assert!(!s.content_bounds.busy());
+        s.dispatch(UiAction::Invoke { command: CommandId::CancelTransform }).ok();
         assert_eq!(s.engine.document(), &before);
         assert!(s.engine.can_redo(), "failed bake must retain redo");
         assert!(s.engine.redo().unwrap());
@@ -221,7 +252,7 @@ fn apply_transform_pixels_failures_preserve_existing_redo_and_original_backing()
 fn renderer_replacement_cancels_the_accepted_bake_on_the_retired_renderer() {
     let mut s = bake_session(true);
     let before = s.engine.document().clone();
-    s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransformPixels }).unwrap();
+    start_bake(&mut s).unwrap();
     assert_eq!(s.engine.backend().snapshot_requests.len(), 1);
     let (retired, _) = s.replace_renderer(Recorder { tiled_sources: true, ..Default::default() }).unwrap();
     assert!(retired.snapshot_cancels > 0, "cancel the worker on its owning renderer before retiring it");
@@ -242,7 +273,7 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
     source.domain = domain;
     let coverage = doc.artwork.occurrences.get(owner).unwrap().mask.as_ref().unwrap().source;
     doc.artwork.coverage.get_mut(coverage).unwrap().domain = domain;
-    doc.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::IDENTITY;
+    doc.artwork.occurrences.get_mut(owner).unwrap().offset = [0, 0];
     let mut s = UiSession::new(Recorder { max_dimension: Some(512), ..Default::default() }, doc,
         [800, 600], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
@@ -258,9 +289,9 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
     if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 32., 32.]); }
     send(&mut s, 2, PenPhase::Move, Point { x: 30., y: 30. }).unwrap();
     let valid = s.engine.document().artwork.occurrences.get(bake_owner(s.engine.document())).unwrap().clone();
-    let moved_origin = s.engine.document().target_geometry(before.active_target().unwrap()).map(Point { x: 0., y: 0. }).unwrap();
-    let original_origin = before.target_geometry(before.active_target().unwrap()).map(Point { x: 0., y: 0. }).unwrap();
-    assert_eq!(moved_origin, Point { x: original_origin.x + 10., y: original_origin.y + 10. });
+    let moved_origin = s.engine.document().target_offset(before.active_target().unwrap());
+    let original_origin = before.target_offset(before.active_target().unwrap());
+    assert_eq!(moved_origin, original_origin.map(|v| v + 10));
     assert!(!s.engine.can_undo());
     send(&mut s, 3, PenPhase::Move, Point { x: 100000., y: 100000. }).unwrap();
     assert_eq!(s.engine.document().artwork.occurrences.get(bake_owner(s.engine.document())).unwrap(), &valid);
@@ -275,8 +306,8 @@ fn source_less_move_rejected_motion_and_release_commit_last_valid_preview_once()
         assert_eq!(old.tiles.len(), new.tiles.len());
         for (key, tile) in &old.tiles {
             let moved = new.tiles.iter().find(|(next, value)| next.plane == key.plane && value.same_capture(tile)).unwrap().0;
-            let original_world = before.affine_edit_transform(target).unwrap().map(Point { x: key.coordinate[0] as f32 * 256., y: key.coordinate[1] as f32 * 256. });
-            let moved_world = s.engine.document().affine_edit_transform(target).unwrap().map(Point { x: moved.coordinate[0] as f32 * 256., y: moved.coordinate[1] as f32 * 256. });
+            let original_world = before.local_to_document(target).map(Point { x: key.coordinate[0] as f32 * 256., y: key.coordinate[1] as f32 * 256. });
+            let moved_world = s.engine.document().local_to_document(target).map(Point { x: moved.coordinate[0] as f32 * 256., y: moved.coordinate[1] as f32 * 256. });
             assert!((moved_world.x - original_world.x - 10.).abs() < 0.001);
             assert!((moved_world.y - original_world.y - 10.).abs() < 0.001);
         }

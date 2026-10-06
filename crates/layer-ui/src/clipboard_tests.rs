@@ -32,7 +32,7 @@ mod clipboard_checks {
             .expect("a document request")
     }
 
-    fn clip(extent: [u32; 2], origin: [u32; 2], color: DocumentColor) -> PixelClip {
+    fn clip(extent: [u32; 2], origin: [i64; 2], color: DocumentColor) -> PixelClip {
         let source = Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [90, 120, 200, 255]));
         PixelClip {
             nonce: "clip".into(),
@@ -42,14 +42,14 @@ mod clipboard_checks {
             origin,
             color,
             png: Arc::from(&b"png"[..]),
+            objects: None,
         }
     }
 
     fn translation(s: &UiSession<Recorder>) -> [f32; 2] {
         let doc = s.engine.document();
-        let placement = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().placement.as_affine().unwrap();
-        assert_eq!(placement.0[..4], [1., 0., 0., 1.], "pasted at full size");
-        [placement.0[4], placement.0[5]]
+        let offset = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().offset;
+        [offset[0] as f32, offset[1] as f32]
     }
 
     #[test]
@@ -60,14 +60,14 @@ mod clipboard_checks {
         let doc = s.engine.document();
         let stack = RecordChange::insert(&doc.artwork.stacks, Stack { entries: vec![paint] });
         let mut group = Occurrence::new(OccurrenceContent::Stack(stack.handle), "Group");
-        group.translation = Point { x: 10., y: 20. };
+        group.offset = [10, 20];
         let group = RecordChange::insert(&doc.artwork.occurrences, group);
         let root = doc.composition().result;
         let mut containing = doc.artwork.stacks.get(root).unwrap().clone();
         containing.entries.retain(|h| *h != paint);
         containing.entries.insert(0, group.handle);
         let mut occurrence = doc.scene().occurrence(paint).unwrap().clone();
-        occurrence.translation = Point { x: 7., y: 3. };
+        occurrence.offset = [7, 3];
         occurrence.blend = LayerBlend::Multiply;
         occurrence.attachment = layer_core::Attachment::None;
         occurrence.opacity = 0.4;
@@ -79,7 +79,7 @@ mod clipboard_checks {
         assert!(s.command(CommandId::Copy).enabled, "{:?}", s.command_disabled_reason(CommandId::Copy));
         invoke(&mut s, CommandId::Copy);
         let (id, request) = pending(&s);
-        assert!(matches!(request, DocumentRequest::Copy { merged: false, cut: false }));
+        assert!(matches!(request, DocumentRequest::Copy { merged: false, cut: false, pixels: false }));
         assert_eq!(s.command_disabled_reason(CommandId::Copy).as_deref(), Some("Wait for the current file operation"));
         let capture = s.capture_clipboard(id).unwrap();
         assert_eq!(capture.crop, [30, 40, 100, 51]);
@@ -89,7 +89,7 @@ mod clipboard_checks {
         let scene = capture.scene.view();
         let target = scene.source_target(paint).unwrap();
         assert_eq!(capture.scope, SceneScope::Raw(target), "only the active source, before occurrence properties");
-        assert_eq!(scene.target_geometry(target).as_affine().unwrap(), layer_core::Affine::translation(Point { x: 17., y: 23. }), "the group's offset is kept");
+        assert_eq!(scene.target_offset(target), [17, 23], "the group's offset is kept");
         let occurrence = scene.occurrence(paint).unwrap();
         assert!(!occurrence.visible && occurrence.opacity == 0.4 && occurrence.mask.is_none());
         assert!(scene.parent(paint).is_some());
@@ -99,7 +99,7 @@ mod clipboard_checks {
 
         invoke(&mut s, CommandId::CopyMerged);
         let (id, request) = pending(&s);
-        assert!(matches!(request, DocumentRequest::Copy { merged: true, cut: false }));
+        assert!(matches!(request, DocumentRequest::Copy { merged: true, cut: false, pixels: false }));
         let merged = s.capture_clipboard(id).unwrap();
         assert_eq!(merged.scene.view().order().len(), s.engine.document().scene().order().len());
         assert_eq!(merged.scope, SceneScope::All);
@@ -216,6 +216,17 @@ mod clipboard_checks {
         s.paste_clip(&hidden, PasteMode::Paste).unwrap();
         assert_eq!(translation(&s), [20., 25.], "centred in the view");
         invoke(&mut s, CommandId::Undo);
+        for (rotation, expected) in [(0., Some([21., 26.])), (0.3, None)] {
+            s.state.camera.rotation = rotation;
+            s.state.camera.center_on([30.5, 30.5]);
+            s.paste_clip(&hidden, PasteMode::Paste).unwrap();
+            let view = s.state.camera.surface_to_document64(s.state.camera.work_area_center().map(f64::from));
+            let rounded = [(view[0] - 10.).round() as f32, (view[1] - 5.).round() as f32];
+            assert_eq!(translation(&s), expected.unwrap_or(rounded), "paint rounds the F64 view centre, halves away from zero");
+            assert_eq!(translation(&s), rounded);
+            invoke(&mut s, CommandId::Undo);
+        }
+        s.state.camera.rotation = 0.;
         s.paste_clip(&hidden, PasteMode::InPlace).unwrap();
         assert_eq!(translation(&s), [300., 250.], "Paste in Place keeps the position");
         invoke(&mut s, CommandId::Undo);
@@ -227,7 +238,7 @@ mod clipboard_checks {
     }
 
     #[test]
-    fn paste_into_masks_the_new_layer_with_the_selection_in_one_step() {
+    fn paste_into_masks_a_new_image_layer_with_the_selection_in_one_step() {
         let mut s = clip_session();
         let selection = rectangle([110., 55., 115., 58.]);
         select(&mut s, Some(selection.clone()));
@@ -235,14 +246,18 @@ mod clipboard_checks {
         let clip = clip([20, 10], [100, 50], DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U8 });
         s.paste_clip(&clip, PasteMode::Into).unwrap();
         let doc = s.engine.document();
-        let layer = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap();
-        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().base.as_ref().unwrap().policy, layer_core::PaintBasePolicy::SourceProfile, "another colour mode");
+        let handle = doc.working.occurrence.unwrap();
+        let layer = doc.scene().occurrence(handle).unwrap();
+        let object = doc.object_layer_children(handle).expect("Paste Into makes an image layer")[0];
+        assert_eq!(doc.working.objects, [object].into());
+        let pasted = doc.scene().object(object).unwrap();
+        assert_eq!(pasted.affine, layer_core::Affine64([1., 0., 0., 1., 103., 52.]), "the clip is centred on the selection");
+        assert_eq!(pasted.image.interpretation, clip.source.interpretation, "the image keeps its own colour interpretation");
         let mask = layer.mask.as_ref().expect("a mask from the selection");
-        let mask = doc.artwork.coverage.get(mask.source).unwrap();
-        assert_eq!(mask.initial.as_ref().unwrap().shape, selection.shape);
-        assert_eq!(mask.default_coverage, 0.);
-        assert!(doc.working.selection.is_none(), "the selection became the mask");
-        assert_eq!(translation(&s), [100., 50.]);
+        let (source, default_coverage, consumed) = (mask.source, doc.artwork.coverage.get(mask.source).unwrap().default_coverage, doc.working.selection.is_none());
+        assert_eq!(crate::session::test_support::stored_selection(&mut s, source).unwrap().shape, selection.shape);
+        assert_eq!(default_coverage, 0.);
+        assert!(consumed, "the selection became the mask");
         invoke(&mut s, CommandId::Undo);
         assert_live_artwork_eq(s.engine.document(), &before);
         assert_eq!(s.engine.document().working.selection, before.working.selection, "one undo step restores the selection");
@@ -251,18 +266,56 @@ mod clipboard_checks {
     }
 
     #[test]
+    fn placed_and_pasted_names_keep_to_the_shared_name_limit() {
+        let mut s = clip_session();
+        let long = format!("  {}\u{7}photo.png", "a".repeat(300));
+        let source = || Arc::unwrap_or_clone(rgba8_source([8, 8], |_, _| [1, 2, 3, 255]));
+        let bounded = |name: &str| name.chars().count() == layer_core::MAX_NAME_CHARS && name.chars().all(|c| c == 'a');
+        let object_name = |s: &UiSession<Recorder>| {
+            let doc = s.engine.document();
+            doc.scene().object(*doc.working.objects.iter().next().unwrap()).unwrap().name.clone()
+        };
+        let layer_name = |s: &UiSession<Recorder>| {
+            let doc = s.engine.document();
+            doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().name.clone()
+        };
+        s.place_layer_source(&long, source(), None).unwrap();
+        assert!(bounded(&object_name(&s)), "place");
+        invoke(&mut s, CommandId::CancelTransform);
+        let context = s.image_placement_context(None, None).unwrap();
+        s.paste_layer_sources(vec![(long.clone(), source())], PasteMode::InPlace, &context).unwrap();
+        assert!(bounded(&object_name(&s)), "paste in place");
+        let mut copied = clip([8, 8], [4, 4], DocumentColor::default());
+        copied.name = long.clone();
+        s.paste_clip(&copied, PasteMode::Paste).unwrap();
+        assert!(bounded(&layer_name(&s)), "paste");
+        select(&mut s, Some(rectangle([10., 10., 50., 50.])));
+        s.paste_clip(&copied, PasteMode::Into).unwrap();
+        assert!(bounded(&object_name(&s)), "paste into");
+        let kept = "é".repeat(layer_core::MAX_NAME_BYTES / 2);
+        let mut object = layer_core::ImageObject::new(layer_core::Image::new(Arc::new(source())), kept.as_str());
+        object.affine = layer_core::Affine64([1., 0., 0., 1., 4., 4.]);
+        copied.objects = Some(Arc::new(clipboard::ObjectClip { objects: vec![object] }));
+        s.paste_clip(&copied, PasteMode::Paste).unwrap();
+        assert_eq!(object_name(&s).as_ref(), kept, "a copied image keeps the name the drawing admitted");
+        assert!(s.place_layer_source("\u{7} ", source(), None).is_err(), "a name of only spaces and controls is refused");
+        assert!(s.import_layer_source(&long, source()).is_err(), "import keeps names literally and refuses ones past the limit");
+    }
+
+    #[test]
     fn external_paste_in_place_centres_at_full_size_without_handles() {
         let mut s = clip_session();
         let image = || vec![("Clipboard image".to_string(), Arc::unwrap_or_clone(rgba8_source([40, 20], |_, _| [1; 4])))];
         let context = s.image_placement_context(None, None).unwrap();
         s.paste_layer_sources(image(), PasteMode::InPlace, &context).unwrap();
-        assert!(!s.operation.placing());
-        let [cx, cy] = s.state.camera.work_area_center();
-        let centre = s.state.camera.input_transform().map(Point { x: cx, y: cy });
-        assert_eq!(translation(&s), [(centre.x - 20.).round(), (centre.y - 10.).round()]);
+        assert!(!s.objects.placing());
+        let centre = s.state.camera.surface_to_document64(s.state.camera.work_area_center().map(f64::from));
+        let doc = s.engine.document();
+        let object = *doc.working.objects.iter().next().unwrap();
+        assert_eq!(doc.scene().object(object).unwrap().affine, layer_core::Affine64([1., 0., 0., 1., centre[0] - 20., centre[1] - 10.]));
         let context = s.image_placement_context(None, None).unwrap();
         s.paste_layer_sources(image(), PasteMode::Paste, &context).unwrap();
-        assert!(s.operation.placing(), "an image from another app opens the placement handles");
+        assert!(s.objects.placing(), "an image from another app opens the placement handles");
         invoke(&mut s, CommandId::CancelTransform);
         let context = s.image_placement_context(None, None).unwrap();
         invoke(&mut s, CommandId::AddLayer);
@@ -276,7 +329,7 @@ mod clipboard_checks {
         select(&mut s, Some(rectangle([10., 10., 60., 60.])));
         invoke(&mut s, CommandId::Cut);
         let (id, request) = pending(&s);
-        assert!(matches!(request, DocumentRequest::Copy { merged: false, cut: true }));
+        assert!(matches!(request, DocumentRequest::Copy { merged: false, cut: true, pixels: false }));
         s.capture_clipboard(id).unwrap();
         s.complete_document_request(id, Ok(true)).unwrap();
         s.frame(2, 2).unwrap();
@@ -320,7 +373,7 @@ mod clipboard_checks {
         assert!(KeyChord::new("c", Modifiers { command: true, shift: true, alt: false }).available(Platform::Web));
         let edit = s.application_menu(ApplicationMenu::Edit);
         let labels: Vec<_> = edit.sections[2].iter().map(|item| item.label.as_str()).collect();
-        assert_eq!(labels, ["Cut", "Copy", "Copy Merged", "Paste", "Paste in Place", "Paste Into"]);
+        assert_eq!(labels, ["Cut", "Copy", "Copy Pixels", "Copy Merged", "Paste", "Paste in Place", "Paste Into"]);
 
         assert!(!key(&mut s, "c", true, true, true).handled, "a focused text field keeps Ctrl+C");
         assert!(s.state.requests.is_empty());
@@ -329,7 +382,7 @@ mod clipboard_checks {
         assert!(s.state.requests.is_empty());
         key(&mut s, "v", false, true, true);
         assert!(key(&mut s, "c", true, true, false).handled);
-        assert!(matches!(pending(&s).1, DocumentRequest::Copy { merged: false, cut: false }));
+        assert!(matches!(pending(&s).1, DocumentRequest::Copy { merged: false, cut: false, pixels: false }));
 
         for platform in [Platform::Mac, Platform::Windows] {
             let mut host = session(platform);

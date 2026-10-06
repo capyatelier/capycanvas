@@ -10,16 +10,17 @@ var<workgroup> partial: array<vec4<u32>, 64>;
 @compute @workgroup_size(8, 8)
 fn measure(@builtin(local_invocation_index) i: u32, @builtin(global_invocation_id) gid: vec3<u32>) {
     var b = vec4<u32>(0xffffffffu, 0xffffffffu, 0u, 0u);
+    let footprint = max(record.options.z, 1u);
     for (var y = 0u; y < 4u; y++) { for (var x = 0u; x < 4u; x++) {
         let p = gid.xy * 4u + vec2<u32>(x, y);
-        let world = p + record.tile.xy;
+        let world = p * footprint + record.tile.xy;
         if (all(p < textureDimensions(pixels)) || (record.options.x == 3u && all(p < vec2<u32>(256u)))) && all(world < record.tile.zw) {
             let raw = textureLoad(pixels, vec2<i32>(p), 0);
             var a = raw.a;
             if record.options.x == 1u { a = select(raw.r, 1. - raw.r, record.options.y == 1u); }
             if record.options.x == 3u { a = select(record.color.x, 1. - record.color.x, record.options.y == 1u); }
             a *= brush_selection_at(vec2<f32>(world) + .5);
-            if a > 0. { b = vec4<u32>(min(b.xy, world), max(b.zw, world + 1u)); }
+            if a > 0. { b = vec4<u32>(min(b.xy, world), max(b.zw, min(world + footprint, record.tile.zw))); }
         }
     }}
     partial[i] = b;
@@ -41,7 +42,7 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
         let low = vec2<f32>(bounds.xy);
         let size = max(vec2<f32>(bounds.zw) - low, vec2<f32>(1.));
         let scale = 32. / select(max(size.x, size.y), min(size.x, size.y), record.options.x == 4u);
-        let source_size = select(vec2(256.), vec2<f32>(record.tile.zw), record.options.x == 4u);
+        let source_size = select(vec2(256. * f32(max(record.options.z, 1u))), vec2<f32>(record.tile.zw), record.options.x == 4u);
         p = (vec2<f32>(record.tile.xy) + uv * source_size - low) * scale + (32. - size * scale) * .5;
     }
     return Vertex(vec4<f32>(p.x/16.-1., 1.-p.y/16., 0., 1.), uv);
@@ -59,7 +60,7 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
         return vec4<f32>(color.rgb + gray * (1.-color.a), 1.);
     }
     if any(v.uv < vec2<f32>(0.)) || any(v.uv > vec2<f32>(1.)) { discard; }
-    if any(vec2<f32>(record.tile.xy) + v.uv * 256. >= vec2<f32>(record.tile.zw)) { discard; }
+    if any(vec2<f32>(record.tile.xy) + v.uv * 256. * f32(max(record.options.z, 1u)) >= vec2<f32>(record.tile.zw)) { discard; }
     let raw = textureSample(pixels, sampling, v.uv);
     if record.options.x == 1u {
         let gray = select(raw.r, 1.-raw.r, record.options.y == 1u);

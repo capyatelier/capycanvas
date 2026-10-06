@@ -44,9 +44,9 @@ fn insert(document: &mut Document, owner: Occurrence) -> OccurrenceHandle {
 }
 fn mask(document: &mut Document, owner: &mut Occurrence, coverage: f32, initial: Option<Selection>) {
     let source = document.artwork.coverage.next_handle();
-    let mut mask = CoverageSnapshot::reveal_all(source, EXTENT, Point::default());
+    let mut mask = CoverageSnapshot::reveal_all(source, EXTENT, [0, 0]);
     mask.source.default_coverage = coverage;
-    mask.source.initial = initial;
+    if let Some(selection) = initial { crate::test_support::materialize_mask(&mut mask.source, selection, document.composition().color); }
     document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
     owner.mask = Some(mask.use_);
 }
@@ -97,7 +97,7 @@ fn representative(depth: SampleDepth) -> Document {
     let group_curves = effect(&mut document, "curves");
     let curves = insert(&mut document, group_curves);
     let mut shifted = paint(&mut document, "Shifted", Some(source(depth, |u, v| [1. - v, u * v, 0.5 + 0.4 * u, (0.3 + u).min(1.)])));
-    shifted.translation = Point { x: 37.5, y: 13. };
+    shifted.offset = [37, 13];
     mask(&mut document, &mut shifted, 1., Some(polygon(&[[10., 150.], [290., 20.], [260., 190.]])));
     let shifted = insert(&mut document, shifted);
     document.artwork.stacks.get_mut(group_stack).unwrap().entries = vec![curves, shifted];
@@ -118,10 +118,10 @@ fn representative(depth: SampleDepth) -> Document {
     painted.opacity = 0.8;
     layers.push(insert(&mut document, painted));
 
-    let mut placed = paint(&mut document, "Placed", Some(source(depth, |u, v| [0.2 + 0.7 * u, 0.6 * v, 0.9 - 0.5 * u, 1.])));
-    placed.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::around(Point { x: 150., y: 100. }, [0.8, 0.7], 0.35, Point { x: 11., y: -7. }));
-    placed.opacity = 0.7;
-    layers.push(insert(&mut document, placed));
+    let mut offset = paint(&mut document, "Offset", Some(source(depth, |u, v| [0.2 + 0.7 * u, 0.6 * v, 0.9 - 0.5 * u, 1.])));
+    offset.offset = [11, -7];
+    offset.opacity = 0.7;
+    layers.push(insert(&mut document, offset));
 
     let mut masked = paint(&mut document, "Masked", Some(source(depth, |u, v| [0.1, 0.8 * u, 0.9 * v, 0.9])));
     mask(&mut document, &mut masked, 1., Some(polygon(&[[40., 40.], [260., 60.], [200., 180.], [30., 150.]])));

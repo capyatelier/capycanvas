@@ -37,6 +37,7 @@ type Image = (wgpu::Texture, wgpu::TextureView);
 enum Ready {
     Probe { scores: Result<[u32; 2], GpuRasterError>, batch_size: usize },
     Pixels(Result<ReadbackImage, GpuRasterError>),
+    ObjectsAdvanced,
 }
 /// Source revision, insertion scope, extent and blend space.
 type SourceKey = (u64, (u64,FilterPreviewSource), [u32; 2], layer_core::BlendSpace);
@@ -378,8 +379,10 @@ impl FilterPreviews {
                     .min(extent[1]),
             );
             let (texture, view) = self.source.as_ref().unwrap();
-            self.source_scene
-                .capture_filter_source(r, request, texture, region, &mut encoder)?;
+            match self.source_scene.capture_filter_source(r, request, texture, region, &mut encoder) {
+                Err(GpuRasterError::DeferredObjectWork) => return Ok(self.retry_after(r, encoder)),
+                result => result?,
+            }
             let mut data = Vec::with_capacity(64);
             for v in backdrop { data.extend(v.to_le_bytes()); }
             for v in [
@@ -543,13 +546,10 @@ impl FilterPreviews {
                 "filter preview source crop",
             ));
             let (texture, view) = self.source.as_ref().unwrap();
-            self.source_scene.capture_filter_source(
-                r,
-                request,
-                texture,
-                source_bounds,
-                &mut encoder,
-            )?;
+            match self.source_scene.capture_filter_source(r, request, texture, source_bounds, &mut encoder) {
+                Err(GpuRasterError::DeferredObjectWork) => return Ok(self.retry_after(r, encoder)),
+                result => result?,
+            }
             view.clone()
         } else {
             fallback_source
@@ -691,6 +691,12 @@ impl FilterPreviews {
         );
         Ok(())
     }
+    fn retry_after(&self, r: &mut WgpuRasterizer, encoder: crate::submission::CommandEncoder) {
+        let tx = self.tx.clone();
+        encoder.on_submitted_work_done(move || { let _ = tx.send(Ready::ObjectsAdvanced); });
+        r.uploads.finish(&encoder);
+        encoder.submit(&r.queue);
+    }
     fn take(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -736,6 +742,7 @@ impl FilterPreviews {
                         }
                         self.with_analyses(r,Self::render)
                     }),
+                    Ready::ObjectsAdvanced => if self.probe_winner.is_some() {self.with_analyses(r,Self::probe_batch)} else {self.with_analyses(r,Self::render)},
                     Ready::Pixels(image) => image.map(|image| {
                         let row_bytes = (self.size[0] * self.size[1] * 4) as usize;
                         for (id, bytes) in
@@ -868,7 +875,7 @@ impl Scene {
             FilterPreviewSource::EffectInput(target)=>scene::Output::EffectInput(target),
             FilterPreviewSource::OwnerContent(target)=>scene::Output::OwnerContent(target),
         };
-        self.capture_region(r,packet,destination,region,output,encoder)
+        self.capture_region_prepared(r,packet,destination,region,output,encoder)
     }
 }
 impl WgpuRasterizer {
@@ -1122,6 +1129,36 @@ mod tests {
         }
     }
     #[test]
+    fn attached_curves_preview_reads_an_image_layer_owner() {
+        let extent=[64;2];
+        let mut artwork=Artwork::new(extent).unwrap();
+        let image=layer_core::authored::Image::new(layer_core::color::source::rgba8_source(extent,|x,_|
+            if (30..34).contains(&x) {[20,40,230,128]} else {[230,40,20,128]}));
+        let object=artwork.objects.insert(PortableId::random(),layer_core::authored::ImageObject::new(image,"Image")).unwrap();
+        let layer=artwork.object_layers.insert(PortableId::random(),layer_core::authored::ObjectLayer {children:vec![object]}).unwrap();
+        let mut occurrence=Occurrence::new(OccurrenceContent::Objects(layer),"Images");
+        occurrence.attachment=layer_core::Attachment::Clip;occurrence.opacity=0.35;
+        let owner=artwork.occurrences.insert(PortableId::random(),occurrence).unwrap();
+        let base=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|_,_|[20,240,30,255])));
+        let target=effect(&mut artwork,fixture("motion_blur").preview().unwrap());
+        artwork.occurrences.get_mut(target).unwrap().attachment=layer_core::Attachment::Effect;
+        let doc=document(artwork,vec![target,owner,base]);
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();
+        let curves=Arc::new(fixture("curves").preview().unwrap());
+        for (request_id,source) in [(1,FilterPreviewSource::OwnerContent(owner)),(2,FilterPreviewSource::EffectInput(target)),(3,FilterPreviewSource::LayerStack(owner))] {
+            let mut request=request(&doc,owner,request_id,[64,40],crate::test_support::view(extent),vec![curves.clone()]);
+            request.source=source;
+            r.request_filter_previews(request).unwrap();
+            let image=finish(&mut r);
+            let index=((20*64+32)*4) as usize;
+            let pixel=&image.image.bytes[index..index+4];
+            if matches!(source,FilterPreviewSource::LayerStack(_)) { assert_eq!(pixel[3],255,"{source:?} center={pixel:?}"); continue; }
+            assert!((f32::from(pixel[3])/255.-128./255.).abs()<0.02,"{source:?} center={pixel:?}");
+            assert!(pixel[2]>pixel[0].max(pixel[1]),"{source:?}: the image layer's blue stripe stays centred without the clipping base");
+        }
+    }
+    #[test]
     fn attached_motion_blur_preview_reads_its_clipped_owner_before_outer_composition() {
         let extent=[32;2];
         let mut artwork=Artwork::new(extent).unwrap();
@@ -1179,10 +1216,10 @@ mod tests {
         assert!(crate::test_support::max_error(&raw,&backdrop)>0.1);
         let mut artwork=doc.artwork.clone();
         let mask=artwork.coverage.insert(PortableId::random(),layer_core::authored::CoverageSource {
-            domain:extent,raster:Default::default(),initial:None,default_coverage:0.5,operations:Default::default(),
+            domain:extent,raster:Default::default(),default_coverage:0.5,operations:Default::default(),
         }).unwrap();
         artwork.occurrences.get_mut(owner).unwrap().mask=Some(layer_core::authored::MaskUse {
-            source:mask,enabled:true,linked:true,inverted:false,translation:Default::default(),placement:layer_core::Projective::IDENTITY,
+            source:mask,enabled:true,linked:true,inverted:false,offset:[0,0],
         });
         let existing=effect(&mut artwork,fixture("exposure").preview().unwrap());
         artwork.occurrences.get_mut(existing).unwrap().attachment=layer_core::Attachment::Effect;

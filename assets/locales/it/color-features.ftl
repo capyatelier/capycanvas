@@ -330,6 +330,7 @@ color-properties-source = { $width } × { $height } px · { $channels } a { $bit
 color-properties-retained-rasterized = Rasterizzato nelle coordinate del documento.
 color-properties-retained-icc = Campioni originali e ICC incorporato conservati.
 color-properties-retained-original = Campioni originali e interpretazione del colore conservati.
+color-properties-retained-placed = Immagine posizionata con campioni e interpretazione del colore propri.
 color-profile-select-imported = Seleziona un profilo importato.
 color-profile-read-limit = Il profilo ICC supera 16 MiB.
 color-profile-changed-storage = Il profilo è cambiato nell'archivio; rimuovilo o importalo di nuovo.

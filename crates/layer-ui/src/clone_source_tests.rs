@@ -197,22 +197,6 @@ fn the_source_disc_drags_at_once_with_every_device_and_a_tap_shows_its_bar() {
 }
 
 #[test]
-fn clone_strokes_explain_a_turned_layer() {
-    let mut s = clone_session();
-    let handle = s.engine.document().working.occurrence.unwrap();
-    let mut occurrence = s.engine.document().scene().occurrence(handle).unwrap().clone();
-    occurrence.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0., 1., -1., 0., 0., 0.]));
-    let change = layer_core::RecordChange::replace(&s.engine.document().artwork.occurrences, handle, Some(occurrence)).unwrap();
-    s.engine.apply_edit(layer_core::Edit::Occurrence(change)).unwrap();
-    let revision = s.engine.document().revision;
-    s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
-    s.pen(event(&s, 2, PenPhase::Up, 1.)).unwrap();
-    s.frame(3, 3).unwrap();
-    assert_eq!(s.state.notice.as_ref().map(|n| n.text.as_str()), Some("This layer is scaled or rotated, so it can't be retouched directly. Retouch on a new layer above it."));
-    assert_eq!(s.engine.document().revision, revision);
-}
-
-#[test]
 fn healing_brushes_join_the_retouching_tools_and_spot_healing_needs_no_disc() {
     let mut s = clone_session();
     for tool in [Tool::Heal, Tool::SpotHeal, Tool::Clone] {

@@ -58,7 +58,7 @@ export async function checkNotices({call,evaluate,settle,device=false}) {
       await canvasTap(pointing);
       await wait(`${shown}&&document.querySelector('${notice} .canvas-notice-text').textContent===${JSON.stringify(WAND)}`);
       assert.equal(await evaluate(`document.querySelector('${action}').textContent`),offer,`${kind}: the action names the layer below`);
-      assert.equal((await current()).action.label,offer);
+      assert.deepEqual((await current()).actions.map(a=>a.label),[offer]);
       await healthy(`${kind} Wand without a reference`);
       await noPopup(kind);
       await tap(await middle(action),kind);
@@ -122,7 +122,7 @@ export async function checkNotices({call,evaluate,settle,device=false}) {
       await canvasTap(kind);
       await wait(`${shown}&&layerApp.state().notice?.id>${previous}&&document.querySelector('${notice} .canvas-notice-text').textContent===${JSON.stringify(LOCKED)}`);
       previous=(await current()).id;
-      assert.equal(await evaluate(`document.querySelector('${action}').hidden`),true,`${kind}: the refusal has no action`);
+      assert.equal(await evaluate(`document.querySelector('${notice} .canvas-notice-actions').hidden&&!document.querySelector('${action}')`),true,`${kind}: the refusal has no action`);
       await healthy(`${kind} Move on a locked layer`);
       await noPopup(kind);
     }

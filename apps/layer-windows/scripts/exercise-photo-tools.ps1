@@ -248,9 +248,9 @@ try {
  Invoke-Id "layer-$hidden-visibility"
  Wait-Until {!(@(Layers)|Where-Object id -eq $hidden).visible} 'The top layer did not hide'
  Run 'Flatten Image'
- Wait-Until {(Visible 'canvas-notice') -and (Visible 'canvas-notice-action')} 'Flatten did not ask before discarding the hidden layer'
+ Wait-Until {(Visible 'canvas-notice') -and (Visible 'canvas-notice-action-flatten')} 'Flatten did not ask before discarding the hidden layer'
  if(@(Layers).Count -ne $stacked){throw 'Flatten changed layers before it was confirmed'}
- Tap 'canvas-notice-action' 'touch'
+ Tap 'canvas-notice-action-flatten' 'touch'
  Wait-Until {@(Layers).Count -lt $stacked} 'Confirming Flatten did not flatten'
  Idle
  Undo

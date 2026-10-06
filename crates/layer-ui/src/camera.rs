@@ -139,6 +139,14 @@ impl Camera {
         ]
     }
 
+    pub fn surface_to_document64(&self, [u, v]: [f64; 2]) -> [f64; 2] {
+        let (sin, cos) = f64::from(self.rotation).sin_cos();
+        let zoom = f64::from(self.zoom);
+        let scale = self.flipped.map(|flipped| if flipped { -zoom } else { zoom });
+        let [x, y] = [u - f64::from(self.translation[0]), v - f64::from(self.translation[1])];
+        [(cos * x + sin * y) / scale[0], (cos * y - sin * x) / scale[1]]
+    }
+
     pub fn input_transform(&self) -> ViewTransform {
         let [a, b, c, d, x, y] = self.document_to_surface();
         let determinant = a * d - b * c;

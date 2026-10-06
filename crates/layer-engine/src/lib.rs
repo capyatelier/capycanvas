@@ -6,6 +6,7 @@
 
 mod brush;
 mod canvas;
+mod contacts;
 mod feedback;
 mod input;
 mod selection_stroke;
@@ -18,6 +19,7 @@ pub mod recording;
 
 pub use brush::DabGenerator;
 pub use canvas::{CanvasEngine, EngineError, EngineMetrics, ScenePreview, StrokeRefusal};
+pub use contacts::DeferredContacts;
 pub use feedback::{FeedbackConfigError, InstantFeedbackConfig};
 pub use input::{
     InputConsumer, InputProducer, PenEvent, PenPhase, PressureCurve, SampleFlags, ToolKind,

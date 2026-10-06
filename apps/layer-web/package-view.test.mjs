@@ -8,9 +8,9 @@ import base64, io, json, sys, zipfile
 request=json.load(sys.stdin)
 source=zipfile.ZipFile(io.BytesIO(base64.b64decode(request['source'])))
 manifest=json.loads(source.read('manifest.json'))
-next(record for record in manifest['objects'] if record['type'] in ['capy.occurrence/2','capy.occurrence/3'])['data']['blend']='future-package-blend'
+next(record for record in manifest['objects'] if record['type']=='capy.occurrence/3')['data']['blend']='future-package-blend'
 for record in manifest['objects']:
-    if record['type']=='capy.output/1':
+    if record['type']=='capy.output/2':
         record['data']['name']='Package preview output'
         record['data'].pop('representation',None)
         if request['preview'] and record['id']==manifest['default_output']['ref']:

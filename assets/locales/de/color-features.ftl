@@ -338,6 +338,7 @@ color-properties-source = { $width } × { $height } px · { $bits } Bit { $chann
 color-properties-retained-rasterized = In Dokumentkoordinaten gerastert.
 color-properties-retained-icc = Originalwerte und eingebettetes ICC-Profil erhalten.
 color-properties-retained-original = Originalwerte und Farbinterpretation erhalten.
+color-properties-retained-placed = Platziertes Bild mit eigenen Samples und eigener Farbinterpretation.
 
 
 color-profile-select-imported = Ein importiertes Profil auswählen.

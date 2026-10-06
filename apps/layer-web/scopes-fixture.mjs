@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import {placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
-import {authoredIdentity,rasterIdentity} from './package-fixture.test.mjs';
+import {placementSave} from './image-placement-motion.test.mjs';
+import {sourceIdentity,authoredIdentity,rasterIdentity} from './package-fixture.test.mjs';
 
 export async function scopesFixture({call,evaluate,settle}) {
   const poll=async condition=>{const end=Date.now()+150000;while(Date.now()<end){if(await evaluate(condition))return;await settle();await new Promise(r=>setTimeout(r,50));}throw Error(`${condition}: ${await evaluate('document.body.innerText.slice(-1500)')}`);};

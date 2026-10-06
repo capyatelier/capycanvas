@@ -783,10 +783,16 @@ class AndroidLanguageTest {
             fun file() = JSONObject(state().getJSONObject("document_file").toString()).apply { remove("busy") }.toString()
             fun request() = state().array("requests").objects().first { it.getJSONObject("kind").getString("type") == "document" }.getInt("id")
             try {
-                host.newDocument(320, 240)
-                host.importStripes(32, 32)
-                host.drain(obj("type" to "invoke", "command" to "apply_transform"))
-                host.awaitMain("source placed", 30_000, { state().toString() }, compose) { state().objectOrNull("canvas_bar")?.objectOrNull("context")?.optString("kind") != "placement" }
+                val stripes = java.io.File(instrumentation.targetContext.cacheDir, "Stripes.png")
+                android.graphics.Bitmap.createBitmap(32, 32, android.graphics.Bitmap.Config.ARGB_8888).let { bitmap ->
+                    try {
+                        android.graphics.Canvas(bitmap).drawColor(android.graphics.Color.BLACK)
+                        for (x in 0 until 32 step 16) android.graphics.Canvas(bitmap).drawRect(x.toFloat(), 0f, x + 8f, 32f, android.graphics.Paint().apply { color = android.graphics.Color.WHITE })
+                        stripes.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    } finally { bitmap.recycle() }
+                }
+                host.openDocument(stripes)
+                host.awaitMain("photo source opened", 30_000, { state().toString() }, compose) { state().array("commands").objects().any { it.getString("id") == "rasterize_source" && it.getBoolean("enabled") } }
                 for (theme in listOf("light", "dark")) {
                     host.drain(obj("type" to "set_theme", "theme" to theme))
                     for (tag in tags(host)) for ((command, titleKey) in listOf("convert_color_space" to "convert_title", "rasterize_source" to "rasterize_title")) {

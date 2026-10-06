@@ -5,7 +5,7 @@
 use crate::localization::MessageId;
 use super::operation::{HANDLE_HALF_SIZE, HANDLES, inside_convex, local_handle, nearest_handle};
 use super::*;
-use layer_core::{Affine, CanvasGeometry, CanvasRect, Interpolation, Point, Rect};
+use layer_core::{Affine, Affine64, CanvasGeometry, CanvasRect, Interpolation, Point, Rect};
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CropOverlay, CursorSegment};
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
@@ -157,7 +157,7 @@ impl CropFrame {
         let upright = self.angle.abs() < 1e-6;
         CanvasGeometry {
             rect: CanvasRect { origin, size },
-            linear: if upright { Affine::IDENTITY } else { Affine::around(self.center, [1., 1.], -self.angle, Point::default()) },
+            linear: if upright { Affine64::default() } else { CanvasGeometry::rotation([self.center.x, self.center.y].map(f64::from), -f64::from(self.angle)) },
             interpolation: Interpolation::Bicubic,
             delete_outside,
         }
@@ -271,7 +271,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.require_idle()?;
             let geometry = session.frame.geometry(self.operation.crop_options.delete);
             let unchanged = geometry.rect == CanvasRect { origin: [0; 2], size: session.canvas }
-                && geometry.linear == Affine::IDENTITY
+                && geometry.linear == Affine64::default()
                 && !geometry.delete_outside;
             if !unchanged {
                 match self.apply_canvas_geometry(&geometry, Vec::new()) {

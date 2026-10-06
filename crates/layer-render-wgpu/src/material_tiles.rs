@@ -343,7 +343,7 @@ impl WgpuRasterizer {
             batch_dabs
                 .last()
                 .map(|last| {
-                    let center = batch.style.brush_to_layer.map(last.center);
+                    let center = last.center;
                     let coordinate = [
                         (center.x.max(0.0) as u32 / PAGE_SIZE).min(
                             self.target_extent(batch.target)[0].saturating_sub(1) / PAGE_SIZE,

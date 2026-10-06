@@ -23,19 +23,19 @@ A source can retain several levels within the display allowance; each records
 which local pages are valid. Authoritative paint uses linear premultiplied working
 color and masks use scalar coverage. In perceptual documents, identity-source
 reduction encodes each input color before averaging; encoding an averaged linear
-color would change the composite. Transformed sources retain linear samples for
+color would change the composite. Moving sources retain linear samples for
 resampling and encode their result before opacity and blending. Each source level
-records its representation; a change invalidates all retained pages. A placement
-transaction keeps its hinted layer's linear source and sampling resolution when
-the pose passes through identity. Ending the transaction reevaluates the source
+records its representation; a change invalidates all retained pages. A move
+keeps its hinted layer's linear source and sampling resolution when the layer
+passes through its original position. Ending the move reevaluates the source
 representation and composition. Encoded
 levels cannot supply linear transform inputs. Source identity, immutable native captures, brush damage
 and retired prediction footprints invalidate the affected pages at every level.
 Brush invalidation reuses the painting tile plan, preserving untouched pages
 inside a contact batch's bounding rectangle.
 Paint and watercolor prediction pages use the target layer's local extent,
-including photo pixels beyond the canvas dimensions. Placement maps their
-damage into document coordinates for composition. Prediction and committed
+including photo pixels beyond the canvas dimensions. The layer's offset maps
+their damage into document coordinates for composition. Prediction and committed
 paint share the current packet's watercolor style in placement, reduction and
 composition; a provisional stroke leaves the retained material metadata intact.
 The native scalar encoder rounds provisional wetness to the document's coverage
@@ -130,13 +130,33 @@ composition pass across independent dirty regions before output mips. Scratch
 inputs, root aliases, shifted or cropped plans, opacity, other blend modes and
 sampling dependencies keep their immediate ordering. Deferred root writes hold
 at most 32 existing composition records and allocate no image storage.
-Placed sources and masks use the common transform
-resampler. Their most magnified axis determines source resolution; an additional
-level of detail and up to four samples per axis limit placement-edge error.
-Unit-scale aligned inputs use one sample per pixel.
+A layer or mask at a whole-pixel offset keeps its levels shifted right and down
+by the offset's remainder within a page. Their texels then cover the same
+document pixels as the composition's, which uses them without resampling.
+Texels at a source's edge average the transparent pixels beside it too, and
+texels at the document's edge only its pixels. Masks keep their default
+coverage outside their local image. Changing the offset reduces the source again,
+except during a move: the moving layer, its children and masks keep their shift
+until the move ends. A shifted level page spans four of the layer's pages; one
+compute dispatch reduces it from them, so painting a shifted layer records as
+many passes as painting an unmoved one. A thread reduces each texel: one
+inside a layer page takes the same filtered taps as an unmoved reduction, and
+one across a page edge reads each pixel from its page. The kernel uses no
+shared memory and keeps every thread's registers within a full Mali-G52
+occupancy. A damaged level page that was complete reduces only the texels over
+its damage. Reduced stroke predictions stay on the layer's own pages. Over them
+a shifted texel loads the prediction texels nearest its pixels, one load each
+as for an unmoved layer, so the preview may sit up to half a prediction texel
+off; the pages reduce exactly once the prediction ends.
+`display_reduction_reads` counts the texels these reductions read, four for
+each filtered sample.
+Moving sources use the common transform resampler. Their most magnified axis
+determines source resolution; an additional level of detail and up to four
+samples per axis limit placement-edge error. Unit-scale aligned inputs use one
+sample per pixel.
 Interior samples use the hardware linear sampler. Boundary samples account
-for partially filled source texels and the smaller final output cell. Masks retain their default coverage outside their local image.
-A normal placed layer over a constant backdrop keeps its source and transform
+for partially filled source texels and the smaller final output cell.
+A normal moving layer over a constant backdrop keeps its source and transform
 until another layer needs its pixels. If it reaches the root unchanged, the
 presenter samples it directly into the surface. This avoids an
 intermediate canvas image and a second resampling step. Its neighboring source
@@ -263,8 +283,7 @@ requested dependency window, retiring tiles from the previous window. Display
 motion has no full-layer native preview. Idle display refinement evaluates exact
 transform regions after the gesture stops. Scalar-mask
 transactions currently provide native coverage to the same graph.
-Photo placement keeps exact refinement deferred until Apply or Cancel, including
-batch imports. Repeated pointer positions during a drag cannot start idle work.
+Repeated pointer positions during a drag cannot start idle work.
 
 Transform motion invalidates the previous and next destination bounds. The
 stationary cut also changes when a transaction starts, its source changes, Leave
@@ -273,7 +292,7 @@ changes. Subsequent poses reuse the unchanged cut.
 
 Eligible temporary dry-brush tails use compact prediction pages. They share the
 existing dry material evaluator, reading averaged exact destination color and
-stroke coverage. The combined layer placement and camera use a half-surface-pixel
+stroke coverage. The combined layer offset and camera use a half-surface-pixel
 contact evaluation density along the most magnified axis, capped at four local
 pixels per prediction texel and by the source level its compositor consumes.
 Depending on the view, compact pages are 64 × 64 or 128 × 128 rather than

@@ -668,6 +668,7 @@ color-properties-retained-rasterized = Dirasterisasi dalam koordinat dokumen.
 color-properties-retained-icc = Sampel asli dan ICC tertanam dipertahankan.
 
 color-properties-retained-original = Sampel asli dan interpretasi warna dipertahankan.
+color-properties-retained-placed = Gambar yang ditempatkan dengan sampel dan interpretasi warnanya sendiri.
 
 
 

@@ -36,6 +36,7 @@ fn refusal_text(refusal: MergeRefusal, l: &Localizer) -> std::sync::Arc<str> {
         R::NothingVisible => l.text(MessageId::COMMANDS_REFUSAL_MERGES_NO_VISIBLE_LAYERS_TO_MERGE),
         R::SelectionLayersInside => l.text(MessageId::COMMANDS_REFUSAL_MERGES_MOVE_THE_SELECTION_LAYERS_OUT_OF_THE_GROUP_FIRST),
         R::TooLarge => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_MERGED_LAYER_WOULD_EXCEED_THE_1_GIB_LIMIT_FOR_ONE_EDIT),
+        R::UnboundedSupport => l.text(MessageId::COMMANDS_REFUSAL_MERGES_A_FILTER_REACHES_TOO_FAR),
     }
 }
 
@@ -75,11 +76,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn bake(&mut self, kind: MergeKind) -> Result<(), String> {
         refused(self.merge_refusal(kind))?;
         let plan = self.engine.document().merge_plan(kind).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
-        self.engine
-            .insert_with_operations(plan.edits, vec![(plan.target, plan.operation)], None)
-            .map_err(error)?;
-        self.layer_interaction.changed = true;
-        Ok(())
+        self.insert_bake(plan, None, None)
     }
 
     /// Merge commands for a layer's menu: Merge Down, or Merge Group for a

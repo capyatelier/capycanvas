@@ -87,15 +87,9 @@ impl SnapshotGpu {
             let SourceTarget::Coverage(handle) = target else { unreachable!() };
             let source = view.coverage(handle).unwrap();
             masks.definitions.insert(target, source.clone());
-            let geometry = view.target_geometry(target);
             let domain = source.domain;
-            let region = paint_transform::snapshot::source_region(&geometry, window.to_rect(), domain,
-                snapshot.renderer.scene.as_ref().and_then(|scene| scene.mesh_geometry(&geometry)))
-                .map_err(|e| e.to_string())?.expand(1, domain);
+            let region = window.translated(view.target_offset(target).map(|v| -v)).in_frame(domain).expand(1, domain);
             let mut needed = std::collections::BTreeSet::new();
-            if let Some(selection) = &source.initial {
-                needed.extend(page_coordinates(pixel_rect(selection.bounds(), domain).intersect(region)));
-            }
             needed.extend(data.tiles.keys().filter(|key| !page_rect(key.coordinate).intersect(region).is_empty()).map(|key| key.coordinate));
             count += needed.len() as u64;
             regions.insert(target, region);

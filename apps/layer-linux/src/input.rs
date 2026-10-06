@@ -177,7 +177,7 @@ pub struct Input {
     sequence: Cell<u64>,
     last: Cell<Option<PenEvent>>,
     pending: RefCell<VecDeque<PenEvent>>,
-    deferred_contacts: RefCell<layer_host::contacts::DeferredContacts>,
+    deferred_contacts: RefCell<layer_engine::DeferredContacts>,
     touches: RefCell<HashMap<gdk::EventSequence, u64>>,
     touch_points: RefCell<HashMap<u64, [f32; 2]>>,
     next_touch: Cell<u64>,
@@ -807,6 +807,7 @@ impl Input {
         // are ready. Navigation and native controls remain active.
         let ready = Self::paint_ready(workspace);
         let events = self.deferred_contacts.borrow_mut().admit(event, ready, Instant::now());
+        self.sync_held(workspace);
         #[cfg(test)]
         if events.is_empty()
             && let Some(gpu) = workspace.gpu.borrow().as_ref()
@@ -816,6 +817,11 @@ impl Input {
         }
         for event in events {
             self.deliver(workspace, event);
+        }
+    }
+    fn sync_held(&self, workspace: &Rc<Workspace>) {
+        if let Some(gpu) = workspace.gpu.borrow_mut().as_mut() {
+            gpu.session.set_input_held(self.deferred_contacts.borrow().holding());
         }
     }
     fn paint_ready(workspace: &Rc<Workspace>) -> bool {
@@ -867,7 +873,7 @@ impl Input {
                     && let Some(occurrence) = doc.scene().occurrence(handle) {
                     gpu.session.engine().backend().stats.lock().unwrap().photo_inputs.push((
                         delivered_ns, layer_ui::occurrence_token(handle),
-                        [event.surface_position.x, event.surface_position.y], occurrence.placement.clone(),
+                        [event.surface_position.x, event.surface_position.y], occurrence.offset,
                     ));
                 }
             }
@@ -889,6 +895,7 @@ impl Input {
     pub fn flush(&self, workspace: &Rc<Workspace>) {
         let ready = Self::paint_ready(workspace);
         let released = self.deferred_contacts.borrow_mut().release(ready, Instant::now());
+        self.sync_held(workspace);
         for event in released {
             self.deliver(workspace, event);
         }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
-import {placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
-import {authoredIdentity,packageObject,packageOccurrences,packageResources,packageResourceIdentity,rasterIdentity} from './package-fixture.test.mjs';
+import {placementSave} from './image-placement-motion.test.mjs';
+import {sourceIdentity,authoredIdentity,packageObject,packageOccurrences,packageResources,packageResourceIdentity,rasterIdentity} from './package-fixture.test.mjs';
 import {png} from './clone-journey.test.mjs';
 
 const selectedEffect=manifest=>packageObject(manifest,packageOccurrences(manifest).find(o=>o.data.content.effect).data.content.effect);

@@ -54,7 +54,7 @@ impl Document {
         let scene=self.scene();let o=scene.occurrence(id).ok_or(DocumentError::MissingOccurrence(id))?;
         let crate::authored::OccurrenceContent::Selection(handle)=o.content else{return Err(DocumentError::InvalidLayerOperation("Choose a Selection Layer"));};
         let selection=&self.artwork.selections.get(handle).ok_or(DocumentError::MissingTarget(crate::authored::SourceTarget::Selection(handle)))?.selection;
-        selection.mapped(&scene.target_geometry(crate::authored::SourceTarget::Selection(handle)).placement)
+        Ok(selection.translated(crate::offsets::point(scene.target_offset(crate::authored::SourceTarget::Selection(handle)))))
     }
     pub fn selection_edit(&self,target:SelectionTarget,coverage:Selection)->Result<Edit,DocumentError> {
         use crate::authored::*;coverage.validate()?;
@@ -63,8 +63,8 @@ impl Document {
             SelectionTarget::Saved(id)=>{
                 self.saved_selection(id)?;if self.is_locked(id){return Err(DocumentError::ProtectedOccurrence(id));}
                 let OccurrenceContent::Selection(handle)=self.scene().occurrence(id).unwrap().content else{unreachable!()};
-                let inverse=self.affine_edit_transform(SourceTarget::Selection(handle)).and_then(Affine::inverse).ok_or(DocumentError::InvalidLayerOperation("Invalid selection placement"))?;
-                let mut value=self.artwork.selections.get(handle).unwrap().clone();value.selection=coverage.transformed(inverse)?;
+                let offset=self.target_offset(SourceTarget::Selection(handle));
+                let mut value=self.artwork.selections.get(handle).unwrap().clone();value.selection=coverage.translated(crate::offsets::point(offset.map(|v| -v)));
                 Ok(Edit::SavedSelection(RecordChange::replace(&self.artwork.selections,handle,Some(value))?))
             }
         }
@@ -483,14 +483,14 @@ mod selection_tests {
     }
     #[test]
     fn saved_selection_resolves_group_placement_and_checks_ancestor_locks() {
-        let mut doc=fixture::document([64,64],&["Ink","Character","Hair"]);let group=nest(&mut doc,"Character",&["Hair"]);occurrence_mut(&mut doc,"Character").translation=Point{x:12.,y:8.};saved(&mut doc,"Hair",soft_mask());let id=fixture::id(&doc,"Hair");occurrence_mut(&mut doc,"Hair").placement=LayerPlacement::from_affine(Affine::around(Point::default(),[2.,2.],0.,Point::default()));let target=fixture::target(&doc,"Hair");let world=doc.saved_selection(id).unwrap();assert_eq!(world.affine,doc.affine_edit_transform(target).unwrap());let replacement=world.translated(Point{x:2.,y:4.});doc.apply(doc.selection_edit(SelectionTarget::Saved(id),replacement.clone()).unwrap()).unwrap();assert_eq!(doc.saved_selection(id).unwrap(),replacement);
+        let mut doc=fixture::document([64,64],&["Ink","Character","Hair"]);let group=nest(&mut doc,"Character",&["Hair"]);occurrence_mut(&mut doc,"Character").offset=[12, 8];saved(&mut doc,"Hair",soft_mask());let id=fixture::id(&doc,"Hair");let target=fixture::target(&doc,"Hair");let world=doc.saved_selection(id).unwrap();assert_eq!(world.affine,doc.local_to_document(target));let replacement=world.translated(Point{x:2.,y:4.});doc.apply(doc.selection_edit(SelectionTarget::Saved(id),replacement.clone()).unwrap()).unwrap();assert_eq!(doc.saved_selection(id).unwrap(),replacement);
         let mut locked=doc.scene().occurrence(group).unwrap().clone();locked.locked=true;doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,group,Some(locked)).unwrap())).unwrap();assert!(doc.selection_edit(SelectionTarget::Saved(id),Selection::empty()).is_err());assert!(doc.selection_edit(SelectionTarget::Current,Selection::empty()).is_ok());assert!(doc.saved_selection(id).is_ok());assert!(doc.saved_selection(fixture::id(&doc,"Ink")).is_err());
     }
     #[test]
     fn selection_nodes_reject_artwork_and_project_limits_include_saved_coverage() {
-        let mut doc=fixture::document([64,64],&["Ink","Region"]);saved(&mut doc,"Region",soft_mask());let id=fixture::id(&doc,"Region");let region=occurrence(&doc,"Region").clone();let mask=doc.artwork.coverage.next_handle();let coverage=CoverageSnapshot::reveal_all(mask,[64;2],Point::default());doc.artwork.coverage.insert(PortableId::random(),coverage.source).unwrap();
+        let mut doc=fixture::document([64,64],&["Ink","Region"]);saved(&mut doc,"Region",soft_mask());let id=fixture::id(&doc,"Region");let region=occurrence(&doc,"Region").clone();let mask=doc.artwork.coverage.next_handle();let coverage=CoverageSnapshot::reveal_all(mask,[64;2],[0;2]);doc.artwork.coverage.insert(PortableId::random(),coverage.source).unwrap();
         for mutate in [|o:&mut Occurrence|o.opacity=0.5,|o:&mut Occurrence|o.attachment = crate::Attachment::Clip,|o:&mut Occurrence|o.alpha_locked=true,
-            |o:&mut Occurrence|o.visible=false,|o:&mut Occurrence|o.reference=true] {let mut invalid=region.clone();mutate(&mut invalid);assert!(doc.clone().apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,id,Some(invalid)).unwrap())).is_err());}
+            |o:&mut Occurrence|o.visible=false,|o:&mut Occurrence|o.reference=true,|o:&mut Occurrence|o.offset=[1,0]] {let mut invalid=region.clone();mutate(&mut invalid);assert!(doc.clone().apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,id,Some(invalid)).unwrap())).is_err());}
         let mut invalid=region.clone();invalid.mask=Some(coverage.use_);assert!(doc.clone().apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,id,Some(invalid)).unwrap())).is_err());let mut missing=doc.artwork.clone();let OccurrenceContent::Selection(handle)=region.content else{panic!("selection")};missing.selections.remove(handle);assert!(Document::from_artwork(missing).is_err());
         let bytes=encoded(&doc);let source=crate::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();let outcome=crate::package::codec::open(source,ProjectLimits {raster_bytes:3,..Default::default()},&std::sync::atomic::AtomicBool::new(false)).unwrap();assert!(!matches!(outcome,crate::package::codec::OpenOutcome::Candidate {..}));let restored=roundtrip(&fixture::document([64,64],&["Ink"]));assert!(restored.artwork.selections.is_empty());assert_ne!(Selection::empty(),Selection::full());assert!(Selection::empty().validate().is_ok());
     }

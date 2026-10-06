@@ -211,6 +211,11 @@ pub enum ImageInterpolation { Nearest, #[default] Linear }
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ObjectLayer { pub children:Vec<ImageObjectHandle> }
 
+pub const MAX_NAME_BYTES: usize = 4096;
+pub const MAX_NAME_CHARS: usize = 128;
+pub fn bounded_name(name: &str) -> Arc<str> {
+    name.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(MAX_NAME_CHARS).collect::<String>().trim_end().into()
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageObject {
     pub image:Image,
@@ -227,10 +232,14 @@ impl ImageObject {
         Ok(())
     }
     pub fn validate(&self)->Result<(),String> {
-        self.image.validate()?;self.admit_affine().map_err(String::from)?;
-        if self.name.len()>4096 {return Err("Invalid image object value".into());}
+        self.image.validate()?;self.validate_presentation()
+    }
+    pub(crate) fn validate_presentation(&self)->Result<(),String> {
+        self.admit_affine().map_err(String::from)?;
+        if self.name.len()>MAX_NAME_BYTES {return Err("Invalid image object value".into());}
         Ok(())
     }
+    pub(crate) fn same_image(&self,other:&Self)->bool {self.image.id()==other.image.id() && Arc::ptr_eq(self.image.storage(),other.image.storage())}
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -253,7 +262,11 @@ impl PaintBase {
 impl Document {
     pub fn import_image_objects_edit(&self,layer:OccurrenceHandle,mut objects:Vec<ImageObject>,at:usize)->Result<(Vec<ImageObjectHandle>,Edit),DocumentError> {
         self.editable_object_layer(layer)?;
-        let images=Image::import_foreign(&objects.iter().map(|o|o.image.clone()).collect::<Vec<_>>()).map_err(DocumentError::InvalidArtwork)?;
+        let existing=self.artwork.images().map_err(DocumentError::InvalidArtwork)?;
+        let local=|image:&Image|existing.get(&image.id()).filter(|known|known.identity_matches(image)).map(|known|(*known).clone());
+        let foreign=Image::import_foreign(&objects.iter().filter(|o|local(&o.image).is_none()).map(|o|o.image.clone()).collect::<Vec<_>>()).map_err(DocumentError::InvalidArtwork)?;
+        let mut foreign=foreign.into_iter();
+        let images:Vec<_>=objects.iter().map(|o|local(&o.image).unwrap_or_else(||foreign.next().expect("Imported foreign image"))).collect();
         let mut candidate=self.clone();let mut edits=Vec::with_capacity(objects.len());let mut handles=Vec::with_capacity(objects.len());
         for (index,(object,image)) in objects.iter_mut().zip(images).enumerate() {
             object.image=image;
@@ -292,7 +305,7 @@ impl Document {
         let owner=self.scene().object_owner(object).ok_or(DocumentError::InvalidLayerOperation("Choose an image object"))?;
         self.editable_object_layer(owner)?;
         let mut value=self.artwork.objects.get(object).unwrap().clone();value.affine=affine;
-        value.validate().map_err(DocumentError::InvalidArtwork)?;
+        value.validate_presentation().map_err(DocumentError::InvalidArtwork)?;
         Ok(Edit::ImageObject(RecordChange::replace(&self.artwork.objects,object,Some(value))?))
     }
     fn editable_object_layer(&self,layer:OccurrenceHandle)->Result<ObjectLayerHandle,DocumentError> {
@@ -304,13 +317,35 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Stack, Artwork, ArtworkQuery, ArtworkSource, PaintSource, PortableId, SceneIndex, color::source::rgba8_source};
+    use crate::{Artwork, ArtworkQuery, ArtworkSource, PaintSource, PortableId, SceneIndex, color::source::rgba8_source};
     fn document()->Document {Document::from_artwork(Artwork::new([1024,1024]).unwrap()).unwrap()}
     fn object_layer(doc:&mut Document)->OccurrenceHandle {
         let (h,edit)=doc.create_object_layer_edit("Photographs",None,0).unwrap();doc.apply(edit).unwrap();h
     }
     fn image()->Image {rgba8_source([7,5],|x,y|[x as u8,y as u8,17,255]).into()}
 
+    #[test]
+    fn same_image_presentation_edits_validate_the_changed_objects_and_restore_exactly() {
+        let mut doc=document();let layer=object_layer(&mut doc);let shared=image();
+        let (first,edit)=doc.add_image_object_edit(layer,ImageObject::new(shared.clone(),"First"),0).unwrap();doc.apply(edit).unwrap();
+        let (second,edit)=doc.add_image_object_edit(layer,ImageObject::new(shared.clone(),"Second"),1).unwrap();doc.apply(edit).unwrap();
+        let before=doc.clone();
+        let moved=Edit::Batch(vec![doc.set_image_object_affine_edit(first,Affine64([0.,1.,-1.,0.,3.5,2.])).unwrap(),doc.set_image_object_affine_edit(second,Affine64([2.,0.,0.,2.,-7.,1.])).unwrap()]);
+        assert!(moved.presents_same_images(&doc));
+        let inverse=doc.apply(moved).unwrap();
+        assert_eq!(doc.revision,before.revision+1);
+        assert_eq!(doc.scene().object(first).unwrap().affine,Affine64([0.,1.,-1.,0.,3.5,2.]));
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.artwork,before.artwork);
+        let mut singular=doc.artwork.objects.get(first).unwrap().clone();singular.affine=Affine64([1.,1.,1.,1.,0.,0.]);
+        let edit=Edit::ImageObject(RecordChange::replace(&doc.artwork.objects,first,Some(singular)).unwrap());
+        assert!(edit.presents_same_images(&doc));
+        assert!(doc.apply(edit).is_err());assert_eq!(doc.artwork,before.artwork);
+        let mut replaced=doc.artwork.objects.get(first).unwrap().clone();replaced.image=image();
+        let edit=Edit::ImageObject(RecordChange::replace(&doc.artwork.objects,first,Some(replaced)).unwrap());
+        assert!(!edit.presents_same_images(&doc),"replacing an image keeps whole-document validation");
+        doc.apply(edit).unwrap();
+    }
     #[test]
     fn image_identity_is_part_of_authored_equality() {
         let original=image();let copy=original.clone();
@@ -434,7 +469,7 @@ mod tests {
         let OccurrenceContent::Paint(paint)=pending.scene().occurrence(row).unwrap().content else {panic!()};
         pending.artwork.paint.get_mut(paint).unwrap().operations=Arc::new(vec![crate::RasterOperation {
             placement:crate::Affine::IDENTITY,
-            coverage:crate::CoverageSnapshot::reveal_all(crate::CoverageHandle::from_index(50),[1024;2],crate::Point::default()),
+            coverage:crate::CoverageSnapshot::reveal_all(crate::CoverageHandle::from_index(50),[1024;2],[0;2]),
             kind:crate::RasterOperationKind::Bake {scene:captured.snapshot(),scope:crate::SceneScope::Members(vec![layer].into()),offset:crate::Point::default()},
         }]);
         let destination=object_layer(&mut pending);
@@ -524,7 +559,7 @@ mod tests {
         assert!(doc.apply(Edit::ObjectLayer(RecordChange::replace(&doc.artwork.object_layers,handle,Some(invalid)).unwrap())).is_err());assert_eq!(doc,before);
         let paint=PaintSource { color_mode:Default::default(),domain:[10,10],base:Some(PaintBase {image,offset:[4,0],policy:PaintBasePolicy::SourceProfile}),raster:Default::default(),operations:Arc::default()};
         assert!(doc.apply(Edit::Paint(RecordChange::insert(&doc.artwork.paint,paint))).is_err());assert_eq!(doc,before);
-        let mut occurrence=doc.scene().occurrence(layer).unwrap().clone();occurrence.translation.x=0.5;
+        let mut occurrence=doc.scene().occurrence(layer).unwrap().clone();occurrence.offset=[i64::MAX,0];
         assert!(doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,layer,Some(occurrence)).unwrap())).is_err());assert_eq!(doc,before);
         let mut changed=doc.scene().object(object).unwrap().clone();let mut samples=(*changed.image).clone();samples.interpretation.profile=ColorProfile::Builtin(crate::color::RgbSpace::DisplayP3);
         changed.image=Image::with_id(changed.image.id(),Arc::new(samples));
@@ -535,21 +570,6 @@ mod tests {
         changed.image=Image::with_id(changed.image.id(),Arc::new(samples));
         assert_eq!(changed.image,doc.scene().object(object).unwrap().image);
         assert!(doc.apply(Edit::ImageObject(RecordChange::replace(&doc.artwork.objects,object,Some(changed)).unwrap())).is_err());assert_eq!(doc,before);
-    }
-    #[test]
-    fn object_creation_and_group_edits_refuse_general_ancestor_geometry_atomically() {
-        let mut doc=document();let stack=RecordChange::insert(&doc.artwork.stacks,Stack::default());
-        let group=RecordChange::insert(&doc.artwork.occurrences,Occurrence::new(OccurrenceContent::Stack(stack.handle),"Group"));let parent=group.handle;
-        let root=doc.composition().result;
-        doc.apply(Edit::Batch(vec![Edit::Stack(stack),Edit::Occurrence(group),Edit::Stack(RecordChange::replace(&doc.artwork.stacks,root,Some(Stack {entries:vec![parent]})).unwrap())])).unwrap();
-        for placement in [crate::LayerPlacement::from_affine(crate::Affine([2.,0.,0.,1.,0.,0.])),crate::LayerPlacement::IDENTITY] {
-            let mut occurrence=doc.scene().occurrence(parent).unwrap().clone();occurrence.placement=placement.clone();occurrence.translation.x=if placement==crate::LayerPlacement::IDENTITY {0.5}else {0.};
-            let mut transformed=doc.clone();transformed.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,parent,Some(occurrence.clone())).unwrap())).unwrap();let before=transformed.clone();
-            assert!(transformed.create_object_layer_edit("Images",Some(parent),0).is_err());assert_eq!(transformed,before);
-        }
-        let (_,edit)=doc.create_object_layer_edit("Images",Some(parent),0).unwrap();doc.apply(edit).unwrap();let before=doc.clone();
-        let mut occurrence=doc.scene().occurrence(parent).unwrap().clone();occurrence.placement=crate::LayerPlacement::from_affine(crate::Affine([2.,0.,0.,1.,0.,0.]));
-        assert!(doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,parent,Some(occurrence)).unwrap())).is_err());assert_eq!(doc,before);
     }
     #[test]
     fn working_pixel_policy_is_binding_local() {

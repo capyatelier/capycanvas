@@ -184,7 +184,7 @@ fn clone_strokes_stay_inside_the_selection_and_keep_alpha_locked_transparency() 
     let (mut input, mut engine) = cloner(document(EXTENT), TARGET, RetouchSource::References, false);
     let mut coverage = reveal_all(EXTENT);
     coverage.source.default_coverage = 0.;
-    coverage.source.initial = Some(rect(0., 150.));
+    coverage.selection = Some(rect(0., 150.));
     engine
         .append_raster_operation(TARGET, RasterOperation {
             placement: layer_core::Affine::IDENTITY,
@@ -243,4 +243,91 @@ fn clone_replays_from_estimates_and_corrections_match_a_direct_stroke() {
     }
     assert!(results[0].iter().any(|(_, page)| page.iter().any(|p| p[3] > 0.)), "the clone painted");
     assert_eq!(results[0], results[1], "corrections replay to the direct stroke");
+}
+
+/// The ink layer over an image layer that is a reference: one rotated,
+/// smoothly sampled photo at a fractional position, in a float drawing.
+fn image_reference_document() -> (Document, OccurrenceHandle) {
+    let mut doc = Document::new(PortableId::random(), EXTENT[0], EXTENT[1],
+        layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color.depth = layer_core::color::SampleDepth::F32;
+    let (layer, edit) = doc.create_object_layer_edit("Images", None, 1).unwrap();
+    doc.apply(edit).unwrap();
+    let mut object = layer_core::ImageObject::new(rgba8_source([320, 240], pattern).into(), "Photo");
+    object.affine = layer_core::Affine64([1.2, 0.35, -0.35, 1.2, 140.25, 20.5]);
+    let (_, edit) = doc.add_image_object_edit(layer, object, 0).unwrap();
+    doc.apply(edit).unwrap();
+    let edit = occurrence_edit(&doc, layer, |o| o.reference = true);
+    doc.apply(edit).unwrap();
+    (doc, layer)
+}
+
+/// Clone reads an image layer reference through its canonical pixels: zooming
+/// the view out changes nothing the stroke copies, the result matches cloning
+/// from the same layer rasterized, and the strokes land on the paint layer.
+#[test]
+fn clone_copies_reference_image_layers_by_their_canonical_pixels_at_any_zoom() {
+    let cloned = |doc: Document, zoom: f32| {
+        let (mut input, mut engine) = cloner(doc, TARGET, RetouchSource::References, false);
+        engine.set_view(ViewState { document_to_surface: [zoom, 0., 0., zoom, 0., 0.], ..view(EXTENT) }, ViewTransform::IDENTITY);
+        flush(&mut engine);
+        source_at(&mut engine, 300., 160., |_| {});
+        stroke(&mut engine, &mut input, 1, [60., 70.], [420., 90.]);
+        let pages: Vec<_> = (0..2).map(|x| layer_page(engine.backend(), TARGET, [x, 0])).collect();
+        (pages, engine)
+    };
+    let (doc, layer) = image_reference_document();
+    let (native, engine) = cloned(doc.clone(), 1.);
+    assert!(native.iter().flatten().any(|pixel| pixel[3] > 0.99 && pixel[..3].iter().any(|v| *v > 0.05)), "the stroke copied the image");
+    let scene = engine.document().scene();
+    assert_eq!(scene.object_layer(layer).unwrap().children.len(), 1, "the image layer is only read");
+    assert_eq!(engine.document().working.target, Some(TARGET));
+    drop(engine);
+    let (reduced, _) = cloned(doc.clone(), 0.25);
+    for (index, (a, b)) in native.iter().flatten().zip(reduced.iter().flatten()).enumerate() {
+        assert_eq!(a, b, "pixel {index} depends on the view's zoom");
+    }
+
+    let (mut input, mut engine) = cloner(doc, TARGET, RetouchSource::References, false);
+    let plan = engine.document().rasterize_plan(layer, false).unwrap();
+    let capture = plan.image_capture(EXTENT, None).unwrap();
+    assert!(engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::Image(capture)).unwrap());
+    let image = loop {
+        if let Some(result) = engine.backend_mut().take_snapshot() { break result.unwrap(); }
+        std::thread::yield_now();
+    };
+    let layer_render::SnapshotResult::Image(image) = image else { panic!("captured image") };
+    let edits = plan.with_image(image.map(|(samples, origin)| (layer_core::Image::new(samples), origin))).unwrap();
+    engine.insert_with_operations(edits, Vec::new(), None).unwrap();
+    assert_eq!(engine.document().working.target, engine.document().scene().source_target(layer), "rasterizing selects the new paint");
+    let edit = engine.document().select_occurrence_edit(TARGET_USE).unwrap();
+    engine.apply_edit(edit).unwrap();
+    engine.set_retouch(Some(RetouchSource::References));
+    flush(&mut engine);
+    source_at(&mut engine, 300., 160., |_| {});
+    stroke(&mut engine, &mut input, 1, [60., 70.], [420., 90.]);
+    let rasterized: Vec<_> = (0..2).map(|x| layer_page(engine.backend(), TARGET, [x, 0])).collect();
+    for (index, (a, b)) in native.iter().flatten().zip(rasterized.iter().flatten()).enumerate() {
+        assert!(close(*a, *b), "pixel {index}: image layer {a:?}, rasterized {b:?}");
+    }
+}
+
+/// Smudge mixes only its own paint: on an image layer it is refused and leaves
+/// the images unchanged, and above one it never picks up the image's pixels.
+#[test]
+fn smudge_keeps_to_paint_and_never_writes_image_layers() {
+    let smudge = || BrushSnapshot { diameter: 48., mappings: Arc::from([]), ..default_brush(DefaultBrushPreset::Smudge) };
+    let (doc, layer) = image_reference_document();
+    let mut on_images = doc.clone();
+    let edit = on_images.select_occurrence_edit(layer).unwrap();
+    on_images.apply(edit).unwrap();
+    assert_eq!(on_images.try_drawing_target(), Err(layer_core::DrawingRefusal::Object));
+    let (mut input, mut engine) = cloner(doc, TARGET, RetouchSource::Editing, false);
+    engine.set_retouch(None);
+    engine.set_brush(smudge()).unwrap();
+    flush(&mut engine);
+    stroke(&mut engine, &mut input, 1, [160., 80.], [400., 120.]);
+    assert!((0..2).map(|x| layer_page(engine.backend(), TARGET, [x, 0])).flatten().all(|pixel| pixel[3] == 0.),
+        "smudging empty paint above the image picks up nothing from it");
+    assert_eq!(engine.document().scene().object_layer(layer).unwrap().children.len(), 1);
 }

@@ -53,7 +53,6 @@ struct DocumentKey {
     operations: bool,
     transform: bool,
     mesh: bool,
-    nonlinear: bool,
     blend_space: layer_core::BlendSpace,
     chains: Vec<(Vec<Arc<layer_core::EffectProgram>>, effects::Execution)>,
 }
@@ -70,9 +69,7 @@ impl DocumentKey {
             objects,
             operations: scene.order().iter().any(|&h| scene.mask(h).is_some()) || operations().next().is_some(),
             transform: operations().any(|op| matches!(op.kind, layer_core::RasterOperationKind::Transform(_))),
-            mesh: scene.order().iter().any(|&h| scene.occurrence(h).is_some_and(|o| o.placement.mesh.is_some()))
-                || operations().any(|op| matches!(&op.kind, layer_core::RasterOperationKind::Transform(t) if t.placement.mesh.is_some())),
-            nonlinear: scene.targets().any(|t| scene.target_geometry(t).as_affine().is_none()),
+            mesh: operations().any(|op| matches!(&op.kind, layer_core::RasterOperationKind::Transform(t) if t.placement.mesh.is_some())),
             blend_space: document.composition().blend,
             chains: scene::startup_effect_chains(scene).into_iter().map(|(handles, execution)| {
                 (handles.into_iter().filter_map(|h| {
@@ -339,6 +336,7 @@ impl WgpuRasterizer {
             required.compute.extend(self.transforms.as_ref().unwrap().placement_pipelines().into_iter().cloned());
             if self.native_edit.is_some() {
                 required.compute.push(self.scene_pipelines.scale.reduce.clone());
+                required.compute.push(self.scene_pipelines.scale.reduce_phased.clone());
                 required.compute.push(self.scene_pipelines.scale.reduce_pair.clone());
                 required.compute.push(self.scene_pipelines.scale.compose.clone());
                 required.compute.push(self.scene_pipelines.resample.area.clone());
@@ -357,7 +355,6 @@ impl WgpuRasterizer {
             if shader.key.mesh {
                 required.render.extend(self.transforms.as_ref().unwrap().mesh_pipelines().into_iter().cloned());
             }
-            if shader.key.nonlinear { required.render.extend(self.scene_pipelines.resample.mesh.iter().cloned()); }
             if shader.key.transform {
                 required.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
             }
@@ -685,7 +682,7 @@ mod gpu_tests {
             assert!(renderer.moving_images.pipelines(&renderer.device).into_iter().all(Deferred::ready));
             let mut encoder=crate::submission::CommandEncoder::new(&renderer.device,&Default::default());
             let source=document.artwork.objects.iter().next().unwrap().2.image.clone();
-            let request=crate::object_image_mips::MovingRequest {id:source.id(),source:source.storage().clone(),level:1};
+            let request=crate::object_image_mips::MovingRequest {id:source.id(),source:source.storage().clone(),level:1,nearest:false};
             let mut images=std::mem::take(&mut renderer.moving_images);
             let plan=images.plan(&renderer,std::slice::from_ref(&request),u64::MAX,&mut encoder);
             assert!(plan.is_ok());

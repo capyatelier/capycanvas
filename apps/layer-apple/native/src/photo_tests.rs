@@ -48,11 +48,10 @@ fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
         app.invoke("zoom_out"); app.invoke("rotate_left");
         read_bytes(&job, "Drop.tiff", &bytes); adopt(&app, &job, false);
         let doc = unsafe { &*app.0 }.host.session.engine().document();
-        let placed = imported_occurrences(doc).next().unwrap();
-        let layer_core::authored::OccurrenceContent::Paint(paint) = doc.scene().occurrence(placed).unwrap().content else { unreachable!() };
-        let center = doc.target_geometry(layer_core::authored::SourceTarget::Paint(paint)).map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
-        assert!((center.x - expected.x).abs() < 0.0001 && (center.y - expected.y).abs() < 0.0001);
-        assert_eq!(source_samples(doc.scene().paint_source(placed).unwrap().base.as_ref().unwrap().image.storage()), source_samples(&original));
+        let placed = placed_objects(doc).next().unwrap();
+        let center = doc.object_document_affine(placed).unwrap().map([6.5, 4.5]);
+        assert!((center[0] - f64::from(expected.x)).abs() < 0.0001 && (center[1] - f64::from(expected.y)).abs() < 0.0001);
+        assert_eq!(source_samples(&doc.scene().object(placed).unwrap().image), source_samples(&original));
         app.invoke("apply_transform"); app.draw_until_idle();
         let pixels = app.pixels();
         app.invoke("undo"); app.draw_until_idle();
@@ -72,7 +71,7 @@ fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
             read_bytes(&job, "Row drop.tiff", &bytes); adopt(&app, &job, false);
             let doc = unsafe { &*app.0 }.host.session.engine().document();
             let inserted = doc.scene().order()[index];
-            assert!(doc.scene().paint_source(inserted).is_some_and(|paint| paint.base.is_some()), "{position} insertion order");
+            assert!(doc.object_layer_children(inserted).is_some_and(|children| children.len() == 1), "{position} insertion order");
             assert_eq!(doc.scene().parent(inserted), (position == "into").then_some(group));
             app.invoke("cancel_transform"); app.draw_until_idle();
             assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
@@ -269,7 +268,7 @@ fn photo_open_and_place_retain_source_depth_profile_samples_and_save_safety() {
             app.invoke("apply_transform"); app.draw_until_idle();
             let document = unsafe { &*app.0 }.host.session.engine().document();
             assert_eq!(document.composition().color, target_color, "Place must preserve the receiving document's space/depth");
-            assert_eq!(source_samples(first_original(document)), source_samples(&original));
+            assert_eq!(source_samples(first_placed_image(document)), source_samples(&original));
             let imported = app.pixels(); assert_ne!(blank, imported);
             app.invoke("undo"); app.draw_until_idle(); assert_eq!(app.pixels(), blank);
             app.invoke("redo"); app.draw_until_idle(); assert_eq!(app.pixels(), imported);
@@ -372,21 +371,14 @@ fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
             assert!(!session.engine().can_undo(), "Provisional placement has no artwork history");
             assert!(session.capture_artwork().is_err(), "Pending placement cannot enter recovery");
             let document = session.engine().document();
-            let placed: Vec<_> = imported_occurrences(document).collect();
+            let placed: Vec<_> = placed_objects(document).collect();
             assert_eq!(placed.len(), 2);
+            let layer = document.scene().object_owner(placed[0]);
+            assert!(layer.is_some() && document.scene().object_owner(placed[1]) == layer, "a batch shares one image layer");
             for (index, handle) in placed.iter().enumerate() {
-                let occurrence = document.scene().occurrence(*handle).unwrap();
-                let paint = document.scene().paint_source(*handle).unwrap();
-                assert_eq!(occurrence.name.as_ref(), format!("Photo-{}", index + 1));
-                assert_source_samples(paint.base.as_ref().map(|base|base.image.as_ref()).unwrap(), &images[index].1);
-                assert!((occurrence.placement.as_affine().unwrap().0[0] - 7. / 13.).abs() < 0.00001);
-                let center = occurrence.placement.map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
-                assert!((center.x - 3.5).abs() < 0.00001 && (center.y - 2.5).abs() < 0.00001);
-            }
-            app.invoke("placement_original_size"); app.draw_until_prepared(true);
-            let document = unsafe { &*app.0 }.host.session.engine().document();
-            for handle in imported_occurrences(document) {
-                assert_eq!(&document.scene().occurrence(handle).unwrap().placement.as_affine().unwrap().0[..4], &layer_core::Affine::IDENTITY.0[..4]);
+                let object = document.scene().object(*handle).unwrap();
+                assert_eq!(object.name.as_ref(), format!("Photo-{}", index + 1));
+                assert_source_samples(&object.image, &images[index].1);
             }
             if !apply {
                 app.invoke("cancel_transform"); app.draw_until_idle();

@@ -7,7 +7,7 @@ pub(super) type Node = Arc<Expression>;
 pub(super) enum Expression {
     Color([u32; 4]),
     Objects {content:object_spatial::Content,preview:bool},
-    Source { id: SourceTarget, placement: pixel_transform::GeometryKey, extent: [u32; 2], outside: u32 },
+    Source { id: SourceTarget, frame: SourceFrame, extent: [u32; 2], outside: u32 },
     Opacity { input: Node, opacity: u32 },
     Combine { front: Node, back: Node, blend: u32, flags: u32 },
     Effect { input: Node, chain: Vec<(OccurrenceHandle, u64, u32)>, masks: Vec<Option<Node>>, radius: Option<u32> },
@@ -34,7 +34,7 @@ impl Expression {
     pub(super) fn support(&self, scene: SceneView<'_>, extent: [u32; 2], level:u32) -> DocRect {
         match self {
             Self::Color(color) => if color[3] == 0 { DocRect::default() } else { PixelRect::full(extent).into() },
-            Self::Source { placement, extent, .. } => DocRect::from_rect(placement.0.forward_bounds(layer_core::Rect::from_extent(*extent))),
+            Self::Source { frame, extent, .. } => DocRect::from(PixelRect::full(*extent)).translated(frame.origin()),
             Self::Objects {content,..} => content.bounds_at(level),
             Self::Opacity { input, .. } => input.support(scene, extent,level),
             Self::Combine { front, back, flags, .. } => {
@@ -53,8 +53,8 @@ impl Expression {
         match self {
             Self::Color(_) => (0, 0),
             Self::Objects {content,..} => (content.len() as u32*2, 3),
-            Self::Source { placement, .. } => {
-                let work = u32::from(!placement.0.is_identity());
+            Self::Source { frame, .. } => {
+                let work = u32::from(!frame.aligned());
                 (work, work)
             }
             Self::Opacity { input, .. } => input.cost(),
@@ -79,13 +79,13 @@ impl Expression {
     fn document_damage(&self, sources: &Sources, plan: display_mips::Plan) -> Vec<DocRect> {
         match self {
             Self::Color(_) => Vec::new(),
-            Self::Objects {..} => sources.object_damage.regions.iter().chain(sources.object_refinements.get(&plan.level).into_iter().flat_map(|damage| damage.regions.iter())).copied().map(DocRect::from).collect(),
-            Self::Source { id, placement, .. } => sources.entries.get(id).map_or_else(|| vec![plan.doc_bounds], |source| {
-                let placement = &placement.0;
-                let local = if placement.is_identity() { source.damage.clone() } else {
-                    source.damage.expand(1 << source_level(plan.level, placement, source.extent), source.extent)
+            Self::Objects {content,..} => [None, Some(content.owner())].into_iter().flat_map(|owner| sources.object_damage.get(&owner).into_iter()
+                .chain(sources.object_refinements.get(&(plan.level, owner)))).flat_map(|damage| damage.regions.iter()).copied().map(DocRect::from).collect(),
+            Self::Source { id, frame, .. } => sources.entries.get(id).map_or_else(|| vec![plan.doc_bounds], |source| {
+                let local = if frame.aligned() { source.damage.clone() } else {
+                    source.damage.expand(1 << source_level(plan.level, *frame), frame.extent(source.extent))
                 };
-                local.regions.iter().map(|region| DocRect::from_rect(placement.forward_bounds(region.to_rect()))
+                local.regions.iter().map(|region| frame.document(*region)
                     .expand(source.watercolor.map_or(0, |w| w.radius()))).collect()
             }),
             Self::Opacity { input, .. } => input.document_damage(sources, plan),
@@ -141,12 +141,11 @@ impl Expression {
     }
     pub(super) fn deferred(&self, r: &WgpuRasterizer, scene: SceneView<'_>, batches: &[DabBatch]) -> bool {
         match self {
-            Self::Source { id, placement, .. } => {
+            Self::Source { id, frame, .. } => {
                 if let Some(transforms) = r.transforms.as_ref().filter(|t| t.display_source(*id)) {
                     return transforms.direct_source(*id);
                 }
-                placement.0.as_affine().is_some() && r.watercolor_style(*id, batches).is_none()
-                    && (r.moving_layer == scene.source_owner(*id) || !placement.0.is_identity())
+                r.watercolor_style(*id, batches).is_none() && (r.moving_layer == scene.source_owner(*id) || !frame.aligned())
             }
             Self::Opacity { input, .. } => input.deferred(r, scene, batches),
             Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(r, scene, batches),
@@ -253,8 +252,7 @@ impl Builder<'_> {
         let id = if mask { SourceTarget::Coverage(scene.mask(handle).unwrap().0.source) } else { scene.source_target(handle).unwrap() };
         if self.sources.is_some_and(|sources| !sources.entries.contains_key(&id)) { return Expression::color([0.; 4]); }
         let outside = scene.mask(handle).filter(|_| mask).map_or(0., |(use_, source)| if use_.inverted { 1. - source.default_coverage } else { source.default_coverage });
-        Arc::new(Expression::Source { id, placement: pixel_transform::GeometryKey(scene.target_geometry(id)),
-            extent: scene.target_extent(id), outside: outside.to_bits() })
+        Arc::new(Expression::Source { id, frame: source_frame(self.sources, scene, id), extent: scene.target_extent(id), outside: outside.to_bits() })
     }
 
 }
@@ -367,7 +365,7 @@ impl Evaluator<'_> {
         let result = self.with_region(evaluation,|compositor|Ok(match node.as_ref() {
             Expression::Color(c) => Value::Color(c.map(f32::from_bits)),
             Expression::Objects {content,preview} => compositor.objects(content,*preview,output)?,
-            Expression::Source { id, placement, extent, outside } => compositor.source(*id, placement.0.clone(), *extent, f32::from_bits(*outside))?,
+            Expression::Source { id, frame, extent, outside } => compositor.source(*id, *frame, *extent, f32::from_bits(*outside))?,
             Expression::Opacity { input, opacity } => compositor.evaluate(input)?.with_opacity(f32::from_bits(*opacity)),
             Expression::Combine { front, back, blend, flags } => {
                 let (front, back) = if front.cost().1 >= back.cost().1 {
@@ -451,7 +449,7 @@ mod reuse_tests {
         let color = |rgb, alpha| RgbColor::from_linear(doc.composition().color.space, [rgb, 0.27, 0.61, alpha]).unwrap();
         let initial = color(0.13, 0.43);
         let fill = add_fill(&mut doc, initial);
-        coverage_mask(&mut doc, fill, Point::default(), Some(Selection::polygon(vec![
+        coverage_mask(&mut doc, fill, [0, 0], Some(Selection::polygon(vec![
             Point { x: 0., y: 0. }, Point { x: 301., y: 0. },
             Point { x: 301., y: 259. }, Point { x: 0., y: 259. },
         ]).unwrap()));
@@ -574,7 +572,7 @@ mod object_reuse_tests {
         } else {unreachable!()}
         doc.apply(doc.set_image_object_affine_edit(handles[1],Affine64([1.,0.,0.,1.,128.,0.])).unwrap()).unwrap();
         assert!(before!=build(&doc,&mut cache));
-        let mut occurrence=doc.scene().occurrence(owner).unwrap().clone();occurrence.translation.x=256.;
+        let mut occurrence=doc.scene().occurrence(owner).unwrap().clone();occurrence.offset[0]=256;
         doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,owner,Some(occurrence)).unwrap())).unwrap();
         let moved=build(&doc,&mut cache);assert!(before!=moved);
     }

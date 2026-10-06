@@ -334,6 +334,7 @@ color-properties-source = { $width } × { $height } px · { $bits } 位 { $chann
 color-properties-retained-rasterized = 已按文档坐标栅格化。
 color-properties-retained-icc = 保留原始像素数值和嵌入的 ICC。
 color-properties-retained-original = 保留原始像素数值和颜色解释。
+color-properties-retained-placed = 保留自身样本和颜色解释的置入图像。
 
 
 color-profile-select-imported = 请选择已导入的配置文件。

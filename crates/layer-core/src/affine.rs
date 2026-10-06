@@ -62,6 +62,10 @@ pub struct ImageTransform {
     pub placement: LayerPlacement,
     pub source_from_owner: Option<Projective>,
     pub keep_source: bool,
+    /// The base image the transform reads in place of its target's own, when
+    /// the same edit removes that base from the target.
+    #[serde(skip)]
+    pub source_base: Option<crate::authored::PaintBase>,
 }
 impl ImageTransform {
     pub fn affine(map: Affine) -> Self { Self { placement: LayerPlacement::from_affine(map), ..Default::default() } }
@@ -91,7 +95,7 @@ impl ImageTransform {
         let to = Projective::from_affine(to);
         let outer = self.placement.outer.then(to)?;
         let source_from_owner = self.source_from_owner.unwrap_or(Projective::IDENTITY).then(to)?;
-        let mut result = Self { placement: LayerPlacement { outer, ..self.placement.clone() }, source_from_owner: Some(source_from_owner), keep_source: self.keep_source };
+        let mut result = Self { placement: LayerPlacement { outer, ..self.placement.clone() }, source_from_owner: Some(source_from_owner), keep_source: self.keep_source, source_base: self.source_base.clone() };
         if result.placement.mesh.is_none() { result.placement.outer = result.projective()?; result.source_from_owner = None; }
         Some(result)
     }

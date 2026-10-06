@@ -141,7 +141,7 @@ fn adjustments(canvas: &mut Canvas, observations: &mut Observations) -> Result<E
                     .collect(),
                 ..Default::default()
             };
-            let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), doc.composition().size, Point::default());
+            let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), doc.composition().size, [0, 0]);
             mask.source.raster = RasterRevision::backed(data);
             coverage = Some(mask);
         }

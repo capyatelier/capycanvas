@@ -76,6 +76,11 @@ copy_struct! { LayerCopy {
     drop_into: NATIVE_LAYERS_DROP_INTO,
     drop_above: NATIVE_LAYERS_DROP_ABOVE,
     drop_below: NATIVE_LAYERS_DROP_BELOW,
+    expand_images: OBJECTS_EXPAND_LIST,
+    collapse_images: OBJECTS_COLLAPSE_LIST,
+    show_image: OBJECTS_SHOW_IMAGE,
+    hide_image: OBJECTS_HIDE_IMAGE,
+    move_image: OBJECTS_MOVE_IMAGE,
 } }
 
 copy_struct! { PaletteCopy {

@@ -190,7 +190,7 @@ fn undo_and_pending_operations_retain_and_charge_shared_resources_once() {
     editor.perform(change).unwrap();assert!(weak.upgrade().is_some());assert!(editor.undo().unwrap());assert_eq!(effect(editor.document(),0).lut3d().unwrap().storage().unwrap().as_ptr(),weak.upgrade().unwrap().as_ptr());assert!(editor.redo().unwrap());assert!(weak.upgrade().is_some());drop(editor);assert!(weak.upgrade().is_none());
     let captured=resource_document();let budget=code_bytes(&captured)+96;
     let mut pending=Document::new(PortableId::random(),64,48,DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
-    pending.target_operations_mut(pending.working.target.unwrap()).unwrap().push(crate::RasterOperation {placement:crate::Affine::default(),coverage:crate::CoverageSnapshot::reveal_all(CoverageHandle::from_index(50),[64,48],Point::default()),kind:crate::RasterOperationKind::Bake {scene:captured.snapshot(),scope:SceneScope::Members(captured.scene().order()[..2].to_vec().into()),offset:Point::default()}});
+    pending.target_operations_mut(pending.working.target.unwrap()).unwrap().push(crate::RasterOperation {placement:crate::Affine::default(),coverage:crate::CoverageSnapshot::reveal_all(CoverageHandle::from_index(50),[64,48], [0; 2]),kind:crate::RasterOperationKind::Bake {scene:captured.snapshot(),scope:SceneScope::Members(captured.scene().order()[..2].to_vec().into()),offset:Point::default()}});
     assert!(pending.validate(crate::ProjectLimits {asset_bytes:budget-1,..Default::default()}).is_err());pending.validate(crate::ProjectLimits {asset_bytes:budget,..Default::default()}).unwrap();
 }
 

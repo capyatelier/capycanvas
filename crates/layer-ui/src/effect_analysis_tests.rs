@@ -10,8 +10,8 @@ fn effect_test_selection_edit(document:&layer_core::Document,selection:Option<la
 }
 fn effect_test_mask_edit(document:&layer_core::Document,handle:layer_core::OccurrenceHandle,default_coverage:f32)->layer_core::Edit {
     use layer_core::authored::{CoverageSource,MaskUse,RecordChange};
-    let coverage=RecordChange::insert(&document.artwork.coverage,CoverageSource {domain:document.scene().local_extent(handle),initial:None,default_coverage,raster:Default::default(),operations:Default::default()});
-    let occurrence=effect_test_occurrence_edit(document,handle,|o|o.mask=Some(MaskUse {source:coverage.handle,enabled:true,linked:true,inverted:false,translation:Point::default(),placement:layer_core::Projective::IDENTITY}));
+    let coverage=RecordChange::insert(&document.artwork.coverage,CoverageSource {domain:document.scene().local_extent(handle),default_coverage,raster:Default::default(),operations:Default::default()});
+    let occurrence=effect_test_occurrence_edit(document,handle,|o|o.mask=Some(MaskUse {source:coverage.handle,enabled:true,linked:true,inverted:false,offset:[0,0]}));
     layer_core::Edit::Batch(vec![layer_core::Edit::Coverage(coverage),occurrence])
 }
 fn analysis_session()->UiSession<Recorder> {

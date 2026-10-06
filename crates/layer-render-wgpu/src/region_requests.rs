@@ -168,6 +168,7 @@ impl RegionRequests {
                 request.source,
                 layer_render::RegionSource::Selection(_)
                     | layer_render::RegionSource::Coverage(_)
+                    | layer_render::RegionSource::ObjectCoverage(_)
                     | layer_render::RegionSource::Tonal(_)
             ) && request.selection.is_none())
             || request.enclosure.as_ref().is_some_and(|area| area.validate().is_err()
@@ -195,7 +196,7 @@ impl RegionRequests {
             } else if tone.is_some() {
                 ready &= self.raw.prepare_tonal(&startup.compiler);
             } else if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
-                if !matches!(request.source, layer_render::RegionSource::Coverage(_)) {
+                if !matches!(request.source, layer_render::RegionSource::Coverage(_) | layer_render::RegionSource::ObjectCoverage(_)) {
                     ready &= self.flood.prepare(&startup.compiler, request.refinement, request.enclosure.is_some());
                 }
                 ready &= self.raw.prepare(&startup.compiler);
@@ -264,7 +265,7 @@ impl RegionRequests {
                     Err(error) => { self.raw.cancel(); return Err(error); },
                 },
             };
-            if tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_)) {
+            if tone.is_some() || matches!(request.source, layer_render::RegionSource::Coverage(_) | layer_render::RegionSource::ObjectCoverage(_)) {
                 flood::Region {
                     coverage: classified,
                     bounds_offset: 0,

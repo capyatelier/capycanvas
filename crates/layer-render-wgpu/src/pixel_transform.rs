@@ -22,20 +22,6 @@ const RECORD_BYTES: u64 = 112 + (1 + TRANSFORM_SLOTS as u64) * 16;
 const ENCODED: f32 = 512.;
 const BINDING_CAPACITY: usize = 4096;
 
-#[derive(Clone)]
-pub(crate) struct GeometryKey(pub ImageTransform);
-impl GeometryKey {
-    fn bits(&self) -> ([u32; 9], Option<usize>, u8, Option<[u32; 9]>, bool) {
-        (self.0.placement.outer.0.map(f32::to_bits), self.0.placement.mesh.as_ref().map(|m| std::sync::Arc::as_ptr(m) as usize),
-            self.0.placement.interpolation as u8, self.0.source_from_owner.map(|m| m.0.map(f32::to_bits)), self.0.keep_source)
-    }
-}
-impl PartialEq for GeometryKey { fn eq(&self, other: &Self) -> bool { self.bits() == other.bits() } }
-impl Eq for GeometryKey {}
-impl PartialOrd for GeometryKey { fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) } }
-impl Ord for GeometryKey { fn cmp(&self, other: &Self) -> std::cmp::Ordering { self.bits().cmp(&other.bits()) } }
-impl std::hash::Hash for GeometryKey { fn hash<H: std::hash::Hasher>(&self, state: &mut H) { std::hash::Hash::hash(&self.bits(), state); } }
-
 pub(super) struct TransformTile<'a> {
     pub view: &'a wgpu::TextureView,
     pub origin: [i32; 2],
@@ -47,8 +33,8 @@ pub struct TransformSource {
 }
 
 pub(super) struct TiledTransformRecord<'a> {
-    /// The page drawn at the attachment's origin.
-    pub target: [u32; 2],
+    /// The layer pixel at the attachment's origin.
+    pub origin: [i64; 2],
     pub sources: &'a [[u32; 2]],
     pub source_size: [u32; 2],
     /// x, y, width, height of the display level texels a job draws.
@@ -382,7 +368,7 @@ impl PixelTransform {
             let values = region_record(
                 rows,
                 taps,
-                job.target.map(|v| (v * super::PAGE_SIZE) as f32),
+                job.origin.map(|v| v as f32),
                 filter_flags(transform.placement.interpolation)
                     + 2. * f32::from(job.unmoved || identity)
                     + 4. * f32::from(self.placement)

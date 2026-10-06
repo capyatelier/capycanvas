@@ -79,7 +79,7 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
         },
     ] {
         let mut doc = document(color);
-        let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), EXTENT, Point::default());
+        let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), EXTENT, [0, 0]);
         mask.source.default_coverage = 0.5;
         let owner = doc.scene().order()[0];
         crate::tests::image_windows::set_mask(&mut doc, owner, mask);

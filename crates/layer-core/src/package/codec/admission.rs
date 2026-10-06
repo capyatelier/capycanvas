@@ -57,17 +57,70 @@ fn admitted_layer_tile_and_dependency_boundaries_reopen() {
 }
 
 #[test]
-fn placement_precision_limits_preserve_but_singular_and_horizon_maps_fail() {
-    let bytes=serialize(&prepare(&fixture(SampleDepth::U8),true));
-    for (matrix,preserved) in [([1.,0.,0.,0.,1.,0.,1.,0.,0.0001],true),
-        ([0.;9],false),([1.,0.,0.,0.,1.,0.,-1.,0.,1.],false)] {
-        let changed=rewrite(&bytes,|manifest| {
-            let occurrence=manifest["objects"].as_array_mut().unwrap().iter_mut().find(|r|r["type"]=="capy.occurrence/2").unwrap();
-            occurrence["data"]["placement"]=json!({"projective":matrix});
+fn image_layer_object_and_name_boundaries_save_and_reopen() {
+    let limit=crate::authored::GraphLimits::default().layer_objects;
+    let image=Image::new(crate::color::source::rgba8_source([4;2],|_,_|[1,2,3,255]));
+    let mut artwork=Artwork::new([64;2]).unwrap();
+    let children:Vec<_>=(0..limit).map(|n|artwork.objects.insert(PortableId::random(),
+        ImageObject::new(image.clone(),if n==0 {"x".repeat(crate::MAX_NAME_BYTES)} else {String::new()})).unwrap()).collect();
+    let layer=artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:children.clone()}).unwrap();
+    let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(layer),"é".repeat(crate::MAX_NAME_BYTES/2))).unwrap();
+    let stack=artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+    let document=crate::Document::from_artwork(artwork.clone()).unwrap();
+    document.admit(Default::default()).unwrap();
+    let bytes=serialize(&prepare(&artwork,false));
+    let restored=editable(bytes.clone());
+    assert_eq!(restored.objects.len(),limit);
+    crate::Document::from_artwork(restored).unwrap().admit(Default::default()).unwrap();
+
+    assert!(document.add_image_object_edit(occurrence,ImageObject::new(image.clone(),""),0).is_err(),"editing refuses one image past the limit");
+    let mut over=artwork.clone();
+    let extra=over.objects.insert(PortableId::random(),ImageObject::new(image.clone(),"")).unwrap();
+    over.object_layers.get_mut(layer).unwrap().children.push(extra);
+    assert!(crate::Document::from_artwork(over.clone()).is_err());
+    assert!(PreparedPackage::prepare(&capture(&over),None,&AtomicBool::new(false)).is_err());
+    let added=rewrite(&bytes,|manifest|{
+        let objects=manifest["objects"].as_array_mut().unwrap();
+        let mut record=objects.iter().find(|r|r["type"]=="capy.image-object/1").unwrap().clone();
+        record["id"]=json!(identity(900_000));
+        objects.iter_mut().find(|r|r["type"]=="capy.object-layer/1").unwrap()["data"]["children"].as_array_mut().unwrap().push(resources::reference(identity(900_000)));
+        objects.push(record);
+    });
+    assert!(matches!(open(backing(added),Default::default(),&AtomicBool::new(false)).unwrap(),OpenOutcome::Preserved {..}));
+
+    let long="x".repeat(crate::MAX_NAME_BYTES+1);
+    assert!(document.rename_image_object_edit(children[1],&long).is_err());
+    let mut long_layer=document.scene().occurrence(occurrence).unwrap().clone();long_layer.name=long.as_str().into();
+    assert!(document.clone().apply(crate::Edit::Occurrence(crate::RecordChange::replace(&artwork.occurrences,occurrence,Some(long_layer)).unwrap())).is_err(),"editing refuses a layer name past the limit");
+    let mut renamed=artwork.clone();renamed.objects.get_mut(children[1]).unwrap().name=long.as_str().into();
+    assert!(crate::Document::from_artwork(renamed).is_err());
+    let mut layer_named=artwork;layer_named.occurrences.get_mut(occurrence).unwrap().name=long.as_str().into();
+    assert!(crate::Document::from_artwork(layer_named).is_err());
+    for kind in ["capy.occurrence/3","capy.image-object/1"] {
+        let named=rewrite(&bytes,|manifest|{
+            manifest["objects"].as_array_mut().unwrap().iter_mut().find(|r|r["type"]==kind).unwrap()["data"]["name"]=json!(long);
         });
-        let outcome=open(backing(changed),Default::default(),&AtomicBool::new(false)).unwrap();
-        if preserved {assert!(matches!(outcome,OpenOutcome::Preserved {ref outputs,preview:Some(_),..} if outputs.len()==1),"{outcome:?}");}
-        else {assert!(matches!(outcome,OpenOutcome::RecoveredView {..}),"{outcome:?}");}
+        let outcome=open(backing(named),Default::default(),&AtomicBool::new(false)).unwrap();
+        assert!(!matches!(outcome,OpenOutcome::Candidate {..}),"{kind}: {outcome:?}");
+    }
+}
+
+#[test]
+fn removed_placement_records_and_fields_are_preserved_as_unsupported() {
+    let bytes=serialize(&prepare(&fixture(SampleDepth::U8),true));
+    for legacy in [true,false] {
+        let changed=rewrite(&bytes,|manifest| {
+            let occurrence=manifest["objects"].as_array_mut().unwrap().iter_mut().find(|r|r["type"]=="capy.occurrence/3" && r["data"].get("mask").is_some()).unwrap();
+            let data=occurrence["data"].as_object_mut().unwrap();data.remove("offset");
+            data.insert("placement".into(),json!({"translation":[0.25,0],"projective":[1,0,0,0,1,0,0,0,1]}));
+            data.get_mut("mask").unwrap().as_object_mut().unwrap().insert("placement".into(),json!({"translation":[3,1]}));
+            if legacy {occurrence["type"]="capy.occurrence/2".into();}
+        });
+        let outcome=open(backing(changed.clone()),Default::default(),&AtomicBool::new(false)).unwrap();
+        let OpenOutcome::Preserved {source,ref outputs,preview:Some(_),..}=outcome else {panic!("{outcome:?}")};
+        assert_eq!(outputs.len(),1);
+        let mut copied=Vec::new();copy_original(&source,&mut copied,&AtomicBool::new(false)).unwrap();assert_eq!(copied,changed);
     }
 }
 
@@ -100,7 +153,7 @@ fn graph_and_record_limits_preserve_known_outputs() {
             let child=identity(1000+2*n);let group=identity(1001+2*n);
             objects.iter_mut().find(|r|r["id"]==stack).unwrap()["data"]["entries"]=json!([resources::reference(group)]);
             objects.push(json!({"id":child,"type":"capy.stack/1","data":{}}));
-            objects.push(json!({"id":group,"type":"capy.occurrence/2","data":{"content":{"stack":resources::reference(child)}}}));
+            objects.push(json!({"id":group,"type":"capy.occurrence/3","data":{"content":{"stack":resources::reference(child)}}}));
             stack=json!(child);
         }
     });
@@ -134,7 +187,7 @@ fn ruler_mesh_curve_gradient_and_lookup_boundaries_save_and_reopen() {
         }
     }
     let occurrence=artwork.occurrences.iter().find(|(_,_,o)|matches!(o.content,OccurrenceContent::Paint(_))).unwrap().0;
-    artwork.occurrences.get_mut(occurrence).unwrap().placement=crate::LayerPlacement {mesh:Some(Arc::new(crate::MeshMap::identity(crate::Rect::from_extent([256;2]),[crate::MeshMap::MAX_CELLS;2]).unwrap())),..Default::default()};
+    artwork.occurrences.get_mut(occurrence).unwrap().offset=[-crate::offsets::MAX_OFFSET,crate::offsets::MAX_OFFSET];
     admitted_roundtrip(&artwork);
 }
 
@@ -159,13 +212,14 @@ fn material_and_ruler_precision_bounds_preserve_future_values() {
 }
 
 #[test]
-fn object_ancestors_preserve_valid_unimplemented_placement_and_reject_invalid_maps() {
+fn object_ancestors_preserve_offsets_beyond_admission_and_reject_noncanonical_offsets() {
     let bytes=include_bytes!("fixtures/shared-image-objects.capy");
-    for (placement,supported,invalid) in [
-        (json!({"translation":[8,4]}),true,false),
-        (json!({"translation":[0.25,0]}),false,false),
-        (json!({"projective":[2,0,0,0,2,0,0,0,1]}),false,false),
-        (json!({"projective":[0,0,0,0,0,0,0,0,0]}),false,true),
+    for (field,value,supported,invalid) in [
+        ("offset",json!(["8","-4"]),true,false),
+        ("offset",json!(["16777217","0"]),false,false),
+        ("placement",json!({"translation":[8,4]}),false,false),
+        ("offset",json!(["08","4"]),false,true),
+        ("offset",json!([8,4]),false,true),
     ] {
         let changed=rewrite(bytes,|manifest| {
             let objects=manifest["objects"].as_array_mut().unwrap();
@@ -173,7 +227,7 @@ fn object_ancestors_preserve_valid_unimplemented_placement_and_reject_invalid_ma
             let entries=stack["data"]["entries"].clone();
             stack["data"]["entries"]=json!([resources::reference(identity(1001))]);
             objects.push(json!({"id":identity(1000),"type":"capy.stack/1","data":{"entries":entries}}));
-            objects.push(json!({"id":identity(1001),"type":"capy.occurrence/2","data":{"content":{"stack":resources::reference(identity(1000))},"placement":placement}}));
+            objects.push(json!({"id":identity(1001),"type":"capy.occurrence/3","data":{"content":{"stack":resources::reference(identity(1000))},field:value}}));
         });
         let outcome=open(backing(changed),Default::default(),&AtomicBool::new(false)).unwrap();
         if supported {assert!(matches!(outcome,OpenOutcome::Candidate {..}),"{outcome:?}");}
@@ -242,10 +296,9 @@ fn linked_integer_mask_offsets_preserve_packages_beyond_runtime_sum_precision() 
     let bytes=serialize(&prepare(&fixture(SampleDepth::U8),true));
     for (owner,relative) in [("16777216","1"),("2147483520","128"),("-2147483648","-1")] {
         let changed=rewrite(&bytes,|manifest| {
-            let occurrence=manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["type"]=="capy.occurrence/2" && record["data"].get("mask").is_some()).unwrap();
-            occurrence["type"]="capy.occurrence/3".into();
-            let data=occurrence["data"].as_object_mut().unwrap();data.remove("placement");data.insert("offset".into(),json!([owner,"0"]));
-            let mask=data.get_mut("mask").unwrap().as_object_mut().unwrap();mask.remove("placement");mask.insert("linked".into(),true.into());mask.insert("offset".into(),json!([relative,"0"]));
+            let occurrence=manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["type"]=="capy.occurrence/3" && record["data"].get("mask").is_some()).unwrap();
+            let data=occurrence["data"].as_object_mut().unwrap();data.insert("offset".into(),json!([owner,"0"]));
+            let mask=data.get_mut("mask").unwrap().as_object_mut().unwrap();mask.insert("linked".into(),true.into());mask.insert("offset".into(),json!([relative,"0"]));
         });
         let outcome=open(backing(changed.clone()),Default::default(),&AtomicBool::new(false)).unwrap();
         let OpenOutcome::Preserved {source,preview:Some(_),..}=outcome else {panic!("exact mask offset must be preserved: {outcome:?}");};

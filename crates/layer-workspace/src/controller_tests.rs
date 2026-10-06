@@ -1413,7 +1413,7 @@ fn startup_notices_relabel_in_place_and_do_not_resurrect_dismissed_or_replaced_n
         controller.tick(&mut host.session, 1000);
         let after = host.session.state().notice.as_ref().unwrap();
         assert_eq!(after.id, before.id);
-        assert_eq!(after.action, before.action);
+        assert_eq!(after.actions.iter().map(|a| a.id).collect::<Vec<_>>(), before.actions.iter().map(|a| a.id).collect::<Vec<_>>());
         assert_ne!(after.text, before.text);
         assert_eq!(controller.manager.current().unwrap(), original);
         let copy = after.text.clone();
@@ -1422,7 +1422,7 @@ fn startup_notices_relabel_in_place_and_do_not_resurrect_dismissed_or_replaced_n
         if replace {
             host.session.notify("a later literal notice");
         } else {
-            host.session.dispatch(UiAction::Notice { id: before.id, accept: false }).unwrap();
+            host.session.dispatch(UiAction::Notice { id: before.id, accept: false, action: None }).unwrap();
         }
         let replacement = host.session.state().notice.clone();
         let korean = Localizer::shared(UiLanguage::Korean);

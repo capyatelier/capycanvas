@@ -184,12 +184,12 @@ impl<R:CanvasRenderer> UiSession<R> {
     }
     pub fn capture_session(&self)->Result<SessionCapture,String> {
         let Self {engine,state,files:_,screen_headroom:_,histogram_captions:_,histogram:_,effect_analyses:_,
-            tonal_histogram:_,auto_levels:_,targeted_curve:_,localization_generation:_,preferences_revision:_,
+            tonal_histogram:_,auto_levels:_,targeted_curve:_,localization_generation:_,renderer_generation:_,preferences_revision:_,
             panel_copy:_,customization_copy:_,command_search:_,last_toolbar_context:_,canvas_bar:_,notices:_,
-            pen:_,input_pending:_,host_requests_changed:_,pen_contact:_,rendering_suspended:_,touch:_,navigator_drag:_,
-            effect_gesture:_,property_editor:_,sdr_gesture:_,last_proof_mode:_,proof_setup_pending:_,filter_previews:_,
+            pen:_,input_pending:_,host_requests_changed:_,pen_contact:_,input_held:_,rendering_suspended:_,touch:_,navigator_drag:_,
+            effect_gesture:_,object_motion:_,property_editor:_,sdr_gesture:_,last_proof_mode:_,proof_setup_pending:_,filter_previews:_,
             eyedropper:_,region_tools:_,selection_tools:_,tonal_tools:_,painted_selections:_,selection_masks:_,
-            canvas_size:_,image_size:_,frequency_separation:_,content_bounds:_,rulers:_,retouch:_,operation:_,
+            canvas_size:_,image_size:_,frequency_separation:_,content_bounds:_,conversion:_,rulers:_,retouch:_,operation:_,objects:_,
             system_theme:_,system_accent:_,platform_prediction_available:_,logical_viewport:_,initial_fit:_,
             automatic_camera_revision:_,divider_drag:_,floating_resize:_,workspace_drag:_,workspace_tab_drag:_,
             workspace_drag_tabs:_,workspace_model_revision:_,workspace_content_revision:_,workspace_history:_,
@@ -567,6 +567,49 @@ mod tests {
         let mut clean=restore(&saved,true);assert!(!clean.state.document_file.modified);assert!(clean.state.document_file.recovered);
         assert!(clean.state.commands.iter().any(|command|command.id==CommandId::SaveDocument && command.enabled));
         save(&mut clean,true);assert!(!clean.state.document_file.modified);assert!(!clean.state.document_file.recovered);
+    }
+    /// Undo then redo `session`'s last edit, checking each step rebuilds the
+    /// renderer and moves the camera by the document's change of origin.
+    fn navigate_rebuilding(session: &mut UiSession<Recorder>, sizes: [[u32; 2]; 2], shift: [i64; 2]) {
+        for (step, (command, size)) in [(CommandId::Undo, sizes[0]), (CommandId::Redo, sizes[1])].into_iter().enumerate() {
+            let camera = session.state.camera.clone();
+            session.renderer_mut().rebuilds = 0;
+            invoke(session, command);
+            session.frame(10 + step as u64, 10 + step as u64).unwrap();
+            assert_eq!(session.engine.document().composition().size, size);
+            assert!(session.renderer_mut().rebuilds > 0, "{command:?} rebuilds the canvas");
+            let mut followed = camera.clone();
+            let sign = if command == CommandId::Undo { -1 } else { 1 };
+            followed.follow_document_origin(shift.map(|v| (sign * v) as f32));
+            assert_eq!(session.state.camera.translation, followed.translation, "{command:?} keeps the artwork in place on screen");
+        }
+    }
+    #[test]
+    fn crops_on_every_edge_and_storage_rebases_rebuild_on_undo_and_redo_after_recovery() {
+        use layer_core::{CanvasGeometry, CanvasRect};
+        let crops = [([0, 0], [900, 1000]), ([0, 0], [1000, 850]), ([70, 0], [930, 1000]), ([0, 45], [1000, 955])];
+        for (origin, size) in crops {
+            let mut source = session(Platform::Gtk); source.frame(0, 0).unwrap();
+            source.apply_canvas_geometry(&CanvasGeometry::crop(CanvasRect { origin, size }), Vec::new()).unwrap();
+            source.frame(1, 1).unwrap();
+            let shift = origin.map(i64::from);
+            for mut session in [restore(&encode(&source), true), source] {
+                navigate_rebuilding(&mut session, [[1000; 2], size], shift);
+            }
+        }
+        let mut source = session(Platform::Gtk); source.frame(0, 0).unwrap();
+        let target = source.engine.document().working.target.unwrap();
+        let mut moved = source.engine.document().clone();
+        let edit = moved.translate_target_edit(target, [300, 0]).unwrap();
+        moved.apply(edit.clone()).unwrap();
+        let mut edits = vec![edit];
+        edits.extend(moved.paint_extent_plan(&[target], source.engine.geometry_limits()).unwrap());
+        source.layer_edit(layer_core::Edit::Batch(edits)).unwrap(); source.frame(1, 1).unwrap();
+        assert_ne!(source.engine.document().target_extent(target), [1000; 2], "the paint domain grows by whole tiles");
+        assert_eq!(source.engine.document().working.view_origin, [0, 0]);
+        for mut session in [restore(&encode(&source), true), source] {
+            navigate_rebuilding(&mut session, [[1000; 2]; 2], [0, 0]);
+        }
     }
     #[test]
     fn restored_camera_centers_document_point_for_new_viewport_and_rejects_unknown_state() {

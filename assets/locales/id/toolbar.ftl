@@ -44,7 +44,7 @@ toolbar-crop = Pangkas
 
 toolbar-delete = Hapus
 
-toolbar-delete-cropped = Hapus Bagian Terpangkas
+toolbar-delete-cropped = Hapus Lukisan Terpangkas
 
 toolbar-deselect = Batalkan Seleksi
 

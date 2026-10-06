@@ -72,3 +72,45 @@ fn cancelled_deferred_object_drain_keeps_output_unpublished() {
     assert!(matches!(pollster::block_on(scene.drain_exact_objects_async(r)), Err(GpuRasterError::Color(message)) if message == "Snapshot capture cancelled"));
     assert_eq!(reader.control.output_rows(), 0);
 }
+
+fn photo_objects(extent: [u32; 2], objects: &[([u32; 2], [f64; 6])]) -> Document {
+    let mut artwork = Artwork::new(extent).unwrap();
+    let children = objects.iter().map(|&(size, affine)| {
+        let image = layer_core::color::source::rgba8_source(size, |x, y| [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) % 256) as u8, 255]);
+        let mut object = ImageObject::new(layer_core::authored::Image::new(image), "Image");
+        object.affine = Affine64(affine);
+        artwork.objects.insert(PortableId::random(), object).unwrap()
+    }).collect();
+    let collection = artwork.object_layers.insert(PortableId::random(), ObjectLayer {children}).unwrap();
+    let owner = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Objects(collection), "Images")).unwrap();
+    let stack = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
+    Document::from_artwork(artwork).unwrap()
+}
+
+#[test]
+fn whole_document_object_previews_drain_each_band_in_a_few_submissions() {
+    let doc = photo_objects([2048, 1536], &[([2048, 1536], [1., 0., 0., 1., 0., 0.]), ([512, 384], [1., 0., 0., 1., 700., 500.])]);
+    let mut reader = capture(doc).unwrap();
+    let preview = reader.preview_document([512; 2], layer_core::color::RgbSpace::Srgb).unwrap();
+    assert_eq!(preview.extent, [512, 384]);
+    let drains = reader.renderer.metrics.object_drain_submissions;
+    assert!(drains <= 24, "each of 24 band captures samples its object pages together: {drains} submissions");
+}
+
+#[test]
+fn nearest_object_captures_finish_while_their_coordinates_are_prepared() {
+    let mut doc = photo_objects([1024, 768], &[([400, 300], [2.5, 0.3, -0.3, 2.5, 30., 10.])]);
+    let object = doc.artwork.objects.iter().next().unwrap().0;
+    doc.artwork.objects.get_mut(object).unwrap().interpolation = ImageInterpolation::Nearest;
+    let doc = Document::from_artwork(doc.artwork).unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let mut reader = capture(doc).unwrap();
+        let _ = sender.send(reader.read_region([0, 0, 1024, 768]).map(|pixels| (pixels.len(), reader.renderer.metrics.object_drain_submissions)));
+    });
+    let (pixels, drains) = receiver.recv_timeout(std::time::Duration::from_secs(120)).expect("a Nearest object capture makes progress").unwrap();
+    worker.join().unwrap();
+    assert_eq!(pixels, 1024 * 768);
+    assert!(drains <= 64, "coordinate preparation waits without resubmitting: {drains} submissions");
+}

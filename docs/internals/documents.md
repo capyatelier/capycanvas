@@ -16,18 +16,19 @@ is attached.
 
 [`Document`](../../crates/layer-core/src/lib.rs) owns typed authored stores and
 working state. A stack owns ordered occurrence handles. An occurrence owns its
-name, placement and composition properties, and refers to a paint source, child
-stack, effect application or saved selection. Paper is an ordinary Solid Color
+name, integer offset and composition properties, and refers to a paint source,
+image layer, child stack, effect application or saved selection. Paper is an ordinary Solid Color
 effect occurrence. Paint and coverage sources
 own immutable raster roots; masks bind a coverage source to an occurrence.
-Working selection and explicit `SourceTarget` belong to working state.
+Working selection, image selection, the canvas view origin and explicit
+`SourceTarget` belong to working state.
 [Authored records](../reference/authored-model.md) define these ownership rules.
 
 `SceneView` lends those records and their derived membership index directly to
 the existing stack evaluator. `SceneSnapshot` retains immutable roots, scope and
 evaluation context for previews, bakes, export and source-aware analysis.
 A raw source scope reads source pixels independently of occurrence opacity,
-visibility or blending, while preserving the source's placed geometry.
+visibility or blending, while preserving the source's position.
 
 With a filter selected, a stroke paints the first artwork layer below it in the
 same group, or its attached effect owner. Groups, maskless generators, locked bases and
@@ -39,25 +40,25 @@ Paper. The fill starts without a mask and follows ordinary layer rules: it can
 be renamed, moved, grouped, duplicated, hidden, deleted or merged. Add a mask to
 paint on it. Its thumbnail shows its color and alpha over the checkerboard.
 
-Paint and photo layers retain a `LayerPlacement`: one outer homography, an
-optional shared `MeshMap`, and interpolation. `Document::layer_geometry` returns
-the complete map in document coordinates, including a linked mask's premap.
-Pixel writers use `validate_content_write` and `affine_edit_transform`; a
-nonlinear destination requires [Apply Transform to Pixels](../ui/image-commands.md#apply-a-layer-transform-to-pixels).
-Read consumers use complete placed geometry. Explicit local extents stay fixed
-when a capture grows its virtual canvas; editable affine paint grows through the
-shared extent planner when the real canvas changes.
+Paint layers, image layers and groups are positioned only by signed integer
+offsets that accumulate through their parents; a mask adds its own offset, plus
+its owner's when linked. Pixel writers use `validate_content_write` and the
+target's integer offset. Explicit local extents stay fixed when a capture grows
+its virtual canvas; paint grows through the shared extent planner when the real
+canvas changes.
 
-`retained_transform_targets` normalizes selected roots and checks every descendant
-before preview. `retained_transform_edit` composes one document-space delta into
-paint placement and linked group masks, without moving independent masks, group offsets or ordinary
-adjustment coordinates. Apply creates one history edit; canceled and unchanged
-transforms preserve both history directions. Mesh control roots are shared across
-document and history, charged once by the existing resource accounting.
+`layer_move_targets` normalizes selected roots, and `move_layers_edit` moves them
+by whole pixels in one history edit; masks follow the linkage rule. Other paint
+transforms are destructive: `exact_layer_transform_plan` permutes samples for
+exact flips and quarter turns, and `layer_transform_plan` resamples the current
+content once, together with a linked mask, on a bounded worker job. A Distort or
+Warp only needs to be valid over the content it moves. Groups and several layers
+move by whole pixels only. Canceled and unchanged transforms preserve both
+history directions.
 
 Effect layers hold filters in the layer stack. An adjustment transforms the
 combined image below it within its group. An attached adjustment instead processes
-one paint layer or isolated group; local effects run bottom-to-top after the
+one paint layer, image layer or isolated group; local effects run bottom-to-top after the
 owner's mask and before its outer clipping. Clipped content shares the first
 eligible unclipped base below it, including that base's completed effects.
 Hidden effects bypass processing without changing owners. An unattached
@@ -127,8 +128,8 @@ Merge Down, Merge Group, Merge Visible, Flatten Image and Stamp Visible, in the
 Layer menu and the layer's menu, replace layers with one new paint layer in one
 undo step ([`merge.rs`](../../crates/layer-core/src/merge.rs)). The new layer has
 full opacity, Normal blending and no mask. It takes the place, name and clipping
-of the layer it replaces, and references move to it. Placed photos become
-ordinary document pixels.
+of the layer it replaces, and references move to it. Image layers and placed
+photos become ordinary document pixels.
 
 - **Merge Down** merges the active layer into the artwork layer below it in its
   group. Both must be visible, unlocked and Normal, and the layer below must hold
@@ -146,19 +147,46 @@ ordinary document pixels.
 - **Merge Visible** composites the visible layers over transparency. Hidden
   layers stay; hidden layers clipped to a merged base are released. Visible
   fills, including Paper, participate in the composite.
-- **Flatten Image** does the same, then discards hidden layers and pixels
-  outside the canvas. When it would discard hidden layers, it asks first through
-  the canvas notice.
+- **Flatten Image** does the same, then discards hidden layers. When it would
+  discard hidden layers, it asks first through the canvas notice.
 - **Stamp Visible** adds the visible image as a new top layer and keeps every
   layer.
 
 Locks block every merge except Stamp Visible, and a group that holds Selection
 Layers must give them up first. A merge is refused with a reason when its result
 would exceed the 1 GiB publication limit or its undo step would not fit the
-history budget. Merge Down, Merge Group and Merge Visible keep pixels outside the
-canvas: the result's extent is the union of the merged layers' extents, on whole
-tiles from the canvas origin. A merge that includes an effect layer covers the
-canvas only, because effects are defined over the canvas.
+history budget. Every merge keeps pixels outside the canvas: the result covers
+everything the merged layers can draw, including images placed beyond it and the
+reach of their filters, on whole tiles from the canvas origin, and also the
+canvas when that still fits, so the result can be painted across it. Fills reach
+the canvas they are defined on; filters that resample the whole image stay
+within what they resample. A merge whose filter reaches too far to represent is
+refused rather than cut off at the canvas.
+
+### Image layers and paint
+
+**Convert to Image Layer** turns the active paint layer into an image layer
+holding one image of its current appearance, painted edits and settled wet paint
+included, at the same place. The layer keeps its name, opacity, blending, mask,
+clipping and filters. An untouched photo keeps its own image and color
+interpretation; edited paint becomes an image in the document's color.
+**Rasterize Layer** turns the active image layer back into paint: its visible
+images, at the document's pixel grid, including those beyond the canvas. The
+layer's mask, filters, opacity and blending stay on the layer and apply once,
+as before. A hidden layer rasterizes the content it would show. On an image layer,
+**Rasterize and Apply Mask** replaces Apply Mask and bakes the mask into the
+pixels too. Each is one undo step and refuses, changing nothing, when the result
+would exceed the editor's limits ([`conversions.rs`](../../crates/layer-core/src/conversions.rs)).
+
+Image layers are read like other artwork: they can be references, clipping
+bases, Select Layer Opacity sources, Wand and Fill Editing sources, merged, and
+copied as pixels with a selection tool. Brushes, fills, Fill Selection, Clear
+Layer, clearing and cutting pixels, Cut Selection to Layer and Frequency
+Separation need paint: on an image layer they change nothing and raise one notice
+offering Add Mask (or Edit Mask), New Paint Layer and Rasterize Layer
+([`notices.rs`](../../crates/layer-ui/src/notices.rs)).
+Repair Source Profile on an image layer repairs the selected image only; other
+layers and images that share its pixels keep their interpretation.
 
 ### Retouching layers
 

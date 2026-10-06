@@ -1,6 +1,6 @@
 use layer_render::CanvasRenderer;
 use crate::{WgpuRasterizer, snapshot::{CaptureControl, SnapshotGpu}};
-use layer_core::{ArtworkSample, ArtworkSampleRequest, ArtworkSource, Document, DocumentNames, Point};
+use layer_core::{ArtworkSample, ArtworkSampleRequest, ArtworkSource, Document, DocumentNames};
 use layer_core::color::{DocumentColor, SampleDepth};
 use layer_core::authored::*;
 use std::sync::Arc;
@@ -122,23 +122,23 @@ fn artwork_sample_distinguishes_outside_transparency_and_cancelled_capture() {
 }
 
 #[test]
-fn artwork_sample_layer_content_ignores_mask_opacity_and_places_pixels() {
+fn artwork_sample_layer_content_ignores_mask_opacity_and_offsets_pixels() {
     let mut doc = document([20, 20], |x, _| [x as f32 / 20., 0.25, 2., 1.]);
     let owner=paint_occurrence(&doc);let id=SourceTarget::Paint(paint_id(&doc));
     let coverage=doc.artwork.coverage.next_handle();
-    let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,[20,20],Point::default());mask.source.default_coverage=0.5;
+    let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,[20,20], [0, 0]);mask.source.default_coverage=0.5;
     doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap();
     let occurrence=doc.artwork.occurrences.get_mut(owner).unwrap();occurrence.opacity=0.25;occurrence.mask=Some(mask.use_);
-    occurrence.placement=layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(Point {x:3.,y:2.}));
+    occurrence.offset=[3,2];
     close(sample(&doc, ArtworkSource::Source(id), [8., 5.], 1).unwrap(), [0.25, 0.25, 2., 1.]);
     close(sample(&doc, ArtworkSource::Visible, [8., 5.], 1).unwrap(), [0.25, 0.25, 2., 0.125]);
     doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().size=[64;2];
-    let group=add_group(&mut doc,vec![owner],0);doc.artwork.occurrences.get_mut(group).unwrap().translation=Point {x:17.,y:23.};
+    let group=add_group(&mut doc,vec![owner],0);doc.artwork.occurrences.get_mut(group).unwrap().offset= [17, 23];
     let occurrence=doc.artwork.occurrences.get_mut(owner).unwrap();occurrence.visible=false;occurrence.opacity=0.4;occurrence.blend=layer_core::LayerBlend::Multiply;occurrence.attachment = layer_core::Attachment::Clip;
     let mut raw=gpu().capture_scene(doc.snapshot(),SceneScope::Raw(id),CaptureControl::default()).unwrap();
     let pixel=raw.read_region([25,28,1,1]).unwrap()[0];
     for (actual,expected) in pixel.into_iter().zip([0.25,0.25,2.,1.]) {assert!((actual-expected).abs()<2e-5,"raw hidden source {pixel:?}");}
-    assert_eq!(doc.scene().target_offset(id),Point {x:17.,y:23.});
+    assert_eq!(doc.scene().target_offset(id),[20,25]);
 }
 
 #[test]
@@ -316,12 +316,8 @@ fn artwork_sample_nonlinear_layer_content_returns_document_primary_linear_color(
     for space in [layer_core::color::RgbSpace::Srgb, layer_core::color::RgbSpace::DisplayP3, layer_core::color::RgbSpace::AdobeRgb, layer_core::color::RgbSpace::ProPhoto] {
         let mut doc = document_in([20, 20], space, |x, _| [x as f32 / 40., 0.25, 1., 0.5]);
         let owner=paint_occurrence(&doc);let id=SourceTarget::Paint(paint_id(&doc));
-        let map = layer_core::Projective::rect_to_quad(layer_core::Rect::from_extent([20, 20]),
-            [[0., 0.], [24., 0.], [18., 20.], [0., 20.]].map(|[x, y]| Point { x, y })).unwrap();
-        doc.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::from_projective(map);
-        let source = map.inverse().unwrap().map(Point { x: 8.5, y: 8.5 }).unwrap();
-        close(sample(&doc, ArtworkSource::Source(id), [8., 8.], 1).unwrap(),
-            [f64::from(source.x - 0.5) / 20., 0.5, 2., 0.5]);
+        doc.artwork.occurrences.get_mut(owner).unwrap().offset = [3, 0];
+        close(sample(&doc, ArtworkSource::Source(id), [8., 8.], 1).unwrap(), [5. / 20., 0.5, 2., 0.5]);
     }
 }
 

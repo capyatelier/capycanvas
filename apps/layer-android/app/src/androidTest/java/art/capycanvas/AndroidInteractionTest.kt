@@ -188,6 +188,120 @@ class AndroidInteractionTest {
         finally { if (::scenario.isInitialized) scenario.close() }
     }
 
+    @Test fun imageRowsTouchPickingMenusAndRefusalActions() {
+        fun image(name: String, color: Int, width: Int, height: Int) = java.io.File(activity.cacheDir, name).also { file ->
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            try { bitmap.eraseColor(color); file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
+        }
+        fun rows() = state().array("layers").objects()
+        fun imageLayer() = rows().single { it.getInt("object_count") > 0 }
+        fun images() = imageLayer().array("objects").objects()
+        fun imageRow(id: Long) = images().single { it.getLong("id") == id }
+        fun menuItem(label: String): Offset {
+            var result: Offset? = null
+            waitFor("menu item $label") {
+                result = findNode(hasLabel(label))?.let { (root, node) ->
+                    val origin = IntArray(2); val base = IntArray(2)
+                    root.view.getLocationOnScreen(origin); owner.view.getLocationOnScreen(base)
+                    node.boundsInRoot.center + Offset((origin[0] - base[0]).toFloat(), (origin[1] - base[1]).toFloat())
+                }
+                result != null
+            }
+            return result!!
+        }
+        fun menuLabel(id: Long, op: String) = kotlinx.coroutines.runBlocking { host.withNative { JSONObject(Native.query(it, obj("type" to "object_menu", "id" to id).toString())) } }
+            .array("sections").values().flatMap { (it as JSONArray).objects() }.first { it.optJSONObject("action")?.optJSONObject("action")?.optString("op") == op }.getString("label")
+        fun menuTap(at: Offset) { popupInput = true; try { tap(at) } finally { popupInput = false }; settle() }
+        fun hold(at: Offset) { event(MotionEvent.ACTION_DOWN, at); SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout() + 250L); event(MotionEvent.ACTION_UP) }
+        fun drag(from: Offset, to: Offset) {
+            event(MotionEvent.ACTION_DOWN, from)
+            for (step in 1..10) { SystemClock.sleep(16); event(MotionEvent.ACTION_MOVE, from + (to - from) * (step / 10f)) }
+            event(MotionEvent.ACTION_UP, to); settle()
+        }
+        fun twoFingerPan(first: Offset, second: Offset, delta: Offset) {
+            val started = SystemClock.uptimeMillis()
+            val properties = Array(2) { index -> MotionEvent.PointerProperties().apply { id = index; toolType = MotionEvent.TOOL_TYPE_FINGER } }
+            fun send(action: Int, count: Int, shift: Offset) {
+                val coords = Array(count) { index -> MotionEvent.PointerCoords().apply { val p = (if (index == 0) first else second) + shift; x = p.x; y = p.y; pressure = .7f } }
+                val motion = MotionEvent.obtain(started, SystemClock.uptimeMillis(), action, count, properties.copyOf(count).requireNoNulls(), coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                try { instrumentation.runOnMainSync { owner.view.dispatchTouchEvent(motion) } } finally { motion.recycle() }
+                SystemClock.sleep(16)
+            }
+            send(MotionEvent.ACTION_DOWN, 1, Offset.Zero)
+            send(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, Offset.Zero)
+            for (step in 1..10) send(MotionEvent.ACTION_MOVE, 2, delta * (step / 10f))
+            send(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, delta)
+            send(MotionEvent.ACTION_UP, 1, delta)
+            settle()
+        }
+        val red = image("rows-red.png", android.graphics.Color.RED, 300, 200)
+        val blue = image("rows-blue.png", android.graphics.Color.BLUE, 200, 160)
+        for (theme in listOf("light", "dark")) {
+            tool = MotionEvent.TOOL_TYPE_FINGER
+            host.newDocument(800, 600)
+            action(obj("type" to "set_theme", "theme" to theme))
+            if (group("layers").getString("active") != "layers") action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
+            for (file in listOf(red, blue)) { host.importImage(file); action(obj("type" to "invoke", "command" to "apply_transform")) }
+            val layer = imageLayer().getLong("id")
+            assertEquals("Second placement enters the active image layer", 2, imageLayer().getInt("object_count"))
+            if (!imageLayer().getBoolean("expanded")) tap(bounds("layer-expand-$layer").center)
+            waitFor("expanded image rows") { imageLayer().getBoolean("expanded") && images().size == 2 }
+            val (front, back) = images().map { it.getLong("id") }
+            waitFor("child rows") { shown("image-object-row-$front") && shown("image-object-row-$back") }
+            waitFor("image row previews", 30_000) { exists("image-object-thumbnail-$front") && exists("image-object-thumbnail-$back") }
+            assertEquals("Child rows keep layer row height", bounds("layer-row-$layer").height, bounds("image-object-row-$front").height, 1f)
+            tap(bounds("image-object-row-$back").center)
+            waitFor("row tap selects the obscured image") { imageRow(back).getBoolean("selected") && !imageRow(front).getBoolean("selected") }
+            tap(bounds("image-object-eye-$front").center)
+            waitFor("image hidden") { !imageRow(front).getBoolean("visible") }
+            tap(bounds("image-object-eye-$front").center)
+            waitFor("image shown") { imageRow(front).getBoolean("visible") }
+            screenshot("validation/image-rows/rows-$theme.png")
+            hold(bounds("image-object-row-$back").center)
+            val duplicate = menuItem(menuLabel(back, "duplicate"))
+            screenshot("validation/image-rows/menu-$theme.png")
+            menuTap(duplicate)
+            waitFor("duplicate adds an image") { images().size == 3 }
+            val copy = images().map { it.getLong("id") }.single { it != front && it != back }
+            waitFor("copy row") { shown("image-object-row-$copy") }
+            hold(bounds("image-object-row-$copy").center)
+            menuTap(menuItem(menuLabel(copy, "delete")))
+            waitFor("delete removes the copy") { images().size == 2 }
+            val grip = bounds("image-object-row-$back").let { Offset(it.right - 8 * density, it.center.y) }
+            drag(grip, bounds("image-object-row-$front").let { Offset(it.center.x, it.top + 4 * density) })
+            waitFor("drag reorders within the layer") { images().map { it.getLong("id") } == listOf(back, front) }
+            action(obj("type" to "invoke", "command" to "undo"))
+            waitFor("reorder undo") { images().map { it.getLong("id") } == listOf(front, back) }
+            action(obj("type" to "invoke", "command" to "move"))
+            action(obj("type" to "object", "action" to obj("op" to "deselect")))
+            waitFor("deselected") { images().none { it.getBoolean("selected") } }
+            tap(documentPoint(400.0, 300.0))
+            host.awaitMain("touch selects the frontmost image", 10_000, { "images=${images()} active=${state().getJSONObject("layer_tools").optJSONObject("editing_layer")?.optLong("id")} layer=$layer camera=${state().getJSONObject("camera")} tap=${documentPoint(400.0, 300.0)}" }) { imageRow(front).getBoolean("selected") }
+            val camera = state().getJSONObject("camera").getJSONArray("translation").toString()
+            twoFingerPan(documentPoint(40.0, 40.0), documentPoint(40.0, 140.0), Offset(120 * density, 60 * density))
+            waitFor("empty two-finger touch navigates") { state().getJSONObject("camera").getJSONArray("translation").toString() != camera }
+            assertEquals("Navigation keeps the image selection", true, imageRow(front).getBoolean("selected"))
+            screenshot("validation/image-rows/picked-$theme.png")
+            val before = rows().size
+            action(obj("type" to "invoke", "command" to "brush"))
+            waitFor("brush ready", 60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+            tool = MotionEvent.TOOL_TYPE_STYLUS
+            drag(documentPoint(300.0, 250.0), documentPoint(420.0, 330.0))
+            waitFor("image refusal offers actions") { exists("canvas-notice-action-new_paint_layer") && exists("canvas-notice-action-add_mask") && exists("canvas-notice-action-rasterize_layer") }
+            screenshot("validation/image-rows/refusal-$theme.png")
+            tool = MotionEvent.TOOL_TYPE_FINGER
+            tap(bounds("canvas-notice-action-new_paint_layer").center)
+            waitFor("new paint layer above the image layer") { rows().size == before + 1 }
+            val created = rows().first { it.getBoolean("editing") }.getLong("paint_revision")
+            SystemClock.sleep(500); settle()
+            assertEquals("The refused stroke is not replayed", created, rows().first { it.getBoolean("editing") }.getLong("paint_revision"))
+            val ink = documentPoint(360.0, 290.0)
+            val pixel = onScreen { image, origin -> image.getPixel((ink.x + origin[0]).toInt(), (ink.y + origin[1]).toInt()) }
+            assertTrue("The image stays visible where the refused stroke passed", android.graphics.Color.blue(pixel) > 200 && android.graphics.Color.red(pixel) < 60)
+            assertNull(host.actionError)
+        }
+    }
+
     @Test fun longPressRetainsEveryWorkspaceDragSource() {
         for (pointer in pointerTools) {
             tool = pointer
@@ -1930,18 +2044,18 @@ class AndroidInteractionTest {
                     val before = notice()?.optLong("id") ?: 0L
                     onCanvas { tap(point) }
                     waitFor("$name Wand offers a reference", 5_000) {
-                        (notice()?.optLong("id") ?: 0L) > before && notice()!!.optJSONObject("action") != null && shown("canvas-notice-action")
+                        (notice()?.optLong("id") ?: 0L) > before && (notice()!!.optJSONArray("actions")?.length() ?: 0) > 0 && shown("canvas-notice-action-use_reference")
                     }
                     theme?.let { captureCanvasBar("wand-$it", "canvas-notice") }
                 }
                 val offer = notice()!!
                 assertEquals("This tool samples reference layers, and none is marked", offer.getString("text"))
                 assertNotNull("$name the notice shows the core's text", textBounds(offer.getString("text")))
-                val label = offer.getJSONObject("action").getString("label")
+                val label = offer.getJSONArray("actions").getJSONObject(0).getString("label")
                 assertNotNull("$name the notice shows its action", textBounds(label))
                 val below = layers().first { "Use ${it.getString("label")} as Reference" == label }.getLong("id")
                 modeless("$name Wand notice")
-                tap(bounds("canvas-notice-action").center)
+                tap(bounds("canvas-notice-action-use_reference").center)
                 waitFor("$name the action marks the layer below as a reference", 5_000) {
                     notice() == null && !shown("canvas-notice") && layers().first { it.getLong("id") == below }.getBoolean("reference")
                 }
@@ -1958,7 +2072,7 @@ class AndroidInteractionTest {
                 onCanvas { drag(point, point + shift) }
                 waitFor("$name Move on a locked layer explains", 5_000) { notice()?.optString("text") == "The active layer is locked" && shown("canvas-notice") }
                 val raised = bounds("canvas-notice")
-                assertTrue("$name the refusal has no action", notice()!!.isNull("action") && !exists("canvas-notice-action"))
+                assertTrue("$name the refusal has no action", notice()!!.getJSONArray("actions").length() == 0 && !exists("canvas-notice-action-use_reference"))
                 modeless("$name Move notice")
                 waitFor("$name the selection bar returns beside the notice", 3_000) { shown("canvas-action-bar") }
                 val bar = bounds("canvas-action-bar"); val bubble = bounds("canvas-notice")

@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{Affine, ContentBoundsRequest, ContentScope, Point, Rect};
+use layer_core::{ContentBoundsRequest, ContentScope, Rect};
 
 impl SnapshotGpu {
     pub fn bounds_source_scene(request:&ContentBoundsRequest)->Result<Arc<SceneSnapshot>,String> {
@@ -35,22 +35,21 @@ impl SnapshotGpu {
             let view = scene.view();
             let owner = view.source_owner(target).ok_or("The bounds target was removed")?;
             selection = request.selection.as_ref().map(|s| {
-                s.transformed(view.target_geometry(target).as_affine().and_then(Affine::inverse).ok_or("Invalid layer placement")?)
-                    .map(Arc::new).map_err(|e| e.to_string())
+                Ok::<_, String>(Arc::new(s.translated(layer_core::offsets::point(view.target_offset(target).map(|v| -v)))))
             }).transpose()?;
             let extent = view.target_extent(target);
             let occurrence = scene.artwork.occurrences.get_mut(owner).unwrap();
-            occurrence.translation = Point::default(); occurrence.placement = layer_core::LayerPlacement::IDENTITY;
+            occurrence.offset = [0; 2];
             occurrence.attachment = layer_core::Attachment::None; occurrence.visible = true; occurrence.opacity = 1.;
             if matches!(target, SourceTarget::Paint(_)) { occurrence.mask = None; }
             else if let Some(mask) = &mut occurrence.mask {
-                mask.placement = layer_core::Projective::IDENTITY; mask.translation = Point::default(); mask.linked = false; mask.enabled = true;
+                mask.offset = [0; 2]; mask.linked = false; mask.enabled = true;
             }
             let mut parent = scene.view().parent(owner);
             while let Some(handle) = parent {
                 parent = scene.view().parent(handle);
                 let occurrence = scene.artwork.occurrences.get_mut(handle).unwrap();
-                occurrence.translation = Point::default(); occurrence.placement = layer_core::LayerPlacement::IDENTITY;
+                occurrence.offset = [0; 2];
                 occurrence.visible = true;
             }
             scene.artwork.compositions.get_mut(scene.artwork.root).unwrap().size = extent;
@@ -80,9 +79,8 @@ impl SnapshotGpu {
                 if !view.visible(handle) || occurrence.opacity <= 0. { continue; }
                 let next = match occurrence.content {
                     OccurrenceContent::Paint(h) => {
-                        let target = SourceTarget::Paint(h); let transform = view.target_geometry(target);
-                        let copied = transform.as_affine().is_some_and(|a| a.0[..4] == [1.,0.,0.,1.] && a.0[4..].iter().all(|v| v.fract() == 0.));
-                        transform.forward_bounds(local_hull(view, target)?.outset(if copied {0.} else {transform.placement.interpolation.support() as f32}))
+                        let target = SourceTarget::Paint(h);
+                        local_hull(view, target)?.translated(layer_core::offsets::point(view.target_offset(target)))
                             .outset(view.paint(h).unwrap().raster.wait_data()?.watercolor.map_or(0., |style| 2. * style.edge_width.clamp(1.,16.)))
                     },
                     OccurrenceContent::Objects(_) => scene::Scene::object_content_bounds(view,handle).to_rect(),

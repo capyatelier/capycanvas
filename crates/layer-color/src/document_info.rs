@@ -22,7 +22,7 @@ pub struct DocumentInfo {
 struct SourceInfo {
     name: String,
     extent: [u32; 2],
-    policy: layer_core::authored::PaintBasePolicy,
+    policy: Option<layer_core::authored::PaintBasePolicy>,
     interpretation: SourceInterpretation,
 }
 impl DocumentInfo {
@@ -37,10 +37,10 @@ impl DocumentInfo {
             sources: scene.order().iter().flat_map(|handle| {
                 let occurrence=scene.occurrence(*handle).unwrap();
                 if let Some(base)=scene.paint_source(*handle).and_then(|paint|paint.base.as_ref()) {
-                    return vec![SourceInfo {name:occurrence.name.to_string(),extent:base.image.extent,policy:base.policy,interpretation:base.image.interpretation.clone()}];
+                    return vec![SourceInfo {name:occurrence.name.to_string(),extent:base.image.extent,policy:Some(base.policy),interpretation:base.image.interpretation.clone()}];
                 }
                 scene.object_layer(*handle).into_iter().flat_map(|layer|layer.children.iter()).filter_map(|handle|scene.object(*handle)).map(|object|SourceInfo {
-                    name:object.name.to_string(),extent:object.image.extent,policy:layer_core::authored::PaintBasePolicy::SourceProfile,interpretation:object.image.interpretation.clone(),
+                    name:object.name.to_string(),extent:object.image.extent,policy:None,interpretation:object.image.interpretation.clone(),
                 }).collect()
             }).collect(),
         }
@@ -79,7 +79,8 @@ pub struct InspectedDocumentInfo {
 pub struct InspectedSourceInfo {
     pub name: String,
     pub extent: [u32; 2],
-    pub policy: layer_core::authored::PaintBasePolicy,
+    /// The paint layer's use of its base, or none for a placed image.
+    pub policy: Option<layer_core::authored::PaintBasePolicy>,
     pub channels: layer_core::color::source::SourceChannels,
     pub bits: u8,
     pub profile_description: Option<String>,

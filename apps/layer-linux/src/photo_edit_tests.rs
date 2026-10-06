@@ -1,5 +1,5 @@
 //! Photo-editing journeys with actual Mutter delivery: a fill layer from
-//! Filter › Fill, a Liquify Pinch stroke, and Revert to Original Photo.
+//! Filter › Fill, a Liquify Pinch stroke, and Discard Paint Edits.
 use super::*;
 use layer_core::{Document, LayerKind};
 use layer_core::authored::OccurrenceHandle;
@@ -117,8 +117,9 @@ fn native_filter_fill_layers_and_selection_masks() {
         let doc = document(&w);
         let fill = doc.working.occurrence.unwrap();
         assert_eq!(doc.scene().effect(fill).unwrap().program.id.as_ref(), "solid_color");
-        assert!(doc.scene().mask(fill).unwrap().1.initial.is_some(), "the selection becomes its mask");
         assert!(doc.working.selection.is_none());
+        until(|| document(&w).scene().mask(fill).unwrap().1.raster.try_data().is_some_and(|data| data.is_ok_and(|data| !data.tiles.is_empty())),
+            "the selection becomes its mask's pixels");
         assert_eq!(doc.scene().position(fill).unwrap() + 1, doc.scene().position(base).unwrap());
         pump(300);
         let inside = shown(&w, [(x0 + x1) * 0.5, (y0 + y1) * 0.5]);
@@ -183,7 +184,7 @@ fn native_liquify_pinch_stroke_on_a_pattern() {
 
 #[test]
 #[ignore = "isolated compositor, GPU and native mouse delivery"]
-fn native_revert_to_original_after_painting_on_a_placed_photo() {
+fn native_discard_paint_edits_after_painting_on_a_photo() {
     let (_app, w, mut input) = start("art.capycanvas.RevertPhoto");
     let (width, height) = {
         let doc = document(&w);
@@ -201,8 +202,8 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     let id: OccurrenceHandle = document(&w).working.occurrence.unwrap();
     let original = document(&w).scene().paint_source(id).unwrap().clone();
     assert!(original.base.as_ref().is_some_and(|s| s.is_original()));
-    let revert = |w: &Workspace| state(w).commands.into_iter().find(|c| c.id == CommandId::RevertToOriginal).unwrap();
-    assert_eq!(revert(&w).disabled_reason.as_deref(), Some("This photo has no edits"));
+    let discard = |w: &Workspace| state(w).commands.into_iter().find(|c| c.id == CommandId::DiscardPaintEdits).unwrap();
+    assert_eq!(discard(&w).disabled_reason.as_deref(), Some("This photo has no edits"));
     w.dispatch(UiAction::Invoke { command: CommandId::Pen });
     w.dispatch(UiAction::SetColor { rgba: [0.9, 0.05, 0.6, 1.] });
     w.dispatch(UiAction::SetBrushSize { value: 80. });
@@ -211,12 +212,12 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     until(|| !document(&w).scene().paint_source(id).unwrap().raster.is_empty(), "painting over the photo creates edits");
     let painted_doc = document(&w);
     let painted = painted_doc.scene().paint_source(id).unwrap().clone();
-    until(|| revert(&w).enabled, "Revert to Original Photo is enabled once the photo has edits");
+    until(|| discard(&w).enabled, "Discard Paint Edits is enabled once the photo has edits");
     let stroke = [w_ * 0.5, h_ * 0.5];
     pump(300);
     let before = shown(&w, stroke);
-    choose(&w, &mut input, "Edit", &["Revert to Original Photo"]);
-    until(|| document(&w).scene().paint_source(id).unwrap().raster.is_empty(), "Revert discards the edits");
+    choose(&w, &mut input, "Edit", &["Discard Paint Edits"]);
+    until(|| document(&w).scene().paint_source(id).unwrap().raster.is_empty(), "Discard Paint Edits removes the edits");
     let reverted = document(&w).scene().paint_source(id).unwrap().clone();
     assert!(std::sync::Arc::ptr_eq(reverted.base.as_ref().unwrap().image.storage(), painted.base.as_ref().unwrap().image.storage()));
     assert_eq!(document(&w).scene().occurrence(id), painted_doc.scene().occurrence(id));
@@ -224,7 +225,7 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     let after = shown(&w, stroke);
     assert_ne!(before, after, "the stroke disappears: {before:?} {after:?}");
     assert!(after[2] < 120, "the photo shows again: {after:?}");
-    assert_eq!(revert(&w).disabled_reason.as_deref(), Some("This photo has no edits"));
+    assert_eq!(discard(&w).disabled_reason.as_deref(), Some("This photo has no edits"));
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| document(&w).scene().paint_source(id).unwrap().raster == painted.raster, "one undo step brings the edits back");
     input.finish();
@@ -280,7 +281,7 @@ fn native_canvas_size_from_the_top_left_anchor_then_undo() {
     apply_canvas_size(&w, &mut input);
     let grown = document(&w);
     assert_eq!(grown.composition().size, [2600, before.composition().size[1]]);
-    assert_eq!(grown.scene().occurrence(paint).unwrap().translation, before.scene().occurrence(paint).unwrap().translation);
+    assert_eq!(grown.scene().occurrence(paint).unwrap().offset, before.scene().occurrence(paint).unwrap().offset);
     assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
     input.perform(json!([
         {"key": 0xffe3, "down": true}, {"key": 0x7a, "down": true},

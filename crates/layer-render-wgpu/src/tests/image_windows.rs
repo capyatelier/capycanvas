@@ -118,9 +118,9 @@ fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
                 occurrence.opacity = 0.63;
                 occurrence.attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
             }
-            let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, Point { x: 7., y: -9. });
+            let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, [7, -9]);
             mask.source.default_coverage = 0.;
-            mask.source.initial = Some(Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 760., y: 99. }, Point { x: 440., y: 533. }]).unwrap());
+            crate::test_support::materialize_mask(&mut mask.source, Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 760., y: 99. }, Point { x: 440., y: 533. }]).unwrap(), document.composition().color);
             document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
             document.artwork.occurrences.get_mut(first).unwrap().mask = Some(mask.use_);
             let inside = effect(&mut document, true, false);
@@ -211,18 +211,18 @@ fn retained_off_frame_source_blurs_into_frame_and_matches_larger_reference() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 };
     let source = crate::test_support::depth_source([64, 32], SampleDepth::F32, color.space, 1 << 20,
         |x, y| if (20..32).contains(&x) && (7..25).contains(&y) { [0.7, 0.2, 0.1, 1.] } else { [0.; 4] });
-    let make = |extent, translation| {
+    let make = |extent, offset| {
         let mut doc = crate::tests::native_effects::empty_document(extent, color);
         let mut blur = EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
         blur.set("sigma", layer_core::EffectValue::Number(4.)).unwrap();
         crate::tests::native_effects::insert_effect(&mut doc, blur);
         let paint = crate::tests::native_effects::insert_source(&mut doc, "retained source", source.clone());
-        doc.artwork.occurrences.get_mut(paint).unwrap().translation = translation;
+        doc.artwork.occurrences.get_mut(paint).unwrap().offset = offset;
         crate::tests::native_effects::refresh(&mut doc);
         doc
     };
-    let document = make([32, 32], Point { x: -32., y: 0. });
-    let reference = make([96, 64], Point { x: 0., y: 16. });
+    let document = make([32, 32], [-32, 0]);
+    let reference = make([96, 64], [0, 16]);
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut scene = scene::Scene::new(&r);
     let actual = capture(&mut r, &mut scene, crate::test_support::packet(document.scene(), [32, 32]), PixelRect::full([32, 32]));

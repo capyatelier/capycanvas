@@ -200,7 +200,7 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
     let extent = [8,8];
     let mut doc = generated(extent, DocumentColor { depth:SampleDepth::F32, ..Default::default() }, &pixels);
     let owner=doc.scene().children(None)[0];
-    let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,extent,layer_core::Point::default());
+    let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,extent, [0, 0]);
     mask.source.default_coverage=0.5;doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap();doc.artwork.occurrences.get_mut(owner).unwrap().mask=Some(mask.use_);refresh(&mut doc);
     let mut r = crate::WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let view = crate::test_support::view(extent);
@@ -279,7 +279,7 @@ fn dense_preview_oracle(doc: &Document) -> Histogram {
 }
 
 #[test]
-fn sparse_statistics_transformed_source_matches_original_dense_pixels_across_windows() {
+fn sparse_statistics_offset_source_matches_original_dense_pixels_across_windows() {
     let extent = [1033,517];
     let mut doc = document_in(extent,RgbSpace::DisplayP3,|_,_|[0.;4]);
     doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=BlendSpace::Linear;
@@ -291,9 +291,8 @@ fn sparse_statistics_transformed_source_matches_original_dense_pixels_across_win
     })).into()));
     paint_mut(&mut doc).domain=source_extent;
     let owner=paint_occurrence(&doc);
-    doc.artwork.occurrences.get_mut(owner).unwrap().placement= layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(layer_core::Rect::from_extent(source_extent),
-        [[7.,13.],[1021.,1.],[1000.,499.],[-12.,507.]].map(|[x,y]|layer_core::Point{x,y})).unwrap());
-    same(statistics(&doc,true,false).unwrap(),dense_preview_oracle(&doc),"transformed source");
+    doc.artwork.occurrences.get_mut(owner).unwrap().offset=[-12,13];
+    same(statistics(&doc,true,false).unwrap(),dense_preview_oracle(&doc),"offset source");
 }
 
 #[test]
@@ -306,8 +305,8 @@ fn sparse_statistics_nested_clipped_spatial_and_document_image_match_dense_pixel
         let base=add_group(&mut doc,vec![generated],0);
         let spatial=insert_effect(&mut doc,crate::tests::image_windows::program(false,global),0);
         let occurrence=doc.artwork.occurrences.get_mut(spatial).unwrap();occurrence.opacity=0.63;occurrence.attachment = layer_core::Attachment::Effect;
-        let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,extent,layer_core::Point{x:7.,y:-9.});
-        mask.source.default_coverage=0.;mask.source.initial=Some(Selection::polygon([[0.,0.],[1020.,99.],[440.,517.]].map(|[x,y]|layer_core::Point{x,y}).to_vec()).unwrap());
+        let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,extent, [7, -9]);
+        mask.source.default_coverage=0.;crate::test_support::materialize_mask(&mut mask.source, Selection::polygon([[0.,0.],[1020.,99.],[440.,517.]].map(|[x,y]|layer_core::Point{x,y}).to_vec()).unwrap(), doc.composition().color);
         doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap();doc.artwork.occurrences.get_mut(spatial).unwrap().mask=Some(mask.use_);
         let group=add_group(&mut doc,vec![spatial,base],0);doc.artwork.occurrences.get_mut(group).unwrap().opacity=0.79;
         let outside=insert_effect(&mut doc,crate::tests::image_windows::program(true,false),1);
@@ -352,7 +351,7 @@ fn curve_histogram_oracle(doc:&Document,pixels:&[[f32;4]],logarithmic:bool,chann
 
 #[test]
 fn statistics_curve_input_and_channels_use_typed_domain_without_master_mask_or_opacity() {
-    use layer_core::{EffectInstance,EffectValue,Point};
+    use layer_core::{EffectInstance,EffectValue};
     for space in RgbSpace::ALL {for logarithmic in [false,true] {for channels in [false,true] {
         let pixels = if logarithmic {[[0.05,0.2,0.75,1.],[0.025,0.05,0.1,0.5],[2.3,4.7,8.9,1.],[0.;4]]}
             else {[[0.05,0.2,0.75,1.],[0.025,0.05,0.1,0.5],[0.17,0.39,0.81,1.],[0.;4]]};
@@ -365,7 +364,7 @@ fn statistics_curve_input_and_channels_use_typed_domain_without_master_mask_or_o
             effect.set("blue",EffectValue::Curve(vec![[0.,0.],[1.,0.75]].into())).unwrap();
         }
         let adjustment=insert_effect(&mut doc,effect,0);doc.artwork.occurrences.get_mut(adjustment).unwrap().opacity=0.;
-        let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,doc.composition().size,Point::default());mask.source.default_coverage=0.;
+        let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,doc.composition().size, [0, 0]);mask.source.default_coverage=0.;
         doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap();doc.artwork.occurrences.get_mut(adjustment).unwrap().mask=Some(mask.use_);
         for source in [ArtworkSource::EffectInput(adjustment),ArtworkSource::EffectChannels(adjustment)] {
             let channel_source = matches!(source,ArtworkSource::EffectChannels(_));

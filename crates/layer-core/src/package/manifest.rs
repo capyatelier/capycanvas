@@ -96,9 +96,9 @@ fn shape(record: &Value, refs: &[PortableId], context: RecordContext, reasons: &
     Ok(match descriptor.kind {
         RecordKind::Composition => Shape::Composition { result: endpoint(required(data, "result")?, &["color"], reasons)? },
         RecordKind::Stack => Shape::Stack { entries: data.get("entries").map_or(Ok(Vec::new()), |v| array(v)?.iter().map(reference).collect())? },
-        RecordKind::OccurrenceLegacy | RecordKind::Occurrence => {
+        RecordKind::Occurrence => {
             let content = object(required(data, "content")?)?;
-            let alternatives: &[&str] = if descriptor.kind == RecordKind::Occurrence { &["paint", "stack", "effect", "selection", "objects"] } else { &["paint", "stack", "effect", "selection"] };
+            let alternatives: &[&str] = &["paint", "stack", "effect", "selection", "objects"];
             let recognized: Vec<_> = alternatives.iter().copied().filter(|key| content.contains_key(*key)).collect();
             if content.is_empty() || recognized.len() > 1 { return Err("Invalid occurrence content".into()); }
             if extras(content, alternatives) { reasons.insert("Unknown occurrence content"); }
@@ -110,13 +110,11 @@ fn shape(record: &Value, refs: &[PortableId], context: RecordContext, reasons: &
                 Some("objects") => Some(Content::Objects(reference(&content["objects"])?)),
                 _ => None,
             };
-            if descriptor.kind == RecordKind::Occurrence {
-                if let Some(offset) = data.get("offset") { integer_offset(offset)?; }
-                if let Some(mask) = data.get("mask") {
-                    let mask = object(mask)?;
-                    if extras(mask, &["source", "enabled", "linked", "inverted", "offset"]) { reasons.insert("Unknown mask data field"); }
-                    if let Some(offset) = mask.get("offset") { integer_offset(offset)?; }
-                }
+            if let Some(offset) = data.get("offset") { integer_offset(offset)?; }
+            if let Some(mask) = data.get("mask") {
+                let mask = object(mask)?;
+                if extras(mask, &["source", "enabled", "linked", "inverted", "offset"]) { reasons.insert("Unknown mask data field"); }
+                if let Some(offset) = mask.get("offset") { integer_offset(offset)?; }
             }
             let mask = data.get("mask").map(|m| reference(required(object(m)?, "source")?)).transpose()?;
             match content { Some(content) => Shape::Occurrence { content, mask }, None => unknown() }

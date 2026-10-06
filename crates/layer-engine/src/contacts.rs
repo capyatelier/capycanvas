@@ -1,8 +1,8 @@
 //! Contacts that begin before painting is ready are held whole and delivered
 //! once it is, so a stroke or drag is neither dropped nor started midway.
-use layer_engine::{PenEvent, PenPhase, SampleFlags};
+use crate::{PenEvent, PenPhase, SampleFlags};
 use std::collections::{BTreeMap, VecDeque};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// How long a contact is held for painting to become ready.
 const HOLD: Duration = Duration::from_secs(5);
@@ -77,6 +77,10 @@ impl DeferredContacts {
     pub fn is_empty(&self) -> bool {
         self.contacts.is_empty()
     }
+    /// Whether samples wait for painting to become ready.
+    pub fn holding(&self) -> bool {
+        !self.held.is_empty()
+    }
     pub fn clear(&mut self) {
         self.held.clear();
         self.contacts.clear();
@@ -113,7 +117,7 @@ impl DeferredContacts {
 mod tests {
     use super::*;
     use layer_core::Point;
-    use layer_engine::ToolKind;
+    use crate::ToolKind;
 
     fn sample(id: u64, sequence: u64, phase: PenPhase) -> PenEvent {
         PenEvent {

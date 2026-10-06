@@ -338,6 +338,7 @@ color-properties-source = { $width } × { $height } px · Разрядность
 color-properties-retained-rasterized = Растеризовано в координатах документа.
 color-properties-retained-icc = Исходные данные и встроенный ICC сохранены.
 color-properties-retained-original = Исходные данные и интерпретация цвета сохранены.
+color-properties-retained-placed = Размещённое изображение со своими отсчётами и интерпретацией цвета.
 
 
 color-profile-select-imported = Выберите импортированный профиль.

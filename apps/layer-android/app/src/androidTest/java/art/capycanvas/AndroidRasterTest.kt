@@ -93,7 +93,7 @@ class AndroidRasterTest {
         return current.optBoolean("canvas_ready") && current.optBoolean("brush_ready")
             && native { !Native.renderingPending(it) }
     }
-    private fun send(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; compose.waitUntil(30_000) { drawingSettled() } }
+    private fun send(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; scenario.onActivity { host.documentChanged() }; compose.waitUntil(30_000) { drawingSettled() } }
     private fun invoke(id: String) = send(obj("type" to "invoke", "command" to id))
     private fun action(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; scenario.onActivity { host.documentChanged() }; tick(); compose.waitForIdle() }
     private fun action(command: String) { compose.runOnUiThread { host.invoke(command) }; compose.waitForIdle() }
@@ -295,7 +295,7 @@ class AndroidRasterTest {
         } catch(e:Exception){native{Native.documentComplete(it,id,false,"null")};throw e} finally {Native.projectFree(task)}
     }
     private fun manifest(bytes: ByteArray): JSONObject = packageManifest(bytes)
-    private fun sourceIdentity(manifest: JSONObject): String = manifest.originalIdentity()
+    private fun sourceIdentity(manifest: JSONObject): String = manifest.originalIdentity() + manifest.objectImageIdentity()
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
     @Test fun exportAgainRetainsDestinationRecipeAndDrawingOwnership() {
@@ -1861,23 +1861,14 @@ class AndroidRasterTest {
     }
 
     @Test fun imagePlacementBatchHistoryAndStaleRequests() {
-        val arguments = InstrumentationRegistry.getArguments()
-        val affineSmoke = arguments.getString("imagePlacementAffineSmoke") == "true"
-        val canvasWidth = arguments.getString("imagePlacementCanvasWidth", "2000")!!.toInt()
-        val canvasHeight = arguments.getString("imagePlacementCanvasHeight", "1500")!!.toInt()
-        val affineIdleMs = arguments.getString("affineSmokeIdleMs", "0")!!.toLong()
-        require(canvasWidth > 0 && canvasHeight > 0 && affineIdleMs in 0L..120000L)
-        require(affineSmoke || (canvasWidth == 2000 && canvasHeight == 1500 && affineIdleMs == 0L))
-        if (affineSmoke) {
-            for (path in listOf("validation/pixel-bake/maps", "validation/pixel-bake/input-probes", "validation/pixel-bake/motion-affine.json", "image-placement-input-missing.png", "image-placement-input-missing.json"))
-                File(activity.getExternalFilesDir(null), path).deleteRecursively()
-        }
         fun invoke(command: String) { native { Native.dispatch(it,obj("type" to "invoke","command" to command).toString()) }; tick(); scenario.onActivity { host.documentChanged() } }
         native { Native.dispatch(it,obj("type" to "preferences","action" to obj("type" to "edit","id" to "missing_profile","value" to 0)).toString()) }
-        val configured = arguments.getString("imagePlacementPhotos")
-        val photos = configured?.split(',')?.map { File(activity.filesDir,it).also { file ->
-            require(file.canonicalPath.startsWith(activity.filesDir.canonicalPath + File.separator) && file.isFile)
-        } } ?: listOf(3000 to 2400,800 to 600).mapIndexed { i,(w,h) ->
+        val newTask = native { h -> val (id, f) = request(h,"new_document"); Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
+        try { Native.projectWork(newTask,-1,2000,1500); native { Native.projectAdopt(it,newTask,"null") } } finally { Native.projectFree(newTask) }
+        scenario.onActivity { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+        val configured = InstrumentationRegistry.getArguments().getString("imagePlacementPhotos")
+        val photos = configured?.split(',')?.map { File(activity.filesDir,it) } ?: listOf(3000 to 2400,800 to 600).mapIndexed { i,(w,h) ->
             File(files,"placement-$i.png").also { file ->
                 val bitmap = android.graphics.Bitmap.createBitmap(w,h,android.graphics.Bitmap.Config.ARGB_8888)
                 val canvas = android.graphics.Canvas(bitmap)
@@ -1886,18 +1877,8 @@ class AndroidRasterTest {
                 file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) }; bitmap.recycle()
             }
         }
-        if (affineSmoke && (canvasWidth != 2000 || canvasHeight != 1500)) {
-            require(configured != null)
-            open(photos.first())
-        } else {
-            val newTask = native { h -> val (id, f) = request(h,"new_document"); Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
-            try { Native.projectWork(newTask,-1,canvasWidth,canvasHeight); native { Native.projectAdopt(it,newTask,"null") } } finally { Native.projectFree(newTask) }
-        }
-        scenario.onActivity { host.documentChanged() }
-        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
-        val activeTab = host.snapshot!!.getJSONObject("state").array("tabs").objects().first { it.getBoolean("active") }
-        assertEquals(canvasWidth, activeTab.getInt("width")); assertEquals(canvasHeight, activeTab.getInt("height"))
-        fun count() = native { state(it).array("layers").length() }
+        fun layers() = native { state(it).array("layers").length() }
+        fun count() = native { org.json.JSONArray(Native.imageObjects(it)).length() }
         fun batch(inputs: List<File>, afterRead: ((Long,Int,Long)->Unit)? = null) {
             val control = Native.captureControl()
             val (task,id) = native { h ->
@@ -1912,48 +1893,34 @@ class AndroidRasterTest {
             tick(); scenario.onActivity { host.documentChanged() }
         }
         fun press(command: String) = pressCanvasBar(command, 20_000)
-        fun memoryStage(label: String) {
-            val stats = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
-            val maps = File("/proc/self/maps").readLines()
-            val directory = File(activity.getExternalFilesDir(null), "validation/pixel-bake/maps").apply { mkdirs() }
-            val name = label.replace(Regex("[^A-Za-z0-9]+"), "-")
-            File(directory, "$name.txt").writeText(maps.joinToString("\n"))
-            val counts = maps.groupingBy { it.trim().split(Regex("\\s+"), limit = 6).getOrNull(5) ?: "[anonymous]" }.eachCount()
-            File(directory, "$name.json").writeText(JSONObject(counts).toString(2))
-            val memory = obj("boot_ns" to SystemClock.elapsedRealtimeNanos(),
-                "process_pss_kib" to android.os.Debug.getPss(), "process_mappings" to maps.size,
-                "process_status" to File("/proc/self/status").readText(), "meminfo" to File("/proc/meminfo").readText(),
-                "gpu" to native { org.json.JSONTokener(Native.rendererMemory(it)).nextValue() },
-                "renderer_stats" to stats, "canvas_extent" to org.json.JSONArray(listOf(canvasWidth, canvasHeight)))
-            File(directory, "$name-memory.json").writeText(memory.toString(2))
-            android.util.Log.i("CapyPlacementTest", "$label: pss=${memory.getInt("process_pss_kib")} KiB; mappings=${maps.size}; canvas=${stats.getLong("resident_bytes")} bytes; status=${memory.getString("process_status").lineSequence().filter { it.startsWith("Vm") }.toList()}")
+        fun extent(project: JSONObject, record: JSONObject) = project.packageData(record.getJSONObject("data").getJSONObject("image").getString("ref")).getJSONArray("extent")
+        val baseLayers=layers()
+        batch(photos);assertEquals(photos.size,count());assertEquals("One image layer holds the batch",baseLayers+1,layers())
+        assertEquals("Recovery defers while a placement is provisional", 0L, selectedSessionCapture())
+        press("cancel_transform");assertEquals(0,count());assertEquals(baseLayers,layers())
+        batch(photos)
+        press("apply_transform")
+        val fitted=manifest(save("batch-placement.capy"));val identity=fitted.objectImageIdentity()
+        assertEquals("Placed images are not paint bases","[]",fitted.originalIdentity())
+        for(record in fitted.imageObjectRecords()) {
+            val size=extent(fitted,record);val w=size.getDouble(0);val h=size.getDouble(1);val scale=minOf(1.0,2000/w,1500/h)
+            val pose=record.getJSONObject("data").getJSONArray("affine")
+            assertEquals(scale,pose.getDouble(0),1e-9);assertEquals(scale,pose.getDouble(3),1e-9)
+            assertEquals((2000-w*scale)/2,pose.getDouble(4),1e-9);assertEquals((1500-h*scale)/2,pose.getDouble(5),1e-9)
         }
-        memoryStage("before batch")
-        val baseCount=count()
-        batch(photos);assertEquals(baseCount+photos.size,count());memoryStage("provisional batch")
-        if (!affineSmoke) {
-            assertEquals("Recovery defers while a placement is provisional", 0L, selectedSessionCapture())
-            press("cancel_transform");assertEquals(baseCount,count())
-            batch(photos)
-        }
-        press("apply_transform");memoryStage("applied batch")
-        val fitted=manifest(save("batch-placement.capy"));val identity=sourceIdentity(fitted)
-        val images=fitted.originalImages()
-        for(i in photos.indices) {
-            val extent=images.getJSONObject(i).getJSONArray("extent");val w=extent.getDouble(0);val h=extent.getDouble(1);val scale=minOf(1.0,canvasWidth/w,canvasHeight/h)
-            val pose=fitted.occurrenceRecords().getJSONObject(i).getJSONObject("data").authoredAffine()
-            assertEquals(scale,pose.getDouble(0),1e-6);assertEquals(scale,pose.getDouble(3),1e-6)
-            assertEquals((canvasWidth-w*scale)/2,pose.getDouble(4),.01);assertEquals((canvasHeight-h*scale)/2,pose.getDouble(5),.01)
-        }
-        if (!affineSmoke) {
-        invoke("undo");assertEquals(baseCount,count());invoke("redo");assertEquals(baseCount+photos.size,count())
-        memoryStage("before reopen")
-        open(File(files,"batch-placement.capy"));memoryStage("after reopen");assertEquals(identity,sourceIdentity(manifest(save("batch-reopened.capy"))))
-        invoke("scale_rotate");press("placement_original_size");press("apply_transform")
+        invoke("undo");assertEquals(0,count());invoke("redo");assertEquals(photos.size,count())
+        open(File(files,"batch-placement.capy"));assertEquals(identity,manifest(save("batch-reopened.capy")).objectImageIdentity())
+        native { h -> val images=state(h).array("layers").objects().single { it.getInt("object_count")>0 }.getLong("id")
+            Native.dispatch(h,obj("type" to "layer","action" to obj("op" to "select","id" to images,"mask" to false)).toString()) }
+        invoke("move");invoke("select_all");invoke("placement_original_size")
         val originalSize=manifest(save("batch-original-size.capy"))
-        memoryStage("after original size")
-        assertEquals(1.0,originalSize.occurrenceRecords().getJSONObject(0).getJSONObject("data").authoredAffine().getDouble(0),1e-6)
-        assertEquals(identity,sourceIdentity(originalSize))
+        for(record in originalSize.imageObjectRecords()) {
+            val pose=record.getJSONObject("data").getJSONArray("affine");val before=fitted.imageObjectRecords().single { it.getString("id")==record.getString("id") }.getJSONObject("data").getJSONArray("affine")
+            val size=extent(originalSize,record)
+            assertEquals("Original Size restores one source pixel per unit",1.0,pose.getDouble(0),1e-9);assertEquals(1.0,pose.getDouble(3),1e-9)
+            for(axis in 0..1) assertEquals("Original Size keeps the centre",before.getDouble(4+axis)+before.getDouble(axis*3)*size.getDouble(axis)/2,pose.getDouble(4+axis)+size.getDouble(axis)/2,1e-6)
+        }
+        assertEquals(identity,originalSize.objectImageIdentity())
         val before=count();val malformed=File(files,"batch-malformed.png").apply { writeText("not a photo") }
         try { batch(listOf(photos.first(),malformed)); fail("Malformed second file was accepted") } catch (_: Exception) { assertEquals(before,count()) }
         batch(listOf(photos.first())) { task,id,control ->
@@ -1966,114 +1933,24 @@ class AndroidRasterTest {
             try { native { Native.imageImportAdopt(it,task) }; fail("Stale target adopted") } catch (_: Exception) { assertEquals(before,count()) }
             native { Native.documentComplete(it,id,false,"null") }
         }
-        assertEquals(identity,sourceIdentity(manifest(save("batch-after-errors.capy"))))
-        }
-        fun backing(project: JSONObject) = project.rasterResources().objects().map {
-            JSONObject(it.toString()).toString()
-        }.sorted()
+        assertEquals(identity,manifest(save("batch-after-errors.capy")).objectImageIdentity())
+        fun backing(project: JSONObject) = project.rasterResources().objects().map { it.toString() }.sorted()
         val originalTheme = host.snapshot!!.getJSONObject("state").opt("settings")?.let { it as JSONObject }?.opt("theme") ?: JSONObject.NULL
         val motions = org.json.JSONArray()
-        val motionFile = File(activity.getExternalFilesDir(null), "validation/pixel-bake/motion-affine.json").apply { parentFile!!.mkdirs() }
         try {
-            for (theme in if (affineSmoke) listOf("light") else listOf("light", "dark")) {
-                if (!affineSmoke) open(File(files, "batch-placement.capy"))
-                memoryStage("$theme: before affine")
+            for (theme in listOf("light", "dark")) {
+                open(File(files, "batch-placement.capy"))
                 action(obj("type" to "set_theme", "theme" to theme))
-                val owner = fitted.occurrenceRecords().getJSONObject(0).getString("id")
-                val ownerToken = native { state(it).array("layers").getJSONObject(0).getLong("id") }
-                action(obj("type" to "layer", "action" to obj("op" to "select", "id" to ownerToken, "mask" to false)))
                 invoke("fit_canvas")
-                if (!affineSmoke || InstrumentationRegistry.getArguments().getString("affineSmokeWatercolor") == "true") {
-                    invoke("brush")
-                    action(obj("type" to "select_brush", "id" to 21))
-                    action(obj("type" to "set_brush_size", "value" to 180.0))
-                    compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
-                    stroke(0.0)
-                }
-                fun beginAffine() {
-                    invoke("scale_rotate")
-                    compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { it.getString("id") == "apply_transform" && it.getBoolean("enabled") } == true }
-                }
-                fun affineMotion(label: String): JSONObject {
-                    if (!affineSmoke) return motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30, canvasWidth / 2.0 to canvasHeight / 2.0)
-                    compose.waitForIdle()
-                    val published = host.snapshot!!.getJSONObject("state")
-                    val camera = published.getJSONObject("camera")
-                    val zoom = camera.getDouble("zoom"); val translation = camera.getJSONArray("translation")
-                    val anchor = published.getJSONObject("canvas_bar").getJSONArray("anchor")
-                    val before = anchor.toString()
-                    val area = camera.getJSONArray("work_area")
-                    var origin = androidx.compose.ui.geometry.Offset.Zero
-                    scenario.onActivity { origin = host.surfaceOrigin }
-                    val hull = androidx.compose.ui.geometry.Rect(
-                        (anchor.getDouble(0) * zoom + translation.getDouble(0) + origin.x).toFloat(),
-                        (anchor.getDouble(1) * zoom + translation.getDouble(1) + origin.y).toFloat(),
-                        (anchor.getDouble(2) * zoom + translation.getDouble(0) + origin.x).toFloat(),
-                        (anchor.getDouble(3) * zoom + translation.getDouble(1) + origin.y).toFloat())
-                    val work = androidx.compose.ui.geometry.Rect(
-                        area.getDouble(0).toFloat() + origin.x, area.getDouble(1).toFloat() + origin.y,
-                        (area.getDouble(0) + area.getDouble(2)).toFloat() + origin.x,
-                        (area.getDouble(1) + area.getDouble(3)).toFloat() + origin.y)
-                    val visible = hull.intersect(work)
-                    val bars = compose.onAllNodesWithTag("canvas-action-bar").fetchSemanticsNodes().map { it.boundsInRoot }
-                    val left = visible.left + 48f; val right = visible.right - 48f
-                    val top = visible.top + 28f; val bottom = visible.bottom - 28f
-                    fun rectangle(rect: androidx.compose.ui.geometry.Rect) = listOf(rect.left, rect.top, rect.right, rect.bottom)
-                    val center = if (left < right && top < bottom) listOf(.5f, .25f, .75f).flatMap { y ->
-                        listOf(.5f, .25f, .75f).map { x -> androidx.compose.ui.geometry.Offset(left + (right - left) * x, top + (bottom - top) * y) }
-                    }.firstOrNull { point -> bars.none { it.overlaps(androidx.compose.ui.geometry.Rect(point.x - 48f, point.y - 28f, point.x + 48f, point.y + 28f)) } } else null
-                    val probe = obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "label" to label,
-                        "camera" to camera, "anchor" to anchor, "surface_origin" to org.json.JSONArray(listOf(origin.x, origin.y)),
-                        "hull_root" to org.json.JSONArray(rectangle(hull)), "work_root" to org.json.JSONArray(rectangle(work)),
-                        "bar_root" to org.json.JSONArray(bars.map { org.json.JSONArray(rectangle(it)) }),
-                        "center_root" to center?.let { org.json.JSONArray(listOf(it.x, it.y)) })
-                    val probeFile = File(activity.getExternalFilesDir(null), "validation/pixel-bake/input-probes/$label.json").apply { parentFile!!.mkdirs() }
-                    probeFile.writeText(probe.toString(2))
-                    assertNotNull("$label has a live image contact clear of chrome: $probe", center)
-                    val point = center!!
-                    val documentCenter = (point.x - origin.x - translation.getDouble(0)) / zoom to (point.y - origin.y - translation.getDouble(1)) / zoom
-                    val result = motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30, documentCenter)
-                    compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("canvas_bar").getJSONArray("anchor").toString() != before }
-                    return result.put("input_probe", probe).put("anchor_after", host.snapshot!!.getJSONObject("state").getJSONObject("canvas_bar").getJSONArray("anchor"))
-                }
-                beginAffine()
-                val affineDrags = if (affineSmoke) arguments.getString("affineSmokeDrags", "1")!!.toInt() else 1
-                require(affineDrags > 0)
-                repeat(affineDrags) { index ->
-                    motions.put(affineMotion("$theme-drag-${index + 1}").put("theme", theme).put("canvas", org.json.JSONArray(listOf(canvasWidth, canvasHeight))))
-                    if (affineSmoke) motionFile.writeText(motions.toString(2))
-                    if (affineDrags > 1) memoryStage("$theme: after affine drag ${index + 1}")
-                }
-                if (affineDrags > 1 && affineIdleMs == 0L) {
-                    android.os.SystemClock.sleep(2000)
-                    memoryStage("$theme: after affine idle")
-                }
-                memoryStage("$theme: after affine motion")
-                press("apply_transform")
-                memoryStage("$theme: after affine Apply")
-                if (affineIdleMs > 0) {
-                    memoryStage("$theme: before accepted affine idle")
-                    SystemClock.sleep(affineIdleMs)
-                    memoryStage("$theme: after accepted affine idle")
-                    beginAffine()
-                    motions.put(affineMotion("$theme-resumed")
-                        .put("theme", theme).put("canvas", org.json.JSONArray(listOf(canvasWidth, canvasHeight))).put("phase", "resumed"))
-                    motionFile.writeText(motions.toString(2))
-                    memoryStage("$theme: after resumed affine drag")
-                    press("apply_transform")
-                    memoryStage("$theme: after resumed affine Apply")
-                }
-                var retained = manifest(save("$theme-retained-affine.capy"))
-                if (affineSmoke) {
-                    assertEquals(identity, sourceIdentity(retained))
-                    assertNotEquals("Accepted affine motion changes the selected photo pose",
-                        fitted.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data").authoredAffine().toString(),
-                        retained.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data").authoredAffine().toString())
-                    assertNull(host.failure)
-                    motionFile.writeText(motions.toString(2))
-                    println("Android minimal retained-photo affine smoke passed")
-                    return
-                }
+                val ink = native { state(it).array("layers").objects().first { row -> row.getInt("object_count")==0 && !row.getBoolean("group") && row.isNull("fill_color") } }
+                action(obj("type" to "layer", "action" to obj("op" to "select", "id" to ink.getLong("id"), "mask" to false)))
+                invoke("brush")
+                action(obj("type" to "select_brush", "id" to 21))
+                action(obj("type" to "set_brush_size", "value" to 180.0))
+                compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+                stroke(0.0)
+                var retained = manifest(save("$theme-watercolor.capy"))
+                val owner = retained.occurrenceRecords().objects().first { it.getJSONObject("data").optString("name") == ink.getString("label") }.getString("id")
                 fun ownerRaster(project: JSONObject) = project.paintData(owner)
                 fun assertMaterial(project: JSONObject) {
                     val raster = ownerRaster(project)
@@ -2117,6 +1994,7 @@ class AndroidRasterTest {
                 if (settingsGroup.getString("active") != "tool_settings") action(obj("type" to "select_panel_tab", "group" to settingsGroup.getLong("id"), "panel" to "tool_settings"))
                 invoke("scale_rotate")
                 compose.waitUntil(30_000) { published().optJSONObject("canvas_bar") != null && published().array("tool_extra").objects().any { it.optJSONObject("Choice")?.optString("id") == "transform-reference" } }
+                motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30).put("theme", theme).put("canvas", listOf(2000, 1500)))
                 val referenceHull = published().getJSONObject("canvas_bar").getJSONArray("anchor")
                 val density = activity.resources.displayMetrics.density
                 var settingsContainer = "panel-body-tool_settings"
@@ -2167,18 +2045,13 @@ class AndroidRasterTest {
                 settings("number-$angleLabel").performImeAction(); refresh()
                 if (settingsDrawer) toggleSettingsDrawer()
                 press("apply_transform")
-                val rotated = manifest(save("$theme-reference-pivot.capy"))
-                val original = ownerProperties(retained).authoredAffine()
-                val rotatedMap = ownerProperties(rotated).authoredAffine()
-                val determinant = original.getDouble(0) * original.getDouble(3) - original.getDouble(1) * original.getDouble(2)
-                val px = pivot.first - original.getDouble(4); val py = pivot.second - original.getDouble(5)
-                val u = (original.getDouble(3) * px - original.getDouble(2) * py) / determinant
-                val v = (-original.getDouble(1) * px + original.getDouble(0) * py) / determinant
-                assertEquals("Native custom pivot remains fixed under numeric rotation", pivot.first, rotatedMap.getDouble(0) * u + rotatedMap.getDouble(2) * v + rotatedMap.getDouble(4), .01)
-                assertEquals(pivot.second, rotatedMap.getDouble(1) * u + rotatedMap.getDouble(3) * v + rotatedMap.getDouble(5), .01)
-                assertEquals(sourceIdentity(retained), sourceIdentity(rotated)); assertEquals(backing(retained), backing(rotated))
+                compose.waitUntil(120_000) { tick(); native { state(it).isNull("canvas_bar") } }
+                val rotated = manifest(save("$theme-rotated-paint.capy"))
+                assertMaterial(rotated)
+                assertNotEquals("$theme: rotation commits new paint pixels", backing(retained), backing(rotated))
+                assertEquals("$theme: placed images keep their sources", identity, rotated.objectImageIdentity())
                 invoke("undo")
-                assertEquals(ownerProperties(retained).toString(), ownerProperties(manifest(save("$theme-pivot-undone.capy"))).toString())
+                assertEquals("$theme: one undo restores the paint", backing(retained), backing(manifest(save("$theme-rotation-undone.capy"))))
                 invoke("move")
                 key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, true)
                 key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, true, 1)
@@ -2186,114 +2059,50 @@ class AndroidRasterTest {
                 key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, false)
                 val nudged = manifest(save("$theme-nudged.capy"))
                 assertNotEquals(ownerProperties(retained).toString(), ownerProperties(nudged).toString())
+                assertEquals("$theme: a whole-pixel move edits only the integer offset", backing(retained), backing(nudged))
                 invoke("undo"); assertEquals("Held native nudge has one undo", ownerProperties(retained).toString(), ownerProperties(manifest(save("$theme-nudge-undone.capy"))).toString())
                 invoke("redo")
                 key(android.view.KeyEvent.KEYCODE_DPAD_LEFT, true)
                 key(android.view.KeyEvent.KEYCODE_ESCAPE, true); key(android.view.KeyEvent.KEYCODE_ESCAPE, false)
                 key(android.view.KeyEvent.KEYCODE_DPAD_LEFT, false)
-                assertEquals("Escape then release preserves the accepted map", ownerProperties(nudged).toString(), ownerProperties(manifest(save("$theme-nudge-cancelled.capy"))).toString())
+                assertEquals("Escape then release preserves the accepted move", ownerProperties(nudged).toString(), ownerProperties(manifest(save("$theme-nudge-cancelled.capy"))).toString())
                 invoke("transform_again")
                 val again = manifest(save("$theme-again.capy"))
                 assertNotEquals(ownerProperties(nudged).toString(), ownerProperties(again).toString())
                 invoke("undo"); assertEquals(ownerProperties(nudged).toString(), ownerProperties(manifest(save("$theme-again-undone.capy"))).toString())
                 invoke("undo"); assertEquals(ownerProperties(retained).toString(), ownerProperties(manifest(save("$theme-nudge-restored.capy"))).toString())
                 if (InstrumentationRegistry.getArguments().getString("imagePlacementPresentationOnly") == "true") continue
-                invoke("scale_rotate")
-                compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
-                invoke("transform_distort")
-                val corner = host.snapshot!!.getJSONObject("state").getJSONObject("canvas_bar").getJSONArray("anchor")
-                val zoom = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getDouble("zoom")
-                motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30,
-                    corner.getDouble(2) to corner.getDouble(3) - 20.0 / zoom).put("theme", theme).put("mode", "Distort"))
-                press("apply_transform")
-                val distorted = manifest(save("$theme-retained-distort.capy"))
-                val properties = distorted.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data")
-                val outer = properties.authoredPlacement().getJSONArray("projective")
-                assertTrue("$theme: corner drag retains a projective map", outer.getDouble(6) != 0.0 || outer.getDouble(7) != 0.0)
-                assertEquals(sourceIdentity(retained), sourceIdentity(distorted))
-                assertEquals(backing(retained), backing(distorted))
-                invoke("scale_rotate")
-                compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
-                invoke("transform_warp")
-                val warpZoom = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getDouble("zoom")
-                motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30,
-                    outer.getDouble(2) / outer.getDouble(8) to outer.getDouble(5) / outer.getDouble(8) - 20.0 / warpZoom)
-                    .put("theme", theme).put("mode", "Warp"))
-                press("apply_transform")
-                retained = manifest(save("$theme-retained-warp.capy"))
-                val warpedProperties = retained.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data")
-                assertFalse("$theme: bent grid persists", warpedProperties.authoredPlacement().isNull("mesh"))
-                assertEquals(sourceIdentity(distorted), sourceIdentity(retained))
-                assertEquals(backing(distorted), backing(retained))
-                open(File(files, "$theme-retained-warp.capy"))
-                val reopenedRetained = manifest(save("$theme-retained-warp-reopened.capy"))
-                assertEquals(warpedProperties.toString(), reopenedRetained.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data").toString())
-                assertEquals(backing(retained), backing(reopenedRetained))
-                assertMaterial(reopenedRetained)
-                invoke("scale_rotate")
-                compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
-                invoke("transform_warp")
-                invoke("warp_split_cross")
-                val splitHull = host.snapshot!!.getJSONObject("state").getJSONObject("canvas_bar").getJSONArray("anchor")
-                val splitZoom = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getDouble("zoom")
-                motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30,
-                    (splitHull.getDouble(0) + splitHull.getDouble(2)) * .5 to
-                        (splitHull.getDouble(1) + splitHull.getDouble(3)) * .5 - 20.0 / splitZoom)
-                    .put("theme", theme).put("mode", "Warp split cross"))
-                press("apply_transform")
-                retained = manifest(save("$theme-retained-split.capy"))
-                val splitPlacement = retained.occurrenceRecords().objects().first { it.getString("id") == owner }
-                    .getJSONObject("data").authoredPlacement()
-                val splitBreakpoints = splitPlacement.getJSONObject("mesh").getJSONArray("breakpoints")
-                assertEquals("$theme: cross split inserts a vertical line", 5, splitBreakpoints.getJSONArray(0).length())
-                assertEquals("$theme: cross split inserts a horizontal line", 5, splitBreakpoints.getJSONArray(1).length())
-                assertEquals(sourceIdentity(reopenedRetained), sourceIdentity(retained))
-                assertEquals(backing(reopenedRetained), backing(retained))
-                open(File(files, "$theme-retained-split.capy"))
-                val reopenedSplit = manifest(save("$theme-retained-split-reopened.capy"))
-                assertEquals(splitPlacement.toString(), reopenedSplit.occurrenceRecords().objects().first { it.getString("id") == owner }
-                    .getJSONObject("data").authoredPlacement().toString())
-                assertEquals(backing(retained), backing(reopenedSplit))
-                memoryStage("$theme: before pixel bake")
-                if (compose.onAllNodesWithTag("application-menu-edit").fetchSemanticsNodes().isNotEmpty()) compose.onNodeWithTag("application-menu-edit").performClick()
-                else {
-                    compose.onNodeWithTag("header-menu-labels-compact").performClick()
-                    val label = host.snapshot!!.array("application_menus").objects().first { it.getString("id") == "edit" }.getString("label")
-                    compose.onNodeWithText(label).performClick()
+                for ((mode, split) in listOf("transform_distort" to false, "transform_warp" to false, "transform_warp" to true)) {
+                    invoke("scale_rotate")
+                    compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
+                    invoke(mode)
+                    if (split) invoke("warp_split_cross")
+                    val hull = host.snapshot!!.getJSONObject("state").getJSONObject("canvas_bar").getJSONArray("anchor")
+                    val zoom = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getDouble("zoom")
+                    val handle = if (mode == "transform_distort") hull.getDouble(2) to hull.getDouble(3) - 20.0 / zoom
+                        else (hull.getDouble(0) + hull.getDouble(2)) * .5 to (hull.getDouble(1) + hull.getDouble(3)) * .5 - 20.0 / zoom
+                    motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30, handle).put("theme", theme).put("mode", "$mode split=$split"))
+                    press("apply_transform")
+                    compose.waitUntil(120_000) { tick(); native { state(it).isNull("canvas_bar") } }
+                    val committed = manifest(save("$theme-$mode-$split.capy"))
+                    assertMaterial(committed)
+                    assertFalse("$theme: paint keeps no retained placement", ownerProperties(committed).has("placement"))
+                    assertNotEquals("$theme: $mode commits pixels once", backing(retained), backing(committed))
+                    open(File(files, "$theme-$mode-$split.capy"))
+                    val reopened = manifest(save("$theme-$mode-$split-reopened.capy"))
+                    assertEquals(backing(committed), backing(reopened)); assertMaterial(reopened)
+                    retained = reopened
                 }
-                val bakeLabel = published().array("commands").objects().first { it.getString("id") == "apply_transform_pixels" }.getString("label")
-                compose.onNodeWithText(bakeLabel).performClick()
-                compose.waitUntil(120_000) { tick(); native { state(it).isNull("canvas_bar") } }
-                refresh()
-                memoryStage("$theme: after pixel bake")
-                val baked = manifest(save("$theme-baked.capy"))
-                assertMaterial(baked)
-                assertEquals(ownerRaster(retained).getJSONObject("material").getJSONObject("watercolor").toString(), ownerRaster(baked).getJSONObject("material").getJSONObject("watercolor").toString())
-                assertEquals("$theme: only the chosen source is baked", retained.originalImages().length() - 1, baked.originalImages().length())
-                val bakedOwner = baked.occurrenceRecords().objects().first { it.getString("id") == owner }
-                val pose = bakedOwner.getJSONObject("data").authoredAffine()
-                assertEquals(listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0), (0 until 6).map { pose.getDouble(it) })
                 invoke("brush"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 80.0))
                 stroke(0.0)
-                val painted = manifest(save("$theme-baked-painted.capy"))
-                assertNotEquals("$theme: painting edits the baked native planes", backing(baked), backing(painted))
+                val painted = manifest(save("$theme-transformed-painted.capy"))
+                assertNotEquals("$theme: painting edits the transformed native planes", backing(retained), backing(painted))
                 invoke("liquify"); action(obj("type" to "select_brush", "id" to 37)); action(obj("type" to "set_brush_size", "value" to 180.0))
                 stroke(0.0)
-                val liquified = manifest(save("$theme-baked-liquified.capy"))
-                assertNotEquals("$theme: Liquify edits the baked native planes", backing(painted), backing(liquified))
+                val liquified = manifest(save("$theme-transformed-liquified.capy"))
+                assertNotEquals("$theme: Liquify edits the transformed native planes", backing(painted), backing(liquified))
                 invoke("undo"); assertEquals(backing(painted), backing(manifest(save("$theme-undo-liquify.capy"))))
-                invoke("undo"); assertEquals(backing(baked), backing(manifest(save("$theme-undo-paint.capy"))))
-                invoke("undo")
-                val restored = manifest(save("$theme-undo-bake.capy"))
-                assertEquals(sourceIdentity(retained), sourceIdentity(restored))
-                assertEquals(backing(retained), backing(restored))
-                invoke("redo"); assertEquals(backing(baked), backing(manifest(save("$theme-redo-bake.capy"))))
-                open(File(files, "$theme-baked.capy"))
-                val reopened = manifest(save("$theme-baked-reopened.capy"))
-                assertMaterial(reopened)
-                assertEquals(ownerRaster(baked).toString(), ownerRaster(reopened).toString())
-                assertEquals(backing(baked), backing(reopened))
-                assertEquals(sourceIdentity(baked), sourceIdentity(reopened))
+                invoke("undo"); assertEquals(backing(retained), backing(manifest(save("$theme-undo-paint.capy"))))
                 instrumentation.uiAutomation.takeScreenshot()?.let { image ->
                     try { File(activity.getExternalFilesDir(null), "validation/pixel-bake/$theme.png").apply { parentFile!!.mkdirs() }.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
                     finally { image.recycle() }
@@ -2302,7 +2111,7 @@ class AndroidRasterTest {
         } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
         File(activity.getExternalFilesDir(null), "validation/pixel-bake/motion-3mp.json").apply { parentFile!!.mkdirs() }.writeText(motions.toString(2))
         assertNull(host.failure)
-        println("Android image placement: batch Apply/Cancel, fit, exact source retention, one-step history, reopen, Original Size, malformed/cancelled/stale requests; light/dark affine bake, paint, Liquify, exact undo/redo and reopen passed")
+        println("Android image placement: image-object batch Apply/Cancel, fit, exact sources, one-step history, reopen, Original Size, malformed/cancelled/stale requests; light/dark paint watercolor rotate/nudge/Transform Again/distort/warp commits, paint, Liquify, exact undo and reopen passed")
     }
 
     @Test fun imagePlacementSystemPickerAndExternalDrag() {
@@ -2312,7 +2121,7 @@ class AndroidRasterTest {
             compose.waitForIdle()
         }
         fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
-        fun count() = native { state(it).array("layers").length() }
+        fun count() = native { org.json.JSONArray(Native.imageObjects(it)).length() }
         fun press(command: String) = pressCanvasBar(command)
         fun systemNode(predicate: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean): android.view.accessibility.AccessibilityNodeInfo? {
             fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
@@ -2436,8 +2245,9 @@ class AndroidRasterTest {
             press("apply_transform")
             DocumentController.nativeFileJobsForTest = true
             val dropped = manifest(save("external-drop.capy"))
-            val pose = dropped.occurrenceRecords().getJSONObject(0).getJSONObject("data").authoredAffine()
-            val extent = dropped.originalImages().getJSONObject(0).getJSONArray("extent")
+            val record = dropped.imageObjectRecords().single()
+            val pose = record.getJSONObject("data").getJSONArray("affine")
+            val extent = dropped.packageData(record.getJSONObject("data").getJSONObject("image").getString("ref")).getJSONArray("extent")
             assertEquals(400.0 - extent.getDouble(0) * pose.getDouble(0) / 2, pose.getDouble(4), 2.0)
             assertEquals(300.0 - extent.getDouble(1) * pose.getDouble(3) / 2, pose.getDouble(5), 2.0)
             invoke("undo"); assertEquals(before, count())
@@ -2454,7 +2264,7 @@ class AndroidRasterTest {
             val groupName = native { state(it).array("layers").objects().single { it.getLong("id") == group }.getString("label") }
             val authoredGroup = nested.occurrenceRecords().objects().single {it.getJSONObject("data").optString("name") == groupName}
             val children = nested.packageData(authoredGroup.getJSONObject("data").getJSONObject("content").getJSONObject("stack").getString("ref")).getJSONArray("entries")
-            assertTrue(children.objects().any {nested.packageData(it.getString("ref")).getJSONObject("content").has("paint")})
+            assertTrue("The dropped image layer is inside the group", children.objects().any {nested.packageData(it.getString("ref")).getJSONObject("content").has("objects")})
             println("Android global URI drag: canvas captured point, group center insertion, Apply and one-step Undo passed")
 
             val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
@@ -2474,10 +2284,10 @@ class AndroidRasterTest {
                 compose.runOnUiThread { previous?.let { clipboard.setPrimaryClip(it) } ?: clipboard.clearPrimaryClip() }
             }
 
-            val retained = nested.originalIdentity()
+            val retained = nested.objectImageIdentity()
             scenario.recreate(); scenario.onActivity { activity = it }
             compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
-            assertEquals(retained, manifest(save("placement-recreated.capy")).originalIdentity())
+            assertEquals(retained, manifest(save("placement-recreated.capy")).objectImageIdentity())
             val control = Native.captureControl()
             val (task, requestId) = native { h -> val (id, _) = request(h, "import_image"); Native.imageImportTask(h, id, Native.imageImportContext(h, "null", "null"), control) to id }
             try {
@@ -2488,7 +2298,7 @@ class AndroidRasterTest {
                 compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
                 try { native { Native.imageImportAdopt(it, task) }; fail("Prepared batch survived a GPU generation change") } catch (_: IllegalStateException) { }
                 native { Native.documentComplete(it, requestId, false, "null") }
-                assertEquals(retained, manifest(save("placement-gpu-recreated.capy")).originalIdentity())
+                assertEquals(retained, manifest(save("placement-gpu-recreated.capy")).objectImageIdentity())
             } finally { Native.imageImportFree(task); Native.captureFree(control) }
             assertNull(host.failure)
             println("Android placed source survived activity/GPU replacement; retired GPU batch rejected")
@@ -3124,6 +2934,7 @@ class AndroidRasterTest {
             } finally { Native.projectFree(imported) }
             refresh(); invoke("apply_transform")
             val original = sourceIdentity(manifest(save("p21-original.capy")))
+            assertNotEquals("The placed image retains its source", "[][]", original)
             for (id in listOf("hue_saturation", "invert", "desaturate", "brightness_to_opacity", "threshold", "photo_filter")) {
                 send(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
                 val layer = native { state(it).getJSONObject("layer_properties").getLong("layer") }
@@ -3715,6 +3526,7 @@ class AndroidRasterTest {
             } finally { Native.projectFree(imported) }
             refresh(); invoke("apply_transform")
             val original = sourceIdentity(manifest(save("p22-original.capy")))
+            assertNotEquals("The placed image retains its source", "[][]", original)
             val originalPixels = hash(png("p22-original.png", builtinRecipe(2).put("format", "Png").put("depth", "U8")))
             for (id in listOf("selective_color", "channel_mixer")) {
                 send(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
@@ -3785,17 +3597,19 @@ class AndroidRasterTest {
         assertTrue(native {state(it).getJSONObject("document_file").getBoolean("modified")})
         val placed=manifest(save("placement-result.capy"))
         assertEquals(before.compositionColor().toString(),placed.compositionColor().toString())
-        assertEquals(source.originalIdentity(),placed.originalIdentity())
+        assertEquals("Place Image adds an image object, not a paint base",before.originalIdentity(),placed.originalIdentity())
+        assertEquals(1,placed.imageObjectRecords().size)
+        assertEquals(source.originalIdentity(),placed.objectImageIdentity())
         assertEquals(source.profileIdentity(),placed.profileIdentity())
         native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick()
-        assertEquals(before.originalIdentity(),manifest(save("placement-undo.capy")).originalIdentity())
+        assertEquals(before.objectImageIdentity(),manifest(save("placement-undo.capy")).objectImageIdentity())
         native {Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString())};tick()
-        assertEquals(placed.originalIdentity(),manifest(save("placement-redo.capy")).originalIdentity())
+        assertEquals(placed.objectImageIdentity(),manifest(save("placement-redo.capy")).objectImageIdentity())
         open(File(files,"placement-result.capy"))
-        assertEquals(placed.originalIdentity(),manifest(save("placement-reopened.capy")).originalIdentity())
+        assertEquals(placed.objectImageIdentity(),manifest(save("placement-reopened.capy")).objectImageIdentity())
         val infoTask=native {Native.documentInfoTask(it)}
         val info=Native.documentInfo(infoTask)
-        assertTrue(info.contains("Display P3"));assertTrue(info.contains("16-bit RGB"));assertTrue(info.contains("embedded ICC retained"))
+        assertTrue(info.contains("Display P3"));assertTrue(info.contains("16-bit RGB"));assertTrue(info.contains("Placed image with its own samples and color interpretation"))
         DocumentController.nativeFileJobsForTest=false
         compose.runOnUiThread {host.invoke("document_properties")}
         compose.waitUntil(10_000) {compose.onAllNodesWithText("placement-original").fetchSemanticsNodes().isNotEmpty()}
@@ -3810,6 +3624,8 @@ class AndroidRasterTest {
         val uri=resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,values)!!
         val clipboard=activity.getSystemService(android.content.ClipboardManager::class.java)
         var previous:android.content.ClipData?=null
+        native { h -> val images=state(h).array("layers").objects().single { it.getInt("object_count")>0 }.getLong("id")
+            Native.dispatch(h,obj("type" to "layer","action" to obj("op" to "select","id" to images,"mask" to false)).toString()) };tick()
         try {
             resolver.openOutputStream(uri)!!.use {it.write(pixels)}
             compose.runOnUiThread {
@@ -3817,17 +3633,18 @@ class AndroidRasterTest {
                 clipboard.setPrimaryClip(android.content.ClipData.newUri(resolver,"Capy test images",uri).apply { addItem(android.content.ClipData.Item(uri)) })
                 host.invoke("paste_image")
             }
-            compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONArray("layers")?.length()==placed.occurrenceRecords().length()+2}
+            compose.waitUntil(30_000) {native { org.json.JSONArray(Native.imageObjects(it)).length() }==placed.imageObjectRecords().size+2}
             compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
             assertNull(host.actionError)
+            assertEquals("External paste adds to the active image layer",placed.occurrenceRecords().length(),native { state(it).array("layers").length() })
             pressCanvasBar("apply_transform")
-            compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.first { it.getString("id")=="placement_original_size" }?.getBoolean("enabled")==false }
+            compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind")!="placement" }
             DocumentController.nativeFileJobsForTest=true
             val pasted=manifest(save("placement-pasted.capy"))
             assertEquals("u8",pasted.compositionColor().optString("depth","u8"))
-            assertEquals(placed.occurrenceRecords().length()+2,pasted.occurrenceRecords().length())
-            assertEquals(placed.originalImages().length()+2,pasted.originalImages().length())
-            for(image in pasted.originalImages().objects()) {
+            assertEquals(placed.occurrenceRecords().length(),pasted.occurrenceRecords().length())
+            assertEquals(placed.imageObjectRecords().size+2,pasted.imageObjectRecords().size)
+            for(image in pasted.objectImages().objects()) {
                 assertEquals("u16",image.getJSONObject("interpretation").optString("depth","u8"))
                 assertEquals(source.originalTileIdentity(source.originalImages().getJSONObject(0)),pasted.originalTileIdentity(image))
             }
@@ -3842,6 +3659,7 @@ class AndroidRasterTest {
             compose.runOnUiThread {previous?.let {clipboard.setPrimaryClip(it)} ?: clipboard.clearPrimaryClip()}
             resolver.delete(uri,null,null)
         }
+        open(File(files,"placement-original.png"))
         sourceEdits()
         assertNull(host.failure)
     }
@@ -3881,7 +3699,9 @@ class AndroidRasterTest {
         native {Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString())};tick();backingEqual(repaired,manifest(save("source-repair-redo.capy")))
         change("rasterize_source")
         val rasterized=manifest(save("source-rasterized.capy"));val image=activeSource(rasterized)
-        assertEquals("working_pixels",rasterized.paintBaseBindings().getJSONObject(0).getString("policy"));assertEquals("u8",image.getJSONObject("interpretation").optString("depth","u8"));assertEquals("display_p3",image.getJSONObject("interpretation").getJSONObject("profile").getString("builtin"))
+        assertEquals("working_pixels",rasterized.paintBaseBindings().getJSONObject(0).getString("policy"))
+        assertEquals(rasterized.compositionColor().optString("depth","u8"),image.getJSONObject("interpretation").optString("depth","u8"))
+        assertEquals(rasterized.compositionColor().optString("space","srgb"),image.getJSONObject("interpretation").getJSONObject("profile").getString("builtin"))
         assertEquals(activeSource(repaired).getJSONArray("extent").toString(),image.getJSONArray("extent").toString())
         native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick();backingEqual(repaired,manifest(save("source-rasterize-undo.capy")))
         native {
@@ -3904,6 +3724,269 @@ class AndroidRasterTest {
         compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
         DocumentController.nativeFileJobsForTest=true
         backingEqual(added,manifest(save("source-ui-cancel.capy")))
+    }
+
+    @Test fun imageObjectsCancelPasteIntoConversionsAndRecovery() {
+        fun decoded(bytes: ByteArray): IntArray = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size).let { bitmap ->
+            try { IntArray(bitmap.width * bitmap.height).also { bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height) } } finally { bitmap.recycle() }
+        }
+        fun assertSamePixels(label: String, expected: ByteArray, actual: ByteArray) {
+            val a = decoded(expected); val b = decoded(actual)
+            assertEquals(label, a.size, b.size)
+            val worst = a.indices.maxOf { i -> listOf(16, 8, 0, 24).maxOf { shift -> kotlin.math.abs((a[i] shr shift and 255) - (b[i] shr shift and 255)) } }
+            assertTrue("$label differs by $worst codes", worst <= 2)
+        }
+        fun image(name: String, color: Int, width: Int, height: Int) = File(files, name).also { file ->
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            try { bitmap.eraseColor(color); file.outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } } finally { bitmap.recycle() }
+        }
+        fun objects() = native { org.json.JSONArray(Native.imageObjects(it)) }.objects()
+        fun poses() = objects().associate { it.getString("id") to jsonValue(it.getJSONArray("affine")) }
+        fun canUndo() = native { state(it).array("commands").objects().first { c -> c.getString("id") == "undo" }.getBoolean("enabled") }
+        fun rows() = native { state(it).array("layers").objects() }
+        fun importImage(file: File) {
+            val control = Native.captureControl()
+            val task = native { h -> Native.imageImportTask(h, request(h, "import_image").first, Native.imageImportContext(h, "null", "null"), control) }
+            try {
+                Native.imageImportRead(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), file.name)
+                native { Native.imageImportAdopt(it, task) }
+            } finally { Native.imageImportFree(task); Native.captureFree(control) }
+            refresh()
+        }
+        fun waitIdle() = compose.waitUntil(60_000) { refresh(); native { !state(it).getJSONObject("document_file").getBoolean("busy") && state(it).array("requests").length() == 0 } && drawingSettled() }
+        val red = image("objects-red.png", android.graphics.Color.RED, 240, 160)
+        val green = image("objects-green.png", android.graphics.Color.rgb(20, 200, 60), 200, 120)
+        for (theme in listOf("light", "dark")) {
+            val created = native { h -> val (id, f) = request(h, "new_document"); Native.projectTask(h, id, "null", f.getLong("epoch"), f.getLong("revision")) }
+            try { Native.projectOptions(created, obj("extent" to org.json.JSONArray(listOf(640, 480)), "color" to obj("space" to "Srgb", "depth" to "U8"), "background" to "White").toString())
+                Native.projectWork(created, -1, 640, 480); native { Native.projectAdopt(it, created, "null") } } finally { Native.projectFree(created) }
+            action(obj("type" to "set_theme", "theme" to theme)); invoke("fit_canvas")
+            val undoable = canUndo(); val layers = rows().size
+            importImage(red)
+            assertEquals("Placement is provisional", 1, objects().size)
+            pressCanvasBar("cancel_transform")
+            assertEquals("Cancelled placement leaves no image", 0, objects().size)
+            assertEquals("Cancelled placement leaves no layer", layers, rows().size)
+            assertEquals("Cancelled placement leaves no history", undoable, canUndo())
+            importImage(red); pressCanvasBar("apply_transform")
+            val placed = poses(); assertEquals(1, placed.size)
+            val id = objects().single().getString("id")
+            native {
+                Native.beginObjectMotion(it, org.json.JSONArray(listOf(id)).toString())
+                Native.previewObjectMotion(it, org.json.JSONArray(listOf(1.0, 0.0, 0.0, 1.0, 31.0, -7.0)).toString())
+                Native.finishObjectMotion(it, false)
+            }
+            refresh()
+            assertEquals("Cancelled transform restores the starting pose", placed, poses())
+            invoke("undo"); assertEquals("Cancelled transform leaves no history entry", 0, objects().size); invoke("redo")
+            assertEquals(placed, poses())
+            invoke("rectangle_select"); invoke("select_all")
+            val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+            val resolver = activity.contentResolver
+            val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "capy-m2-into-${System.nanoTime()}.png")
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/png")
+            })!!
+            var previous: android.content.ClipData? = null
+            val layersBefore = rows().size
+            try {
+                resolver.openOutputStream(uri)!!.use { output -> green.inputStream().use { it.copyTo(output) } }
+                DocumentController.nativeFileJobsForTest = false
+                compose.runOnUiThread { previous = clipboard.primaryClip; clipboard.setPrimaryClip(android.content.ClipData.newUri(resolver, "Capy Paste Into", uri)); host.invoke("paste_into") }
+                compose.waitUntil(30_000) { rows().size == layersBefore + 1 }
+                waitIdle()
+            } finally {
+                DocumentController.nativeFileJobsForTest = true
+                compose.runOnUiThread { previous?.let { clipboard.setPrimaryClip(it) } ?: clipboard.clearPrimaryClip() }
+                resolver.delete(uri, null, null)
+            }
+            val masked = rows().single { it.getBoolean("editing") }
+            assertTrue("Paste Into masks a new image layer", masked.getBoolean("has_mask") && masked.getInt("object_count") == 1)
+            val framed = manifest(save("$theme-paste-into.capy"))
+            fun maskOf(m: JSONObject) = m.occurrenceRecords().objects().single { it.getJSONObject("data").getJSONObject("content").has("objects") && it.getJSONObject("data").has("mask") }.getJSONObject("data").getJSONObject("mask")
+            val frame = maskOf(framed)
+            val inside = objects().single { it.getString("id") !in placed.keys }.getString("id")
+            native {
+                Native.beginObjectMotion(it, org.json.JSONArray(listOf(inside)).toString())
+                Native.previewObjectMotion(it, org.json.JSONArray(listOf(1.0, 0.0, 0.0, 1.0, 40.0, 25.0)).toString())
+                Native.finishObjectMotion(it, true)
+            }
+            refresh()
+            val moved = manifest(save("$theme-paste-into-moved.capy"))
+            assertEquals("Moving the image keeps the mask frame", frame.toString(), maskOf(moved).toString())
+            assertEquals(framed.packageData(frame.getJSONObject("source").getString("ref")).toString(), moved.packageData(maskOf(moved).getJSONObject("source").getString("ref")).toString())
+            assertNotEquals(framed.imageObjectRecords().map { it.toString() }, moved.imageObjectRecords().map { it.toString() })
+            action(obj("type" to "set_layer_opacity", "opacity" to .5))
+            val composite = png("$theme-before-rasterize.png")
+            invoke("rasterize_layer")
+            compose.waitUntil(60_000) { refresh(); rows().single { it.getBoolean("editing") }.getInt("object_count") == 0 }
+            val rasterized = rows().single { it.getBoolean("editing") }
+            assertEquals("Rasterize keeps the mask", true, rasterized.getBoolean("has_mask"))
+            assertEquals("Rasterize keeps the opacity", .5, rasterized.getDouble("opacity"), 1e-6)
+            assertEquals("Rasterized layer is paint", 0, rasterized.getInt("object_count"))
+            assertSamePixels("$theme: rasterize applies mask and opacity once", composite, png("$theme-after-rasterize.png"))
+            invoke("undo")
+            assertEquals("Undo restores the image layer", 1, rows().single { it.getBoolean("editing") }.getInt("object_count"))
+            invoke("redo")
+            action(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false)))
+            invoke("brush"); compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+            stroke(0.0)
+            val painted = png("$theme-before-convert.png")
+            invoke("convert_to_object")
+            compose.waitUntil(60_000) { refresh(); rows().single { it.getBoolean("editing") }.getInt("object_count") == 1 }
+            assertSamePixels("$theme: conversion keeps the appearance", painted, png("$theme-after-convert.png"))
+            invoke("undo"); assertEquals("Undo restores paint", 0, rows().single { it.getBoolean("editing") }.getInt("object_count")); invoke("redo")
+            val saved = manifest(save("$theme-objects.capy"))
+            val reopenedPoses = poses()
+            open(File(files, "$theme-objects.capy"))
+            assertEquals("Reopen keeps binary64 poses", reopenedPoses, poses())
+            assertEquals(saved.imageObjectRecords().map { it.toString() }.sorted(), manifest(save("$theme-objects-reopened.capy")).imageObjectRecords().map { it.toString() }.sorted())
+            val undone = poses()
+            val moving = objects().first().getString("id")
+            native { Native.beginObjectMotion(it, org.json.JSONArray(listOf(moving)).toString()) }
+            native { Native.previewObjectMotion(it, org.json.JSONArray(listOf(0.5, 0.0, 0.0, 0.5, 13.25, 7.125)).toString()) }
+            native { Native.finishObjectMotion(it, true) }
+            refresh()
+            val edited = poses()
+            assertNotEquals(undone, edited)
+            val editedPixels = png("$theme-edited.png")
+            invoke("undo")
+            assertEquals(undone, poses())
+            val recovery = File(files, "$theme-objects-session")
+            captureSession(recovery)
+            val restore = restoreSessionTask(recovery)
+            try { adoptSession(restore) } finally { Native.sessionFree(restore) }
+            assertEquals("Recovery keeps the undone state", undone, poses())
+            invoke("redo"); assertEquals("Recovered Redo restores the edit", edited, poses())
+            assertSamePixels("$theme: recovered pixels", editedPixels, png("$theme-recovered.png"))
+            fun previewsArrive(label: String) {
+                for (row in rows().filter { it.getInt("object_count") > 0 && !it.getBoolean("expanded") })
+                    action(obj("type" to "object", "action" to obj("op" to "expand", "layer" to row.getLong("id"), "expanded" to true)))
+                val previews = rows().filter { it.getInt("object_count") > 0 }.flatMap { row ->
+                    listOf(row.getLong("id") to "layer-thumbnail-${row.getLong("id")}-false") + row.array("objects").objects().map { it.getLong("id") to "image-object-thumbnail-${it.getLong("id")}" }
+                }
+                assertTrue(previews.size >= 2)
+                for ((key, tag) in previews) {
+                    compose.onNodeWithTag("layer-rows").performScrollToKey(key)
+                    try { compose.waitUntil(30_000) { compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() } }
+                    catch (e: Throwable) { throw AssertionError("$theme: $label image preview $tag is missing", e) }
+                }
+            }
+            previewsArrive("before GPU replacement")
+            native { Native.destroyGpuForTest(it) }; compose.runOnUiThread { host.documentChanged() }
+            compose.waitUntil(10_000) { host.failure != null }
+            compose.runOnUiThread { host.restartCanvas() }
+            compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
+            assertNull(host.failure)
+            previewsArrive("after GPU replacement")
+            assertEquals(edited, poses())
+            assertSamePixels("$theme: new GPU pixels", editedPixels, png("$theme-new-gpu.png"))
+            instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+                try { File(activity.getExternalFilesDir(null), "validation/image-objects/$theme.png").apply { parentFile!!.mkdirs() }.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                finally { bitmap.recycle() }
+            }
+        }
+        assertNull(host.failure); assertNull(host.actionError)
+    }
+
+    @Test fun imageObjectClipboardCopyCutPasteNonceAndOtherDocument() {
+        fun image(name: String, color: Int, width: Int, height: Int) = File(files, name).also { file ->
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            try { bitmap.eraseColor(color); file.outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) } } finally { bitmap.recycle() }
+        }
+        fun objects() = native { org.json.JSONArray(Native.imageObjects(it)) }.objects()
+        fun requestsIdle() = native { state(it).array("requests").length() == 0 && !state(it).getJSONObject("document_file").getBoolean("busy") }
+        val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+        fun hostCommand(command: String) {
+            DocumentController.nativeFileJobsForTest = false
+            try {
+                compose.runOnUiThread { host.invoke(command) }
+                compose.waitUntil(60_000) { refresh(); requestsIdle() }
+                if (command in listOf("copy", "cut")) compose.waitUntil(10_000) {
+                    var shared: String? = null
+                    compose.runOnUiThread { shared = clipboard.primaryClipDescription?.extras?.getString(ClipboardController.NONCE) }
+                    shared != null && shared == native { Native.clipNonce(it) }
+                }
+            } finally { DocumentController.nativeFileJobsForTest = true }
+            assertNull(host.actionError)
+        }
+        fun newDocument(width: Int, height: Int) {
+            val task = native { h -> val (id, f) = request(h, "new_document"); Native.projectTask(h, id, "null", f.getLong("epoch"), f.getLong("revision")) }
+            try { Native.projectOptions(task, obj("extent" to org.json.JSONArray(listOf(width, height)), "color" to obj("space" to "Srgb", "depth" to "U8"), "background" to "White").toString())
+                Native.projectWork(task, -1, width, height); native { Native.projectAdopt(it, task, "null") } } finally { Native.projectFree(task) }
+            refresh()
+        }
+        fun place(file: File) {
+            val control = Native.captureControl()
+            val task = native { h -> Native.imageImportTask(h, request(h, "import_image").first, Native.imageImportContext(h, "null", "null"), control) }
+            try { Native.imageImportRead(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), file.name); native { Native.imageImportAdopt(it, task) } }
+            finally { Native.imageImportFree(task); Native.captureFree(control) }
+            refresh(); pressCanvasBar("apply_transform")
+        }
+        fun samples(document: JSONObject) = document.objectImageIdentity()
+        var previous: android.content.ClipData? = null
+        compose.runOnUiThread { previous = clipboard.primaryClip }
+        try {
+            for (theme in listOf("light", "dark")) {
+                newDocument(640, 480); action(obj("type" to "set_theme", "theme" to theme)); invoke("fit_canvas")
+                place(image("clip-red.png", android.graphics.Color.RED, 160, 120))
+                place(image("clip-blue.png", android.graphics.Color.BLUE, 120, 90))
+                val originals = objects()
+                assertEquals(2, originals.size)
+                invoke("move"); invoke("select_all")
+                hostCommand("copy")
+                val nonce = clipboard.primaryClipDescription?.extras?.getString(ClipboardController.NONCE)
+                assertNotNull("$theme: Copy publishes a nonce with the PNG fallback", nonce)
+                assertTrue("$theme: other apps receive a PNG", clipboard.primaryClipDescription!!.hasMimeType("image/png") || clipboard.primaryClip!!.getItemAt(0).uri != null)
+                hostCommand("paste_image")
+                val pasted = objects()
+                assertEquals("$theme: Paste adds both images", 4, pasted.size)
+                assertEquals("$theme: same-document paste shares the image records", originals.map { it.getString("image") }.toSet(), pasted.map { it.getString("image") }.toSet())
+                val layer = native { state(it).array("layers").objects().first { row -> row.getInt("object_count") > 0 } }
+                if (!layer.getBoolean("expanded")) action(obj("type" to "object", "action" to obj("op" to "expand", "layer" to layer.getLong("id"), "expanded" to true)))
+                val front = native { state(it).array("layers").objects().first { row -> row.getLong("id") == layer.getLong("id") } }.array("objects").getJSONObject(0).getLong("id")
+                action(obj("type" to "object", "action" to obj("op" to "select", "id" to front, "extend" to false)))
+                val beforeCut = objects().map { it.getString("id") }.toSet()
+                hostCommand("cut")
+                val cut = beforeCut - objects().map { it.getString("id") }.toSet()
+                assertEquals("$theme: Cut removes only the selected image after the clipboard write", 1, cut.size)
+                assertNotEquals("$theme: Cut publishes a new copy", nonce, clipboard.primaryClipDescription?.extras?.getString(ClipboardController.NONCE))
+                hostCommand("paste_image")
+                assertEquals("$theme: Paste restores the cut image", 4, objects().size)
+                assertTrue("$theme: pasted images get new identities", objects().none { it.getString("id") in cut })
+                val resolver = activity.contentResolver
+                val foreign = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "capy-m2-foreign-${System.nanoTime()}.png")
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                })!!
+                try {
+                    resolver.openOutputStream(foreign)!!.use { output -> image("clip-green.png", android.graphics.Color.GREEN, 100, 80).inputStream().use { it.copyTo(output) } }
+                    compose.runOnUiThread {
+                        clipboard.setPrimaryClip(android.content.ClipData.newUri(resolver, "Foreign", foreign).apply {
+                            description.extras = android.os.PersistableBundle().apply { putString(ClipboardController.NONCE, "stale-$nonce") }
+                        })
+                    }
+                    val before = objects().map { it.getString("image") }.toSet()
+                    hostCommand("paste_image")
+                    pressCanvasBar("apply_transform")
+                    val after = objects()
+                    assertEquals("$theme: a mismatched nonce pastes the external image", 5, after.size)
+                    assertTrue("$theme: the external image has its own record", after.map { it.getString("image") }.toSet().size == before.size + 1)
+                } finally { resolver.delete(foreign, null, null) }
+                invoke("select_all"); hostCommand("copy")
+                val copied = manifest(save("$theme-clip-source.capy"))
+                newDocument(800, 600)
+                hostCommand("paste_image")
+                val other = manifest(save("$theme-clip-other.capy"))
+                assertEquals("$theme: another document receives every copied image", copied.imageObjectRecords().size, other.imageObjectRecords().size)
+                assertEquals("$theme: pasted images keep their samples", samples(copied), samples(other))
+                invoke("undo"); assertEquals("$theme: one undo removes the paste", 0, objects().size)
+            }
+        } finally {
+            DocumentController.nativeFileJobsForTest = true
+            compose.runOnUiThread { previous?.let { clipboard.setPrimaryClip(it) } ?: clipboard.clearPrimaryClip() }
+        }
+        assertNull(host.failure)
     }
 
     @Test fun documentColorChangesPreserveExactHistoryAndCancel() {
@@ -4325,9 +4408,9 @@ class AndroidRasterTest {
         val affine = org.json.JSONArray(objectValue.getJSONArray("affine").toString())
         affine.put(4, affine.getDouble(4) + 17.0).put(5, affine.getDouble(5) - 11.0)
         native {
-            Native.setImageObjectMotion(it, objectId, true)
-            Native.setImageObjectAffine(it, objectId, affine.toString())
-            Native.setImageObjectMotion(it, objectId, false)
+            Native.beginObjectMotion(it, org.json.JSONArray(listOf(objectId)).toString())
+            Native.previewObjectMotion(it, org.json.JSONArray(listOf(1.0, 0.0, 0.0, 1.0, 17.0, -11.0)).toString())
+            Native.finishObjectMotion(it, true)
         }
         refresh()
         val edited = poses()

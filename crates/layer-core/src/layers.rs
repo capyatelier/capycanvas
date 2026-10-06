@@ -4,7 +4,6 @@ use crate::authored::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawingRefusal {
     NoLayer,
-    NonAffine,
     Locked,
     BaseLocked,
     Group,
@@ -14,25 +13,31 @@ pub enum DrawingRefusal {
     /// Content tools draw on artwork, and the layer's mask is being edited.
     Mask,
     EffectMask,
+    Object,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoverageSnapshot {
     pub target: CoverageHandle,
     pub source: CoverageSource,
+    pub selection: Option<Selection>,
     pub use_: MaskUse,
 }
 impl CoverageSnapshot {
-    pub fn reveal_all(target: CoverageHandle, domain: [u32; 2], translation: Point) -> Self {
+    pub fn reveal_all(target: CoverageHandle, domain: [u32; 2], offset: [i64; 2]) -> Self {
         Self {
             target,
-            source: CoverageSource { domain, raster: Default::default(), initial: None, default_coverage: 1., operations: Arc::default() },
-            use_: MaskUse { source: target, enabled: true, linked: true, inverted: false, translation, placement: Projective::IDENTITY },
+            source: CoverageSource { domain, raster: Default::default(), default_coverage: 1., operations: Arc::default() },
+            selection: None,
+            use_: MaskUse { source: target, enabled: true, linked: true, inverted: false, offset },
         }
     }
     pub fn validate(&self) -> Result<(), DocumentError> {
         self.source.validate()?;
         self.use_.validate()?;
+        if let Some(selection) = &self.selection {
+            selection.validate()?;
+        }
         if self.target != self.use_.source {
             return Err(DocumentError::InvalidLayerOperation("Coverage target differs from its use"));
         }
@@ -48,11 +53,8 @@ impl CoverageSource {
         {
             return Err(DocumentError::InvalidLayerOperation("Invalid mask value"));
         }
-        if let Some(initial) = &self.initial {
-            initial.validate()?;
-        }
         for op in self.operations.iter() {
-            if !matches!(op.kind, RasterOperationKind::Transform(_)) {
+            if !matches!(op.kind, RasterOperationKind::Transform(_) | RasterOperationKind::Coverage) {
                 return Err(DocumentError::InvalidLayerOperation("Unsupported mask operation"));
             }
             op.validate()?;
@@ -62,68 +64,38 @@ impl CoverageSource {
 }
 impl MaskUse {
     pub fn validate(&self) -> Result<(), DocumentError> {
-        if !self.translation.x.is_finite() || !self.translation.y.is_finite() || self.placement.inverse().is_none() {
+        if !crate::offsets::admitted(self.offset) {
             return Err(DocumentError::InvalidLayerOperation("Invalid mask value"));
         }
         Ok(())
-    }
-    pub fn geometry_in_parent(&self, owner: &Occurrence) -> ImageTransform {
-        if self.linked {
-            let pre = self
-                .placement
-                .then(Projective::from_affine(Affine::translation(Point {
-                    x: self.translation.x - owner.translation.x,
-                    y: self.translation.y - owner.translation.y,
-                })))
-                .unwrap_or(Projective([f32::NAN; 9]));
-            ImageTransform {
-                placement: owner
-                    .placement
-                    .post(Projective::from_affine(Affine::translation(owner.translation)))
-                    .unwrap_or_else(|| LayerPlacement::from_projective(Projective([f32::NAN; 9]))),
-                source_from_owner: Some(pre.inverse().unwrap_or(Projective([f32::NAN; 9]))),
-                keep_source: false,
-            }
-        } else {
-            ImageTransform {
-                placement: LayerPlacement::from_projective(
-                    self.placement
-                        .then(Projective::from_affine(Affine::translation(self.translation)))
-                        .unwrap_or(Projective([f32::NAN; 9])),
-                ),
-                ..Default::default()
-            }
-        }
     }
     pub fn set_linked(&mut self, linked: bool, owner: &Occurrence) -> Result<(), DocumentError> {
         if self.linked == linked {
             return Ok(());
         }
-        let invalid = || DocumentError::InvalidLayerOperation("Apply the layer transform before changing mask linkage");
-        if owner.placement.as_affine().is_none() || self.geometry_in_parent(owner).as_affine().is_none() {
-            return Err(invalid());
-        }
-        let current = self.geometry_in_parent(owner).projective().ok_or_else(invalid)?;
-        let mut next = self.clone();
-        next.linked = linked;
-        next.placement = Projective::IDENTITY;
-        let rest = next.geometry_in_parent(owner).projective().and_then(Projective::inverse).ok_or_else(invalid)?;
-        next.placement = current.then(rest).ok_or_else(invalid)?;
+        let offset = if linked { crate::offsets::checked_sub(self.offset, owner.offset) } else { crate::offsets::checked_add(self.offset, owner.offset) }
+            .ok_or(DocumentError::InvalidLayerOperation("Invalid mask value"))?;
+        let next = Self { linked, offset, ..self.clone() };
         next.validate()?;
         *self = next;
         Ok(())
     }
 }
+impl Occurrence {
+    pub fn shifted(&self, shift: [i64; 2]) -> Result<Self, DocumentError> {
+        let out_of_range = || DocumentError::InvalidLayerOperation("A layer offset exceeds the editor's range");
+        let mut occurrence = self.clone();
+        let positioned = self.positioned();
+        if positioned {
+            occurrence.offset = crate::offsets::checked_add(occurrence.offset, shift).ok_or_else(out_of_range)?;
+        }
+        if let Some(mask) = occurrence.mask.as_mut().filter(|mask| !positioned || !mask.linked) {
+            mask.offset = crate::offsets::checked_add(mask.offset, shift).ok_or_else(out_of_range)?;
+        }
+        Ok(occurrence)
+    }
+}
 
-pub fn target_offset(scene: SceneView<'_>, target: SourceTarget) -> Point {
-    scene.target_offset(target)
-}
-pub fn target_geometry(scene: SceneView<'_>, target: SourceTarget) -> ImageTransform {
-    scene.target_geometry(target)
-}
-pub fn affine_edit_transform(scene: SceneView<'_>, target: SourceTarget) -> Option<Affine> {
-    scene.target_geometry(target).as_affine()
-}
 pub fn isolated_scope(scene: SceneView<'_>, mut parent: Option<OccurrenceHandle>) -> Option<OccurrenceHandle> {
     while let Some(h) = parent {
         if scene.includes(h) && !scene.occurrence(h).is_some_and(|o| o.passes_through()) {
@@ -388,6 +360,8 @@ pub struct RasterOperation {
 pub enum RasterOperationKind {
     ColorMode(crate::color::LayerColorMode),
     ApplyMask,
+    /// Replaces a mask's pixels with the operation coverage.
+    Coverage,
     /// Erases where the coverage is set: ApplyMask with complemented coverage.
     /// Alpha-locked content keeps its transparency, so nothing changes.
     Erase {
@@ -431,14 +405,16 @@ impl RasterOperation {
             }
             _ => Rect::from_extent(extent),
         };
-        if self.kind != RasterOperationKind::ApplyMask
-            && self.coverage.source.default_coverage == 0.0
-            && !self.coverage.use_.inverted
-            && self.coverage.source.raster.is_empty()
-            && let Some(selection) = &self.coverage.source.initial
-            && !selection.inverted
-        {
-            let selection = selection.translated(self.coverage.use_.translation).bounds();
+        let clipped = match self.kind {
+            RasterOperationKind::ApplyMask => false,
+            RasterOperationKind::Coverage => true,
+            _ => self.coverage.source.default_coverage == 0.0
+                && !self.coverage.use_.inverted
+                && self.coverage.source.raster.is_empty()
+                && self.coverage.selection.as_ref().is_some_and(|s| !s.inverted),
+        };
+        if clipped && let Some(selection) = &self.coverage.selection {
+            let selection = selection.translated(crate::offsets::point(self.coverage.use_.offset)).bounds();
             bounds.min.x = bounds.min.x.max(selection.min.x);
             bounds.min.y = bounds.min.y.max(selection.min.y);
             bounds.max.x = bounds.max.x.min(selection.max.x);
@@ -454,7 +430,7 @@ impl RasterOperation {
             return Err(DocumentError::InvalidLayerOperation("Nested coverage operations"));
         }
         self.coverage.validate()?;
-        if self.coverage.source.initial.as_ref().is_some_and(|s| s.affine.inverse().is_none()) {
+        if self.coverage.selection.as_ref().is_some_and(|s| s.affine.inverse().is_none()) {
             return Err(DocumentError::InvalidLayerOperation("Invalid selection transform"));
         }
         // Paint is straight linear RGB, like BrushSnapshot. Portable colors can
@@ -463,23 +439,30 @@ impl RasterOperation {
         let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(&c[3]);
         let valid = match &self.kind {
             RasterOperationKind::ColorMode(_) | RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. } => self.placement == Affine::IDENTITY,
+            RasterOperationKind::Coverage => {
+                self.placement == Affine::IDENTITY
+                    && self.coverage.use_.offset == [0; 2]
+                    && self.coverage.use_.enabled
+                    && !self.coverage.use_.inverted
+                    && self.coverage.source.raster.is_empty()
+            }
             RasterOperationKind::Bake { offset, .. } => self.placement == Affine::IDENTITY && offset.x.is_finite() && offset.y.is_finite(),
             RasterOperationKind::FrequencyDetail { offset, .. } => {
                 self.placement == Affine::IDENTITY
                     && offset.x.is_finite()
                     && offset.y.is_finite()
                     && self.coverage.source.default_coverage == 1.
-                    && self.coverage.source.initial.is_none()
+                    && self.coverage.selection.is_none()
                     && self.coverage.source.raster.is_empty()
             }
             RasterOperationKind::Transform(transform) => {
                 self.placement == Affine::IDENTITY
                     && transform.validate().is_ok()
                     && self.coverage.source.raster.is_empty()
-                    && self.coverage.use_.translation == Point::default()
+                    && self.coverage.use_.offset == [0; 2]
                     && self.coverage.use_.enabled
                     && !self.coverage.use_.inverted
-                    && if self.coverage.source.initial.is_some() {
+                    && if self.coverage.selection.is_some() {
                         self.coverage.source.default_coverage == 0.
                     } else {
                         self.coverage.source.default_coverage == 1.
@@ -608,7 +591,8 @@ impl Document {
                 self.validate_content_write(target)?;
                 Ok(target)
             }
-            LayerKind::Group | LayerKind::Object => Err(DrawingRefusal::Group),
+            LayerKind::Group => Err(DrawingRefusal::Group),
+            LayerKind::Object => Err(DrawingRefusal::Object),
             LayerKind::Selection => Err(DrawingRefusal::SelectionLayer),
             LayerKind::Effect => Err(DrawingRefusal::EffectWithoutBase),
         }
@@ -640,28 +624,15 @@ impl Document {
             _ => None,
         }
     }
-    pub fn layer_offset(&self, id: OccurrenceHandle) -> Point {
-        let scene = self.scene();
-        let mut offset = Point::default();
-        let mut current = Some(id);
-        while let Some(h) = current {
-            let Some(o) = scene.occurrence(h) else {
-                break;
-            };
-            offset.x += o.translation.x;
-            offset.y += o.translation.y;
-            current = scene.parent(h);
-        }
-        offset
+    pub fn layer_offset(&self, id: OccurrenceHandle) -> [i64; 2] {
+        self.scene().layer_origin(Some(id))
     }
-    pub fn target_offset(&self, target: SourceTarget) -> Point {
+    pub fn target_offset(&self, target: SourceTarget) -> [i64; 2] {
         self.scene().target_offset(target)
     }
-    pub fn target_geometry(&self, target: SourceTarget) -> ImageTransform {
-        self.scene().target_geometry(target)
-    }
-    pub fn affine_edit_transform(&self, target: SourceTarget) -> Option<Affine> {
-        self.target_geometry(target).as_affine()
+    /// The map from a target's pixels to the document's.
+    pub fn local_to_document(&self, target: SourceTarget) -> Affine {
+        Affine::translation(crate::offsets::point(self.target_offset(target)))
     }
     pub fn target_extent(&self, target: SourceTarget) -> [u32; 2] {
         self.scene().target_extent(target)
@@ -688,7 +659,7 @@ impl Document {
         if self.is_locked(owner) {
             return Err(DrawingRefusal::Locked);
         }
-        self.affine_edit_transform(target).ok_or(DrawingRefusal::NonAffine).map(|_| ())
+        Ok(())
     }
     pub fn layer_is_visible(&self, id: OccurrenceHandle) -> bool {
         let scene = self.scene();
@@ -716,7 +687,7 @@ impl Document {
         for h in members.iter().copied().collect::<Vec<_>>() {let mut parent=scene.parent(h);while let Some(h)=parent{members.insert(h);parent=scene.parent(h);}}
         members
     }
-    pub fn retained_transform_targets(&self, roots: &[OccurrenceHandle]) -> Result<Vec<OccurrenceHandle>, DocumentError> {
+    pub fn layer_move_targets(&self, roots: &[OccurrenceHandle]) -> Result<Vec<OccurrenceHandle>, DocumentError> {
         if roots.is_empty() {
             return Err(DocumentError::InvalidLayerOperation("Select artwork to transform"));
         }
@@ -728,12 +699,12 @@ impl Document {
         let mut members = BTreeSet::new();
         for h in roots {
             let o = scene.occurrence(h).ok_or(DocumentError::MissingOccurrence(h))?;
-            if !matches!(o.kind(), LayerKind::Paint | LayerKind::Group) {
-                return Err(DocumentError::InvalidLayerOperation("Select paint layers or groups to transform"));
+            if !o.positioned() {
+                return Err(DocumentError::InvalidLayerOperation("Select paint layers, image layers or groups to move"));
             }
             let subtree = self.layer_subtrees(&[h]);
-            if !subtree.iter().any(|h| scene.occurrence(*h).is_some_and(|o| o.kind() == LayerKind::Paint)) {
-                return Err(DocumentError::InvalidLayerOperation("This group has no paint layers"));
+            if !subtree.iter().any(|h| scene.occurrence(*h).is_some_and(|o| matches!(o.kind(), LayerKind::Paint | LayerKind::Object))) {
+                return Err(DocumentError::InvalidLayerOperation("This group has no paint or image layers"));
             }
             members.extend(subtree);
         }
@@ -747,75 +718,67 @@ impl Document {
             {
                 return Err(DocumentError::InvalidLayerOperation("Wait for the current edit"));
             }
-            if matches!(o.kind(), LayerKind::Selection)
-                || scene.effect(*h).is_some_and(|e| e.program.kind == EffectKind::Generator)
-            {
-                return Err(DocumentError::InvalidLayerOperation("This selection contains content that cannot retain a transform"));
-            }
         }
         Ok(scene.order().iter().copied().filter(|h| members.contains(h)).collect())
     }
-    pub fn retained_transform_edit(&self, roots: &[OccurrenceHandle], delta: Projective) -> Result<Edit, DocumentError> {
-        let targets = self.retained_transform_targets(roots)?;
-        if delta == Projective::IDENTITY {
+    pub fn move_layers_edit(&self, roots: &[OccurrenceHandle], delta: [i64; 2]) -> Result<Edit, DocumentError> {
+        self.layer_move_targets(roots)?;
+        if delta == [0; 2] {
             return Ok(Edit::Batch(Vec::new()));
         }
-        let invalid = || DocumentError::InvalidLayerOperation("Invalid retained transform");
-        if delta.inverse().is_none() {
-            return Err(invalid());
-        }
-        let scene = self.scene();
         let mut edits = Vec::new();
-        for h in targets {
-            let old = scene.occurrence(h).unwrap();
-            let mut o = old.clone();
-            if o.kind() == LayerKind::Paint {
-                let to = Projective::from_affine(Affine::translation(self.layer_offset(h)));
-                let local = to.then(delta).and_then(|m| m.then(to.inverse()?)).ok_or_else(invalid)?;
-                o.placement = old.placement.post(local).ok_or_else(invalid)?;
-                o.placement.validate_for(Rect::from_extent(scene.local_extent(h)))?;
-            }
-            if let Some(mask) = o.mask.as_mut() && mask.linked && old.kind() != LayerKind::Paint {
-                let desired = self
-                    .target_geometry(SourceTarget::Coverage(mask.source))
-                    .projective()
-                    .and_then(|m| m.then(delta))
-                    .ok_or_else(invalid)?;
-                mask.placement = Projective::IDENTITY;
-                let mut rest = mask.geometry_in_parent(old).projective().ok_or_else(invalid)?;
-                let world = self.layer_offset(h);
-                rest = rest
-                    .then(Projective::from_affine(Affine::translation(Point {
-                        x: world.x - old.translation.x,
-                        y: world.y - old.translation.y,
-                    })))
-                    .ok_or_else(invalid)?;
-                mask.placement = desired.then(rest.inverse().ok_or_else(invalid)?).ok_or_else(invalid)?;
-                mask.validate()?;
-            }
-            if o != *old {
-                edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(o))?));
-            }
+        for h in self.layer_roots(&roots.iter().copied().collect()) {
+            let mut o = self.scene().occurrence(h).ok_or(DocumentError::MissingOccurrence(h))?.clone();
+            o.offset = crate::offsets::checked_add(o.offset, delta).ok_or(DocumentError::InvalidLayerOperation("A layer offset exceeds the editor's range"))?;
+            edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(o))?));
         }
         Ok(Edit::Batch(edits))
     }
-    pub fn move_target_edit(&self, delta: Point) -> Result<Edit, DocumentError> {
+    pub fn move_target_edit(&self, delta: [i64; 2]) -> Result<Edit, DocumentError> {
         let h = self.working.occurrence.ok_or(DocumentError::InvalidLayerOperation("Select artwork to move"))?;
         let mut o = self.scene().occurrence(h).ok_or(DocumentError::MissingOccurrence(h))?.clone();
         if self.is_locked(h) {
             return Err(DocumentError::ProtectedOccurrence(h));
         }
         let mask_target = matches!(self.working.target, Some(SourceTarget::Coverage(_)));
-        let linked = o.mask.as_ref().is_some_and(|m| m.linked);
-        if !mask_target || linked {
-            o.translation.x += delta.x;
-            o.translation.y += delta.y;
-        }
-        if let Some(mask) = o.mask.as_mut().filter(|_| mask_target || linked) {
-            mask.translation.x += delta.x;
-            mask.translation.y += delta.y;
+        let invalid = || DocumentError::InvalidLayerOperation("A layer offset exceeds the editor's range");
+        let positioned = o.positioned();
+        match o.mask.as_mut() {
+            Some(mask) if mask_target && (!mask.linked || !positioned) => mask.offset = crate::offsets::checked_add(mask.offset, delta).ok_or_else(invalid)?,
+            _ if positioned => o.offset = crate::offsets::checked_add(o.offset, delta).ok_or_else(invalid)?,
+            _ => return Err(DocumentError::InvalidLayerOperation("Select artwork to move")),
         }
         Ok(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(o))?))
+    }
+    pub fn translate_target_edit(&self, target: SourceTarget, delta: [i64; 2]) -> Result<Edit, DocumentError> {
+        let h = self.target_owner(target).ok_or(DocumentError::MissingTarget(target))?;
+        if self.is_locked(h) {
+            return Err(DocumentError::ProtectedOccurrence(h));
+        }
+        let mut o = self.scene().occurrence(h).ok_or(DocumentError::MissingOccurrence(h))?.clone();
+        let invalid = || DocumentError::InvalidLayerOperation("A layer offset exceeds the editor's range");
+        let paint = matches!(o.content, OccurrenceContent::Paint(_));
+        match (target, o.mask.as_mut()) {
+            (SourceTarget::Coverage(_), Some(mask)) if !(paint && mask.linked) => mask.offset = crate::offsets::checked_add(mask.offset, delta).ok_or_else(invalid)?,
+            (SourceTarget::Coverage(_) | SourceTarget::Paint(_), _) if paint => o.offset = crate::offsets::checked_add(o.offset, delta).ok_or_else(invalid)?,
+            _ => return Err(DocumentError::MissingTarget(target)),
+        }
+        Ok(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(o))?))
+    }
+    pub(crate) fn shifted_occurrence_edits(&self, h: OccurrenceHandle, shift: [i64; 2]) -> Result<Vec<Edit>, DocumentError> {
+        let scene = self.scene();
+        let occurrence = scene.occurrence(h).ok_or(DocumentError::MissingOccurrence(h))?;
+        let mut edits = Vec::new();
+        if shift == [0; 2] {
+            return Ok(edits);
+        }
+        if let OccurrenceContent::Selection(selection) = occurrence.content {
+            let mut saved = self.artwork.selections.get(selection).ok_or(DocumentError::MissingTarget(SourceTarget::Selection(selection)))?.clone();
+            saved.selection = saved.selection.translated(crate::offsets::point(shift));
+            edits.push(Edit::SavedSelection(RecordChange::replace(&self.artwork.selections, selection, Some(saved))?));
+        }
+        edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(occurrence.shifted(shift)?))?));
+        Ok(edits)
     }
 }
 
@@ -992,16 +955,11 @@ impl Document {
         let children = scene.children(Some(id));
         let mut edits = Vec::new();
         for h in children {
-            let child = scene.occurrence(*h).unwrap();
-            let mut child = child.clone();
-            child.translation.x += group.translation.x;
-            child.translation.y += group.translation.y;
-            if let Some(mask) = &mut child.mask {
-                mask.translation.x += group.translation.x;
-                mask.translation.y += group.translation.y;
-            }
+            let mut child_edits = self.shifted_occurrence_edits(*h, group.offset)?;
+            let mut child = match child_edits.pop() { Some(Edit::Occurrence(change)) => change.value.unwrap(), _ => scene.occurrence(*h).unwrap().clone() };
             child.visible &= group.visible;
             child.reference |= group.reference;
+            edits.extend(child_edits);
             edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, *h, Some(child))?));
         }
         let stack = scene.stack(id).unwrap();
@@ -1156,7 +1114,7 @@ mod organization_tests {
             ]
             .map(|kind| RasterOperation {
                 placement: Affine::IDENTITY,
-                coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(20), [100; 2], Point::default()),
+                coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(20), [100; 2], [0; 2]),
                 kind,
             })
         };
@@ -1214,21 +1172,38 @@ mod organization_tests {
     fn placement_composes_group_offsets_and_linked_masks() {
         let mut doc = document([2000, 1500], &["Group", "Ink"]);
         nest(&mut doc, "Group", &["Ink"]);
-        occurrence_mut(&mut doc, "Group").translation = Point { x: 20., y: -30. };
-        occurrence_mut(&mut doc, "Ink").translation = Point { x: 6., y: 9. };
-        occurrence_mut(&mut doc, "Ink").placement = LayerPlacement::from_affine(Affine([0.5, 0., 0., 0.5, -100., 50.]));
+        occurrence_mut(&mut doc, "Group").offset = [20, -30];
+        occurrence_mut(&mut doc, "Ink").offset = [6, 9];
         let ink = id(&doc, "Ink");
-        let mask = add_mask(&mut doc, ink, [2000, 1500], Point { x: 10., y: 9. });
+        let mask = add_mask(&mut doc, ink, [2000, 1500], [10, 9]);
         let target = target(&doc, "Ink");
         let mask_target = SourceTarget::Coverage(mask);
         let p = Point { x: 100., y: 200. };
-        assert_eq!(doc.affine_edit_transform(target).unwrap().map(p), Point { x: -24., y: 129. });
-        assert_eq!(doc.affine_edit_transform(mask_target).unwrap().map(p), Point { x: -22., y: 129. });
+        assert_eq!(doc.local_to_document(target).map(p), Point { x: 126., y: 179. });
+        assert_eq!(doc.local_to_document(mask_target).map(p), Point { x: 136., y: 188. });
         occurrence_mut(&mut doc, "Ink").mask.as_mut().unwrap().linked = false;
-        assert_eq!(doc.affine_edit_transform(mask_target).unwrap().map(p), Point { x: 130., y: 179. });
+        assert_eq!(doc.local_to_document(mask_target).map(p), Point { x: 130., y: 179. });
         let mut invalid = occurrence(&doc, "Ink").clone();
-        invalid.placement = LayerPlacement::from_affine(Affine([0.; 6]));
+        invalid.offset = [offsets::MAX_OFFSET + 1, 0];
         assert!(doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, ink, Some(invalid)).unwrap())).is_err());
+    }
+    #[test]
+    fn offsets_compose_as_integers_and_refuse_overflow_instead_of_clamping() {
+        let mut doc = document([64, 64], &["Group", "Ink"]);
+        nest(&mut doc, "Group", &["Ink"]);
+        occurrence_mut(&mut doc, "Group").offset = [offsets::MAX_OFFSET, -offsets::MAX_OFFSET];
+        occurrence_mut(&mut doc, "Ink").offset = [3 - offsets::MAX_OFFSET, offsets::MAX_OFFSET - 2];
+        let ink = id(&doc, "Ink");
+        assert_eq!(doc.target_offset(target(&doc, "Ink")), [3, -2]);
+        assert_eq!(doc.layer_offset(ink), [3, -2]);
+        let mut far = occurrence(&doc, "Ink").clone();
+        far.offset = [i64::MAX, 0];
+        assert!(far.shifted([1, 0]).is_err());
+        assert_eq!(far.shifted([-1, 4]).unwrap().offset, [i64::MAX - 1, 4]);
+        let mask = MaskUse { source: CoverageHandle::INVALID, enabled: true, linked: false, inverted: false, offset: [i64::MIN, 0] };
+        let mut linked = mask.clone();
+        assert!(linked.set_linked(true, &Occurrence { offset: [1, 0], ..far.clone() }).is_err());
+        assert_eq!(linked, mask);
     }
     #[test]
     fn saved_selection_navigation_overrides_only_overlays_and_respects_hidden_groups() {
@@ -1272,10 +1247,10 @@ mod organization_tests {
     fn pending_mask_operations_validate_before_submission() {
         let op = RasterOperation {
             placement: Affine::IDENTITY,
-            coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(20), [100; 2], Point::default()),
+            coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(20), [100; 2], [0; 2]),
             kind: RasterOperationKind::Transform(ImageTransform::default()),
         };
-        let mut mask = CoverageSnapshot::reveal_all(CoverageHandle::from_index(9), [100; 2], Point::default());
+        let mut mask = CoverageSnapshot::reveal_all(CoverageHandle::from_index(9), [100; 2], [0; 2]);
         mask.source.operations = Arc::new(vec![op.clone()]);
         assert!(mask.validate().is_ok());
         let mut snapshot = RasterOperation { placement: Affine::IDENTITY, coverage: mask.clone(), kind: RasterOperationKind::ApplyMask };
@@ -1290,7 +1265,7 @@ mod organization_tests {
         mask.source.default_coverage = f32::NAN;
         assert!(mask.validate().is_err());
         mask.source.default_coverage = 1.;
-        mask.use_.translation.x = f32::INFINITY;
+        mask.use_.offset = [0, i64::MIN];
         assert!(mask.validate().is_err());
     }
     fn reference_names(doc: &Document) -> Vec<String> {
@@ -1307,7 +1282,7 @@ mod organization_tests {
     fn references_preserve_objects_and_ancestors_not_unrelated_siblings() {
         let mut doc = document([128; 2], &["Group", "Clip", "Line", "Unrelated", "Ink"]);
         let group = nest(&mut doc, "Group", &["Clip", "Line", "Unrelated"]);
-        occurrence_mut(&mut doc, "Group").translation = Point { x: 5., y: 8. };
+        occurrence_mut(&mut doc, "Group").offset = [5, 8];
         occurrence_mut(&mut doc, "Clip").attachment = crate::Attachment::Clip;
         crate::operation_test_support::refresh(&mut doc);
         assert!(reference_names(&doc).is_empty());
@@ -1342,14 +1317,14 @@ mod organization_tests {
         let mut doc = document([100; 2], &["Texture", "Ink"]);
         let texture = id(&doc, "Texture");
         let ink = id(&doc, "Ink");
-        let mask = add_mask(&mut doc, texture, [100; 2], Point { x: 7., y: 9. });
+        let mask = add_mask(&mut doc, texture, [100; 2], [7, 9]);
         let roots = doc.layer_roots(&[ink, texture].into());
         let name = "  Group { $name }「グループ」🖌️\u{2068}literal\u{2069}  ";
         doc.apply(doc.group_layers_edit(&roots, LayerBlend::Normal, name).unwrap()).unwrap();
         let group = id(&doc, name);
         assert_eq!(occurrence(&doc, name).name.as_ref(), name);
         assert_eq!(doc.layer_roots(&[group, texture].into()), vec![group]);
-        occurrence_mut(&mut doc, name).translation = Point { x: 20., y: -10. };
+        occurrence_mut(&mut doc, name).offset = [20, -10];
         occurrence_mut(&mut doc, name).reference = true;
         insert_paint(&mut doc, "Outside", 0, None);
         doc.apply(doc.move_occurrence_edit(texture, 0).unwrap()).unwrap();
@@ -1505,7 +1480,7 @@ mod organization_tests {
             assert!(doc.ungroup_layer_edit(group).is_err());
         }
         let mut doc = before.clone();
-        add_mask(&mut doc, group, [64; 2], Point::default());
+        add_mask(&mut doc, group, [64; 2], [0; 2]);
         assert!(doc.ungroup_layer_edit(group).is_err());
     }
     #[test]
@@ -1513,7 +1488,7 @@ mod organization_tests {
         let mut doc = document([64; 2], &["Ink"]);
         let owner = id(&doc, "Ink");
         let SourceTarget::Paint(paint) = target(&doc, "Ink") else { panic!("paint") };
-        let mask = add_mask(&mut doc, owner, [64; 2], Point::default());
+        let mask = add_mask(&mut doc, owner, [64; 2], [0; 2]);
         let unplaced = doc
             .artwork
             .paint

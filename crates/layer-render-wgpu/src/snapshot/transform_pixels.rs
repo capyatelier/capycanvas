@@ -14,8 +14,8 @@ impl SnapshotGpu {
         }
         let extent = plan.extent;
         snapshot.extent = extent;
-        snapshot.offset = layer_core::Point { x: -plan.origin.x, y: -plan.origin.y };
-        snapshot.raw_geometry = Some(plan.geometry.clone());
+        snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
+        snapshot.raw_plan = Some(plan.clone());
         snapshot.renderer.ensure_document_metadata(extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).map_err(|e| e.to_string())?;
         let mut color = RasterData { watercolor: snapshot.backing[&target].watercolor, ..Default::default() };
         let mut mask = RasterData::default();

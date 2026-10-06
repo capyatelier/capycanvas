@@ -42,13 +42,14 @@ async fn copy(
     let rendition = document.composition().color.depth.is_float().then_some(document.artwork().outputs.get(document.artwork().default_output).unwrap().sdr);
     let clip = output::ClipMetadata {
         origin: [crop[0], crop[1]],
-        document: document.composition().size,
+        document: capture.window.map_or(document.composition().size, |(_, extent)| extent),
         source: capture.original.is_none(),
     };
     let mut snapshot = task
         .gpu
         .capture_scene(capture.scene.clone(), capture.scope.clone(), control.clone())
         .map_err(js)?;
+    if let Some((origin, extent)) = capture.window { snapshot.capture_window(origin, extent).map_err(js)?; }
     let buffers = js_sys::Array::new();
     let guide = if rendition.is_some() {
         let guide = snapshot.local_tone_guide_async().await.map_err(js)?;

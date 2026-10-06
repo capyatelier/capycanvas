@@ -89,7 +89,7 @@ fn crop_starts_at_the_canvas_with_its_bar_and_blocks_other_edits() {
         ("Fit Crop to Content", "Fit Content".into()),
         ("crop-overlay", "Thirds Grid Diagonal Golden Ratio".to_string()),
         ("Straighten", "Straighten".into()),
-        ("Delete Cropped Pixels", "Delete Cropped".into()),
+        ("Delete Cropped Paint Pixels", "Delete Cropped Paint".into()),
         ("Reset crop", "Reset".into()),
     ]);
     assert_eq!(bar_items(&bar.completion), [
@@ -156,7 +156,7 @@ fn a_ratio_from_the_bar_constrains_handle_drags_that_grow_the_canvas() {
     let doc = s.engine.document();
     let size = frame.size[0].round() as u32;
     assert_eq!(doc.composition().size, [size, size]);
-    assert_eq!(doc.scene().occurrence(doc.target_owner(paint).unwrap()).unwrap().translation.x, -x0);
+    assert_eq!(doc.scene().occurrence(doc.target_owner(paint).unwrap()).unwrap().offset[0] as f32, -x0);
     assert!(y0 < 0. && size as f32 + y0 > 800., "the new area is transparent canvas");
     assert!(s.renderer_mut().pending_operations.is_empty(), "keeping the pixels changes only metadata");
     assert_eq!(tiles(&s), before);
@@ -306,9 +306,9 @@ fn straighten_levels_a_drawn_line_and_applies_one_resampling_step_on_locked_laye
     let layer_core::RasterOperationKind::Transform(transform) = &op.kind else { panic!("a resample") };
     assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Bicubic);
     let map = transform.as_affine().unwrap();
-    let after = s.engine.document().affine_edit_transform(paint).unwrap().inverse().unwrap();
+    let after = s.engine.document().local_to_document(paint).inverse().unwrap();
     for p in [Point { x: 0., y: 0. }, Point { x: 1000., y: 800. }] {
-        near_point(map.map(p), after.map(to_canvas.map(before.affine_edit_transform(paint).unwrap().map(p))), 0.01);
+        near_point(map.map(p), after.map(to_canvas.map(before.local_to_document(paint).map(p))), 0.01);
     }
     let doc = s.engine.document();
     assert_eq!(doc.working.selection, Some(before.working.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));

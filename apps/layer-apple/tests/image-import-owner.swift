@@ -85,6 +85,14 @@ import UniformTypeIdentifiers
                 }).stableKey
             }
             func invoke(_ command: String) async throws { try await store.apply(["type": "invoke", "command": command]) }
+            func images() -> UInt64 { store.state["layers"].array.reduce(0) { $0 + $1["object_count"].uint } }
+            func imageNames() async throws -> [String] {
+                let collapsed = store.state["layers"].array.filter { $0["object_count"].uint > 0 && !$0["expanded"].bool }.map { $0["id"].raw }
+                for layer in collapsed { try await store.apply(["type": "object", "action": ["op": "expand", "layer": layer, "expanded": true]]) }
+                let names = store.state["layers"].array.flatMap { $0["objects"].array.map { $0["label"].string } }
+                for layer in collapsed { try await store.apply(["type": "object", "action": ["op": "expand", "layer": layer, "expanded": false]]) }
+                return names
+            }
             func settled(_ label: String) async throws {
                 try await wait(label, native: native) {
                     !files.busy && !store.state["requests"].array.contains { $0["kind"]["type"].string == "document" }
@@ -129,22 +137,22 @@ import UniformTypeIdentifiers
             release.signal(); try await writer.value
             try require(!premature, "Photo read must wait for coordinated replacement")
             try await settled("Place photo")
-            try require(files.error == nil && store.state["layers"].array.count == 3, files.error ?? "Place must add one layer")
-            try require(store.state["layer_tools"]["editing_layer"]["label"].string == "Imported image", "Use the photo name without its extension")
+            try require(files.error == nil && store.state["layers"].array.count == 3 && images() == 1, files.error ?? "Place must add one image layer")
             try require(store.state["colors"]["rgb_space"].string == "Srgb", "Place must preserve receiving working space")
             try await invoke("apply_transform"); try await settled("Apply placed photo")
+            try require(try await imageNames() == ["Imported image"], "Use the photo name without its extension")
             let placed = layerState()
             try await invoke("undo"); try await wait("Place Undo", native: native) { layerState() == blank }
             try await invoke("redo"); try await wait("Place Redo", native: native) { layerState() == placed }
             try await invoke("paste_image"); try await settled("Paste encoded photo")
-            try require(files.error == nil && store.state["layers"].array.count == 4, files.error ?? "Paste must add one retained photo")
+            try require(files.error == nil && images() == 2, files.error ?? "Paste must add one retained image")
             try await invoke("apply_transform"); try await settled("Apply pasted photo")
             let pasted = layerState()
             try await invoke("undo"); try await wait("Paste Undo", native: native) { layerState() == placed }
             try await invoke("redo"); try await wait("Paste Redo", native: native) { layerState() == pasted }
             batch = [url, second]
             try await invoke("import_image"); try await settled("Prepare image batch")
-            try require(store.state["layers"].array.count == 6 && store.command("placement_original_size")["enabled"].bool,
+            try require(images() == 4 && store.command("placement_original_size")["enabled"].bool,
                 "All batch members must enter one visible placement transaction")
             try await invoke("cancel_transform"); try await settled("Cancel whole batch")
             try require(layerState() == pasted, "Cancel removes every provisional member")
@@ -160,7 +168,7 @@ import UniformTypeIdentifiers
             files.error = nil; batch = nil
             clipboard = [sourceBytes, sourceBytes]
             try await invoke("paste_image"); try await settled("Paste image batch")
-            try require(store.state["layers"].array.count == 6 && store.command("placement_original_size")["enabled"].bool,
+            try require(images() == 4 && store.command("placement_original_size")["enabled"].bool,
                 "Clipboard items share the same batch transaction")
             try await invoke("cancel_transform"); try await settled("Cancel pasted batch")
             try require(layerState() == pasted, "Clipboard batch cancellation preserves artwork")
@@ -189,11 +197,11 @@ import UniformTypeIdentifiers
             let fileProvider = NSItemProvider(item: url as NSURL, typeIdentifier: UTType.fileURL.identifier)
             try require(files.drop([fileProvider, provider("Encoded.png", sourceBytes)], placement: dropPoint), "Accept native file/image providers")
             try await settled("Mixed provider batch")
-            try require(files.error == nil && store.state["layers"].array.count == 6,
+            try require(files.error == nil && images() == 4,
                 files.error ?? "Drop must enter placement without opening a picker")
-            try require(store.state["layers"].array.contains { $0["label"].string == "Encoded" },
-                "A provider's supplied filename must name its retained layer")
             try await invoke("apply_transform"); try await settled("Apply dropped batch")
+            try require(try await imageNames().contains("Encoded"),
+                "A provider's supplied filename must name its retained image")
             let dropped = layerState(ignoringSelection: true)
             try await invoke("undo"); try await wait("Drop batch Undo", native: native) { layerState() == pasted }
             try await invoke("redo"); try await wait("Drop batch Redo", native: native) { layerState(ignoringSelection: true) == dropped }
@@ -219,7 +227,7 @@ import UniformTypeIdentifiers
             try require(files.busy && layerState() == pasted, "An old provider reply must not complete a newer drop")
             delayedRepresentation?(sourceBytes, nil); delayedRepresentation = nil
             try await settled("New provider completes")
-            try require(files.error == nil && store.state["layers"].array.count == 5, files.error ?? "Only the new provider may enter placement")
+            try require(files.error == nil && images() == 3, files.error ?? "Only the new provider may enter placement")
             try await invoke("cancel_transform"); try await settled("Cancel dropped placement")
             try require(layerState() == pasted, "Drop cancellation removes the complete provisional placement")
 

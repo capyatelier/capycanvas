@@ -106,7 +106,7 @@ impl SpatialIndex {
 #[cfg(test)]
 pub(in crate::scene) mod tests {
     use super::*;
-    use layer_core::{Document, Edit, Point, authored::*};
+    use layer_core::{Document, Edit, authored::*};
 
     pub(in crate::scene) fn document()->(Document,OccurrenceHandle,Vec<ImageObjectHandle>) {
         let mut art=Artwork::new([256;2]).unwrap();
@@ -177,7 +177,7 @@ pub(in crate::scene) mod tests {
         assert_eq!(hits(&mut index,doc.scene(),owner,window),[handles[2],handles[1]]);
         assert!(!Arc::ptr_eq(&tree,&index.layers[&owner].tree));
         assert_eq!(hits(&mut index,doc.scene(),owner,DocRect {min:[-1030,-4],max:[-1010,12]}),[handles[0]]);
-        let mut occurrence=doc.scene().occurrence(owner).unwrap().clone();occurrence.translation=Point {x:256.,y:0.};
+        let mut occurrence=doc.scene().occurrence(owner).unwrap().clone();occurrence.offset= [256, 0];
         doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,owner,Some(occurrence)).unwrap())).unwrap();
         assert!(hits(&mut index,doc.scene(),owner,window).is_empty());
         assert_eq!(hits(&mut index,doc.scene(),owner,DocRect {min:[252,-4],max:[268,12]}),[handles[2],handles[1]]);

@@ -62,6 +62,7 @@ pub(crate) struct Recorder {
     pub(crate) crop_overlay: Option<layer_render::CropOverlay>,
     pub(crate) frame_scene: Option<SceneSnapshot>,
     pub(crate) evaluation: EvaluationContext,
+    pub(crate) rebuilds: usize,
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
@@ -219,6 +220,7 @@ impl CanvasRenderer for Recorder {
     fn release_asset(&mut self, _: &AssetId) {}
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         self.evaluation.elapsed = packet.time_seconds;
+        self.rebuilds += usize::from(packet.reset_layers);
         self.frame_scene = Some(packet.scene.snapshot(self.evaluation.clone()));
         self.pending_operations.clear();
         for batch in packet.dab_batches {
@@ -246,6 +248,13 @@ impl CanvasRenderer for Recorder {
         self.composites += usize::from(packet.composite_all);
         Ok(())
     }
+}
+/// The selection that a pending or just submitted Coverage operation stores in `mask`.
+pub(crate) fn stored_selection(s: &mut UiSession<Recorder>, mask: layer_core::authored::CoverageHandle) -> Option<layer_core::Selection> {
+    let target = SourceTarget::Coverage(mask);
+    let pending = s.engine.document().artwork.coverage.get(mask).and_then(|source| source.operations.first().cloned());
+    pending.or_else(|| s.renderer_mut().pending_operations.iter().find(|(t, _)| *t == target).map(|(_, op)| op.clone()))
+        .filter(|op| op.kind == layer_core::RasterOperationKind::Coverage).and_then(|op| op.coverage.selection)
 }
 pub(crate) fn session(platform: Platform) -> UiSession<Recorder> {
     UiSession::new(
@@ -317,7 +326,7 @@ pub(crate) fn finish_fixture_content_bounds(session: &mut UiSession<Recorder>) -
         let scene = request.snapshot.view();
         let bounds = request.selection.as_ref().map_or_else(
             || layer_core::Rect::from_extent(scene.target_extent(target)),
-            |selection| scene.target_geometry(target).as_affine().unwrap().inverse().unwrap().bounds(selection.coverage_bounds()),
+            |selection| selection.coverage_bounds().translated(layer_core::offsets::point(scene.target_offset(target).map(|v| -v))),
         );
         session.engine.backend_mut().bounds_reply = Some(Ok(bounds));
         regions |= session.frame(tick + 1, tick + 1).unwrap().regions;

@@ -16,15 +16,15 @@ be tested without launching a window.
 `Document`, in `layer-core`, owns one typed `Artwork` and transient
 `WorkingState`. Artwork stores compositions, stacks, occurrences, paint and
 coverage sources, effect applications and immutable programs, saved selections, guides
-and outputs. Stacks own order; occurrences own placement and presentation;
+and outputs. Stacks own order; occurrences own integer offsets and presentation;
 sources own editable pixels; image objects and paint bases share immutable
 ID-bearing images. Object collections own their child order and retain no
 writable raster cache. Compact typed handles identify runtime records, while stable
 portable IDs identify records in files. `Editor` applies atomic reversible record
 changes and retains immutable owners for undo/redo.
 
-Working selection, saved-selection overlay visibility/color/opacity and editing targets
-belong to `WorkingState`; they do not
+Working selection, image selection, the canvas view origin, saved-selection overlay
+visibility/color/opacity and editing targets belong to `WorkingState`; they do not
 enter the portable artwork manifest. A captured `ArtworkCapture` retains shared
 immutable artwork roots, an output evaluation context and a checkpoint. Shared
 resource enumeration works independently of ZIP construction, so history, parked

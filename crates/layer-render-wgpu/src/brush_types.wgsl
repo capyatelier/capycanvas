@@ -15,10 +15,6 @@ struct Style {
     contact_b: vec4<f32>,
     contact_c: vec4<f32>,
     bristles: vec4<f32>,
-    brush_to_layer_linear: vec4<f32>,
-    brush_to_layer_offset: vec4<f32>,
-    layer_to_brush_linear: vec4<f32>,
-    layer_to_brush_offset: vec4<f32>,
     bristle_streak: vec4<f32>,
     color_mode: vec4<f32>,
 }

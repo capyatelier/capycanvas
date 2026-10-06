@@ -2,7 +2,7 @@ use super::*;
 use layer_core::{Ruler, RulerConstraint, RulerGeometry};
 
 #[derive(Clone)]
-pub(super) struct Snapping {
+pub(crate) struct Snapping {
     targets: Arc<[(Option<OccurrenceHandle>, Rect)]>,
     rulers: Arc<[Ruler]>,
     axes: [Option<(usize, usize, usize)>; 2],

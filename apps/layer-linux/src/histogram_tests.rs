@@ -39,7 +39,7 @@ fn fixture() -> Document {
     paint_at_mut(&mut p, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(source.finish().unwrap())).into()));
     let owner = p.scene().order()[0];
     let coverage = p.artwork.coverage.next_handle();
-    let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, [64, 16], Point::default());
+    let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, [64, 16], [0, 0]);
     mask.source.default_coverage = 0.5;
     p.artwork.coverage.insert(layer_core::authored::PortableId::random(), mask.source).unwrap();
     let occurrence = p.artwork.occurrences.get_mut(owner).unwrap();

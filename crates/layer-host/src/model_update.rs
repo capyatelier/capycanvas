@@ -367,7 +367,7 @@ mod tests {
         apply(&mut retained, patch);
         assert_eq!(retained, expected_model(&host));
         let id = retained["state"]["notice"]["id"].as_u64().unwrap();
-        host.dispatch(UiAction::Notice { id, accept: false }).unwrap();
+        host.dispatch(UiAction::Notice { id, accept: false, action: None }).unwrap();
         let patch = read(&mut host);
         assert_eq!(notice_paths(&patch), [json!([["state", "notice"], null])], "{patch}");
         apply(&mut retained, patch);

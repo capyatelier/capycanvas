@@ -338,6 +338,7 @@ color-properties-source = { $width } × { $height } px · { $bits } bit { $chann
 color-properties-retained-rasterized = Đã chuyển thành ảnh điểm theo tọa độ tài liệu.
 color-properties-retained-icc = Đã giữ mẫu gốc và ICC nhúng.
 color-properties-retained-original = Đã giữ mẫu gốc và cách diễn giải màu.
+color-properties-retained-placed = Hình ảnh đã đặt với mẫu và cách diễn giải màu riêng.
 
 
 color-profile-select-imported = Chọn hồ sơ màu đã nhập.

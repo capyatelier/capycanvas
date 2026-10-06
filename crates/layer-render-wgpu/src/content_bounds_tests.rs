@@ -74,9 +74,9 @@ fn paint(document: &mut Document) -> &mut PaintSource {
     let SourceTarget::Paint(h) = paint_target(document) else { unreachable!() };
     document.artwork.paint.get_mut(h).unwrap()
 }
-fn attach_mask(document: &mut Document, owner: OccurrenceHandle, translation: Point) -> CoverageHandle {
+fn attach_mask(document: &mut Document, owner: OccurrenceHandle) -> CoverageHandle {
     let h = document.artwork.coverage.next_handle();
-    let snapshot = layer_core::CoverageSnapshot::reveal_all(h, document.composition().size, translation);
+    let snapshot = layer_core::CoverageSnapshot::reveal_all(h, document.composition().size, [0, 0]);
     assert_eq!(document.artwork.coverage.insert(PortableId::random(), snapshot.source).unwrap(), h);
     document.artwork.occurrences.get_mut(owner).unwrap().mask = Some(snapshot.use_);
     h
@@ -148,7 +148,7 @@ fn mask_products_use_coverage_instead_of_intersecting_rectangles() {
     let mut document = document(Default::default());
     paint(&mut document).raster = raster(RasterPlane::Color, document.composition().color, |x, y| if y == 20 && (x == 20 || x == 40) { 1. } else { 0. });
     let h = owner(&document);
-    let mask = attach_mask(&mut document, h, Point::default());
+    let mask = attach_mask(&mut document, h);
     document.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.;
     document.artwork.coverage.get_mut(mask).unwrap().raster = raster(RasterPlane::Mask, document.composition().color, |x, y| if y == 20 && (x == 21 || x == 39) { 1. } else { 0. });
     assert!(bounds(&renderer, &document, ContentScope::Visible).is_empty());
@@ -160,7 +160,7 @@ fn mask_products_use_coverage_instead_of_intersecting_rectangles() {
 fn inverted_selection_intersects_actual_target_pixels_in_local_coordinates() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
-    occurrence(&mut document).translation = Point { x: 10., y: 12. };
+    occurrence(&mut document).offset = [10, 12];
     paint(&mut document).raster = raster(RasterPlane::Color, document.composition().color, |x, y| if y == 20 && (x == 20 || x == 40) { 1. } else { 0. });
     let mut selection = Selection::polygon(rect(29., 31., 32., 34.).corners().to_vec()).unwrap();
     selection.inverted = true;
@@ -174,14 +174,14 @@ fn inverted_selection_intersects_actual_target_pixels_in_local_coordinates() {
 fn nested_group_target_selection_retains_absolute_registration() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
-    occurrence(&mut document).translation = Point { x: 10., y: 10. };
+    occurrence(&mut document).offset = [10, 10];
     paint(&mut document).raster = raster(RasterPlane::Color, document.composition().color, |x, y| if y == 20 && (x == 20 || x == 40) { 1. } else { 0. });
     let target = paint_target(&document);
     let h = owner(&document);
     let inner = wrap(&mut document, h, "inner");
-    let o = document.artwork.occurrences.get_mut(inner).unwrap(); o.translation = Point { x: 20., y: 20. }; o.visible = false;
+    let o = document.artwork.occurrences.get_mut(inner).unwrap(); o.offset = [20, 20]; o.visible = false;
     let outer = wrap(&mut document, inner, "outer");
-    document.artwork.occurrences.get_mut(outer).unwrap().translation = Point { x: 30., y: 30. };
+    document.artwork.occurrences.get_mut(outer).unwrap().offset = [30, 30];
     reindex(&mut document);
     document.working.selection = Some(Selection::polygon(rect(79., 79., 82., 82.).corners().to_vec()).unwrap());
     let request = ContentBoundsRequest::new(&document, ContentScope::Target(target));
@@ -196,7 +196,7 @@ fn hidden_offcanvas_content_counts_for_all_and_local_target_only() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     paint(&mut document).raster = raster(RasterPlane::Color, document.composition().color, |x, y| if (20..40).contains(&x) && (30..50).contains(&y) { 1. } else { 0. });
-    occurrence(&mut document).translation = Point { x: -30., y: -40. };
+    occurrence(&mut document).offset = [-30, -40];
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), rect(-10., -10., 10., 10.));
     assert_eq!(bounds(&renderer, &document, ContentScope::Canvas), rect(0., 0., 10., 10.));
     occurrence(&mut document).visible = false;
@@ -227,7 +227,7 @@ fn group_mask_products_and_paper_are_evaluated_at_document_coordinates() {
     paint(&mut document).raster = raster(RasterPlane::Color, document.composition().color, |x, y| if y == 20 && (x == 20 || x == 40) { 1. } else { 0. });
     let h = owner(&document);
     let group = wrap(&mut document, h, "group");
-    let mask = attach_mask(&mut document, group, Point::default());
+    let mask = attach_mask(&mut document, group);
     document.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.;
     document.artwork.coverage.get_mut(mask).unwrap().raster = raster(RasterPlane::Mask, document.composition().color, |x, y| if y == 20 && (x == 21 || x == 39) { 1. } else { 0. });
     assert!(bounds(&renderer, &document, ContentScope::Visible).is_empty());
@@ -241,7 +241,7 @@ fn inverted_mask_target_uses_actual_coverage_and_finite_extent() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     let h = owner(&document);
-    let mask = attach_mask(&mut document, h, Point::default());
+    let mask = attach_mask(&mut document, h);
     document.artwork.coverage.get_mut(mask).unwrap().default_coverage = 1.;
     occurrence(&mut document).mask.as_mut().unwrap().inverted = true;
     document.artwork.coverage.get_mut(mask).unwrap().raster = raster(RasterPlane::Mask, document.composition().color, |x, y| if (25..35).contains(&x) && (40..60).contains(&y) { 0. } else { 1. });
@@ -265,7 +265,7 @@ fn transparent_offcanvas_photo_does_not_expand_paper_coverage() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = Document::new(PortableId::random(), 128, 96, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([96, 80], |_, _| 0)).into()));
-    occurrence(&mut document).translation = Point { x: -80., y: -70. };
+    occurrence(&mut document).offset = [-80, -70];
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(0., 0., 128., 96.));
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), rect(0., 0., 128., 96.));
     let paper = document.scene().order()[1];
@@ -302,20 +302,20 @@ fn renderer_cancellation_discards_the_old_result_before_replacement() {
 }
 
 #[test]
-fn linked_and_unlinked_initial_mask_coverage_uses_the_owner_geometry_once() {
+fn linked_and_unlinked_initial_mask_coverage_follow_the_owner_offset_once() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([96, 80], |_, _| 255)).into()));
-    occurrence(&mut document).translation = Point { x: 10., y: 10. };
-    occurrence(&mut document).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
+    occurrence(&mut document).offset = [10, 10];
     let h = owner(&document);
-    let mask = attach_mask(&mut document, h, Point { x: 10., y: 10. });
+    let mask = attach_mask(&mut document, h);
     document.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.;
-    document.artwork.coverage.get_mut(mask).unwrap().initial = Some(Selection::polygon(rect(20., 20., 30., 30.).corners().to_vec()).unwrap());
-    assert_eq!(bounds(&renderer, &document, ContentScope::Visible), rect(49., 49., 71., 71.));
+    let color = document.composition().color;
+    crate::test_support::materialize_mask(document.artwork.coverage.get_mut(mask).unwrap(), Selection::polygon(rect(20., 20., 30., 30.).corners().to_vec()).unwrap(), color);
+    assert_eq!(bounds(&renderer, &document, ContentScope::Visible), rect(30., 30., 40., 40.));
     let mask = occurrence(&mut document).mask.as_mut().unwrap();
     mask.linked = false;
-    mask.translation = Point::default();
+    mask.offset = [0, 0];
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), rect(20., 20., 30., 30.));
 }
 
@@ -324,7 +324,7 @@ fn visible_filter_halos_extend_past_the_local_source_hull() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
-    occurrence(&mut document).translation = Point { x: 20., y: 20. };
+    occurrence(&mut document).offset = [20, 20];
     let mut effect = layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
     effect.set("sigma", layer_core::EffectValue::Number(2.)).unwrap();
     add_effect(&mut document, effect, "blur");
@@ -338,7 +338,7 @@ fn off_frame_filter_bounds_keep_authored_coordinates_when_capture_rebases() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     paint(&mut document).base = Some(PaintBase::new(source([32;2], |x,y| u8::from((10..18).contains(&x) && (10..18).contains(&y)) * 255).into()));
-    occurrence(&mut document).translation = Point {x:-12.,y:-14.};
+    occurrence(&mut document).offset = [-12, -14];
     let mut effect = layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
     effect.set("sigma", layer_core::EffectValue::Number(2.)).unwrap();
     add_effect(&mut document,effect,"off-frame blur");
@@ -346,7 +346,7 @@ fn off_frame_filter_bounds_keep_authored_coordinates_when_capture_rebases() {
     let actual = bounds(&renderer,&document,ContentScope::Visible);
     assert!(actual.min.x < -2. && actual.min.y < -4. && actual.max.x > 6. && actual.max.y > 4., "{actual:?}");
     let mut reference = document.clone();
-    occurrence(&mut reference).translation = Point {x:20.,y:18.};
+    occurrence(&mut reference).offset = [20, 18];
     let expected = bounds(&renderer,&reference,ContentScope::Visible);
     assert_eq!(actual,rect(expected.min.x-32.,expected.min.y-32.,expected.max.x-32.,expected.max.y-32.));
 }

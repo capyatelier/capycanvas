@@ -338,9 +338,9 @@ fn photo_filter_frame_time() {
         let source=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()),Default::default()).unwrap();
         let imported=layer_color::photo_project(source,Default::default(),layer_core::DocumentNames {paint:"Water".into(),paper:"Paper".into()},SampleDepth::U8).unwrap();
         let h=imported.working.occurrence.unwrap();let paint=imported.scene().paint_source(h).unwrap();let original=paint.base.as_ref().unwrap().image.storage();
-        eprintln!("decoded_source_channels={:?} embedded_icc={} pose={:?}",original.interpretation.channels,matches!(original.interpretation.profile,layer_core::color::ColorProfile::Icc(_)),imported.scene().occurrence(h).unwrap().placement);
+        eprintln!("decoded_source_channels={:?} embedded_icc={} offset={:?}",original.interpretation.channels,matches!(original.interpretation.profile,layer_core::color::ColorProfile::Icc(_)),imported.scene().occurrence(h).unwrap().offset);
         base=empty_document(extent,Default::default());let target=insert_source(&mut base,"Water",original.clone());
-        base.artwork.occurrences.get_mut(target).unwrap().placement=imported.scene().occurrence(h).unwrap().placement.clone();
+        base.artwork.occurrences.get_mut(target).unwrap().offset=imported.scene().occurrence(h).unwrap().offset;
         if std::env::var_os("CAPY_FILTER_ASSUME_SRGB").is_some() {
             let layer_core::OccurrenceContent::Paint(p)=base.scene().occurrence(target).unwrap().content else {unreachable!()};
             let binding=base.artwork.paint.get_mut(p).unwrap().base.as_mut().unwrap();

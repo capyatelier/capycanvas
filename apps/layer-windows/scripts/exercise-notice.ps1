@@ -70,7 +70,7 @@ try {
 
  Click 'mouse' $point
  Wait-Until {(NoticeText) -eq $reason -and (Notice).text -eq $reason} 'Move on a locked layer did not show the notice'
- if(Shown 'canvas-notice-action'){throw 'The locked-layer refusal offered an action'}
+ if(Shown 'canvas-notice-actions'){throw 'The locked-layer refusal offered an action'}
  if((Model).state.host_error){throw "The refusal reached host_error: $((Model).state.host_error)"}
  if(!(Focused)){throw 'The notice took focus from the canvas'}
  $notice=(Find 'canvas-notice').Current.BoundingRectangle
@@ -108,8 +108,8 @@ try {
  Wait-Until {((Model).state.commands|Where-Object id -eq 'selection_reference').selected} 'Reference sampling was not chosen'
  (Find 'drawing-canvas').SetFocus()
  Click 'mouse' $point
- Wait-Until {(NoticeText) -eq 'This tool samples reference layers, and none is marked' -and (Shown 'canvas-notice-action')} 'The Wand refusal did not offer a reference'
- $action=Shown 'canvas-notice-action'
+ Wait-Until {(NoticeText) -eq 'This tool samples reference layers, and none is marked' -and (Shown 'canvas-notice-action-use_reference')} 'The Wand refusal did not offer a reference'
+ $action=Shown 'canvas-notice-action-use_reference'
  if($action.Current.Name -notmatch '^Use .+ as Reference$'){throw "Unexpected notice action: $($action.Current.Name)"}
  if(!(Focused)){throw 'The notice action took focus from the canvas'}
  $frame=(Find 'canvas-notice').Current.BoundingRectangle;$line=(Find 'canvas-notice-text').Current.BoundingRectangle;$offer=$action.Current.BoundingRectangle

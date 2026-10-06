@@ -1,6 +1,6 @@
 use super::{Handle, PortableId, Store, Image, ImageObject, ObjectLayer, PaintBase};
-use crate::{BlendSpace, EffectProgram, EffectValue, ImageResolution, LayerBlend, LayerPlacement,
-    PhotoMetadata, Point, Projective, RulerGeometry, Selection, SelectionMaskProperties,
+use crate::{BlendSpace, EffectProgram, EffectValue, ImageResolution, LayerBlend,
+    PhotoMetadata, RulerGeometry, Selection, SelectionMaskProperties,
     color::{DocumentColor, ProofRecipe, hdr::SdrRendition}, raster::RasterRevision};
 use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
 
@@ -38,7 +38,6 @@ pub struct Artwork {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Composition {
     pub size: [u32; 2],
-    pub origin: Point,
     pub color: DocumentColor,
     pub blend: BlendSpace,
     pub resolution: Option<ImageResolution>,
@@ -66,15 +65,14 @@ pub struct Occurrence {
     pub alpha_locked: bool,
     pub reference: bool,
     pub attachment: Attachment,
-    pub translation: Point,
-    pub placement: LayerPlacement,
+    pub offset: [i64; 2],
     pub mask: Option<MaskUse>,
 }
 impl Occurrence {
     pub fn new(content: OccurrenceContent, name: impl Into<Arc<str>>) -> Self {
         Self { content, name: name.into(), visible: true, opacity: 1., blend: LayerBlend::Normal,
             locked:false, alpha_locked:false, reference:false, attachment:Attachment::None,
-            translation:Point::default(), placement:LayerPlacement::default(), mask:None }
+            offset:[0;2], mask:None }
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -89,7 +87,6 @@ pub struct PaintSource {
 pub struct CoverageSource {
     pub domain: [u32; 2],
     pub raster: RasterRevision,
-    pub initial: Option<Selection>,
     pub default_coverage: f32,
     pub operations: Arc<Vec<crate::RasterOperation>>,
 }
@@ -99,8 +96,7 @@ pub struct MaskUse {
     pub enabled: bool,
     pub linked: bool,
     pub inverted: bool,
-    pub translation: Point,
-    pub placement: Projective,
+    pub offset: [i64; 2],
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectApplication {
@@ -161,8 +157,6 @@ pub struct Output {
     pub composition: CompositionHandle,
     pub name: Arc<str>,
     pub context: EvaluationContext,
-    pub frame: Option<(Point, [u32; 2])>,
-    pub scale: [f32; 2],
     pub sdr: SdrRendition,
     pub proof: Option<ProofRecipe>,
 }
@@ -179,6 +173,8 @@ pub struct WorkingState {
     pub occurrence: Option<OccurrenceHandle>,
     pub target: Option<SourceTarget>,
     pub inspect_mask: Option<OccurrenceHandle>,
+    pub objects: BTreeSet<ImageObjectHandle>,
+    pub view_origin: [i64; 2],
 }
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,11 +206,11 @@ impl Artwork {
         let mut stacks = Store::default();
         let stack = stacks.insert(PortableId::random(), Stack::default())?;
         let mut compositions = Store::default();
-        let root = compositions.insert(PortableId::random(), Composition { size, origin:Point::default(), color:DocumentColor::default(),
+        let root = compositions.insert(PortableId::random(), Composition { size, color:DocumentColor::default(),
             blend:BlendSpace::Linear, resolution:None, result:stack })?;
         let mut outputs = Store::default();
         let default_output = outputs.insert(PortableId::random(), Output { composition:root, name:Arc::from(""), context:EvaluationContext::default(),
-            frame:None, scale:[1.;2], sdr:SdrRendition::default(), proof:None })?;
+            sdr:SdrRendition::default(), proof:None })?;
         Ok(Self { id:PortableId::random(), root, compositions, stacks, outputs, default_output,
             occurrences:Store::default(), paint:Store::default(), object_layers:Store::default(), objects:Store::default(), coverage:Store::default(), effects:Store::default(),
             selections:Store::default(), guides:Store::default(), metadata:Arc::new(PhotoMetadata::default()), extensions:Arc::default() })

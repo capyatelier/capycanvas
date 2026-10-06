@@ -22,7 +22,7 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
   const choose=async(name,group='Saved Profiles')=>{const selector=`.proof-panel optgroup[label="${group}"] option`;await wait(`!![...document.querySelectorAll(${JSON.stringify(selector)})].find(o=>o.textContent===${JSON.stringify(name)})`);await evaluate(`(()=>{const s=document.querySelector('.proof-panel select[aria-label="Proof profile"]');s.value=[...document.querySelectorAll(${JSON.stringify(selector)})].find(o=>o.textContent===${JSON.stringify(name)}).value;s.dispatchEvent(new Event('change'));})()`);};
   const histogram=histogramJourney({evaluate,settle}).exact;
   const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return readPackage(evaluate, '[...proofTest.files.values()].at(-1)');};
-  const backing=m=>({objects:m.objects.filter(o=>o.type!=='capy.output/1'),resources:m.resources.filter(r=>r.type!=='capy.icc/1').map(r=>resourceIdentity(m,{ref:r.id}))});
+  const backing=m=>({objects:m.objects.filter(o=>o.type!=='capy.output/2'),resources:m.resources.filter(r=>r.type!=='capy.icc/1').map(r=>resourceIdentity(m,{ref:r.id}))});
   const exportPng=async()=>{
     await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
     await set('Format','Png');await set('Output profile','0');await set('Bit depth','U8');await set('Dither','None');

@@ -38,12 +38,13 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
       check(pixel===9504*6336);
       const objects=transfer.manifest.objects;
       const saved=objects.find(o=>o.type==='capy.selection/1');
-      const coverage=objects.find(o=>o.type==='capy.coverage-source/1');
-      check(saved && coverage && JSON.stringify(saved.data.shape.pixels.chunks)===JSON.stringify(coverage.data.initial.shape.pixels.chunks));
+      const coverage=objects.find(o=>o.type==='capy.coverage-source/2');
+      check(saved && coverage && JSON.stringify(coverage.data.domain.size)===JSON.stringify([9504,6336]) && !(coverage.data.tiles??[]).length);
       check(JSON.stringify(selection.chunks)===JSON.stringify(saved.data.shape.pixels.chunks.map(c=>c.ref)));
+      const chunks=new Set(selection.chunks),bindings=objects.filter(o=>JSON.stringify(o.data).match(/"ref":"([^"]+)"/g)?.some(ref=>chunks.has(ref.slice(7,-1)))).length;
       const profiles=transfer.manifest.resources.filter(r=>r.type==='capy.icc/1');check(profiles.length===1);
       const profile=profiles[0].id;
-      const proof=objects.find(o=>o.type==='capy.output/1').data.proof;
+      const proof=objects.find(o=>o.type==='capy.output/2').data.proof;
       const base=objects.find(o=>o.type==='capy.paint-source/2').data.base;
       const original=objects.find(o=>o.id===base.image.ref).data;
       check(proof.profile.resource.ref===profile && original.interpretation.profile.resource.ref===profile);
@@ -51,7 +52,7 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
       let code=0;
       for(const bytes of payload(resource.payload))for(const value of bytes){if(value!==expectedProfile[code])throw Error('ICC mismatch at '+code);code++;}
       check(code===2*1024*1024 && code===expectedProfile.length);
-      return {envelope,metadata:wire.metadata.length,payload:total,largest,decoded:pixel,profiles:profiles.length,bindings:2};
+      return {envelope,metadata:wire.metadata.length,payload:total,largest,decoded:pixel,profiles:profiles.length,bindings};
     };
     const hash=async blob=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()))).join(',');
     try {
@@ -69,7 +70,7 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
       const main=performance.now()-begin;
       const saved=new Blob(parts),expectedHash=await hash(saved),savedBytes=new Uint8Array(await saved.arrayBuffer());
       const savedManifest=await (${packageManifest.toString()})(savedBytes),savedEvidence=await (${packageEvidence.toString()})(savedBytes,savedManifest);
-      const identity=manifest=>({objects:manifest.objects,resources:manifest.resources.map(({location,...resource})=>resource)});
+      const identity=manifest=>({objects:manifest.objects.map(o=>o.type==='capy.output/2'?{...o,data:{...o.data,representation:undefined}}:o),resources:manifest.resources.map(({location,...resource})=>resource)});
       const exactOriginal=JSON.stringify(identity(savedManifest))===JSON.stringify(identity(originalManifest))&&JSON.stringify(savedEvidence)===JSON.stringify(originalEvidence);
       const again=await request('read',options,[new Uint8Array(await saved.arrayBuffer())]);const second=inspect(again);
       const finish=performance.now();const final=await request('write',again.metadata,again.buffers);outputs.add(final.token);
@@ -89,7 +90,7 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
   assert.equal(result.exact_archive, true, 'All mask and ICC bytes survive reopening exactly');
   assert.equal(result.exact_original, true, 'Original authored records and every immutable resource identity, descriptor and byte survive the first round trip');
   assert.equal(result.selections, 1, 'Shared 61 MP authored coverage transfers once');
-  assert.equal(result.selection_bindings, 2, 'Saved selection and layer mask share one payload');
+  assert.equal(result.selection_bindings, 1, 'Only the saved selection references the 61 MP selection payload');
   assert.equal(result.profiles, 1, 'Proof and original share one ICC resource');
   assert.equal(result.decoded_selection_bytes, 9504 * 6336);
   assert.ok(result.metadata_bytes < 1024 * 1024, 'No image-sized JSON arrays');

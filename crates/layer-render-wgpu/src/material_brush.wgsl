@@ -119,11 +119,11 @@ fn local_canvas_load(document_position: vec2<f32>) -> vec4<f32> {
 }
 
 fn canvas_load(brush_position: vec2<f32>) -> vec4<f32> {
-    return local_canvas_load(brush_to_layer(brush_position));
+    return local_canvas_load(brush_position);
 }
 
 fn canvas_sample(brush_position: vec2<f32>) -> vec4<f32> {
-    let document_position = brush_to_layer(brush_position);
+    let document_position = brush_position;
     let base = floor(document_position - vec2<f32>(0.5)) + vec2<f32>(0.5);
     let fraction = clamp(document_position - base, vec2<f32>(0.0), vec2<f32>(1.0));
     let top = mix(
@@ -179,7 +179,7 @@ fn contact_coverage(dab: Dab, world: vec2<f32>) -> f32 {
     return contact_coverage_field(dab, world, contact_field(world));
 }
 fn contact_coverage_field(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> f32 {
-    return brush_footprint(dab, world, field) * brush_selection_at(brush_to_layer(world));
+    return brush_footprint(dab, world, field) * brush_selection_at(world);
 }
 
 fn contact_segment_progress(dab: Dab, world: vec2<f32>) -> f32 {
@@ -587,7 +587,7 @@ fn wet_fragment(
 }
 
 fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
-    let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);
+    let world = render_target.origin_extent.xy + fragment_position.xy;
     let first = style.operation.x;
     let count = style.operation.y;
     if MATERIAL_OPERATION == OP_WATERCOLOR {
@@ -678,7 +678,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
         var repaint = false;
         if bristles_enabled() {
             let paint = bristle_paint(dab, world, field.y);
-            let selected = brush_selection_at(brush_to_layer(world));
+            let selected = brush_selection_at(world);
             if paint.held {
                 stroke_coverage = max(stroke_coverage, paint.coverage * selected);
                 continue;
@@ -697,7 +697,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             1.0,
         );
         if contact_feature(1u, style.contact_a.x > 0.5) && !contact_uniform() {
-            let selected = brush_selection_at(brush_to_layer(world));
+            let selected = brush_selection_at(world);
             let unselected_coverage = coverage / max(selected, 0.000001);
             requested_alpha = (1.0 - exp(-unselected_coverage * dab.flow * dab.color.a * 6.0)) * selected;
         }
@@ -763,7 +763,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
 
 @fragment
 fn gather_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let world = layer_to_brush(render_target.origin_extent.xy + position.xy);
+    let world = render_target.origin_extent.xy + position.xy;
     var value = vec4<f32>(0.0);
     if MATERIAL_OPERATION == OP_SMUDGE {
         let trace = trace_smudge(world, style.operation.x, style.operation.y);
@@ -788,7 +788,7 @@ fn material_result(fragment_position: vec4<f32>) -> MaterialOutput {
     }
     var result = paint_fragment(fragment_position);
     if style.color.a > 0.5 {
-        let world = layer_to_brush(render_target.origin_extent.xy + fragment_position.xy);
+        let world = render_target.origin_extent.xy + fragment_position.xy;
         var original: vec4<f32>;
         if MATERIAL_OPERATION == OP_DEPOSIT || MATERIAL_OPERATION == OP_COVERAGE || MATERIAL_OPERATION == OP_CLONE {
             original = dry_original(vec2<i32>(floor(fragment_position.xy)));

@@ -142,7 +142,7 @@ def validate_setup(info, requested):
         actual[f"radius_{axis}"] = info["radii"][axis]
     workload = requested.get("workload", "ordinary")
     effect_count = int(workload in ("blurred-base", "objects-effects")) + int(bool(requested.get("live_filter")))
-    expected.update(layers=requested["photo_layers"] + 2 + effect_count,
+    expected.update(layers=requested.get("fixture_layers", requested["photo_layers"] + 2 + effect_count),
                     diameter=requested["brush_size"], selected_preset=requested["preset"],
                     feedback=requested["prediction"])
     actual.update(layers=len(state["layers"]), diameter=state["brush"]["diameter"],

@@ -99,7 +99,7 @@ fn occurrence_edit(doc: &Document, handle: OccurrenceHandle, update: impl FnOnce
 }
 
 fn reveal_all(extent: [u32; 2]) -> CoverageSnapshot {
-    CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), extent, Point::default())
+    CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), extent, [0, 0])
 }
 
 fn flush(engine: &mut CanvasEngine<WgpuRasterizer>) {

@@ -616,7 +616,7 @@ pub const SHORTCUT_SECTIONS: [ShortcutSection; 13] = [
 fn command_section(command: CommandId) -> ShortcutSection {
     use CommandId as C;
     match command {
-        C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::Copy | C::Cut | C::CopyMerged | C::PasteImage
+        C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::Copy | C::Cut | C::CopyMerged | C::CopyPixels | C::PasteImage
         | C::PasteInPlace | C::PasteInto | C::ClearLayer | C::FillSelection
         | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection | C::ImageSize
         | C::RotateImageLeft | C::RotateImageRight | C::RotateImage180 | C::FlipImageHorizontal
@@ -644,8 +644,8 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::Deselect | C::InvertSelection | C::RemoveSelectionPoint | C::MaskSelection | C::LoadSelectionLayer
         | C::InvertSelectionLayer | C::GrowSelection | C::ShrinkSelection | C::FeatherSelection | C::BorderSelection
         | C::SmoothSelection | C::TransformSelectionOutline => ShortcutSection::Select,
-        C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RepairSourceProfile
-        | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::RevertToOriginal | C::ApplyTransformPixels | C::InvertLayerMask
+        C::AddLayer | C::DeleteLayer | C::RaiseLayer | C::LowerLayer | C::RasterizeSource | C::RasterizeLayer | C::ConvertToObject | C::RepairSourceProfile
+        | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::DiscardPaintEdits | C::InvertLayerMask
         | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask | C::EditLayerContent | C::MergeDown | C::MergeGroup
         | C::MergeVisible | C::FlattenImage | C::StampVisible | C::NewDodgeBurnLayer | C::FrequencySeparation => ShortcutSection::Layer,
         C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical

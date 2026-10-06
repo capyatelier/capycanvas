@@ -27,8 +27,8 @@ small on-chip tiles used internally by some GPU architectures.
 
 Paint and coverage pages live in explicit source-local domains,
 `PaintSource.domain` and `CoverageSource.domain` in the
-[authored model](../reference/authored-model.md). A placed photo also retains its
-independent original extent. `SceneView::local_extent` and `target_extent` expose
+[authored model](../reference/authored-model.md). A photo base keeps its own
+image extent at its base offset inside the paint domain. `SceneView::local_extent` and `target_extent` expose
 these domains in [`authored/scene.rs`](../../crates/layer-core/src/authored/scene.rs).
 The composition frame is a window over those pixels; changing the canvas does not
 discard pixels outside it. Retained pixels count toward tile and byte limits.
@@ -39,38 +39,60 @@ Canvas geometry commands build one batch in
 [`canvas_geometry.rs`](../../crates/layer-core/src/canvas_geometry.rs):
 - A crop only moves root offsets and stores the old extent. It never copies pixels,
   so growing the canvas again shows the hidden pixels.
-- Growing the canvas left or up *rebases* a paint layer without a source by whole
-  tiles: its tile keys shift, still sharing their backing, and its offset, mask
-  offset and mask `initial` coverage move the other way. Tile coordinates stay
-  unsigned. A layer with a source never rebases, so the new strip beside a photo is
-  not paintable, as beside a moved photo.
-- After every geometry edit, each paint layer without a source, and each mask,
-  covers the canvas window in its local coordinates.
+- Growing the canvas left or up *rebases* paint layers and masks by whole tiles:
+  tile keys shift, still sharing their backing, a photo's base offset moves with
+  them, and the layer offset and linked mask offset move the other way. Tile
+  coordinates stay unsigned, and the new strip beside a photo is paintable.
+- After every geometry edit, each paint layer and each mask covers the canvas
+  window in its local coordinates.
 - A fill, gradient or figure with no selection is bounded to the canvas window on
   a layer with hidden pixels, and never writes past the layer's extent within an
   edge page, so growing the canvas shows transparency there. Brush dabs past the
   canvas edge may write hidden pixels, as they already do on photo layers.
 - A turned, flipped or resized canvas (Straighten, Rotate and Flip Image, Image
-  Size) is a `linear` map in the plan. Paint layers and masks without a source get
-  a pending `Transform` operation into a new local frame that holds the whole
-  moved extent; photos move their placement, and the selection, Selection Layers
-  and guides are transformed as metadata. Flips and quarter turns sample with
-  `Nearest`, so they move pixels exactly. Source and destination share one tile
-  grid while the operation runs, so a quarter turn of a non-square layer draws
-  into a square extent.
+  Size) is an F64 `linear` map in the plan; image objects and effect references
+  compose it in double precision. Paint layers and masks get a pending `Transform`
+  operation into a new local frame that holds the whole moved extent, and the
+  selection, Selection Layers and guides are transformed as metadata. Flips and
+  quarter turns sample with `Nearest`, so they move pixels exactly. Source and
+  destination share one tile grid while the operation runs, so a quarter turn of a
+  non-square layer draws into a square extent.
+- A paint layer with a base image is moved by the plan's `remaps` instead. A flip
+  or quarter turn moves it exactly, turning its tile-padded domain as a whole
+  ([`sample_remap.rs`](../../crates/layer-core/src/sample_remap.rs)): the base
+  becomes a new immutable image in its own interpretation, and every paint and
+  material tile moves to one tile. Whole-layer Transform flips and quarter turns
+  of such a layer and its linked mask use the same moves
+  (`Document::exact_layer_transform_plan`). Any other resample of an untouched
+  source-profile photo layer (no paint tiles or pending operations, full color,
+  not CMYK) keeps the photo's interpretation: its remap is a `BaseRemap::Resample`
+  that the snapshot worker renders through the map into float rows in the photo's
+  own primaries and encodes at its own channels, depth and profile
+  ([`snapshot/resample_image.rs`](../../crates/layer-render-wgpu/src/snapshot/resample_image.rs)).
+  RGB and gray gain alpha only where the result exposes transparency. Every other
+  photo layer folds its base into the layer's paint: the record loses its base,
+  and its `Transform` reads the removed base through `ImageTransform::source_base`,
+  so base and paint are resampled once together into working pixels.
 - A `Transform` whose selection takes every pixel its target holds (no
   selection, or a rectangle around all of its pages) leaves the pages outside its
   forward bounds empty. The renderer drops them, in every plane, from the GPU and
   from the data the next publication copies, so a reduction or turn publishes no
-  transparent tiles and they don't count toward the tile limit. A photo keeps its
-  pages, since they cover its original. A mask's transform creates the pages it
-  draws, so its source is only the pages the mask held.
-- Delete Cropped Pixels trims each paint layer and mask to the tiles its window
-  touches, rebases them to the smallest tile-aligned extent, and erases the edges
-  of paint layers with up to four bounded `Erase` operations, so only edge tiles
-  are rewritten.
+  transparent tiles and they don't count toward the tile limit. A layer that keeps
+  its base keeps its pages, since they cover it. A mask's transform creates the
+  pages it draws, so its source is only the pages the mask held.
+- Delete Cropped Paint Pixels trims each paint layer and mask to the tiles its
+  window touches, rebases them to the smallest tile-aligned extent, and erases the
+  edges of paint layers with up to four bounded `Erase` operations, so only edge
+  tiles are rewritten. A layer with a base is cut exactly instead: its base becomes
+  a new image of only the kept samples, or none, and its tiles are cleared outside
+  the window by a remap. Image objects are never cut.
+- Remaps run on the snapshot worker (`SnapshotRequest::Remap`, the Web raster
+  worker included); exact moves read at most four source tiles per result tile
+  and resamples render one result tile at a time. The UI applies the
+  plan with their results only if the drawing has not changed meanwhile, in one
+  undo step; undo restores the original images.
 - Pixel operations run in the same undo step as the metadata edits
-  (`CanvasEngine::apply_canvas_geometry`), on locked layers too. A target whose
+  (`CanvasEngine::apply_canvas_plan`), on locked layers too. A target whose
   raster the batch replaced is restored from that raster before its operations run.
 
 A canvas size change resets the renderer's paint pages and restores every layer
@@ -87,7 +109,7 @@ frame composites the retained scope over transparency, isolated and moved into
 the result's pixels, in the document's blend space. It copies each tile into the
 result's pages, decoded to linear pixels in a Perceptual document so the result
 looks the same ([`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs)).
-Placed photos are sampled as for export, never from the display's mip levels, and
+Image objects are sampled with their saved kernel, never from the display's mip levels, and
 watercolor settles into the result, which keeps no wet state. The authored edit
 removes the merged occurrences; the accepted bake snapshot retains their sources,
 masks and original image tiles until the job finishes. The bake runs on the
@@ -96,6 +118,24 @@ render owner; the UI thread only plans it. Large bakes advance through
 eviction can discard them. Intermediate native backing belongs to the renderer;
 history publishes the complete edit after the last region. Hosts poll readiness
 without waiting on the GPU and keep the previous artwork visible during the bake.
+
+A merge allocates the finite support of what it bakes, not the frame: painted
+pages or paint domains, image objects with their smooth sampling footprint,
+filter radii and the authored frame of generators (`output_support` in
+[`merge.rs`](../../crates/layer-core/src/merge.rs)), extended over the canvas when
+that fits. Off-frame content therefore survives Merge Visible, Flatten and Stamp
+Visible. A filter whose reach can't be represented refuses the bake instead of
+being clipped. A
+bake that reads image objects, including Rasterize Layer, Rasterize and Apply
+Mask, merges of image layers and Copy Selection to Layer from one, runs on the
+snapshot worker instead, where canonical image sampling can finish: the worker
+evaluates the scope into one immutable working-pixel image, and the shared session
+publishes it as the new paint layer's base once the drawing is unchanged
+([`snapshot/image_capture.rs`](../../crates/layer-render-wgpu/src/snapshot/image_capture.rs),
+[`layer_conversions.rs`](../../crates/layer-ui/src/layer_conversions.rs)). A changed
+drawing cancels the capture and edits nothing. Convert to Image Layer shares an
+untouched photo's image, or captures the paint layer's raw appearance, trimmed to
+its visible pixels, the same way.
 
 A bake keeps no filter images. When its members' filters would need more
 image memory than the default image budget, it runs them in the bounded windows
@@ -157,43 +197,66 @@ keep those source entries. Object metadata includes ordered children, image
 identity and interpretation, visibility, affine and interpolation. Edits damage
 the old and new bounds with sampling and declared effect support.
 
-Moving smooth display can use a temporary bilinear result from shared immutable
-image mip levels. The source cache reserves their storage from its byte budget;
-native source preparation runs on a worker and builds bounded tiles between
-frames. Image identity and source interpretation select the pyramid independently
-of object placement. Nearest continues reading level zero.
+Smooth display shows a temporary bilinear result from shared immutable image mip
+levels until the canonical result is ready, and a moving layer uses it for every
+pose. One fused pass samples up to 16 objects from up to eight source levels with
+transparent extension, so admission depends only on mip readiness, not on the
+window's area or object count. A moving layer never queues canonical work for a superseded pose. The
+source cache reserves mip storage from its byte budget. Native source preparation
+runs on up to three workers, each with six tiles queued, and the queue removes
+duplicates. An idle frame writes up to 32 prepared tiles or reductions into mip
+pyramids and an input frame two; both frames request enough upcoming tiles to keep
+the workers busy until the next frame, so a cold document with many distinct
+images does not wait one frame per handful of tiles. Image identity and source
+interpretation select the pyramid independently of object placement. Nearest continues reading level zero.
 
 Canonical object collections accumulate privately across frames, consuming children
-in their authored order. A window retains one child's sampling state and three
-rotating surfaces for the sampled child, its converted color and the isolated
-collection prefix. Each child enters the selected composition color space before
-source-over. Only the complete collection becomes a reusable result. This bounds
-working storage independently of the number of overlapping children.
-Ready mip previews admit at most 64 dispatches across the complete collection
-window and share one queue-ordered transient sampling workspace. A private batch
-records at most eight sampling/composition steps and waits for GPU completion
-before another batch is recorded. Each private cache admits buffers, output
-textures, prepared geometry and queued metadata within 64 MiB. Live display and
+in their authored order. A window larger than 512 output pixels per side is
+evaluated in equal parts that retain one child's sampling state and three
+rotating part surfaces for the sampled child, its converted color and the
+isolated collection prefix; each completed part is copied into the window's
+result. Each child enters the selected composition color space before
+source-over. Only the complete collection becomes a reusable result. A display
+region composes completed results of the same layer and density that cover it,
+and queues windows only for its uncovered remainder, so overlapping and merged
+regions never sample the same content twice. This bounds
+working storage independently of the window size and the number of overlapping
+children. Canonical work is budgeted in tent taps. An idle frame records up to
+2²³ taps across consecutive tasks; painting and object motion pause canonical
+work while previews satisfy the frame, and record at most 2²⁰ taps when a frame
+cannot be composed without it. Each child reads every source tile in its support
+with one dispatch, and only windows whose support crosses the image boundary
+evaluate the transparent samples of the normalization. Each private cache admits buffers, output textures, prepared geometry and
+queued metadata within 64 MiB; a window result in progress or used by the
+current frame is charged to the display that consumes it. Live display and
 exact snapshot queries use separate caches, so concurrent evaluators can retain
-up to two such allowances. Resources retired by an edit remain charged through
-GPU completion. Completed results remain reusable across deferred frame retries
-until their copies are encoded. Hidden owners cancel display work; raw object
-queries retain their independent visibility semantics.
+up to two such allowances. The live cache keeps completed results after their
+copies are encoded and evicts the least recently used ones when admission needs
+room; snapshot queries release results once their copies are encoded. Resources
+retired by an edit remain charged through GPU completion. A completed canonical
+result damages only its own layer's evaluated region and refreshes a complete
+display. Hidden owners cancel display work; raw object queries retain their
+independent visibility semantics.
 Replacing an affine retires its unfinished result. Direct coarse completion damages
 its evaluated density; native completion also invalidates consumers of native image
 inputs. Main and overview refinement preserve each other's completed pixels. Canonical
 captures use the authored kernel, submit bounded worker chunks and check capture
 cancellation between chunks. Display approximations never become capture inputs.
 Snapshot region planning defers pending object work to a separate exact-result
-cache. Each drain records at most eight sampling steps, submits and awaits GPU
-completion, then checks cancellation before resuming. Successful source commands
+cache. A region capture first queues the object pages of its whole capture window
+and defers before encoding anything until they are all complete, so one drain
+covers every page of a band. Each drain records up to the idle tap budget, submits
+and awaits GPU completion, then checks cancellation before resuming; while source
+tiles are still decoding it waits for them instead of submitting empty batches. Successful source commands
 remain in queue order during retries; histogram consumers and final readback run
 only after the requested pixels are complete. The live compose context follows
 filter input captures so those captures retain the display scheduler. Quiet retouch
-and thumbnail reads use the prepared-source worker and private scheduler with the
-canonical kernel. A pending read preserves its request and resumes after submitted
-work; it cannot decode image pixels on the initiating thread. Object captures
-encode and release completed results one native page at a time.
+reads use the prepared-source worker and private scheduler with the canonical
+kernel. A pending read preserves its request and resumes after submitted work; it
+cannot decode image pixels on the initiating thread. Each attempt uploads every
+tile the workers have finished and records the idle tap budget unless painting or
+object motion is active. Object captures encode and release completed results one
+native page at a time.
 Native filter input gathers retain completed pages across these retries; a
 partial input never marks its filter output valid. Authored edits, new contacts
 and changes to input interpretation discard that unfinished gather.
@@ -222,7 +285,9 @@ Viewport presentation and staging uploads return mapping failures to their host.
 A device removed during buffer allocation must not unwind the render owner; the
 host can reconstruct its GPU while retaining the shared document session. Uploads
 continue to reuse the staging belt and never wait for GPU completion on the UI
-thread.
+thread. Work submitted on its own while a frame is recording, such as native
+raster restoration, uses a separate belt: finishing the shared belt for it would
+recall chunks the frame still references and remap them before the frame submits.
 
 ## Native SDR working color
 
@@ -464,7 +529,7 @@ page they revisit. Destination storage, redraw regions and reduced source caches
 use the same stroke coverage pages, including pages far from the final dab.
 
 Eligible paint stacks use [region and scale composition](../rendering/display-composition.md).
-The scene retains local source levels across camera and placement changes. Reduced
+The scene retains source levels across camera changes and moves. Reduced
 views compose at the requested resolution; native views fill a bounded viewport
 window and reuse its overlap while panning. A lone affine source over a constant
 backdrop can be sampled directly by the presenter and Navigator. These display
@@ -578,16 +643,18 @@ from the map's Jacobian. A reduction to an eighth therefore averages every
 source pixel, as an area reduction would, instead of aliasing. A moving
 Bicubic or Lanczos preview draws bilinearly until it stops.
 
-Exact capture (export, snapshots and the artwork readback) draws placed photos
-through the same pass with the exact cap and the persisted interpolation choice.
-Layer reads for sampling, Wand, Fill and selection coverage use complete placed
-geometry in document coordinates. Raw target bounds retain their local coordinates.
-Display composition uses the scene's reduced source levels. Placed sources keep
-a level finer than the projected pixel footprint; small changes around unit scale
-do not force a second unnecessary level of detail. Mesh footprint planning reuses
+Exact capture (export, snapshots and the artwork readback) evaluates image
+objects with their saved kernel through the uncapped object sampler. Layer reads
+for sampling, Wand, Fill and selection coverage use layer offsets and image
+placements in document coordinates. Raw target bounds retain their local coordinates.
+Display composition uses the scene's reduced source levels, aligned with the
+document's texels at every whole-pixel offset. Transform previews reduce their
+captured layer with the same alignment. Moving sources keep a level finer than
+the projected pixel footprint. Mesh footprint planning reuses
 the scene's cached tessellation, and source preparation and regional composition
-share the resolved footprint. Translated material neighborhoods reuse the owner's
-geometry buffers. Admission counts the allocated vertex and index buffers;
+share the resolved footprint. Layer offsets stay integers until each placement
+record subtracts its page origin, so layer tiles, watercolor neighborhoods and
+snapshot regions copy whole pixels at every admitted offset. Admission counts the allocated vertex and index buffers;
 source magnification bounds preserve the signed Bézier derivatives.
 Affine display sampling counts taps independently along each output axis,
 preserving edges under uneven scaling, and accounts for partially covered edge texels.
@@ -598,8 +665,7 @@ dispatches, including each region's clear and clip. Mapping, watercolor on a
 transparent target and reduction share ordered compute batches; scratch pages
 can be reused after their reduction. Their pipelines are prepared with the
 document. Projective display resampling uses the same mapped sampler in the
-existing compute batches. Consecutive mesh regions sharing an output use one
-render pass, preserving weighted source positions and triangle order.
+existing compute batches.
 Display resampling and composition share ordered batches too. A placed
 layer over a constant backdrop resamples directly into its final output.
 
@@ -634,15 +700,14 @@ this bounded scratch allowance. On devices without Float32 attachment blending,
 a source over a newly cleared transparent target renders directly into that
 target; only an existing backdrop needs the portable blend pass.
 
-**Apply Transform to Pixels** uses the same raw-plane sampler and native tile
+Applying a whole-layer transform uses the same raw-plane sampler and native tile
 encoder. Its private snapshot retains Color, Wetness, WatercolorWetness and linked
 Mask separately; it never stores evaluated watercolor appearance as pigment.
 The shared session publishes one replacement after every output tile succeeds.
 Cancellation, renderer replacement and failure discard that private result.
 A scalar-only mask bake uses that worker and preserves its owner, default
-coverage and inversion. A linked mask under nonlinear paint geometry maps from
-the winning owner source position through its independent premap; applying it
-bakes the owner and mask together. The capture freezes each input's local extent
+coverage and inversion. A linked mask is resampled through its owner's map, so
+applying the transform bakes the owner and mask together. The capture freezes each input's local extent
 before growing the output canvas, so default mask coverage and hidden source
 domains do not change during a bake.
 
@@ -873,7 +938,10 @@ requests can be retained, and layers sharing a photo reuse its integrated
 original contributions. Generator thumbnails share the filter-picker
 preview execution path, sampling document coordinates on a grid of at most
 32 × 32 pixels. They compile asynchronously and retain at most two temporary
-images per request. Shared layer revisions include generator parameters, so all
+images per request. Object-layer rows frame the layer's own objects in linear
+light on a grid of at most 256 × 256 pixels: from the canvas's prefiltered image
+levels when every object has them, otherwise from one exact collection evaluation.
+Thumbnail work that leaves decoding or sampling for the canvas schedules a frame. Shared layer revisions include generator parameters, so all
 hosts request new pixels after a parameter edit or undo. Content requests use
 occurrence IDs; mask requests use encoded coverage source IDs. GTK, Web and
 native bridges share `ThumbnailTarget::from_wire_id` to decode both targets.

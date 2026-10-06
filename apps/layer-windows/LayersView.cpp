@@ -10,7 +10,7 @@ namespace CapyLayers {
 UIElement ElementFactory::GetElement(ElementFactoryGetArgs const& args){
     auto view=owner.lock();if(!view)return Border();
     auto row=std::make_shared<LayerRow>();row->owner=view;row->data=view->data;
-    row->id=unbox_value<double>(args.Data());row->epoch=view->epoch;row->init();if(view->pickup)view->pickup->Attach(row);row->refresh();
+    row->id=unbox_value<double>(args.Data());row->image=imageId(row->id);row->epoch=view->epoch;row->init();if(view->pickup)view->pickup->Attach(row);row->refresh();
     view->rows.emplace(row->root.as<::IUnknown>().get(),row);return row->root;
 }
 void ElementFactory::RecycleElement(ElementFactoryRecycleArgs const& args){
@@ -194,18 +194,22 @@ void LayersView::refresh(){
     }
     opacityGate.IsEnabled(flag(capabilities,L"opacity"));for(auto const& bind:opacityBindings)bind();
     for(auto const& bind:controls)bind(active,capabilities);
-    auto layers=array(data->state,L"layers");
+    std::vector<double> ids;
+    for(auto value:array(data->state,L"layers")){
+        auto layer=value.GetObject();ids.push_back(num(layer,L"id"));
+        for(auto child:array(layer,L"objects"))ids.push_back(num(child.GetObject(),L"id"));
+    }
     // Preserve existing elements on value changes; structural edits only change
     // the affected items. ItemsRepeater creates native widgets near the viewport.
-    for(uint32_t i=0;i<layers.Size();i++){
-        double id=num(layers.GetObjectAt(i),L"id");
+    for(uint32_t i=0;i<ids.size();i++){
+        double id=ids[i];
         if(i<source.Size()&&unbox_value<double>(source.GetAt(i))==id)continue;
         for(uint32_t j=i+1;j<source.Size();j++)if(unbox_value<double>(source.GetAt(j))==id){source.RemoveAt(j);break;}
         source.InsertAt(i,box_value(id));
     }
-    while(source.Size()>layers.Size())source.RemoveAtEnd();
+    while(source.Size()>ids.size())source.RemoveAtEnd();
     for(auto const& [element,row]:rows)row->refresh();
-    if(menuTarget&&(menuOpen||menuPending)&&!findId(layers,*menuTarget).Size()){
+    if(menuTarget&&(menuOpen||menuPending)&&!panelRow(data->state,*menuTarget).Size()){
         ++menuGeneration;menuPending=false;menuOpen=false;if(menu)menu.Hide();
     }
     if(pickup)pickup->Refresh();
@@ -298,7 +302,7 @@ void LayersView::showMenu(J spec, FrameworkElement const& anchor){
 void LayersView::context(double id,bool mask,UIElement const& anchor,std::optional<Windows::Foundation::Point> at,bool holding,bool blendMenu){
     if(data->updating||!anchor.XamlRoot())return;
     if(!holding&&pickup)pickup->Cancel();
-    if(id>=0&&!blendMenu)action(O({{L"op",S(L"context")},{L"id",N(id)},{L"mask",B(mask)}}));
+    if(id>=0&&!blendMenu&&!imageId(id))action(O({{L"op",S(L"context")},{L"id",N(id)},{L"mask",B(mask)}}));
     auto generation=++menuGeneration;auto document=epoch;
     if(menu)menu.Hide();menuOpen=false;menuPending=true;menuTarget=id>=0?std::optional<double>(id):std::nullopt;
     auto weak=weak_from_this();auto target=make_weak(anchor);auto queue=root.DispatcherQueue();
@@ -310,7 +314,7 @@ void LayersView::context(double id,bool mask,UIElement const& anchor,std::option
             if(!self||self->menuGeneration!=generation)return;
             self->menuPending=false;if(self->pickup)self->pickup->MenuChanged();
             if(!anchor||!anchor.XamlRoot()||!self->root.IsLoaded()||epochOf(self->data)!=document||!packet)return;
-            if(id>=0&&!findId(array(self->data->state,L"layers"),id).Size())return;
+            if(id>=0&&!panelRow(self->data->state,id).Size())return;
             try{
                 auto reply=J::Parse(to_hstring(capy_preview_metadata(packet.get())));
                 if(str(reply,L"epoch")!=document)return;
@@ -321,7 +325,7 @@ void LayersView::context(double id,bool mask,UIElement const& anchor,std::option
                 self->menu.Closed([weak](auto&& sender,auto&&){if(auto owner=weak.lock();owner&&owner->menu==sender){owner->menuOpen=false;if(owner->pickup)owner->pickup->MenuChanged();}});
                 NativeMenuItems(self->menu.Items(),array(spec,L"sections"),self->data,[weak,generation,document,menuId](J action){
                     if(auto self=weak.lock();self&&self->menuGeneration==generation&&epochOf(self->data)==document
-                        &&(findId(array(self->data->state,L"layers"),menuId).Size()||num(self->editing(),L"id",-1)==menuId))self->data->dispatchDocument(action,document);
+                        &&(panelRow(self->data->state,menuId).Size()||num(self->editing(),L"id",-1)==menuId))self->data->dispatchDocument(action,document);
                 });
                 Primitives::FlyoutShowOptions options;
                 if(at)options.Position(*at);

@@ -103,7 +103,7 @@ fn native_clipboard_copy_paste_round_trips() {
         copied(&w, before, "Ctrl+C")
     };
     let selection = document(&w).working.selection.clone().unwrap().coverage_bounds();
-    assert_eq!(clip.origin, [selection.min.x.floor() as u32, selection.min.y.floor() as u32]);
+    assert_eq!(clip.origin, [selection.min.x.floor() as i64, selection.min.y.floor() as i64]);
     assert_eq!(clip.policy, PaintBasePolicy::WorkingPixels);
     let formats = clipboard_formats(&w);
     assert!(formats.iter().any(|m| m == "image/png") && formats.iter().any(|m| m == CLIP_MIME), "{formats:?}");
@@ -118,7 +118,7 @@ fn native_clipboard_copy_paste_round_trips() {
     until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), "Ctrl+V pastes a new layer");
     let pasted = document(&w);
     assert_source_samples(active_paint(&pasted).base.as_ref().map(|base|base.image.as_ref()).unwrap(), clip.source_for(document(&w).composition().color).image.as_ref());
-    assert_eq!(active_occurrence(&pasted).placement.as_affine().unwrap().0[4..], clip.origin.map(|v| v as f32), "at the copied position");
+    assert_eq!(active_occurrence(&pasted).offset, clip.origin.map(i64::from), "at the copied position");
     assert!(state(&w).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement), "no handles");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| document(&w).scene().order().len() == layers, "one undo step");
@@ -148,8 +148,9 @@ fn native_clipboard_copy_paste_round_trips() {
         let layers = document(&w).scene().order().len();
         w.dispatch(UiAction::Invoke { command: CommandId::PasteInto });
         until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), &format!("{device:?}: Paste Into"));
-        let into = document(&w);
-        assert!(active_occurrence(&into).mask.as_ref().is_some_and(|m| into.artwork.coverage.get(m.source).unwrap().initial.is_some()), "a mask from the selection");
+        let mask = |into: &layer_core::Document| into.artwork.coverage.get(active_occurrence(into).mask.as_ref().expect("Paste Into adds a mask").source).unwrap().raster.clone();
+        until(|| mask(&document(&w)).try_data().is_some(), &format!("{device:?}: the mask's pixels are stored"));
+        assert!(mask(&document(&w)).try_data().is_some_and(|data| data.is_ok_and(|data| !data.tiles.is_empty())), "a mask from the selection");
         assert!(document(&w).working.selection.is_none());
         w.dispatch(UiAction::Invoke { command: CommandId::Undo });
         until(|| document(&w).scene().order().len() == layers && document(&w).working.selection.is_some(), "Paste Into undoes in one step");
@@ -169,7 +170,7 @@ fn native_clipboard_copy_paste_round_trips() {
     until(|| document(&second).scene().order().len() == 3 && idle(&second), "Paste in Place into another drawing");
     let pasted = document(&second);
     assert_eq!(active_paint(&pasted).base.as_ref().unwrap().policy, PaintBasePolicy::SourceProfile, "another colour mode keeps an explicit profile");
-    assert_eq!(active_occurrence(&pasted).placement.as_affine().unwrap().0[4..], copy.origin.map(|v| v as f32));
+    assert_eq!(active_occurrence(&pasted).offset, copy.origin.map(i64::from));
     second.window.destroy();
     w.window.present();
     pump(400);

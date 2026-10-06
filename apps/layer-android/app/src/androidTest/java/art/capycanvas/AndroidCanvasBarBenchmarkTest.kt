@@ -140,6 +140,18 @@ class AndroidCanvasBarBenchmarkTest {
                 waitFor("placement bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "placement" }
                 waitFor("canvas ready") { host.snapshot?.let { it.optBoolean("canvas_ready") && it.optBoolean("brush_ready") } == true }
             }
+            fun rasterizePlaced() {
+                val editing = state().array("layers").objects().single { it.optBoolean("editing") }
+                if (editing.optInt("object_count") == 0) return
+                invoke("rasterize_layer")
+                waitFor("rasterized photo") { state().array("layers").objects().single { it.optBoolean("editing") }.optInt("object_count") == 0 }
+            }
+            fun placedPaint(file: File) {
+                place(file)
+                invoke("apply_transform")
+                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                rasterizePlaced()
+            }
             fun photoDocument(): Long {
                 val file = photo()
                 host.openDocument(file)
@@ -284,17 +296,15 @@ class AndroidCanvasBarBenchmarkTest {
             }
             fun finalBake() {
                 check(materialWatercolor) { "Final bake requires the native watercolor workload" }
-                action(obj("type" to "set_tool_setting", "id" to "transform_x", "value" to 16.0))
-                invoke("apply_transform")
                 val retained = saveProject("bake-retained.capy")
                 val owner = retained.occurrenceRecords().objects().first {
-                    it.getJSONObject("data").getJSONObject("content").has("paint") && it.getJSONObject("data").authoredAffine().let { pose ->
-                        (0 until 6).map { pose.getDouble(it) } != listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-                    }
+                    it.getJSONObject("data").getJSONObject("content").optJSONObject("paint")?.let { paint ->
+                        retained.packageData(paint.getString("ref")).optJSONObject("material")?.isNull("watercolor") == false } == true
                 }.getString("id")
                 fun raster(project: JSONObject) = project.paintData(owner)
+                fun digests(project: JSONObject) = project.rasterResources().objects().map { JSONObject(it.toString()).toString() }.sorted()
                 val style = raster(retained).getJSONObject("material").getJSONObject("watercolor").toString()
-                check(state().array("commands").objects().any { it.getString("id") == "apply_transform_pixels" && it.getBoolean("enabled") })
+                action(obj("type" to "set_tool_setting", "id" to "transform_angle", "value" to 7.0))
                 val samples = JSONArray()
                 fun sample() {
                     val info = android.app.ActivityManager.MemoryInfo()
@@ -307,35 +317,30 @@ class AndroidCanvasBarBenchmarkTest {
                 }
                 sample()
                 val began = android.os.SystemClock.elapsedRealtimeNanos()
-                instrumentation.runOnMainSync { host.dispatch(obj("type" to "invoke", "command" to "apply_transform_pixels")) }
+                instrumentation.runOnMainSync { host.dispatch(obj("type" to "invoke", "command" to "apply_transform")) }
                 var pendingPublished: Long? = null
                 val deadline = SystemClock.uptimeMillis() + 300_000
                 while (true) {
                     check(host.failure == null) { host.failure ?: "Renderer failed" }
                     val current = state()
-                    val disabled = current.array("commands").objects().any { it.getString("id") == "apply_transform_pixels" && !it.getBoolean("enabled") }
-                    val pending = !current.isNull("canvas_bar")
-                    if (disabled && pending && pendingPublished == null) pendingPublished = android.os.SystemClock.elapsedRealtimeNanos()
-                    if (disabled && !pending) break
-                    check(SystemClock.uptimeMillis() < deadline) { "Final bake did not complete: $current" }
+                    val pending = !current.isNull("canvas_bar") || native { Native.renderingPending(it) }
+                    if (pending && pendingPublished == null) pendingPublished = android.os.SystemClock.elapsedRealtimeNanos()
+                    if (!pending) break
+                    check(SystemClock.uptimeMillis() < deadline) { "Committed transform did not complete: $current" }
                     sample(); SystemClock.sleep(100)
                 }
                 val completed = android.os.SystemClock.elapsedRealtimeNanos()
                 sample()
                 val baked = saveProject("bake-completed.capy")
-                check(baked.originalImages().length() == 0) { "The retained source remains after bake" }
-                val properties = baked.packageData(owner)
-                check((0 until 6).map { properties.authoredAffine().getDouble(it) } == listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0))
+                check(!baked.packageData(owner).has("placement")) { "Paint retained a placement" }
+                check(digests(baked) != digests(retained)) { "The rotation did not commit new pixels" }
                 check(raster(baked).getJSONObject("material").getJSONObject("watercolor").toString() == style)
                 val planes = raster(baked).array("tiles").objects().map { it.getString("plane") }
-                check("color" in planes && "watercolor_wetness" in planes) { "Baked native material is missing" }
+                check("color" in planes && "watercolor_wetness" in planes) { "Committed native material is missing" }
                 openProject(File(output, "bake-completed.capy"))
                 val reopened = saveProject("bake-reopened.capy")
-                fun digests(project: JSONObject) = project.rasterResources().objects().map {
-                    JSONObject(it.toString()).toString()
-                }.sorted()
-                check(digests(baked) == digests(reopened)) { "Baked native backing changed on reopen" }
-                check(raster(baked).toString() == raster(reopened).toString()) { "Baked material changed on reopen" }
+                check(digests(baked) == digests(reopened)) { "Committed native backing changed on reopen" }
+                check(raster(baked).toString() == raster(reopened).toString()) { "Committed material changed on reopen" }
                 File(output, "final-bake.json").writeText(obj("canvas" to documentExtent,
                     "dispatch_boot_ns" to began, "pending_published_boot_ns" to pendingPublished,
                     "completed_boot_ns" to completed, "elapsed_ms" to (completed - began) / 1e6,
@@ -1316,7 +1321,7 @@ class AndroidCanvasBarBenchmarkTest {
                 else action(obj("type" to "select_layer", "id" to openedPhoto))
                 if (tierPhoto || materialWatercolor || args.getString("acceptedPhoto") == "true") {
                     Log.i("CapyBarPerf", "material setup: accept photo")
-                    if (openedPhoto == null) invoke("apply_transform")
+                    if (openedPhoto == null) { invoke("apply_transform"); rasterizePlaced() }
                     if (materialWatercolor) {
                         Log.i("CapyBarPerf", "material setup: select wet brush")
                         invoke("brush")
@@ -1363,7 +1368,7 @@ class AndroidCanvasBarBenchmarkTest {
                     }
                     val entryBegan = android.os.SystemClock.elapsedRealtimeNanos()
                     instrumentation.runOnMainSync { host.dispatch(obj("type" to "invoke", "command" to "scale_rotate")) }
-                    waitFor("material placement bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "placement" }
+                    waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                     val entryPublished = android.os.SystemClock.elapsedRealtimeNanos()
                     val entryDeadline = SystemClock.uptimeMillis() + 120_000
                     while (native { Native.renderingPending(it) }) {
@@ -1432,6 +1437,7 @@ class AndroidCanvasBarBenchmarkTest {
                     invoke("show_canvas_action_bar")
                     invoke("apply_transform")
                     waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                    rasterizePlaced()
                     if (!materialWatercolor) {
                         invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
                         waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
@@ -1458,8 +1464,7 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("composed_transform")) {
                 newDocument()
-                place(photo())
-                invoke("apply_transform")
+                placedPaint(photo())
                 action(obj("type" to "layer", "action" to obj("op" to "duplicate_selected")))
                 action(obj("type" to "set_layer_opacity", "opacity" to .35))
                 invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
@@ -1488,9 +1493,7 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("crop")) {
                 newDocument()
-                place(photo())
-                invoke("apply_transform")
-                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                placedPaint(photo())
                 SystemClock.sleep(3000)
                 invoke("crop")
                 waitFor("crop bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "crop" }
@@ -1514,10 +1517,12 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("scaled")) {
                 newDocument()
-                place(photo())
+                placedPaint(photo())
+                invoke("scale_rotate")
+                waitFor("photo scale bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                 for (axis in listOf("transform_width", "transform_height")) action(obj("type" to "set_tool_setting", "id" to axis, "value" to .45f))
                 invoke("apply_transform")
-                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                waitFor("scaled photo pixels") { host.canvasBar == null && !native { Native.renderingPending(it) } }
                 SystemClock.sleep(3000)
                 invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
                 waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
@@ -1528,9 +1533,7 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("move")) {
                 newDocument()
-                place(photo())
-                invoke("apply_transform")
-                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                placedPaint(photo())
                 SystemClock.sleep(3000)
                 fun surface(x: Double, y: Double): Pair<Double, Double> {
                     val camera = state().getJSONObject("camera")
@@ -1650,9 +1653,7 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("merge")) {
                 newDocument()
-                place(photo())
-                invoke("apply_transform")
-                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                placedPaint(photo())
                 invoke("pen"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 120))
                 val area = state().getJSONObject("camera").getJSONArray("work_area")
                 val left = area.getDouble(0) + area.getDouble(2) * .1
@@ -1680,9 +1681,7 @@ class AndroidCanvasBarBenchmarkTest {
             if (wanted("dodge_burn") || wanted("frequency_separation")) {
                 newDocument()
                 invoke("blend_perceptual")
-                place(photo())
-                invoke("apply_transform")
-                waitFor("placed photo") { host.canvasBar == null || host.canvasBar?.getJSONObject("context")?.getString("kind") != "placement" }
+                placedPaint(photo())
                 val layers = { state().array("layers").length() }
                 val count = layers()
                 SystemClock.sleep(3000)

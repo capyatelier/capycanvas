@@ -11,12 +11,12 @@ fn identity_source_window_clips_signed_bounds_without_interpolation_padding() {
     let extent = [2048; 2];
     let mut output = display_mips::Plan::window(extent, 2, PixelRect::full([579, 190]));
     output.doc_bounds = DocRect { min: [-100, 289], max: [479, 479] };
-    let identity = layer_core::ImageTransform::default();
-    let plan = source_plan(None, output, &identity, extent, false).unwrap();
+    let identity = SourceFrame::at([0; 2], [0; 2]);
+    let plan = source_plan(output, identity, extent, false);
     assert_eq!(plan.level, 2);
     assert_eq!(plan.bounds, PixelRect::new(0, 256, 512, 512));
     output.doc_bounds = DocRect { min: [-400, 289], max: [-100, 479] };
-    assert!(source_plan(None, output, &identity, extent, false).unwrap().bounds.is_empty());
+    assert!(source_plan(output, identity, extent, false).bounds.is_empty());
 }
 
 #[path = "presentation_tests.rs"]
@@ -41,6 +41,9 @@ mod native_signed;
 
 #[path = "root_fragment_tests.rs"]
 mod root_fragment;
+
+#[path = "moved_paint_tests.rs"]
+mod moved_paint;
 
 fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[f32; 4]]) {
     let revision = r.artwork_revision;
@@ -168,9 +171,11 @@ pub(super) fn set_effect_value(doc: &mut Document, handle: OccurrenceHandle, key
     let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == key).unwrap();
     doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = value;
 }
-pub(super) fn coverage_mask(doc: &mut Document, handle: OccurrenceHandle, translation: layer_core::Point, initial: Option<layer_core::Selection>) -> CoverageHandle {
-    let source = doc.artwork.coverage.insert(PortableId::random(), CoverageSource { domain: doc.scene().local_extent(handle), raster: Default::default(), initial, default_coverage: 1., operations: Arc::default() }).unwrap();
-    doc.artwork.occurrences.get_mut(handle).unwrap().mask = Some(MaskUse { source, enabled: true, linked: true, inverted: false, translation, placement: layer_core::Projective::IDENTITY });
+pub(super) fn coverage_mask(doc: &mut Document, handle: OccurrenceHandle, offset: [i64; 2], initial: Option<layer_core::Selection>) -> CoverageHandle {
+    let mut source = CoverageSource { domain: doc.scene().local_extent(handle), raster: Default::default(), default_coverage: 1., operations: Arc::default() };
+    if let Some(selection) = initial { crate::test_support::materialize_mask(&mut source, selection, doc.composition().color); }
+    let source = doc.artwork.coverage.insert(PortableId::random(), source).unwrap();
+    doc.artwork.occurrences.get_mut(handle).unwrap().mask = Some(MaskUse { source, enabled: true, linked: true, inverted: false, offset });
     reindex(doc);
     source
 }
@@ -241,7 +246,7 @@ fn idle_display_converges_to_exact_composition_after_edits() {
 
 #[test]
 fn blend_space_changes_refresh_branches_and_source_representations() {
-    use layer_core::{Affine, BlendSpace};
+    use layer_core::BlendSpace;
     let mut doc = document();
     let extent = doc.composition().size;
     let entries=(0..12).map(|i| { let handle=copy_paint(&mut doc,0); doc.artwork.occurrences.get_mut(handle).unwrap().opacity=0.15+i as f32*0.04; handle }).collect();
@@ -253,17 +258,16 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
     let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let shifted = Affine([1., 0., 0., 1., 8., -4.]);
-    for (step, (space, placement, level)) in [
-        (BlendSpace::Linear, Affine::IDENTITY, 3),
-        (BlendSpace::Perceptual, Affine::IDENTITY, 3),
-        (BlendSpace::Linear, Affine::IDENTITY, 3),
-        (BlendSpace::Perceptual, shifted, 3),
-        (BlendSpace::Perceptual, Affine::IDENTITY, 3),
-        (BlendSpace::Perceptual, Affine::IDENTITY, 0),
-        (BlendSpace::Linear, Affine::IDENTITY, 0),
+    for (step, (space, offset, level)) in [
+        (BlendSpace::Linear, [0, 0], 3),
+        (BlendSpace::Perceptual, [0, 0], 3),
+        (BlendSpace::Linear, [0, 0], 3),
+        (BlendSpace::Perceptual, [8, -4], 3),
+        (BlendSpace::Perceptual, [0, 0], 3),
+        (BlendSpace::Perceptual, [0, 0], 0),
+        (BlendSpace::Linear, [0, 0], 0),
     ].into_iter().enumerate() {
-        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(placement);
+        occurrence_mut(&mut doc,0).offset = offset;
         let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.composite_all = matches!(step, 3 | 4);
@@ -275,13 +279,12 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         let actual = display_pixels(&r);
         let expected = display_pixels(&fresh);
         let error = crate::test_support::max_error(&actual, &expected);
-        assert!(error < 2e-5, "step={step} {space:?} {placement:?} level={level}: {error}");
+        assert!(error < 2e-5, "step={step} {space:?} {offset:?} level={level}: {error}");
         let cache = r.scale_display.as_ref().unwrap();
         assert!(cache.graph.storage_bytes() > 0);
         let sources = &r.scene.as_ref().unwrap().scale_sources;
-        let encoding = if placement == Affine::IDENTITY { space } else { BlendSpace::Linear };
-        assert_eq!(sources.entries[&source_at(&doc,0)].blend_space, encoding);
-        if encoding == BlendSpace::Perceptual {
+        assert_eq!(sources.entries[&source_at(&doc,0)].blend_space, space);
+        if space == BlendSpace::Perceptual {
             assert!(sources.complete_texture(doc.scene(), source_at(&doc,0), extent, level).is_none());
         }
         if level == 0 {
@@ -413,7 +416,7 @@ fn streamed_sources_match_cached_pixels_through_masks_paint_and_admission_change
         insert_occurrence(&mut doc, layer, 0);
     }
     let owner=doc.scene().order()[0];
-    coverage_mask(&mut doc,owner, Default::default(), Some(layer_core::Selection::polygon(vec![
+    coverage_mask(&mut doc,owner, [0, 0], Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 280., y: 210. }, layer_core::Point { x: 1600., y: 260. },
         layer_core::Point { x: 1700., y: 1200. }, layer_core::Point { x: 330., y: 1100. },
     ]).unwrap()));
@@ -642,24 +645,24 @@ fn view_windows_reuse_overlap_and_preserve_global_sampling() {
 }
 
 #[test]
-fn small_placed_source_remains_visible_beyond_its_local_extent() {
+fn small_offset_source_remains_visible_beyond_its_local_extent() {
     let mut doc = document_at([256, 256]);
     let extent = [2048, 1536];
     composition_mut(&mut doc).size[0] = extent[0]; composition_mut(&mut doc).size[1] = extent[1];
-    occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([1., 0., 0., 1., 896., 640.]));
+    occurrence_mut(&mut doc,0).offset = [896, 640];
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.385, 0., 0., 0.385, 0., 0.];
     r.submit(frame).unwrap();
     let display = display_pixels(&r);
-    assert!(display.iter().any(|p| p[3] > 0.99 && p[2] > 0.05), "placed source contributes to presentation");
+    assert!(display.iter().any(|p| p[3] > 0.99 && p[2] > 0.05), "offset source contributes to presentation");
     let exact = r.readback_srgb_rgba8().unwrap();
     let center = ((768 * extent[0] + 1024) * 4) as usize;
     assert_eq!(&exact[center..center + 4], &[42, 64, 80, 255]);
 }
 
 #[test]
-fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
+fn offset_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
     let source_extent = [517, 259];
     let extent = [389, 277];
     let mut doc = document_at(source_extent);
@@ -667,7 +670,7 @@ fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
     composition_mut(&mut doc).size[1] = extent[1];
     occurrence_mut(&mut doc,0).opacity = 0.71;
     let owner=doc.scene().order()[0];
-    let mask_source=coverage_mask(&mut doc,owner, layer_core::Point { x: 17., y: -11. }, Some(layer_core::Selection::polygon(vec![
+    let mask_source=coverage_mask(&mut doc,owner, [17, -11], Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 30., y: 10. }, layer_core::Point { x: 390., y: 10. },
         layer_core::Point { x: 390., y: 200. }, layer_core::Point { x: 30., y: 200. },
     ]).unwrap()));
@@ -675,11 +678,8 @@ fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    for (pose, placement) in [
-        [0.5, 0., 0., 0.5, 16., 32.], [-0.5, 0., 0., 0.5, 320., 32.],
-        [0.6, 0.2, -0.1, 0.5, 30., 4.], [0.35, 0.1, 0.2, 0.75, -17., 21.],
-    ].into_iter().enumerate() {
-        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
+    for (pose, offset) in [[16, 32], [-120, 32], [30, 4], [-17, 21]].into_iter().enumerate() {
+        occurrence_mut(&mut doc,0).offset = offset;
         occurrence_mut(&mut doc,0).mask.as_mut().unwrap().inverted = pose % 2 != 0;
         for enabled in [true, false] {
             occurrence_mut(&mut doc,0).mask.as_mut().unwrap().enabled = enabled;
@@ -697,7 +697,7 @@ fn placed_sources_and_masks_compose_in_document_scale_and_keep_exact_queries() {
                 assert_presentation_mip(&r);
                 let actual = r.readback_srgb_rgba8().unwrap();
                 let expected = exact.readback_srgb_rgba8().unwrap();
-                assert!(actual == expected, "exact placed export pose={pose} level={level} mask={enabled}");
+                assert!(actual == expected, "exact offset export pose={pose} level={level} mask={enabled}");
             }
         }
     }
@@ -712,10 +712,11 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
+    r.prepare_moving_layer(Some(doc.scene().order()[0]));
     let mut updates = 0;
     let mut previous = None;
-    for (step, offset) in [[-2050., -1000.], [-2100., -1000.], [-2350., -1000.], [-2100., -1000.], [-3575., -1790.], [700., 400.]].into_iter().enumerate() {
-        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(layer_core::Point { x: offset[0], y: offset[1] }));
+    for (step, offset) in [[-2050, -1000], [-2100, -1000], [-2350, -1000], [-2100, -1000], [-3575, -1790], [700, 400]].into_iter().enumerate() {
+        occurrence_mut(&mut doc,0).offset = offset;
         let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
@@ -735,11 +736,12 @@ fn source_windows_keep_overlap_and_sample_global_coordinates() {
         assert!(error[0] < 0.004 && error[1] < 0.04, "step={step}: {error:?}");
         assert_presentation_mip(&r);
     }
-    occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.5, 0., 0., 0.5, -100., -100.]));
+    r.prepare_moving_layer(None);
+    occurrence_mut(&mut doc,0).offset = [-100, -100];
     let frame = packet(doc.scene(), extent);
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
-    assert!(error[0] < 0.004 && error[1] < 0.04, "native placement after a partial source: {error:?}");
+    assert!(error[0] < 0.004 && error[1] < 0.04, "native offset after a partial source: {error:?}");
 }
 
 #[test]
@@ -764,43 +766,6 @@ fn cold_identity_sources_prepare_adjacent_detail_without_redecoding() {
 }
 
 #[test]
-fn optional_source_detail_yields_to_unallocated_required_images() {
-    let mut doc = document_at([1024, 1024]);
-    composition_mut(&mut doc).size[0] = 128; composition_mut(&mut doc).size[1] = 128;
-    occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.125, 0., 0., 0.125, 0., 0.]));
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.submit(packet(doc.scene(), doc.composition().size)).unwrap();
-    let mut scene = r.scene.take().unwrap();
-    let source = &scene.scale_sources.entries[&source_at(&doc,0)];
-    assert_eq!(source.updates, 16, "cold detail and its required level decode each native page once");
-    assert!(source.levels.contains_key(&1) && source.levels.contains_key(&2));
-    let second = copy_paint(&mut doc,0);
-    doc.artwork.occurrences.get_mut(second).unwrap().opacity = 0.5;
-    insert_occurrence(&mut doc, second, 0);
-    let frame = packet(doc.scene(), doc.composition().size);
-    scene.scale_sources.prepare(&r, frame, &[]);
-    let requested = r.scale_display.as_ref().unwrap().source_levels(&r, frame, &scene);
-    let budget = requested.values().flat_map(|levels| levels.values()).map(|p| p.level_bytes(p.level)).sum();
-    assert_eq!(scene.scale_sources.retain_levels(&requested, budget), budget);
-    assert!(scene.scale_sources.entries.values().all(|s| !s.levels.contains_key(&1)));
-    let mut commands = Commands::new(&r);
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    for &handle in doc.scene().order() {
-        let OccurrenceContent::Paint(paint)=doc.artwork.occurrences.get(handle).unwrap().content else {continue}; let target=SourceTarget::Paint(paint);
-        if let Some(levels) = requested.get(&target) {
-            for &plan in levels.values() {
-                scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, handle,
-                    SourceRequest { plan, required: plan.bounds.into(), covered: PixelRect::EMPTY }).unwrap();
-            }
-        }
-    }
-    r.uploads.finish(&encoder); encoder.submit(&r.queue);
-    assert_eq!(scene.scale_sources.storage_bytes(), budget);
-    assert!(requested.iter().all(|(id, levels)| levels.keys().all(|level|
-        scene.scale_sources.entries[id].levels.contains_key(level))));
-}
-
-#[test]
 fn source_retention_reserves_images_that_composition_allocates_later() {
     for material in [false, true] {
         let mut doc = document_at([33, 17]);
@@ -819,7 +784,7 @@ fn source_retention_reserves_images_that_composition_allocates_later() {
             }
             paint_mut(&mut doc,0).domain=doc.composition().size;
             paint_mut(&mut doc,0).raster = RasterRevision::backed(data);
-            occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(layer_core::Point { x: 32., y: 32. }));
+            occurrence_mut(&mut doc,0).offset = [32, 32];
         }
         let front = copy_paint(&mut doc,0);
         doc.artwork.occurrences.get_mut(front).unwrap().opacity = 0.5;
@@ -889,7 +854,7 @@ fn source_windows_derive_across_origins_and_fill_only_missing_pages() {
 }
 
 #[test]
-fn placement_crossing_identity_keeps_the_prepared_source() {
+fn moving_layer_crossing_identity_keeps_the_prepared_source() {
     let extent = [1024, 512];
     let mut doc = document_at(extent);
     let id = source_at(&doc,0);
@@ -897,8 +862,8 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
     r.prepare_moving_layer(Some(doc.scene().order()[0]));
     let mut prepared = None;
     let mut prepared_level = None;
-    for (step, (x, scale)) in [(10., 1.), (0., 1.), (0., 0.9), (0., 0.9), (0., 1.), (-10., 1.), (0., 1.)].into_iter().enumerate() {
-        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([scale, 0., 0., scale, x, 0.]));
+    for (step, x) in [10, 0, 0, -10, 0].into_iter().enumerate() {
+        occurrence_mut(&mut doc,0).offset = [x, 0];
         let mut frame = packet(doc.scene(), extent);
         frame.blend_space = layer_core::BlendSpace::Perceptual;
         frame.time_seconds = step as f32 * 0.1;
@@ -906,24 +871,24 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
         r.submit(frame).unwrap();
         let source = &r.scene.as_ref().unwrap().scale_sources.entries[&id];
         let level = *prepared_level.get_or_insert_with(|| source_level(r.scale_display.as_ref().unwrap().plan.level,
-            &layer_core::target_geometry(doc.scene(),id),extent));
+            source_frame(Some(&r.scene.as_ref().unwrap().scale_sources), doc.scene(), id)));
         let current = (source.updates, source.levels[&level].image.texture.clone());
         assert_eq!(prepared.get_or_insert_with(|| current.clone()), &current,
-            "moving an unchanged photo through its original pose must reuse its pixels");
-        assert!(!r.has_pending_work(), "an unfinished placement must not schedule exact refinement");
+            "moving an unchanged photo through its original position must reuse its pixels");
+        assert!(!r.has_pending_work(), "an unfinished move must not schedule exact refinement");
         let work = r.metrics.composited_pixels;
         frame.composite_all = false;
         r.submit(frame).unwrap();
-        assert_eq!(r.metrics.composited_pixels, work, "an unchanged placement pose must not refine");
+        assert_eq!(r.metrics.composited_pixels, work, "an unchanged position must not refine");
     }
     r.prepare_moving_layer(None);
-    occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine::IDENTITY);
+    occurrence_mut(&mut doc,0).offset = [0, 0];
     let mut frame = packet(doc.scene(), extent);
     frame.blend_space = layer_core::BlendSpace::Perceptual;
     frame.composite_all = false;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     r.submit(frame).unwrap();
-    assert!(r.has_pending_work(), "finishing placement must allow exact refinement");
+    assert!(r.has_pending_work(), "finishing a move must allow exact refinement");
     let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     fresh.submit(frame).unwrap();
     let actual = display_pixels(&r);
@@ -938,7 +903,7 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
 }
 
 #[test]
-fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
+fn deferred_transform_preview_samples_the_final_surface_without_a_canvas_image() {
     let mut doc = document_at([1025, 513]);
     add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
     let extent = [641, 385];
@@ -955,7 +920,9 @@ fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
         pixels(r, &texture)
     };
     for placement in [[1., 0., 0., 1., -153.25, -51.5], [0.5, 0.1, -0.15, 0.6, 30., 5.], [-0.6, 0.1, 0.15, 0.5, 570., 7.]] {
-        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
+        let preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc, 0), moving: false, selection: None,
+            transform: layer_core::ImageTransform::affine(layer_core::Affine(placement)) };
+        for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(Some(&preview)).unwrap(); }
         for camera in [[0.25, 0., 0., 0.25, 8.25, 7.5], [0.19, 0., 0., 0.19, 8.25, 7.5], [0.13, 0., 0., 0.13, 8.25, 7.5],
             [0.17, 0.075, -0.075, 0.17, 37.5, 6.25], [0.14, -0.06, 0.02, 0.24, 8.25, 42.5]] {
             let mut frame = packet(doc.scene(), extent);
@@ -999,7 +966,7 @@ fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
 }
 
 #[test]
-fn deferred_placement_navigator_preserves_coarse_artwork() {
+fn deferred_transform_preview_navigator_preserves_coarse_artwork() {
     let mut doc = document_at([1025, 513]);
     add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
     composition_mut(&mut doc).size[0] = 641; composition_mut(&mut doc).size[1] = 385;
@@ -1019,7 +986,9 @@ fn deferred_placement_navigator_preserves_coarse_artwork() {
         pixels(r, &texture)
     };
     for (step, placement) in [[1., 0., 0., 1., -153.25, -51.5], [0.5, 0.1, -0.15, 0.6, 30., 5.], [-0.6, 0.1, 0.15, 0.5, 570., 7.]].into_iter().enumerate() {
-        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
+        let preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc, 0), moving: false, selection: None,
+            transform: layer_core::ImageTransform::affine(layer_core::Affine(placement)) };
+        for renderer in [&mut r, &mut exact] { renderer.set_transform_preview(Some(&preview)).unwrap(); }
         let mut frame = packet(doc.scene(), doc.composition().size);
         frame.time_seconds = step as f32 * 0.1;
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 8.25, 7.5];
@@ -1072,34 +1041,6 @@ fn deriving_partial_sources_preserves_completed_texels_between_refreshed_regions
 }
 
 #[test]
-fn placed_compact_prediction_keeps_the_most_magnified_source_axis() {
-    let mut doc = document();
-    let extent = doc.composition().size;
-    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    for placement in [[2., 0., 0., 1., -300., -20.], [-2., 0., 0., 0.25, 600., 80.]] {
-        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
-        let mut frame = packet(doc.scene(), extent);
-        frame.composite_all = false;
-        frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-        r.submit(FramePacket { composite_all: true, ..frame }).unwrap();
-        let baseline = display_pixels(&r);
-        let mut dab = crate::tests::test_dab([200., 110.], [0.9, 0.02, 0.1, 1.], 1.);
-        dab.radii = [32.; 2];
-        let mut batch = dab_batch(source_at(&doc,0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-        batch.kind = DabBatchKind::Preview;
-        batch.style.brush_to_layer = occurrence_at(&doc,0).placement.as_affine().unwrap().inverse().unwrap();
-        r.submit(FramePacket { dabs: &[dab], dab_batches: &[batch], ..frame }).unwrap();
-        assert_eq!(r.preview_level, 1);
-        assert_ne!(display_pixels(&r), baseline);
-        r.submit(frame).unwrap();
-        let actual = display_pixels(&r);
-        let changed: Vec<_> = actual.iter().zip(&baseline).enumerate().filter(|(_, (a,b))| a != b).collect();
-        let error = crate::test_support::max_error(&actual, &baseline);
-        assert!(changed.is_empty(), "pose={placement:?} differing={} max={error} first={:?}", changed.len(), changed.first());
-    }
-}
-
-#[test]
 fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
     let extent = [33, 19];
     let mut doc = document_at(extent);
@@ -1108,7 +1049,7 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
     doc.artwork.occurrences.get_mut(base).unwrap().opacity=0.81;
     let clipped=paint_occurrence(&mut doc,"solid",Some(rgba8_source(extent,|_,_|[230,30,120,193])));
     doc.artwork.occurrences.get_mut(clipped).unwrap().opacity=0.54;
-    let clip_mask=coverage_mask(&mut doc,clipped,Default::default(),None);
+    let clip_mask=coverage_mask(&mut doc,clipped,[0, 0],None);
     doc.artwork.coverage.get_mut(clip_mask).unwrap().default_coverage=0.42;
     doc.artwork.occurrences.get_mut(clipped).unwrap().mask.as_mut().unwrap().inverted=true;
     let inner=stack_occurrence(&mut doc,"inner",vec![clipped,base]);
@@ -1116,7 +1057,7 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
     let occurrence=doc.artwork.occurrences.get_mut(inner).unwrap(); occurrence.opacity=0.71; occurrence.blend=layer_core::LayerBlend::Multiply;
     let outer=stack_occurrence(&mut doc,"outer",vec![inner]);
     doc.artwork.occurrences.get_mut(outer).unwrap().opacity=0.63;
-    let group_mask=coverage_mask(&mut doc,outer,Default::default(),None);
+    let group_mask=coverage_mask(&mut doc,outer,[0, 0],None);
     doc.artwork.coverage.get_mut(group_mask).unwrap().default_coverage=0.61;
     let behind=paint_occurrence(&mut doc,"solid",Some(rgba8_source(extent,|_,_|[170,210,70,230])));
     doc.artwork.occurrences.get_mut(behind).unwrap().opacity=0.79;
@@ -1313,11 +1254,11 @@ fn identity_edits_recompose_only_damaged_regions() {
 }
 
 #[test]
-fn placed_page_edge_edits_match_rebuilding_the_entire_display() {
+fn offset_page_edge_edits_match_rebuilding_the_entire_display() {
     let mut doc = document_at([513, 513]);
     let moving = copy_paint(&mut doc,0);
     doc.artwork.occurrences.get_mut(moving).unwrap().opacity = 0.71;
-    doc.artwork.occurrences.get_mut(moving).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0.7, 0.7, -0.7, 0.7, 76.8, 77.8]));
+    doc.artwork.occurrences.get_mut(moving).unwrap().offset = [77, 78];
     let front = copy_paint(&mut doc,0);
     doc.artwork.occurrences.get_mut(front).unwrap().opacity = 0.3;
     insert_occurrence(&mut doc, moving, 0);
@@ -1351,7 +1292,7 @@ fn masks_refresh_coverage_properties_and_paint_without_exact_display() {
     let mut doc = document();
     let extent = doc.composition().size;
     let owner=doc.scene().order()[0];
-    let mask_source=coverage_mask(&mut doc,owner, Default::default(), Some(layer_core::Selection::polygon(vec![
+    let mask_source=coverage_mask(&mut doc,owner, [0, 0], Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 0., y: 0. }, layer_core::Point { x: 258., y: 0. },
         layer_core::Point { x: 258., y: 259. }, layer_core::Point { x: 0., y: 259. },
     ]).unwrap()));
@@ -1972,122 +1913,6 @@ fn resident_bytes(cache: &crate::scene::scale::Cache, scene: &crate::scene::Scen
 
 fn resident_bytes_with_pool(cache: &crate::scene::scale::Cache, scene: &crate::scene::Scene) -> u64 {
     resident_bytes(cache, scene) + scene.pool.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>()
-}
-
-#[test]
-fn retained_outer_mesh_display_refines_to_exact_after_geometry_and_mask_changes() {
-    use layer_core::{Affine,LayerPlacement,MeshMap,Point,Projective,Rect,Interpolation};
-    let extent = [513,387];
-    let mut doc = document_at(extent);
-    let id = source_at(&doc,0);
-    paint_mut(&mut doc,0).base = Some(layer_core::authored::PaintBase::new((rgba8_source(extent,|x,y|
-        if (x/7+y/5)%2==0 {[220,31,90,255]} else {[25,180,210,128]})).into()));
-    let domain = Rect::from_extent(extent);
-    let mesh = Arc::new(MeshMap::from_affine(domain,[2,2],Affine([0.7,0.02,-0.03,0.8,57.,21.])).unwrap()
-        .move_node(4,Point {x:31.,y:-23.}).unwrap());
-    let owner=doc.scene().order()[0];
-    let mask_source=coverage_mask(&mut doc,owner,Point {x:7.,y:-3.}, Some(layer_core::Selection::polygon(vec![Point {x:20.,y:30.},Point {x:400.,y:30.},
-        Point {x:400.,y:300.},Point {x:20.,y:300.}]).unwrap()));
-    doc.artwork.coverage.get_mut(mask_source).unwrap().default_coverage=0.63;
-    occurrence_mut(&mut doc,0).mask.as_mut().unwrap().placement=Projective([1.,0.02,0.,0.,1.,0.,0.0001,0.,1.]);
-    let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    exact.test.reference=true;
-    for (step,outer) in [Projective::IDENTITY,Projective([1.05,0.02,-16.,-0.02,1.04,-6.,0.00015,-0.0001,1.])].into_iter().enumerate() {
-        occurrence_mut(&mut doc,0).placement =LayerPlacement {outer,mesh:Some(mesh.clone()),interpolation:Interpolation::Linear};
-        occurrence_mut(&mut doc,0).mask.as_mut().unwrap().inverted=step!=0;
-        let mut frame=packet(doc.scene(),extent);
-        frame.view.document_to_surface=[0.125,0.,0.,0.125,0.,0.];
-        cached.submit(frame).unwrap();exact.submit(frame).unwrap();
-        let owner_geometry=layer_core::target_geometry(doc.scene(),id);
-        let mask_geometry=layer_core::target_geometry(doc.scene(),SourceTarget::Coverage(mask_source));
-        let scene=cached.scene.as_ref().unwrap();
-        let owner_mesh=scene.mesh_geometry(&owner_geometry).unwrap();
-        assert!(Arc::ptr_eq(&owner_mesh,&scene.mesh_geometry(&mask_geometry).unwrap()),"owner and linked mask share tessellation and winning UV");
-        let reference=pixels(&exact,crate::test_support::document_texture(&exact));
-        assert_settled(&mut cached,frame,&reference);
-        assert!(cached.scene.as_ref().unwrap().scale_sources.cache_info(id).is_some());
-    }
-}
-
-#[test]
-fn a_near_unit_projective_photo_keeps_the_display_source_budget() {
-    use layer_core::{LayerPlacement,Projective};
-    let mut doc=document_at([33,17]);
-    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.submit(packet(doc.scene(),doc.composition().size)).unwrap();
-    composition_mut(&mut doc).size[0] =9504;composition_mut(&mut doc).size[1] =6336;
-    paint_mut(&mut doc,0).domain=doc.composition().size;
-    occurrence_mut(&mut doc,0).placement =LayerPlacement::from_projective(
-        Projective([1.,0.,0.,0.,1.,0.,0.000001,0.,1.]));
-    r.moving_layer=Some(doc.scene().order()[0]);
-    let geometry=layer_core::target_geometry(doc.scene(),source_at(&doc,0));
-    let mut frame=packet(doc.scene(),doc.composition().size);
-    frame.view.document_to_surface=[0.1653409,0.,0.,0.1653409,0.,0.];
-    let requested=request(&r,frame).unwrap();
-    eprintln!("near-unit rate {} source level {} display level {} native {}",
-        geometry.magnification(layer_core::Rect::from_extent(frame.document_extent)),
-        source_level(requested.plan.level,&geometry,frame.document_extent),requested.plan.level,
-        requested.evaluation==Evaluation::Native);
-    assert!(requested.evaluation==Evaluation::Display,"a near-unit pose fits a reduced immutable source");
-    assert!(source_level(requested.plan.level,&geometry,frame.document_extent)>0);
-}
-
-#[test]
-fn a_large_bent_material_photo_keeps_the_display_source_budget() {
-    use layer_core::{LayerPlacement,MeshMap,Point,Rect};
-    use layer_core::raster::*;
-    let mut doc=document_at([33,17]);
-    let tile=RasterTile::backed(TileBlob::encode(RasterPlane::WatercolorWetness.descriptor(doc.composition().color),&vec![255;256*256]).unwrap());
-    paint_mut(&mut doc,0).raster =RasterRevision::backed(RasterData {watercolor:Some(RasterWatercolor {wet_edge:0.9,burnt_edge:0.6,edge_width:8.}),
-        tiles:BTreeMap::from([(TileKey {plane:RasterPlane::WatercolorWetness,coordinate:[0;2]},tile)]),..Default::default()});
-    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.submit(packet(doc.scene(),doc.composition().size)).unwrap();
-    composition_mut(&mut doc).size[0] =9504;composition_mut(&mut doc).size[1] =6336;
-    paint_mut(&mut doc,0).domain=doc.composition().size;
-    occurrence_mut(&mut doc,0).placement =LayerPlacement {mesh:Some(Arc::new(MeshMap::identity(Rect::from_extent(doc.composition().size),[3;2]).unwrap()
-        .move_node(5,Point {x:-120./0.1653409,y:-80./0.1653409}).unwrap())),..Default::default()};
-    r.moving_layer=Some(doc.scene().order()[0]);
-    let mut frame=packet(doc.scene(),doc.composition().size);frame.view.document_to_surface=[0.1653409,0.,0.,0.1653409,0.,0.];
-    let requested=request(&r,frame).unwrap();
-    let bytes=allocation_for(&r,requested.plan,frame,None,bounded(frame.scene),None).into_iter().sum::<u64>();
-    let geometry=layer_core::target_geometry(doc.scene(),source_at(&doc,0));
-    eprintln!("bent material photo: level={}, source={}, native={}, prospective={bytes}",requested.plan.level,source_level(requested.plan.level,&geometry,frame.document_extent),requested.evaluation==Evaluation::Native);
-    assert!(requested.evaluation==Evaluation::Display,"the actual binned mesh and conservative reduced source fit the existing budget");
-    assert!(bytes<=CACHE_BYTES);
-    let scene=r.scene.as_ref().unwrap();let first=scene.mesh_geometry(&geometry).unwrap();
-    let other=copy_paint(&mut doc,0);doc.artwork.occurrences.get_mut(other).unwrap().translation=Point {x:16.,y:8.};insert_occurrence(&mut doc,other,0);
-    let second_geometry=layer_core::target_geometry(doc.scene(),source_at(&doc,0));
-    Scene::geometry_bytes(doc.scene(),Some(scene));let second=scene.mesh_geometry(&second_geometry).unwrap();
-    assert!(Arc::ptr_eq(&first,&scene.mesh_geometry(&geometry).unwrap()));
-    assert!(Arc::ptr_eq(&second,&scene.mesh_geometry(&second_geometry).unwrap()));
-    remove_occurrence(&mut doc,other);Scene::geometry_bytes(doc.scene(),Some(scene));
-    assert_eq!(scene.mesh_geometry.borrow().len(),1,"retired owner geometry cannot accumulate across poses");
-    let mut scene=r.scene.take().unwrap();
-    let mapped=scene.material_coverage(&r,source_at(&doc,0),&geometry,&[]).0;
-    assert!(!mapped.is_empty());
-    assert!((mapped.max.x-mapped.min.x)*(mapped.max.y-mapped.min.y)<256.*256.*2.,"one wet tile keeps its mapped footprint: {mapped:?}");
-    assert_eq!(scene.material_coverage(&r,source_at(&doc,0),&geometry,&[]).0,mapped);
-    let frame=packet(doc.scene(),doc.composition().size);
-    for tile in [[0,0],[1,0],[0,1]] {
-        scene.placed_material_tile(&r,frame,doc.scene().order()[0],geometry.clone(),tile).unwrap();
-    }
-    assert_eq!(scene.mesh_geometry.borrow().len(),1,"material neighborhoods share the owner's world mesh");
-    assert!(Arc::ptr_eq(&first,&scene.mesh_geometry(&geometry).unwrap()));
-    assert!(scene.mesh_geometry.borrow().iter().map(|(_,mesh)|mesh.storage_bytes()).sum::<u64>()<=64*1024*1024);
-}
-
-#[test]
-fn folded_display_across_positions_windows_matches_exact_paint() {
-    let mut doc=document_at([2048,512]);
-    occurrence_mut(&mut doc,0).placement =layer_core::LayerPlacement {mesh:Some(Arc::new(layer_core::MeshMap::identity(
-        layer_core::Rect::from_extent(doc.composition().size),[3;2]).unwrap().move_node(4,layer_core::Point {x:1500.,y:0.}).unwrap())),..Default::default()};
-    let mut cached=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let mut exact=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();exact.test.reference=true;
-    let mut frame=packet(doc.scene(),doc.composition().size);frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
-    cached.submit(frame).unwrap();exact.submit(frame).unwrap();
-    let reference=pixels(&exact,crate::test_support::document_texture(&exact));
-    assert_settled(&mut cached,frame,&reference);
 }
 
 #[test]

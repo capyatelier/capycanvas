@@ -86,14 +86,25 @@ impl crate::WgpuRasterizer {
         if requests.is_empty() {
             return Ok(());
         }
+        self.submit_restore(|r, scene, encoder| scene.restore_native_tiles(r, requests, encoder))
+    }
+    /// Restorations submit their own commands, possibly while a frame is still
+    /// recording. Their uploads use a separate staging belt, so recalling it
+    /// after they complete cannot remap chunks the frame still references.
+    pub(crate) fn submit_restore(
+        &mut self,
+        encode: impl FnOnce(&mut Self, &mut crate::scene::Scene, &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError>,
+    ) -> Result<(), GpuRasterError> {
         let mut scene = self
             .scene
             .take()
             .unwrap_or_else(|| crate::scene::Scene::new(self));
         let mut encoder = crate::submission::CommandEncoder::new(&self.device, &Default::default());
-        let result = scene.restore_native_tiles(self, requests, &mut encoder);
-        self.scene = Some(scene);
+        std::mem::swap(&mut self.uploads, &mut self.restore_uploads);
+        let result = encode(self, &mut scene, &mut encoder);
         self.uploads.finish(&encoder);
+        std::mem::swap(&mut self.uploads, &mut self.restore_uploads);
+        self.scene = Some(scene);
         if result.is_ok() {
             self.last_submission = Some(encoder.submit(&self.queue));
             self.metrics.native_restore_submissions += 1;

@@ -52,13 +52,15 @@ struct ColorInput {
     lease: Option<Arc<()>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reduction { Pages, Phased }
 #[derive(Clone)]
 enum Job {
-    Object(Box<objects::ObjectJob>),
+    Collection(Box<crate::object_sampling::CollectionPreview>),
     PaintBase(Arc<crate::source_access::PaintBaseAssembly>),
-    Positions(Arc<paint_transform::mesh::MeshGeometry>, [u32; 2], [i32;2]),
+    Positions(Arc<paint_transform::mesh::MeshGeometry>, [u32; 2]),
     Placement(Box<placement::PlacementJob>),
-    Reduce { binding: wgpu::BindGroup, values: [u32; 20], size: [u32; 2] },
+    Reduce { binding: wgpu::BindGroup, values: [u32; 20], size: [u32; 2], kernel: Reduction },
     DecodedTile(std::sync::Arc<sources::PendingTile>),
     Effect {
         target: wgpu::TextureView,
@@ -146,12 +148,11 @@ pub(super) struct Scene {
     valid: Arc<std::sync::atomic::AtomicBool>,
     placement: [pixel_transform::PixelTransform; 2],
     positions: paint_transform::mesh::Positions,
-    display_mesh: paint_transform::MeshBuffers,
-    position_key: Option<(layer_core::LayerPlacement, [u32; 2], [i32;2])>,
+    position_key: Option<(layer_core::LayerPlacement, [u32; 2])>,
     mesh_geometry: std::cell::RefCell<Vec<(layer_core::LayerPlacement, Arc<paint_transform::mesh::MeshGeometry>)>>,
     material_coordinates: wgpu::BindGroup,
     material_pages: std::collections::VecDeque<placement::MaterialPage>,
-    material_bounds: std::collections::HashMap<SourceTarget, placement::MaterialBounds>,
+    material_bounds: std::collections::HashMap<SourceTarget, DocRect>,
     placement_display: bool,
     object_display: bool,
     object_source_damage: scale::Damage,
@@ -254,7 +255,7 @@ impl Scene {
             .chain(self.exact_object_results.metadata_allocations()).filter_map(|(id,bytes)|(!allocations.insert(id)).then_some(bytes)).sum::<u64>();
         self.pool.iter().map(PageSurface::storage_bytes).sum::<u64>()
             + (self.capacity * self.stride) as u64
-            + self.effects.storage_bytes() + self.positions.storage_bytes() + self.display_mesh.storage_bytes()
+            + self.effects.storage_bytes() + self.positions.storage_bytes()
             + self.placement.iter().map(pixel_transform::PixelTransform::storage_bytes).sum::<u64>() + 32
             + self.images.storage_bytes() + self.scale_sources.storage_bytes() + self.object_results.bytes() + self.exact_object_results.bytes() + self.object_spatial.storage_bytes() + self.scale_commands.as_ref().map_or(0, scale::Commands::storage_bytes) - duplicate_metadata
     }
@@ -349,16 +350,8 @@ impl Scene {
         }
         Ok(())
     }
-    pub(crate) fn geometry_bytes(view: SceneView<'_>, scene: Option<&Self>) -> u64 {
-        let geometries = || view.order().iter().filter_map(|handle| {
-            view.occurrence(*handle)?.placement.mesh.as_ref()?;
-            let target = view.source_target(*handle)?;
-            Some(view.target_geometry(target))
-        });
-        if let Some(scene) = scene { scene.mesh_geometry.borrow_mut().retain(|(key, _)| geometries().any(|geometry| geometry.placement == *key)); }
-        let buffers = geometries().map(|geometry| scene.map_or_else(
-            || paint_transform::mesh::MeshGeometry::new(geometry.placement.mesh.as_ref().unwrap(), geometry.placement.outer, None).buffer_bytes(),
-            |scene| scene.mesh_geometry(&geometry).unwrap().buffer_bytes())).max().unwrap_or(0);
+    pub(crate) fn geometry_bytes(scene: Option<&Self>) -> u64 {
+        let buffers = scene.map_or(0, |scene| scene.mesh_geometry.borrow().iter().map(|(_, geometry)| geometry.buffer_bytes()).max().unwrap_or(0));
         if buffers == 0 { 0 } else { buffers.saturating_mul(2) + u64::from(PAGE_SIZE + 2).pow(2) * 16 + 48 }
     }
     pub fn begin_frame(&mut self) {
@@ -406,9 +399,8 @@ impl Scene {
             positions: r.transforms.as_ref().map_or_else(|| paint_transform::mesh::Positions::new(device), paint_transform::mesh::Positions::sharing),
             position_key: None,
             mesh_geometry: Default::default(),
-            display_mesh: Default::default(),
             scale_sources: Default::default(),
-            object_results: Default::default(),
+            object_results: object_cache::ObjectCache::live(),
             object_spatial: Default::default(),
             exact_object_results: Default::default(),
             scale_commands: None,
@@ -520,16 +512,15 @@ impl Scene {
     ) -> Result<crate::source_access::RawTile, GpuRasterError> {
         debug_assert!(self.jobs.is_empty());
         self.used.fill(false); self.begin_frame();
-        let geometry = scene.target_geometry(target);
         let extent = scene.target_extent(target);
         let page = match target {
             SourceTarget::Coverage(coverage) => {
                 let owner = scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
                 let (use_, source) = scene.mask(owner).ok_or(GpuRasterError::MissingPaintLayer(target))?;
                 debug_assert_eq!(use_.source, coverage);
-                self.mask_at(r, use_, source, geometry, extent, coordinate)?
+                self.mask_at(r, use_, source, scene.target_offset(target), coordinate)
             }
-            _ => self.placed_raw_plane(r, scene, target, geometry, coordinate, layer_core::raster::RasterPlane::Color, extent)?,
+            _ => self.placed_raw_plane(r, scene, target, Default::default(), scene.target_offset(target), coordinate, layer_core::raster::RasterPlane::Color, PixelRect::full(extent))?,
         };
         self.encode_jobs(r, encoder)?;
         Ok(crate::source_access::RawTile { texture: self.pool[page].texture.clone(), view: self.pool[page].view.clone() })
@@ -732,8 +723,8 @@ impl Scene {
         let prepared = self.effects.prepare(r, packet.scene, indices, effects::Execution::Fused, packet.time_seconds, 0, packet.blend_space)?;
         let mask = if indices.len() == 1 && !direct_effect_mask(packet.scene, handle) {
             packet.scene.mask(handle).filter(|(use_, _)| use_.enabled).map(|(use_, source)| {
-                self.mask_at(r, use_, source, packet.scene.target_geometry(SourceTarget::Coverage(use_.source)), source.domain, tile)
-            }).transpose()?
+                self.mask_at(r, use_, source, packet.scene.target_offset(SourceTarget::Coverage(use_.source)), tile)
+            })
         } else { None };
         let out = self.reserve(r);
         let mut data = [0.; 32];
@@ -987,7 +978,7 @@ impl Scene {
         r: &WgpuRasterizer,
         mask: &MaskUse,
         source: &CoverageSource,
-        offset: layer_core::Point,
+        offset: [i64; 2],
         tile: [u32; 2],
     ) -> usize {
         self.mask_tile_input(r, mask, source, offset, tile, None)
@@ -995,7 +986,7 @@ impl Scene {
 
     fn mask_tile_input(
         &mut self, r: &WgpuRasterizer, mask: &MaskUse, source: &CoverageSource,
-        offset: layer_core::Point, tile: [u32; 2], command: Option<layer_masks::CommandCoverage>,
+        offset: [i64; 2], tile: [u32; 2], command: Option<layer_masks::CommandCoverage>,
     ) -> usize {
         let default = if mask.inverted {
             1. - source.default_coverage
@@ -1053,11 +1044,11 @@ impl Scene {
         } else if packet.scene.object_layer(index).is_some() {
             self.object_tile(r, packet, index, tile)?
         } else {
-            let out = self.paint_tile(r, packet, index, tile, scale::placement_level(packet.scene, packet.scene.source_target(index).unwrap()))?;
+            let out = self.paint_tile(r, packet, index, tile)?;
             self.converted(r, out, Convert::layers(packet))
         };
         if let Some((mask, source)) = packet.scene.mask(index).filter(|(mask, _)| mask.enabled) {
-            let m = self.mask_at(r, mask, source, packet.scene.target_geometry(SourceTarget::Coverage(mask.source)), source.domain, tile)?;
+            let m = self.mask_at(r, mask, source, packet.scene.target_offset(SourceTarget::Coverage(mask.source)), tile);
             let result = self.alloc(r, wgpu::Color::TRANSPARENT);
             self.draw(
                 r,
@@ -1076,13 +1067,11 @@ impl Scene {
             Ok(out)
         }
     }
-    fn paint_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, index: OccurrenceHandle, tile: [u32; 2], source_level: u32) -> Result<usize, GpuRasterError> {
-        let layer = packet.scene.occurrence(index).unwrap();
+    fn paint_tile(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, index: OccurrenceHandle, tile: [u32; 2]) -> Result<usize, GpuRasterError> {
         let target = packet.scene.source_target(index).unwrap_or_default();
-        if layer.placement != layer_core::LayerPlacement::IDENTITY
-            || (world_offset(packet.scene, index, false) != layer_core::Point::default()
-                && r.watercolor_style(target, packet.dab_batches).is_some()) {
-            return self.placed_tile(r, packet, index, tile, source_level);
+        if world_offset(packet.scene, index, false) != [0; 2]
+                && r.watercolor_style(target, packet.dab_batches).is_some() {
+            return self.placed_material_tile(r, packet, index, packet.scene.target_offset(target), tile);
         }
         let out = self.alloc(r, wgpu::Color::TRANSPARENT);
         let offset = world_offset(packet.scene, index, false);
@@ -1091,20 +1080,8 @@ impl Scene {
             // A translated output tile intersects at most four native
             // source tiles. Watercolor samples its halo from their bindings;
             // never scan/expand every page in the layer for every output tile.
-            let origin = layer_core::Point {
-                x: (tile[0] * PAGE_SIZE) as f32 - offset.x,
-                y: (tile[1] * PAGE_SIZE) as f32 - offset.y,
-            };
-            let region = pixel_rect(
-                layer_core::Rect {
-                    min: origin,
-                    max: layer_core::Point {
-                        x: origin.x + PAGE_SIZE as f32,
-                        y: origin.y + PAGE_SIZE as f32,
-                    },
-                },
-                packet.scene.local_extent(index),
-            );
+            let origin: [i64; 2] = std::array::from_fn(|i| i64::from(tile[i] * PAGE_SIZE) - offset[i]);
+            let region = DocRect { min: origin, max: origin.map(|v| v + i64::from(PAGE_SIZE)) }.in_frame(packet.scene.local_extent(index));
             for c in page_coordinates(region) {
                 let rect = local_rect(c, offset, tile);
                 if !intersects(rect) {
@@ -1113,7 +1090,7 @@ impl Scene {
                 self.paint_page(r, packet, index, stored, c, out, rect, Convert::None)?;
             }
         }
-        if layer.placement==layer_core::LayerPlacement::IDENTITY && offset==layer_core::Point::default()
+        if offset==[0; 2]
             && r.watercolor_style(target,packet.dab_batches).is_none()
             && let Some(Job::Draw {target:output,source_target,..})=self.jobs.last_mut()
             && *output==self.pool[out].view {
@@ -1164,32 +1141,10 @@ impl Scene {
             return Ok(false);
         }
         let mask = packet.scene.mask(index).filter(|(mask, _)| mask.enabled);
-        if mask.is_none() && self.placement_display
-            && let Some(affine) = packet.scene.target_geometry(target).as_affine()
-            && r.watercolor_style(target, packet.dab_batches).is_none()
-            && scale::placement_level(packet.scene, packet.scene.source_target(index).unwrap()) > 0
-            && let Some((plan, view)) = self.scale_sources.sample(target, scale::placement_level(packet.scene, packet.scene.source_target(index).unwrap()))
-        {
-            let scale = (1 << plan.level) as f32;
-            let transform = layer_core::Affine([scale, 0., 0., scale, plan.bounds.min_x() as f32, plan.bounds.min_y() as f32])
-                .then(affine);
-            let inverse = transform.inverse().ok_or(GpuRasterError::InvalidTransform(
-                "Transform must be finite and invertible"))?.0;
-            let view = view.clone();
-            self.draw(r, output, view, None, [0., 0., 256., 256.],
-                [12., layer.opacity, 0., 0.], true, Convert::layers(packet));
-            let Some(Job::Draw { data, .. }) = self.jobs.last_mut() else { unreachable!() };
-            data[12..14].copy_from_slice(&tile.map(|n| (n * PAGE_SIZE) as f32));
-            data[24..28].copy_from_slice(&inverse[..4]);
-            data[28..30].copy_from_slice(&inverse[4..]);
-            return Ok(true);
-        }
-        if layer.placement != layer_core::LayerPlacement::IDENTITY
-            || world_offset(packet.scene, index, false) != layer_core::Point::default()
-        {
+        if world_offset(packet.scene, index, false) != [0; 2] {
             return Ok(false);
         }
-        if mask.is_some_and(|(mask, _)| !packet.scene.target_geometry(SourceTarget::Coverage(mask.source)).is_identity())
+        if mask.is_some_and(|(mask, _)| packet.scene.target_offset(SourceTarget::Coverage(mask.source)) != [0; 2])
         {
             return Ok(false);
         }
@@ -1314,11 +1269,12 @@ impl Scene {
         let erase = f32::from(matches!(op.kind, RasterOperationKind::Erase { .. }));
         let gradient = if let RasterOperationKind::Gradient {gradient,..}=&op.kind {Some(crate::gradient::texture(r,gradient)?)} else {None};
         for (c, source, destination) in pages {
-            let mask = self.command_mask_at(r, &op.coverage, layer_core::ImageTransform { placement: layer_core::LayerPlacement::from_projective(op.coverage.use_.placement.then(layer_core::Projective::from_affine(layer_core::Affine::translation(op.coverage.use_.translation))).ok_or(GpuRasterError::InvalidTransform("Invalid mask placement"))?), ..Default::default() }, c, (target, operation_index as u32))?;
+            let mask = self.command_mask_at(r, &op.coverage, c, (target, operation_index as u32));
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             match op.kind {
-                RasterOperationKind::ColorMode(_) | RasterOperationKind::Transform(_) | RasterOperationKind::Bake { .. } | RasterOperationKind::FrequencyDetail { .. } => {
-                    unreachable!("transforms and bakes run before page operations")
+                RasterOperationKind::ColorMode(_) | RasterOperationKind::Transform(_) | RasterOperationKind::Bake { .. } | RasterOperationKind::FrequencyDetail { .. }
+                    | RasterOperationKind::Coverage => {
+                    unreachable!("transforms, bakes and mask coverage run before page operations")
                 }
                 RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. } => {
                     let mut resolved = None;
@@ -1495,6 +1451,11 @@ impl Scene {
         }
         let window = if matches!(output,Output::Source(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
         let dirty = match output { Output::Display => PixelRect::EMPTY, _ => window.in_frame(packet.document_extent) };
+        self.object_display = self.object_live || matches!(output, Output::Display);
+        let raw = match output { Output::Objects(owner) => Some(owner), _ => None };
+        if !matches!(output, Output::Source(_)) && !self.prepare_object_pages(r, packet, raw, page_coordinates(window.in_frame(packet.document_extent)))? {
+            return Err(GpuRasterError::DeferredObjectWork);
+        }
         self.prepare_region(r, packet, window, dirty, matches!(output,Output::Source(_) | Output::Objects(_)), encoder)?;
         let destination = Image { texture: destination.clone(), view: destination.create_view(&Default::default()),
             plan: display_mips::Plan::window(packet.document_extent, 0, region) };
@@ -1508,10 +1469,10 @@ impl Scene {
         if r.snapshot_worker || !packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some()) {
             return self.capture_region(r, packet, destination, region, output, encoder);
         }
-        r.drain_image_decode(encoder)?;
+        r.drain_image_decodes(encoder)?;
         self.object_results.retain(packet.scene,packet.blend_space,r.device.working_space());
         let mut objects = std::mem::take(&mut self.object_results);
-        let advanced = objects.advance(r, self, encoder);
+        let advanced = objects.advance(r, self, encoder, r.moving_layer.is_some() || !packet.dab_batches.is_empty());
         self.object_results = objects;
         advanced?;
         self.object_query = true;
@@ -1566,15 +1527,16 @@ impl Scene {
                 return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
             }
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-            r.drain_image_decode(&mut encoder)?;
+            r.drain_image_decodes(&mut encoder)?;
             let mut objects=std::mem::take(&mut self.exact_object_results);
-            let result=objects.advance(r,self,&mut encoder);
-            self.exact_object_results=objects;result?;
+            let result=objects.advance(r,self,&mut encoder,false);
+            self.exact_object_results=objects;
+            let idle=result? == 0 && encoder.pass_count() == 0;
             r.uploads.finish(&encoder);
             encoder.submit(&r.queue);
+            if idle && r.image_decode_waiting() { r.await_image_decode().await?; continue; }
+            r.metrics.object_drain_submissions += 1;
             crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
-            #[cfg(target_arch="wasm32")]
-            if r.image_decode_waiting() {r.await_image_decode().await?;}
         }
         if r.snapshot_cancelled.as_ref().is_some_and(|cancelled|cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
             return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
@@ -1650,6 +1612,8 @@ impl Scene {
         self.stop_before = packet.scene.effect_input();
         let object_pages = packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some());
         for tile in regions.iter().flat_map(|r| page_coordinates(*r)) {
+            let covered = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(page_rect(tile).intersect(*region))).intersect(destination.plan.bounds);
+            if covered.is_empty() { continue; }
             let image = match output {
                 Output::Artwork(parent) => {
                     let image = self.group(r, packet, parent, tile)?;
@@ -1676,11 +1640,11 @@ impl Scene {
                 Output::Source(target) => {
                     let owner=packet.scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
                     match target {
-                        SourceTarget::Paint(_) => self.paint_tile(r, packet, owner, tile, 0)?,
+                        SourceTarget::Paint(_) => self.paint_tile(r, packet, owner, tile)?,
                         SourceTarget::Coverage(_) => {
                             let (use_,source)=packet.scene.mask(owner).ok_or(GpuRasterError::MissingPaintLayer(target))?;
                             let mut use_=use_.clone(); use_.inverted=false;
-                            self.mask_at(r,&use_,source,packet.scene.target_geometry(target),source.domain,tile)?
+                            self.mask_at(r,&use_,source,packet.scene.target_offset(target),tile)
                         }
                         SourceTarget::Selection(_) => return Err(GpuRasterError::MissingPaintLayer(target)),
                     }
@@ -1691,15 +1655,14 @@ impl Scene {
                 let execution=if matches!(self.jobs.last(),Some(Job::Effect {data,..}) if data[19]>2.5) {effects::Execution::ReducedContribution} else {effects::Execution::Reduced};
                 let prepared=self.effects.prepare(r,packet.scene,&[handle],execution,packet.time_seconds,0,packet.blend_space)?;
                 let Job::Effect {target,data,prepared:effect,source_target,changed_cells,..}=self.jobs.last_mut().unwrap() else {unreachable!()};
-                let bounds=regions.iter().fold(PixelRect::EMPTY,|bounds,region|bounds.union(page_rect(tile).intersect(*region))).intersect(destination.plan.bounds);
-                let rect=paint_transform::texel_rect(bounds.window_local(destination.plan.bounds),1<<destination.plan.level);
+                let rect=paint_transform::texel_rect(covered.window_local(destination.plan.bounds),1<<destination.plan.level);
                 *target=destination.view.clone();
                 data[..4].copy_from_slice(&rect.map(|v|v as f32));
                 data[4..6].copy_from_slice(&destination.plan.size.map(|v|v as f32));
-                data[24..26].copy_from_slice(&[(bounds.max_x()-tile[0]*PAGE_SIZE) as f32,(bounds.max_y()-tile[1]*PAGE_SIZE) as f32]);
+                data[24..26].copy_from_slice(&[(covered.max_x()-tile[0]*PAGE_SIZE) as f32,(covered.max_y()-tile[1]*PAGE_SIZE) as f32]);
                 data[26]=1.;
                 data[27]=(1<<destination.plan.level) as f32;
-                data[28..30].copy_from_slice(&[(bounds.min_x()-tile[0]*PAGE_SIZE) as f32,(bounds.min_y()-tile[1]*PAGE_SIZE) as f32]);
+                data[28..30].copy_from_slice(&[(covered.min_x()-tile[0]*PAGE_SIZE) as f32,(covered.min_y()-tile[1]*PAGE_SIZE) as f32]);
                 *effect=prepared;
                 if initialized.is_some_and(|pages|pages.contains(&tile)) && !packet.composite_all && r.document_damage.is_empty() {
                     *changed_cells=source_target.and_then(|id|r.changed_cells.as_ref().unwrap().reusable(id,tile)).cloned();
@@ -1768,17 +1731,22 @@ impl Scene {
             self.object_results.retain_view(bounds, level);
         }
         let mut objects = std::mem::take(&mut self.object_results);
-        let advanced = objects.advance(r, self, encoder);
-        self.scale_sources.object_refinements = objects.take_damage();
-        self.scale_sources.object_damage = self.scale_sources.object_refinements.remove(&0).unwrap_or(scale::Damage::EMPTY)
-            .union(std::mem::take(&mut self.object_source_damage));
+        let input = !packet.dab_batches.is_empty() || r.moving_layer.is_some();
+        let advanced = if input && !r.object_deferred { Ok(0) } else { objects.advance(r, self, encoder, input) };
+        let mut refinements = objects.take_damage();
+        let mut damage: std::collections::BTreeMap<_, _> = refinements.extract_if(.., |(level, _), _| *level == 0).map(|((_, owner), damage)| (owner, damage)).collect();
+        let source = std::mem::take(&mut self.object_source_damage);
+        if !source.is_empty() { damage.entry(None).or_insert(scale::Damage::EMPTY).extend(&source); }
+        self.scale_sources.object_refinements = refinements;
+        self.scale_sources.object_damage = damage;
         self.object_results = objects;
         advanced?;
-        let dirty = dirty.union(self.scale_sources.object_damage.bounds());
+        let dirty = self.scale_sources.object_damage.values().fold(dirty, |dirty, damage| dirty.union(damage.bounds()));
         self.scale_sources.prepare(r, packet, batch_tiles);
         let mut commands = self.scale_commands.take().unwrap_or_else(|| scale::Commands::new(r));
         commands.begin();
         let mut cache = r.scale_display.take().expect("prepared display cache");
+        if self.scale_sources.object_damage.values().chain(self.scale_sources.object_refinements.values()).any(|damage| !damage.is_empty()) { cache.refresh_objects(); }
         cache.submission_valid = Some(self.valid.clone());
         self.object_live = true;
         self.object_display = true;
@@ -1820,7 +1788,7 @@ impl Scene {
         let mut output = self.group(r, packet, None, tile)?;
         if let Some(handle) = packet.inspect_mask
             && let Some((mask, source)) = packet.scene.mask(handle).filter(|(mask, _)| mask.enabled) {
-            let m = self.mask_at(r, mask, source, packet.scene.target_geometry(SourceTarget::Coverage(mask.source)), source.domain, tile)?;
+            let m = self.mask_at(r, mask, source, packet.scene.target_offset(SourceTarget::Coverage(mask.source)), tile);
             let tint = self.alloc(r, wgpu::Color::TRANSPARENT);
             self.draw(
                 r,
@@ -1873,14 +1841,6 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         grid: Option<[u32;4]>,
     ) -> Result<(), GpuRasterError> {
-        let mut deferred = false;
-        for job in &self.jobs {
-            let Job::Object(job) = job else {continue;};
-            if !job.live || self.object_results.has_job(job) || objects::live_ready(r,job)? {continue;}
-            if !job.preview || job.nearest {self.object_results.resolve_job(r,job)?;}
-            deferred = true;
-        }
-        if deferred {return Err(GpuRasterError::DeferredObjectWork);}
         let source_jobs = self.source_jobs.clone();
         let job_grid = |i| grid.filter(|_| !source_jobs.iter().any(|range| range.contains(&i)));
         let base = self.record_count;
@@ -1953,7 +1913,7 @@ impl Scene {
             _ => false,
         };
         let material_clear = |i: usize| matches!(self.jobs[i], Job::Clear(..))
-            && i + 1 < self.jobs.len() && is_material_compute(i + 1);
+            && matches!(self.jobs.get(i + 1), Some(Job::Placement(_) | Job::Watercolor { .. })) && is_material_compute(i + 1);
         let source_bindings = &mut self.source_bindings;
         let mask_bindings = &mut self.mask_bindings;
         let output_bindings = &mut self.output_bindings;
@@ -1995,8 +1955,11 @@ impl Scene {
                             pass.set_bind_group(3, output, &[]);
                             pass.dispatch_workgroups(PAGE_SIZE.div_ceil(8), PAGE_SIZE.div_ceil(8), 1);
                         }
-                        Job::Reduce { binding, size, .. } => {
-                            pass.set_pipeline(&r.scene_pipelines.scale.reduce);
+                        Job::Reduce { binding, size, kernel, .. } => {
+                            pass.set_pipeline(match kernel {
+                                Reduction::Pages => &r.scene_pipelines.scale.reduce,
+                                Reduction::Phased => &r.scene_pipelines.scale.reduce_phased,
+                            });
                             pass.set_bind_group(0, &self.reduction_binding, &[((base + j) * self.stride) as u32]);
                             pass.set_bind_group(1, binding, &[]);
                             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
@@ -2031,6 +1994,7 @@ impl Scene {
                         pass.set_bind_group(2,&prepared.binding,&[]);
                         pass.set_bind_group(3,output,&[]);
                         let size=job_grid(j).map_or([data[2] as u32,data[3] as u32],query_grid_size);
+                        debug_assert!(!size.contains(&0), "empty pointwise effect job was queued");
                         pass.dispatch_workgroups(size[0].div_ceil(32),size[1].div_ceil(2),1);
                         continue;
                     }
@@ -2049,28 +2013,19 @@ impl Scene {
                     pass.set_bind_group(1, input, &[]);
                     pass.set_bind_group(2, output, &[]);
                     let size = job_grid(j).map_or([data[2] as u32,data[3] as u32], query_grid_size);
+                    debug_assert!(!size.contains(&0), "empty pointwise draw job was queued");
                     pass.dispatch_workgroups(size[0].div_ceil(32), size[1].div_ceil(2), 1);
                 }
                 encoded_through = end;
                 continue;
             }
             match job {
-                Job::Object(job) => {
-                    if job.live && let Some(view)=self.object_results.take_job(job) {
-                        encoder.copy_texture_to_texture(view.texture().as_image_copy(),job.output.texture().as_image_copy(),
-                            wgpu::Extent3d {width:job.size[0],height:job.size[1],depth_or_array_layers:1});
-                    } else if r.snapshot_worker && !job.preview {
-                        if self.exact_object_results.resolve_job(r,job)?.is_none() {return Err(GpuRasterError::DeferredObjectWork);}
-                        let view=self.exact_object_results.take_job(job).expect("prepared canonical object result");
-                        encoder.copy_texture_to_texture(view.texture().as_image_copy(),job.output.texture().as_image_copy(),
-                            wgpu::Extent3d {width:job.size[0],height:job.size[1],depth_or_array_layers:1});
-                    } else {objects::encode(r,encoder,job)?;}
-                },
+                Job::Collection(job) => r.scene_pipelines.objects.clone().preview(&r.device,encoder,&mut r.uploads,job,&r.empty_view)?,
                 Job::PaintBase(assembly) => crate::source_access::encode_paint_base(assembly, encoder),
                 Job::Placement(_) | Job::Reduce { .. } => unreachable!(),
-                Job::Positions(geometry, tile, offset) => {
+                Job::Positions(geometry, tile) => {
                     self.positions.upload(r, encoder, geometry)?;
-                    self.positions.draw_offset(r, encoder, *tile, *offset)?;
+                    self.positions.draw(r, encoder, *tile)?;
                 }
                 Job::DecodedTile(pending) => {
                     if r.source_tiles.borrow().uploads_full() {
@@ -2318,7 +2273,7 @@ impl Pipelines {
 }
 
 fn direct_effect_mask(scene: SceneView<'_>, handle: OccurrenceHandle) -> bool {
-    scene.mask(handle).is_none_or(|(use_, _)| !use_.enabled || scene.target_geometry(SourceTarget::Coverage(use_.source)).is_identity())
+    scene.mask(handle).is_none_or(|(use_, _)| !use_.enabled || scene.target_offset(SourceTarget::Coverage(use_.source)) == [0; 2])
 }
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     crate::bindings::texture(
@@ -2336,18 +2291,20 @@ fn uniform_binding(
         wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer, offset: 0, size: NonZeroU64::new(144), }),
     ])
 }
-fn local_rect(c: [u32; 2], offset: layer_core::Point, tile: [u32; 2]) -> [f32; 4] {
-    [
-        (c[0] as f32 - tile[0] as f32) * 256. + offset.x,
-        (c[1] as f32 - tile[1] as f32) * 256. + offset.y,
-        256.,
-        256.,
-    ]
+fn local_rect(c: [u32; 2], offset: [i64; 2], tile: [u32; 2]) -> [f32; 4] {
+    let at = |i: usize| ((i64::from(c[i]) - i64::from(tile[i])) * i64::from(PAGE_SIZE) + offset[i]) as f32;
+    [at(0), at(1), PAGE_SIZE as f32, PAGE_SIZE as f32]
 }
 fn intersects(r: [f32; 4]) -> bool {
     r[0] < 256. && r[1] < 256. && r[0] + r[2] > 0. && r[1] + r[3] > 0.
 }
-pub(super) fn world_offset(scene: SceneView<'_>, handle: OccurrenceHandle, mask: bool) -> layer_core::Point {
+/// A layer's pixels placed in the document, for the samplers that transform
+/// previews and pixel commits share.
+/// How far right and down of a page corner `origin` lies.
+pub(crate) fn page_phase(origin: [i64; 2]) -> [u32; 2] {
+    origin.map(|value| value.rem_euclid(i64::from(PAGE_SIZE)) as u32)
+}
+pub(super) fn world_offset(scene: SceneView<'_>, handle: OccurrenceHandle, mask: bool) -> [i64; 2] {
     if mask { scene.mask(handle).map_or_else(Default::default, |(use_, _)| scene.target_offset(SourceTarget::Coverage(use_.source))) }
     else { scene.occurrence_offset(handle) }
 }

@@ -96,7 +96,7 @@ impl PaintTransforms {
                 let native = level.is_none() || r.layer_masks.definitions.contains_key(&next.target);
                 damage.extend(state.update_preview(r, encoder, &next, Some((scene, next.target)), extent, native)?);
                 if let Some(level) = level.filter(|_| !native) {
-                    let local = input_level(level, &next, &scene.target_geometry(next.target), extent);
+                    let local = input_level(level, &next, extent);
                     state.prepare_reduced(r, encoder, next.selection.as_ref(), Some((scene, next.target)), extent, local)?;
                 }
             } else { damage.extend(state.cancel_preview(r, encoder)?); }
@@ -112,10 +112,10 @@ impl PaintTransforms {
         let extent = r.target_extent(id);
         let standby = Standby::of(scene, id, selection);
         if state.standby.as_ref() != Some(&standby) {
-            state.capture_source(r, encoder, id, Some(selection), extent)?;
+            state.capture_source(r, encoder, id, None, Some(selection), extent)?;
             state.standby = Some(standby);
         }
-        let local = sampling::selection_level(level, &scene.target_geometry(id), Some(selection), extent);
+        let local = sampling::selection_level(level, Some(selection), extent);
         state.prepare_reduced(r, encoder, Some(selection), Some((scene, id)), extent, local)
     }
     pub fn release_standby(&mut self) {
@@ -153,10 +153,9 @@ impl PaintTransforms {
         for state in self.0.iter_mut().filter(|t| !t.native_preview && t.preview.is_some()) {
             let preview = state.preview.clone().unwrap();
             let extent = r.target_extent(preview.target);
-            let transform = scene.target_geometry(preview.target);
-            let mesh = self::mesh_geometry_for(&transform);
             let bounds = PixelRect::full(extent);
-            let splitter = snapshot::Splitter::new(bounds, &transform, mesh, |c| !page_rect(c).intersect(bounds).is_empty())?;
+            let splitter = snapshot::Splitter::new(bounds, &Default::default(), None, |c| !page_rect(c).intersect(bounds).is_empty())?
+                .shifted(scene.target_offset(preview.target));
             let mut jobs = Vec::new();
             splitter.split(local, &mut jobs)?;
             let pages: std::collections::BTreeSet<_> = jobs.into_iter().flat_map(|job| job.sources).collect();
@@ -276,27 +275,28 @@ pub(crate) fn aligned(region: PixelRect, side: u32, extent: [u32; 2]) -> PixelRe
     PixelRect::new(near(region.min_x()), near(region.min_y()), far(region.max_x(), extent[0]), far(region.max_y(), extent[1]))
 }
 
-/// `transform` followed by `placement`, from texels of the layer reduced to
-/// `local` to texels of display `level`, sampled bilinearly. A warp resamples
+/// `transform` followed by `placement`, from texels of the layer reduced in
+/// `inputs` to texels of display `level`, sampled bilinearly. A warp resamples
 /// from mesh positions instead and maps through the placement alone.
 pub(crate) fn resample_map(
     transform: &layer_core::ImageTransform,
     placement: layer_core::Affine,
-    local: u32,
+    inputs: &snapshot::DisplayInputs,
     level: u32,
 ) -> Result<layer_core::ImageTransform, GpuRasterError> {
+    let scale = |s: f32| layer_core::Projective([s, 0., 0., 0., s, 0., 0., 0., 1.]);
+    let shift = |sign: f32| layer_core::Projective([1., 0., sign * inputs.phase[0] as f32, 0., 1., sign * inputs.phase[1] as f32, 0., 0., 1.]);
     if transform.placement.mesh.is_some() {
-        let scale = 1. / (1u32 << local) as f32;
         let mut result = transform.clone();
-        result.source_from_owner = Some(transform.source_from_owner.unwrap_or(layer_core::Projective::IDENTITY)
-            .then(layer_core::Projective([scale,0.,0.,0.,scale,0.,0.,0.,1.])).ok_or(GpuRasterError::InvalidTransform("Invalid source placement"))?);
+        result.source_from_owner = Some([shift(1.), scale(1. / (1u32 << inputs.level) as f32)].into_iter()
+            .try_fold(transform.source_from_owner.unwrap_or(layer_core::Projective::IDENTITY), layer_core::Projective::then)
+            .ok_or(GpuRasterError::InvalidTransform("Invalid source placement"))?);
         return Ok(result);
     }
     let moved = transform.projective().unwrap_or(layer_core::Projective::IDENTITY);
-    let scale = |s: f32| layer_core::Projective([s, 0., 0., 0., s, 0., 0., 0., 1.]);
-    let map = [moved, layer_core::Projective::from_affine(placement), scale(1. / (1u32 << level) as f32)]
+    let map = [shift(-1.), moved, layer_core::Projective::from_affine(placement), scale(1. / (1u32 << level) as f32)]
         .into_iter()
-        .try_fold(scale((1u32 << local) as f32), layer_core::Projective::then)
+        .try_fold(scale((1u32 << inputs.level) as f32), layer_core::Projective::then)
         .ok_or(GpuRasterError::InvalidTransform("Transform must be finite and invertible"))?;
     Ok(layer_core::ImageTransform { placement: layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Linear, ..layer_core::LayerPlacement::from_projective(map) }, ..Default::default() })
 }
@@ -532,7 +532,8 @@ impl ImageTransformState {
             r,
             encoder,
             layer,
-            operation.coverage.source.initial.as_ref(),
+            transform.source_base.as_ref(),
+            operation.coverage.selection.as_ref(),
             extent,
         )?;
         let regions = transform
@@ -540,7 +541,8 @@ impl ImageTransformState {
             .map(|b| pixel_rect(b, extent));
         let taps = pixel_transform::exact_taps(transform);
         let result = self.render_source(r, encoder, layer, transform, taps, &regions);
-        if result.is_ok() && self.moves_everything(operation.coverage.source.initial.as_ref()) {
+        let keeps_base = transform.source_base.is_none() && r.tiled_sources.contains_key(&layer);
+        if result.is_ok() && !keeps_base && self.moves_everything(operation.coverage.selection.as_ref()) {
             let placed = regions[1];
             r.drop_vacated_pages(layer, |c| !placed.page_local(c).is_empty());
         }
@@ -548,11 +550,10 @@ impl ImageTransformState {
         result
     }
     /// Whether the captured transform moves every pixel its target holds,
-    /// leaving only the pages its forward bounds reach. A photo's original
-    /// stays under its pages, so emptied pages must keep covering it.
+    /// leaving only the pages its forward bounds reach.
     fn moves_everything(&self, selection: Option<&layer_core::Selection>) -> bool {
         let source = self.source_bounds.into_iter().fold(PixelRect::EMPTY, PixelRect::union);
-        self.sources[0].as_ref().is_some_and(|s| s.base.is_none())
+        self.sources[0].is_some()
             && !source.is_empty()
             && selection.is_none_or(|s| selects_all(s, source))
     }
@@ -561,6 +562,7 @@ impl ImageTransformState {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         layer: SourceTarget,
+        base: Option<&layer_core::authored::PaintBase>,
         selection: Option<&layer_core::Selection>,
         extent: [u32; 2],
     ) -> Result<(), GpuRasterError> {
@@ -573,7 +575,7 @@ impl ImageTransformState {
             .map(|data| (data, r.document_color().space))).flatten();
         let original = background
             .is_none()
-            .then(|| r.tiled_sources.get(&layer).cloned())
+            .then(|| base.or_else(|| r.tiled_sources.get(&layer)).cloned())
             .flatten();
         self.background = background;
         self.original_pages = std::array::from_fn(|i| pages[i].iter().map(|(c, _)| *c).collect());
@@ -920,7 +922,7 @@ impl ImageTransformState {
             .flat_map(|window| {
                 window.jobs.iter().map(|(job, unmoved)| pixel_transform::TiledTransformRecord {
                     source_size: [PAGE_SIZE; 2],
-                    target: window.origin,
+                    origin: window.origin.map(|v| i64::from(v * PAGE_SIZE)),
                     sources: &job.sources,
                     texels: [0; 4],
                     unmoved: *unmoved,
@@ -1194,7 +1196,7 @@ impl ImageTransformState {
         }
         let operation = packet.scene.operations(preview.target)?.get(index as usize)?;
         if !matches!(&operation.kind, layer_core::RasterOperationKind::Transform(t) if t == preview.drawn().as_ref())
-            || operation.coverage.source.initial != preview.selection
+            || operation.coverage.selection != preview.selection
             || preview_taps(preview) != pixel_transform::exact_taps(&preview.drawn())
         {
             return None;
@@ -1248,7 +1250,7 @@ impl ImageTransformState {
         let mut damage = Vec::with_capacity(2);
         if !same_source {
             damage.extend(self.cancel_preview(r, encoder)?);
-            self.capture_source(r, encoder, next.target, next.selection.as_ref(), extent)?;
+            self.capture_source(r, encoder, next.target, None, next.selection.as_ref(), extent)?;
         }
         let regions = next
             .transform
@@ -1311,8 +1313,8 @@ impl ImageTransformState {
     ) -> Result<[u8; resample::UNIFORM_BYTES as usize], GpuRasterError> {
         let inputs = self.reduced.as_ref().unwrap();
         let display_level = display.side.trailing_zeros();
-        let moved = resample_map(&next.transform, placement, inputs.level, display_level)?;
-        let kept = resample_map(&layer_core::ImageTransform::default(), placement, inputs.level, display_level)?;
+        let moved = resample_map(&next.transform, placement, inputs, display_level)?;
+        let kept = resample_map(&layer_core::ImageTransform::default(), placement, inputs, display_level)?;
         let side = display.side as f32;
         let clip = layer_core::Affine([side, 0., 0., side, 0., 0.])
             .then(placement.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid layer placement"))?);
@@ -1321,13 +1323,14 @@ impl ImageTransformState {
             keep_source: next.transform.keep_source, identity: next.transform.is_identity() })
     }
     /// Draw `part` of `drawn`, whose corners lie on texel corners, by
-    /// evaluating every layer pixel of every texel from the captured originals.
+    /// evaluating every layer pixel of every texel from the captured originals,
+    /// shifted right and down by `phase`.
     #[allow(clippy::too_many_arguments)]
     fn draw_exact(
         &mut self,
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
-        transform: &layer_core::ImageTransform,
+        phase: [u32; 2],
         drawn: PixelRect,
         level: &wgpu::TextureView,
         display: pixel_transform::DisplayLevel,
@@ -1335,7 +1338,8 @@ impl ImageTransformState {
     ) -> Result<(), GpuRasterError> {
         let side = display.side;
         let snapshot = self.sources[0].as_ref().unwrap();
-        let splitter = snapshot.splitter(transform, None)?.aligned(side);
+        let shift = layer_core::ImageTransform::affine(layer_core::Affine::translation(layer_core::Point { x: phase[0] as f32, y: phase[1] as f32 }));
+        let splitter = snapshot.splitter(&shift, None)?.aligned(side);
         let mut blocks = std::collections::BTreeMap::new();
         for c in page_coordinates(drawn) {
             blocks
@@ -1359,7 +1363,7 @@ impl ImageTransformState {
             .iter()
             .map(|job| pixel_transform::TiledTransformRecord {
                 source_size: [PAGE_SIZE; 2],
-                target: [0; 2],
+                origin: phase.map(|v| -i64::from(v)),
                 sources: &job.sources,
                 texels: texels(job.region),
                 unmoved: false,
@@ -1374,7 +1378,7 @@ impl ImageTransformState {
                 encoder,
                 bounds,
                 0.,
-                transform,
+                &layer_core::ImageTransform::default(),
                 pixel_transform::PREVIEW_TAPS,
                 &records,
                 Some((display, part)),
@@ -1413,20 +1417,22 @@ impl ImageTransformState {
             return Ok(());
         }
         let kept = keeps_pixels(selection, self.sources[0].as_ref().unwrap().bounds);
+        let phase = layer.map_or([0; 2], |(scene, target)| crate::scene::page_phase(scene.target_offset(target)));
         let cached = (!kept).then(|| { let (scene, target) = layer?; r.scene.as_ref()?.reduced_layer(r, scene, target, extent, level) }.cloned()).flatten();
-        let input = snapshot::DisplayInputs::new(r, level, extent, kept);
+        let input = snapshot::DisplayInputs::new(r, level, extent, phase, kept);
         if let Some(texture) = &cached {
             encoder.copy_texture_to_texture(texture.as_image_copy(), input.image.texture.as_image_copy(), texture.size());
         }
         self.reduced = Some(input);
         let snapshot = self.sources[0].as_ref().unwrap();
-        let pages: Vec<_> = page_coordinates(snapshot.bounds).filter(|c| snapshot.contains(*c))
-            .map(|c| page_rect(c).intersect(PixelRect::full(extent))).collect();
+        let reduced = PixelRect::full([extent[0] + phase[0], extent[1] + phase[1]]);
+        let pages: std::collections::BTreeSet<_> = page_coordinates(snapshot.bounds).filter(|c| snapshot.contains(*c))
+            .flat_map(|c| page_coordinates(page_rect(c).intersect(PixelRect::full(extent)).translated(phase))).collect();
         let pipelines = r.display_pipelines.take().unwrap_or_else(|| display_mips::Pipelines::new(&r.device));
         let result = pages.into_iter().filter(|_| cached.is_none()).try_for_each(|page| {
             #[cfg(test)]
             r.test.reduced_pages.update(|n| n + 1);
-            self.reduce_page(r, encoder, &pipelines, selection, extent, level, page)
+            self.reduce_page(r, encoder, &pipelines, selection, extent, level, page_rect(page).intersect(reduced))
         });
         if result.is_ok() {
             let input = self.reduced.as_ref().unwrap();
@@ -1438,9 +1444,10 @@ impl ImageTransformState {
         result
     }
 
-    /// Reduce one page of the layer into the image of the pixels that move,
-    /// or of those kept when the selection leaves the page out, or draw both
-    /// exactly where a selection edge splits it.
+    /// Reduce one page of the reduced image from the layer pixels it covers,
+    /// into the image of the pixels that move, or of those kept when the
+    /// selection leaves them out, or draw both exactly where a selection edge
+    /// splits them.
     #[allow(clippy::too_many_arguments)]
     fn reduce_page(
         &mut self,
@@ -1454,18 +1461,28 @@ impl ImageTransformState {
     ) -> Result<(), GpuRasterError> {
         let snapshot = self.sources[0].as_ref().unwrap();
         let reduced = self.reduced.as_mut().unwrap();
+        let phase = reduced.phase;
+        let local = page.window_local(PixelRect::new(phase[0], phase[1], u32::MAX, u32::MAX)).intersect(PixelRect::full(extent));
         let moves = reduced.kept.is_none()
-            || selection.is_some_and(|s| selects_all(s, page.intersect(snapshot.bounds)));
-        let kept = !moves && page.intersect(pixel_rect(self.cut, extent)).is_empty();
+            || selection.is_some_and(|s| selects_all(s, local.intersect(snapshot.bounds)));
+        let kept = !moves && local.intersect(pixel_rect(self.cut, extent)).is_empty();
         let image = match &mut reduced.kept {
             Some(image) if kept => Some(image),
             _ => moves.then_some(&mut reduced.image),
         };
         if let Some(image) = image {
-            let c = [page.min_x() / PAGE_SIZE, page.min_y() / PAGE_SIZE];
-            if let Some(tile) = snapshot.original_page(r, c, encoder)? {
-                image.write_tile(&r.device, pipelines, encoder, &tile.texture, [0; 2], c)?;
+            let shifted = phase != [0; 2];
+            if shifted { image.clear_scratch(encoder); }
+            let mut written = shifted;
+            for c in page_coordinates(local).filter(|c| snapshot.contains(*c)) {
+                if let Some(tile) = snapshot.original_page(r, c, encoder)? {
+                    let part = page_rect(c).intersect(local);
+                    let destination = part.translated(phase).page_local([page.min_x() / PAGE_SIZE, page.min_y() / PAGE_SIZE]);
+                    image.copy_to_scratch(encoder, &tile.texture, part.page_local(c), [destination.min_x(), destination.min_y()])?;
+                    written = true;
+                }
             }
+            if written { image.reduce_scratch(&r.device, pipelines, encoder, [page.min_x() / PAGE_SIZE, page.min_y() / PAGE_SIZE])?; }
             return Ok(());
         }
         let parts = [
@@ -1479,8 +1496,7 @@ impl ImageTransformState {
             backdrop: [0.; 4],
             encode: false,
         };
-        let identity = layer_core::ImageTransform::default();
-        parts.iter().try_for_each(|(part, view)| self.draw_exact(r, encoder, &identity, page, view, display, *part))
+        parts.iter().try_for_each(|(part, view)| self.draw_exact(r, encoder, phase, page, view, display, *part))
     }
     fn channel_regions(
         &self,
@@ -1633,8 +1649,4 @@ fn selection_capture(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
-}
-
-fn mesh_geometry_for(transform: &layer_core::ImageTransform) -> Option<std::sync::Arc<mesh::MeshGeometry>> {
-    transform.placement.mesh.as_ref().map(|mesh| std::sync::Arc::new(mesh::MeshGeometry::new(mesh, transform.placement.outer, None)))
 }

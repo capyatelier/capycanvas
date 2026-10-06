@@ -84,10 +84,10 @@ fn frequency_separation_needs_a_visible_normal_paint_layer_in_a_perceptual_docum
 fn frequency_separation_bakes_low_and_high_in_an_isolated_group_above_the_hidden_layer() {
     let mut doc = document(&["Above", "Photo", "Under"]);
     let group = nest(&mut doc, "Above", &["Photo", "Under"]);
-    occurrence_mut(&mut doc, "Above").translation = Point { x: 30., y: -10. };
+    occurrence_mut(&mut doc, "Above").offset = [30, -10];
     let photo = id(&doc, "Photo");
     occurrence_mut(&mut doc, "Photo").opacity = 0.8;
-    occurrence_mut(&mut doc, "Photo").translation = Point { x: 4., y: 5. };
+    occurrence_mut(&mut doc, "Photo").offset = [4, 5];
     activate(&mut doc, "Photo");
     let filters = filters();
     let plan = doc.separation_plan(photo, &filters, ["Frequency Separation", "Low", "High"].map(Arc::from)).unwrap();
@@ -106,8 +106,8 @@ fn frequency_separation_bakes_low_and_high_in_an_isolated_group_above_the_hidden
     assert_eq!(low_scene.view().effect(blur).unwrap().values, filters.blur.values);
     assert_eq!(low_scene.view().occurrence(blur).unwrap().attachment, crate::Attachment::Effect);
     assert!(source.visible && source.opacity == 1.);
-    assert_eq!(source.translation, Point { x: 4., y: 5. });
-    assert_eq!(low_scene.view().target_offset(low_scene.view().source_target(photo).unwrap()), Point { x: 34., y: -5. });
+    assert_eq!(source.offset, [4, 5]);
+    assert_eq!(low_scene.view().target_offset(low_scene.view().source_target(photo).unwrap()), [34, -5]);
     let RasterOperationKind::FrequencyDetail { scene: original, scope: original_scope, offset: detail_offset, low: reference } =
         &plan.operations[1].1.kind
     else {
@@ -132,7 +132,7 @@ fn frequency_separation_bakes_low_and_high_in_an_isolated_group_above_the_hidden
     for (name, target, blend) in [("High", high, LayerBlend::LinearLight), ("Low", low, LayerBlend::Normal)] {
         let h = id(&doc, name);
         assert_eq!((doc.scene().parent(h), occurrence(&doc, name).blend), (Some(separation), blend));
-        assert_eq!(doc.target_offset(target), Point::default());
+        assert_eq!(doc.target_offset(target), [0, 0]);
     }
     assert!(!occurrence(&doc, "Photo").visible);
     assert_eq!(doc.working.occurrence, Some(active));

@@ -5,6 +5,7 @@ use crate::authored::*;
 pub enum RetouchLayerRefusal {
     NoLayer,
     NotPaint,
+    Objects,
     Hidden,
     NotNormal,
     Linear,
@@ -86,7 +87,7 @@ impl Document {
         let gray = self.soft_light_neutral();
         let fill = RasterOperation {
             placement: Affine::IDENTITY,
-            coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), canvas, Point::default()),
+            coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), canvas, [0; 2]),
             kind: RasterOperationKind::Fill { color: [gray, gray, gray, 1.], alpha_locked: false },
         };
         let mut working = self.working.clone();
@@ -117,7 +118,9 @@ impl Document {
         let Some(o) = scene.occurrence(target) else {
             return Some(R::NoLayer);
         };
-        if o.kind() != LayerKind::Paint {
+        if o.kind() == LayerKind::Object {
+            Some(R::Objects)
+        } else if o.kind() != LayerKind::Paint {
             Some(R::NotPaint)
         } else if !o.visible {
             Some(R::Hidden)
@@ -141,7 +144,7 @@ impl Document {
         let scene = self.scene();
         let old = scene.occurrence(target).unwrap();
         let parent = scene.parent(target);
-        let parent_offset = parent.map_or(Point::default(), |p| self.layer_offset(p));
+        let parent_origin = self.scene().layer_origin(parent);
         let canvas = self.composition().size;
         let mut high_scene = self.snapshot();
         let authored = &mut Arc::make_mut(&mut high_scene).artwork;
@@ -174,7 +177,7 @@ impl Document {
         let operation = |kind| {
             let op = RasterOperation {
                 placement: Affine::IDENTITY,
-                coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), canvas, Point::default()),
+                coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), canvas, [0; 2]),
                 kind,
             };
             if self.exceeds_publication(&op, canvas) { Err(RetouchLayerRefusal::TooLarge) } else { Ok(op) }
@@ -198,9 +201,10 @@ impl Document {
         group.attachment = old.attachment;
         let group = RecordChange::insert(&allocator.occurrences, group);
         allocator.occurrences.change(group.handle, group.id, group.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let offset = offsets::checked_sub([0; 2], parent_origin).ok_or(RetouchLayerRefusal::TooLarge)?;
         let part = |h, name, blend| {
             let mut o = Occurrence::new(OccurrenceContent::Paint(h), name);
-            o.translation = Point { x: -parent_offset.x, y: -parent_offset.y };
+            o.offset = offset;
             o.blend = blend;
             o
         };

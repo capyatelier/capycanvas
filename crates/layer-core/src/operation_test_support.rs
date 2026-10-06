@@ -74,9 +74,9 @@ pub fn nest(doc: &mut Document, group: &str, children: &[&str]) -> OccurrenceHan
     if doc.working.occurrence == Some(h) { doc.working.target = doc.scene().source_target(h); }
     h
 }
-pub fn add_mask(doc: &mut Document, owner: OccurrenceHandle, domain: [u32; 2], translation: Point) -> CoverageHandle {
+pub fn add_mask(doc: &mut Document, owner: OccurrenceHandle, domain: [u32; 2], offset: [i64; 2]) -> CoverageHandle {
     let c = doc.artwork.coverage.next_handle();
-    let snapshot = CoverageSnapshot::reveal_all(c, domain, translation);
+    let snapshot = CoverageSnapshot::reveal_all(c, domain, offset);
     let h = doc.artwork.coverage.insert(PortableId::random(), snapshot.source).unwrap();
     doc.artwork.occurrences.get_mut(owner).unwrap().mask = Some(snapshot.use_);
     refresh(doc);

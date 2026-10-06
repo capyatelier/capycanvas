@@ -108,7 +108,6 @@ impl Document {
     pub fn admit(&self,limits:ProjectLimits)->Result<(),String>{
         let composition=self.composition();
         if composition.size.contains(&0)||composition.size.iter().any(|v|*v>limits.dimension)||self.artwork.occurrences.len()>limits.layers{return Err("Invalid or oversized artwork".into());}
-        if self.artwork.occurrences.iter().any(|(_,_,o)|o.name.len()>4096){return Err("Oversized occurrence name".into());}
         let mut roots=RootInventory::default();roots.document(self);
         let mut sources=color::source::SourceAccounting::default();
         let mut resources=history_budget::Accounting::default();

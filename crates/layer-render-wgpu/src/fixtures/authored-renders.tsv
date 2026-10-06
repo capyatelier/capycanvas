@@ -128,13 +128,5 @@ filter/vignette/U8	1548288	12288	0.0002	0.00002
 filter/white_balance/F32	1560576	12288	0.00002	0.000002
 filter/white_balance/U8	1572864	12288	0.00002	0.000002
 output/sdr	1585152	12288	0.0002	0.00002
-placement/Bicubic/mesh=false	1597440	12288	0.0002	0.00002
-placement/Bicubic/mesh=true	1609728	12288	0.0002	0.00002
-placement/Lanczos/mesh=false	1622016	12288	0.0002	0.00002
-placement/Lanczos/mesh=true	1634304	12288	0.0002	0.00002
-placement/Linear/mesh=false	1646592	12288	0.0002	0.00002
-placement/Linear/mesh=true	1658880	12288	0.0002	0.00002
-placement/Nearest/mesh=false	1671168	12288	0.0002	0.00002
-placement/Nearest/mesh=true	1683456	12288	0.0002	0.00002
-procedural/fbm	1695744	12288	0.0002	0.00002
-watercolor	1708032	12288	0.0002	0.00002
+procedural/fbm	1597440	12288	0.0002	0.00002
+watercolor	1609728	12288	0.0002	0.00002

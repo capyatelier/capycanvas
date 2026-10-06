@@ -81,6 +81,8 @@ current UI preferences.
 | `WorkingState.selection_overlays.visibility` | Transient per-occurrence visibility for saved-selection overlays; absent entries are visible. | Navigation and eye toggles never edit artwork; delete repairs entries, undo restores them, and private recovery retains them while portable save omits them. |
 | `WorkingState.selection_overlays.properties` | Transient per-saved-selection overlay color and opacity; absent entries use sRGB red `[1,0,0,1]` and `0.5`. | Property edits preserve artwork and redo; parked tabs and recovery retain them, while portable save omits them. |
 | `WorkingState.inspect_mask` | Optional occurrence whose mask is inspected. | Omit from portable artwork and output pixels. |
+| `WorkingState.objects` | Selected image objects, all children of the active image layer; initially empty. | Separate from layer-row and pixel selection. Selection repair drops images outside the active layer; delete and undo repair it; private recovery retains it while portable save omits it. |
+| `WorkingState.view_origin` | Accumulated signed integer offset of the canvas frame from crops and grows, initially `[0,0]`. | Working edits, history and private sessions record it; Undo/Redo and camera follow use its change without editing artwork coordinates; portable save omits it. |
 | `WorkingState.generation` | Runtime working-state generation. | Reject stale working requests without treating navigation as an authored edit. |
 
 `DocumentNames` supplies localized initial names. Created occurrence names are
@@ -96,14 +98,13 @@ shared session or workspace owners.
 | --- | --- | --- |
 | `Artwork.id` | Drawing portable identity; new unique ID. | Preserve for the drawing lifetime; opening the same ID twice does not share mutable stores. |
 | `Artwork.root`, `default_output` | Typed composition and output handles. | Resolve portable references once on decode; handles never become portable identities. |
-| `Composition.size`, `origin` | Positive integer frame extent and explicit origin in local pixels; origin initially zero. | Crop/grow changes the frame without discarding out-of-frame source pixels. |
+| `Composition.size` | Positive integer frame extent in composition pixels. | Crop/grow changes the frame and shifts root offsets, never discarding out-of-frame content. |
 | `Composition.color` | Working RGB primaries and committed sample depth; default sRGB/U8. | Preserve U8/U16/F16/F32 codes and independent imported interpretation. |
 | `Composition.blend` | Blend domain, initially Linear. | Perceptual and Linear retain their evaluation rules and admission restrictions. |
 | `Composition.resolution` | Optional exact positive rational physical density on both axes, with inch, centimetre or metre units. | Round-trip rational pairs and units without normalization; changing resolution alone does not invalidate pixels. |
 | `Composition.result`, `Stack.entries` | Typed result stack and front-to-back occurrence order. | Preserve membership, including empty stacks; no parallel flat order or authored parent field. |
 | `Output.composition`, `name` | Output source composition and literal UTF-8 name. | Preserve output identity independently of presentation name. |
 | `Output.context` | Effective effect phases; the runtime elapsed origin is not saved and reopens at zero. | Evaluate captured source roots at these phases, never reconstruct phases from elapsed time and the latest rate. |
-| `Output.frame`, `scale` | Optional output frame and positive delivery scale, initially absent and `[1,1]`. | Output framing is independent of composition and source domains. |
 | `Output.proof` | Optional proof intent with immutable profile resource. | Preserve name, profile, intent, black-point compensation, paper and black-ink simulation; temporary proof toggles are omitted. |
 | `Output.sdr` | Exposure, contrast, headroom, highlight-color fraction and balance; defaults `0`, `1`, `2.3004484`, `0.3`, `0`. | All five values survive save/reopen; screen capability never changes authored intent. |
 | `Artwork.metadata` | Exact opaque Exif, XMP and IPTC blocks, initially absent. | Preserve metadata unrelated to output; placing another image does not replace drawing metadata. |
@@ -120,36 +121,36 @@ shared session or workspace owners.
 | `Occurrence.opacity` | Finite contribution factor `[0,1]`, initially 1. | Affect only this occurrence and retain pass-through interpolation. |
 | `Occurrence.blend` | Actual blend operation, initially Normal. | Pass Through is an explicit mode; isolating a Pass Through group makes it Normal. |
 | `Occurrence.attachment` | `None`, `Clip` or `Effect`, initially None. | Publication resolves a common clipping base or an effect owner from sibling order, independent of visibility. |
-| `Occurrence.translation` | Translation in enclosing-stack pixels, initially zero. | Preserve inherited group offsets, including mask placement. |
-| `Occurrence.placement` | Retained paint/group projective placement, optional cubic mesh and interpolation; initially identity, no mesh, Linear. | Object-layer occurrences require identity placement and integer translation; their image children own affine geometry. Paint/container integer cutover remains separate. |
+| `Occurrence.offset` | Signed integer offset in the containing stack's pixels for paint, image-layer and group content, initially `[0,0]`. Effects and saved selections have no offset. | Ancestor offsets accumulate with checked arithmetic; moving a group moves its descendants once. Editor admission bounds each value; image children own their affine geometry. |
 | `Occurrence.locked`, `alpha_locked` | Editing locks, initially false. | Derive ancestor locks; valid undo restores records without changing source sample identity. |
 | `Occurrence.reference` | Authored reference designation, initially false. | Preserve independently of visibility and rebuild reference scopes after grouping or reorder. |
-| `Occurrence.mask` | Optional `MaskUse` in the occurrence's mask slot. | Source edits differ from use enablement, linkage, inversion and placement edits. |
-| `PaintSource.domain` | Explicit local pixel domain. | Canvas shrink does not shrink the source; domains and occurrence placement remain independent. |
+| `Occurrence.mask` | Optional `MaskUse` in the occurrence's mask slot. | Source edits differ from use enablement, linkage, inversion and offset edits. |
+| `PaintSource.domain` | Explicit local pixel domain. | Canvas shrink does not shrink the source; domains and occurrence offsets remain independent. |
 | `PaintSource.raster` | Immutable sparse revision, initially empty, with color and material planes. | Preserve tile codes and unchanged compressed bytes; missing overrides reveal the imported base. |
 | `PaintSource.base` | Optional immutable image binding, absent for new paint. | Retain the shared image ID, nonnegative integer paint-local offset and `SourceProfile` or `WorkingPixels` policy. The entire image rectangle must fit the paint domain. Shared color-job capture omits source-profile paint bindings; adoption restores them by paint ID and interns matching image, raster tile and proof profile owners before validation. Source job preview and adoption use the same strict resource pool for returned immutable samples. |
 | `PaintSource.color_mode` | Full color (default), Grayscale, or Two-tone. | Store full color as RGB + alpha and reduced modes as gray + alpha at the document precision. Changes convert existing pixels in one undo step; subsequent edits obey the selected mode. |
 | `PaintSource.operations` | Accepted transient raster commands and immutable inputs. | Package preparation refuses unfinished commands; represented pending revision promises may be retained. |
 
-Composition frame, source domain, occurrence placement and output frame are
-independent. Source domains are explicit and do not fall back to canvas size.
-Whole-tile rebasing changes local coordinates and placement in one transaction
-without losing hidden tiles. Apply Transform to Pixels publishes new source roots
-and corresponding placement together.
+Composition frame, source domain and occurrence offset are independent. Source
+domains are explicit and do not fall back to canvas size. Whole-tile rebasing
+changes local coordinates, the base offset and the occurrence offset in one
+transaction without losing hidden tiles. A whole-pixel layer move changes only
+the offset. Exact flips and quarter turns permute samples into new immutable
+images; other layer transforms resample the current content once and publish the
+new source roots with their offset in one undo step.
 
 ### Coverage, mask use and saved selections
 
 | Field | Meaning, default and units | Required assertion |
 | --- | --- | --- |
 | `CoverageSource.domain` | Explicit local pixel domain. | Preserve coverage outside the composition frame. |
-| `CoverageSource.raster` | Sparse immutable scalar revision, initially empty. | Missing tiles retain declared initial/default coverage; coverage is not image alpha or luminance. |
-| `CoverageSource.initial` | Optional retained selection geometry or scalar resource, initially absent. | Preserve contour even/odd rule, affine map, inversion and pixel coverage without rasterizing contours at save. |
+| `CoverageSource.raster` | Sparse immutable scalar revision, initially empty. A mask made from a selection stores the selection's coverage here. | Missing tiles retain the declared default coverage; coverage is not image alpha or luminance. |
 | `CoverageSource.default_coverage` | Finite scalar `[0,1]`, initially 1 for Reveal All. | Freeze missing-tile and out-of-bounds coverage independently of use inversion. |
-| `CoverageSource.operations` | Accepted transient coverage commands and retained inputs. | Omit commands from portable data; retain the committed scalar revision promise. |
+| `CoverageSource.operations` | Accepted transient coverage commands and retained inputs. | Omit commands from portable data; retain the committed scalar revision promise. Operation coverage for erase, clear, selection-to-layer and transform jobs travels in `CoverageSnapshot.selection`, never in the coverage record. |
 | `MaskUse.source` | Typed coverage handle; use identity is occurrence plus mask slot. | Unlink/relink preserves coverage-source identity. |
-| `MaskUse.enabled`, `linked` | Application and placement linkage, initially true. | Disable preserves source data; toggling linkage preserves displayed coverage. |
-| `MaskUse.translation`, `placement` | Translation in the defined parent domain and independent projective geometry, initially zero and identity. | Preserve unlinked placement and owner pre-maps through projective/mesh placement. |
-| `MaskUse.inverted` | Use inversion, initially false. | Apply at its declared stage; initial-selection inversion stays separate. |
+| `MaskUse.enabled`, `linked` | Application and owner linkage, initially true. | Disable preserves source data; toggling linkage preserves displayed coverage. |
+| `MaskUse.offset` | Signed integer offset `M`, initially `[0,0]`. The mask's document origin is parent offset plus owner offset plus `M` when linked, parent offset plus `M` when unlinked. | Unlinking stores owner offset plus `M`, relinking subtracts it, so coverage stays in place. A linked mask follows its owner; moving an image inside its layer never moves the layer mask. |
+| `MaskUse.inverted` | Use inversion, initially false. | Apply after stored and default coverage. |
 | `SavedSelection.selection` | Authored `Selection` geometry or immutable pixel coverage. | Preserve independently of current working selection; do not composite exported color. |
 
 Saved selections retain `Selection.shape`, `affine` and `inverted`. Contours use
@@ -158,7 +159,8 @@ extent, sample representation and immutable coverage. An absent current selectio
 and an empty current selection remain different working states. Saved-selection
 painting changes its authored coverage; loading it into current selection changes
 working state and remains undoable without marking artwork dirty.
-Selection occurrences retain names, order, placement and edit locks. Their
+Selection occurrences retain names, order and edit locks; their geometry lives in
+the selection, not an occurrence offset. Their
 artwork-only flags are fixed: visible, unit opacity, normal blend and isolated
 blend, no reference designation, alpha lock, mask or attachment. Overlay display
 changes do not alter saved coverage or portable records.
@@ -206,8 +208,7 @@ placement and `Nearest` or `Linear` interpolation. Linear is the insertion defau
 The six finite F64 coefficients map source image coordinates into the layer frame
 as `[xx,yx,xy,yy,tx,ty]`; validation requires an invertible map and finite image
 bounds. Nonfinite and singular mappings are invalid; finite mappings beyond the
-implemented numerical support are refused as unsupported. Object layers currently
-require integer offsets and identity placement on every ancestor group. Duplication allocates new object and collection IDs while sharing immutable
+implemented numerical support are refused as unsupported. Duplication allocates new object and collection IDs while sharing immutable
 images. Foreign image-object import assigns new image, tile and profile IDs to the
 whole dependency batch while retaining shared immutable payloads. Object-only
 documents require no paint source. Opening or replacing the renderer still
@@ -218,8 +219,11 @@ affine placements with atomic reversible record edits. They respect ancestor loc
 and validate before publication. The shared session asks the renderer to preflight
 the candidate affine against the current scene and view before committing history.
 A rejected sampling request preserves the document, checkpoint and both history
-directions. These planners do not expose object-authoring UI;
-working object selection and tool routing belong to that later feature.
+directions. [`object_edits.rs`](../../crates/layer-core/src/authored/object_edits.rs)
+adds front-to-back bounds picking, document-space affines and bounds, and batch
+affine, delete, duplicate, reorder, visibility, rename and interpolation edits.
+`WorkingState.objects` holds the selection; the shared editor routes Move gestures
+through these planners as [image layers](../ui/image-objects.md) describes.
 
 `RasterData.tiles` retains plane, local tile coordinate, pixel descriptor and
 immutable publication. Color, Wetness and WatercolorWetness are paint-source
@@ -300,8 +304,8 @@ ID in the live closure identifies one kind, descriptor and backing owner; it
 cannot overlap an authored record ID. Verified worker adoption interns equivalent
 resources before admission.
 Affine-only object edits retain their owners and skip resource-closure admission.
-Final occurrence offsets whose linked mask sum exceeds the interim runtime's
-integer range or exact precision preserve the package instead of rounding.
+Occurrence and mask offsets, and their accumulated sums, beyond the editor's
+integer admission preserve the package instead of rounding.
 
 1. Check unique IDs, reference existence, relation types, finite numbers, domains,
    resource descriptors and required parameter/port keys. Resource references do
@@ -342,8 +346,8 @@ bottom-to-top. Isolated groups start transparent; pass-through groups interpolat
 groups cannot clip, own attached effects or serve as clipping bases. An explicit
 isolate-and-attach edit changes mode and relationship atomically.
 
-Consecutive clipped content uses the first eligible unclipped paint or isolated
-group below it as a common base. Attached adjustment rows and saved selections
+Consecutive clipped content uses the first eligible unclipped paint layer, image
+layer or isolated group below it as a common base. Attached adjustment rows and saved selections
 do not become bases. An owner's content and mask feed its attached effects
 bottom-to-top before outer clipping; effects may expand alpha. Hidden effects
 are bypassed, and hidden owners suppress their chain without retargeting it.
@@ -353,15 +357,15 @@ effect, and attaching across selections moves those selections above the chain
 in the same edit. A position below the owner remains valid.
 An unattached adjustment transforms its scoped lower composite and cannot split
 a clipping run. Generators remain content and cannot become direct targets.
-Masks retain source evaluation, placement, inversion and application as separate
+Masks retain source evaluation, offset, inversion and application as separate
 stages.
 
 ## Shared edits, targets and undo
 
 The ordered shared editor owns authored stores and working state. Working state
-contains current selection, selected occurrence, explicit drawing target and mask
-inspection, saved-selection overlay visibility/color/opacity and its own mutation
-generation. Existing UI/session owners retain
+contains current selection, selected occurrence, explicit drawing target, image
+selection, mask inspection, canvas view origin, saved-selection overlay
+visibility/color/opacity and its own mutation generation. Existing UI/session owners retain
 camera, tools, tabs and preferences. One transaction can update artwork and working
 state atomically. Working-only changes do not advance the artwork saved checkpoint;
 selection undo remains in shared history.
@@ -370,7 +374,7 @@ selection undo remains in shared history.
 `WorkingState.occurrence` supplies the occurrence context separately. Stroke
 admission resolves group locks, mask linkage, coordinates and source generation
 once. The source handle selects mutable backing;
-the occurrence context selects placement and editing policy. A query for an
+the occurrence context selects offset and editing policy. A query for an
 occurrence is not a query for its raw source. Deleted or changed targets are
 revalidated at a contact boundary, never silently rerouted mid-stroke.
 
@@ -430,15 +434,15 @@ and evaluation offset, excluding working selection and mask inspection.
 RawObjects and `ArtworkSource::Objects` expose an object layer's internal content
 without creating a writable `SourceTarget`; their query dependencies track child
 order, image identity, affine placement, visibility, interpolation and the owner
-and ancestor placement in document coordinates. Layer opacity, masks and attached
+and ancestor offsets in document coordinates. Layer opacity, masks and attached
 effects remain outside the raw content scope.
-Member scopes preserve original placement ancestry while evaluating the selected
+Member scopes preserve original offset ancestry while evaluating the selected
 contributors through their scoped parents; they do not copy or mutate occurrences.
 EffectInput resolves the owner content, descendants and preceding local effects
 for an attachment, or the ordinary lower backdrop for an unattached adjustment.
 `SceneView.effect_owner`, `attached_effects` and `clipping_base` expose the
 published relationships. Structural planners move an owner with its effects and
-a clipping base with its run, preserving unrelated targets and world placement.
+a clipping base with its run, preserving unrelated targets and world positions.
 
 Queries address raw sources, placed occurrences, scalar coverage, stack composites,
 effect inputs or outputs against an immutable scene revision and evaluation
@@ -449,7 +453,7 @@ destination publication, even after source occurrences leave the live stack.
 
 `ArtworkQuery` and source-analysis keys identify typed effect input scope,
 contributing source generations, topology, program/parameter dependencies,
-ancestor placement and captured phases. Occurrence names and control presentation
+ancestor offsets and captured phases. Occurrence names and control presentation
 order do not invalidate pixels; authored stack order remains an evaluation
 dependency. A changed upstream source or effective phase invalidates analysis. Captured phases
 take priority over elapsed-time fallback. Raw source queries exclude effect phases
@@ -566,7 +570,7 @@ or qualify host behavior and performance.
 | Boundary | Existing oracle |
 | --- | --- |
 | Bake lifetime and composition | [`merge_tests.rs`](../../crates/layer-core/src/merge_tests.rs) and [`scene/stack.rs`](../../crates/layer-render-wgpu/src/scene/stack.rs) |
-| Shared roots, selection and history admission | [`history_budget/tests.rs`](../../crates/layer-core/src/history_budget/tests.rs), [`retained_geometry_tests.rs`](../../crates/layer-core/src/retained_geometry_tests.rs) and [`raster/restore_tests.rs`](../../crates/layer-render-wgpu/src/raster/restore_tests.rs) |
+| Shared roots, selection and history admission | [`history_budget/tests.rs`](../../crates/layer-core/src/history_budget/tests.rs), [`layer_geometry_tests.rs`](../../crates/layer-core/src/layer_geometry_tests.rs) and [`raster/restore_tests.rs`](../../crates/layer-render-wgpu/src/raster/restore_tests.rs) |
 | Private session/history and worker transport | [`package/session_tests.rs`](../../crates/layer-core/src/package/session_tests.rs), [`package/session.rs`](../../crates/layer-core/src/package/session.rs) and [`package/session_transfer.rs`](../../crates/layer-core/src/package/session_transfer.rs) |
 | Portable codec, verified transfer and exact preview context | [`package/codec/tests.rs`](../../crates/layer-core/src/package/codec/tests.rs), [`package/transfer.rs`](../../crates/layer-core/src/package/transfer.rs) and [`authored/tests.rs`](../../crates/layer-core/src/authored/tests.rs) |
 | Groups, masks, native precision and transforms | [`scene/scale/tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/tests.rs), [`effect_tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/effect_tests.rs), [`transform_tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/transform_tests.rs) and [`placement_material_tests.rs`](../../crates/layer-render-wgpu/src/placement_material_tests.rs) |

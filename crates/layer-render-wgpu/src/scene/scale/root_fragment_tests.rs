@@ -121,7 +121,7 @@ fn root_deferred_flushes_before_placed_root_fallback() {
         e.draw(value(&images[0]),value(&images[1]),layer_core::LayerBlend::Normal,0,Some(output.clone())).unwrap();
         assert_eq!(e.root_compositions.len(),usize::from(deferred));
         let id=source_at(&doc,0);
-        let mut placed=Placed {id,view:images[0].view.clone(),transform:doc.scene().target_geometry(id),plan,outside:0.,opacity:1.,backdrop:[0.;4],encode:false};
+        let mut placed=Placed {id,view:images[0].view.clone(),transform:Default::default(),shift:[0;2],plan,outside:0.,opacity:1.,backdrop:[0.;4],encode:false};
         if direct {placed.backdrop=[0.11,0.22,0.33,1.];e.materialize(Value::Placed(placed),Some(output)).unwrap();}
         else {e.draw(Value::Placed(placed),Value::Color([0.11,0.22,0.33,1.]),layer_core::LayerBlend::Normal,0,Some(output)).unwrap();}
         assert!(e.root_compositions.is_empty());

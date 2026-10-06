@@ -63,8 +63,8 @@ moves the whole layer by changing its offset, which resamples nothing.
 - Move refuses with a notice on a locked layer and on the paper. With a
   selection it also refuses on a group or effect layer ("Choose a paint layer or
   a mask to move selected pixels") and on a layer with no pixels.
-- Moving pixels of a placed photo paints them over its original, which Revert to
-  Original Photo brings back.
+- Moving pixels of a photo layer paints them over its photo, which Discard Paint
+  Edits brings back.
 
 ## Paint selection
 

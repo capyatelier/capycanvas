@@ -112,7 +112,7 @@ impl ReferenceKey {
         *self.members == *members && self.extent == extent && self.blend_space == frame.blend_space
             && self.members.iter().all(|&h| previous.same_occurrence(current,h,true)
                 && previous.visible(h)==current.visible(h) && previous.occurrence_offset(h)==current.occurrence_offset(h)
-                && previous.source_target(h).is_none_or(|target|previous.target_geometry(target)==current.target_geometry(target)))
+                && previous.source_target(h).is_none_or(|target|previous.target_offset(target)==current.target_offset(target)))
     }
 }
 
@@ -211,7 +211,7 @@ fn lone_layer(frame: &artwork::Frame) -> Option<SourceTarget> {
     let mut visible = scene.order().iter().copied().filter(|&h| scene.visible(h));
     let handle = visible.next()?; let o = scene.occurrence(handle)?; let target = scene.source_target(handle)?;
     (visible.next().is_none() && matches!(target, SourceTarget::Paint(_)) && o.opacity == 1. && o.mask.is_none()
-        && scene.parent(handle).is_none() && !o.attachment.is_clip() && o.blend == layer_core::LayerBlend::Normal && scene.target_geometry(target).is_identity()).then_some(target)
+        && scene.parent(handle).is_none() && !o.attachment.is_clip() && o.blend == layer_core::LayerBlend::Normal && scene.target_offset(target) == [0; 2]).then_some(target)
 }
 
 /// Pages within `PREFETCH_RING` of each point, nearest rings first.
@@ -292,6 +292,10 @@ pub(super) struct RetouchSources {
     capture: artwork::Capture,
     missed: Option<StrokeId>,
     reported: Option<StrokeId>,
+    /// A finished stroke that read reference pages still being evaluated, such
+    /// as image layers whose canonical pixels are pending. It replays once
+    /// they are cached instead of keeping the holes it drew.
+    waiting: Option<(StrokeId, std::collections::BTreeSet<[u32; 2]>)>,
     view: Option<layer_render::ViewState>,
     pending: bool,
     heal: heal::Buffers,
@@ -317,6 +321,7 @@ impl RetouchSources {
             capture: artwork::Capture::default(),
             missed: None,
             reported: None,
+            waiting: None,
             view: None,
             pending: false,
             heal: heal::Buffers::default(),
@@ -335,7 +340,7 @@ impl RetouchSources {
     }
 
     pub fn pending(&self) -> bool {
-        self.pending
+        self.pending || self.missed.is_some()
     }
 
     pub fn storage_bytes(&self) -> u64 {
@@ -387,6 +392,10 @@ impl RetouchSources {
         {
             self.missed = Some(stroke);
         }
+    }
+
+    pub fn waiting(&self) -> Option<StrokeId> {
+        self.waiting.as_ref().map(|(stroke, _)| *stroke)
     }
 
     pub fn take_miss(&mut self) -> Option<StrokeId> {
@@ -584,6 +593,7 @@ impl RetouchSources {
         &mut self,
         r: &mut WgpuRasterizer,
         coordinate: [u32; 2],
+        stroke: Option<StrokeId>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
         if page_rect(coordinate).intersect(PixelRect::full(r.document_extent)).is_empty() {
@@ -604,7 +614,13 @@ impl RetouchSources {
             }
         }
         let slot = self.capture_reference(r, coordinate, self.live.is_none(), encoder)?;
-        if slot.is_none() { self.miss(); }
+        if slot.is_none() {
+            self.miss();
+            if self.live.is_none() && let Some(stroke) = stroke {
+                if self.waiting.as_ref().is_none_or(|(waiting, _)| *waiting != stroke) { self.waiting = Some((stroke, Default::default())); }
+                self.waiting.as_mut().unwrap().1.insert(coordinate);
+            }
+        }
         Ok(slot.map(|slot| self.cache.slots[slot].page.view.clone()))
     }
 
@@ -620,11 +636,10 @@ impl RetouchSources {
         let frame = if retouch.source == layer_core::RetouchSource::References && !retouch.references.is_empty() {
             self.cache.frame.as_ref()
         } else { r.artwork_frame.as_ref() }.ok_or(GpuRasterError::InvalidExtent)?;
-        let layer_core::Affine([a, b, c, d, tx, ty]) = frame.scene.view().target_geometry(target).as_affine()
-            .ok_or(GpuRasterError::InvalidTransform("Apply the transform to edit these pixels"))?;
+        let layer_core::Point { x: tx, y: ty } = layer_core::offsets::point(frame.scene.view().target_offset(target));
         let region = gather.region;
-        if [a, b, c, d] != [1., 0., 0., 1.] || region.is_empty() || region.width().max(region.height()) > PAGE_SIZE {
-            return Err(GpuRasterError::InvalidTransform("Retouch sources need an unrotated, unscaled layer"));
+        if region.is_empty() || region.width().max(region.height()) > PAGE_SIZE {
+            return Err(GpuRasterError::InvalidTransform("Retouch sources need a bounded region"));
         }
         let references = (retouch.source == layer_core::RetouchSource::References && !retouch.references.is_empty())
             .then(|| retouch.references.clone());
@@ -686,7 +701,7 @@ impl RetouchSources {
             if mapping.references.is_some()
                 && let Some(coordinate) = references[i]
             {
-                views[4 + i] = self.reference_page(r, coordinate, encoder)?;
+                views[4 + i] = self.reference_page(r, coordinate, mapping.stroke, encoder)?;
             }
         }
         Ok((views, self.counts.misses == misses))
@@ -747,18 +762,32 @@ impl RetouchSources {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(),GpuRasterError> {
         self.pending = false;
-        let Some(prepared) = self.prepared.as_ref().filter(|p| {
+        let Some((members, points)) = self.prepared.as_ref().filter(|p| {
             p.retouch.source == layer_core::RetouchSource::References && !p.retouch.references.is_empty()
-        }) else {
+        }).map(|p| (p.retouch.references.clone(), p.points.clone())) else {
             return Ok(());
         };
         if self.live.is_some() {
             return Ok(());
         }
-        let members = prepared.retouch.references.clone();
         self.cache.validate(frame, &members, r.document_extent);
         if !self.cache.analysis_ready(r)? { self.pending = true; return Ok(()); }
-        let wanted: Vec<_> = rings(&prepared.points, r.document_extent)
+        if let Some((stroke, pages)) = self.waiting.take() {
+            let mut missing = std::collections::BTreeSet::new();
+            for coordinate in pages {
+                if self.cache.pages.contains_key(&coordinate)
+                    || (missing.is_empty() && self.capture_reference(r, coordinate, true, encoder)?.is_some()) { continue; }
+                missing.insert(coordinate);
+            }
+            if !missing.is_empty() {
+                self.waiting = Some((stroke, missing));
+                self.pending = true;
+                return Ok(());
+            }
+            self.missed = Some(stroke);
+            self.reported = None;
+        }
+        let wanted: Vec<_> = rings(&points, r.document_extent)
             .into_iter()
             .filter(|c| !self.cache.pages.contains_key(c))
             .collect();

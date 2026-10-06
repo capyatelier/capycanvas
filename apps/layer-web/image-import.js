@@ -11,8 +11,8 @@ export function createImageImport({app,canvas,dispatch,applyChange,wake,element,
     if(!command('import_image')?.enabled)return null;
     const row=e.target.closest?.('.layer-row');
     if(row) {
-      const bounds=row.getBoundingClientRect(),target=BigInt(row.dataset.layer);
-      const position=app.image_layer_drop(target,Math.max(0,Math.min(1,(e.clientY-bounds.top)/bounds.height)));
+      const bounds=row.getBoundingClientRect(),target=BigInt(row.dataset.layer??row.dataset.objectLayer);
+      const position=app.image_layer_drop(target,row.dataset.layer?Math.max(0,Math.min(1,(e.clientY-bounds.top)/bounds.height)):.5);
       return position?{row,destination:{target,position},screen:null}:null;
     }
     if(e.target!==canvas)return null;

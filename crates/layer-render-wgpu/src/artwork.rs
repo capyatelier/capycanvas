@@ -30,11 +30,14 @@ impl Drop for PendingFrame {
 impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
     /// Source identity and raster publication catch edits without scanning pixels.
-    pub fn same_artwork(&self, packet: FramePacket<'_>) -> bool {
-        let old = self.scene.view();
+    pub fn same_evaluation(&self, packet: FramePacket<'_>) -> bool {
         self.blend_space == packet.blend_space
             && (self.time == packet.time_seconds || !packet.scene.order().iter().any(|&h|
                 packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated())))
+    }
+    pub fn same_artwork(&self, packet: FramePacket<'_>) -> bool {
+        let old = self.scene.view();
+        self.same_evaluation(packet)
             && self.previews.is_empty() && packet.dab_batches.is_empty()
             && old.same_artwork(packet.scene)
             && packet.scene.evaluation_context().is_none_or(|_|packet.scene.order().iter().filter(|h|packet.scene.effect(**h).is_some()).all(|h|
@@ -210,7 +213,7 @@ impl Capture {
             if !scene.visible(h) { return false; }
             if scene.object_layer(h).is_some_and(|layer| !layer.children.is_empty()) { return true; }
             let Some(target) = scene.source_target(h) else { return false; };
-            let placed = !scene.target_geometry(target).is_identity();
+            let placed = scene.target_offset(target) != [0; 2];
             let source = scene.paint_base(target).is_some_and(|base| placed
                 || (source_access::paint_base_contains(base, tile)
                     && !resident(target) && sources.prepared_base_view(base, tile).is_none()));

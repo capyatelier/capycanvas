@@ -71,13 +71,13 @@ fn trim_shrinks_to_the_visible_pixels_and_reveal_all_brings_hidden_pixels_back()
     invoke(&mut s, CommandId::Undo);
     let paint = s.engine.document().working.occurrence.unwrap();
     let mut occurrence = s.engine.document().scene().occurrence(paint).unwrap().clone();
-    occurrence.translation = Point { x: -100., y: 0. };
+    occurrence.offset = [-100, 0];
     s.layer_edit(layer_core::Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences, paint, Some(occurrence)).unwrap())).unwrap();
     s.frame(11, 11).unwrap();
     invoke(&mut s, CommandId::Trim);
     reply_bounds(&mut s, [166., 256., 442., 456.]);
     assert_eq!(size_of(&s), [276, 200], "only the pixels on the canvas count; the one at 0,0 lies beyond its left edge");
-    assert_eq!(s.engine.document().scene().occurrence(paint).unwrap().translation, Point { x: -266., y: -256. });
+    assert_eq!(s.engine.document().scene().occurrence(paint).unwrap().offset, [-266, -256]);
     invoke(&mut s, CommandId::RevealAll);
     reply_bounds(&mut s, [-266., -256., 276., 200.]);
     let doc = s.engine.document();
@@ -428,4 +428,58 @@ fn snapping_excludes_moved_nested_ancestors_but_keeps_siblings_and_cousins() {
     }
     let mut expected=vec![sibling,unrelated];expected.sort();
     assert_eq!(eligible(&s),expected,"multiple nested roots exclude each ancestor chain only");
+}
+
+fn photo_session() -> (UiSession<Recorder>, layer_core::authored::PaintHandle) {
+    let mut s = content_session([600, 400]);
+    let ink = s.engine.document().working.occurrence.unwrap();
+    let Some(SourceTarget::Paint(paint)) = s.engine.document().scene().source_target(ink) else { panic!("paint") };
+    let mut source = s.engine.document().artwork.paint.get(paint).unwrap().clone();
+    let mut base = PaintBase::new(layer_core::color::source::rgba8_source([300, 200], |x, y| [x as u8, y as u8, 9, 255]).into());
+    base.offset = [40, 30];
+    source.base = Some(base);
+    let edit = layer_core::Edit::Paint(RecordChange::replace(&s.engine.document().artwork.paint, paint, Some(source)).unwrap());
+    s.engine.apply_edit(edit).unwrap();
+    s.refresh_document();
+    (s, paint)
+}
+
+#[test]
+fn turning_a_photo_waits_for_its_exact_move_then_lands_in_one_undo_step() {
+    let (mut s, paint) = photo_session();
+    let before = s.engine.document().clone();
+    invoke(&mut s, CommandId::RotateImageRight);
+    let Some(layer_render::SnapshotRequest::Remap(plan)) = s.engine.backend().snapshot_requests.last().cloned() else { panic!("an exact photo move") };
+    assert_eq!(plan.targets().collect::<Vec<_>>(), [SourceTarget::Paint(paint)]);
+    assert_eq!(s.engine.document().composition().size, [600, 400], "nothing changes until the move finishes");
+    assert!(s.document_idle_reason().is_some(), "the drawing waits for the move");
+    let results = plan.run(&plan.scene.artwork, &Default::default(), &Default::default()).unwrap();
+    s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::Remap(results)));
+    s.frame(10, 10).unwrap();
+    let doc = s.engine.document();
+    assert_eq!(doc.composition().size, [400, 600]);
+    let base = doc.artwork.paint.get(paint).unwrap().base.clone().unwrap();
+    assert_eq!(base.image.extent, [200, 300]);
+    assert!(s.document_idle_reason().is_none());
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().composition().size, [600, 400]);
+    assert!(s.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.same_owner(&before.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image));
+}
+
+#[test]
+fn a_changed_drawing_cancels_a_photo_move_without_editing() {
+    let (mut s, _) = photo_session();
+    invoke(&mut s, CommandId::RotateImageLeft);
+    let Some(layer_render::SnapshotRequest::Remap(plan)) = s.engine.backend().snapshot_requests.last().cloned() else { panic!("an exact photo move") };
+    let results = plan.run(&plan.scene.artwork, &Default::default(), &Default::default()).unwrap();
+    s.engine.apply_edit(s.engine.document().select_occurrence_edit(s.engine.document().scene().order()[0]).unwrap()).unwrap();
+    let mut changed = s.engine.document().clone();
+    let occurrence = changed.scene().order()[0];
+    s.engine.apply_edit(layer_core::Edit::Occurrence(RecordChange::replace(&changed.artwork.occurrences, occurrence, Some(Occurrence { opacity: 0.5, ..changed.artwork.occurrences.get(occurrence).unwrap().clone() })).unwrap())).unwrap();
+    changed = s.engine.document().clone();
+    s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::Remap(results)));
+    s.frame(10, 10).unwrap();
+    assert_eq!(s.engine.document().composition().size, [600, 400], "a stale move never applies");
+    assert_eq!(s.engine.document().artwork, changed.artwork);
+    assert!(s.document_idle_reason().is_none());
 }

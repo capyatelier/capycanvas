@@ -646,9 +646,8 @@ impl WgpuRasterizer {
             {
                 return Err(GpuRasterError::Effect(error));
             }
-            runtime.targets.retain(|id, _| {
-                source_access::placed_targets(packet.scene).any(|target| target == *id)
-            });
+            let retained = source_access::retained_targets(packet.scene);
+            runtime.targets.retain(|id, _| retained.contains_key(id));
             for (id, revision) in packet.restore_rasters {
                 if let Some(current) = runtime.targets.get_mut(id) {
                     let data = revision.wait_data().map_err(GpuRasterError::Effect)?;
@@ -656,8 +655,8 @@ impl WgpuRasterizer {
                     current.revision = revision.clone();
                 }
             }
-            for target in source_access::placed_targets(packet.scene).filter(|t| packet.scene.raster(*t).is_some()) {
-                for (id, revision) in std::iter::once((target, packet.scene.raster(target).unwrap()))
+            for (&target, scene) in retained.iter().filter(|(t, scene)| scene.raster(**t).is_some()) {
+                for (id, revision) in std::iter::once((target, scene.raster(target).unwrap()))
                 {
                     // Backgrounds, groups and generators have no editable color pages.
                     if matches!(id, SourceTarget::Paint(_)) && !self.paint_layers.iter().any(|l| l.id == id) {

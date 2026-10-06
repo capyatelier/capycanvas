@@ -197,8 +197,8 @@ function Choose-Path([string]$Path) {
 function Write-PreservedPackage([string]$Destination,[byte[]]$Preview) {
     $members=[CapyPackageFixture]::Read((Join-Path $repo 'crates/layer-core/src/package/codec/fixtures/authored-filters.capy'))
     $manifest=[Text.Encoding]::UTF8.GetString(@($members|Where-Object Key -eq 'manifest.json')[0].Value)|ConvertFrom-Json -Depth 100
-    @($manifest.objects|Where-Object type -eq 'capy.occurrence/2')[0].data|Add-Member -Force blend 'future-package-blend'
-    foreach($record in @($manifest.objects|Where-Object type -eq 'capy.output/1')){
+    @($manifest.objects|Where-Object type -eq 'capy.occurrence/3')[0].data|Add-Member -Force blend 'future-package-blend'
+    foreach($record in @($manifest.objects|Where-Object type -eq 'capy.output/2')){
         $record.data|Add-Member -Force name 'Package preview output'
         $record.data.PSObject.Properties.Remove('representation')
         if($record.id -eq $manifest.default_output.ref){$record.data|Add-Member representation ([ordered]@{member='preview.png';size=@(2,1);color='srgb'})}
@@ -353,6 +353,25 @@ function Draw {
     Invoke-Control 'Test pen'
     Wait-Until {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
 }
+function Draw-Below {
+    $script:scope=$root
+    $camera=(Model).state.camera;$bounds=(Find-Id 'drawing-canvas').Current.BoundingRectangle
+    $revision=(Model).state.document_file.revision
+    $context=[CapyDocumentControls]::SetThreadDpiAwarenessContext([IntPtr](-4))
+    try{
+        [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+        [CapyRowPointer]::Initialize([uint32]$review.Id)
+        try{
+            for($i=0;$i -le 16;$i++){
+                $x=[int]($bounds.X+$camera.translation[0]+$camera.zoom*(20+5*$i));$y=[int]($bounds.Y+$camera.translation[1]+$camera.zoom*(78+[Math]::Sin($i/3)))
+                if($i -eq 0){[CapyRowPointer]::Down('mouse',$x,$y)}else{[CapyRowPointer]::Move($x,$y)}
+                Start-Sleep -Milliseconds 12
+            }
+            [CapyRowPointer]::Up()
+        }finally{[CapyRowPointer]::Dispose()}
+    }finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
+    Wait-Until {(Model).state.document_file.revision -gt $revision} 'The stroke below the controlled stroke did not modify the drawing'
+}
 Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'No review window' 30
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
 $script:scope=$root
@@ -410,9 +429,12 @@ Wait-Until {(Model).windows_document.stage -eq 'error'} 'Invalid image did not r
 $script:scope=$root;$script:scope=Find-Id 'document-workflow';Invoke-Control 'Close';Import-Idle
 if(@((Model).state.layers).Count -ne 2 -or (Model).state.document_file.modified){throw 'Invalid image changed the document'}
 Import-Start;Choose-Path $imageSource;Import-Idle
-Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.label -eq 'Source image 日本語'} 'Image layer was not selected'
+Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.object_count -eq 1} 'Image layer was not selected'
 if((Model).error){throw 'Successful import did not clear the previous decoder error'}
 $imported=(Model).state.layer_tools.editing_layer.id
+$script:scope=$root;Wait-Until {$expand=Find-Id "layer-$imported-expand";$expand -and $expand.Current.IsEnabled} 'The image layer did not offer its image list'
+(Find-Id "layer-$imported-expand").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+Wait-Until {$layer=@((Model).state.layers|Where-Object id -eq $imported)[0];$layer.expanded -and @($layer.objects).Count -eq 1 -and $layer.objects[0].label -eq 'Source image 日本語'} 'The imported image was not named after its file'
 Wait-Until {(Find-Id "layer-$imported-thumbnail").Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not arrive' 15
 Invoke-Control 'Apply transform'
 Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Placement did not enter undo history'
@@ -454,16 +476,21 @@ function Export-Again {
     Idle
     if(Find-Name 'Save As' ([System.Windows.Automation.ControlType]::Window)){throw 'Export Again asked for a destination it can still write'}
 }
-$hash=(Get-FileHash -LiteralPath $exported).Hash
+$exportedHash=(Get-FileHash -LiteralPath $exported).Hash
 Export-Again
-if((Get-FileHash -LiteralPath $exported).Hash -ne $hash){throw 'Export Again did not rewrite identical pixels'}
-Draw
+if((Get-FileHash -LiteralPath $exported).Hash -ne $exportedHash){throw 'Export Again did not rewrite identical pixels'}
+$inkBefore=Stroke-InkPixels
+Draw-Below
 Export-Again
-if((Get-FileHash -LiteralPath $exported).Hash -eq $hash){throw 'Export Again did not export the current pixels'}
+if((Get-FileHash -LiteralPath $exported).Hash -eq $exportedHash){throw 'Export Again did not export the current pixels'}
+if((Stroke-InkPixels) -ne $inkBefore){throw 'The Export Again stroke reached the controlled stroke region'}
 if(!(Model).state.document_file.modified -or (Model).state.document_file.location.uri -ne $first){throw 'Export Again acknowledged a project save'}
 Remove-Item -LiteralPath $exported
 $script:scope=$root;File-Command 'export_again';Picker 'Save As';$moved=Join-Path $run 'Export again.png';Choose-Path $moved;Idle
 Wait-Until {(Test-Path -LiteralPath $moved) -and (Model).state.document_file.export_uri -eq $moved} 'Export Again did not fall back to choosing a new destination'
+$revision=(Model).state.document_file.revision
+$script:scope=$root;Invoke-Control 'Undo'
+Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Undo did not remove the Export Again stroke'
 $webp=Join-Path $run 'Export.webp'
 File-Command 'export_document' {
     Combo-Select (Find-Id 'export-format') {$_.Current.Name -like 'WebP*'}
@@ -516,11 +543,18 @@ Wait-Until {(Model).state.document_file.location.uri -eq $first} 'Closing the ph
 if($RecoverGpu){
     function Signature {
         $state=(Model).state
-        $state.document_file.PSObject.Properties.Remove("revision")
+        foreach($field in @('revision','export_uri')){$state.document_file.PSObject.Properties.Remove($field)}
         @($state.document_file,$state.camera,$state.workspace,$state.brush)|ConvertTo-Json -Depth 80 -Compress
     }
+    $png={
+        Combo-Select (Find-Id 'export-format') {$_.Current.Name -like 'PNG*'}
+        Wait-Until {$format=Find-Id 'export-format';$format -and (Combo-Value $format) -like 'PNG*'} 'Export did not choose PNG'
+    }
+    $reference=Join-Path $run 'Recovered-0.png'
+    $script:scope=$root;File-Command 'export_document' $png;Picker 'Save As';Choose-Path $reference;Idle
+    Wait-Until {Test-Path -LiteralPath $reference} 'The drawing did not export before GPU recovery'
+    $exportHash=(Get-FileHash -LiteralPath $reference -Algorithm SHA256).Hash
     $beforeRecovery=Signature
-    $exportHash=(Get-FileHash -LiteralPath $exported -Algorithm SHA256).Hash
     foreach($attempt in 1..2){
         $generation=(Model).windows_gpu_generation
         $documentRevision=(Model).state.document_file.revision
@@ -544,7 +578,7 @@ if($RecoverGpu){
         $status=Find-Id 'canvas-status'
         if($status -and !$status.Current.IsOffscreen){throw ('GPU recovery reports an error: '+$status.Current.Name)}
         $restored=Join-Path $run ("Recovered-$attempt.png")
-        File-Command 'export_document';Picker 'Save As';Choose-Path $restored;Idle
+        File-Command 'export_document' $png;Picker 'Save As';Choose-Path $restored;Idle
         Wait-Until {Test-Path -LiteralPath $restored} 'Recovered GPU did not export'
         if((Get-FileHash -LiteralPath $restored -Algorithm SHA256).Hash -ne $exportHash){
             throw 'GPU reconstruction changed exported pixels'

@@ -77,7 +77,6 @@ fn unplaced_photo_preview_draws_the_photo_before_any_paint() {
     let document = Document::from_artwork(artwork).unwrap();
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     r.submit(crate::test_support::packet(document.scene(), [24, 48])).unwrap();
-    r.thumbnails.source_placements.clear();
     let bytes = thumbnail(&mut r, ThumbnailTarget::Source(SourceTarget::Paint(target)));
     assert!(bytes.chunks_exact(4).filter(|p| p[0].abs_diff(p[2]) > 20).count() > 100, "the layer preview shows the photo, not an empty checkerboard");
 }

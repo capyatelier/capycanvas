@@ -232,7 +232,7 @@ mod enclose_fill_checks {
             s.frame(2, 2).unwrap();
             let operations = s.engine.document().target_operations(target).unwrap();
             assert_eq!(operations.len(), 1);
-            assert_eq!(operations[0].coverage.source.initial, Some(Selection::pixels(pixels)));
+            assert_eq!(operations[0].coverage.selection, Some(Selection::pixels(pixels)));
             let layer_core::RasterOperationKind::Fill { color, .. } = operations[0].kind else { panic!("fill operation"); };
             assert_eq!(color[3], 0.25);
             assert!(s.engine.document().working.selection.is_none());

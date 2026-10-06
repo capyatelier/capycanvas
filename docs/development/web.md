@@ -345,7 +345,7 @@ LAYER_TEST_ARTIFACTS=artifacts/web-android \
   Desktop headless results do not establish tablet performance.
 
 `--binary-transfer` checks bounded worker buffers and exact archive bytes for a
-9504 × 6336 saved selection shared with a layer mask, plus a 2 MiB ICC profile
+9504 × 6336 saved selection and a full-size layer mask, plus a 2 MiB ICC profile
 shared by proof and retained original samples. Generate its fixture from a valid
 RGB profile so opening also passes shared color validation; use the
 [binary payload commands](../internals/binary-payloads.md#reproducible-checks).

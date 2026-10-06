@@ -277,7 +277,7 @@ fn discontinuous_n65_vertices_require_native_graph_evaluation() {
             let mut document=empty_document(extent,color);let target=insert_effect(&mut document,adjustment);insert_source(&mut document,"Correlated LUT edges",original);
             if !hdr {
                 mask(&mut document,target,1.);let coverage=document.scene().mask(target).unwrap().0.source;
-                document.artwork.coverage.get_mut(coverage).unwrap().initial=Some(layer_core::Selection::polygon(vec![Point{x:573.,y:237.},Point{x:1001.,y:257.},Point{x:987.,y:507.},Point{x:587.,y:479.}]).unwrap());
+                crate::test_support::materialize_mask(document.artwork.coverage.get_mut(coverage).unwrap(),layer_core::Selection::polygon(vec![Point{x:573.,y:237.},Point{x:1001.,y:257.},Point{x:987.,y:507.},Point{x:587.,y:479.}]).unwrap(),color);
                 let occurrence=document.artwork.occurrences.get_mut(target).unwrap();occurrence.opacity=0.7;occurrence.attachment = layer_core::Attachment::Effect;
             }
             for level in [1,2,3] {

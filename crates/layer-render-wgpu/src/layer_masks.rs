@@ -47,7 +47,7 @@ pub(super) struct MaskRenderer {
     pub definitions: BTreeMap<SourceTarget, layer_core::authored::CoverageSource>,
     pub pages: BTreeMap<(SourceTarget, [u32; 2]), MaskPage>,
     pub command_pages: BTreeMap<(CommandCoverage, [u32; 2]), MaskPage>,
-    command_definitions: BTreeMap<CommandCoverage, layer_core::authored::CoverageSource>,
+    command_definitions: BTreeMap<CommandCoverage, layer_core::CoverageSnapshot>,
     pub snapshots: BTreeMap<CommandCoverage, SnapshotMasks>,
     pub(super) brush: [Deferred<wgpu::RenderPipeline>; 4],
     pub(super) initialize: Deferred<wgpu::RenderPipeline>,
@@ -69,7 +69,6 @@ impl MaskRenderer {
                     source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                         include_str!("analytic_coverage.wgsl"),
                     include_str!("brush.wgsl"),
-                        include_str!("brush_geometry.wgsl"),
                         include_str!("selection_clip.wgsl"),
                     ])),
                 })
@@ -235,20 +234,22 @@ impl MaskRenderer {
             let operation = scene.operations(batch.target)?.get(index as usize)?;
             Some(((batch.target, index), operation))
         }).collect();
+        let same = |stored: Option<&layer_core::CoverageSnapshot>, coverage: &layer_core::CoverageSnapshot|
+            stored.is_some_and(|stored| stored.source == coverage.source && stored.selection == coverage.selection);
         self.command_pages.retain(|(key, _), _| commands.get(key)
-            .is_some_and(|coverage| self.command_definitions.get(key) == Some(&coverage.coverage.source)));
+            .is_some_and(|operation| same(self.command_definitions.get(key), &operation.coverage)));
         for (key, operation) in &commands {
             let coverage = &operation.coverage;
             let source = &coverage.source;
             let authored = SourceTarget::Coverage(coverage.use_.source);
-            if self.command_definitions.get(key) != Some(source) && self.definitions.get(&authored) == Some(source) {
+            if !same(self.command_definitions.get(key), coverage) && coverage.selection.is_none() && self.definitions.get(&authored) == Some(source) {
                 for ((target, coordinate), page) in &self.pages {
                     if *target == authored { self.command_pages.insert((*key, *coordinate), page.clone()); }
                 }
             }
-            let needed = source.initial.as_ref().map_or_else(Default::default,
+            let needed = coverage.selection.as_ref().map_or_else(Default::default,
                 |selection| page_coordinates(pixel_rect(selection.bounds(), source.domain)).collect());
-            initialize_pages(&mut self.command_pages, *key, source, needed, regions.is_some(),
+            initialize_pages(&mut self.command_pages, *key, source, coverage.selection.as_ref(), needed, regions.is_some(),
                 device, encoder, selections, &self.initialize, &self.init_layout, &self.empty_selection)?;
         }
         self.snapshots.retain(|key, _| commands.get(key).is_some_and(|operation| matches!(operation.kind,
@@ -275,7 +276,7 @@ impl MaskRenderer {
             }
             stored.definitions = definitions;
         }
-        self.command_definitions = commands.into_iter().map(|(key, operation)| (key, operation.coverage.source.clone())).collect();
+        self.command_definitions = commands.into_iter().map(|(key, operation)| (key, operation.coverage.clone())).collect();
         let definitions: BTreeMap<_, _> = scene.artwork().coverage.iter()
             .filter(|(h, _, _)| scene.source_owner(SourceTarget::Coverage(*h)).is_some())
             .map(|(h, _, source)| (SourceTarget::Coverage(h), source.clone())).collect();
@@ -289,13 +290,6 @@ impl MaskRenderer {
         for (&target, mask) in &self.definitions {
             let extent = mask.domain;
             let mut needed = std::collections::BTreeSet::new();
-            if let Some(selection) = &mask.initial {
-                let bounds = pixel_rect(selection.bounds(), extent);
-                let bounds = regions.map_or(bounds, |regions| {
-                    bounds.intersect(regions.get(&target).copied().unwrap_or(PixelRect::EMPTY))
-                });
-                needed.extend(page_coordinates(bounds));
-            }
             let transforms = |batch: &DabBatch| {
                 matches!(batch.kind, DabBatchKind::RasterOperation(index)
                     if mask.operations.get(index as usize)
@@ -304,7 +298,7 @@ impl MaskRenderer {
             for batch in batches.iter().filter(|b| b.target == target && !transforms(b)) {
                 needed.extend(page_coordinates(batch_pixel_rect(batch, extent)));
             }
-            initialize_pages(&mut self.pages, target, mask, needed, regions.is_some(),
+            initialize_pages(&mut self.pages, target, mask, None, needed, regions.is_some(),
                 device, encoder, selections, &self.initialize, &self.init_layout, &self.empty_selection)?;
         }
         Ok(())
@@ -314,7 +308,7 @@ impl MaskRenderer {
 #[allow(clippy::too_many_arguments)]
 fn initialize_pages<K: Copy + Ord>(
     pages: &mut BTreeMap<(K, [u32; 2]), MaskPage>, target: K,
-    source: &layer_core::CoverageSource, needed: std::collections::BTreeSet<[u32; 2]>, bounded: bool,
+    source: &layer_core::CoverageSource, selection: Option<&layer_core::Selection>, needed: std::collections::BTreeSet<[u32; 2]>, bounded: bool,
     device: &PipelineDevice, encoder: &mut crate::submission::CommandEncoder,
     selections: &mut selection_clip::SelectionClip, initialize: &Deferred<wgpu::RenderPipeline>,
     init_layout: &wgpu::BindGroupLayout, empty_selection: &wgpu::Buffer,
@@ -327,7 +321,7 @@ fn initialize_pages<K: Copy + Ord>(
     if missing.is_empty() {
         return Ok(());
     }
-    if let Some(selection) = &source.initial {
+    if let Some(selection) = selection {
         let region = bounded.then(|| {
             missing
                 .iter()
@@ -342,7 +336,7 @@ fn initialize_pages<K: Copy + Ord>(
             region,
         )?;
     }
-    let coverage = if source.initial.is_some() {
+    let coverage = if selection.is_some() {
         selections.buffer.as_ref().unwrap()
     } else {
         empty_selection
@@ -352,7 +346,7 @@ fn initialize_pages<K: Copy + Ord>(
         let data = [
             coordinate[0] as f32 * PAGE_SIZE as f32,
             coordinate[1] as f32 * PAGE_SIZE as f32,
-            f32::from(source.initial.is_some()),
+            f32::from(selection.is_some()),
             source.default_coverage,
         ];
         let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -398,6 +392,14 @@ impl WgpuRasterizer {
                     let operation = &scene.operations(batch.target)
                         .ok_or(GpuRasterError::MissingPaintLayer(batch.target))?
                         [op as usize];
+                    if operation.kind == layer_core::RasterOperationKind::Coverage {
+                        for coordinate in page_coordinates(batch_pixel_rect(batch, self.target_extent(batch.target))) {
+                            if let Some(page) = self.layer_masks.command_pages.get(&((batch.target, op), coordinate)).cloned() {
+                                self.layer_masks.pages.insert((batch.target, coordinate), page);
+                            }
+                        }
+                        continue;
+                    }
                     let mut transforms = self.transforms.take().unwrap();
                     let result = transforms.apply(
                         self,

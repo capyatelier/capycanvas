@@ -60,7 +60,7 @@ impl EffectInputKey {
             && ancestors.iter().all(|h|{
                 let (Some(a),Some(b))=(old.occurrence(*h),scene.occurrence(*h)) else{return false;};
                 a.kind()==b.kind() && a.visible==b.visible && a.attachment==b.attachment && a.passes_through()==b.passes_through()
-                    && a.translation==b.translation && a.placement==b.placement && old.local_extent(*h)==scene.local_extent(*h)
+                    && a.offset==b.offset && old.local_extent(*h)==scene.local_extent(*h)
             })
     }
 }
@@ -156,7 +156,7 @@ impl ArtworkQuery {
 impl SceneView<'_> {
     pub fn same_composition(self,other:SceneView<'_>)->bool {
         let a=self.composition();let b=other.composition();
-        a.size==b.size && a.origin==b.origin && a.color==b.color && a.blend==b.blend && a.result==b.result
+        a.size==b.size && a.color==b.color && a.blend==b.blend && a.result==b.result
     }
     pub fn same_artwork(self,other:SceneView<'_>)->bool {
         self.artwork().id==other.artwork().id && self.same_composition(other) && self.order()==other.order()
@@ -176,7 +176,7 @@ impl SceneView<'_> {
     }
     pub fn same_occurrence(self,other:SceneView<'_>,h:OccurrenceHandle,values:bool)->bool {
         let (Some(a),Some(b))=(self.occurrence(h),other.occurrence(h)) else{return false;};
-        if a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.attachment!=b.attachment||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask||self.parent(h)!=other.parent(h){return false;}
+        if a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.attachment!=b.attachment||a.offset!=b.offset||a.mask!=b.mask||self.parent(h)!=other.parent(h){return false;}
         if let Some(target)=self.source_target(h) {
             if self.color_mode(target)!=other.color_mode(target)||self.raster(target)!=other.raster(target)||self.operations(target)!=other.operations(target)||self.target_extent(target)!=other.target_extent(target){return false;}
             if self.paint_base(target)!=other.paint_base(target) {return false;}

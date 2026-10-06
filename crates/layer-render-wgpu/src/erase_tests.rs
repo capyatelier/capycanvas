@@ -1,7 +1,7 @@
 //! Erase through selection coverage: bounded pages, soft coverage, inverted
 //! coverage, alpha lock, watercolor settling and inserted copies.
 use super::*;
-use layer_core::raster::{RasterRevision, TileKey};
+use layer_core::raster::{RasterPlane, RasterRevision, TileKey};
 use std::collections::BTreeMap;
 
 const EXTENT: [u32; 2] = [600, 300];
@@ -50,9 +50,9 @@ fn painted(r: &mut WgpuRasterizer) -> Document {
 }
 
 fn erase_operation(selection: Selection, alpha_locked: bool) -> RasterOperation {
-    let mut coverage = reveal_all(EXTENT, Point::default());
+    let mut coverage = reveal_all(EXTENT, [0, 0]);
     coverage.source.default_coverage = f32::from(selection.inverted);
-    coverage.source.initial = Some(selection);
+    coverage.selection = Some(selection);
     RasterOperation {
         placement: layer_core::Affine::IDENTITY,
         coverage,
@@ -213,12 +213,30 @@ fn an_inserted_copy_starts_from_its_restore_source() {
 }
 
 #[test]
+fn mask_coverage_operations_store_selection_pages_and_keep_the_default_elsewhere() {
+    for inverted in [false, true] {
+        let mut selection = Selection::polygon(vec![Point { x: 20., y: 30. }, Point { x: 300., y: 30. }, Point { x: 160., y: 200. }]).unwrap();
+        selection.inverted = inverted;
+        let mut source = reveal_all(EXTENT, [0, 0]).source;
+        source.default_coverage = f32::from(inverted);
+        crate::test_support::materialize_mask(&mut source, selection, Default::default());
+        let data = source.raster.wait_data().unwrap();
+        assert_eq!(data.tiles.keys().map(|key| key.coordinate).collect::<Vec<_>>(), [[0, 0], [1, 0]], "only pages the selection reaches");
+        let bytes = data.tiles[&TileKey { plane: RasterPlane::Mask, coordinate: [0, 0] }].wait_backing().unwrap().decode().unwrap();
+        let at = |x: usize, y: usize| bytes[y * PAGE_SIZE as usize + x];
+        assert_eq!(at(160, 100), if inverted { 0 } else { 255 });
+        assert_eq!(at(20, 190), if inverted { 255 } else { 0 });
+        assert!(bytes.iter().any(|v| *v != 0 && *v != 255), "edges keep the selection's antialiasing");
+    }
+}
+
+#[test]
 fn command_coverage_is_independent_of_authored_masks_and_other_operations() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = painted(&mut r);
-    let mut mask = reveal_all(EXTENT, Point::default());
+    let mut mask = reveal_all(EXTENT, [0, 0]);
     mask.source.default_coverage = 0.;
-    mask.source.initial = Some(rectangle([0., 0., 300., 300.]));
+    crate::test_support::materialize_mask(&mut mask.source, rectangle([0., 0., 300., 300.]), document.composition().color);
     set_mask(&mut document, mask);
     frame(&mut r, document.scene(), &[], &[], &[]);
     let owner = placement::occurrence_id(&document);
@@ -257,7 +275,7 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
     use layer_core::{SceneScope, raster::{RasterData, RasterPlane, RasterTile, TileBlob}};
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = painted(&mut r);
-    set_mask(&mut document, reveal_all(EXTENT, Point::default()));
+    set_mask(&mut document, reveal_all(EXTENT, [0, 0]));
     let owner = placement::occurrence_id(&document);
     let mask = document.scene().mask(owner).unwrap().0.source;
     let mask_target = SourceTarget::Coverage(mask);
@@ -267,28 +285,29 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
                 &vec![coverage; (PAGE_SIZE * PAGE_SIZE) as usize]).unwrap()))].into(),
         ..Default::default()
     });
-    let first = revision(64);
     {
+        let color = document.composition().color;
         let source = document.artwork.coverage.get_mut(mask).unwrap();
         source.default_coverage = 0.;
-        source.initial = Some(rectangle([0., 0., 300., 300.]));
-        source.raster = first.clone();
+        source.raster = revision(64);
+        crate::test_support::materialize_mask(source, rectangle([0., 0., 300., 300.]), color);
     }
+    let first = document.artwork.coverage.get(mask).unwrap().raster.clone();
     frame(&mut r, document.scene(), &[], &[], &[(mask_target, first)]);
     let first_scene = document.snapshot();
-    let second = revision(192);
     {
+        let color = document.composition().color;
         let source = document.artwork.coverage.get_mut(mask).unwrap();
-        source.initial = Some(rectangle([300., 0., 600., 300.]));
-        source.raster = second.clone();
+        source.raster = revision(192);
+        crate::test_support::materialize_mask(source, rectangle([300., 0., 600., 300.]), color);
     }
+    let second = document.artwork.coverage.get(mask).unwrap().raster.clone();
     frame(&mut r, document.scene(), &[], &[], &[(mask_target, second)]);
     let second_scene = document.snapshot();
     let live = revision(255);
     {
         let source = document.artwork.coverage.get_mut(mask).unwrap();
         source.default_coverage = 1.;
-        source.initial = None;
         source.raster = live.clone();
     }
     frame(&mut r, document.scene(), &[], &[], &[(mask_target, live)]);
@@ -300,7 +319,7 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
     for (name, scene) in [("First captured mask", first_scene), ("Second captured mask", second_scene)] {
         let operation = RasterOperation {
             placement: layer_core::Affine::IDENTITY,
-            coverage: reveal_all(EXTENT, Point::default()),
+            coverage: reveal_all(EXTENT, [0, 0]),
             kind: RasterOperationKind::Bake { scene, scope: SceneScope::Members(Arc::from([owner])), offset: Point::default() },
         };
         let damage = operation.bounds(EXTENT);

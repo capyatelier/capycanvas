@@ -5,7 +5,7 @@ extension XCTestCase {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch(); capturePaintEditor(in: app)
         let notice = app.descendants(matching: .any)["canvas-notice"].firstMatch
-        let text = app.staticTexts["canvas-notice-text"], action = app.buttons["canvas-notice-action"]
+        let text = app.staticTexts["canvas-notice-text"], action = app.buttons["canvas-notice-action-use_reference"]
         let viewport = workspaceViewport(in: app)
         func tapCanvas() { viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).clickOrTap() }
         workspaceActivate(app.buttons["layer-New layer"])

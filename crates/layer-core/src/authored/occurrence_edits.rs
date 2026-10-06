@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Document, DocumentError, Edit, Point};
+use crate::{Document, DocumentError, Edit};
 use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
 
 fn insert<T: Clone>(store: &mut Store<T>, value: T) -> Result<RecordChange<T>, DocumentError> {
@@ -123,10 +123,8 @@ impl Document {
         let old_stack=scene.stack(id).ok_or(DocumentError::MissingOccurrence(id))?;let stack=scene.stack(owner).ok_or(DocumentError::MissingOccurrence(owner))?;
         let mut destination=self.artwork.stacks.get(stack).unwrap().clone();destination.entries.retain(|h|*h!=id);
         let anchor=if index==0 {owner}else{chain[index-1]};let at=destination.entries.iter().position(|h|*h==anchor).unwrap();destination.entries.insert(at,id);
-        let mut occurrence=original.clone();occurrence.attachment=Attachment::Effect;
-        let old_origin=scene.parent(id).map_or(Point::default(),|h|self.layer_offset(h));let new_origin=scene.parent(owner).map_or(Point::default(),|h|self.layer_offset(h));
-        let delta=Point{x:old_origin.x-new_origin.x,y:old_origin.y-new_origin.y};occurrence.translation.x+=delta.x;occurrence.translation.y+=delta.y;
-        if let Some(mask)=&mut occurrence.mask{mask.translation.x+=delta.x;mask.translation.y+=delta.y;}
+        let shift=crate::offsets::checked_sub(scene.layer_origin(scene.parent(id)),scene.layer_origin(scene.parent(owner))).ok_or(invalid("A layer offset exceeds the editor's range"))?;
+        let mut occurrence=original.shifted(shift)?;occurrence.attachment=Attachment::Effect;
         let mut edits=vec![Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,id,Some(occurrence))?),Edit::Stack(RecordChange::replace(&self.artwork.stacks,stack,Some(destination))?)];
         if old_stack!=stack {let mut old=self.artwork.stacks.get(old_stack).unwrap().clone();old.entries.retain(|h|*h!=id);edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks,old_stack,Some(old))?));}
         if target.passes_through(){if !isolate{return Err(invalid("Isolate the target group before attaching"));}edits.push(self.group_blend_edit(owner,crate::LayerBlend::Normal)?);}
@@ -151,10 +149,15 @@ impl Document {
             }else{Attachment::None}
         }else if !original.passes_through()&&clipping_gap(scene,&destination.entries,at){Attachment::Clip}else{Attachment::None};
         destination.entries.splice(at..at,moving.iter().copied());
-        let delta=Point{x:scene.parent(id).map_or(0.,|h|self.layer_offset(h).x)-parent.map_or(0.,|h|self.layer_offset(h).x),y:scene.parent(id).map_or(0.,|h|self.layer_offset(h).y)-parent.map_or(0.,|h|self.layer_offset(h).y)};
+        let shift=crate::offsets::checked_sub(scene.layer_origin(scene.parent(id)),scene.layer_origin(parent)).ok_or(invalid("A layer offset exceeds the editor's range"))?;
         let mut edits=Vec::new();
-        for &h in &moving {let mut occurrence=scene.occurrence(h).unwrap().clone();if h==id {occurrence.attachment=attachment;}occurrence.translation.x+=delta.x;occurrence.translation.y+=delta.y;if let Some(mask)=&mut occurrence.mask{mask.translation.x+=delta.x;mask.translation.y+=delta.y;}
-            if scene.occurrence(h)!=Some(&occurrence){edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,h,Some(occurrence))?));}}
+        for &h in &moving {
+            let mut shifted=self.shifted_occurrence_edits(h,shift)?;
+            let mut occurrence=match shifted.pop() {Some(Edit::Occurrence(change))=>change.value.unwrap(),_=>scene.occurrence(h).unwrap().clone()};
+            if h==id {occurrence.attachment=attachment;}
+            edits.extend(shifted);
+            if scene.occurrence(h)!=Some(&occurrence){edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,h,Some(occurrence))?));}
+        }
         if old_stack!=new_stack {let mut old=self.artwork.stacks.get(old_stack).unwrap().clone();old.entries.retain(|h|!moving.contains(h));edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks,old_stack,Some(old))?));}
         if self.artwork.stacks.get(new_stack)!=Some(&destination){edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks,new_stack,Some(destination))?));}
         self.checked_relationship_edit(Edit::Batch(edits),&moving)
@@ -297,10 +300,10 @@ mod tests {
     fn document() -> Document {
         Document::new(PortableId::random(), 16, 16, DocumentNames { paint: "Ink".into(), paper: "Paper".into() })
     }
-    fn group(doc: &mut Document, name: &str, translation: Point) -> OccurrenceHandle {
+    fn group(doc: &mut Document, name: &str, offset: [i64; 2]) -> OccurrenceHandle {
         let stack = RecordChange::insert(&doc.artwork.stacks, Stack::default());
         let mut occurrence = Occurrence::new(OccurrenceContent::Stack(stack.handle), name);
-        occurrence.translation = translation;
+        occurrence.offset = offset;
         let occurrence = RecordChange::insert(&doc.artwork.occurrences, occurrence);
         let h = occurrence.handle;
         let root = doc.composition().result;
@@ -308,8 +311,8 @@ mod tests {
         doc.apply(Edit::Batch(vec![Edit::Stack(stack), Edit::Occurrence(occurrence), Edit::Stack(RecordChange::replace(&doc.artwork.stacks, root, Some(entries)).unwrap())])).unwrap();
         h
     }
-    fn mask(doc: &mut Document, id: OccurrenceHandle, translation: Point) -> CoverageHandle {
-        let snapshot = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), [16, 16], translation);
+    fn mask(doc: &mut Document, id: OccurrenceHandle, offset: [i64; 2]) -> CoverageHandle {
+        let snapshot = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), [16, 16], offset);
         let source = RecordChange::insert(&doc.artwork.coverage, snapshot.source);
         let mut occurrence = doc.scene().occurrence(id).unwrap().clone(); occurrence.mask = Some(snapshot.use_);
         let h = source.handle;
@@ -509,15 +512,16 @@ mod tests {
             f::effect(&mut doc,"FX","exposure");f::nest(&mut doc,"From",&["FX","Old owner"]);f::nest(&mut doc,"To",&["Top","Member","Base"]);
             let fx=f::id(&doc,"FX");let from=f::id(&doc,"From");let to=f::id(&doc,"To");let member=f::id(&doc,"Member");
             for name in ["FX","Member","Top"] {doc.apply(doc.attachment_edit(f::id(&doc,name),true,false).unwrap()).unwrap();}
-            for (id,translation) in [(from,Point{x:40.,y:60.}),(to,Point{x:-11.,y:23.}),(fx,Point{x:5.,y:9.})] {doc.artwork.occurrences.get_mut(id).unwrap().translation=translation;}
-            let coverage=mask(&mut doc,fx,Point{x:19.,y:23.});doc.artwork.occurrences.get_mut(fx).unwrap().mask.as_mut().unwrap().linked=linked;
-            let before=doc.clone();let offset=doc.layer_offset(fx);let geometry=doc.target_geometry(SourceTarget::Coverage(coverage));
+            for (id,offset) in [(from,[40,60]),(to,[-11,23])] {doc.artwork.occurrences.get_mut(id).unwrap().offset=offset;}
+            let coverage=mask(&mut doc,fx,[19,23]);doc.artwork.occurrences.get_mut(fx).unwrap().mask.as_mut().unwrap().linked=linked;
+            let before=doc.clone();let origin=doc.scene().target_origin(SourceTarget::Coverage(coverage));assert_eq!(origin,[59,83]);
             let undo=doc.apply(doc.drop_occurrence_edit(fx,member,Above).unwrap().edit).unwrap();
             assert_eq!(doc.scene().effect_owner(fx),Some(member));assert_eq!(doc.scene().parent(fx),Some(to));
-            assert_eq!(doc.layer_offset(fx),offset);assert_eq!(doc.target_geometry(SourceTarget::Coverage(coverage)),geometry);
+            assert_eq!(doc.scene().occurrence(fx).unwrap().offset,[0,0]);assert_eq!(doc.scene().target_origin(SourceTarget::Coverage(coverage)),origin);
+            assert_eq!(doc.scene().occurrence(fx).unwrap().mask.as_ref().unwrap().offset,[70,60]);
             let attached=doc.clone();let redo=doc.apply(undo).unwrap();f::restored(&before,&doc);doc.apply(redo).unwrap();f::restored(&attached,&doc);
             let reopened=f::roundtrip(&doc);let restored=f::id(&reopened,"FX");let restored_mask=reopened.scene().mask(restored).unwrap().0.source;
-            assert_eq!(reopened.layer_offset(restored),offset);assert_eq!(reopened.target_geometry(SourceTarget::Coverage(restored_mask)),geometry);
+            assert_eq!(reopened.scene().target_origin(SourceTarget::Coverage(restored_mask)),origin);
             for locked in [from,to] {let mut doc=before.clone();doc.artwork.occurrences.get_mut(locked).unwrap().locked=true;assert!(doc.drop_occurrence_edit(fx,member,Above).is_err());}
         }
     }
@@ -568,7 +572,7 @@ mod tests {
         let OccurrenceContent::Paint(paint) = doc.scene().occurrence(id).unwrap().content else { unreachable!() };
         doc.artwork.paint.get_mut(paint).unwrap().base = Some(PaintBase::new(original.clone().into()));
         doc.artwork.occurrences.get_mut(id).unwrap().reference = true;
-        let coverage = mask(&mut doc, id, Point { x: 3., y: 4. });
+        let coverage = mask(&mut doc, id, [3, 4]);
         let unplaced = doc.artwork.paint.insert(PortableId::random(), doc.artwork.paint.get(paint).unwrap().clone()).unwrap();
         let note_id = PortableId::random();
         Arc::make_mut(&mut doc.artwork.extensions).records.insert(note_id, serde_json::json!({"id":note_id,"type":"test.note/1","ancillary":true,"copy_safe":true,"data":{"owner":{"ref":doc.artwork.occurrences.id(id).unwrap()}}}));
@@ -608,7 +612,7 @@ mod tests {
     fn duplicated_groups_copy_applications_selections_and_membership_with_shared_programs() {
         let mut doc = document();
         let paint = doc.scene().order()[0];
-        let group_handle = group(&mut doc, "Group", Point { x: 7., y: 11. });
+        let group_handle = group(&mut doc, "Group", [7, 11]);
         doc.apply(doc.reparent_occurrence_edit(paint, Some(group_handle), 0).unwrap()).unwrap();
         let program = crate::bundled_effect_catalog().get("unsharp_mask").unwrap().program();
         let draft = crate::EffectInstance::new(program.clone());
@@ -644,22 +648,24 @@ mod tests {
     fn reparent_preserves_content_and_unlinked_mask_world_placements_and_undo() {
         let mut doc = document();
         let paint = doc.scene().order()[0];
-        let coverage = mask(&mut doc, paint, Point { x: 19., y: 23. });
+        let coverage = mask(&mut doc, paint, [19, 23]);
         let occurrence = doc.artwork.occurrences.get_mut(paint).unwrap();
-        occurrence.translation = Point { x: 5., y: 9. }; occurrence.mask.as_mut().unwrap().linked = false;
-        let group_handle = group(&mut doc, "Group", Point { x: 40., y: 60. });
+        occurrence.offset = [5, 9]; occurrence.mask.as_mut().unwrap().linked = false;
+        let group_handle = group(&mut doc, "Group", [40, 60]);
         let paint_target = doc.scene().source_target(paint).unwrap();
         let mask_target = SourceTarget::Coverage(coverage);
-        let geometry = [doc.target_geometry(paint_target), doc.target_geometry(mask_target)];
+        let geometry = [doc.target_offset(paint_target), doc.target_offset(mask_target)];
         let order = doc.scene().order().to_vec();
         let edit = doc.reparent_occurrence_edit(paint, Some(group_handle), 0).unwrap();
         let inverse = doc.apply(edit).unwrap();
-        assert_eq!([doc.target_geometry(paint_target), doc.target_geometry(mask_target)], geometry);
+        assert_eq!([doc.target_offset(paint_target), doc.target_offset(mask_target)], geometry);
+        assert_eq!(doc.scene().occurrence(paint).unwrap().offset, [-35, -51]);
+        assert_eq!(doc.scene().occurrence(paint).unwrap().mask.as_ref().unwrap().offset, [-21, -37]);
         assert_eq!(doc.scene().children(Some(group_handle)), [paint]);
         doc.apply(inverse).unwrap();
         assert_eq!(doc.scene().order(), order);
-        assert_eq!([doc.target_geometry(paint_target), doc.target_geometry(mask_target)], geometry);
-        let child = group(&mut doc, "Child", Point::default());
+        assert_eq!([doc.target_offset(paint_target), doc.target_offset(mask_target)], geometry);
+        let child = group(&mut doc, "Child", [0, 0]);
         doc.apply(doc.reparent_occurrence_edit(child, Some(group_handle), 0).unwrap()).unwrap();
         assert!(doc.reparent_occurrence_edit(group_handle, Some(child), 0).is_err());
         doc.artwork.occurrences.get_mut(group_handle).unwrap().locked = true;
@@ -673,7 +679,7 @@ mod tests {
         let base = doc.scene().order()[0]; let paper = doc.scene().order()[1];
         let (edit, copies) = doc.duplicate_layers_edit(&[base]).unwrap(); doc.apply(edit).unwrap(); let clipped = copies[0];
         doc.artwork.occurrences.get_mut(clipped).unwrap().attachment = crate::Attachment::Clip;
-        let destination = group(&mut doc, "Group", Point::default());
+        let destination = group(&mut doc, "Group", [0, 0]);
         let inverse=doc.apply(doc.reparent_occurrence_edit(base,Some(destination),0).unwrap()).unwrap();
         assert_eq!(doc.scene().children(Some(destination)),[clipped,base]);
         assert_eq!(doc.scene().clipping_base(clipped),Some(base));doc.apply(inverse).unwrap();

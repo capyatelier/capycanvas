@@ -52,7 +52,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     paint.domain = source.extent;
     paint.base = Some(layer_core::PaintBase::new((source.clone()).into()));
     let mask = project.allocate_coverage_handle();
-    let coverage = layer_core::CoverageSnapshot::reveal_all(mask, source.extent, layer_core::Point { x: 11., y: -5. });
+    let coverage = layer_core::CoverageSnapshot::reveal_all(mask, source.extent, [11, -5]);
     project.artwork.coverage.install(mask, coverage.source).unwrap();
     let mut occurrence = project.scene().occurrence(id).unwrap().clone();
     occurrence.mask = Some(coverage.use_);
@@ -72,11 +72,8 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     ready(&w);
     native_pen_path(&w, &[[100., 80.], [-160., 19.5], [-160., 19.5]]);
     ready(&w);
-    let offset = ui_session(&w).engine().document().target_geometry(layer_core::SourceTarget::Paint(handle)).map(layer_core::Point::default()).unwrap();
-    assert!(
-        (offset.x + 260.).abs() < 0.01 && (offset.y + 60.5).abs() < 0.01,
-        "{offset:?}"
-    );
+    let offset = ui_session(&w).engine().document().target_offset(layer_core::SourceTarget::Paint(handle));
+    assert_eq!(offset, [-260, -61], "Move keeps paint on whole pixels, rounding half a pixel away from zero");
     invoke(&w, CommandId::Pen);
     // A separate paint overlay also survives the source-only conversion.
     w.dispatch(UiAction::Layer {
@@ -173,7 +170,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     ready(&w);
     native_pen_path(&w, &[[100., 80.], [360., 140.5], [360., 140.5]]);
     ready(&w);
-    let restored_offset = ui_session(&w).engine().document().target_geometry(layer_core::SourceTarget::Paint(handle)).map(layer_core::Point::default()).unwrap();
+    let restored_offset = layer_core::Affine::translation(layer_core::offsets::point(ui_session(&w).engine().document().target_offset(layer_core::SourceTarget::Paint(handle)))).map(layer_core::Point::default());
     assert!(
         restored_offset.x.abs() < 0.01 && restored_offset.y.abs() < 0.01,
         "{restored_offset:?}"

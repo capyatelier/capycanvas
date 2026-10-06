@@ -1352,7 +1352,6 @@ impl Workspace {
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
         this.canvas_bar.bind(&this);
-        this.notice.bind(&this);
         this.view_info.bind(&this);
         this.selection_refine.bind(&this, |apply| UiAction::Selection {
             action: if apply { layer_ui::SelectionAction::ApplyResize } else { layer_ui::SelectionAction::CancelResize },
@@ -2342,7 +2341,7 @@ impl Workspace {
             .gpu
             .borrow_mut()
             .as_mut()
-            .map(|g| g.session.dispatch(UiAction::Notice { id, accept: false }));
+            .map(|g| g.session.dispatch(UiAction::Notice { id, accept: false, action: None }));
         if let Some(Ok(change)) = result {
             self.changed(Ok(change));
         }

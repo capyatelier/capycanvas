@@ -70,7 +70,7 @@ Names here describe roles; registry spelling is fixed with the schema fixtures.
 | Stack | One ordered list of occurrence references, front to back, evaluated bottom to top. Ordinary groups are structured stack uses in the enclosing composition, not newly allocated full-canvas images or independent color domains. |
 | Occurrence | Identity of one layer-panel entry: name, contribution visibility, locks, placement, blend, opacity, clipping membership and optional mask use; refers to content or a structured operation. Each occurrence has at most one containing stack. Reuse creates another occurrence rather than inserting the same occurrence twice. |
 | Paint source | Editable source identity, local pixel domain, immutable imported base when present, sparse painted overrides, material planes and live material settings. Refers to immutable typed resources; a source edit publishes a new revision without changing source identity. |
-| Coverage source | Contours or declared initial/default coverage plus sparse painted overrides, with its own domain and resources. A mask use owns enabled/inverted/linked state and placement. Keep scalar coverage distinct from an image's alpha and from luminance extraction. |
+| Coverage source | A declared default coverage plus sparse painted overrides, with its own domain and resources. A mask use owns enabled/inverted/linked state and placement. Keep scalar coverage distinct from an image's alpha and from luminance extraction. |
 | Effect application | Identity, definition reference, values keyed by stable parameter keys, resource bindings and typed evaluation inputs. Definition source/ABI and parameter layout are shared immutable data. A stack adjustment has a defined scoped input, not an invented independent image. |
 | Saved selection and guides | Independently retained authored data. Saved-selection rows may occupy non-compositing stack entries without becoming fake paint sources. Rulers and reference markings keep their current meaning. |
 | Output | Identified composition result, evaluation context, framing and delivery intent; optional saved representation. The ordinary document has one canvas output. The envelope retains the foundation's support for future empty or multiple output inventories. |
@@ -116,7 +116,7 @@ extensible reference grammar.
 A paint source is not simply RGBA tiles. Preserve Original/Rasterized image roles,
 independent profile interpretation, tile-presence override rules, watercolor
 wetness and edge settings, and pixels outside the canvas. Missing paint overrides
-reveal the imported base; missing mask tiles use the declared initial/default
+reveal the imported base; missing mask tiles use the declared default
 coverage. The behavior in
 [`source_access.rs`](../../crates/layer-render-wgpu/src/source_access.rs),
 [`raster.rs`](../../crates/layer-core/src/raster.rs) and
@@ -185,18 +185,18 @@ Reuse the contracts in [`layers.rs`](../../crates/layer-core/src/layers.rs) and
 - Adjustments transform their scoped lower composite; clipped adjustments operate
   on the clipping stack and preserve base coverage. Hiding a direct contribution
   must not disable a source that a future explicit input still needs.
-- Mask source evaluation, inversion, placement and application stage are distinct.
-  A linked mask follows the owner's source mapping, including its pre-map under
-  projective/mesh placement. Preserve default coverage and out-of-bounds behavior.
-- Store retained placement once on the occurrence. Do not add another transform
-  node with the same matrix. Existing cubic meshes remain semantic geometry;
-  generated tessellation and GPU buffers are derived.
-- The source-local domain, composition frame and output crop are independent.
-  Preserve crop/grow, whole-tile rebasing, group translations, hidden pixels and
-  Apply Transform to Pixels behavior in
+- Mask source evaluation, inversion, offset and application stage are distinct.
+  A linked mask follows its owner's integer offset. Preserve default coverage and
+  out-of-bounds behavior.
+- An occurrence stores one integer offset; paint and groups retain no general
+  placement, and image objects own their affine
+  ([object-layer design](../history/object-layer-ga-design.md)). Do not add
+  another transform node.
+- The source-local domain and composition frame are independent. Preserve
+  crop/grow, whole-tile rebasing, group offsets and hidden pixels in
   [`canvas_geometry.rs`](../../crates/layer-core/src/canvas_geometry.rs).
   Regrouping cannot silently change the coordinate domain of a target.
-  Ordinary groups pass their existing translation context to their children;
+  Ordinary groups pass their existing offset context to their children;
   distinguishing membership from general transform parenting does not remove
   today's inherited group offsets. No separate transform-parent network is needed.
 - The initial composition may require editable paint to match its working format,
@@ -385,7 +385,7 @@ remain transient; a correction cannot mutate an older saved snapshot.
 These consumers must adopt the same scene/source contracts at the baseline
 cutover, rather than flatten arbitrary graphs into temporary layer documents:
 
-- **Merge, flatten, stamp and Apply Transform:**
+- **Merge, flatten, stamp and layer transforms:**
   [`merge.rs`](../../crates/layer-core/src/merge.rs) retains bake members after
   removing their visible entries. Keep a snapshot of the old evaluated scope and
   its source roots until the destination publication finishes. Derived render
@@ -552,10 +552,10 @@ store; the format cutover must not hardwire recovery to a whole-archive `Vec<u8>
 | Future case | Representation and evidence required before enabling it |
 | --- | --- |
 | One painted matte drives two effects while its direct row is hidden | Both inputs reference the coverage source endpoint. Demand ignores contribution visibility; changing the source invalidates both consumers. No duplicate paint source or implicit luma conversion. |
-| One logo is placed twice with different masks and transforms | Two occurrences reference one content source; edits to the source affect both, occurrence edits affect one. Raw samples may be reused; placed results use distinct contexts. Ordinary Duplicate remains independent. |
+| One logo is placed twice with different masks and poses | Two image objects reference one immutable image and keep their own affines; their layers keep their own masks and integer offsets. Raw samples may be reused; posed results use distinct contexts. Ordinary Duplicate remains independent. |
 | A reusable effect group exposes two controls and two outputs | A definition owns stable interface keys and a subgraph; instances bind those keys. Renaming controls does not retarget bindings. Group encapsulation preserves connections, unlike creating an isolated compositing group. |
 | A vector/text source feeds raster effects | Retain editable geometry/text/font resources upstream. The new port type and rasterization operation define sampling. No mandatory early conversion of all content to RGBA and no container change. |
-| Two outputs use different crops, scales or working contexts | Outputs reference composition results and their contexts. Different working domains use separate composition contexts or explicit conversions; an output crop does not redefine source color. Share only equivalent evaluations and schedule requested regions under common admission. |
+| Two outputs use different working contexts | Outputs reference composition results and their contexts; export requests own delivery size and region. Different working domains use separate composition contexts or explicit conversions. Share only equivalent evaluations and schedule requested regions under common admission. |
 | Held cels and two time-offset instances | Cels reference sources; exposures/time maps are new typed records. Properties are addressed by object/parameter IDs and instance paths. Existing paint sources and stacks retain their meaning. |
 | A procedural source or delayed simulation is added | Declare typed inputs, bounds, time/state and resource dependencies. Instantaneous cycles stay invalid. A future solver/delayed-state type owns its contract; do not weaken baseline DAG validation. |
 

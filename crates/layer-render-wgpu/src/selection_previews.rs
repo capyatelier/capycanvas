@@ -135,8 +135,7 @@ impl WgpuRasterizer {
             for &handle in scene.order() {
                 let Some(SourceTarget::Selection(target)) = scene.source_target(handle) else { continue; };
                 let saved = scene.artwork().selections.get(target).ok_or(GpuRasterError::InvalidImage)?;
-                let coverage = saved.selection.mapped(&scene.target_geometry(SourceTarget::Selection(target)).placement)
-                    .map_err(|_| GpuRasterError::InvalidImage)?;
+                let coverage = saved.selection.translated(layer_core::offsets::point(scene.target_offset(SourceTarget::Selection(target))));
                 previews.definitions.insert(SourceTarget::Selection(target), coverage);
             }
             let Some(options) = self.selection_overlay else { previews.reset(); return Ok(()); };

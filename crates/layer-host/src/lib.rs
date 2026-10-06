@@ -1,7 +1,6 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
 pub mod clipboard;
-pub mod contacts;
 pub mod export;
 pub mod gpu;
 mod header;
@@ -70,7 +69,7 @@ pub struct NativeHost {
     pub startup: layer_render_wgpu::StartupProgress,
     pub(crate) document_close_prepared: bool,
     pub proof: layer_ui::proof_workflow::ProofView,
-    deferred_contacts: contacts::DeferredContacts,
+    deferred_contacts: layer_engine::DeferredContacts,
     last_pen: Option<PenEvent>,
     paint_start_sequence: u64,
     last_snapshot: Option<SnapshotKey>,
@@ -86,6 +85,7 @@ pub struct NativeHost {
     filter_preview_image: Option<layer_render::FilterPreviewImage>,
     catalog: Box<layer_ui::UiCatalog>,
     localization_generation: u64,
+    thumbnails: layer_ui::ThumbnailRequests,
 }
 
 impl NativeHost {
@@ -192,6 +192,7 @@ impl NativeHost {
             filter_preview_image: None,
             catalog,
             localization_generation: 0,
+            thumbnails: Default::default(),
         })
     }
     /// Regions changed since the platform service last observed accepted input.
@@ -214,6 +215,7 @@ impl NativeHost {
     pub fn document_adopted(&mut self) {
         self.header_drag = None;
         self.deferred_contacts.clear();
+        self.session.set_input_held(false);
         self.last_pen = None;
         self.last_snapshot = None;
         self.last_camera_revision = None;
@@ -267,8 +269,9 @@ impl NativeHost {
                 .unwrap()
                 .poll_startup()
                 .map_err(|e| e.to_string())?;
-            let ready = self.paint_ready();
-            for event in self.deferred_contacts.release(ready, std::time::Instant::now()) {
+            let released = self.deferred_contacts.release(self.paint_ready(), std::time::Instant::now());
+            self.session.set_input_held(self.deferred_contacts.holding());
+            for event in released {
                 self.deliver(event)?;
             }
             if self.startup.canvas_ready {
@@ -301,6 +304,7 @@ impl NativeHost {
         requests: impl IntoIterator<Item = (u64, u64)>,
     ) -> Result<(Vec<u64>, Vec<layer_render::ReadbackImage>), String> {
         self.prepare_ui_previews()?;
+        let retry = self.thumbnails.retry(&self.session);
         let mut accepted = Vec::new();
         // Background brush/filter warmup keeps the canvas dirty after document
         // pixels settle. It must not starve visible thumbnails. Still yield to
@@ -309,18 +313,25 @@ impl NativeHost {
             && self.session.background_readback_idle()
             && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.ui_readback_ready())
         {
-            for (request, target) in requests.into_iter().take(1) {
-                let target = layer_render::ThumbnailTarget::from_wire_id(target).ok_or("Invalid thumbnail identity")?;
+            let requests = requests.into_iter().map(|(request, target)| layer_render::ThumbnailTarget::from_wire_id(target)
+                .map(|target| (request, target, false)).ok_or("Invalid thumbnail identity"));
+            for next in retry.map(|(request, target)| Ok((request, target, true))).into_iter().chain(requests).take(1) {
+                let (request, target, retry) = next?;
                 // Match GTK's bounded cold-photo work. The UI retries requests
                 // that are not yet accepted, leaving input/frame opportunities
                 // between batches instead of scanning an entire photo here.
-                match self.session.renderer_mut().0.as_mut().unwrap().prepare_thumbnail_batch(target) {
-                    Ok(true) => (),
-                    Ok(false) | Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => continue,
-                    Err(error) => return Err(error.to_string()),
-                }
-                match self.session.renderer_mut().request_thumbnail(request, target) {
-                    Ok(()) => accepted.push(request),
+                let prepared = self.session.renderer_mut().0.as_mut().unwrap().prepare_thumbnail_batch(target);
+                let submitted = match prepared {
+                    Ok(true) => self.session.renderer_mut().request_thumbnail(request, target).map(|()| true),
+                    Ok(false) => continue,
+                    Err(error) => Err(error),
+                };
+                match submitted {
+                    Ok(_) => {
+                        if !retry { accepted.push(request); }
+                        self.thumbnails.submitted(request, target, retry);
+                    }
+                    Err(error) if retry => self.thumbnails.refused(&self.session, matches!(error, layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_))),
                     Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => (),
                     Err(error) => return Err(error.to_string()),
                 }
@@ -333,8 +344,11 @@ impl NativeHost {
                 .map_err(|e| e.to_string())?;
         }
         while let Some(image) = self.session.renderer_mut().take_thumbnail() {
-            images.push(image.map_err(|e| e.to_string())?);
+            let image = image.map_err(|e| e.to_string())?;
+            self.thumbnails.completed(image.request_id);
+            images.push(image);
         }
+        self.dirty |= self.session.engine().wants_continuous_frames();
         Ok((accepted, images))
     }
     /// Camera motion changes the core revision without changing the workspace
@@ -580,6 +594,7 @@ impl NativeHost {
     pub fn suspend_renderer(&mut self) -> Result<(), String> {
         self.last_pen = None;
         self.deferred_contacts.clear();
+        self.session.set_input_held(false);
         let previous = self.session.state().revision;
         let change = self.session.suspend_renderer()?;
         self.apply_change(previous, change);
@@ -644,8 +659,9 @@ impl NativeHost {
     /// Deliver a paint sample to the engine, or hold its contact until
     /// painting is ready and then deliver every sample it held.
     fn admit(&mut self, event: PenEvent) -> Result<(), String> {
-        let ready = self.paint_ready();
-        for event in self.deferred_contacts.admit(event, ready, std::time::Instant::now()) {
+        let admitted = self.deferred_contacts.admit(event, self.paint_ready(), std::time::Instant::now());
+        self.session.set_input_held(self.deferred_contacts.holding());
+        for event in admitted {
             self.deliver(event)?;
         }
         Ok(())
@@ -752,6 +768,9 @@ impl NativeHost {
                 mask: bool,
             },
             LayerBlendMenu {
+                id: u64,
+            },
+            ObjectMenu {
                 id: u64,
             },
             PaletteMenu {
@@ -908,6 +927,7 @@ impl NativeHost {
             Query::ZoomMenu => json!(self.session.zoom_menu()),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::LayerBlendMenu { id } => json!(self.session.layer_blend_menu(id)?),
+            Query::ObjectMenu { id } => json!(self.session.object_menu(id)?),
             Query::StrokeRecording { action } => {
                 let platform = json!(self.session.state().platform);
                 let mut recorder = self.session.stroke_recording();
@@ -1225,13 +1245,14 @@ mod tests {
     }
 
     fn gpu_host(platform: layer_ui::Platform, size: [u32; 2]) -> (layer_render_wgpu::WgpuRasterizer, NativeHost) {
+        gpu_document_host(platform, layer_ui::new_drawing(size[0], size[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap())
+    }
+
+    fn gpu_document_host(platform: layer_ui::Platform, document: layer_core::Document) -> (layer_render_wgpu::WgpuRasterizer, NativeHost) {
         let reference = layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
         let mut host = NativeHost::new(platform).unwrap();
-        host.session = UiSession::from_project(
-            Renderer(Some(gpu.into())), layer_ui::new_drawing(size[0], size[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
-            None, [640, 480], platform,
-        ).unwrap();
+        host.session = UiSession::from_project(Renderer(Some(gpu.into())), document, None, [640, 480], platform).unwrap();
         host.startup = Default::default();
         host.resize(640, 480, 1.).unwrap();
         (reference, host)
@@ -1274,6 +1295,175 @@ mod tests {
                 break;
             }
             frame_step(&mut host, &clock, deadline);
+        }
+    }
+    #[test]
+    fn the_first_eraser_stroke_on_a_new_image_layer_mask_waits_for_its_shaders_and_is_stored() {
+        let mut document = layer_ui::new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
+        document.apply(edit).unwrap();
+        let image = layer_core::color::source::rgba8_source([960, 720], |x, y| [(x % 256) as u8, (y % 256) as u8, 40, 255]);
+        let mut object = layer_core::authored::ImageObject::new(image.into(), "Photo");
+        object.affine = layer_core::Affine64([1., 0., 0., 1., -160., -120.]);
+        let (_, edit) = document.add_image_object_edit(layer, object, 0).unwrap();
+        document.apply(edit).unwrap();
+        let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.brush_ready { frame_step(&mut host, &clock, deadline); }
+        host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::AddMask { id: layer_ui::occurrence_token(layer), replace: false } }).unwrap();
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Eraser }).unwrap();
+        assert!(!host.paint_ready(), "the first mask needs shaders the drawing did not use before");
+        let surface = layer_core::Affine(host.session.state().camera.document_to_surface());
+        let mut records = Vec::new();
+        for (step, x) in [100., 160., 220.].into_iter().enumerate() {
+            let at = surface.map(Point { x, y: 200. });
+            records.extend([f64::from(at.x), f64::from(at.y), 1., 0., 0., 0., 0., (clock.get() + step as u64 * 1_000_000) as f64, step as f64 + 1.]);
+        }
+        pointer(&mut host, 7, 0, 0, &records, false).unwrap();
+        assert!(!host.deferred_contacts.is_empty(), "the stroke waits instead of being dropped");
+        while !host.deferred_contacts.is_empty() || host.session.engine().has_active_stroke() { frame_step(&mut host, &clock, deadline); }
+        for _ in 0..4 { frame_step(&mut host, &clock, deadline); }
+        let doc = host.session.engine().document();
+        let mask = doc.scene().occurrence(layer).unwrap().mask.clone().unwrap().source;
+        assert_eq!(doc.working.target, Some(layer_core::SourceTarget::Coverage(mask)));
+        assert_eq!(host.session.engine().metrics().committed_strokes, 1);
+        assert!(doc.artwork.coverage.get(mask).unwrap().raster.try_data().is_some_and(|data| data.is_ok_and(|data| !data.tiles.is_empty())), "the erased coverage is stored");
+        assert!(host.session.engine().can_undo());
+    }
+    #[test]
+    fn input_held_for_shaders_keeps_saving_waiting_until_it_is_delivered_or_cancelled() {
+        let mut document = layer_ui::new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
+        document.apply(edit).unwrap();
+        let mut object = layer_core::authored::ImageObject::new(layer_core::color::source::rgba8_source([200, 150], |_, _| [200, 40, 30, 255]).into(), "Photo");
+        object.affine = layer_core::Affine64([1., 0., 0., 1., 100., 100.]);
+        let (image, edit) = document.add_image_object_edit(layer, object, 0).unwrap();
+        document.apply(edit).unwrap();
+        let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.brush_ready { frame_step(&mut host, &clock, deadline); }
+        let choose = UiAction::Object { action: layer_ui::ObjectAction::Select { id: layer_ui::object_token(image), extend: false } };
+        host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::AddMask { id: layer_ui::occurrence_token(layer), replace: false } }).unwrap();
+        host.dispatch(choose).unwrap();
+        assert!(!host.paint_ready(), "the first mask needs shaders the drawing did not use before");
+        let surface = layer_core::Affine(host.session.state().camera.document_to_surface());
+        let contact = |host: &mut NativeHost, id: u64, path: &[([f64; 2], f64)]| {
+            let records: Vec<f64> = path.iter().enumerate().flat_map(|(step, ([x, y], phase))| {
+                let at = surface.map(Point { x: *x as f32, y: *y as f32 });
+                [f64::from(at.x), f64::from(at.y), 0.5, 0., 0., 0., 0., (clock.get() + step as u64 * 1_000_000) as f64, *phase]
+            }).collect();
+            pointer(host, id, 1, 0, &records, false).unwrap();
+        };
+        let saving = |host: &NativeHost| host.session.command_disabled_reason(layer_ui::CommandId::SaveDocumentAs).is_none();
+        contact(&mut host, 6, &[([140., 140.], 1.)]);
+        assert!(host.deferred_contacts.holding() && !saving(&host), "a held contact keeps saving waiting");
+        contact(&mut host, 6, &[([140., 140.], 4.)]);
+        assert!(!host.deferred_contacts.holding() && saving(&host), "a cancelled held contact releases saving");
+        contact(&mut host, 7, &[([140., 140.], 1.), ([155., 150.], 2.), ([170., 160.], 3.)]);
+        assert!(host.deferred_contacts.holding() && !saving(&host), "a later save waits for the held drag");
+        while host.deferred_contacts.holding() { frame_step(&mut host, &clock, deadline); }
+        assert!(saving(&host), "delivering the drag releases saving");
+        for _ in 0..4 { frame_step(&mut host, &clock, deadline); }
+        let [.., x, y] = host.session.engine().document().scene().object(image).unwrap().affine.0;
+        assert!((x - 130.).abs() < 0.5 && (y - 120.).abs() < 0.5, "the held drag moved the image: {x}, {y}");
+        assert!(host.paint_ready());
+        contact(&mut host, 8, &[([500., 400.], 1.), ([500., 400.], 3.)]);
+        assert!(!host.deferred_contacts.holding() && saving(&host), "a contact while painting is ready is never held");
+    }
+    #[test]
+    fn thumbnails_in_flight_during_a_renderer_replacement_still_arrive() {
+        let mut document = layer_ui::new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
+        document.apply(edit).unwrap();
+        let image = layer_core::color::source::rgba8_source([64; 2], |_, _| [20, 200, 40, 255]);
+        let (object, edit) = document.add_image_object_edit(layer, layer_core::authored::ImageObject::new(image.into(), "Photo"), 0).unwrap();
+        document.apply(edit).unwrap();
+        let (reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.brush_ready { frame_step(&mut host, &clock, deadline); }
+        let target = object.wire_id();
+        let mut request = 40;
+        let request = loop {
+            request += 1;
+            let (accepted, images) = host.layer_thumbnails([(request, target)]).unwrap();
+            if accepted == [request] && images.iter().all(|image| image.request_id != request) { break request; }
+            frame_step(&mut host, &clock, deadline);
+        };
+        let replacement = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
+        host.session.replace_renderer(Renderer(Some(replacement.into()))).unwrap();
+        host.startup = Default::default();
+        while !(host.startup.canvas_ready && host.session.background_readback_idle()
+            && host.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.ui_readback_ready())) { frame_step(&mut host, &clock, deadline); }
+        host.session.renderer_mut().prepare_moving_layer(Some(layer));
+        let (accepted, images) = host.layer_thumbnails(std::iter::empty()).unwrap();
+        assert!(accepted.is_empty() && images.is_empty(), "a renderer without a drawn frame cannot preview the image yet");
+        host.session.renderer_mut().prepare_moving_layer(None);
+        let image = loop {
+            frame_step(&mut host, &clock, deadline);
+            let (accepted, images) = host.layer_thumbnails(std::iter::empty()).unwrap();
+            assert!(accepted.is_empty(), "the resubmitted request is not reported as a new acceptance");
+            if let Some(image) = images.into_iter().find(|image| image.request_id == request) { break image; }
+        };
+        assert_eq!(image.bytes.as_chunks::<4>().0[16 * 32 + 16], [20, 200, 40, 255]);
+    }
+    #[test]
+    fn thumbnail_work_left_for_canvas_frames_wakes_the_host() {
+        let mut document = layer_ui::new_drawing(2048, 1024, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
+        document.apply(edit).unwrap();
+        let image = layer_core::color::source::rgba8_source([1024; 2], |x, y| [x as u8, y as u8, 90, 255]);
+        let (_, edit) = document.add_image_object_edit(layer, layer_core::authored::ImageObject::new(image.into(), "Photo"), 0).unwrap();
+        document.apply(edit).unwrap();
+        document.artwork.occurrences.get_mut(layer).unwrap().visible = false;
+        let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.brush_ready || host.session.engine().wants_continuous_frames() { frame_step(&mut host, &clock, deadline); }
+        let mut woke = false;
+        loop {
+            host.dirty = false;
+            let (_, images) = host.layer_thumbnails([(1, layer_ui::occurrence_token(layer))]).unwrap();
+            woke |= host.dirty;
+            assert!(host.dirty || !host.session.engine().wants_continuous_frames(), "work left for frames schedules one");
+            if images.iter().any(|image| image.request_id == 1) { break; }
+            while host.dirty { frame_step(&mut host, &clock, deadline); }
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        assert!(woke, "the thumbnail leaves decoding for canvas frames");
+    }
+    fn thumbnail(host: &mut NativeHost, clock: &std::cell::Cell<u64>, request: u64, target: u64) -> Vec<u8> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            while host.session.engine().wants_continuous_frames() || host.session.engine().has_pending_document_edits() { frame_step(host, clock, deadline); }
+            let (_, images) = host.layer_thumbnails([(request, target)]).unwrap();
+            if let Some(image) = images.into_iter().find(|image| image.request_id == request) { return image.bytes; }
+            frame_step(host, clock, deadline);
+        }
+    }
+    #[test]
+    fn a_layer_thumbnail_returns_the_same_bytes_after_a_stroke_is_undone() {
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Windows, [2048, 1536]);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.brush_ready || host.session.engine().wants_continuous_frames() { frame_step(&mut host, &clock, deadline); }
+        let layer = layer_ui::occurrence_token(host.session.engine().document().working.occurrence.unwrap());
+        let original = thumbnail(&mut host, &clock, 1, layer);
+        for attempt in 0..4u64 {
+            let start = clock.get();
+            let records: Vec<f64> = (0..42u64).flat_map(|i| {
+                let phase = if i == 0 { 1. } else if i == 41 { 3. } else { 2. };
+                [256. + i as f64 * 5., 240. + 24. * (i as f64 / 6.).sin(), 1., 0., 0., 0., 0., (start + i * 1_000_000) as f64, phase]
+            }).collect();
+            pointer(&mut host, 77, 1, 0, &records, false).unwrap();
+            let painted = thumbnail(&mut host, &clock, 10 + attempt * 2, layer);
+            assert_ne!(painted, original, "the stroke changes the thumbnail");
+            host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Undo }).unwrap();
+            let undone = thumbnail(&mut host, &clock, 11 + attempt * 2, layer);
+            let differing: Vec<_> = original.iter().zip(&undone).enumerate().filter(|(_, (a, b))| a != b).take(8).collect();
+            assert!(differing.is_empty(), "attempt {attempt}: Undo restores the thumbnail bytes: {differing:?}");
         }
     }
     fn pointer(host: &mut NativeHost, id: u64, tool: u8, button: u8, records: &[f64], predicted: bool) -> Result<(), String> {
@@ -1337,6 +1527,27 @@ mod tests {
             assert_eq!(host.query(json!({"type":"layer_drop","epoch":epoch,"id":effect,"target":target,"fraction":fraction,"surface":"row"})).unwrap(),json!({"epoch":epoch,"target":ink,"position":"above","effect_owner":ink}));
         }
         assert_eq!(host.session.engine().document().revision,revision);
+    }
+
+    #[test]
+    fn object_menu_query_returns_the_shared_image_menu() {
+        use layer_core::color::source::{SourceBuilder,SourceChannels,SourceInterpretation};
+        let localizer=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let mut document=layer_ui::new_drawing(32,32,&localizer).unwrap();
+        let mut builder=SourceBuilder::new([4;2],SourceInterpretation{channels:SourceChannels::Rgba,depth:layer_core::color::SampleDepth::U8,profile:Default::default(),profile_assumed:false},1<<20).unwrap();
+        for _ in 0..4 { builder.push_row(&[255;16]).unwrap(); }
+        let image=layer_core::authored::Image::new(std::sync::Arc::new(builder.finish().unwrap()));
+        let (layer,edit)=document.create_object_layer_edit("Images",None,0).unwrap();document.apply(edit).unwrap();
+        let (object,edit)=document.add_image_object_edit(layer,layer_core::ImageObject::new(image,"Photo"),0).unwrap();document.apply(edit).unwrap();
+        let reference=layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let gpu=GpuContext::of(&reference).rasterizer(Default::default(),&RendererOptions::default(),true).unwrap();
+        let mut host=NativeHost::new(layer_ui::Platform::Android).unwrap();
+        host.session=UiSession::from_project(Renderer(Some(gpu.into())),document,None,[640,480],layer_ui::Platform::Android).unwrap();
+        let id=layer_ui::object_token(object);
+        let menu=host.query(json!({"type":"object_menu","id":id})).unwrap();
+        assert_eq!(menu,json!(host.session.object_menu(id).unwrap()));
+        assert!(menu["sections"].as_array().is_some_and(|sections|!sections.is_empty()));
+        assert!(host.query(json!({"type":"object_menu","id":layer_ui::occurrence_token(layer)})).is_err());
     }
 
     #[test]
@@ -1929,6 +2140,7 @@ mod tests {
         while !host.startup.complete {
             frame(&mut host);
         }
+        let mut accepted = None;
         for command in [
             layer_ui::CommandId::SelectAll,
             layer_ui::CommandId::FillSelection,
@@ -1942,9 +2154,23 @@ mod tests {
             for _ in 0..8 {
                 frame(&mut host);
             }
+            if command == layer_ui::CommandId::ScaleRotate {
+                accepted = host.session.engine().transform_preview().map(|preview| preview.transform.placement.clone());
+            }
         }
+        let selected = |command| host.session.state().commands.iter().any(|c| c.id == command && c.selected);
+        assert!(selected(layer_ui::CommandId::TransformWarp) && selected(layer_ui::CommandId::WarpGridThree), "Warp offers its grid");
+        let bar = host.session.state().canvas_bar.clone().expect("Warp bar");
+        assert!(bar.items.iter().any(|item| matches!(item.option, layer_ui::ToolOption::Choice { id: "transform-warp-grid", .. })));
+        let bounds = host.session.engine().document().working.selection.as_ref().unwrap().bounds();
+        let anchor = bar.anchor.expect("the bar anchors to the warped pixels");
+        for (actual, expected) in anchor.into_iter().zip([bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y]) {
+            assert!((actual - expected).abs() <= 1., "the grid covers the selection: {anchor:?} against {bounds:?}");
+        }
+        let accepted = accepted.unwrap();
         let preview = host.session.engine().transform_preview().unwrap();
-        assert!(preview.transform.placement.mesh.is_some(), "Warp draws its mesh");
+        assert_eq!(preview.transform.placement.outer, accepted.outer, "Warp keeps the accepted pose");
+        assert!(preview.transform.placement.mesh.is_none(), "the untouched grid leaves the transform unchanged");
     }
 
     #[test]

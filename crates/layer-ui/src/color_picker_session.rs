@@ -66,7 +66,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(crate) fn cancel_picker(&mut self) -> bool {
         if self.targeted_curve.is_some() {
-            if let Err(reason)=self.cancel_targeted_contact() {self.raise_notice(reason,None);}
+            if let Err(reason)=self.cancel_targeted_contact() {self.notify(reason);}
             self.targeted_curve=None;
         }
         if self.eyedropper.calibration.take().is_some_and(|calibration| calibration.submitted) {

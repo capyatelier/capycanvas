@@ -52,7 +52,6 @@ impl SelectionPaint {
                     && g.gradient.validate()
             })
             && self.style.execution == layer_core::BrushExecution::Dry
-            && self.style.brush_to_layer == layer_core::Affine::IDENTITY
             && self.style.selection.is_none()
             && self.dabs.iter().all(|d| {
                 d.center.x.is_finite()

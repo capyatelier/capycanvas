@@ -48,6 +48,7 @@ fn refusal_text(refusal: RetouchLayerRefusal, l: &Localizer) -> std::sync::Arc<s
     match refusal {
         R::NoLayer => l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_A_LAYER_FIRST),
         R::NotPaint => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_SELECT_A_PAINT_LAYER_FIRST),
+        R::Objects => l.text(MessageId::OBJECTS_PAINT_ONLY),
         R::Hidden => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_SHOW_THE_LAYER_FIRST),
         R::NotNormal => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_SET_THE_LAYER_TO_NORMAL_FIRST),
         R::Linear => l.text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_FREQUENCY_SEPARATION_NEEDS_PERCEPTUAL_BLENDING_CHANGE_IT_IN_EDIT_BLENDING),
@@ -89,7 +90,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn separation_refusal(&self) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
         let doc = self.engine.document();
-        self.retouch_layer_refusal().or_else(|| doc.working.occurrence.and_then(|h| doc.separation_refusal(h)).or_else(|| doc.working.occurrence.is_none().then_some(RetouchLayerRefusal::NoLayer)).map(|refusal| refusal_text(refusal, l)))
+        self.retouch_layer_refusal().or_else(|| doc.working.occurrence.and_then(|h| doc.separation_refusal(h)).or_else(|| doc.working.occurrence.is_none().then_some(RetouchLayerRefusal::NoLayer))
+            .filter(|refusal| *refusal != RetouchLayerRefusal::Objects || !self.image_content()).map(|refusal| refusal_text(refusal, l)))
     }
 
     pub fn frequency_separation_view(&self) -> Option<FrequencySeparationView> {
@@ -123,6 +125,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn open_frequency_separation(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
         refused(self.separation_refusal())?;
+        if self.refuse_image_content() { return Ok(()); }
         let parameter = SeparationFilters::radius_parameter(&self.effect_catalog).ok_or("Gaussian Blur is missing")?;
         let numeric = effects::number_control(parameter).ok_or("Gaussian Blur has no radius")?;
         let radius = DEFAULT_RADIUS.clamp(numeric.min as f32, numeric.max as f32);

@@ -124,9 +124,9 @@ function message(error) {
 function refreshMessage() {
   if(statusError!==null)$("status").textContent=typeof statusError==="function"?statusError():app.color_feature_error_copy(statusError);
 }
-function answerNotice(id, accept) {
-  if (accept) return dispatch({ type: "notice", id, accept });
-  try { applyChange(app.dispatch({ type: "notice", id, accept })); } catch {}
+function answerNotice(id, accept, action = null) {
+  if (accept) return dispatch({ type: "notice", id, accept, action });
+  try { applyChange(app.dispatch({ type: "notice", id, accept, action })); } catch {}
 }
 function button(text, action, className = "") {
   const node = element("button", className, text);

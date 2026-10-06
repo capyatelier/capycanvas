@@ -50,6 +50,8 @@ mod blending;
 mod photo_edit;
 #[path = "object_foundation_tests.rs"]
 mod object_foundation;
+#[path = "image_object_tests.rs"]
+mod image_objects;
 #[path = "calibration_tests.rs"]
 mod calibration;
 #[path = "merge_tests.rs"]

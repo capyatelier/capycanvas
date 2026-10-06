@@ -24,23 +24,21 @@ Moving paint reserves enough local space to paint across the canvas again. Exist
 hidden pixels and mask coverage stay intact. An oversized move keeps its last valid
 position; releasing commits that position as one undo step.
 
-## Apply a layer transform to pixels
+## Layer transforms
 
-**Apply Transform to Pixels**, in Edit and the active layer's menu, turns an
-accepted affine, perspective or Warp placement into editable pixels. It includes content outside the
-canvas, preserves paint wetness and keeps linked masks editable. An unlinked mask
-stays in place. Layer opacity, blending and clipping remain separate from its paint.
+Move shifts a paint layer, image layer or group by whole pixels; a linked mask
+follows its owner and an unlinked mask stays in place. **Transform**, with
+Distort, Perspective and Warp, works on one paint layer: applying it resamples
+the layer's current pixels once, including content outside the canvas and paint
+wetness, together with a linked mask. Exact flips and quarter turns move samples
+without resampling. A Distort or Warp only needs to be valid over the content it
+moves. Groups and several layers move by whole pixels only, and image layers
+transform their images instead ([image layers](image-objects.md)).
 
-Painting and other pixel edits on a perspective or Warp result require this
-command first. Sampling, copying and selecting its visible pixels remain available.
-With a mask selected, the command applies that mask's geometry. A mask linked to
-a perspective or warped paint layer applies the owner's geometry and linked mask
-together; an independent mask or group mask changes only its coverage.
-
-The command runs in the background with Cancel on the canvas bar. A failed or
-canceled operation changes nothing; one Undo restores the original photo, paint,
-mask and placement. **Rasterize Original Photo** instead converts the original
-photo's local pixels while retaining its placement.
+The work runs in the background with Cancel on the canvas bar. A failed or
+canceled transform changes nothing; one Undo restores the layer and its mask.
+**Rasterize Source…** instead turns a photo layer's photo into ordinary paint in
+place.
 
 ## Commands
 
@@ -59,23 +57,28 @@ photo's local pixels while retaining its placement.
   - **Resample:** Automatic (Lanczos when reducing, Bicubic when enlarging),
     Bicubic, Lanczos, Bilinear or Nearest neighbor. A strong reduction averages
     every source pixel under each new pixel with any filter but Nearest neighbor.
-  - Paint layers and masks are resampled. Placed photos scale their placement and
-    keep their original pixels. The selection, Selection Layers and guides scale
+  - Paint layers and masks are resampled. A photo layer with nothing painted on
+    it keeps the photo's own color and depth, resampled; one with paint on it,
+    or a CMYK photo, is resampled with its paint into ordinary paint. Image
+    layers scale their images without resampling them. The selection, Selection
+    Layers and guides scale
     with the image, and effect settings measured in pixels, such as a blur
     radius, scale too, within their range.
   - A size beyond the drawing's size, tile or memory limits is refused in the
     dialog, with the reason, before anything changes.
 - **Rotate Image 90° Left and Right, Rotate Image 180°, Flip Image Horizontally
   and Vertically** move pixels exactly, without resampling. Quarter turns swap
-  the width and height, and the horizontal and vertical resolution. Placed photos
-  turn their placement, and the selection, Selection Layers and guides follow.
+  the width and height, and the horizontal and vertical resolution. A photo layer
+  turns its photo exactly, keeping its own color and depth, while a worker moves
+  its samples; image layers turn their images, and the selection, Selection
+  Layers and guides follow.
   The view's own rotation and flips (View menu) never change pixels.
 - **Trim** shrinks the canvas to the visible pixels on it, cutting away transparent
   edges. Visible layers, masks, filters and paper contribute their rendered
   coverage. Hide opaque paper to trim to the artwork. Pixels outside stay hidden on
   their layers. When nothing would change, a notice says so.
 - **Reveal All** grows the canvas to hold every layer's pixels, including hidden
-  layers, pixels hidden by masks, and placed photos. When every pixel is already on
+  layers, pixels hidden by masks, and placed images. When every pixel is already on
   the canvas, a notice says so.
 - **Large drawings:** Trim, Reveal All and Fit Content find the pixels' bounds in
   the background and apply when it finishes. Changing the drawing in the meantime
@@ -121,8 +124,8 @@ photo's local pixels while retaining its placement.
   including a dedicated Web worker. The frame loop keeps running while the query
   is pending. Target changes, cancellation and renderer replacement discard stale
   results. Move remembers motion and release while preparing; Escape cancels a
-  pending Transform. Initial photo placement and Original Size use the original
-  image frame; later transforms use measured coverage. `image_size.rs` and
+  pending Transform. Image placement and Original Size use each image's own
+  frame; paint transforms use measured coverage. `image_size.rs` and
   `canvas_size.rs` hold the dialog models, and hosts only present them.
 - **Hosts:** each host presents Image Size beside Canvas Size.
   - GTK: `apps/layer-linux/src/image_size.rs` and `canvas_size.rs`.

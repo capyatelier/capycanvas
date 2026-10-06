@@ -349,7 +349,7 @@ fn calibration_failed_notice_language_refresh_preserves_picker_request_document_
             s.set_localization(Localizer::shared(language));
             let current = s.state.notice.as_ref().unwrap();
             assert_eq!(current.id, notice.id);
-            assert_eq!(current.action, notice.action);
+            assert_eq!(current.actions, notice.actions);
             let expected = message.map_or_else(|| notice.text.clone(), |message| s.localization().text(message).to_string());
             assert_eq!(current.text, expected, "{}", language.tag());
             assert_eq!(calibration(&s), failed);

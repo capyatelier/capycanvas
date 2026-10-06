@@ -111,7 +111,7 @@ fn nested() -> (Document, OccurrenceHandle) {
     b.layer(adjustment).opacity = 0.8;
     b.paint("Multiply", Some(outer), LayerBlend::Multiply, 5, disc(200, 90, 80));
     let inner = b.group("Inner", Some(outer), LayerBlend::PassThrough);
-    b.layer(inner).translation = Point { x: 13., y: -7. };
+    b.layer(inner).offset = [13, -7];
     b.effect("Blur", Some(inner), "gaussian_blur");
     let clip = b.paint("Overlay clip", Some(inner), LayerBlend::Overlay, 7, |x, _| if x % 90 < 60 { 65535 } else { 0 });
     let base = b.paint("Base", Some(inner), LayerBlend::Normal, 11, disc(150, 180, 90));
@@ -256,9 +256,9 @@ fn opacity_and_mask_fade_between_the_backdrop_and_the_groups_result() {
     let first = document.scene().order()[0];
     document.artwork.occurrences.get_mut(first).unwrap().blend = LayerBlend::Normal;
     document.artwork.occurrences.get_mut(first).unwrap().opacity = 0.7;
-    let mut mask = CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), EXTENT, Point { x: 9., y: 4. });
+    let mut mask = CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), EXTENT, [9, 4]);
     mask.source.default_coverage = 0.25;
-    mask.source.initial = Some(
+    crate::test_support::materialize_mask(&mut mask.source,
         Selection::polygon(vec![
             Point { x: 20., y: 10. },
             Point { x: 290., y: 40. },
@@ -266,6 +266,7 @@ fn opacity_and_mask_fade_between_the_backdrop_and_the_groups_result() {
             Point { x: 30., y: 200. },
         ])
         .unwrap(),
+        document.composition().color,
     );
     let covered = coverage(&mut r, &mask);
     assert!(covered.iter().any(|c| *c > 0.99) && covered.iter().any(|c| (*c - 0.25).abs() < 1e-3));

@@ -120,7 +120,7 @@ Export Again continues to capture fresh artwork for each invocation.
 | Research IDs | Deferred result |
 | --- | --- |
 | RET-5, RET-6 | Local content-aware removal/fill, Patch and content-aware move. |
-| RET-8, RET-9 | Blur/sharpen brushes and History brush; Revert to Original already exists. |
+| RET-8, RET-9 | Blur/sharpen brushes and History brush; Discard Paint Edits already exists. |
 | LYR-6–LYR-9 | Align/distribute/auto-align, stack modes, layer styles, panorama and focus merge. |
 | IO-4–IO-6 | Batch processing, layer/selection export, RAW hand-off and New Drawing from Files. |
 | ADJ-11, ADJ-12 | Remaining lens corrections and Match Color; vignette removal already exists. |

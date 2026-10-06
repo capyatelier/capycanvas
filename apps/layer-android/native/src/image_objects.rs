@@ -24,37 +24,43 @@ pub extern "system" fn Java_art_capycanvas_Native_imageObjects(
     string(&mut env, serde_json::to_string(&rows).map_err(error))
 }
 
+fn motion_change(handle: jlong, update: impl FnOnce(&mut layer_host::NativeHost) -> Result<layer_ui::UiChange, String>) -> Result<jlong, String> {
+    let a = unsafe { app(handle) };
+    let previous = a.host.session.state().revision;
+    let change = update(&mut a.host)?;
+    a.host.apply_change(previous, change);
+    Ok(a.host.session.engine().document().revision as jlong)
+}
+
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_setImageObjectAffine(
-    mut env: JNIEnv, _: JClass, handle: jlong, object: JString, affine: JString,
+pub extern "system" fn Java_art_capycanvas_Native_beginObjectMotion(
+    mut env: JNIEnv, _: JClass, handle: jlong, objects: JString,
+) {
+    let result = (|| {
+        let ids: Vec<PortableId> = serde_json::from_str(&read(&mut env, &objects)?).map_err(error)?;
+        let a = unsafe { app(handle) };
+        let store = &a.host.session.engine().document().artwork.objects;
+        let objects = ids.iter().map(|id| store.resolve(*id).ok_or("Unknown image object")).collect::<Result<Vec<_>, _>>()?;
+        motion_change(handle, |host| host.session.begin_object_motion(&objects)).map(|_| ())
+    })();
+    fail(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_previewObjectMotion(
+    mut env: JNIEnv, _: JClass, handle: jlong, delta: JString,
 ) -> jlong {
     let result = (|| {
-        let id: PortableId = read(&mut env, &object)?.parse().map_err(error)?;
-        let affine: Affine64 = serde_json::from_str(&read(&mut env, &affine)?).map_err(error)?;
-        let a = unsafe { app(handle) };
-        let object = a.host.session.engine().document().artwork.objects.resolve(id).ok_or("Unknown image object")?;
-        let previous = a.host.session.state().revision;
-        let change = a.host.session.set_image_object_affine(object, affine)?;
-        a.host.apply_change(previous, change);
-        Ok(a.host.session.engine().document().revision as jlong)
+        let delta: Affine64 = serde_json::from_str(&read(&mut env, &delta)?).map_err(error)?;
+        motion_change(handle, |host| host.session.preview_object_motion(delta))
     })();
     or_throw(&mut env, result, -1)
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_setImageObjectMotion(
-    mut env: JNIEnv, _: JClass, handle: jlong, object: JString, moving: jboolean,
-) {
-    let result = (|| {
-        let a = unsafe { app(handle) };
-        let object = if moving != 0 {
-            let id: PortableId = read(&mut env, &object)?.parse().map_err(error)?;
-            Some(a.host.session.engine().document().artwork.objects.resolve(id).ok_or("Unknown image object")?)
-        } else { None };
-        let previous = a.host.session.state().revision;
-        let change = a.host.session.set_image_object_motion(object)?;
-        a.host.apply_change(previous, change);
-        Ok(())
-    })();
-    fail(&mut env, result)
+pub extern "system" fn Java_art_capycanvas_Native_finishObjectMotion(
+    mut env: JNIEnv, _: JClass, handle: jlong, commit: jboolean,
+) -> jlong {
+    let result = motion_change(handle, |host| if commit != 0 { host.session.commit_object_motion() } else { host.session.cancel_object_motion() });
+    or_throw(&mut env, result, -1)
 }

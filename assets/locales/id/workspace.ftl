@@ -381,23 +381,26 @@ workspace-tool-description-convert-color-space = Konversi lapisan yang dapat die
 
 workspace-tool-description-change-bit-depth = Ubah presisi pengeditan dengan Urungkan yang persis
 
-workspace-tool-description-import-image = Tempatkan foto dengan mempertahankan profil dan kedalaman aslinya
+workspace-tool-description-import-image = Tempatkan foto sebagai gambar yang bisa dipindahkan, diskalakan, dan diputar, dengan profil dan kedalaman aslinya
 
 workspace-tool-description-rasterize-source = Konversi gambar asli yang disimpan menjadi piksel dokumen
+workspace-tool-description-rasterize-layer = Ubah lapisan gambar menjadi piksel cat
+workspace-tool-description-convert-to-object = Ubah lapisan cat menjadi gambar yang bisa dipindahkan dan diskalakan
 
 workspace-tool-description-repair-source-profile = Perbaiki profil sumber gambar asli yang disimpan dengan mempertahankan pengeditan yang diterapkan
 
-workspace-tool-description-copy = Salin piksel terpilih lapisan aktif ke papan klip
+workspace-tool-description-copy = Salin piksel atau gambar yang dipilih ke papan klip
 
-workspace-tool-description-cut = Salin piksel terpilih ke papan klip, lalu hapus
+workspace-tool-description-cut = Salin piksel atau gambar yang dipilih ke papan klip, lalu hapus
 
 workspace-tool-description-copy-merged = Salin gambar terlihat di dalam seleksi ke papan klip
+workspace-tool-description-copy-pixels = Salin piksel lapisan aktif ke papan klip, termasuk gambar pada lapisan gambar
 
-workspace-tool-description-paste-image = Tempel isi papan klip sebagai lapisan baru
+workspace-tool-description-paste-image = Tempel isi papan klip sebagai lapisan baru atau gambar
 
-workspace-tool-description-paste-in-place = Tempel isi papan klip sebagai lapisan baru pada posisi asal salinan
+workspace-tool-description-paste-in-place = Tempel isi papan klip di posisi asal salinan
 
-workspace-tool-description-paste-into = Tempel isi papan klip sebagai lapisan baru dengan mask sesuai seleksi
+workspace-tool-description-paste-into = Tempel isi papan klip sebagai gambar yang dimask oleh seleksi
 
 workspace-tool-description-pen = Gambar garis tinta dengan pena
 
@@ -487,7 +490,7 @@ workspace-tool-description-apply-transform = Pertahankan transformasi yang ditam
 
 workspace-tool-description-cancel-transform = Pulihkan karya asli
 
-workspace-tool-description-placement-original-size = Pulihkan foto ke ukuran piksel aslinya
+workspace-tool-description-placement-original-size = Kembalikan gambar ke ukuran piksel aslinya
 
 workspace-tool-description-hand = Seret untuk memindahkan tampilan kanvas
 
@@ -513,17 +516,17 @@ workspace-tool-description-undo = Urungkan perubahan terakhir
 
 workspace-tool-description-redo = Pulihkan perubahan terakhir yang diurungkan
 
-workspace-tool-description-clear-layer = Hapus seluruh karya pada lapisan yang diedit, dengan membuang foto asli yang ditempatkan
+workspace-tool-description-clear-layer = Hapus seluruh karya pada lapisan yang diedit, termasuk foto di dalamnya
 
 workspace-tool-description-clear-selected = Hapus piksel terpilih, dengan mempertahankan tepi lembut
 
 workspace-tool-description-clear-outside = Hapus piksel di luar seleksi
 
-workspace-tool-description-copy-selection-to-layer = Salin piksel terpilih ke lapisan baru; tanpa seleksi, duplikat lapisan
+workspace-tool-description-copy-selection-to-layer = Salin piksel terpilih ke lapisan baru; tanpa seleksi, duplikasi lapisan; pada lapisan gambar, duplikasi gambar yang dipilih
 
 workspace-tool-description-cut-selection-to-layer = Pindahkan piksel terpilih ke lapisan baru
 
-workspace-tool-description-revert-to-original = Buang setiap pengeditan pada foto yang ditempatkan, dengan mempertahankan posisi dan masknya
+workspace-tool-description-discard-paint-edits = Buang suntingan lukisan pada foto, dengan mempertahankan foto dan masknya
 
 workspace-tool-description-merge-down = Gabungkan lapisan ke lapisan di bawah, atau terapkan efek padanya
 
@@ -589,7 +592,7 @@ workspace-tool-description-crop-cycle-overlay = Beralih ke hamparan garis bantu 
 
 workspace-tool-description-crop-straighten = Gambar sepanjang garis yang seharusnya datar
 
-workspace-tool-description-crop-delete-cropped-pixels = Buang piksel di luar pangkasan alih-alih mempertahankannya tersembunyi
+workspace-tool-description-crop-delete-cropped-pixels = Buang piksel lukisan di luar pangkasan alih-alih mempertahankannya tersembunyi
 
 workspace-tool-description-straighten-to-guide = Pangkas gambar sejajar dengan garis bantu lurus terpilih
 

@@ -361,43 +361,71 @@ impl Image {
         source_origin: [u32; 2],
         coordinate: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        if coordinate
-            .into_iter()
-            .zip(self.plan.extent)
-            .any(|(c, n)| c >= n.div_ceil(PAGE_SIZE))
-        {
+        let valid = self.tile_extent(coordinate)?;
+        if source == &self.scratch {
+            if source_origin != [0; 2] { return Err(GpuRasterError::InvalidExtent); }
+        } else {
+            let region = PixelRect::new(source_origin[0], source_origin[1],
+                source_origin[0].checked_add(valid[0]).ok_or(GpuRasterError::InvalidExtent)?,
+                source_origin[1].checked_add(valid[1]).ok_or(GpuRasterError::InvalidExtent)?);
+            self.copy_to_scratch(encoder, source, region, [0; 2])?;
+        }
+        self.reduce_scratch(device, pipelines, encoder, coordinate)
+    }
+    fn tile_extent(&self, coordinate: [u32; 2]) -> Result<[u32; 2], GpuRasterError> {
+        if coordinate.into_iter().zip(self.plan.extent).any(|(c, n)| c >= n.div_ceil(PAGE_SIZE)) {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let origin = coordinate.map(|v| v * PAGE_SIZE);
-        let valid = std::array::from_fn(|i| (self.plan.extent[i] - origin[i]).min(PAGE_SIZE));
+        Ok(std::array::from_fn(|i| (self.plan.extent[i] - coordinate[i] * PAGE_SIZE).min(PAGE_SIZE)))
+    }
+    pub fn clear_scratch(&self, encoder: &mut crate::submission::CommandEncoder) {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear display mip tile"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.views[0], resolve_target: None, depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+    }
+    /// Copy `region` of `source` into the tile that `reduce_scratch` reduces,
+    /// with its corner at `destination`.
+    pub fn copy_to_scratch(
+        &self,
+        encoder: &mut crate::submission::CommandEncoder,
+        source: &wgpu::Texture,
+        region: PixelRect,
+        destination: [u32; 2],
+    ) -> Result<(), GpuRasterError> {
         if source.format() != wgpu::TextureFormat::Rgba32Float
-            || (source == &self.scratch && source_origin != [0; 2])
-            || source_origin
-                .into_iter()
-                .zip(valid)
-                .zip([source.width(), source.height()])
-                .any(|((start, n), size)| start.checked_add(n).is_none_or(|end| end > size))
+            || region.max_x() > source.width() || region.max_y() > source.height()
+            || destination[0] + region.width() > PAGE_SIZE || destination[1] + region.height() > PAGE_SIZE
         {
             return Err(GpuRasterError::InvalidExtent);
         }
-        if source != &self.scratch {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    origin: wgpu::Origin3d {
-                        x: source_origin[0],
-                        y: source_origin[1],
-                        z: 0,
-                    },
-                    ..source.as_image_copy()
-                },
-                self.scratch.as_image_copy(),
-                wgpu::Extent3d {
-                    width: valid[0],
-                    height: valid[1],
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                origin: wgpu::Origin3d { x: region.min_x(), y: region.min_y(), z: 0 },
+                ..source.as_image_copy()
+            },
+            wgpu::TexelCopyTextureInfo {
+                origin: wgpu::Origin3d { x: destination[0], y: destination[1], z: 0 },
+                ..self.scratch.as_image_copy()
+            },
+            wgpu::Extent3d { width: region.width(), height: region.height(), depth_or_array_layers: 1 },
+        );
+        Ok(())
+    }
+    /// Reduce the scratch tile into tile `coordinate` of the image.
+    pub fn reduce_scratch(
+        &mut self,
+        device: &PipelineDevice,
+        pipelines: &Pipelines,
+        encoder: &mut crate::submission::CommandEncoder,
+        coordinate: [u32; 2],
+    ) -> Result<(), GpuRasterError> {
+        let valid = self.tile_extent(coordinate)?;
+        let origin = coordinate.map(|v| v * PAGE_SIZE);
         let last = self.plan.level;
         let records = self.records.entry(valid).or_insert_with(|| {
             (1..=last)

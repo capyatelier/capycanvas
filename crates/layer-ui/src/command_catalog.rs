@@ -386,8 +386,7 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
             ClearOutside => l.text(MessageId::COMMANDS_HELP_CLEAR_OUTSIDE).to_string(),
             CopySelectionToLayer => l.text(MessageId::COMMANDS_HELP_COPY_SELECTION_TO_LAYER).to_string(),
             CutSelectionToLayer => l.text(MessageId::COMMANDS_HELP_CUT_SELECTION_TO_LAYER).to_string(),
-            RevertToOriginal => l.text(MessageId::COMMANDS_HELP_REVERT_TO_ORIGINAL).to_string(),
-            ApplyTransformPixels => l.text(MessageId::COMMANDS_HELP_APPLY_TRANSFORM_PIXELS).to_string(),
+            DiscardPaintEdits => l.text(MessageId::COMMANDS_HELP_DISCARD_PAINT_EDITS).to_string(),
             MergeDown => l.text(MessageId::COMMANDS_HELP_MERGE_DOWN).to_string(),
             MergeGroup => l.text(MessageId::COMMANDS_HELP_MERGE_GROUP).to_string(),
             MergeVisible => l.text(MessageId::COMMANDS_HELP_MERGE_VISIBLE).to_string(),
@@ -428,6 +427,7 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
             Copy => l.text(MessageId::COMMANDS_HELP_COPY).to_string(),
             Cut => l.text(MessageId::COMMANDS_HELP_CUT).to_string(),
             CopyMerged => l.text(MessageId::COMMANDS_HELP_COPY_MERGED).to_string(),
+            CopyPixels => l.text(MessageId::COMMANDS_HELP_COPY_PIXELS).to_string(),
             PasteImage => l.text(MessageId::COMMANDS_HELP_PASTE_IMAGE).to_string(),
             PasteInPlace => l.text(MessageId::COMMANDS_HELP_PASTE_IN_PLACE).to_string(),
             PasteInto => l.text(MessageId::COMMANDS_HELP_PASTE_INTO).to_string(),
@@ -969,6 +969,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.document_file.close_ready {
             return l.text(MessageId::COMMANDS_THIS_DRAWING_IS_CLOSING);
         }
+        if let Some(reason) = self.object_disabled_reason(command) {
+            return reason;
+        }
         if self.workspace_read_only && !matches!(command, C::ApplyTransform | C::CancelTransform) {
             return if self.managed_workspace.is_none() {
                 l.text(MessageId::COMMANDS_THE_WORKSPACE_IS_STILL_LOADING)
@@ -999,6 +1002,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::Copy
             | C::Cut
             | C::CopyMerged
+            | C::CopyPixels
             | C::DocumentProperties
             | C::NewDocument
             | C::OpenDocument
@@ -1014,8 +1018,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ClearOutside
             | C::CopySelectionToLayer
             | C::CutSelectionToLayer
-            | C::RevertToOriginal
-            | C::ApplyTransformPixels
+            | C::DiscardPaintEdits
             | C::MergeDown
             | C::MergeGroup
             | C::MergeVisible
@@ -1122,7 +1125,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             {
                 self.operation_refusal()
             }
-            C::PlacementOriginalSize => l.text(MessageId::COMMANDS_TRANSFORM_ORIGINAL_AFFINE),
+            C::PlacementOriginalSize => l.text(MessageId::COMMANDS_ORIGINAL_SIZE_SELECT_IMAGES),
             C::Reselect if selection => l.text(MessageId::COMMANDS_DESELECT_BEFORE_RESTORING_THE_PREVIOUS_SELECTION),
             C::Reselect => l.text(MessageId::COMMANDS_NO_PREVIOUS_SELECTION_TO_RESTORE),
             C::Deselect | C::InvertSelection | C::FillSelection | C::SaveSelectionLayer if !selection => {
@@ -1143,7 +1146,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::GamutWarning => l.text(MessageId::COMMANDS_SET_UP_SOFT_PROOFING_FIRST),
             C::ResetLayout if self.managed_workspace.is_some() => l.text(MessageId::COMMANDS_THE_LAYOUT_ALREADY_MATCHES_ITS_STARTING_STATE),
             C::RepairSourceProfile | C::RasterizeSource if document.working.target.is_some_and(layer_core::SourceTarget::is_coverage) => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
-            C::RepairSourceProfile | C::RasterizeSource => l.text(MessageId::COMMANDS_SELECT_AN_UNLOCKED_RETAINED_IMAGE_LAYER),
+            C::RepairSourceProfile | C::RasterizeSource => l.text(MessageId::COMMANDS_SELECT_AN_UNLOCKED_PHOTO_OR_IMAGE),
+            C::RasterizeLayer | C::ConvertToObject => self.conversion_refusal(command).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::ApplyTransform if self.region_tools.applying_transform() => l.text(MessageId::COMMANDS_APPLYING_THE_TRANSFORM),
             C::TransformPerspective if self.operation.transforming() => l.text(MessageId::COMMANDS_CHOOSE_DISTORT_FIRST),
             C::ApplyTransform
@@ -1185,8 +1189,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::CopySelectionToLayer | C::CutSelectionToLayer => {
                 self.selection_to_layer_refusal(command == C::CutSelectionToLayer).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }
-            C::RevertToOriginal => self.revert_to_original_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
-            C::ApplyTransformPixels => self.transform_pixels_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::DiscardPaintEdits => self.discard_paint_edits_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::MergeDown | C::MergeGroup | C::MergeVisible | C::FlattenImage | C::StampVisible => {
                 super::merges::merge_kind(command).and_then(|kind| self.merge_refusal(kind)).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }
@@ -1226,10 +1229,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.refine_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }
             C::TransformSelectionOutline => self.outline_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
-            C::Copy | C::Cut | C::CopyMerged | C::PasteInto if self.state.document_file.busy => {
+            C::Copy | C::Cut | C::CopyMerged | C::CopyPixels | C::PasteInto if self.state.document_file.busy => {
                 l.text(MessageId::COMMANDS_WAIT_FOR_THE_CURRENT_FILE_OPERATION)
             }
-            C::Copy | C::Cut | C::CopyMerged => self.copy_refusal(command).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::Copy | C::Cut | C::CopyMerged | C::CopyPixels => self.copy_refusal(command).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::PasteInto => self.paste_into_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::MaskSelection if self.engine.document().working.selection.is_none() => l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST),
             C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),

@@ -133,7 +133,7 @@ pub(crate) struct Splitter<F> {
     /// Pieces start and end on multiples of this, unless at the region's edge.
     align: u32,
     original: bool,
-    offset: [i32;2],
+    offset: [i64; 2],
 }
 impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
     /// A mesh transform needs its geometry, which bounds each region's source.
@@ -156,7 +156,7 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
     pub fn aligned(self, align: u32) -> Self {
         Self { align, ..self }
     }
-    pub fn shifted(self,offset:[i32;2])->Self {Self {offset,..self}}
+    pub fn shifted(self, offset: [i64; 2]) -> Self { Self { offset, ..self } }
     pub fn placed(self) -> Self { Self { original: false, ..self } }
     /// Append the pieces of `start` and the pages each one reads.
     pub fn split(&self, start: PixelRect, jobs: &mut Vec<Footprint>) -> Result<(), GpuRasterError> {
@@ -167,10 +167,7 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
             }
             let mut required = Vec::with_capacity(TRANSFORM_SLOTS + 1);
             if self.original { required.extend(page_coordinates(region).filter(|c| (self.contains)(*c))); }
-            let query = layer_core::Rect {
-                min:layer_core::Point {x:region.min_x() as f32-self.offset[0] as f32,y:region.min_y() as f32-self.offset[1] as f32},
-                max:layer_core::Point {x:region.max_x() as f32-self.offset[0] as f32,y:region.max_y() as f32-self.offset[1] as f32},
-            };
+            let query = DocRect::from(region).translated(self.offset.map(|v| -v)).to_rect();
             self.map.footprints_rect(query, |[x0,y0,x1,y1]| {
                 let support = self.map.support;
                 let footprint = PixelRect::new(
@@ -328,7 +325,7 @@ impl SourceMap {
                 let mut map = Self::new(&layer_core::ImageTransform {
                     placement: layer_core::LayerPlacement { outer: adapter.inverse().ok_or(invalid)?,
                         mesh: None, interpolation: transform.placement.interpolation },
-                    source_from_owner: None, keep_source: false,
+                    source_from_owner: None, keep_source: false, source_base: None,
                 }, bounds, None)?;
                 map.inset = 0.;
                 Ok::<_, GpuRasterError>(Box::new(map))
@@ -647,8 +644,11 @@ mod tests {
 
 }
 
+/// A layer reduced to `level`, shifted right and down by `phase` pixels so
+/// its texels cover the same pixels as the document's.
 pub(crate) struct DisplayInputs {
     pub level: u32,
+    pub phase: [u32; 2],
     pub image: display_mips::Image,
     pub kept: Option<display_mips::Image>,
     pub sampling: [wgpu::TextureView; 2],
@@ -660,14 +660,16 @@ impl DisplayInputs {
         r: &WgpuRasterizer,
         level: u32,
         extent: [u32; 2],
+        phase: [u32; 2],
         kept: bool,
     ) -> Self {
-        let plan = display_mips::Plan::at(extent, level);
+        let plan = display_mips::Plan::at([extent[0] + phase[0], extent[1] + phase[1]], level);
         let image = display_mips::Image::with_mips(r, plan, display_mips::MAX_LEVEL);
         let kept = kept.then(|| display_mips::Image::with_mips(r, plan, display_mips::MAX_LEVEL));
         let sampling = [image.sampling_view(), kept.as_ref().unwrap_or(&image).sampling_view()];
         Self {
             level,
+            phase,
             image, kept, sampling,
             uniforms: r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("display resample"),

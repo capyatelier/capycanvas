@@ -46,8 +46,8 @@ fn document(depth: SampleDepth, space: BlendSpace) -> Document {
     paint_mut(&mut doc, photo_use).base = Some(layer_core::authored::PaintBase::new((photo(depth)).into()));
     let group = convert_group(&doc, folder, &[photo_use]);
     doc.apply(group).unwrap();
-    doc.artwork.occurrences.get_mut(folder).unwrap().translation = Point { x: 20., y: -12. };
-    doc.artwork.occurrences.get_mut(photo_use).unwrap().translation = Point { x: -20., y: 12. };
+    doc.artwork.occurrences.get_mut(folder).unwrap().offset = [20, -12];
+    doc.artwork.occurrences.get_mut(photo_use).unwrap().offset = [-20, 12];
     let select = doc.select_occurrence_edit(photo_use).unwrap();
     doc.apply(select).unwrap();
     doc

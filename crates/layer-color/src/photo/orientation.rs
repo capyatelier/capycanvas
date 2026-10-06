@@ -1,9 +1,7 @@
 use super::*;
-use layer_core::raster::{TILE_SIZE, TileBlob};
-use std::{collections::BTreeMap, sync::Arc};
+use layer_core::sample_remap::{GridMap, remap_image};
 
-/// Normalize the source's sample positions losslessly. At most four input tiles
-/// and one output tile are decoded; no rotated full-size image is allocated.
+/// Normalize the source's sample positions losslessly, one bounded tile at a time.
 pub(super) fn normalize(
     mut source: SourceImage,
     resolution: Option<layer_core::ImageResolution>,
@@ -14,66 +12,8 @@ pub(super) fn normalize(
     if orientation == 1 {
         return Ok(source);
     }
-    if !(1..=8).contains(&orientation) {
-        return Err("Invalid source orientation".into());
-    }
-    let [w, h] = source.extent;
-    let extent = if orientation >= 5 { [h, w] } else { [w, h] };
-    let bpp = source.interpretation.pixel_bytes();
-    let descriptor = source.interpretation.descriptor();
-    let mut result = SourceImage {
-        resolution: source
-            .resolution
-            .map(|r| if orientation >= 5 { r.swapped() } else { r }),
-        extent,
-        interpretation: source.interpretation.clone(),
-        tiles: BTreeMap::new(),
-    };
-    let mut retained = 0;
-    let mut output = vec![0; TILE_SIZE as usize * TILE_SIZE as usize * bpp];
-    for ty in 0..extent[1].div_ceil(TILE_SIZE) {
-        for tx in 0..extent[0].div_ceil(TILE_SIZE) {
-            let mut decoded = BTreeMap::new();
-            output.fill(0);
-            for ly in 0..TILE_SIZE.min(extent[1] - ty * TILE_SIZE) {
-                for lx in 0..TILE_SIZE.min(extent[0] - tx * TILE_SIZE) {
-                    let (x, y) = (tx * TILE_SIZE + lx, ty * TILE_SIZE + ly);
-                    let [sx, sy] = match orientation {
-                        2 => [w - 1 - x, y],
-                        3 => [w - 1 - x, h - 1 - y],
-                        4 => [x, h - 1 - y],
-                        5 => [y, x],
-                        6 => [y, h - 1 - x],
-                        7 => [w - 1 - y, h - 1 - x],
-                        8 => [w - 1 - y, x],
-                        _ => unreachable!(),
-                    };
-                    let coordinate = [sx / TILE_SIZE, sy / TILE_SIZE];
-                    if let std::collections::btree_map::Entry::Vacant(entry) =
-                        decoded.entry(coordinate)
-                    {
-                        entry.insert(
-                            source
-                                .tiles
-                                .get(&coordinate)
-                                .ok_or("Missing oriented source tile")?
-                                .decode()?,
-                        );
-                    }
-                    let from = ((sy % TILE_SIZE) * TILE_SIZE + sx % TILE_SIZE) as usize * bpp;
-                    let to = (ly * TILE_SIZE + lx) as usize * bpp;
-                    output[to..to + bpp].copy_from_slice(&decoded[&coordinate][from..from + bpp]);
-                }
-            }
-            let blob = TileBlob::encode(descriptor, &output)?;
-            retained += blob.resident_bytes();
-            if retained > max_bytes {
-                return Err("Oriented source exceeds the memory budget".into());
-            }
-            result.tiles.insert([tx, ty], Arc::new(blob));
-        }
-    }
-    Ok(result)
+    let (map, extent) = GridMap::exif(orientation, source.extent).ok_or("Invalid source orientation")?;
+    remap_image(&source, extent, map, max_bytes, &Default::default())
 }
 
 #[cfg(test)]

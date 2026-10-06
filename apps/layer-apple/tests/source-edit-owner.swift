@@ -65,9 +65,7 @@ import UniformTypeIdentifiers
                 try await wait("Source comparison",store:store) {editor.ready || editor.error != nil}
                 try require(editor.ready && editor.previews.count==2,editor.error ?? "Complete comparisons")
             }
-            try await invoke("new_document");try await idle()
-            try await invoke("paste_image");try await idle()
-            try await invoke("apply_transform");try await idle()
+            try await invoke("open_document");try await idle()
             let count=store.state["layers"].array.count
             let target=store.state["layer_tools"]["editing_layer"]["id"].uint
             var editor=try await dialog("repair_source_profile")

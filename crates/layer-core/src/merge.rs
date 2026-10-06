@@ -41,6 +41,7 @@ pub enum MergeRefusal {
     NothingVisible,
     SelectionLayersInside,
     TooLarge,
+    UnboundedSupport,
 }
 
 #[derive(Clone, Debug)]
@@ -56,53 +57,110 @@ struct Merge {
     released: Vec<OccurrenceHandle>,
     anchor: Option<OccurrenceHandle>,
     group: bool,
-    canvas: bool,
 }
 fn adjustment(scene: SceneView<'_>, h: OccurrenceHandle) -> bool {
     scene.effect(h).is_some_and(|e| e.program.kind == EffectKind::Adjustment)
 }
-fn content(scene: SceneView<'_>, h: OccurrenceHandle) -> Rect {
-    let Some(paint) = scene.paint_source(h) else {
-        return Rect::EMPTY;
-    };
-    let Some(Ok(data)) = paint.raster.try_data() else {
-        return Rect::from_extent(paint.domain);
-    };
-    let size = raster::TILE_SIZE as f32;
-    let bounds = data.tiles.keys().fold(Rect::EMPTY, |b, k| {
-        let [x, y] = k.coordinate.map(|v| v as f32 * size);
-        b.union(Rect { min: Point { x, y }, max: Point { x: x + size, y: y + size } })
-    });
-    paint.base.as_ref().map_or(bounds, |base| bounds.union(Rect {min:Point {x:base.offset[0] as f32,y:base.offset[1] as f32},max:Point {x:(base.offset[0]+base.image.extent[0]) as f32,y:(base.offset[1]+base.image.extent[1]) as f32}}))
-}
-pub(crate) fn bake_bounds(snapshot: &SceneSnapshot, scope: &SceneScope, offset: Point, extent: [u32; 2]) -> Rect {
-    let scene = snapshot.view().with_scope(scope).with_offset(offset);
-    let mut bounds = Rect::EMPTY;
-    for h in scene.order().iter().copied().filter(|h| layer_is_visible(scene, *h)) {
-        if let Some(target) = scene.source_target(h).filter(|t| matches!(t, SourceTarget::Paint(_))) {
-            let transform = scene.target_geometry(target);
-            let mapped = transform.forward_bounds(content(scene, h));
-            bounds = bounds.union(mapped);
-        } else if let Some(layer)=scene.object_layer(h) {
-            let world=scene.occurrence_offset64(h);
-            for object in layer.children.iter().filter_map(|h|scene.object(*h)).filter(|o|o.visible) {
-                let [min,max]=object.affine.bounds(object.image.extent);
-                let rectangle=Rect {min:Point {x:(min[0]+world[0]) as f32,y:(min[1]+world[1]) as f32},max:Point {x:(max[0]+world[0]) as f32,y:(max[1]+world[1]) as f32}};
-                bounds=bounds.union(rectangle);
-            }
-        }
+/// Signed evaluation-space bounds in F64, before rounding to the document grid.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SupportBounds { pub min: [f64; 2], pub max: [f64; 2] }
+impl SupportBounds {
+    pub const EMPTY: Self = Self { min: [f64::INFINITY; 2], max: [f64::NEG_INFINITY; 2] };
+    pub fn is_empty(self) -> bool { (0..2).any(|axis| self.min[axis] >= self.max[axis]) }
+    pub fn union(self, other: Self) -> Self {
+        if self.is_empty() { return other; }
+        if other.is_empty() { return self; }
+        Self { min: std::array::from_fn(|axis| self.min[axis].min(other.min[axis])), max: std::array::from_fn(|axis| self.max[axis].max(other.max[axis])) }
     }
-    for effect in scene.order().iter().copied().filter(|h| layer_is_visible(scene, *h)).filter_map(|h| scene.effect(h)) {
+    fn outset(self, amount: [f64; 2]) -> Self {
+        if self.is_empty() { return self; }
+        Self { min: std::array::from_fn(|axis| self.min[axis] - amount[axis]), max: std::array::from_fn(|axis| self.max[axis] + amount[axis]) }
+    }
+    fn offset(self, by: [f64; 2]) -> Self {
+        if self.is_empty() { return self; }
+        Self { min: std::array::from_fn(|axis| self.min[axis] + by[axis]), max: std::array::from_fn(|axis| self.max[axis] + by[axis]) }
+    }
+    fn extent(origin: [f64; 2], extent: [u32; 2]) -> Self {
+        Self { min: origin, max: std::array::from_fn(|axis| origin[axis] + f64::from(extent[axis])) }
+    }
+    /// The document pixels this support touches, or `None` when it can't be
+    /// addressed by the editor's integer offsets.
+    pub fn grid(self) -> Option<[[i64; 2]; 2]> {
+        if self.is_empty() { return None; }
+        let min = self.min.map(f64::floor);
+        let max = self.max.map(f64::ceil);
+        let limit = offsets::MAX_OFFSET as f64 + MAX_EXTENT as f64;
+        min.iter().chain(&max).all(|v| v.is_finite() && v.abs() <= limit).then(|| [min.map(|v| v as i64), max.map(|v| v as i64)])
+    }
+    fn rect(self) -> Rect {
+        if self.is_empty() { return Rect::EMPTY; }
+        Rect { min: Point { x: self.min[0] as f32, y: self.min[1] as f32 }, max: Point { x: self.max[0] as f32, y: self.max[1] as f32 } }
+    }
+}
+
+fn paint_support(scene: SceneView<'_>, h: OccurrenceHandle, reach: Reach) -> SupportBounds {
+    let Some(paint) = scene.paint_source(h) else { return SupportBounds::EMPTY; };
+    let origin = scene.occurrence_offset64(h);
+    let content = match paint.raster.try_data() {
+        Some(Ok(data)) if paint.operations.is_empty() && reach == Reach::Content => data.tiles.keys().fold(SupportBounds::EMPTY, |bounds, key| {
+            let tile = key.coordinate.map(|v| f64::from(v) * f64::from(raster::TILE_SIZE));
+            bounds.union(SupportBounds::extent(tile, [raster::TILE_SIZE; 2]))
+        }),
+        _ => return SupportBounds::extent(origin, paint.domain),
+    };
+    let base = paint.base.as_ref().map_or(SupportBounds::EMPTY, |base| SupportBounds::extent(base.offset.map(f64::from), base.image.extent));
+    let domain = SupportBounds::extent([0.; 2], paint.domain);
+    let local = content.union(base);
+    SupportBounds { min: std::array::from_fn(|axis| local.min[axis].max(domain.min[axis])), max: std::array::from_fn(|axis| local.max[axis].min(domain.max[axis])) }
+        .offset(origin)
+}
+
+/// Where an image object can contribute pixels: its rectangle, widened by the
+/// smooth filter's footprint unless it maps samples exactly onto the grid.
+pub fn object_support(placement: Affine64, object: &ImageObject) -> SupportBounds {
+    let [min, max] = placement.bounds(object.image.extent);
+    let [a, b, c, d, tx, ty] = placement.0;
+    let permutation = [a, b, c, d].iter().all(|v| *v == 0. || v.abs() == 1.) && (a * d - b * c).abs() == 1.;
+    let exact = object.interpolation == ImageInterpolation::Nearest || (permutation && tx.fract() == 0. && ty.fract() == 0.);
+    let halo = if exact { [0.; 2] } else { [(a.abs() + c.abs()) * 0.5 + 2., (b.abs() + d.abs()) * 0.5 + 2.] };
+    SupportBounds { min, max }.outset(halo)
+}
+
+fn objects_support(scene: SceneView<'_>, h: OccurrenceHandle) -> SupportBounds {
+    let Some(layer) = scene.object_layer(h) else { return SupportBounds::EMPTY; };
+    let origin = scene.occurrence_offset64(h);
+    let placement = Affine64([1., 0., 0., 1., origin[0], origin[1]]);
+    layer.children.iter().filter_map(|child| scene.object(*child)).filter(|object| object.visible)
+        .fold(SupportBounds::EMPTY, |bounds, object| bounds.union(object_support(placement.compose(object.affine), object)))
+}
+
+/// Whether paint contributes its painted pages or its whole editable domain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach { Content, Domain }
+
+/// The finite support of everything `scene` evaluates in its scope: paint,
+/// object images with their sampling footprint and the output of filters and
+/// generators. A generator's output is defined on the authored frame; a filter
+/// whose reach can't be represented is refused with `UnboundedSupport`.
+pub fn output_support(scene: SceneView<'_>, reach: Reach) -> Result<SupportBounds, MergeRefusal> {
+    let visible: Vec<_> = scene.order().iter().copied().filter(|h| layer_is_visible(scene, *h)).collect();
+    let mut bounds = visible.iter().fold(SupportBounds::EMPTY, |bounds, h| bounds.union(paint_support(scene, *h, reach)).union(objects_support(scene, *h)));
+    let frame = SupportBounds::extent(scene.evaluation_offset64(), scene.composition().size);
+    for effect in visible.iter().filter_map(|h| scene.effect(*h)) {
         match (effect.program.kind, effect.program.alpha) {
-            (EffectKind::Generator, _) => return Rect::from_extent(extent),
-            (EffectKind::Adjustment, EffectAlpha::Filter) => match effect.damage_radius() {
-                Some(r) => bounds = bounds.outset(r as f32),
-                None => return Rect::from_extent(extent),
-            },
+            (EffectKind::Generator, _) => bounds = bounds.union(frame),
+            (EffectKind::Adjustment, EffectAlpha::Filter) => {
+                bounds = bounds.outset([f64::from(effect.support_radius().ok_or(MergeRefusal::UnboundedSupport)?); 2]);
+            }
             _ => {}
         }
     }
-    if bounds.is_empty() { bounds } else { bounds.intersect(Rect::from_extent(extent)) }
+    Ok(bounds)
+}
+
+pub(crate) fn bake_bounds(snapshot: &SceneSnapshot, scope: &SceneScope, offset: Point, extent: [u32; 2]) -> Rect {
+    let scene = snapshot.view().with_scope(scope).with_offset(offset);
+    output_support(scene, Reach::Content).map_or(Rect::from_extent(extent), |support| support.rect().intersect(Rect::from_extent(extent)))
 }
 impl Document {
     fn clips_above(&self,h:OccurrenceHandle)->Vec<OccurrenceHandle> {
@@ -168,7 +226,6 @@ impl Document {
             released: Vec::new(),
             anchor: None,
             group: false,
-            canvas: false,
         };
         match kind {
             MergeKind::Group => {
@@ -254,15 +311,12 @@ impl Document {
                     .collect();
                 let anchor = *visible.last().ok_or(MergeRefusal::NothingVisible)?;
                 m.members = self.layer_subtrees(&visible);
-                if kind == MergeKind::Stamp {
-                    m.canvas = true;
-                } else {
+                if kind != MergeKind::Stamp {
                     m.members = self.checked(m.members)?;
                     m.anchor = Some(anchor);
                     if kind == MergeKind::Flatten {
                         let hidden: Vec<_> = roots.iter().copied().filter(|h| !m.members.contains(h)).collect();
                         m.discarded = self.checked(self.layer_subtrees(&hidden))?;
-                        m.canvas = true;
                     } else {
                         m.released = roots
                             .iter()
@@ -278,22 +332,24 @@ impl Document {
         }
         Ok(m)
     }
+    /// The whole-page window, in document pixels, that holds `members`
+    /// together with the composition frame.
     pub fn bake_extent(&self, members: &BTreeSet<OccurrenceHandle>) -> Result<(Point, [u32; 2]), MergeRefusal> {
-        let scene = self.scene();
-        let bounds =
-            scene.order().iter().copied().filter(|h| members.contains(h) && scene.paint_source(*h).is_some()).fold(
-                Rect::from_extent(self.composition().size),
-                |b, h| {
-                    b.union(scene.target_geometry(scene.source_target(h).unwrap()).forward_bounds(Rect::from_extent(scene.local_extent(h))))
-                },
-            );
-        let size = raster::TILE_SIZE as f32;
-        let origin = Point { x: (bounds.min.x / size).floor() * size, y: (bounds.min.y / size).floor() * size };
-        let extent = [(bounds.max.x - origin.x).ceil(), (bounds.max.y - origin.y).ceil()];
-        if !extent.iter().all(|v| v.is_finite() && *v <= MAX_EXTENT as f32) {
-            return Err(MergeRefusal::TooLarge);
-        }
-        Ok((origin, extent.map(|v| v as u32)))
+        let scope = SceneScope::Members(self.scene().order().iter().copied().filter(|h| members.contains(h)).collect::<Vec<_>>().into());
+        self.bake_window(self.scene().with_scope(&scope))
+    }
+    /// The whole pages that hold what `scene` draws, extended over the canvas
+    /// when that still fits so the result can be painted across it.
+    pub(crate) fn bake_window(&self, scene: SceneView<'_>) -> Result<(Point, [u32; 2]), MergeRefusal> {
+        let support = output_support(scene, Reach::Domain)?;
+        let window = |support: SupportBounds| {
+            let [min, max] = support.grid()?;
+            let size = i64::from(raster::TILE_SIZE);
+            let origin = min.map(|v| v.div_euclid(size) * size);
+            let extent: [u32; 2] = std::array::from_fn(|axis| u32::try_from(max[axis] - origin[axis]).unwrap_or(u32::MAX));
+            (extent.iter().all(|v| *v <= MAX_EXTENT) && offsets::admitted(origin)).then(|| (offsets::point(origin), extent))
+        };
+        window(support.union(SupportBounds::extent([0.; 2], self.composition().size))).or_else(|| window(support)).ok_or(MergeRefusal::TooLarge)
     }
     pub(crate) fn exceeds_publication(&self, operation: &RasterOperation, extent: [u32; 2]) -> bool {
         raster::RasterPlane::Color.descriptor(self.composition().color).byte_len([raster::TILE_SIZE; 2]).is_none_or(|page| {
@@ -303,14 +359,9 @@ impl Document {
     pub fn merge_plan(&self, kind: MergeKind) -> Result<MergePlan, MergeRefusal> {
         let m = self.merge(kind)?;
         let scene = self.scene();
-        let canvas = self.composition().size;
-        let (origin, extent) = if m.canvas || m.members.iter().any(|h| scene.effect(*h).is_some()) {
-            (Point::default(), canvas)
-        } else {
-            self.bake_extent(&m.members)?
-        };
+        let (origin, extent) = self.bake_extent(&m.members)?;
         let parent = m.anchor.and_then(|h| scene.parent(h));
-        let parent_offset = parent.map_or(Point::default(), |p| self.layer_offset(p));
+        let parent_origin = self.scene().layer_origin(parent);
         let mut snapshot = self.snapshot();
         if m.group {
             let h = m.anchor.unwrap();
@@ -322,7 +373,7 @@ impl Document {
         let scope = SceneScope::Members(scene.order().iter().copied().filter(|h| m.members.contains(h)).collect::<Vec<_>>().into());
         let operation = RasterOperation {
             placement: Affine::IDENTITY,
-            coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), extent, Point::default()),
+            coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), extent, [0; 2]),
             kind: RasterOperationKind::Bake { scene: snapshot, scope, offset: Point { x: -origin.x, y: -origin.y } },
         };
         if self.exceeds_publication(&operation, extent) {
@@ -337,7 +388,7 @@ impl Document {
             OccurrenceContent::Paint(paint.handle),
             m.anchor.and_then(|h| scene.occurrence(h)).map_or_else(|| Arc::from("Visible"), |o| o.name.clone()),
         );
-        result.translation = Point { x: origin.x - parent_offset.x, y: origin.y - parent_offset.y };
+        result.offset = offsets::checked_sub(offsets::exact(origin).ok_or(MergeRefusal::TooLarge)?, parent_origin).ok_or(MergeRefusal::TooLarge)?;
         if let Some(h) = m.anchor {
             let anchor = scene.occurrence(h).unwrap();
             result.attachment = anchor.attachment;

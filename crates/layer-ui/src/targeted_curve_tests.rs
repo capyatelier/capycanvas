@@ -145,7 +145,7 @@ fn targeted_curve_retired_failure_reprojects_typed_notice_without_resampling_or_
         let rendering=(s.engine.backend().snapshot_requests.len(),s.engine.backend().snapshot_cancels,s.engine.backend().dabs);
         for language in UiLanguage::ALL.iter().copied().chain([UiLanguage::English]) {
             s.set_localization(Localizer::shared(language));
-            let current=s.state.notice.as_ref().unwrap();assert_eq!(current.id,notice.id);assert_eq!(current.action,notice.action);
+            let current=s.state.notice.as_ref().unwrap();assert_eq!(current.id,notice.id);assert_eq!(current.actions,notice.actions);
             assert_eq!(current.text,message.map_or_else(||notice.text.clone(),|id|s.localization().text(id).to_string()),"{}",language.tag());
             assert!(s.targeted_curve.is_some());assert!(!s.targeted_curve_busy());assert!(s.effect_gesture.is_none());
             assert_eq!(s.engine.document(),&document);assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.state.colors,colors);

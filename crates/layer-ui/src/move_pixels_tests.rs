@@ -32,6 +32,7 @@ mod move_pixels_checks {
             placement: LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine::translation(Point { x: offset[0], y: offset[1] })) },
             source_from_owner: None,
             keep_source,
+            source_base: None,
         }
     }
     fn committed(s: &UiSession<Recorder>) -> Vec<ImageTransform> {
@@ -116,7 +117,7 @@ mod move_pixels_checks {
     }
 
     #[test]
-    fn move_without_a_selection_keeps_the_lossless_layer_offset() {
+    fn move_without_a_selection_rounds_to_a_lossless_integer_layer_offset() {
         let mut s = filled_selection_session();
         invoke(&mut s, CommandId::Deselect);
         invoke(&mut s, CommandId::Move);
@@ -133,11 +134,11 @@ mod move_pixels_checks {
         let data = s.engine.document().target_raster(paint).unwrap().wait_data().unwrap();
         let (key, tile) = data.tiles.iter().next().unwrap();
         assert!(tile.same_capture(&original_tile), "the same captured pixels survive tile rebasing");
-        let origin = s.engine.document().affine_edit_transform(paint).unwrap().map(layer_core::Point {
+        let origin = s.engine.document().local_to_document(paint).map(layer_core::Point {
             x: key.coordinate[0] as f32 * layer_core::raster::TILE_SIZE as f32,
             y: key.coordinate[1] as f32 * layer_core::raster::TILE_SIZE as f32,
         });
-        assert!((origin.x - 30.5).abs() < 1e-3 && (origin.y - 11.25).abs() < 1e-3, "{origin:?}");
+        assert_eq!(origin, layer_core::Point { x: 31., y: 11. }, "whole layers move by whole pixels");
         assert!(committed(&s).is_empty(), "no pixels are resampled");
     }
 

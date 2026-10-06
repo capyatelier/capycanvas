@@ -27,6 +27,8 @@ pub enum SnapshotRequest {
     ArtworkSample(layer_core::ArtworkSampleRequest),
     Bounds(layer_core::ContentBoundsRequest),
     TransformPixels(layer_core::TransformPixelsPlan),
+    Image(layer_core::ImageCapture),
+    Remap(layer_core::RemapPlan),
 }
 #[derive(Clone, Debug)]
 pub enum SnapshotResult {
@@ -35,6 +37,10 @@ pub enum SnapshotResult {
     ArtworkSample(layer_core::ArtworkSample),
     Bounds(Rect),
     TransformPixels(layer_core::Edit),
+    /// The captured pixels and their top-left position in the capture, or
+    /// none when the capture holds no visible pixels.
+    Image(Option<(std::sync::Arc<layer_core::color::source::SourceImage>, [i64; 2])>),
+    Remap(Vec<layer_core::RemapResult>),
 }
 
 /// Immutable brush source shared across a render-worker boundary. Pixel storage
@@ -175,10 +181,6 @@ pub enum DabMode {
 /// instance record; color and texture identity are submitted only once.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DabStyle {
-    /// Maps generated brush contacts into the editable layer's pixel grid.
-    /// Dynamics and texture geometry stay in brush coordinates; placement never
-    /// changes the user's nominal brush footprint in document space.
-    pub brush_to_layer: layer_core::Affine,
     pub alpha_locked: bool,
     pub selection: Option<std::sync::Arc<layer_core::Selection>>,
     pub tip: BrushTip,
@@ -200,7 +202,6 @@ pub struct DabStyle {
 impl DabStyle {
     pub fn for_brush(brush: &layer_core::BrushSnapshot, tool: layer_core::StrokeTool) -> Self {
         Self {
-            brush_to_layer: layer_core::Affine::IDENTITY,
             alpha_locked: false,
             selection: None,
             tip: brush.tip.clone(),
@@ -321,12 +322,13 @@ pub struct ReadbackImage {
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum ThumbnailTarget {Occurrence(OccurrenceHandle),Source(SourceTarget),QuickMask}
+pub enum ThumbnailTarget {Occurrence(OccurrenceHandle),Source(SourceTarget),Object(layer_core::authored::ImageObjectHandle),QuickMask}
 impl ThumbnailTarget {
     pub fn from_wire_id(id: u64) -> Option<Self> {
         Some(if id == 0 { Self::QuickMask } else if id >> 32 == 0 {
             Self::Occurrence(OccurrenceHandle::from_index(u32::try_from(id - 1).ok()?))
-        } else { Self::Source(SourceTarget::from_wire_id(id)?) })
+        } else if let Some(object) = layer_core::authored::ImageObjectHandle::from_wire_id(id) { Self::Object(object) }
+        else { Self::Source(SourceTarget::from_wire_id(id)?) })
     }
 }
 
@@ -441,6 +443,8 @@ pub struct ColorSample {
 pub enum RegionSource {
     Composite,
     Objects(OccurrenceHandle),
+    /// An image layer's own content alpha, in document coordinates.
+    ObjectCoverage(OccurrenceHandle),
     /// Placed raw paint, in document coordinates.
     Source(SourceTarget),
     /// Placed raw content alpha or mask coverage, in document coordinates.
@@ -649,7 +653,8 @@ impl TransformPreview {
         let mask=occurrence.mask.as_ref().filter(|m|m.linked)?;
         let paint=match occurrence.content {layer_core::authored::OccurrenceContent::Paint(h)=>SourceTarget::Paint(h),_=>return None};
         let target=if self.target==paint{SourceTarget::Coverage(mask.source)}else{paint};
-        let to=scene.target_geometry(self.target).as_affine()?.then(scene.target_geometry(target).as_affine()?.inverse()?);
+        let [from,into]=[self.target,target].map(|t|scene.target_offset(t));
+        let to=layer_core::Affine::translation(layer_core::offsets::point([from[0]-into[0],from[1]-into[1]]));
         Some(Self {transaction:self.transaction,moving:self.moving,target,
             selection:self.selection.as_ref().map(|s|s.transformed(to)).transpose().ok()?,transform:self.transform.conjugate(to)?})
     }
@@ -761,6 +766,11 @@ pub trait CanvasRenderer {
     fn take_retouch_miss(&mut self) -> Option<StrokeId> {
         None
     }
+    /// A finished retouching stroke whose replay waits for source pixels
+    /// still being evaluated; it stays correctable until it is reported.
+    fn retouch_waiting(&self) -> Option<StrokeId> {
+        None
+    }
     /// The latest stroke can no longer be corrected, so its stroke-start
     /// pixels may be released.
     fn retire_stroke_sources(&mut self) {}
@@ -836,7 +846,7 @@ pub trait CanvasRenderer {
     fn take_content_bounds(&mut self) -> Option<Result<layer_core::Rect, Self::Error>> {
         self.take_snapshot().map(|result| result.map(|result| match result {
             SnapshotResult::Bounds(bounds) => bounds,
-            SnapshotResult::LevelsStatistics(_) | SnapshotResult::TransformPixels(_) | SnapshotResult::ArtworkSample(_) | SnapshotResult::ArtworkStatistics(_) => unreachable!(),
+            SnapshotResult::LevelsStatistics(_) | SnapshotResult::TransformPixels(_) | SnapshotResult::ArtworkSample(_) | SnapshotResult::ArtworkStatistics(_) | SnapshotResult::Image(_) | SnapshotResult::Remap(_) => unreachable!(),
         }))
     }
     fn cancel_content_bounds(&mut self) { self.cancel_snapshot(); }
@@ -893,7 +903,10 @@ mod tests {
         assert_eq!(ThumbnailTarget::from_wire_id(2), Some(ThumbnailTarget::Occurrence(OccurrenceHandle::from_index(1))));
         let source = SourceTarget::Coverage(layer_core::authored::CoverageHandle::from_index(3));
         assert_eq!(ThumbnailTarget::from_wire_id(source.wire_id()), Some(ThumbnailTarget::Source(source)));
-        assert_eq!(ThumbnailTarget::from_wire_id(3u64 << 32 | 1), None);
+        let object = layer_core::authored::ImageObjectHandle::from_index(4);
+        assert_eq!(ThumbnailTarget::from_wire_id(object.wire_id()), Some(ThumbnailTarget::Object(object)));
+        assert_eq!(ThumbnailTarget::from_wire_id(3u64 << 32), None);
+        assert_eq!(ThumbnailTarget::from_wire_id(4u64 << 32 | 1), None);
     }
 
     #[test]
@@ -901,9 +914,9 @@ mod tests {
         use layer_core::{Affine, ImageTransform, Point, Selection, CoverageSnapshot, authored::*};
         let mut document=layer_core::Document::new(PortableId::random(),128,96,layer_core::DocumentNames{paint:"paint".into(),paper:"Paper".into()});
         let paint=document.scene().order()[0];let pigment=document.scene().source_target(paint).unwrap();
-        document.artwork.occurrences.get_mut(paint).unwrap().translation=Point{x:12.,y:8.};
-        let coverage=CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(),[128,96],Point{x:-7.,y:23.});let mask=document.artwork.coverage.insert(PortableId::random(),coverage.source).unwrap();document.artwork.occurrences.get_mut(paint).unwrap().mask=Some(coverage.use_);
-        let stack=document.artwork.stacks.insert(PortableId::random(),Stack{entries:vec![paint]}).unwrap();let mut parent=Occurrence::new(OccurrenceContent::Stack(stack),"parent");parent.translation=Point{x:19.,y:-11.};let parent=document.artwork.occurrences.insert(PortableId::random(),parent).unwrap();let root=document.composition().result;document.artwork.stacks.get_mut(root).unwrap().entries[0]=parent;
+        document.artwork.occurrences.get_mut(paint).unwrap().offset=[12,8];
+        let coverage=CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(),[128,96],[-19,15]);let mask=document.artwork.coverage.insert(PortableId::random(),coverage.source).unwrap();document.artwork.occurrences.get_mut(paint).unwrap().mask=Some(coverage.use_);
+        let stack=document.artwork.stacks.insert(PortableId::random(),Stack{entries:vec![paint]}).unwrap();let mut parent=Occurrence::new(OccurrenceContent::Stack(stack),"parent");parent.offset=[19,-11];let parent=document.artwork.occurrences.insert(PortableId::random(),parent).unwrap();let root=document.composition().result;document.artwork.stacks.get_mut(root).unwrap().entries[0]=parent;
         document.apply(layer_core::Edit::Stack(RecordChange::replace(&document.artwork.stacks,root,document.artwork.stacks.get(root).cloned()).unwrap())).unwrap();
         let selection = Selection::polygon(vec![
             Point { x: 0., y: 0. },
@@ -926,8 +939,8 @@ mod tests {
             };
             let other = request.companion(document.scene()).unwrap();
             assert_ne!(other.target, primary);
-            let a = document.scene().target_offset(primary);
-            let b = document.scene().target_offset(other.target);
+            let a = layer_core::offsets::point(document.scene().target_offset(primary));
+            let b = layer_core::offsets::point(document.scene().target_offset(other.target));
             let delta = Point {
                 x: a.x - b.x,
                 y: a.y - b.y,

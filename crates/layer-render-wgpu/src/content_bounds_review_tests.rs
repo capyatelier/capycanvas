@@ -18,7 +18,7 @@ fn batched_bounds_preserve_source_reads_before_late_color_and_mask_restores() {
     paint(&mut document).raster = late_page(raster(RasterPlane::Color, document.composition().color,
         |x, y| if (x == 20 && y == 17) || (x == 40 && y == 40) { 1. } else { 0. }));
     let h = owner(&document);
-    let mask = attach_mask(&mut document, h, Point::default());
+    let mask = attach_mask(&mut document, h);
     document.artwork.coverage.get_mut(mask).unwrap().raster = late_page(raster(RasterPlane::Mask, document.composition().color,
         |x, y| if x == 20 && y == 17 { 0.5 } else { 0. }));
     let captured_bounds = |document: &Document| {
@@ -92,11 +92,11 @@ fn bounded_bounds_batch_falls_back_for_regions_above_the_batch_share() {
     document.artwork.compositions.get_mut(document.artwork.root).unwrap().size = [512, 256];
     paint(&mut document).domain = [512, 256];
     paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
-    occurrence(&mut document).translation = Point { x: 32., y: 48. };
+    occurrence(&mut document).offset = [32, 48];
     let extent = document.composition().size;
     let (second, SourceTarget::Paint(second_paint)) = crate::test_support::add_paint(&mut document.artwork, "second boundary page", extent) else { panic!("paint") };
     document.artwork.paint.get_mut(second_paint).unwrap().base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
-    document.artwork.occurrences.get_mut(second).unwrap().translation = Point { x: 300., y: 24. };
+    document.artwork.occurrences.get_mut(second).unwrap().offset = [300, 24];
     while document.artwork.occurrences.len() < 16 {
         crate::test_support::add_paint(&mut document.artwork, "additional compositing layer", extent);
     }
@@ -128,7 +128,7 @@ fn paper_bounds_follow_alpha_filters_and_masked_pass_through_groups() {
         let mut document = Document::new(PortableId::random(), 128, 96, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         if case == 2 {
             paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([10, 10], |_, _| 255)).into()));
-            occurrence(&mut document).translation = Point { x: -10., y: -10. };
+            occurrence(&mut document).offset = [-10, -10];
         }
         let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
         program.wgsl = if grouped {
@@ -147,10 +147,11 @@ fn paper_bounds_follow_alpha_filters_and_masked_pass_through_groups() {
         if grouped {
             let group = wrap(&mut document, effect, "masked pass-through group");
             document.artwork.occurrences.get_mut(group).unwrap().blend = layer_core::LayerBlend::PassThrough;
-            let mask = attach_mask(&mut document, group, Point::default());
+            let mask = attach_mask(&mut document, group);
+            let color = document.composition().color;
             let coverage = document.artwork.coverage.get_mut(mask).unwrap();
             coverage.default_coverage = 0.;
-            coverage.initial = Some(Selection::polygon(rect(0., 0., 64., 96.).corners().to_vec()).unwrap());
+            crate::test_support::materialize_mask(coverage, Selection::polygon(rect(0., 0., 64., 96.).corners().to_vec()).unwrap(), color);
         }
         let expected = if grouped { rect(64., 0., 128., 96.) } else { rect(20., 30., 40., 50.) };
         let mut capture = renderer.snapshot_gpu().capture_scene(captured(&document), SceneScope::All, Default::default()).unwrap();
@@ -178,7 +179,7 @@ fn remote_transparent_or_fully_masked_sources_do_not_refuse_small_actual_bounds(
     let extent = document.composition().size;
     let (remote_id, SourceTarget::Paint(remote_paint)) = crate::test_support::add_paint(&mut document.artwork, "remote source", extent) else { panic!("paint") };
     document.artwork.paint.get_mut(remote_paint).unwrap().base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 0)).into()));
-    document.artwork.occurrences.get_mut(remote_id).unwrap().translation = Point { x: 40000., y: -40000. };
+    document.artwork.occurrences.get_mut(remote_id).unwrap().offset = [40000, -40000];
     let root = document.composition().result;
     let entries = &mut document.artwork.stacks.get_mut(root).unwrap().entries; entries.pop(); entries.insert(0, remote_id);
     let expected = rect(3., 7., 4., 8.);
@@ -186,13 +187,14 @@ fn remote_transparent_or_fully_masked_sources_do_not_refuse_small_actual_bounds(
     assert_eq!(bounds(&renderer, &document, ContentScope::All), expected);
     assert_eq!(bounds(&renderer, &document, ContentScope::Canvas), expected);
 
-    let mask = attach_mask(&mut document, remote_id, Point { x: 40000., y: -40000. });
+    let mask = attach_mask(&mut document, remote_id);
     document.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.;
     document.artwork.paint.get_mut(remote_paint).unwrap().base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), expected);
     assert_eq!(bounds(&renderer, &document, ContentScope::Canvas), expected);
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(3., -40000., 40016., 8.));
-    document.artwork.coverage.get_mut(mask).unwrap().initial = Some(Selection::polygon(rect(80., 80., 96., 96.).corners().to_vec()).unwrap());
+    let color = document.composition().color;
+    crate::test_support::materialize_mask(document.artwork.coverage.get_mut(mask).unwrap(), Selection::polygon(rect(80., 80., 96., 96.).corners().to_vec()).unwrap(), color);
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), expected,
         "bounded mask preparation cannot reserve the empty space between remote objects");
 }
@@ -202,7 +204,7 @@ fn visible_alpha_filter_uses_the_canvas_domain_when_it_creates_alpha() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
-    occurrence(&mut document).translation = Point { x: 32., y: 48. };
+    occurrence(&mut document).offset = [32, 48];
     let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
     program.wgsl = "fn opaque(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(.2,.3,.4,1.);}".into();
     program.entry = "opaque".into();
@@ -219,17 +221,16 @@ fn visible_alpha_filter_uses_the_canvas_domain_when_it_creates_alpha() {
 }
 
 #[test]
-fn mask_target_selection_keeps_nested_nonuniform_registration_and_ignores_paint_visibility() {
+fn mask_target_selection_keeps_nested_registration_and_ignores_paint_visibility() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     occurrence(&mut document).visible = false;
     occurrence(&mut document).opacity = 0.;
-    occurrence(&mut document).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 0.5, 0., 0.]));
-    occurrence(&mut document).translation = Point { x: 10., y: 12. };
+    occurrence(&mut document).offset = [10, 12];
     let h = owner(&document);
     let group = wrap(&mut document, h, "parent");
-    document.artwork.occurrences.get_mut(group).unwrap().translation = Point { x: 30., y: 40. };
-    let mask = attach_mask(&mut document, h, Point { x: 10., y: 12. });
+    document.artwork.occurrences.get_mut(group).unwrap().offset = [30, 40];
+    let mask = attach_mask(&mut document, h);
     occurrence(&mut document).mask.as_mut().unwrap().enabled = false;
     let color = document.composition().color;
     let coverage = document.artwork.coverage.get_mut(mask).unwrap();
@@ -239,8 +240,7 @@ fn mask_target_selection_keeps_nested_nonuniform_registration_and_ignores_paint_
     reindex(&mut document);
     for linked in [true, false] {
         occurrence(&mut document).mask.as_mut().unwrap().linked = linked;
-        let map = document.target_geometry(mask_id);
-        document.working.selection = Some(Selection::polygon(rect(19., 19., 22., 22.).corners().map(|p| map.map(p).unwrap()).to_vec()).unwrap());
+        document.working.selection = Some(Selection::polygon(rect(19., 19., 22., 22.).translated(layer_core::offsets::point(document.target_offset(mask_id))).corners().to_vec()).unwrap());
         assert_eq!(bounds(&renderer, &document, ContentScope::Target(mask_id)), rect(20., 20., 21., 21.), "linked={linked}");
         document.working.selection.as_mut().unwrap().inverted = true;
         assert_eq!(bounds(&renderer, &document, ContentScope::Target(mask_id)), rect(40., 20., 41., 21.), "inverted linked={linked}");
@@ -248,15 +248,13 @@ fn mask_target_selection_keeps_nested_nonuniform_registration_and_ignores_paint_
 }
 
 #[test]
-fn visible_and_all_bounds_include_placement_interpolation_beyond_source_rectangle() {
+fn visible_and_all_bounds_of_an_offset_photo_are_its_exact_pixels() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
     paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([16, 16], |_, _| 255)).into()));
-    occurrence(&mut document).translation = Point { x: 20., y: 30. };
-    occurrence(&mut document).placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
+    occurrence(&mut document).offset = [20, 30];
     let canvas = bounds(&renderer, &document, ContentScope::Canvas);
-    assert!(canvas.min.x < 20. && canvas.min.y < 30. && canvas.max.x > 52. && canvas.max.y > 62.,
-        "independent canvas query captures interpolation fringe: {canvas:?}");
+    assert_eq!(canvas, rect(20., 30., 36., 46.));
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), canvas);
     assert_eq!(bounds(&renderer, &document, ContentScope::All), canvas);
 }
@@ -315,7 +313,7 @@ fn identity_warp_preserves_linked_companion_pixels_outside_primary_tight_bounds(
             if (20..40).contains(&x) && (20..40).contains(&y) { 1. } else { 0. });
         let paint = paint_target(&document);
         let h = owner(&document);
-        let mask = attach_mask(&mut document, h, Point::default());
+        let mask = attach_mask(&mut document, h);
         document.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.;
         document.artwork.coverage.get_mut(mask).unwrap().raster = raster(RasterPlane::Mask, document.composition().color, |x, y|
             if (80..100).contains(&x) && (80..100).contains(&y) { 1. } else { 0. });
@@ -329,9 +327,8 @@ fn identity_warp_preserves_linked_companion_pixels_outside_primary_tight_bounds(
         assert_eq!(primary_bounds, if primary_mask { rect(80., 80., 100., 100.) } else { rect(20., 20., 40., 40.) });
         let companion_bounds = bounds(&renderer, &document, ContentScope::Target(companion));
         assert_eq!(companion_bounds, if primary_mask { rect(20., 20., 40., 40.) } else { rect(80., 80., 100., 100.) });
-        let to_primary = document.target_geometry(companion).as_affine().unwrap()
-            .then(document.target_geometry(primary).as_affine().unwrap().inverse().unwrap());
-        let prepared = primary_bounds.union(to_primary.bounds(companion_bounds));
+        let [from, into] = [companion, primary].map(|target| document.target_offset(target));
+        let prepared = primary_bounds.union(companion_bounds.translated(layer_core::offsets::point([from[0] - into[0], from[1] - into[1]])));
         assert_eq!(prepared, rect(20., 20., 100., 100.));
         let frame = |renderer: &mut WgpuRasterizer, reset| {
             renderer.submit(layer_render::FramePacket {
@@ -379,22 +376,18 @@ fn placed_target_bounds_match_masked_world_pixels_and_exclude_siblings() {
     let mut document = document(Default::default());
     let target = paint_target(&document);
     paint(&mut document).base = Some(layer_core::authored::PaintBase::new((source([48, 32], |_, _| 255)).into()));
-    occurrence(&mut document).placement = layer_core::LayerPlacement::from_projective(
-        layer_core::Projective::rect_to_quad(Rect::from_extent([48, 32]), [
-            Point { x: 20., y: 15. }, Point { x: 65., y: 19. },
-            Point { x: 72., y: 56. }, Point { x: 15., y: 52. },
-        ]).unwrap());
+    occurrence(&mut document).offset = [20, 15];
     let h = owner(&document);
     let group = wrap(&mut document, h, "masked parent");
-    let o = document.artwork.occurrences.get_mut(group).unwrap(); o.translation = Point { x: 7., y: 9. }; o.blend = layer_core::LayerBlend::PassThrough;
-    let mask = attach_mask(&mut document, group, Point { x: 7., y: 9. });
+    let o = document.artwork.occurrences.get_mut(group).unwrap(); o.offset = [7, 9]; o.blend = layer_core::LayerBlend::PassThrough;
+    let mask = attach_mask(&mut document, group);
     document.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.;
     document.artwork.coverage.get_mut(mask).unwrap().raster = raster(RasterPlane::Mask, document.composition().color,
         |x, y| if (10..50).contains(&x) && (10..55).contains(&y) { 0.5 } else { 0. });
     let extent = document.composition().size;
     let (sibling, SourceTarget::Paint(sibling_paint)) = crate::test_support::add_paint(&mut document.artwork, "unrelated outside target", extent) else { panic!("paint") };
     document.artwork.paint.get_mut(sibling_paint).unwrap().base = Some(layer_core::authored::PaintBase::new((source([8, 8], |_, _| 255)).into()));
-    document.artwork.occurrences.get_mut(sibling).unwrap().translation = Point { x: 106., y: 106. };
+    document.artwork.occurrences.get_mut(sibling).unwrap().offset = [106, 106];
     let mut reference = document.clone();
     let root = reference.composition().result;
     reference.artwork.stacks.get_mut(root).unwrap().entries.retain(|h| *h != sibling);
@@ -406,7 +399,7 @@ fn placed_target_bounds_match_masked_world_pixels_and_exclude_siblings() {
             bounds.union(rect(x, y, x + 1., y + 1.))
         });
     assert!(!expected.is_empty());
-    assert!(expected.max.x < 80. && expected.max.y < 80., "masked, placed target: {expected:?}");
+    assert!(expected.max.x < 80. && expected.max.y < 80., "masked, offset target: {expected:?}");
     assert_eq!(bounds(&renderer, &document, ContentScope::PlacedTarget(owner(&document))), expected);
     assert_eq!(bounds(&renderer, &document, ContentScope::Target(target)), Rect::from_extent([48, 32]),
         "raw target bounds remain local and unmasked");

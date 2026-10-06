@@ -64,7 +64,7 @@ fn selection_history_charges_shared_coverage_once_and_rejects_oversized_edits() 
     assert!(!editor.can_undo());
 }
 #[test]
-fn retained_selection_inventory_counts_binary_ownership_across_history_and_masks() {
+fn retained_selection_inventory_counts_binary_ownership_across_history_and_saved_selections() {
     let extent = [9504, 6336];
     let bytes = extent[0] as usize * extent[1] as usize;
     let selection = Selection::pixels(Arc::new(
@@ -77,41 +77,14 @@ fn retained_selection_inventory_counts_binary_ownership_across_history_and_masks
     ));
     let mut d = document(extent);
     d.working.selection = Some(selection.clone());
-    let h = d.working.occurrence.unwrap();
-    let coverage = RecordChange::insert(
-        &d.artwork.coverage,
-        CoverageSource {
-            domain: extent,
-            raster: Default::default(),
-            initial: Some(selection.clone()),
-            default_coverage: 1.,
-            operations: Default::default(),
-        },
-    );
-    let coverage_handle = coverage.handle;
     let saved = RecordChange::insert(
         &d.artwork.selections,
         SavedSelection {
             selection: selection.clone(),
         },
     );
-    let mut occurrence = d.artwork.occurrences.get(h).unwrap().clone();
-    occurrence.mask = Some(MaskUse {
-        source: coverage_handle,
-        enabled: true,
-        linked: true,
-        inverted: false,
-        translation: Point::default(),
-        placement: Projective::IDENTITY,
-    });
-    d.apply(Edit::Batch(vec![
-        Edit::Coverage(coverage),
-        Edit::SavedSelection(saved),
-        Edit::Occurrence(
-            RecordChange::replace(&d.artwork.occurrences, h, Some(occurrence)).unwrap(),
-        ),
-    ]))
-    .unwrap();
+    let saved_handle = saved.handle;
+    d.apply(Edit::SavedSelection(saved)).unwrap();
     let mut editor = Editor::new(d);
     let retained = editor.retained_tiles().metadata_bytes;
     assert!(
@@ -126,15 +99,15 @@ fn retained_selection_inventory_counts_binary_ownership_across_history_and_masks
     let s = editor
         .document()
         .artwork
-        .coverage
-        .get(coverage_handle)
+        .selections
+        .get(saved_handle)
         .unwrap()
         .clone();
     let entry = HistoryEntry::new(
-        Edit::Coverage(
+        Edit::SavedSelection(
             RecordChange::replace(
-                &editor.document().artwork.coverage,
-                coverage_handle,
+                &editor.document().artwork.selections,
+                saved_handle,
                 Some(s),
             )
             .unwrap(),
@@ -143,7 +116,7 @@ fn retained_selection_inventory_counts_binary_ownership_across_history_and_masks
     );
     assert!(
         entry.metadata_bytes < 16 * 1024,
-        "Initial mask pixels stay out of history metadata"
+        "Saved selection pixels stay out of history metadata"
     );
     let mut accounting = Accounting::default();
     assert_eq!(accounting.charge(&entry), bytes + entry.metadata_bytes);

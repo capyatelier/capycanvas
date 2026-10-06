@@ -7,7 +7,7 @@ pub enum RecordContext { Portable, Private }
 pub enum RecordRole { Object, Resource }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
-    Composition, Stack, OccurrenceLegacy, Occurrence, PaintSource, Image, ObjectLayer, ImageObject,
+    Composition, Stack, Occurrence, PaintSource, Image, ObjectLayer, ImageObject,
     CoverageSource, Effect, Selection, Guides, Output, RasterTile, SelectionCoverage, Icc, Wgsl, PhotoMetadata, Lut3d,
 }
 pub struct RecordDescriptor {
@@ -28,19 +28,18 @@ macro_rules! records {
     };
 }
 records! {
-    Composition, "capy.composition/1", Object, ["frame", "result", "color", "blend", "resolution"], [];
+    Composition, "capy.composition/2", Object, ["size", "result", "color", "blend", "resolution"], [];
     Stack, "capy.stack/1", Object, ["entries"], [];
-    OccurrenceLegacy, "capy.occurrence/2", Object, ["content", "name", "visible", "locked", "alpha_locked", "reference", "opacity", "blend", "attachment", "placement", "mask"], [];
     Occurrence, "capy.occurrence/3", Object, ["content", "name", "visible", "locked", "alpha_locked", "reference", "opacity", "blend", "attachment", "offset", "mask"], [];
     PaintSource, "capy.paint-source/2", Object, ["domain", "tiles", "material", "base", "color_mode"], [];
     Image, "capy.image/1", Object, ["extent", "interpretation", "tiles", "resolution"], [];
     ObjectLayer, "capy.object-layer/1", Object, ["children"], [];
     ImageObject, "capy.image-object/1", Object, ["image", "name", "visible", "affine", "interpolation"], [];
-    CoverageSource, "capy.coverage-source/1", Object, ["domain", "tiles", "material", "default_coverage", "initial"], [];
+    CoverageSource, "capy.coverage-source/2", Object, ["domain", "tiles", "material", "default_coverage"], [];
     Effect, "capy.effect/2", Object, ["builtin", "version", "program", "values", "spatial"], [];
     Selection, "capy.selection/1", Object, ["shape", "affine", "inverted"], [];
     Guides, "capy.guides/1", Object, ["rulers"], [];
-    Output, "capy.output/1", Object, ["source", "name", "context", "frame", "scale", "sdr", "proof", "representation"], ["representation"];
+    Output, "capy.output/2", Object, ["source", "name", "context", "sdr", "proof", "representation"], ["representation"];
     RasterTile, "capy.raster-tile/1", Resource, ["channels", "depth", "transfer", "alpha", "profile"], [];
     SelectionCoverage, "capy.selection-coverage/1", Resource, ["depth", "extent", "bounds", "chunk"], [];
     Icc, "capy.icc/1", Resource, ["decoded_bytes"], [];
@@ -93,8 +92,8 @@ mod tests {
             assert!(record.contexts.contains(&RecordContext::Portable));
             assert!(record.contexts.contains(&RecordContext::Private));
         }
-        for removed in ["capy.paint-source/1","capy.effect/1","capy.effect-definition/1"] { assert!(descriptor(removed).is_none()); }
+        for removed in ["capy.paint-source/1","capy.effect/1","capy.effect-definition/1","capy.occurrence/2","capy.composition/1","capy.output/1","capy.coverage-source/1"] { assert!(descriptor(removed).is_none()); }
         assert_eq!(descriptor("capy.image/1").unwrap().role,RecordRole::Object);
-        assert_eq!(descriptor("capy.output/1").unwrap().ignored_reference_fields,&["representation"]);
+        assert_eq!(descriptor("capy.output/2").unwrap().ignored_reference_fields,&["representation"]);
     }
 }

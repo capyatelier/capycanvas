@@ -252,7 +252,9 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     action(obj("type" to "set_layer_opacity", "opacity" to .35))
                 }
             }
-            invoke("add_layer")
+            val paintLayerName = arguments.getString("paintLayerName")
+            if (paintLayerName == null) invoke("add_layer")
+            else action(obj("type" to "select_layer", "id" to state().array("layers").objects().single { it.optString("label") == paintLayerName }.getLong("id")))
             if (colorMode != "full_color") {
                 action(obj("type" to "layer", "action" to obj("op" to "color_mode",
                     "id" to state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id"),
@@ -361,6 +363,8 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 val viewport = state().getJSONObject("camera").getJSONArray("viewport")
                 viewport.getInt(0) > viewport.getInt(1)
             }
+            waitFor { !native { Native.renderingPending(it) } }
+            stage("composition-ready")
             val initial = state()
             check(abs(initial.getJSONObject("brush").getDouble("diameter") - size) < .01)
             val camera = initial.getJSONObject("camera")
@@ -388,7 +392,10 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     val objectValue = checkNotNull(objectFixture).getJSONObject(0)
                     val original = objectValue.getJSONArray("affine")
                     val edits = JSONArray()
-                    native { Native.setImageObjectMotion(it, objectValue.getString("id"), true) }
+                    native { Native.beginObjectMotion(it, JSONArray(listOf(objectValue.getString("id"))).toString()) }
+                    val determinant = original.getDouble(0) * original.getDouble(3) - original.getDouble(1) * original.getDouble(2)
+                    val inverse = doubleArrayOf(original.getDouble(3) / determinant, -original.getDouble(1) / determinant,
+                        -original.getDouble(2) / determinant, original.getDouble(0) / determinant)
                     var due = begun
                     while (System.nanoTime() - begun < milliseconds * 1_000_000L) {
                         val delay = due - System.nanoTime()
@@ -408,15 +415,21 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                         val py = extent.getDouble(1) / 2
                         val tx = original.getDouble(4) + (original.getDouble(0) - a) * px + (original.getDouble(2) - e) * py + photoWidth * .05 * sin(angle)
                         val ty = original.getDouble(5) + (original.getDouble(1) - b) * px + (original.getDouble(3) - d) * py + photoHeight * .05 * cos(angle)
-                        val affine = JSONArray(listOf(a,b,e,d,tx,ty))
-                        val revision = native { Native.setImageObjectAffine(it, objectValue.getString("id"), affine.toString()) }
-                        host.documentChanged()
+                        val ma = a * inverse[0] + e * inverse[1]
+                        val mb = b * inverse[0] + d * inverse[1]
+                        val mc = a * inverse[2] + e * inverse[3]
+                        val md = b * inverse[2] + d * inverse[3]
+                        val delta = JSONArray(listOf(ma, mb, mc, md,
+                            tx - ma * original.getDouble(4) - mc * original.getDouble(5),
+                            ty - mb * original.getDouble(4) - md * original.getDouble(5)))
+                        val revision = native { Native.previewObjectMotion(it, delta.toString()) }
+                        host.canvasChanged()
                         edits.put(JSONArray(listOf(sent, System.nanoTime(), revision)))
                         due = maxOf(due + sampleInterval, System.nanoTime() + sampleInterval)
                     }
                     val ended = System.nanoTime()
                     val endedBoot = SystemClock.elapsedRealtimeNanos()
-                    native { Native.setImageObjectMotion(it, objectValue.getString("id"), false) }
+                    native { Native.finishObjectMotion(it, true) }
                     host.documentChanged()
                     return obj("begin_ns" to begun, "begin_boot_ns" to boot, "end_ns" to ended,
                         "end_boot_ns" to endedBoot, "injected" to delivered, "object_edits" to edits)

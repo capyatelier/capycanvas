@@ -44,6 +44,8 @@ mod storage;
 pub use events::CapyPointer;
 #[cfg(target_os = "windows")]
 mod device;
+#[cfg(any(target_os = "windows", test))]
+mod frame_pacing;
 #[cfg(target_os = "windows")]
 mod host;
 #[cfg(any(target_os = "windows", test))]

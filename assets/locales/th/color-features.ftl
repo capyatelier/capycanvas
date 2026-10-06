@@ -330,6 +330,7 @@ color-properties-source = { $width } × { $height } px · { $bits } บิต { 
 color-properties-retained-rasterized = แปลงเป็นราสเตอร์ในพิกัดเอกสารแล้ว
 color-properties-retained-icc = เก็บตัวอย่างต้นฉบับและ ICC ที่ฝังไว้
 color-properties-retained-original = เก็บตัวอย่างต้นฉบับและการตีความสีไว้
+color-properties-retained-placed = รูปภาพที่วางไว้ซึ่งใช้ตัวอย่างและการตีความสีของตัวเอง
 color-profile-select-imported = เลือกโปรไฟล์ที่นำเข้า
 color-profile-read-limit = โปรไฟล์ ICC ใหญ่กว่า 16 MiB
 color-profile-changed-storage = โปรไฟล์ในที่เก็บเปลี่ยนไป ลบหรือนำเข้าอีกครั้ง

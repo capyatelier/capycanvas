@@ -2,17 +2,19 @@
 
 [Workspace and UI](README.md) · [Open and import](open-and-import.md) · [Canvas action bar](canvas-action-bar.md)
 
-Copy, Cut and Copy Merged put pixels on the clipboard; Paste, Paste in Place and
-Paste Into add them as a new layer. Every host offers them.
+Copy, Cut and Copy Merged put pixels, or selected images, on the clipboard;
+Paste, Paste in Place and Paste Into add them as a new layer. Every host offers
+them.
 
 | Command | Default | Result |
 | --- | --- | --- |
-| **Copy** | Ctrl+C | The active layer's own pixels, before its opacity, mask, blend mode and clipping, times the selection's coverage. Without a selection, the whole layer within the canvas. |
-| **Cut** | Ctrl+X | Copy, then Clear Selected on the same layer. It needs a selection and follows Clear Selected's rules. |
+| **Copy** | Ctrl+C | The active layer's own pixels, before its opacity, mask, blend mode and clipping, times the selection's coverage. Without a selection, the whole layer within the canvas. With Move or Transform on an image layer, the selected images, which paste as images. |
+| **Copy Pixels** | none | The active layer's own pixels even where Copy would take images. |
+| **Cut** | Ctrl+X | Copy, then Clear Selected on the same layer. It needs a selection and follows Clear Selected's rules. Selected images are removed once they are on the clipboard. |
 | **Copy Merged** | Ctrl+Shift+C | The visible image, as an export would show it (visible paper included), times the coverage. |
 | **Paste** | Ctrl+V | A copy from Capy Canvas lands where it was copied when that position is in view, otherwise centred in the view, with no handles. An image from another app opens the placement handles. |
 | **Paste in Place** | Ctrl+Shift+V (Ctrl+Alt+V in the GIMP keymap) | Always at the copied position, with no handles. An image from another app is centred in the view at full size. |
-| **Paste Into** | none (Ctrl+Alt+Shift+V in the Photoshop keymap) | Paste in Place, then a mask from the selection, which the mask consumes. It needs a selection. |
+| **Paste Into** | none (Ctrl+Alt+Shift+V in the Photoshop keymap) | A new image layer with a mask from the selection, which the mask consumes. The pasted pixels or images are centred on the selection's bounds, on whole pixels. It needs a selection. |
 
 - **One layer, one step:** every paste adds one layer above the active layer's
   clipping stack and is one undo step; undoing Paste Into restores the selection.
@@ -21,10 +23,13 @@ Paste Into add them as a new layer. Every host offers them.
 - **Refusals:** Copy is unavailable on the paper, groups, effect and Selection
   Layers, in Quick Mask and while editing a mask, and when the selection misses
   the canvas; Cut also refuses locked and alpha-locked layers. Each gives its reason.
+  Cutting or clearing pixels of an image layer offers Add Mask (or Edit Mask), New
+  Paint Layer and Rasterize Layer instead.
 - **Text fields keep their keys:** Ctrl+C, Ctrl+X and Ctrl+V in a focused text
   field copy and paste text, not pixels.
-- **Edit menu and bar:** Edit lists Cut, Copy, Copy Merged, Paste, Paste in
-  Place and Paste Into. The selection bar's Copy ▾ holds Copy, Copy Merged and Cut.
+- **Edit menu and bar:** Edit lists Cut, Copy, Copy Pixels, Copy Merged, Paste,
+  Paste in Place and Paste Into. The selection bar's Copy ▾ holds Copy, Copy Merged
+  and Cut; with a selection tool, Copy already takes pixels.
 
 ## The clip
 
@@ -48,7 +53,7 @@ from another app.
 
 - **Colour:** in a drawing with the same colour space and depth, the pasted layer
   holds document pixels; otherwise it keeps the clip as an original image with its
-  explicit profile, converted like a placed photo.
+  explicit profile, converted like an opened photo.
 - **Cut** captures, then erases once the host reports the copy written. If the
   drawing changed meanwhile, the pixels stay and a notice says so.
 

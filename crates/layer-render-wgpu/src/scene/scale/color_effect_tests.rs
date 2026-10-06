@@ -31,7 +31,7 @@ fn p21_hue_nondefault_ranges_and_colorize_meet_existing_reduced_graph_quality_or
         if state == 3 { adjustment.set("colorize", EffectValue::Toggle(true)).unwrap(); }
         let resolution = adjustment.program.resolution;
         let handle = effect_occurrence(&mut doc, adjustment, "Hue qualification");
-        coverage_mask(&mut doc, handle, Default::default(), Some(layer_core::Selection::polygon(vec![
+        coverage_mask(&mut doc, handle, [0, 0], Some(layer_core::Selection::polygon(vec![
             layer_core::Point { x: 573., y: 237. }, layer_core::Point { x: 1001., y: 257. },
             layer_core::Point { x: 987., y: 507. }, layer_core::Point { x: 587., y: 479. },
         ]).unwrap()));
@@ -51,7 +51,7 @@ fn p21_hue_nondefault_ranges_and_colorize_meet_existing_reduced_graph_quality_or
             assert!(cache.evaluation == if resolution == EffectResolution::Display { Evaluation::Display } else { Evaluation::Native });
             let error = quality(&display_pixels(&window), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
             assert!(error[0] < 0.002 && error[1] < 0.015, "state={state} level={level} {resolution:?} error={error:?}");
-            assert_eq!(window.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap(), "state={state} level={level}");
+            crate::test_support::assert_same_canonical(&mut window, &mut exact);
             let updates = window.scene.as_ref().unwrap().scale_sources.entries[&paint].updates;
             window.submit(FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
             assert_eq!(updates, window.scene.as_ref().unwrap().scale_sources.entries[&paint].updates);
@@ -126,7 +126,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                 if matches!(name, "selective_color" | "channel_mixer") { mixing_state(&mut effect, name, state); }
                 let handle = effect_occurrence(&mut doc, effect, "Display candidate");
                 if source == 0 {
-                    coverage_mask(&mut doc, handle, Default::default(), Some(layer_core::Selection::polygon(vec![
+                    coverage_mask(&mut doc, handle, [0, 0], Some(layer_core::Selection::polygon(vec![
                         layer_core::Point { x: 573., y: 237. }, layer_core::Point { x: 1001., y: 257. },
                         layer_core::Point { x: 987., y: 507. }, layer_core::Point { x: 587., y: 479. },
                     ]).unwrap()));
@@ -147,7 +147,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                     for i in 0..2 { worst[i] = worst[i].max(error[i]); }
                     println!("{name} {space:?} source={source} state={state} level={level} error={error:?}");
                     assert!(error.iter().all(|v| v.is_finite()));
-                    assert_eq!(window.readback_srgb_rgba8().unwrap(), exact.readback_srgb_rgba8().unwrap());
+                    crate::test_support::assert_same_canonical(&mut window, &mut exact);
                 }
             }
         }
@@ -268,7 +268,7 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
     for (state, threshold) in [0.31, 0.47, 0.63, 0.38].into_iter().enumerate() {
         set_effect_value(&mut doc, effect, "threshold", EffectValue::Number(threshold));
         if state == 2 {
-            coverage_mask(&mut doc, effect, layer_core::Point { x: 11., y: -7. }, Some(layer_core::Selection::polygon(vec![
+            coverage_mask(&mut doc, effect, [11, -7], Some(layer_core::Selection::polygon(vec![
                 layer_core::Point { x: 109., y: 37. }, layer_core::Point { x: (extent[0]-14) as f32, y: 91. },
                 layer_core::Point { x: (extent[0]-206) as f32, y: 767. }, layer_core::Point { x: 7., y: 599. },
             ]).unwrap()));

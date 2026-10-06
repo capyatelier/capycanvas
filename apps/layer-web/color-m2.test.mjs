@@ -1,6 +1,6 @@
 import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
-import {paintBaseImage,authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples} from './package-fixture.test.mjs';
+import {paintBaseImage,authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples,packageObjects,imageIdentity,imageContent} from './package-fixture.test.mjs';
 const rasterResources=m=>packageResources(m,'capy.raster-tile/1').map(resource=>resourceIdentity(m,{ref:resource.id}));
 const compositionColor=m=>({space:'srgb',depth:'u8',...packageComposition(m).data.color});
 const wireColor=c=>({space:{Srgb:'srgb',DisplayP3:'display_p3',AdobeRgb:'adobe_rgb',ProPhoto:'pro_photo'}[c.space],depth:c.depth.toLowerCase()});
@@ -80,7 +80,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'DisplayP3',depth:'U8'});
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
   const reduced=await readPackage(evaluate,'sdrFiles.get("resized.capy")');
-  assert.deepEqual(packageComposition(reduced).data.frame.size,[257,129]);assert.ok(packageComposition(reduced).data.resolution);
+  assert.deepEqual(packageComposition(reduced).data.size,[257,129]);assert.ok(packageComposition(reduced).data.resolution);
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}];`);
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   await exported('Jpeg','0','U8');
@@ -177,13 +177,17 @@ export async function checkSourceImports({call,evaluate}) {
   assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),await evaluate('JSON.parse(sdrPlaceFile).epoch'));
   assert.deepEqual(await evaluate('layerApp.state().document_file.location'),await evaluate('JSON.parse(sdrPlaceFile).location'));
   await wait('layerApp.state().commands.find(c=>c.id==="apply_transform")?.enabled');await invoke('apply_transform');await idle();
-  const placed=await save();assert.deepEqual(compositionColor(placed),{space:'display_p3',depth:'u8'});assert.deepEqual(sourceContent(placed),sourceContent(original));
-  await invoke('undo');await idle();assert.deepEqual(sourceIdentity(await save()),sourceIdentity(before));
-  await invoke('redo');await idle();assert.deepEqual(sourceIdentity(await save()),sourceIdentity(placed));
-  await invoke('document_properties');await wait(`document.querySelector('dialog[open]')?.textContent.includes('embedded ICC retained')`);
-  const details=await evaluate('document.querySelector("dialog[open]").textContent');assert.match(details,/Display P3/);assert.match(details,/16-bit RGB/);await click('Done');await idle();
+  const placed=await save();assert.deepEqual(compositionColor(placed),{space:'display_p3',depth:'u8'});
+  assert.equal(sourceContent(original).length,1,'Open Image makes paint with a referenced base');
+  assert.deepEqual(sourceContent(placed),sourceContent(before),'Placing an image adds no paint base');
+  assert.equal(packageObjects(placed,'capy.image-object/1').length,1,'Placing an image makes an image object');
+  assert.deepEqual(imageContent(placed),sourceContent(original),'The placed image keeps every source sample and its ICC interpretation');
+  await invoke('undo');await idle();assert.deepEqual(imageIdentity(await save()),imageIdentity(before));
+  await invoke('redo');await idle();assert.deepEqual(imageIdentity(await save()),imageIdentity(placed));
+  await invoke('document_properties');await wait(`document.querySelector('dialog[open]')?.textContent.includes('Placed image')`);
+  const details=await evaluate('document.querySelector("dialog[open]").textContent');assert.match(details,/Display P3/);assert.match(details,/16-bit RGB/);assert.match(details,/Source profile: ProPhoto RGB/);await click('Done');await idle();
   await evaluate(`window.sdrPlacedMaster=sdrFiles.get(layerApp.state().document_file.location.name).slice();window.showOpenFilePicker=async()=>[{name:'placed.capy',async getFile(){return new File([sdrPlacedMaster],'placed.capy')}}];`);
-  await invoke('open_document');await idle();assert.deepEqual(sourceIdentity(await save()),sourceIdentity(placed));
+  await invoke('open_document');await idle();assert.deepEqual(imageIdentity(await save()),imageIdentity(placed));
   // Chromium custom image formats preserve the original bytes. Ordinary image/png
   // may have been sanitized by the clipboard producer/browser before we read it.
   const focus=await evaluate('({x:innerWidth/2,y:3})');
@@ -195,10 +199,12 @@ export async function checkSourceImports({call,evaluate}) {
   const paste=await call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'invoke',command:'paste_image'})",userGesture:true});assert.equal(paste.exceptionDetails,undefined);
   await idle();assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   await wait('layerApp.state().commands.find(c=>c.id==="apply_transform")?.enabled||!!layerApp.state().host_error');assert.equal(await evaluate('layerApp.state().host_error??null'),null);await invoke('apply_transform');await idle();
-  const copy=await save();assert.equal(packageOccurrences(copy).length,packageOccurrences(placed).length+1);
-  assert.deepEqual(compositionColor(copy),compositionColor(placed));assert.deepEqual(sourceContent(copy).map(o=>o.interpretation.profile),Array(sourceContent(copy).length).fill(sourceContent(original)[0].interpretation.profile));
-  for(const image of sourceContent(copy)){assert.equal(image.interpretation.depth,'u16');assert.deepEqual(image.tiles,sourceContent(original)[0].tiles);}
-  console.log('Layer-panel import and real custom-format clipboard paste preserve every ProPhoto16 sample/ICC in a P3 U8 master; undo/redo, reopen and document details passed');
+  const copy=await save();assert.equal(packageObjects(copy,'capy.image-object/1').length,packageObjects(placed,'capy.image-object/1').length+1,'External paste makes an image object');
+  assert.deepEqual(sourceContent(copy),sourceContent(placed),'External paste adds no paint base');
+  assert.deepEqual(compositionColor(copy),compositionColor(placed));assert.ok(imageContent(copy).length>=1);
+  assert.deepEqual(imageContent(copy).map(o=>o.interpretation.profile),Array(imageContent(copy).length).fill(sourceContent(original)[0].interpretation.profile));
+  for(const image of imageContent(copy)){assert.equal(image.interpretation.depth,'u16');assert.deepEqual(image.tiles,sourceContent(original)[0].tiles);}
+  console.log('Layer-panel import and real custom-format clipboard paste make image objects that preserve every ProPhoto16 sample/ICC in a P3 U8 master; undo/redo, reopen and document details passed');
 }
 
 export async function checkSourceEdits({call,evaluate,settle}) {
@@ -214,13 +220,14 @@ export async function checkSourceEdits({call,evaluate,settle}) {
     await click(!apply?'Cancel':command==='rasterize_source'?'Rasterize':adds?'Add Corrected Source':'Apply Profile');await idle();
     assert.equal(await evaluate('layerApp.state().host_error??null'),null);return adds;
   }
-  const before=await save();await change('repair_source_profile','2',false);assert.deepEqual(backing(await save()),backing(before));
+  await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}]`);await invoke('open_document');await idle();
+  const before=await save();assert.ok(await source(before),'Open Image makes paint with a referenced base');await change('repair_source_profile','2',false);assert.deepEqual(backing(await save()),backing(before));
   assert.equal(await change('repair_source_profile','2'),false);const repaired=await save();
   assert.deepEqual(rasterResources(repaired),rasterResources(before));assert.deepEqual((await source(repaired)).interpretation.profile,{builtin:'adobe_rgb'});
   await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(before));
   await invoke('redo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
   await change('rasterize_source',null);const rasterized=await save();
-  assert.equal(packageObject(rasterized,(await activeOccurrence(evaluate,rasterized)).data.content.paint).data.base.policy,'working_pixels');assert.equal((await source(rasterized)).interpretation.depth,'u8');assert.deepEqual((await source(rasterized)).interpretation.profile,{builtin:'display_p3'});assert.deepEqual((await source(rasterized)).extent,(await source(repaired)).extent);
+  assert.equal(packageObject(rasterized,(await activeOccurrence(evaluate,rasterized)).data.content.paint).data.base.policy,'working_pixels');assert.equal((await source(rasterized)).interpretation.depth,'u16');assert.deepEqual((await source(rasterized)).interpretation.profile,{builtin:'pro_photo'});assert.deepEqual((await source(rasterized)).extent,(await source(repaired)).extent);
   await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
   await invoke('fit_canvas');await invoke('pen');await settle();
   const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
@@ -331,7 +338,7 @@ export async function checkFlattenedCopy({evaluate}) {
   await invoke('save_document_as');await idle();
   const master=await readPackage(evaluate,`sdrFiles.get(${JSON.stringify(saved.file.location.name)})`);
   assert.deepEqual(compositionColor(master),wireColor(saved.color));
-  assert.deepEqual(packageComposition(copied).data.frame.size,packageComposition(master).data.frame.size);
+  assert.deepEqual(packageComposition(copied).data.size,packageComposition(master).data.size);
   assert.deepEqual(packageComposition(copied).data.resolution,packageComposition(master).data.resolution);
   await evaluate(`window.sdrCopy=sdrFiles.get(${JSON.stringify(copyName)});window.showOpenFilePicker=async()=>[{name:'converted.capy',async getFile(){return new File([sdrCopy],'converted.capy')}}]`);
   await invoke('open_document');await idle();await invoke('save_document_as');await idle();

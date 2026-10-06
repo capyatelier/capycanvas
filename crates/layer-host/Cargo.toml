@@ -16,4 +16,5 @@ serde_json = { version = "1", features = ["raw_value"] }
 wgpu.workspace = true
 
 [dev-dependencies]
+layer-core = { path = "../layer-core", features = ["test-support"] }
 pollster = "0.4"

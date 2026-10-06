@@ -76,13 +76,13 @@ struct ZoomReadout:std::enable_shared_from_this<ZoomReadout>{
         zoom=nextZoom;rotation=nextRotation;flipped=nextFlipped;zoomLocked=nextZoomLocked;rotationLocked=nextRotationLocked;
         if(!open)return;
         if(moved)for(auto const& bind:fields)bind();
-        if(menu)query();
+        if(menu)query(false);
     }
     void toggle(){
         if(open){popup.Hide();return;}
         previous=FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>();
         for(auto const& bind:fields)bind();
-        query();
+        query(true);
     }
     bool within(UIElement const& element)const{
         for(DependencyObject node=element;node;node=VisualTreeHelper::GetParent(node))if(node==body)return true;
@@ -91,10 +91,10 @@ struct ZoomReadout:std::enable_shared_from_this<ZoomReadout>{
     void restoreFocus(){
         if(auto focus=previous.get();focus&&focus.IsLoaded())focus.Focus(FocusState::Programmatic);
     }
-    void query(){
+    void query(bool show){
         auto serial=++request;auto weak=weak_from_this();
-        QueryWorkspace(data->query,O({{L"type",S(L"zoom_menu")}}),[weak,serial](J reply){
-            auto self=weak.lock();if(!self||serial!=self->request)return;
+        QueryWorkspace(data->query,O({{L"type",S(L"zoom_menu")}}),[weak,serial,show](J reply){
+            auto self=weak.lock();if(!self||serial!=self->request||(!show&&!self->open))return;
             self->render(object(reply,L"result"));
             if(!self->open){
                 if(auto xaml=self->root.XamlRoot())self->scroller.MaxHeight(std::max(0.,double(xaml.Size().Height)-12));

@@ -334,6 +334,7 @@ color-properties-source = { $width } × { $height } px · { $bits }ビット { $
 color-properties-retained-rasterized = ドキュメントの座標でラスタライズされています。
 color-properties-retained-icc = 元の画素値と埋め込みICCを保持しています。
 color-properties-retained-original = 元の画素値と色の解釈を保持しています。
+color-properties-retained-placed = 独自のサンプルと色の解釈を持つ配置画像です。
 
 
 color-profile-select-imported = 読み込んだプロファイルを選択してください。

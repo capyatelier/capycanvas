@@ -84,15 +84,14 @@ fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls(
     }
     assert_eq!(builtin_ids.len(),52);
     let objects=manifest["objects"].as_array().unwrap();
-    let occurrence=|name:&str|&objects.iter().find(|r|matches!(r["type"].as_str(),Some("capy.occurrence/2"|"capy.occurrence/3")) && r["data"]["name"]==name).unwrap()["data"];
+    let occurrence=|name:&str|&objects.iter().find(|r|r["type"]=="capy.occurrence/3" && r["data"]["name"]==name).unwrap()["data"];
     assert_eq!(objects.iter().filter_map(|r|r["data"]["blend"].as_str()).collect::<BTreeSet<_>>().len(),24);
     assert_eq!([&occurrence("Original source")["attachment"],&occurrence("color_lookup")["attachment"],&occurrence("Fills")["blend"]],["clip","effect","pass_through"]);
-    let placement=&occurrence("Independent copy")["placement"];
-    assert_eq!([placement["interpolation"].as_str(),placement["mesh"]["frame"].as_array().map(|_|"mesh")],[Some("bicubic"),Some("mesh")]);
+    assert_eq!([&occurrence("Independent copy")["offset"],&occurrence("Original source")["offset"],&occurrence("Original source")["mask"]["offset"]],[&json!(["3","4"]),&json!(["1","0"]),&json!(["2","3"])]);
     let kinds=objects.iter().filter(|r|r["type"]=="capy.guides/1").flat_map(|r|r["data"]["rulers"].as_array().unwrap()).map(|r|r["geometry"]["kind"].as_str().unwrap()).collect::<BTreeSet<_>>();
     assert_eq!(kinds,["parallel","radial","straight"].into());
     assert!(objects.iter().any(|r|r["data"]["shape"]["contours"].is_array() && r["data"]["inverted"]==true));
-    let output=&objects.iter().find(|r|r["type"]=="capy.output/1").unwrap()["data"];
+    let output=&objects.iter().find(|r|r["type"]=="capy.output/2").unwrap()["data"];
     assert_eq!([&output["proof"]["intent"],&output["sdr"]["balance"]],[&json!("perceptual"),&json!(-0.25)]);
     let curves=artwork.effects.iter().map(|(_,_,e)|crate::EffectView::new(&e.program,&e.values)).find(|e|e.program.id.as_ref()=="curves").unwrap();
     assert_eq!(curves.choice("domain"),Some("log_hdr"));

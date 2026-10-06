@@ -17,7 +17,7 @@ fn native_alpha_signed_capture_matches_native_reference_without_reducing_input()
         let source = crate::test_support::depth_source([64, 48], SampleDepth::F32, color.space, 1 << 20,
             |x, y| { let gray = if (x + y) % 3 == 0 {0.8} else {0.02}; [gray, gray, gray, alpha] });
         let paint = crate::tests::native_effects::insert_source(&mut doc, "negative source", source);
-        doc.artwork.occurrences.get_mut(paint).unwrap().translation = layer_core::Point { x: -24., y: -16. };
+        doc.artwork.occurrences.get_mut(paint).unwrap().offset = [-24, -16];
         crate::tests::native_effects::refresh(&mut doc);
         let bounds = DocRect { min: [-16, -8], max: [48, 24] };
         let size = bounds.size().unwrap();
@@ -74,7 +74,7 @@ fn native_alpha_on_both_sides_of_spatial_effect_preserves_cross_canvas_support()
                 crate::tests::native_effects::insert_effect(&mut doc, blur);
             }
             let paint = crate::tests::native_effects::insert_source(&mut doc, "cross canvas source", source.clone());
-            doc.artwork.occurrences.get_mut(paint).unwrap().translation = translation;
+            doc.artwork.occurrences.get_mut(paint).unwrap().offset = translation;
             crate::tests::native_effects::refresh(&mut doc); doc
         };
         let evaluate = |doc: &Document| {
@@ -84,11 +84,39 @@ fn native_alpha_on_both_sides_of_spatial_effect_preserves_cross_canvas_support()
             assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 2);
             (r.scale_display.as_ref().unwrap().plan.size, display_pixels(&r))
         };
-        let small = make([32, 32], layer_core::Point { x: -32., y: 0. });
-        let large = make([96, 64], layer_core::Point { x: 0., y: 16. });
+        let small = make([32, 32], [-32, 0]);
+        let large = make([96, 64], [0, 16]);
         let (size, actual) = evaluate(&small); let (larger, reference) = evaluate(&large);
         let expected: Vec<_> = (0..size[1]).flat_map(|y| (0..size[0]).map(move |x| ((y + 4) * larger[0] + x + 8) as usize)).map(|i| reference[i]).collect();
         assert!(actual.iter().any(|pixel| pixel[3] > 0.01), "{name} before{before} must retain off-canvas input");
         assert!(crate::test_support::max_error(&actual, &expected) < 3e-5, "{name} before{before} signed support differs from larger reference");
     }}
+}
+
+#[test]
+fn native_alpha_capture_skips_pages_outside_its_destination_window() {
+    let extent = [512, 512];
+    let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 };
+    for name in ["brightness_to_opacity", "threshold"] {
+        let mut doc = crate::tests::native_effects::empty_document(extent, color);
+        let handle = crate::tests::native_effects::insert_effect(&mut doc, EffectInstance::new(crate::tests::fixture(name).program()));
+        let source = crate::test_support::depth_source(extent, SampleDepth::F32, color.space, 1 << 20,
+            |x, y| { let gray = if (x + y) % 3 == 0 {0.8} else {0.02}; [gray, gray, gray, 0.6] });
+        crate::tests::native_effects::insert_source(&mut doc, "page source", source);
+        crate::tests::native_effects::refresh(&mut doc);
+        let plan = display_mips::Plan::window(extent, 2, PixelRect::new(0, 0, 256, 256));
+        let capture = |regions: &[DocRect]| {
+            let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+            let mut scene = Scene::new(&r);
+            let destination = Image::new(&r, plan, "windowed native alpha reduction");
+            let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+            super::super::effects::capture_native_effect(&mut scene, &mut r, packet(doc.scene(), extent), handle,
+                &Target { view: destination.view.clone(), slot: None, plan }, regions, None, &mut encoder).unwrap();
+            r.uploads.finish(&encoder); encoder.submit(&r.queue);
+            pixels(&r, &destination.texture)
+        };
+        let window = capture(&[DocRect::from(plan.bounds)]);
+        assert_eq!(capture(&[DocRect::from(PixelRect::full(extent))]), window,
+            "{name}: pages beyond the destination window queue no work and leave its pixels unchanged");
+    }
 }

@@ -83,22 +83,25 @@ not cloned onto independently duplicated objects.
 The current registry is shared by portable and private contexts. Manifest
 classification, topology, record adapters and history descriptors consume its
 type definitions and contextual restrictions.
+Superseded pre-release types (`capy.occurrence/2`, `capy.composition/1`,
+`capy.coverage-source/1`, `capy.output/1`, `capy.paint-source/1`, `capy.effect/1`
+and `capy.effect-definition/1`) are absent from it, so a package using them opens
+as unsupported and is preserved; there is no conversion reader.
 
 | Type | Owned data and wire relationship |
 | --- | --- |
-| `capy.composition/1` | `frame` with required pixel `size`, optional `origin`; `resolution`, `color`, `blend`, and required `result` endpoint. |
+| `capy.composition/2` | Required pixel `size:[width,height]` and `result` endpoint; optional `resolution`, `color`, `blend`. The frame has no saved origin. |
 | `capy.stack/1` | `entries`, an ordered array of occurrence references, front to back. |
-| `capy.occurrence/3` | Required `content`; layer properties, signed decimal-string integer `offset`, and optional mask with integer `offset`, relative to its owner when linked. |
-| `capy.occurrence/2` | Required `content`; `name`, `visible`, `opacity`, `blend`, `locked`, `alpha_locked`, `reference`, `attachment`, `placement`, and optional `mask`. |
+| `capy.occurrence/3` | Required `content`; `name`, `visible`, `opacity`, `blend`, `locked`, `alpha_locked`, `reference`, `attachment`, a signed decimal-string integer `offset` for paint, object and stack content, and an optional `mask` with its own integer `offset`, relative to its owner when linked. |
 | `capy.paint-source/2` | Required pixel `domain`; authored `color_mode` (`full_color`, `grayscale`, `two_tone`, default `full_color`), optional `base` image binding, sparse `tiles`, `material`. The binding owns its base offset and color policy. |
 | `capy.image/1` | Immutable sample `extent`, `interpretation`, complete `tiles`; optional physical `resolution`. |
 | `capy.object-layer/1` | Required ordered `children` drawable references, front to back; an empty list is valid. |
 | `capy.image-object/1` | Required immutable `image` reference; optional `name`, `visible`, F64 `affine`, `interpolation`. |
-| `capy.coverage-source/1` | Required pixel `domain`; `initial`, `default_coverage`, sparse `tiles`. Initial contour/pixel selection remains authoritative where supplied. |
+| `capy.coverage-source/2` | Required pixel `domain`; `default_coverage` and sparse `tiles`. A mask made from a selection stores that selection's coverage in tiles. |
 | `capy.effect/2` | Required inline `builtin`, parameter-data `version` and every keyed `values` entry. Effects consuming authored coordinates require F64 `spatial`. |
-| `capy.selection/1` | Required `shape`; placement/inversion. Pixels use coverage resources; contours keep their geometry. |
+| `capy.selection/1` | Required `shape`; optional `affine` and `inverted`. Pixels use coverage resources; contours keep their geometry. |
 | `capy.guides/1` | Authored ruler geometry and reference markings. |
-| `capy.output/1` | Required `source` composition endpoint; `name`, `context`, framing, SDR rendition, proof intent and disposable optional `representation`; unfamiliar caches are ignored. |
+| `capy.output/2` | Required `source` composition endpoint; `name`, `context`, SDR rendition, proof intent and disposable optional `representation`; unfamiliar caches are ignored. Export requests own delivery size. |
 
 `content` is one of `{"paint":{"ref":"…"}}`,
 `{"objects":{"ref":"…"}}`, `{"stack":{"ref":"…"}}`, `{"effect":{"ref":"…"}}`,
@@ -107,11 +110,10 @@ Exactly one alternative appears. Paper is an ordinary Solid Color effect
 occurrence, with its color in the effect values. Files using the former inline
 Paper alternative fail admission. A mask is inline
 `{"source":{"ref":"…"},…}` with slot key `mask` fixed by the occurrence
-schema, and optional `enabled`, `linked`, `inverted` and `offset` values in `/3`.
-The temporary `/2` adapter retains general paint placement and mask placement.
-A writer selects `/3` only for exact integer offsets, identity owner placement and
-exactly representable mask mapping; it never rounds to choose a version. Both
-versions retain the same runtime occurrence identity through history.
+schema, and optional `enabled`, `linked`, `inverted` and `offset` values.
+A linked mask's document origin is the parent offset plus the owner offset plus
+the mask offset; an unlinked mask omits the owner offset. Effect and selection
+occurrences carry no `offset`, and `alpha_locked` applies only to paint.
 The coverage source has its own paint-target identity.
 
 Paint sources write `color_mode` even at its default. Full color paint tiles use
@@ -122,7 +124,7 @@ coverage; its color threshold is encoded gray 0.5 for integer documents and
 linear gray 0.5 for floating documents, and its alpha threshold is 0.5.
 Layer filters operate on expanded RGB and may introduce color without changing
 the paint source's mode. A conversion preserves retained original image bytes;
-Revert to Original restores Full color.
+Discard Paint Edits keeps the layer's color mode.
 
 Writers omit optional fields equal to their frozen wire defaults. Required
 fields have no omission default. A changed UI default does not change the wire
@@ -140,8 +142,6 @@ The common frozen defaults are:
 | Occurrence `attachment` | `none`; alternatives are `clip` and `effect`. |
 | Composition `blend` | `linear`. |
 | Composition `color` | Built-in `srgb`, unsigned `u8`. |
-| `origin`, placement translation | `[0,0]` in the owner's declared pixel domain. |
-| Retained placement | Identity projective transform, no mesh, bilinear interpolation. |
 | Physical `resolution` | Unspecified; it is not silently 72 or 300 pixels/inch. |
 | Paint base `offset` | U32 `[0,0]`. |
 | Occurrence/mask `offset` | Canonical signed decimal strings `["0","0"]`. |
@@ -149,7 +149,7 @@ The common frozen defaults are:
 | Image-object `affine`, `interpolation` | Identity F64 affine; `linear`, with `nearest` as the other implemented kernel. |
 | Image `profile_assumed` | False. |
 | Paint overrides/material tiles | No override at absent coordinates; an imported base is revealed. |
-| Coverage `default_coverage` | One; supplied `initial` coverage takes precedence before painted overrides. |
+| Coverage `default_coverage` | One; stored tiles take precedence. |
 | Effect parameter value | Required for every parameter, including a value equal to the insertion default. |
 | Custom effect alpha/space/time | `preserve`, `linear`, false. |
 | Output context | Animated effect opening phase zero. |
@@ -165,7 +165,8 @@ range or combination a later version may allow, is unsupported.
 Reader, editor admission and finalized capture publication share metadata and
 record admission. Metadata is bounded to 64 MiB, fewer than 128 nested JSON
 containers and 4,194,304 traversal nodes; evaluation graphs admit 65,536 objects,
-262,144 evaluation edges and depth 128. Resource bindings, including repeated
+262,144 evaluation edges, depth 128 and 4,096 image objects per image layer.
+Layer and image object names are at most 4,096 bytes. Resource bindings, including repeated
 tile references, do not consume evaluation edges. There are at most 262,144
 resource records. Project admission also bounds layers, dimensions, retained
 source bytes and raster bytes using the same units on reopen. Shared source
@@ -303,13 +304,11 @@ objects have closed known field sets; unknown additions follow preservation poli
 | Value | Grammar |
 | --- | --- |
 | Pixel point/size | Two-element `[x,y]`; existing point components finite F32, sizes positive U32. |
-| Source `domain` | `{"size":[width,height]}`; local origin is zero. Composition frame additionally permits `origin:[x,y]`. |
+| Source `domain` | `{"size":[width,height]}`; local origin is zero. |
 | Working `color` | `{"space":"srgb","depth":"u8"}` with either default-valued field omitted. Spaces are `srgb`, `display_p3`, `adobe_rgb`, `pro_photo`. |
 | Portable color | `{"rgba":[r,g,b,a],"space":"srgb"}` with transfer-encoded RGB, or `{"linear_rgba":[r,g,b,a],"space":"srgb"}` with linear RGB in the space's primaries; exactly one of the two arrays. `space` defaults to `srgb`. Writers use `linear_rgba` only when encoding would lose the authored value. |
 | Physical resolution | `{"unit":"inch","density":[[x_n,x_d],[y_n,y_d]]}`; all values required and positive U32; unit also permits `centimetre`, `metre`. |
 | Profile | `{"builtin":"srgb"}` or `{"resource":{"ref":"…"}}`; exactly one alternative. |
-| Placement | Optional `translation:[x,y]`, row-major `projective:[m00,m01,m02,m10,m11,m12,m20,m21,m22]`, `mesh`, `interpolation`; maps local geometry, then translates. Interpolation is `nearest`, `linear`, `bicubic`, `lanczos`, default `linear`. |
-| Cubic mesh | Required `frame:[a,b,c,d,tx,ty]`, `breakpoints:[[x…],[y…]]`, `net:[[x,y]…]`; affine frame maps the unit square to source pixels, breakpoints retain the current cubic patch partition, net is row-major destination control points. GPU tessellation is absent. |
 | Sparse tile entry | `{"coordinate":[x,y],"plane":"color","resource":{"ref":"…"}}`; all fields required, coordinate U32 in source-local 256-pixel tiles, no repeated coordinate/plane pair. |
 | Immutable image | Required `extent`, `interpretation`, `tiles`; optional `resolution`. Interpretation has required `channels`, `depth`, `profile` and optional `profile_assumed`. Tiles have coordinate/resource only. |
 | Paint `base` | Required `image:{ref:…}`; optional U32 `offset:[x,y]` and `policy:source_profile` or `working_pixels`. The image rectangle must fit the zero-origin paint domain. |
@@ -317,21 +316,22 @@ objects have closed known field sets; unknown additions follow preservation poli
 | Effect spatial reference | Required `mapping:[a,b,c,d,tx,ty]` of finite F64 values and positive `extent:[width,height]`; invertible mapping from authored reference to composition coordinates. |
 | Material | `{"watercolor":{"wet_edge":number,"burnt_edge":number,"edge_width":number}}`; all three settings required when watercolor exists; finite wet/burnt edges in `[0,1]`, positive edge width in source pixels, currently admitted in `[1,16]`. |
 | Selection shape | `{"contours":[[[x,y]…]…]}` using even/odd interiors, or `{"pixels":{"extent":[w,h],"bounds":[x0,y0,x1,y1],"depth":"u4","chunks":[{"ref":"…"}…]}}`; exactly one alternative. U8 coverage uses depth `u8`. |
-| Selection placement | Optional `affine:[a,b,c,d,tx,ty]` and `inverted`; identity/false when absent. Coverage-source `initial` uses the same shape/placement values inline. |
+| Selection geometry | Optional `affine:[a,b,c,d,tx,ty]` and `inverted`; identity/false when absent. |
 | Guides | `rulers` array with required stable portable `id` and `geometry`; geometry is `{kind:"straight"|"parallel",start:[x,y],end:[x,y]}` or `{kind:"radial",center:[x,y]}`. Ruler IDs are type-owned local subelement IDs. |
-| Output framing | Optional `frame:{origin:[x,y],size:[w,h]}` and `scale:[x,y]`; absence inherits composition frame and scale `[1,1]`. |
 | SDR rendition | `sdr` with optional `exposure`, `contrast`, `headroom`, `highlight_color`, `balance`; defaults respectively `0`, `1`, `2.3004484`, `0.3`, `0`. |
 | Proof intent | `proof` with required `name`, `profile`, optional `intent`, `black_point_compensation`, `simulate_paper`, `simulate_black_ink`; defaults relative colorimetric, true, false, true. |
 
 Affine `[a,b,c,d,tx,ty]` means `x'=a*x+c*y+tx`, `y'=b*x+d*y+ty`.
-Matrices/meshes preserve current invertibility and bounded mapping validation.
-Occurrence `/3` mask offsets are owner-relative when linked and parent-relative
-when unlinked. Its exact conversion checks the actual `/2` parent-space map.
+Affine matrices preserve invertibility and bounded mapping validation.
+Occurrence and mask `offset` values are canonical signed 64-bit decimal strings:
+no sign on positive values, no `-0` and no leading zeros. Malformed spellings and
+64-bit overflow are invalid; well-formed values beyond the editor's integer
+admission are unsupported.
 Saved-selection overlay visibility, color and opacity belong to working state
 and are absent from this grammar. Selection occurrences fix `visible` to true,
 `opacity` to one, `blend` to normal, and `reference` and
 `alpha_locked` to false, with no mask or attachment; these defaults are omitted.
-Names, placement and edit locks remain authored. Blend and
+Names and edit locks remain authored. Blend and
 rendering-intent names use the existing semantic names in lower snake case,
 never Rust discriminants or GPU blend codes. Blend names are `normal`,
 `multiply`, `screen`, `add`, `overlay`, `soft_light`, `color`, `darken`, `lighten`,
@@ -340,8 +340,8 @@ never Rust discriminants or GPU blend codes. Blend names are `normal`,
 `divide`, `hue`, `saturation`, `luminosity`, `pass_through`. Only stack occurrences
 admit pass-through. Attachment relationships resolve from stack order at admission:
 `clip` content shares an eligible unclipped base, while `effect` adjustments belong
-to the eligible content below their contiguous chain. Direct targets are paint or
-isolated groups. Selection rows do not affect clipping bases and cannot split an
+to the eligible content below their contiguous chain. Direct targets are paint, image
+layers or isolated groups. Selection rows do not affect clipping bases and cannot split an
 effect chain from its owner. Dangling attachments and pass-through
 dependencies are invalid. Rendering intents are `perceptual`, `relative_colorimetric`,
 `saturation`, `absolute_colorimetric`. Proof paper simulation requires black-ink
@@ -371,15 +371,14 @@ grids remain separate, and temporary capture edges do not replace source bounds.
 | Curves | Monotone cubic Hermite through the saved points with Fritsch–Butland interior tangents and secant end tangents, continuing linearly beyond the end points. |
 | Filter color and alpha | The keyed built-in contract fixes `space` and `alpha`. Filter input/output is premultiplied in linear document RGB, or in the composition's blending space when declared `blending`. `preserve` retains source coverage; `filter` permits coverage to move with the samples. Tagged colors remain straight and convert to the document's primaries before evaluation. Extended RGB remains extended unless the named operation explicitly clips it. |
 | Gaussian family | Normalized separable weights proportional to `exp(-x²/(2*sigma²))`, supported through `ceil(3*sigma)` on each side. Zero sigma is identity. Larger sigma widens the kernel; it does not stop at an editor or lookup-table limit. Gaussian Blur, Unsharp Mask, High Pass, Bloom, Soft Focus and Pencil share this kernel. |
-| Spatial sampling | Filter sample positions are continuous pixel coordinates; centers are half-integers. Image filters interpolate linearly and extend the nearest edge sample outside the captured source. Motion Blur averages a centered line of the authored `distance` and `angle`. Pixel Mosaic samples the center of each authored-size grid cell. Placement interpolation uses its saved kernel independently of filter sampling. |
-| Placement kernels | `nearest` selects the pixel containing the source coordinate; `linear` is bilinear about pixel centers. `bicubic` is separable Catmull–Rom and `lanczos` is normalized Lanczos-3 (`sinc(x)*sinc(x/3)`, support three). Both bound overshoot by the nearest four samples and their brightest straight color, as in [`pixel_transform.wgsl`](../../crates/layer-render-wgpu/src/pixel_transform.wgsl). Outside paint is transparent; coverage uses its authored default. Minification may integrate the pixel footprint. |
-| Mesh geometry | Tensor-product cubic Bézier patches over the saved breakpoint intervals and destination control net, composed with the saved projective map and translation. Tessellation and inverse-solving tolerances may improve without changing the authored surface. |
+| Spatial sampling | Filter sample positions are continuous pixel coordinates; centers are half-integers. Image filters interpolate linearly and extend the nearest edge sample outside the captured source. Motion Blur averages a centered line of the authored `distance` and `angle`. Pixel Mosaic samples the center of each authored-size grid cell. Image-object interpolation uses its saved kernel independently of filter sampling. |
+| Image-object kernels | `nearest` takes the source sample containing the inverse-mapped output pixel center, transparent outside the image, also under minification. `linear` is a scale-adapted tent: with `J` the inverse map's 2×2 part per output pixel and `J = U diag(s1,s2) Vᵀ`, `S = U diag(max(1,s1),max(1,s2)) Uᵀ`; each source sample center `p` weighs `max(0,1-|r.x|)*max(0,1-|r.y|)` for `r = S⁻¹(p-q)`, and the premultiplied sum is divided by the weights of the whole lattice, including transparent samples outside the image. Without minification this is bilinear. The binary64 reference is [`object_sampling_reference.rs`](../../crates/layer-render-wgpu/src/object_sampling_reference.rs); moving display may approximate `linear`, while captures, exports, merges and pixel tools use the saved kernel. |
 | Tone and color adjustments | The equations and neutral conditions in [photo adjustment mathematics](photo-adjustments.md) and [runtime filter color semantics](runtime-filters.md#filter-spaces). Amount/strength controls retain each operation's existing mapping, including divisions by 100, stop exposure, thresholds and signed continuations; a new slider mapping cannot retune them. |
 | Gradients | Interpolate associated color and coverage in the saved mixing space; preserve exact stop colors, extend end colors outside the stop range and contribute no hidden color in a fully transparent span. Gradient Map's stop alpha is mapping strength; Gradient Fill's stop alpha is coverage. |
 | Procedural patterns | `fx_random`, `fx_noise` and `fx_fbm` in [`filter_library.wgsl`](../../assets/filters/filter_library.wgsl), with each filter's fixed seeds, belong to that filter's data version. |
 | Time and phase | Saved output phases are accumulated seconds, already integrated through speed changes. Without an output phase, frozen time is `time*speed`. Pattern frequency and phase direction belong to each filter's math; playback scheduling does not. |
 | Imported originals | Untouched original tiles convert to the working space with relative colorimetric intent and no black-point compensation; painted tiles hold the converted result. |
-| Linked masks | Mask pixels pass through the mask's projective placement, then its translation relative to the owner's, then the owner's placement and translation. |
+| Masks | A document pixel reads the stored coverage at its position minus the mask origin, or the default coverage where no tile is stored, then applies inversion. The origin is the parent offset plus the mask offset, plus the owner offset when linked. |
 | SDR rendition | Parameters of the tone mapper in [`sdr.rs`](../../crates/layer-core/src/color/hdr/sdr.rs): exposure is stops, headroom is the input white endpoint in stops above RGB 1, and highlight color runs from luminous white to retained chroma. Macro/micro gains are `1.3*contrast*2^(∓0.5*(0.3+balance))`; baseline compression is 0.6 and default headroom is log2(1000/203). |
 | Watercolor | Exact saved pigment and wetness samples, with the 2/255 material floor and the wet-edge, burnt-edge and source-pixel edge-width meanings in [painterly paint state](painterly-paint-state.md). Opening never replays strokes or ages the saved water. Future brush interactions may improve while retaining that material interpretation. |
 
@@ -747,12 +746,12 @@ output. This abbreviated fixture has no pixels, paper or optional preview:
   "document": "00000000000000000000000000000001",
   "root": {"ref": "00000000000000000000000000000002"},
   "objects": [
-    {"id": "00000000000000000000000000000002", "type": "capy.composition/1", "data": {
-      "frame": {"size": [64, 64]},
+    {"id": "00000000000000000000000000000002", "type": "capy.composition/2", "data": {
+      "size": [64, 64],
       "result": {"object": {"ref": "00000000000000000000000000000003"}, "port": "color"}
     }},
     {"id": "00000000000000000000000000000003", "type": "capy.stack/1", "data": {}},
-    {"id": "00000000000000000000000000000004", "type": "capy.output/1", "data": {
+    {"id": "00000000000000000000000000000004", "type": "capy.output/2", "data": {
       "source": {"object": {"ref": "00000000000000000000000000000002"}, "port": "color"}
     }}
   ],
@@ -782,12 +781,10 @@ Fixtures distinguish malformed content from unsupported content and preservation
 
 The checked-in `codec/fixtures/authored-filters.capy` covers all 52 built-ins, exact
 raster samples, watercolor state, LUT samples, SDR rendition and proof, every blend
-name, clip and effect attachments, a Pass Through group, projective and mesh
-placement, contour selection placement, every ruler kind, non-default built-in
+name, clip and effect attachments, a Pass Through group, signed layer and linked
+mask offsets, contour selection geometry, every ruler kind, non-default built-in
 choices and gradient interpolations, and both color forms, using the current
-occurrence and filter data versions. The temporary occurrence `/2` adapter
-retains this fixture’s projective and mesh placement until the paint placement
-cutover. Its fixed values exercise opening, editing,
+occurrence and filter data versions. Its fixed values exercise opening, editing,
 saving, reopening and compiling current filters. `builtin-contracts.json` fixes
 all 53 built-in contracts and 285 parameter keys: kinds, choice IDs,
 dimensions, accepted bounds, constraints, color domain, alpha behavior and time

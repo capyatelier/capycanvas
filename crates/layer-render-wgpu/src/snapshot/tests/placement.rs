@@ -26,7 +26,7 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
     }
     document.artwork.paint.get_mut(paint_id).unwrap().base = Some(layer_core::authored::PaintBase::new((Arc::new(builder.finish().unwrap())).into()));
     document.artwork.compositions.get_mut(document.artwork.root).unwrap().size = [321, 257];
-    document.artwork.occurrences.get_mut(owner).unwrap().translation = Point { x: -5., y: 11. };
+    document.artwork.occurrences.get_mut(owner).unwrap().offset = [-5, 11];
     let mut paint = RasterData::default();
     let codes: Vec<_> = [32768u16, 0, 0, 65535]
         .into_iter()
@@ -42,7 +42,7 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
         ),
     );
     document.artwork.paint.get_mut(paint_id).unwrap().raster = RasterRevision::backed(paint);
-    let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, document.artwork.occurrences.get(owner).unwrap().translation);
+    let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, [0, 0]);
     let mut coverage = RasterData::default();
     coverage.tiles.insert(
         TileKey {
@@ -61,20 +61,13 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
     document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
     document.artwork.occurrences.get_mut(owner).unwrap().mask = Some(mask.use_);
     let group = add_group(&mut document, vec![owner], 0);
-    document.artwork.occurrences.get_mut(group).unwrap().translation = Point { x: 15., y: -9. };
+    document.artwork.occurrences.get_mut(group).unwrap().offset = [15, -9];
 
-    for pose in [
-        Affine([0.25, 0., 0., 0.25, 30., 4.]),
-        Affine([0.27, 0.04, -0.03, 0.24, 30., 4.]),
-        Affine([-0.25, 0., 0., 0.25, 290., 4.]),
-    ] {
-        document.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::from_affine(pose);
+    for offset in [[-700, -450], [-900, -600], [-560, -300]] {
+        document.artwork.occurrences.get_mut(owner).unwrap().offset = offset;
         document.validate(Default::default()).unwrap();
         let source = document.artwork.paint.get(paint_id).unwrap().base.clone();
-        let inverse = pose
-            .then(Affine::translation(Point { x: 10., y: 2. }))
-            .inverse()
-            .unwrap();
+        let inverse = Affine::translation(Point { x: -(offset[0] + 15) as f32, y: -(offset[1] - 9) as f32 });
         let mut capture =
             capture(document.clone()).unwrap();
         let mut painted = 0;
@@ -93,9 +86,6 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
                         x: (x + rect[0]) as f32 + 0.5,
                         y: (y + rect[1]) as f32 + 0.5,
                     });
-                    // The independent constant-color oracle excludes the edge
-                    // footprints of a minified pixel's bilinear taps, but includes
-                    // both sides of source/tile boundaries.
                     if [0., 768., 1024., 1025.]
                         .iter()
                         .any(|v| (local.x - v).abs() < 3.)
@@ -129,7 +119,7 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
                             .iter()
                             .zip(expected)
                             .all(|(a, b)| (*a - b).abs() < 2e-6),
-                        "pose={pose:?} rect={rect:?} local={local:?}: {actual:?} vs {expected:?}"
+                        "offset={offset:?} rect={rect:?} local={local:?}: {actual:?} vs {expected:?}"
                     );
                 }
             }
@@ -143,7 +133,7 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
 }
 
 #[test]
-fn snapshot_export_does_not_bypass_placement_when_source_matches_canvas_extent() {
+fn snapshot_export_does_not_bypass_an_offset_source_that_matches_the_canvas_extent() {
     let color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
@@ -156,11 +146,11 @@ fn snapshot_export_does_not_bypass_placement_when_source_matches_canvas_extent()
         .unwrap().image.storage()
         .interpretation
         .clone();
-    document.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: 7., y: -3. }));
+    document.artwork.occurrences.get_mut(owner).unwrap().offset = [7, -3];
     let mut capture = capture(document).unwrap();
     assert!(
         capture.identity_source(&target).is_none(),
-        "source passthrough must honor placement"
+        "source passthrough must honor the layer offset"
     );
     let mut png = Vec::new();
     capture
@@ -186,7 +176,7 @@ fn snapshot_export_does_not_bypass_placement_when_source_matches_canvas_extent()
         0,
         "translation reveals transparent pixels below the source"
     );
-    assert_eq!(alpha(15, 8), 65535, "the placed image remains visible");
+    assert_eq!(alpha(15, 8), 65535, "the offset image remains visible");
 }
 
 #[test]
@@ -196,7 +186,7 @@ fn snapshot_bounds_preserve_clipped_fills_when_the_capture_domain_expands() {
     hide_paper(&mut document);
     paint_mut(&mut document).base = Some(layer_core::authored::PaintBase::new((layer_core::color::source::rgba8_source([16;2], |_,_| [255;4])).into()));
     let base = paint_occurrence(&document);
-    document.artwork.occurrences.get_mut(base).unwrap().translation = Point {x:-8.,y:-8.};
+    document.artwork.occurrences.get_mut(base).unwrap().offset = [-8, -8];
     let fill = insert_effect(&mut document, EffectInstance::new(crate::tests::fixture("solid_color").program()), 0);
     document.artwork.occurrences.get_mut(fill).unwrap().attachment = layer_core::Attachment::Clip;
     refresh(&mut document);

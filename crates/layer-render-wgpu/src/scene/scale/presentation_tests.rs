@@ -136,7 +136,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     submit(&mut reference, &abandoned, v, true);
     let mut oracle = crate::test_support::float_presenter(&reference);
     close(&present(&r, &mut presenter, v), &present(&reference, &mut oracle, v));
-    assert_eq!(r.readback_srgb_rgba8().unwrap(), reference.readback_srgb_rgba8().unwrap());
+    crate::test_support::assert_same_canonical(&mut r, &mut reference);
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
     let source = paint_at(&doc,0).base.as_ref().unwrap().image.storage().clone();
     let owner=doc.scene().order()[0];
     let initial=Selection::polygon(vec![Point{x:0.,y:0.},Point{x:760.,y:99.},Point{x:440.,y:533.}]).unwrap();
-    let mask=coverage_mask(&mut doc,owner,Point{x:7.,y:-9.},Some(initial));doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.;
+    let mask=coverage_mask(&mut doc,owner,[7, -9],Some(initial));doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.;
     for name in ["20","21"] {let effect=effect_occurrence(&mut doc,crate::tests::image_windows::program(false,false),name);insert_occurrence(&mut doc,effect,0);}
     let original = doc.clone();
     let mut dense = bounded_renderer(doc.composition().color).unwrap();
@@ -248,7 +248,7 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
     let mut first = Vec::new();
     for step in 0..5 {
         match step {
-            1 => occurrence_mut(&mut doc,2).translation = Point { x: 17., y: -9. },
+            1 => occurrence_mut(&mut doc,2).offset = [17, -9],
             2 => {
                 occurrence_mut(&mut doc,2).mask.as_mut().unwrap().inverted = true;
                 occurrence_mut(&mut doc,0).opacity = 0.6;
@@ -533,7 +533,7 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
             4 => find(&mut doc,id).blend = layer_core::LayerBlend::Normal,
             5 => find(&mut doc,id).blend = layer_core::LayerBlend::PassThrough,
             6 => {
-                let mask=coverage_mask(&mut doc,id,Default::default(),None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.6;
+                let mask=coverage_mask(&mut doc,id,[0, 0],None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.6;
                 find(&mut doc, id).opacity = 0.5;
             }
             _ => {}
