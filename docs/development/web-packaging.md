@@ -51,6 +51,10 @@ The build:
    derived from the whole package, an integrity-checked precache list and a
    `.nojekyll` marker.
 
+The source HTML supplies the editor’s description, social preview, site name and
+canonical URL at `https://editor.capycanvas.art/`. Packaging preserves this
+metadata; the marketing site at `https://capycanvas.art/` has its own canonical.
+
 The packager follows the module graph as the browser does: relative static,
 side-effect and dynamic imports, and `new URL(…, import.meta.url)` workers and
 Wasm. Adding a module, worker or import needs no packager change. The build
