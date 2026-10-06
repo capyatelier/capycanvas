@@ -45,9 +45,6 @@ extension XCTestCase {
         expectSelected(eyedropper, false)
         expectColor([1, 1, 1, 1])
         #endif
-        workspaceActivate(app.buttons["color-quick-black"])
-        expectColor([0, 0, 0, 1])
-        attachEditor(in: app, name: "picker-neutral-shortcuts")
 
         let sketch = app.buttons["workspace-switch-builtin:workspace:painter"]
         workspaceActivate(sketch)

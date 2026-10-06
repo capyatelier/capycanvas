@@ -116,20 +116,6 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
                 val preview = host.colorPreview
                 ColorWheel(host, view, if (view.optBoolean("hdr")) (preview?.objectOrNull("colors") ?: host.snapshot!!.getJSONObject("state").displayColors()).toString() else "",
                     preview?.objectOrNull("picker")?.objectOrNull("preview") != null, Modifier.place(layout.array("wheel")), ::color)
-                for (white in listOf(true, false)) {
-                    val preset = view.array("quick_colors").objects().first { it.getBoolean("white") == white }
-                    val key = if (white) "white" else "black"
-                    ColorButton(preset.getString("label"), Modifier.place(layout.array(key)).testTag("color-quick-$key")
-                        .semantics { selected = preset.getBoolean("selected") },
-                        onClick = { color(obj("op" to "quick_color", "white" to white)) }) { _, hovered ->
-                        Canvas(Modifier.matchParentSize()) {
-                            drawCircle(colors.panel)
-                            drawCircle(preset.array("rgba").color(), size.minDimension / 2 - 1.dp.toPx())
-                            val stroke = (if (preset.getBoolean("selected") || hovered) 2.dp else 1.dp).toPx()
-                            drawCircle(colors.text.copy(alpha = if (preset.getBoolean("selected") || hovered) 1f else .25f), size.minDimension / 2 - stroke / 2, style = Stroke(stroke))
-                        }
-                    }
-                }
                 for (slot in listOf("background", "foreground", "transparent")) {
                     val swatch = view.array("swatches").objects().first { it.getString("slot") == slot }
                     ColorSwatch(host, swatch, Modifier.place(layout.array(slot)).zIndex(if (slot == view.getString("front_swatch")) 1f else 0f), ::color)

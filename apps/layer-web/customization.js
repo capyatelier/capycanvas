@@ -290,7 +290,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       };
       const node = button("", pickerButtonAction(() => root.tileView.resolved_control ?? tile.control,{kind:'tile',panel,tile:tile.id},dispatch,activate));
       if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
-      node.append(icon(tile.icon,(tile.resolved_control??tile.control).kind==='color'));
+      node.append(icon(tile.icon,true));
       if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));
       node.append(variationMarker()); root.append(node);
     }
@@ -304,8 +304,8 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     node.disabled = !tile.enabled; node.title = tile.tooltip;
     node.setAttribute('aria-label', tile.label); node.setAttribute('aria-pressed', tile.selected);
     const label = node.querySelector('.tile-label');if(label)label.textContent=tile.label;
-    const glyph = node.querySelector('svg'), pair=(tile.resolved_control??tile.control).kind==='color';
-    if (glyph?.dataset.asset !== tile.icon || glyph?.hasAttribute('data-paint-pair') !== pair) glyph?.replaceWith(icon(tile.icon,pair));
+    const glyph = node.querySelector('svg');
+    if (glyph?.dataset.asset !== tile.icon || glyph?.hasAttribute('data-paint-pair') !== (tile.icon === 'colors')) glyph?.replaceWith(icon(tile.icon,true));
     const variants = root.querySelector('.tool-variations');
     variants.hidden = !tile.has_variants;
   }

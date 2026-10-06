@@ -80,8 +80,8 @@ private fun JSONObject.tabStyle(group: Int): String? {
             onLongClick = { dock.holdContext(obj("kind" to "panel", "panel" to id)) })
         .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
-        if (showIcon) SharedIcon(panel.getString("icon"), if (showName) null else panel.getString("title"),
-            Modifier.testTag("tab-icon-$id"), tint = colors.text)
+        if (showIcon) LiveIcon(host, panel.getString("icon"), if (showName) null else panel.getString("title"),
+            Modifier.testTag("tab-icon-$id"))
         if (showName) Text(panel.getString("title"), Modifier.testTag("tab-name-$id"), color = colors.text, fontWeight = FontWeight.Bold)
     }
 }

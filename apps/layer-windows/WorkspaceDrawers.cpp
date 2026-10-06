@@ -32,7 +32,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     std::map<std::wstring,J> panels;
     struct Body {hstring key;bool splitFilters=false;std::unique_ptr<PanelBody> view;};
     std::map<std::wstring,Body> bodies;
-    struct Column {Grid frame;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;std::vector<AutomaticTab> automatic;};
+    struct Column {Grid frame;ScrollView scroll;StackPanel stack;std::vector<std::wstring> panels;std::vector<AutomaticTab> automatic;Bindings paintIcons;};
     std::map<std::wstring,double> tabWidths;
     std::vector<Column> columns;
     std::map<std::wstring,J> toolbarLayouts;
@@ -77,6 +77,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
 
         for(auto value:array(data->model,L"panels")){auto panel=value.GetObject();panels[std::wstring(str(panel,L"id"))]=panel;}
         rebuild();
+        for(auto const& column:columns)for(auto const& update:column.paintIcons)update();
         for(auto& [panel,body]:bodies)if(body.view)body.view->Apply(active(panel));
         frame.IsHitTestVisible(!closing);bridge.IsHitTestVisible(!closing);
 
@@ -183,7 +184,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                     pick.Height(36);pick.MinWidth(36);pick.Padding({8,4,8,4});pick.CornerRadius({6,6,0,0});
                     StackPanel labelRow;labelRow.Orientation(Orientation::Horizontal);labelRow.Spacing(6);
                     auto presentation=object(panel,L"tab");bool fitted=automaticTabs(data,group);
-                    if(flag(presentation,L"show_icon")||fitted)labelRow.Children().Append(icon(str(panel,L"icon"),data->theme()));
+                    if(flag(presentation,L"show_icon")||fitted)labelRow.Children().Append(panelIcon(data,str(panel,L"icon"),column.paintIcons));
                     if(flag(presentation,L"show_name")||fitted){
                         auto name=label(data,str(panel,L"title"),true);name.Visibility(flag(presentation,L"show_name")?Visibility::Visible:Visibility::Collapsed);labelRow.Children().Append(name);
                         if(fitted)column.automatic.push_back({pick,name,std::wstring(panelId)+L"\n"+std::wstring(str(panel,L"title"))+L"\n"+std::to_wstring(data->textSize())});

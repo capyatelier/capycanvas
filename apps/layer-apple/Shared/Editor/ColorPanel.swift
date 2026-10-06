@@ -36,18 +36,6 @@ struct ColorPanel: View {
                     color(["op": "pick_wheel", "part": part == 1 ? "hue" : "field",
                         "point": [point.x, point.y], "size": size])
                 }.colorPlaced(layout["wheel"], id: "wheel")
-                ForEach([true, false], id: \.self) { white in
-                    let quick = model["quick_colors"].array.first { $0["white"].bool == white } ?? JSON()
-                    let name = white ? "white" : "black"
-                    Button { color(["op": "quick_color", "white": white]) } label: {
-                        Circle().fill(quick["rgba"].paintColor).padding(1).contentShape(Circle())
-                    }.buttonStyle(ColorPanelButtonStyle(kind: .paint(quick["selected"].bool), palette: palette))
-                        .clipShape(Circle()).contentShape(Circle())
-                        .accessibilityLabel(quick["label"].string)
-                        .accessibilityAddTraits(quick["selected"].bool ? .isSelected : [])
-                        .accessibilityIdentifier("color-quick-" + name)
-                        .colorPlaced(layout[name], id: "quick-" + name)
-                }
                 ForEach(["background", "foreground", "transparent"], id: \.self) { slot in
                     let swatch = model["swatches"].array.first { $0["slot"].string == slot } ?? JSON()
                     Button { color(["op": "select", "slot": slot]) } label: {

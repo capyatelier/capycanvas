@@ -73,6 +73,11 @@ private object IconPictures {
     }
 }
 
+@Composable internal fun LiveIcon(host: CanvasHost, name: String, description: String?, modifier: Modifier = Modifier) {
+    if (name == "colors") PaintPairIcon(host.snapshot!!.getJSONObject("paint_pair"), description, modifier)
+    else SharedIcon(name, description, modifier)
+}
+
 @Composable internal fun PaintPairIcon(view: JSONObject, description: String?, modifier: Modifier = Modifier) {
     val ink = LocalPalette.current.text
     val fields = remember {

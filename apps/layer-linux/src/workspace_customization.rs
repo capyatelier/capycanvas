@@ -57,13 +57,7 @@ pub(super) fn tile_button(
     let panel = config.id;
     let id = tile.id;
     let button = gtk::Button::builder().tooltip_text(&choice.label).build();
-    let icon: gtk::Widget = if tile.control == ToolbarControl::Color {
-        w.customization.color_pair(w, style.icon_size() as i32)
-    } else {
-        let image = crate::icons::image(&format!("layer-{}-symbolic", choice.icon));
-        image.set_pixel_size(style.icon_size() as i32);
-        image.upcast()
-    };
+    let icon = w.customization.icon(w, choice.icon, style.icon_size() as i32);
     let label_lines = style.label_lines();
     if label_lines > 0 {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -952,7 +946,28 @@ impl Customization {
         }
     }
 
-    pub(super) fn color_pair(&self, w: &Workspace, size: i32) -> gtk::Widget {
+    pub(super) fn icon(&self, w: &Workspace, icon: &str, size: i32) -> gtk::Widget {
+        if icon == ToolbarControl::Color.icon() {
+            return self.color_pair(w, size);
+        }
+        let image = crate::icons::image(&format!("layer-{icon}-symbolic"));
+        image.set_pixel_size(size);
+        image.upcast()
+    }
+    pub(super) fn replace_icon(&self, w: &Workspace, content: &gtk::Box, icon: &str, size: i32) -> gtk::Widget {
+        let current = content.first_child().unwrap();
+        if (icon == ToolbarControl::Color.icon()) == current.is::<crate::display_color::ColorPair>() {
+            if let Some(image) = current.downcast_ref::<gtk::Image>() {
+                crate::icons::set(image, Some(&format!("layer-{icon}-symbolic")));
+            }
+            return current;
+        }
+        let next = self.icon(w, icon, size);
+        content.remove(&current);
+        content.prepend(&next);
+        next
+    }
+    fn color_pair(&self, w: &Workspace, size: i32) -> gtk::Widget {
         let pair = crate::display_color::ColorPair::new(size);
         if let Some(g) = w.gpu.borrow().as_ref() {
             let colors = g.session.state().display_colors();

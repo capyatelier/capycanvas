@@ -138,9 +138,6 @@ struct View:std::enable_shared_from_this<View>{
     std::array<Button,3> swatches;
     std::array<Shapes::Ellipse,3> swatchBacks,swatchEdges,swatchChecks,swatchPaint;
     std::array<bool,3> hovered{};
-    std::array<Button,2> quick;
-    std::array<Shapes::Ellipse,2> quickBacks,quickEdges,quickPaint;
-    std::array<bool,2> quickHovered{};
     Button edit;Shapes::Ellipse editFill;bool editHovered=false;
     Canvas arc;Shapes::Path arcTrack;std::vector<Shapes::Line> ramp;Shapes::Ellipse markerShadow,marker;TextBlock caption;
     Slider intensity;bool syncingIntensity=false;
@@ -266,17 +263,6 @@ struct View:std::enable_shared_from_this<View>{
         edit.PointerEntered([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){self->editHovered=e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse;self->refresh();}});
         edit.PointerExited([weak](auto&&,auto&&){if(auto self=weak.lock()){self->editHovered=false;self->refresh();}});
         stage.Children().Append(edit);
-        for(int i=0;i<2;i++){
-            bool white=i==0;
-            quick[i]=control(white?data->caption(L"color",L"paint_white"):data->caption(L"color",L"paint_black"),[weak,white]{if(auto self=weak.lock())self->send(O({{L"op",S(L"quick_color")},{L"white",B(white)}}));});
-            Grid sample;sample.Background(nullptr);sample.Children().Append(quickBacks[i]);sample.Children().Append(quickPaint[i]);sample.Children().Append(quickEdges[i]);
-            quickPaint[i].Margin({1,1,1,1});quick[i].Content(sample);stage.Children().Append(quick[i]);
-            AutomationProperties::SetAutomationId(quick[i],white?L"color-white":L"color-black");
-            quick[i].PointerEntered([weak,i](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
-                self->quickHovered[i]=e.Pointer().PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Touch;self->refresh();
-            }});
-            quick[i].PointerExited([weak,i](auto&&,auto&&){if(auto self=weak.lock()){self->quickHovered[i]=false;self->refresh();}});
-        }
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         for(int i=0;i<3;i++){
             auto slot=slots[i];auto pick=control(slot,[weak,slot]{if(auto self=weak.lock())self->send(O({{L"op",S(L"select")},{L"slot",S(slot)}}));});
@@ -497,7 +483,6 @@ struct View:std::enable_shared_from_this<View>{
             image.Width(paintSide);image.Height(paintSide);Canvas::SetLeft(image,paintInset-inset);Canvas::SetTop(image,paintInset-inset);
             drawError.Width(side);Canvas::SetTop(drawError,side*.4);
             placeBox(readout,array(layout,L"readout"));placeBox(swap,array(layout,L"swap"));placeBox(edit,array(layout,L"edit"));
-            for(int i=0;i<2;i++)placeBox(quick[i],array(layout,i==0?L"white":L"black"));
             if(hdr){
                 auto start=arcAt(0),end=arcAt(1);auto shape=object(start,L"geometry");
                 double radius=num(shape,L"radius"),width=num(shape,L"width");
@@ -549,16 +534,6 @@ struct View:std::enable_shared_from_this<View>{
         auto swapInk=color(str(object(data->state,L"palette"),L"text"));swapInk.A=swapHovered?31:0;swapFill.Fill(fill(swapInk));
         bool editable=!transparentSlot();edit.IsEnabled(editable);edit.Opacity(editable?1.:.36);
         auto editInk=color(str(object(data->state,L"palette"),L"text"));editInk.A=editHovered&&editable?31:0;editFill.Fill(fill(editInk));
-        auto quickColors=array(view,L"quick_colors");
-        for(int i=0;i<2;i++){
-            J preset;for(auto value:quickColors)if(flag(value.GetObject(),L"white")==(i==0))preset=value.GetObject();
-            bool chosen=flag(preset,L"selected");auto ring=color(str(object(data->state,L"palette"),L"text"));
-            if(!(chosen||quickHovered[i]))ring.A=64;
-            quickBacks[i].Fill(data->brush(L"panel"));quickEdges[i].Stroke(fill(ring));quickEdges[i].StrokeThickness(chosen||quickHovered[i]?2:1);
-            quickPaint[i].Fill(fill(rgba(array(preset,L"rgba"))));
-            auto name=str(preset,L"label");AutomationProperties::SetName(quick[i],name);tooltip(quick[i],name);
-            AutomationProperties::SetItemStatus(quick[i],chosen?data->caption(L"search",L"selected"):L"");
-        }
         updateArc(view);
         const std::array<hstring,3> slots{L"background",L"foreground",L"transparent"};
         auto front=str(view,L"front_swatch");

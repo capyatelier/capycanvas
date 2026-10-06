@@ -234,10 +234,6 @@ native-color-swatch-no-match = Ninguna paleta ni color coincide con «{ $query }
 
 native-color-palettes = Paletas…
 
-native-color-paint-white = Pintar con blanco
-
-native-color-paint-black = Pintar con negro
-
 native-color-shape = Forma del selector de color
 
 native-color-switch-readout = Cambiar lectura del color

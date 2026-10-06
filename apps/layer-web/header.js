@@ -227,8 +227,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
       if(r.button) {
         const kind=r.entry.item.kind, command=state().commands.find(c=>c.id===r.button.dataset.command);
         const glyph=command?.icon||spec.icon;
-        const pair=(spec.resolved_control??r.entry.item.control)?.kind==='color';
-        if(glyph && (r.button.firstChild?.dataset.asset!==glyph || r.button.firstChild?.hasAttribute('data-paint-pair')!==pair))r.button.replaceChildren(icon(glyph,pair),...(r.variants?[r.variants]:[]));
+        if(glyph && (r.button.firstChild?.dataset.asset!==glyph || r.button.firstChild?.hasAttribute('data-paint-pair')!==(glyph==='colors')))r.button.replaceChildren(icon(glyph,true),...(r.variants?[r.variants]:[]));
         r.button.title=command?.tooltip||spec.label; r.button.setAttribute('aria-label',command?.label||spec.label);
         r.button.disabled=!editing&&(!spec.enabled||(kind==='fullscreen'&&!document.fullscreenEnabled));
         r.button.setAttribute('aria-pressed',String(spec.selected));

@@ -16,6 +16,7 @@ struct Column:std::enable_shared_from_this<Column>{
     uint32_t id=0;
     J geometry;
     std::map<std::wstring,Button> buttons;
+    std::map<std::wstring,Bindings> paintIcons;
     std::map<uint32_t,Border> dividers;
     struct Connection {Shapes::Path path;hstring geometry;};
     std::map<std::wstring,Connection> connections;
@@ -104,7 +105,7 @@ struct Column:std::enable_shared_from_this<Column>{
                             }
                         }
                     });
-                    pick.Padding({0,0,0,0});pick.Content(icon(str(panel,L"icon"),data->theme()));
+                    pick.Padding({0,0,0,0});pick.Content(panelIcon(data,str(panel,L"icon"),paintIcons[key]));
                     auto target=O({{L"kind",S(L"panel")},{L"panel",S(panelId)}});
                     gestures->Source(pick,O({{L"type",S(L"drag_workspace")},{L"item",target}}),target,false,{},WorkspaceGestures::Pickup::Hold);
                     AutomationProperties::SetAutomationId(pick,L"column-icon-"+panelId);
@@ -121,8 +122,9 @@ struct Column:std::enable_shared_from_this<Column>{
             }
         }
         for(auto it=buttons.begin();it!=buttons.end();)if(!current.contains(it->first)){
-            uint32_t index;if(icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=buttons.erase(it);
+            uint32_t index;if(icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);paintIcons.erase(it->first);it=buttons.erase(it);
         }else ++it;
+        for(auto const& [key,updates]:paintIcons)for(auto const& update:updates)update();
         for(auto it=dividers.begin();it!=dividers.end();)if(!currentDividers.contains(it->first)){
             uint32_t index;if(icons.Children().IndexOf(it->second,index))icons.Children().RemoveAt(index);it=dividers.erase(it);
         }else ++it;

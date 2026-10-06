@@ -289,10 +289,6 @@ native-color-swatch-no-match = Tidak ada palet atau warna yang cocok dengan “{
 
 native-color-palettes = Palet…
 
-native-color-paint-white = Lukis dengan putih
-
-native-color-paint-black = Lukis dengan hitam
-
 native-color-shape = Bentuk warna
 
 native-color-switch-readout = Ubah tampilan nilai warna

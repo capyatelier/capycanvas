@@ -3350,10 +3350,9 @@ impl Workspace {
                 let config = layout.panel(*panel).expect("validated panel");
                 let title = config.title_localized(&self.localization());
                 let tab = layout.tab_presentation(*panel);
-                let content = button.child().unwrap();
-                let icon = content.first_child().and_downcast::<gtk::Image>().unwrap();
+                let content = button.child().and_downcast::<gtk::Box>().unwrap();
+                let icon = self.customization.replace_icon(self, &content, config.icon(), 14);
                 let label = content.last_child().and_downcast::<gtk::Label>().unwrap();
-                crate::icons::set(&icon, Some(&format!("layer-{}-symbolic", config.icon())));
                 icon.set_visible(tab.show_icon);
                 label.set_label(&title);
                 label.set_visible(tab.show_name);

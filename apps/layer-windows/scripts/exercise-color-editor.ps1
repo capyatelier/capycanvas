@@ -61,8 +61,8 @@ try {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     $revision=(Model).state.document_file.revision
 
-    Invoke-Id 'color-white'
-    Wait-Until {Same (Foreground) @(1,1,1,1)} 'White paint did not apply'
+    Invoke-Id 'color-swap'
+    Wait-Until {Same (Foreground) @(1,1,1,1)} 'Swapping did not bring the white background forward'
     $white=Foreground
     Open-Editor
     Capture "editor-$Theme" -WithModel

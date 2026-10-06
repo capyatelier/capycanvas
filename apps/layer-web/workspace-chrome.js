@@ -64,7 +64,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           }
           for(const item of group.icons) {
             const view=customization.view(item.panel),b=button("",()=>send({type:"toggle_column_drawer",group:group.group,panel:item.panel}),"dock-tab column-tab");
-            b.dataset.panel=item.panel;b.title=view.title;b.setAttribute("aria-label",view.title);b.append(icon(view.icon));
+            b.dataset.panel=item.panel;b.title=view.title;b.setAttribute("aria-label",view.title);b.append(icon(view.icon,true));
             customization.target(b,{kind:"panel",panel:item.panel});
             content.append(draggable(b,{kind:"panel",panel:item.panel},"hold"));
           }
@@ -203,7 +203,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           const strip=element("div","drawer-tab-strip"),automatic=app.group_tab_style(r.drawer.tabs.group)==="automatic";tabs.append(strip);
           for(const panel of r.drawer.tabs.panels){
             const v=customization.view(panel),b=button("",()=>dispatch({type:"select_panel_tab",group:r.drawer.tabs.group,panel}),"dock-tab");
-            if(automatic)tabLabel(b,v,true);else{if(v.tab.show_icon)b.append(icon(v.icon));if(v.tab.show_name)b.append(document.createTextNode(v.title));}
+            if(automatic)tabLabel(b,v,true);else{if(v.tab.show_icon)b.append(icon(v.icon,true));if(v.tab.show_name)b.append(document.createTextNode(v.title));}
             b.dataset.panel=panel;b.setAttribute("aria-label",v.title);b.setAttribute("aria-selected",String(panel===r.drawer.tabs.active));
             customization.target(b,{kind:"panel",panel});strip.append(draggable(b,{kind:"panel",panel}));
           }

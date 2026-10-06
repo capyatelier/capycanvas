@@ -124,7 +124,7 @@ struct IconTile: View {
     var corner = SquircleShape.Corner.radius(SquircleShape.controlRadius)
     let action: () -> Void
     var body: some View {
-        Button(action: action) { SharedIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
+        Button(action: action) { PanelIcon(name: icon, size: size).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle()) }
             .buttonStyle(EditorControlButtonStyle(selected: selected, active: active, joinedEdge: joinedEdge,
                 background: background, keepsBackground: keepsBackground, drawerBackground: drawerBackground, corner: corner))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)

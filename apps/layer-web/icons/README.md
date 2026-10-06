@@ -18,7 +18,8 @@ swatches to the live foreground/background palette.
 Live toolbar and window-bar paint pairs retain this geometry and draw the shared
 front swatch last. Their fills use the shared mapped paint previews and opaque
 checker composites; selection and rendition changes refresh existing icons.
-Category symbols in tabs and customization lists keep the fixed SVG paints.
+The Color panel's tabs and icon tiles use the same live pair. Other category
+symbols in tabs and customization lists keep the fixed SVG paints.
 Android also reads this bank directly and paints the vectors at the requested
 device size, preserving fixed swatch fills. Windows stages theme-specific copies
 for WinUI's SVG image source, replacing only `currentColor` and preserving the

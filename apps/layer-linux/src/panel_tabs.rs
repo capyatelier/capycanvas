@@ -115,11 +115,7 @@ impl PanelTabs {
             .iter()
             .map(|button| {
                 let content = button.child().unwrap().downcast::<gtk::Box>().unwrap();
-                let icon = content
-                    .first_child()
-                    .unwrap()
-                    .downcast::<gtk::Image>()
-                    .unwrap();
+                let icon = content.first_child().unwrap();
                 let label = content
                     .last_child()
                     .unwrap()

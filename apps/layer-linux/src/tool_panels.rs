@@ -790,8 +790,6 @@ mod wheel {
                 return;
             };
             let boxes = [
-                layout.white,
-                layout.black,
                 layout.background,
                 layout.foreground,
                 layout.transparent,
@@ -805,7 +803,7 @@ mod wheel {
                 .corners
                 .borrow()
                 .iter()
-                .skip(5)
+                .skip(3)
                 .zip(layout.shape_rotations)
             {
                 button.imp().rotation.set(rotation);
@@ -1076,7 +1074,6 @@ pub struct ColorPanel {
     initialized: Cell<bool>,
     wheel: ColorWheel,
     swatches: Vec<(ColorSlot, WheelButton, ColorPatch)>,
-    quick_colors: Vec<(bool, WheelButton, ColorPatch)>,
     shape_buttons: [WheelButton; 2],
     readout: WheelButton,
     swap: WheelButton,
@@ -1110,22 +1107,6 @@ impl ColorPanel {
         edit_color.add_css_class("color-utility");
         edit_color.add_css_class("color-swap");
         edit_color.set_widget_name("color-edit-button");
-        let mut quick_colors = Vec::new();
-        for white in [true, false] {
-            let label = if white { &copy.paint_white } else { &copy.paint_black };
-            let button: WheelButton = glib::Object::new();
-            button.add_css_class("flat");
-            button.add_css_class("color-swatch");
-            button.set_tooltip_text(Some(label));
-            button.update_property(&[gtk::accessible::Property::Label(label)]);
-            button.set_widget_name(if white { "color-White" } else { "color-Black" });
-            let sample = ColorPatch::new(true);
-            sample.set_size_request(12, 12);
-            button.set_child(Some(&sample));
-            button.set_parent(&wheel);
-            wheel.imp().corners.borrow_mut().push(button.clone());
-            quick_colors.push((white, button, sample));
-        }
         let mut swatches = Vec::new();
         for (slot, label) in [
             (ColorSlot::Background, localization.text(layer_ui::MessageId::COMMANDS_BACKGROUND_COLOR)),
@@ -1206,7 +1187,6 @@ impl ColorPanel {
             wheel,
             initialized: Cell::new(false),
             swatches,
-            quick_colors,
             shape_buttons,
             readout,
             swap,
@@ -1231,12 +1211,6 @@ impl ColorPanel {
             if let Some(slot) = slot { crate::color_editor::show(&workspace, slot); }
         }));
         workspace.watch_popover(self.wheel.imp().menu.borrow().as_ref().unwrap());
-        for (white, button, _) in &self.quick_colors {
-            let white = *white;
-            button.connect_clicked(glib::clone!(#[weak] workspace, move |_| {
-                workspace.dispatch(UiAction::Color { action: ColorAction::QuickColor { white } });
-            }));
-        }
         for (slot, button, _) in &self.swatches {
             let slot = *slot;
             button.connect_clicked(glib::clone!(
@@ -1393,11 +1367,6 @@ impl ColorPanel {
         if let Some(label) = self.menu_swap.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { label.set_text(&copy.swap); }
         self.menu_edit.set_label(&copy.edit_menu);
         self.menu_library.set_label(&copy.palettes);
-        for (white, button, _) in &self.quick_colors {
-            let label = if *white { &copy.paint_white } else { &copy.paint_black };
-            button.set_tooltip_text(Some(label));
-            button.update_property(&[gtk::accessible::Property::Label(label)]);
-        }
         for (slot, button, _) in &self.swatches {
             let message = match slot {
                 ColorSlot::Background => layer_ui::MessageId::COMMANDS_BACKGROUND_COLOR,
@@ -1450,11 +1419,6 @@ impl ColorPanel {
         self.readout
             .update_property(&[gtk::accessible::Property::Label(&description)]);
         self.readout.queue_draw();
-        for (white, button, sample) in &self.quick_colors {
-            let preset = &state.quick_colors_localized(&localization)[usize::from(*white)];
-            button.set_selected(preset.selected);
-            sample.set_display_color(if *white { layer_core::color::RgbColor::WHITE } else { layer_core::color::RgbColor::BLACK }, ViewColor::Srgb, 1.);
-        }
         let front = self.swatches.iter().find(|(slot, _, _)| *slot == state.front_swatch()).unwrap();
         let rear = self.swatches.iter().find(|(slot, _, _)|
             matches!(slot, ColorSlot::Foreground | ColorSlot::Background) && *slot != front.0).unwrap();

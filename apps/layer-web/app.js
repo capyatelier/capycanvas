@@ -216,9 +216,9 @@ async function loadIcons() {
     icons.set(svg.dataset.asset, svg);
   }
 }
-function icon(name, paintPair = false) {
+function icon(name, live = false) {
   const svg = icons.get(name).cloneNode(true);
-  return paintPair && name === 'colors' ? createPaintPairIcon(svg, paintPairView) : svg;
+  return live && name === 'colors' ? createPaintPairIcon(svg, paintPairView) : svg;
 }
 function iconButton(id) {
   const node = commandButton(id, "");
@@ -526,7 +526,7 @@ function place(node, rect) {
 }
 function tabLabel(tab, view, automatic = false) {
   tab.classList.toggle("icon-only-tab", !view.tab.show_name);
-  if (view.tab.show_icon || automatic) tab.append(icon(view.icon));
+  if (view.tab.show_icon || automatic) tab.append(icon(view.icon, true));
   if (view.tab.show_name || automatic) { const label = element("span", "", view.title); label.hidden = !view.tab.show_name; tab.append(label); }
 }
 const fullTabWidths = new Map(), pendingTabFits = new Set();

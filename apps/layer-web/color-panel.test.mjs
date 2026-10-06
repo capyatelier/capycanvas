@@ -210,14 +210,6 @@ export async function checkColorPanel({call,evaluate,settle}) {
     await gesture(device,await overlap());assert.equal((await read()).slot,'background',`${device}: overlap resumes its front paint`);
     await gesture(device,await point(`${root} [data-color-slot="transparent"]`));assert.equal((await read()).slot,'transparent');
     await gesture(device,await point(`${root} .color-wheel`,.5,.5),await point(`${root} .color-wheel`,.55,.45));assert.equal((await read()).slot,'background','Picking resumes the remembered paint');
-    const pair=await read();await gesture(device,await point(`${root} [data-color-slot="transparent"]`));
-    for(const [name,rgba] of [['black',[0,0,0,1]],['white',[1,1,1,1]]]) {
-      await gesture(device,await point(`${root} [data-quick-color="${name}"]`));
-      const colors=await read();assert.equal(colors.slot,'temporary');assert.deepEqual(colors.temporary.rgba,rgba);
-      assert.deepEqual([colors.foreground,colors.background],[pair.foreground,pair.background]);
-      await front('foreground');
-    }
-    await gesture(device,await point(`${root} [data-color-slot="background"]`));
     for(const shape of ['circle','square','triangle','circle']) {
       if((await read()).readout!=='rgb')await send({type:'color',action:{op:'toggle_readout'}});
       await gesture(device,await point(`${root} [data-color-shape="${shape}"]`));assert.equal((await read()).shape,shape);
@@ -263,10 +255,6 @@ export async function checkColorPanel({call,evaluate,settle}) {
       await settle();assert.equal((await read()).slot,slot);await front(slot);
       await gesture('mouse',await point(swatch('transparent')));await front(slot);
     }
-    for(const name of ['black','white']) {
-      const selector=`${root} [data-quick-color="${name}"]`;
-      await hoverAt(selector);await rim(selector,`${theme}: hovered ${name}`);
-    }
     await gesture('mouse',await point(swatch('transparent')));await rim(swatch('transparent'),`${theme}: selected transparent`);
     await capturePanel(`${theme}-transparent`);
     assert.ok(await evaluate(`retainedColorSwatches.every(n=>n===document.querySelector(${JSON.stringify(root)}).querySelector('[data-color-slot="'+n.dataset.colorSlot+'"]'))`),'Selection and hover retain the swatch controls');
@@ -302,10 +290,11 @@ export async function checkColorPanel({call,evaluate,settle}) {
       const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
       return [...document.querySelectorAll('svg[data-paint-pair]')].filter(svg=>{const r=svg.getBoundingClientRect();return r.width&&r.height;}).map(svg=>{
         const r=svg.getBoundingClientRect(),front=svg.lastElementChild.dataset.paintSlot,pattern=svg.querySelector('pattern[data-paint-slot="'+front+'"]');
-        return {header:!!svg.closest('.header-tool'),front,size:pattern.getAttribute('width'),pixel:[...ctx.getImageData(Math.floor((r.x+r.width*9.25/16)*canvas.width/innerWidth),Math.floor((r.y+r.height*9.25/16)*canvas.height/innerHeight),1,1).data]};
+        return {header:!!svg.closest('.header-tool'),tab:svg.closest('.dock-tab')?.dataset.panel,front,size:pattern.getAttribute('width'),pixel:[...ctx.getImageData(Math.floor((r.x+r.width*9.25/16)*canvas.width/innerWidth),Math.floor((r.y+r.height*9.25/16)*canvas.height/innerHeight),1,1).data]};
       });
     })()`);
-    assert.ok(icons.some(i=>i.header)&&icons.some(i=>!i.header),`${name}: actual toolbar and title-bar icons: ${JSON.stringify(icons)}`);
+    assert.ok(icons.some(i=>i.header)&&icons.some(i=>!i.header&&!i.tab)&&icons.some(i=>i.tab==='color'),`${name}: actual toolbar, title-bar and Color tab icons: ${JSON.stringify(icons)}`);
+    assert.equal(await evaluate(`document.querySelector('.dock-tab[data-panel="palettes"] svg')?.dataset.asset`),'palette',`${name}: Palettes tab symbol`);
     const paint=pair.swatches.find(s=>s.slot===expected);
     for(const icon of icons){
       assert.equal(icon.front,expected,`${name}: selected circle drawn last`);
@@ -339,7 +328,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
     }
     await gesture('mouse',await point(swatch('background')));await gesture('mouse',await point(swatch('transparent')));
     await editCompact('#336699','background');await checkPair(`${theme}-compact-background-pair`,'background');
-    const remembered=await read();await gesture('mouse',await point(swatch('transparent')));await gesture('mouse',await point(`${root} [data-quick-color="white"]`));
+    const remembered=await read();await gesture('mouse',await point(swatch('transparent')));await send({type:'color',action:{op:'quick_color',white:true}});
     assert.equal((await read()).slot,'temporary');
     await editCompact('#cc9933','temporary');assert.deepEqual([(await read()).foreground,(await read()).background],[remembered.foreground,remembered.background]);
     await checkPair(`${theme}-temporary-pair`,'foreground');

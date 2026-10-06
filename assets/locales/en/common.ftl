@@ -234,10 +234,6 @@ native-color-swatch-no-match = No palettes or colors match “{ $query }”.
 
 native-color-palettes = Palettes…
 
-native-color-paint-white = Paint with white
-
-native-color-paint-black = Paint with black
-
 native-color-shape = Color shape
 
 native-color-switch-readout = Switch color readout

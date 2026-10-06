@@ -17,7 +17,8 @@ import SwiftUI
                 let row = fixture["rows"][index], panel = row["panel"]
                 HStack(spacing: 2) {
                     ForEach(panel["tiles"].array.indices, id: \.self) { tile in
-                        ToolbarTileButton(panel: panel, tile: panel["tiles"][tile], palette: palette, colors: JSON(["foreground": fixture["color"].raw, "background": [1, 1, 1, 1]])) {}
+                        ToolbarTileButton(panel: panel, tile: panel["tiles"][tile], palette: palette) {}
+                            .environment(\.paintPair, JSON(["foreground": fixture["color"].raw, "background": [1, 1, 1, 1]]))
                             .frame(width: row["size"][0].number, height: row["size"][1].number)
                     }
                 }.frame(width: width - 12, alignment: .leading)

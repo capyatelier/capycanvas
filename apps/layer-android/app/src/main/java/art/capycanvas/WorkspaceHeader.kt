@@ -321,8 +321,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                         }
                     }) {
                     val iconSize = if (kind == "capy") size.number("tile") * 440f / 512f else size.number("icon")
-                    if (item.objectOrNull("control")?.optString("kind") == "color") PaintPairIcon(snapshot.getJSONObject("paint_pair"), label, Modifier.size(iconSize.dp))
-                    else SharedIcon(icon, label, Modifier.size(iconSize.dp))
+                    LiveIcon(host, icon, label, Modifier.size(iconSize.dp))
                 }
             }
             if (!editing && spec.optBoolean("has_variants")) ToolGroupIndicator(

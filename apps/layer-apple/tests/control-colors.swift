@@ -26,7 +26,8 @@ import SwiftUI
                                     selected: selected, enabled: enabled) {}
                             } else {
                                 let tile = original.replacing("selected", with: JSON(selected)).replacing("enabled", with: JSON(enabled))
-                                ToolbarTileButton(panel: panel, tile: tile, palette: palette, colors: JSON(["foreground": fixture["color"].raw, "background": [1, 1, 1, 1]])) {}
+                                ToolbarTileButton(panel: panel, tile: tile, palette: palette) {}
+                                    .environment(\.paintPair, JSON(["foreground": fixture["color"].raw, "background": [1, 1, 1, 1]]))
                             }
                         }.frame(width: 36, height: 36)
                     }

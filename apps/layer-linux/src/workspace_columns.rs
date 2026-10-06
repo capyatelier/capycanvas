@@ -112,10 +112,7 @@ impl Columns {
                         button.add_css_class("flat");
                         button.add_css_class("tile-button");
                         button.set_size_request(TILE_SIZE as i32, TILE_SIZE as i32);
-                        let image =
-                            crate::icons::image(&format!("layer-{}-symbolic", config.icon()));
-                        image.set_pixel_size(20);
-                        button.set_child(Some(&image));
+                        button.set_child(Some(&w.customization.icon(w, config.icon(), 20)));
                         // An icon tile remains a held source even though it moves a panel.
                         button.add_css_class("drag-hold");
                         w.install_panel_drag(&button, DockItem::Panel { panel: icon.panel });

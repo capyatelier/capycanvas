@@ -10,10 +10,10 @@ mod okhsv;
 mod editor;
 mod text;
 mod hdr_picker;
-mod quick_colors;
+#[cfg(test)]
+mod quick_color_tests;
 mod paint_pair;
 pub use paint_pair::{PaintPairView, PaintSwatchView};
-pub use quick_colors::QuickColorView;
 use hdr_picker::HdrPaint;
 mod hdr_arc;
 pub use hdr_arc::HdrIntensityArc;
@@ -183,7 +183,6 @@ pub struct ColorPanelView {
     pub components: [ColorComponentView; 3],
     pub front_swatch: ColorSlot,
     pub swatches: [ColorSwatchView; 3],
-    pub quick_colors: [QuickColorView; 2],
 }
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ColorHueStop {
@@ -329,7 +328,6 @@ impl ColorState {
                 numeric: Self::component_control(i).unwrap(),
             }),
             front_swatch: self.front_swatch(),
-            quick_colors: self.quick_colors_localized(localizer),
             swatches: {
                 let rgba = [
                     self.preview_in(self.foreground, display),
@@ -1104,15 +1102,13 @@ fn render_okhsv_disc_in(
 }
 
 /// A color wheel and compact footer, down to four tiles (128px after insets).
-/// Arrays are x/y/width/height in host logical pixels. Swatch groups overlap.
+/// Arrays are x/y/width/height in host logical pixels. Only the paint pair overlaps.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ColorPanelLayout {
     pub wheel: [f32; 4],
     pub foreground: [f32; 4],
     pub background: [f32; 4],
     pub transparent: [f32; 4],
-    pub black: [f32; 4],
-    pub white: [f32; 4],
     pub swap: [f32; 4],
     pub edit: [f32; 4],
     pub shapes: [[f32; 4]; 2],
@@ -1129,54 +1125,28 @@ impl ColorPanelLayout {
             && (point[0] - x - width * 0.5).hypot(point[1] - y - height * 0.5)
                 <= width.min(height) * 0.5
     }
-    /// Keep the remembered swatches clear of the HDR arc and align the shortcuts.
+    /// Preserve each swatch's SDR edge clearance from the new outer arc.
     pub fn with_hdr(size: f32) -> Option<Self> {
         let mut layout = Self::new(size)?;
         let wheel = ColorWheelGeometry::new(layout.wheel[2])?;
         let arc = HdrIntensityArc::new(size)?;
         let expansion = arc.radius + arc.width * 0.5 - wheel.outer;
         let old_background_y = layout.background[1];
-        for b in [&mut layout.foreground, &mut layout.background] {
+        for b in [&mut layout.foreground, &mut layout.background, &mut layout.transparent] {
             let dx = b[0] + b[2] * 0.5 - arc.center[0];
             let dy = b[1] + b[3] * 0.5 - arc.center[1];
             let distance = dx.hypot(dy) + expansion;
             b[1] = arc.center[1] + (distance * distance - dx * dx).sqrt() - b[3] * 0.5;
         }
         layout.swap[1] += layout.background[1] - old_background_y;
-        layout.align_neutral_swatches(size);
-        // The caption has its own compact row below both swatch groups.
+        // The caption has its own compact row below the swatches.
         let font = (size * 0.044).clamp(9., 12.);
         layout.intensity_caption = [size * 0.5, layout.height() + font + 2., font];
         Some(layout)
     }
-    fn align_neutral_swatches(&mut self, size: f32) {
-        self.transparent[1] = self.foreground[1];
-        let center = size * 0.5;
-        let mut previous = self.transparent;
-        let radius = previous[2] * 0.5;
-        let edge_distance = (previous[0] + radius - center)
-            .hypot(previous[1] + radius - center) - radius;
-        let bottom = self.background[1] + self.background[3];
-        for circle in [&mut self.black, &mut self.white] {
-            let previous_radius = previous[2] * 0.5;
-            let dx = previous[0] + previous_radius - center;
-            let dy = previous[1] + previous_radius - center;
-            let previous_distance = dx.hypot(dy);
-            let radius = circle[2] * 0.5;
-            let distance = edge_distance + radius;
-            // Overlap the circles while leaving each center available to tap.
-            let separation = ((previous_radius + radius) * 0.56).max(previous_radius + 1.);
-            let cosine = ((previous_distance * previous_distance + distance * distance
-                - separation * separation) / (2. * previous_distance * distance)).clamp(-1., 1.);
-            let angle = dy.atan2(dx) + cosine.acos();
-            circle[0] = center + distance * angle.cos() - radius;
-            circle[1] = (center + distance * angle.sin() - radius).min(bottom - circle[3]);
-            previous = *circle;
-        }
-    }
-    /// Include the complete swatch groups and the optional HDR caption.
+    /// Include the swatches and the optional HDR caption.
     pub fn height(&self) -> f32 {
-        [self.foreground, self.background, self.transparent, self.black, self.white, self.swap]
+        [self.foreground, self.background, self.transparent, self.swap]
             .into_iter().map(|b| b[1] + b[3]).fold(0., f32::max)
             .max(self.intensity_caption[1] + 3.)
     }
@@ -1191,20 +1161,16 @@ impl ColorPanelLayout {
         let bg = (fg * 0.8).round();
         let background = [(fg * 0.54).round(), size - bg, bg, bg];
         let c = size * 0.5;
-        let foreground = [0., (size - fg - bg * 0.26).round(), fg, fg];
-        let transparent = [size - bg, foreground[1], bg, bg];
-        let white = (bg * 0.64).round().max(20.);
-        let black = (bg * 0.8).round().max(white + 2.);
+        let distance = (background[0] + bg * 0.5 - c).hypot(background[1] + bg * 0.5 - c);
+        let transparent = (c + distance / std::f32::consts::SQRT_2 - bg * 0.5).round();
         let swap = (size * 0.085).round().clamp(20., 24.);
         let shape = (size * 0.1).round().clamp(24., 28.);
         let angles = [-57_f32, -33.];
-        let mut layout = Self {
+        Some(Self {
             wheel,
-            foreground,
+            foreground: [0., (size - fg - bg * 0.26).round(), fg, fg],
             background,
-            transparent,
-            black: [0., 0., black, black],
-            white: [0., 0., white, white],
+            transparent: [transparent, transparent, bg, bg],
             edit: [size - swap, 0., swap, swap],
             swap: [background[0] + bg + 2., size - swap, swap, swap],
             shapes: angles.map(|angle| {
@@ -1221,9 +1187,7 @@ impl ColorPanelLayout {
             readout: [0., 0., c.round(), c.round()],
             readout_radius: (size - 28.) * 0.49 + 6.,
             intensity_caption: [0.; 3],
-        };
-        layout.align_neutral_swatches(size);
-        Some(layout)
+        })
     }
 }
 
@@ -1471,7 +1435,6 @@ mod tests {
         assert_eq!(english.marker_color, japanese.marker_color);
         assert_eq!(japanese.components[0].name, ja.text(crate::MessageId::COLOR_FORM_FIELD_HUE));
         assert_eq!(japanese.swatches[0].label, ja.text(crate::MessageId::COMMANDS_FOREGROUND_COLOR));
-        assert_eq!(japanese.quick_colors[1].label, ja.text(crate::MessageId::NATIVE_COLOR_PAINT_WHITE));
         assert!(japanese.readout_description.contains(ja.text(crate::MessageId::COLOR_FORM_FIELD_CHROMA).as_ref()));
         assert!(japanese.readout_description.ends_with(ja.text(crate::MessageId::NATIVE_COLOR_SWITCH_READOUT).as_ref()));
         assert_ne!(english.readout_description, japanese.readout_description);
@@ -1703,8 +1666,6 @@ mod tests {
                 l.foreground,
                 l.background,
                 l.transparent,
-                l.black,
-                l.white,
                 l.swap,
                 l.shapes[0],
                 l.shapes[1],
@@ -1722,34 +1683,19 @@ mod tests {
             let [a, b] = l.shapes;
             assert!((a[0] - b[0]).hypot(a[1] - b[1]) >= a[2] - 0.5);
             assert_eq!(l.background[2], l.transparent[2]);
-            assert_eq!(l.foreground[1], l.transparent[1]);
-            assert_eq!(l.transparent[0], size as f32 - l.transparent[2]);
-            assert!(l.white[2] >= 20. && l.white[2] < l.black[2] && l.black[2] < l.transparent[2]);
             assert!(l.foreground[2] > l.background[2]);
         }
     }
 
     #[test]
-    fn neutral_swatches_shrink_along_an_equal_gap_arc() {
+    fn transparency_mirrors_the_background_swatch_across_the_wheel_diagonal() {
         for size in 128..=600 {
-            for l in [
-                ColorPanelLayout::new(size as f32),
-                ColorPanelLayout::with_hdr(size as f32),
-            ] {
-                let l = l.unwrap();
-                let c = size as f32 * 0.5;
-                let gap =
-                    |b: [f32; 4]| (b[0] + b[2] * 0.5 - c).hypot(b[1] + b[3] * 0.5 - c) - b[2] * 0.5;
-                let center = |b: [f32; 4]| (b[0] + b[2] * 0.5 - c).hypot(b[1] + b[3] * 0.5 - c);
-                for b in [l.black, l.white] {
-                    let difference = (gap(b) - gap(l.transparent)).abs();
-                    assert!(difference < if size < 200 { 1.5 } else { 0.01 }, "{size}: {b:?} {difference}");
-                }
-                assert!(
-                    center(l.transparent) > center(l.black) && center(l.black) > center(l.white)
-                );
-                assert!(l.white[1] + l.white[3] <= l.background[1] + l.background[3]);
-            }
+            let l = ColorPanelLayout::new(size as f32).unwrap();
+            let c = size as f32 * 0.5;
+            let center = |b: [f32; 4]| (b[0] + b[2] * 0.5 - c).hypot(b[1] + b[3] * 0.5 - c);
+            assert_eq!(l.transparent[0], l.transparent[1], "{size}");
+            assert!((center(l.transparent) - center(l.background)).abs() <= 0.75, "{size}");
+            assert_eq!(l.height(), size as f32);
         }
     }
 

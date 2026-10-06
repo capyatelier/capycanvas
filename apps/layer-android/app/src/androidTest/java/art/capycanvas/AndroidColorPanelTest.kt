@@ -159,10 +159,16 @@ class AndroidColorPanelTest {
         layout.put("header", obj("size" to "small", "next_id" to 903, "zones" to JSONArray(listOf(
             JSONArray().put(obj("id" to 902, "item" to obj("kind" to "tool", "control" to obj("kind" to "color")))), JSONArray(), JSONArray()))))
         action(obj("type" to "restore_workspace", "workspace" to workspace))
-        action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "float", "position" to JSONArray(listOf(120, 120))),
-            "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
-        waitFor("live paint icons") { find("tile-icon-toolbar-900") != null && find("header-control-902") != null }
+        val viewport = JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))
+        action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "float", "position" to JSONArray(listOf(120, 120))), "viewport" to viewport))
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "palettes", "visible" to true)))
+        action(obj("type" to "move_panel", "panel" to "palettes", "target" to obj("kind" to "tab", "group" to colorGroup()), "viewport" to viewport))
+        action(obj("type" to "select_panel_tab", "group" to colorGroup(), "panel" to "color"))
+        waitFor("live paint icons") { paintIconTags.all { find(it) != null } && find("tab-icon-palettes") != null }
+        assertEquals("palette", host.snapshot!!.array("panels").objects().first { it.getString("id") == "palettes" }.getString("icon"))
     }
+    private val paintIconTags = listOf("tile-icon-toolbar-900", "header-control-902", "tab-icon-color")
+    private fun colorGroup() = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "color" in it.array("panels").values() }.getInt("id")
     private fun assertPaintIcons(name: String) {
         settle()
         val committed = CountDownLatch(1)
@@ -179,7 +185,7 @@ class AndroidColorPanelTest {
         val header = host.snapshot!!.getJSONObject("header")
         val iconSize = header.array("sizes").objects().first { it.getString("id") == header.getJSONObject("model").getString("size") }.number("icon") * density
         val headerCenter = bounds("header-control-902").center
-        val regions = listOf(bounds("tile-icon-toolbar-900"), androidx.compose.ui.geometry.Rect(headerCenter - Offset(iconSize / 2, iconSize / 2), androidx.compose.ui.geometry.Size(iconSize, iconSize)))
+        val regions = listOf(bounds("tile-icon-toolbar-900"), androidx.compose.ui.geometry.Rect(headerCenter - Offset(iconSize / 2, iconSize / 2), androidx.compose.ui.geometry.Size(iconSize, iconSize)), bounds("tab-icon-color"))
         for ((index, region) in regions.withIndex()) {
             val crop = Bitmap.createBitmap(screenshot, (region.left + origin[0]).roundToInt(), (region.top + origin[1]).roundToInt(), region.width.roundToInt(), region.height.roundToInt())
             File(output, "$name-icon-$index.png").outputStream().use { crop.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -358,7 +364,7 @@ class AndroidColorPanelTest {
     }
     @Test fun retainedPaintIconsAndCompactControlFollowCommittedContext() {
         paintPairFixture()
-        val ids = listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id)
+        val ids = paintIconTags.map { node(it).id }
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
             for ((slot, rgba) in listOf("foreground" to listOf(.85, .12, .18, 1), "background" to listOf(.08, .28, .9, 1)))
@@ -400,7 +406,7 @@ class AndroidColorPanelTest {
             assertPaintIcons("$theme-mask")
             action(obj("type" to "invoke", "command" to "quick_mask"))
             assertPaintIcons("$theme-artwork-restored")
-            assertEquals(ids, listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id))
+            assertEquals(ids, paintIconTags.map { node(it).id })
         }
     }
     @Test fun retainedPaintIconsUseMappedRenditionAndIgnorePickerHover() {
@@ -417,7 +423,7 @@ class AndroidColorPanelTest {
         } finally { Native.projectFree(task) }
         instrumentation.runOnMainSync { host.documentChanged() }
         waitFor("HDR document ready", 60_000) { view().optBoolean("hdr") && host.snapshot?.optBoolean("brush_ready") == true }
-        val ids = listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id)
+        val ids = paintIconTags.map { node(it).id }
         color(obj("op" to "definition", "color" to srgbLinear(4.0, 1.0, .25, alpha = .5)))
         val definition = paintPair().getJSONObject("definition").toString()
         for (theme in listOf("light", "dark")) {
@@ -433,7 +439,7 @@ class AndroidColorPanelTest {
             waitFor("committed rendition updates live icons") { paintPair().array("swatches").toString() != initial }
             assertEquals("Rendition retains authored paint", definition, paintPair().getJSONObject("definition").toString())
             assertPaintIcons("$theme-hdr-mapped")
-            assertEquals(ids, listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id))
+            assertEquals(ids, paintIconTags.map { node(it).id })
             val committed = paintPair().toString()
             action(obj("type" to "invoke", "command" to "fit_canvas"))
             action(obj("type" to "invoke", "command" to "eyedropper"))
@@ -664,9 +670,9 @@ class AndroidColorPanelTest {
                 val wheel = bounds("color-wheel")
                 assertTrue("Wheel and footer at $width", stage.height >= stage.width)
                 assertTrue("Whole picker fits $width", stage.width <= (width - 16) * density + 1.5f && stage.width >= 128 * density - 1.5f)
-                val layout = JSONObject(Native.colorUi(obj("type" to "layout", "size" to stage.width / density).toString()))
-                for (slot in listOf("foreground", "background", "transparent", "black", "white", "swap", "wheel")) {
-                    val b = bounds(when (slot) { "wheel", "swap" -> "color-$slot"; "black", "white" -> "color-quick-$slot"; else -> "color-swatch-$slot" })
+                val layout = JSONObject(Native.colorUi(obj("type" to "layout", "size" to (stage.width / density).coerceAtLeast(128f)).toString()))
+                for (slot in listOf("foreground", "background", "transparent", "swap", "wheel")) {
+                    val b = bounds(when (slot) { "wheel", "swap" -> "color-$slot"; else -> "color-swatch-$slot" })
                     val expected = layout.getJSONArray(slot)
                     assertEquals("$slot x", expected.getDouble(0).toFloat() * density, b.left - stage.left, 1.5f)
                     assertEquals("$slot y", expected.getDouble(1).toFloat() * density, b.top - stage.top, 1.5f)
@@ -794,33 +800,6 @@ class AndroidColorPanelTest {
             color(obj("op" to "select", "slot" to "foreground"))
         }
     }
-    @Test fun neutralShortcutsPreserveRememberedColorsWithTouchPenAndMouse() {
-        resize(280, 340)
-        for (device in tools) {
-            tool = device
-            color(obj("op" to "select", "slot" to "foreground"))
-            action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.2, .7, .4, 1))))
-            val foreground = colors().getJSONObject("foreground").toString()
-            val background = colors().getJSONObject("background").toString()
-            tap(bounds("color-swatch-transparent").center)
-            assertEquals("transparent", colors().getString("slot"))
-            for (white in listOf(false, true, false)) {
-                tap(bounds(if (white) "color-quick-white" else "color-quick-black").center)
-                assertEquals("temporary", colors().getString("slot"))
-                assertEquals(foreground, colors().getJSONObject("foreground").toString())
-                assertEquals(background, colors().getJSONObject("background").toString())
-                val rgba = colors().getJSONObject("temporary").getJSONArray("rgba")
-                for (i in 0..2) assertEquals(if (white) 1.0 else 0.0, rgba.getDouble(i), .00001)
-            }
-            tap(bounds("color-swatch-foreground").center)
-            tap(bounds("color-quick-white").center)
-            assertEquals("foreground", colors().getString("slot"))
-            assertEquals(background, colors().getJSONObject("background").toString())
-            assertEquals(1.0, colors().getJSONObject("foreground").getJSONArray("rgba").getDouble(0), .00001)
-        }
-        capture("neutral-shortcuts")
-    }
-
     private fun menuOpen(): Boolean {
         var present = false
         instrumentation.runOnMainSync { present = findTag("color-swap-menu") != null }

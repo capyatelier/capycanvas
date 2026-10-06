@@ -90,13 +90,13 @@ struct WorkspaceTabDrag::Impl {
         place(overlay,clip);overlay.Background(CapyUi::clear());
         RectangleGeometry mask;mask.Rect({0,0,float(num(clip,L"width")),float(num(clip,L"height"))});overlay.Clip(mask);
         animate=Windows::UI::ViewManagement::UISettings().AnimationsEnabled();
-        A hits;
+        A hits;Bindings paintIcons;
         for(uint32_t i=0;i<entries.size();++i){
             auto& entry=entries[i];hits.Append(entry.hit);
             StackPanel row;row.Orientation(Orientation::Horizontal);row.Spacing(6);
             row.HorizontalAlignment(HorizontalAlignment::Center);row.VerticalAlignment(VerticalAlignment::Center);
             auto presentation=object(entry.model,L"tab");
-            if(flag(presentation,L"show_icon"))row.Children().Append(icon(str(entry.model,L"icon"),data->theme()));
+            if(flag(presentation,L"show_icon"))row.Children().Append(panelIcon(data,str(entry.model,L"icon"),paintIcons));
             if(flag(presentation,L"show_name"))row.Children().Append(label(data,str(entry.model,L"title"),true));
             Border content;content.Padding({8,4,8,4});content.Child(row);
             auto copy=panelTabShell(content,entry.active?Brush(data->glass(L"tab")):Brush(nullptr));

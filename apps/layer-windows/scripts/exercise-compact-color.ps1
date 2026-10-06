@@ -105,7 +105,7 @@ function Assert-Rim([string]$Id,[string]$Name){
     $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
     $snapshot=Model
     $front='color-'+$snapshot.color_panel.front_swatch
-    $order=@('color-white','color-black','color-background','color-foreground','color-transparent')|Where-Object {$_ -ne $front}
+    $order=@('color-background','color-foreground','color-transparent')|Where-Object {$_ -ne $front}
     $order=@($order)+@($front);$index=[Array]::IndexOf($order,$Id)
     $covers=@($order|Select-Object -Skip ($index+1)|ForEach-Object {(Control $_ -Arranged).Current.BoundingRectangle})
     $ink=[Drawing.ColorTranslator]::FromHtml($snapshot.state.palette.text)
@@ -148,6 +148,14 @@ function Pair-Text([string]$Id,[string]$Value){
     }
     $pattern.SetValue($Value)
 }
+function Quick-Color([string]$Label){
+    (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x4B)
+    Wait-Until {$search=Find 'command-search';$search -and !$search.Current.IsOffscreen} 'Command search did not open'
+    (Find 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Label)
+    Wait-Until {$row=Find 'command-result-0';$row -and $row.Current.Name -eq $Label} "Command search did not rank $Label first"
+    [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
+    Wait-Until {$search=Find 'command-search';!$search -or $search.Current.IsOffscreen} 'Command search did not close'
+}
 function Pair-Park{
     $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
     [CapyRowPointer]::Hover([int]($bounds.X+$bounds.Width/2),[int]($bounds.Y+$bounds.Height/2))
@@ -162,7 +170,11 @@ function Pair-Controls{
     $frame=Control ('header-item-'+$entry.id) -Arranged
     $button=$frame.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))
     $size=@($snapshot.header.sizes|Where-Object id -eq $snapshot.header.model.size)[0].icon
-    @(@{kind='header';button=$button;size=$size;labels=0},@{kind='toolbar';button=(Control ('tile-toolbar-'+$tile.id) -Arranged);size=$geometry.tile_icon_size;labels=$geometry.tile_label_lines})
+    $tab=Control 'panel-tab-color' -Arranged
+    $named=$tab.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text))
+    @(@{kind='header';button=$button;size=$size;center=$null},
+        @{kind='toolbar';button=(Control ('tile-toolbar-'+$tile.id) -Arranged);size=$geometry.tile_icon_size;center=$(if($geometry.tile_label_lines -gt 0){18}else{$null})},
+        @{kind='tab';button=$tab;size=16;center=$null;title=$(if($named -and !$named.Current.IsOffscreen){$named}else{$null})})
 }
 function Pair-Setup{
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1800 -Height 1300
@@ -184,7 +196,39 @@ function Pair-Setup{
     Wait-Until {!(Model).picker} 'Header color picker did not close'
     Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Header color editor did not finish'
     $script:pairIdentities=@{}
-    foreach($control in (Pair-Controls)){$script:pairIdentities[$control.kind]=$control.button.GetRuntimeId() -join ':'}
+    foreach($control in (Pair-Controls)|Where-Object {$_.kind -ne 'tab'}){$script:pairIdentities[$control.kind]=$control.button.GetRuntimeId() -join ':'}
+}
+function Pair-Glyph($Bitmap,$Control,$Pair,[double]$Left,[double]$Top,[double]$Unit){
+    $samples=@()
+    foreach($slot in @('foreground','background')){
+        $swatch=@($Pair.swatches|Where-Object slot -eq $slot)[0]
+        $center=if($slot -eq 'foreground'){6.75}else{11.};$radius=if($slot -eq 'foreground'){6.}else{4.25}
+        $otherCenter=if($slot -eq 'foreground'){11.}else{6.75};$otherRadius=if($slot -eq 'foreground'){4.25}else{6.}
+        $seen=@{};$count=0
+        for($y=0;$y -lt 16;$y++){
+            for($x=0;$x -lt 16;$x++){
+                $at=@([int][Math]::Floor($Left+($x+.5)*$Unit),[int][Math]::Floor($Top+($y+.5)*$Unit))
+                $cx=($at[0]+.5-$Left)/$Unit;$cy=($at[1]+.5-$Top)/$Unit
+                if([Math]::Sqrt([Math]::Pow($cx-$center,2)+[Math]::Pow($cy-$center,2)) -ge $radius-1.5){continue}
+                if($slot -ne $Pair.front_swatch -and [Math]::Sqrt([Math]::Pow($cx-$otherCenter,2)+[Math]::Pow($cy-$otherCenter,2)) -le $otherRadius+1){continue}
+                if($swatch.rgba[3] -lt 1){
+                    $cell=$Pair.checker_cell;$dx=($cx-$center+$radius)%$cell;$dy=($cy-$center+$radius)%$cell
+                    if([Math]::Min($dx,$cell-$dx)*$Unit -lt 1.5 -or [Math]::Min($dy,$cell-$dy)*$Unit -lt 1.5){continue}
+                }
+                $pixel=Swatch-Pixel $Bitmap $at;$best=255;$which=-1
+                for($i=0;$i -lt 2;$i++){
+                    $difference=0;for($channel=0;$channel -lt 3;$channel++){$difference=[Math]::Max($difference,[Math]::Abs($pixel[$channel]-255*$swatch.checker[$i][$channel]))}
+                    if($difference -lt $best){$best=$difference;$which=$i}
+                }
+                $samples+=@{control=$Control.kind;slot=$slot;point=$at;canonical=@($cx,$cy);origin=@($Left,$Top);unit=$Unit;rgb=$pixel;difference=$best}
+                if($best -gt 8){return @{samples=$samples;failure="$($Control.kind) $slot glyph shows $($pixel -join ',') outside its shared opaque checker colors"}}
+                $seen[$which]=$true;$count++
+            }
+        }
+        if($count -lt 6){return @{samples=$samples;failure="has too few visible $slot icon samples"}}
+        if([Math]::Abs($swatch.checker[0][0]-$swatch.checker[1][0])*255 -gt 16 -and $seen.Count -ne 2){return @{samples=$samples;failure="$slot glyph omitted a shared checker color"}}
+    }
+    @{samples=$samples;failure=$null}
 }
 function Assert-Pair([string]$Name){
     Pair-Park;$snapshot=Model;$pair=$snapshot.paint_pair
@@ -193,41 +237,22 @@ function Assert-Pair([string]$Name){
     $bitmap=[Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')));$samples=@()
     try{
         foreach($control in $controls){
-            if(($control.button.GetRuntimeId() -join ':') -ne $script:pairIdentities[$control.kind]){throw "$Name replaced retained $($control.kind) color button"}
+            if($script:pairIdentities.ContainsKey($control.kind) -and ($control.button.GetRuntimeId() -join ':') -ne $script:pairIdentities[$control.kind]){throw "$Name replaced retained $($control.kind) color button"}
             $bounds=$control.button.Current.BoundingRectangle
             $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.;$unit=$control.size*$scale/16.
             if($unit -le 0){throw "Missing canonical icon size for $($control.kind)"}
-            $left=$bounds.X+$bounds.Width/2-8*$unit
-            if($control.labels -gt 0){$left=$bounds.X+18*$scale-8*$unit}
-            $top=$bounds.Y+$bounds.Height/2-8*$unit
-            foreach($slot in @('foreground','background')){
-                $swatch=@($pair.swatches|Where-Object slot -eq $slot)[0]
-                $center=if($slot -eq 'foreground'){6.75}else{11.};$radius=if($slot -eq 'foreground'){6.}else{4.25}
-                $otherCenter=if($slot -eq 'foreground'){11.}else{6.75};$otherRadius=if($slot -eq 'foreground'){4.25}else{6.}
-                $seen=@{};$count=0
-                for($y=0;$y -lt 16;$y++){
-                    for($x=0;$x -lt 16;$x++){
-                        $at=@([int][Math]::Floor($left+($x+.5)*$unit),[int][Math]::Floor($top+($y+.5)*$unit))
-                        $cx=($at[0]+.5-$left)/$unit;$cy=($at[1]+.5-$top)/$unit
-                        if([Math]::Sqrt([Math]::Pow($cx-$center,2)+[Math]::Pow($cy-$center,2)) -ge $radius-1.5){continue}
-                        if($slot -ne $pair.front_swatch -and [Math]::Sqrt([Math]::Pow($cx-$otherCenter,2)+[Math]::Pow($cy-$otherCenter,2)) -le $otherRadius+1){continue}
-                        if($swatch.rgba[3] -lt 1){
-                            $cell=$pair.checker_cell;$dx=($cx-$center+$radius)%$cell;$dy=($cy-$center+$radius)%$cell
-                            if([Math]::Min($dx,$cell-$dx)*$unit -lt 1.5 -or [Math]::Min($dy,$cell-$dy)*$unit -lt 1.5){continue}
-                        }
-                        $pixel=Swatch-Pixel $bitmap $at;$best=255;$which=-1
-                        for($i=0;$i -lt 2;$i++){
-                            $difference=0;for($channel=0;$channel -lt 3;$channel++){$difference=[Math]::Max($difference,[Math]::Abs($pixel[$channel]-255*$swatch.checker[$i][$channel]))}
-                            if($difference -lt $best){$best=$difference;$which=$i}
-                        }
-                        $samples+=@{control=$control.kind;slot=$slot;point=$at;canonical=@($cx,$cy);origin=@($left,$top);unit=$unit;rgb=$pixel;difference=$best}
-                        if($best -gt 8){throw "$Name $($control.kind) $slot glyph shows $($pixel -join ',') outside its shared opaque checker colors"}
-                        $seen[$which]=$true;$count++
-                    }
-                }
-                if($count -lt 6){throw "$Name has too few visible $slot icon samples"}
-                if([Math]::Abs($swatch.checker[0][0]-$swatch.checker[1][0])*255 -gt 16 -and $seen.Count -ne 2){throw "$Name $slot glyph omitted a shared checker color"}
+            $left=if($null -ne $control.center){$bounds.X+$control.center*$scale-8*$unit}else{$bounds.X+$bounds.Width/2-8*$unit}
+            $top=$bounds.Y+$bounds.Height/2-8*$unit;$slack=0
+            if($control.title){$title=$control.title.Current.BoundingRectangle;$left=$title.X-6*$scale-16*$unit;$top=$title.Y+$title.Height/2-8*$unit;$slack=2}
+            $offsets=@(foreach($dy in -$slack..$slack){foreach($dx in -$slack..$slack){@{x=$dx;y=$dy}}})|Sort-Object {[Math]::Abs($_.x)+[Math]::Abs($_.y)}
+            $glyph=$null
+            foreach($offset in $offsets){
+                $attempt=Pair-Glyph $bitmap $control $pair ($left+$offset.x) ($top+$offset.y) $unit
+                if(!$glyph){$glyph=$attempt}
+                if(!$attempt.failure){$glyph=$attempt;break}
             }
+            $samples+=$glyph.samples
+            if($glyph.failure){throw "$Name $($glyph.failure)"}
         }
     }finally{$bitmap.Dispose();$samples|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ($Name+'-pixels.json'))}
 }
@@ -256,9 +281,9 @@ function Pair-Journey{
         Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent did not select for icon memory'
         Assert-Pair "pair-$slot-transparent"
     }
-    foreach($name in @('black','white')){
-        Invoke "color-$name";Wait-Until {(Model).state.colors.slot -eq 'temporary'} 'Quick color did not enter Temporary'
-        Assert-Pair "pair-temporary-$name"
+    foreach($name in @('Black','White')){
+        Quick-Color $name;Wait-Until {(Model).state.colors.slot -eq 'temporary'} "$name did not enter Temporary"
+        Assert-Pair "pair-temporary-$($name.ToLower())"
     }
     if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $document){throw 'Icon selection changed artwork history'}
     (Control 'panel-tab-sizes').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
@@ -311,7 +336,7 @@ function Pair-Journey{
 
 function Swatch-Journey{
     $document=(Model).state.document_file|ConvertTo-Json -Compress
-    $ids=@('color-foreground','color-background','color-transparent','color-black','color-white')
+    $ids=@('color-foreground','color-background','color-transparent')
     $retained=@{};foreach($id in $ids){$retained[$id]=(Control $id).GetRuntimeId() -join ':'}
     foreach($device in @('mouse','pen','touch')){
         foreach($slot in @('background','foreground')){
@@ -343,16 +368,7 @@ function Swatch-Journey{
         if(!$button.Current.HasKeyboardFocus){throw 'Raising the focused swatch lost keyboard focus'}
         Park-Pointer;Assert-Front $slot "keyboard-$slot-front"
     }
-    foreach($name in @('black','white')){
-        Invoke 'color-background';Wait-Until {(Model).state.colors.slot -eq 'background'} 'Background did not select before quick color'
-        Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent did not select before quick color'
-        Swatch-Tap 'mouse' (Swatch-Point "color-$name")
-        Wait-Until {(Model).state.colors.slot -eq 'temporary'} "Quick $name did not select"
-        Park-Pointer;Assert-Rim "color-$name" "$name-selected";Assert-Front 'foreground' "$name-front"
-        Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent did not select before quick hover'
-        $at=Swatch-Point "color-$name";[CapyRowPointer]::Hover($at[0],$at[1]);Assert-Rim "color-$name" "$name-hover"
-        Park-Pointer;[CapyRowPointer]::PenHover($at[0],$at[1]);Assert-Rim "color-$name" "$name-pen-hover";[CapyRowPointer]::PenLeave()
-    }
+    Invoke 'color-transparent';Wait-Until {(Model).state.colors.slot -eq 'transparent'} 'Transparent did not select before the corner tap'
     Park-Pointer
     $bounds=(Control 'color-foreground' -Arranged).Current.BoundingRectangle
     $corner=@([int]($bounds.X+1),[int]($bounds.Y+1))
@@ -484,7 +500,7 @@ try{
         foreach($check in @('swatch_overlap_and_transparent_memory','retained_swatch_focus','circular_swatch_hits','keyboard_activation','document_unchanged')){$result[$check]='passed'}
         if($Journey -ne 'input'){$result['selected_and_hover_rims']='passed'}
     }
-    if($Journey -in @('full','pair-dark','pair-light')){$result['retained_header_and_toolbar_pair_pixels']='passed';$result['temporary_active_preview']='passed';$result['mask_alpha_and_rendition']='passed'}
+    if($Journey -in @('full','pair-dark','pair-light')){$result['retained_header_toolbar_and_tab_pair_pixels']='passed';$result['temporary_active_preview']='passed';$result['mask_alpha_and_rendition']='passed'}
     if($Journey -eq 'full'){
         foreach($check in @('shapes_and_readouts','mouse_pen_touch_fields_and_ring','cancellation','retained_controls','paint_slots_and_swap','native_context_menus','mouse_hold_no_menu','retained_drawer_input')){$result[$check]='passed'}
     }

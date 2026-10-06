@@ -222,8 +222,6 @@ copy_struct! { ColorCopy {
     swatch_search: NATIVE_COLOR_SWATCH_SEARCH,
     palettes: NATIVE_COLOR_PALETTES,
     swap: COMMANDS_SWAP_FOREGROUND_AND_BACKGROUND,
-    paint_white: NATIVE_COLOR_PAINT_WHITE,
-    paint_black: NATIVE_COLOR_PAINT_BLACK,
     shape: NATIVE_COLOR_SHAPE,
     switch_readout: NATIVE_COLOR_SWITCH_READOUT,
     circle: NATIVE_COLOR_CIRCLE,

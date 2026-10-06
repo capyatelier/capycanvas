@@ -270,6 +270,7 @@ inline void inheritLanguage(FrameworkElement const& element,std::shared_ptr<Work
         auto owner=weak.get();auto data=source.lock();if(!owner||!data)return false;owner.Language(data->language());return true;
     });
 }
+FrameworkElement panelIcon(std::shared_ptr<WorkspaceData> const& data,hstring const& name,Bindings& bindings,double size=16);
 inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){return data->tint(L"button",13);}
 inline SolidColorBrush headerSurface(std::shared_ptr<WorkspaceData> const& data){return data->glass(L"chip");}
 inline SolidColorBrush selected(std::shared_ptr<WorkspaceData> const& data){return data->glassSurfaces?data->glass(L"selection"):data->brush(L"selection");}

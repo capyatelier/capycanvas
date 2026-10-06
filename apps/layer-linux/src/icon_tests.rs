@@ -107,10 +107,18 @@ fn native_color_pair_updates() {
     workspace.layout.header.add(HeaderZone::Left, None, &[HeaderItem::Menu, HeaderItem::Tool { control: ToolbarControl::Color }]).unwrap();
     workspace.layout.set_panel_visible(Panel::Sizes, true).unwrap();
     workspace.layout.set_panel_visible(Panel::Color, true).unwrap();
-    workspace.layout.move_panel([w.surface.width() as f32, w.surface.height() as f32], Panel::Color,
-        DockTarget::Float { position: [600., 120.] }).unwrap();
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    workspace.layout.move_panel(viewport, Panel::Color, DockTarget::Float { position: [600., 120.] }).unwrap();
+    let group = workspace.layout.panel_group(Panel::Color).unwrap();
+    workspace.layout.set_panel_visible(Panel::Palettes, true).unwrap();
+    workspace.layout.move_panel(viewport, Panel::Palettes, DockTarget::Tab { group, index: None }).unwrap();
     w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    let group = state(&w).workspace.layout.panel_group(Panel::Color).unwrap();
+    w.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Color });
     show(&w, Panel::Sizes);
+    let color_group = || std::iter::successors(w.panel_widget(Panel::Color).parent(), |p| p.parent())
+        .find(|p| find_named(p, "layer-colors-symbolic").is_some()).unwrap();
+    let tab_icon = |name: &str| find_named(&color_group(), name).unwrap();
     input.ready();
     for theme in [Theme::Light, Theme::Dark] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
@@ -130,6 +138,20 @@ fn native_color_pair_updates() {
                 input.click(point);
                 assert!(w.window.visible_dialog().is_none());
                 assert_eq!(state(&w).display_colors().slot, slot);
+            }
+            if style == TileStyle::Small {
+                let tab = tab_icon("layer-colors-symbolic").downcast::<crate::display_color::ColorPair>().unwrap();
+                assert_eq!(tab.imp().size.get(), 14);
+                assert!(tab_icon("layer-palette-symbolic").is::<gtk::Image>());
+                capture_widget(&w.window, &color_group()).save_to_png(output.join(format!("{theme:?}-Color-Tabs.png"))).unwrap();
+                let textures = pair_textures(&tab);
+                for (slot, front) in [(Foreground, Foreground), (Transparent, Foreground), (Background, Background), (Transparent, Background)] {
+                    w.dispatch(UiAction::Color { action: ColorAction::Select { slot } });
+                    pump(60);
+                    assert_eq!(pair_textures(&tab), textures, "selection reuses the tab's paint textures");
+                    check_pair(&w, &tab, front, &output.join(format!("{theme:?}-Tab-{slot:?}-{front:?}.png")));
+                }
+                assert_eq!(&tab_icon("layer-colors-symbolic"), tab.upcast_ref::<gtk::Widget>());
             }
             w.customize(CustomizationAction::ShowAllControls { panel: Panel::Sizes });
             pump(80);

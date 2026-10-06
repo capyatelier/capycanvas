@@ -234,10 +234,6 @@ native-color-swatch-no-match = Нет палитр или цветов, подх
 
 native-color-palettes = Палитры…
 
-native-color-paint-white = Рисовать белым
-
-native-color-paint-black = Рисовать чёрным
-
 native-color-shape = Форма выбора цвета
 
 native-color-switch-readout = Переключить отображение цвета

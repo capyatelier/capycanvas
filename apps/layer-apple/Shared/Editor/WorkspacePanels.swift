@@ -237,7 +237,7 @@ private struct WorkspaceTile: View {
                     .padding(vertical ? .horizontal : .vertical, 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             } else {
-                ToolbarTileButton(panel: panel, tile: tile, palette: palette, colors: store.paintPair, drawerOpen: drawerOpen,
+                ToolbarTileButton(panel: panel, tile: tile, palette: palette, drawerOpen: drawerOpen,
                     drawerDirection: store.contentDrawers.sources["tool"]?.direction) {
                     guard !store.workspace.input.contact.consumeClick() else { return }
                     let anchor: [String: Any] = ["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]

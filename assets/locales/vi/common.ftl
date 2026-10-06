@@ -234,10 +234,6 @@ native-color-swatch-no-match = Không có bảng màu hoặc màu nào khớp v�
 
 native-color-palettes = Bảng màu…
 
-native-color-paint-white = Vẽ bằng màu trắng
-
-native-color-paint-black = Vẽ bằng màu đen
-
 native-color-shape = Hình chọn màu
 
 native-color-switch-readout = Đổi cách hiển thị giá trị màu

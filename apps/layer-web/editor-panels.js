@@ -168,10 +168,6 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     },"color-edit color-utility");
     bindCopy(edit,()=>copy.color.edit_menu,"title");bindCopy(edit,()=>copy.color.edit,"ariaLabel");edit.append(icon("pencil"));stage.append(edit);
     const wheel=element("canvas","color-wheel");bindCopy(wheel,()=>copy.color.wheel,"ariaLabel");stage.append(wheel);
-    const quickColors=[true,false].map(white=>{
-      const node=button("",()=>color({op:"quick_color",white}),"color-swatch");node.dataset.quickColor=white?"white":"black";
-      const paint=element("span");node.append(paint);stage.append(node);return{white,node,paint};
-    });
     const choices=["background","foreground","transparent"].map(slot=>{
       const node=button("",()=>color({op:"select",slot}),"color-swatch");node.dataset.colorSlot=slot;node.ondblclick=()=>{if(slot!=='transparent'){color({op:'select',slot});edit.click();}};
       const paint=element("span");node.append(paint);stage.append(node);return{slot,node,paint};
@@ -220,7 +216,6 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         frameWidth=availableWidth;frameHeight=height;layoutWidth=width;layout=geometry(width);layout.hdr=view.hdr;
         stage.style.width=`${width}px`;stage.style.height=`${layout.height}px`;
         place(wheel,layout.wheel);
-        quickColors.forEach(({white,node})=>place(node,layout[white?"white":"black"]));
         choices.forEach(({slot,node})=>place(node,layout[slot]));
         shapes.forEach((node,i)=>place(node,layout.shapes[i]));
         place(swap,layout.swap);place(readout,layout.readout);place(edit,layout.edit);
@@ -284,7 +279,6 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       if(previewing!==active)painter.invalidate();
       previewing=active;view=preview.view;
       edit.disabled=displayColors().slot==="transparent";
-      quickColors.forEach(({white,node,paint})=>{const preset=view.quick_colors.find(p=>p.white===white);node.title=preset.label;node.setAttribute("aria-label",preset.label);node.setAttribute("aria-pressed",String(preset.selected));paint.style.background=rgba(preset.rgba);});
       choices.forEach(choice=>{
         const zIndex=choice.slot===view.front_swatch?"1":"0";
         if(choice.node.style.zIndex!==zIndex)choice.node.style.zIndex=zIndex;

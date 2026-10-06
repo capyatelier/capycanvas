@@ -131,7 +131,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                         .combinedClickable(onLongClick = { dock.holdContext(target) }, onClick = {
                                             host.customize(obj("type" to "toggle_column_drawer", "group" to group.getInt("group"), "panel" to panel))
                                         }), contentAlignment = Alignment.Center) {
-                                        SharedIcon(view.getString("icon"), view.getString("title"))
+                                        LiveIcon(host, view.getString("icon"), view.getString("title"))
                                     }
                                 }
                             }

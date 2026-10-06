@@ -82,6 +82,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Grid layout{nullptr},header{nullptr};
         StackPanel tabLabels{nullptr};
         std::vector<AutomaticTab> automatic;
+        Bindings paintIcons;
         ScrollView tabScroll{nullptr};
         Microsoft::UI::Xaml::Shapes::Path background,strip;
         std::array<float,4> corners{SurfaceRadius,SurfaceRadius,SurfaceRadius,SurfaceRadius};
@@ -151,7 +152,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
     }
     void build(Group& group,J const& geometry,J const& panel){
-        group.body.reset();group.footer=nullptr;group.tabs.clear();group.automatic.clear();group.backgroundKey=L"";
+        group.body.reset();group.footer=nullptr;group.tabs.clear();group.automatic.clear();group.paintIcons.clear();group.backgroundKey=L"";
         auto groupItem=O({{L"kind",S(L"group")},{L"group",N(num(geometry,L"id"))}});
         float fit=groupRadius(geometry)*CornerFit;group.border.Background(clear());group.border.CornerRadius(CornerRadius{fit,fit,fit,fit});
         if(!group.layout){
@@ -175,7 +176,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 });tab.Height(36);tab.MinWidth(36);tab.Padding(Thickness{8,4,8,4});tab.CornerRadius(CornerRadius{6,6,0,0});
                 StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(6);
                 auto tabStyle=object(model,L"tab");
-                if(flag(tabStyle,L"show_icon")||fitted)content.Children().Append(icon(str(model,L"icon"),data->theme()));
+                if(flag(tabStyle,L"show_icon")||fitted)content.Children().Append(panelIcon(data,str(model,L"icon"),group.paintIcons));
                 if(flag(tabStyle,L"show_name")||fitted){
                     auto name=label(data,str(model,L"title"),true);name.Visibility(flag(tabStyle,L"show_name")?Visibility::Visible:Visibility::Collapsed);content.Children().Append(name);
                     if(fitted)group.automatic.push_back({tab,name,std::wstring(id)+L"\n"+std::wstring(str(model,L"title"))+L"\n"+std::to_wstring(data->textSize())});
@@ -357,6 +358,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 if(auto content=tab.Content().try_as<Panel>())for(auto child:content.Children())if(auto label=child.try_as<TextBlock>())label.Text(title);
                 for(auto& automatic:group.automatic)if(automatic.tab==tab)automatic.key=panelId+L"\n"+std::wstring(title)+L"\n"+std::to_wstring(data->textSize());
             }
+            for(auto const& update:group.paintIcons)update();
             bool hidden=flag(snapshot,L"chrome_hidden")&&!flag(geometry,L"floating");
             group.hidden=hidden;
             int z=flag(geometry,L"floating")?100+2*order:0;++order;

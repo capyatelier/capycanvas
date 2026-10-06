@@ -641,31 +641,17 @@ impl Header {
                 b.add_css_class("header-tool");
                 b.set_tooltip_text(Some(&w.gpu.borrow().as_ref().unwrap().session.header_item_label(entry.item)));
                 let icon = match entry.item {
-                    HeaderItem::Tool {
-                        control: ToolbarControl::Color,
-                    } => "colors",
                     HeaderItem::Tool { control } => control.icon(),
                     HeaderItem::Settings => "settings",
                     HeaderItem::Fullscreen => "fullscreen-enter",
                     _ => ZenIcon::LookingUp.icon(),
                 };
-                let image: gtk::Widget = if matches!(
-                    entry.item,
-                    HeaderItem::Tool {
-                        control: ToolbarControl::Color
-                    }
-                ) {
-                    w.customization.color_pair(w, size.icon())
+                let image = w.customization.icon(w, icon, if entry.item == HeaderItem::Capy {
+                    b.add_css_class("capy-button");
+                    (size.tile() * 440. / 512.).round() as i32
                 } else {
-                    let image = crate::icons::image(&format!("layer-{icon}-symbolic"));
-                    image.set_pixel_size(if entry.item == HeaderItem::Capy {
-                        b.add_css_class("capy-button");
-                        (size.tile() * 440. / 512.).round() as i32
-                    } else {
-                        size.icon()
-                    });
-                    image.upcast()
-                };
+                    size.icon()
+                });
                 b.set_child(Some(&image));
                 if entry.item
                     == (HeaderItem::Tool {

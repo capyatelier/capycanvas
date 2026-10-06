@@ -87,7 +87,7 @@ struct WorkspaceTabLabel: View {
     var fill: Color?? = .none
     var body: some View {
         HStack(spacing: 6) {
-            if tab["tab"]["show_icon"].bool { SharedIcon(name: tab["icon"].string) }
+            if tab["tab"]["show_icon"].bool { PanelIcon(name: tab["icon"].string) }
             if tab["tab"]["show_name"].bool { Text(tab["title"].string).fontWeight(.bold).lineLimit(1) }
         }.padding(.horizontal, 8)
             .frame(width: tab["tab"]["show_name"].bool ? nil : 36, height: 36)

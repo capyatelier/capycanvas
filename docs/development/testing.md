@@ -292,7 +292,7 @@ Preserve user names and document contents across language changes. Follow the
   --icons` at scale 1 and with `LAYER_MOTION_SCALE=2`, Android `AndroidIconTest`,
   and `python3 apps/layer-apple/tests/test_icon_assets.py`.
   Live paint pairs also need `native_color_pair_updates` on GTK and Web
-  `--color-panel`: these inspect retained toolbar/header overlap pixels after
+  `--color-panel`: these inspect retained toolbar, header and Color tab overlap pixels after
   selection-only changes, temporary paint, mask editing, alpha and HDR rendition
   changes. Static asset captures do not exercise these updates.
   Android uses `AndroidColorPanelTest#retainedPaintIconsAndCompactControlFollowCommittedContext`

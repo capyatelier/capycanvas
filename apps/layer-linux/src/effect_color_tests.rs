@@ -279,7 +279,7 @@ fn native_effect_colors_gradients_and_retained_controls() {
     w.dispatch(UiAction::SetBrushOpacity { value: 0.23 });
     let controls = gtk::Box::new(gtk::Orientation::Vertical, 8);
     controls.append(&w.color.widget);
-    controls.append(&w.customization.color_pair(&w, 32));
+    controls.append(&w.customization.icon(&w, "colors", 32));
     let window = gtk::Window::builder()
         .application(&*app)
         .child(&controls)

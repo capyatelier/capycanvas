@@ -234,10 +234,6 @@ native-color-swatch-no-match = “{ $query }” ile eşleşen palet veya renk yo
 
 native-color-palettes = Paletler…
 
-native-color-paint-white = Beyazla boya
-
-native-color-paint-black = Siyahla boya
-
 native-color-shape = Renk şekli
 
 native-color-switch-readout = Renk gösterimini değiştir

@@ -333,7 +333,7 @@ impl View {
                     button.add_css_class("flat");
                     button.set_widget_name(&format!("column-drawer-tab-{panel:?}"));
                     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                    let icon = crate::icons::image(&format!("layer-{}-symbolic", config.icon()));
+                    let icon = w.customization.icon(w, config.icon(), 16);
                     icon.set_visible(presentation.show_icon);
                     content.append(&icon);
                     let label = gtk::Label::new(None);

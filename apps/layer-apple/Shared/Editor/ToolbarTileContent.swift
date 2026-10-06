@@ -4,13 +4,12 @@ struct ToolbarTileButton: View {
     let panel: JSON
     let tile: JSON
     let palette: EditorPalette
-    let colors: JSON
     var drawerOpen = false
     var drawerDirection: String?
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            ToolbarTileContent(panel: panel, tile: tile, palette: palette, colors: colors)
+            ToolbarTileContent(panel: panel, tile: tile, palette: palette)
                 .overlay(alignment: .bottomTrailing) { if tile["has_variants"].bool { ToolGroupMarker() } }
                 .contentShape(Rectangle())
         }.buttonStyle(EditorControlButtonStyle(selected: tile["selected"].bool, joinedEdge: drawerOpen ? drawerDirection : nil,
@@ -27,12 +26,11 @@ struct ToolbarTileContent: View {
     let panel: JSON
     let tile: JSON
     let palette: EditorPalette
-    let colors: JSON
     private var iconSize: CGFloat { CGFloat(panel["tile_icon_size"].number) }
     private var labelLines: Int { Int(panel["tile_label_lines"].number) }
     var body: some View {
         HStack(spacing: 0) {
-            glyph.frame(width: labelLines > 0 ? 36 : iconSize)
+            PanelIcon(name: tile["icon"].string, size: iconSize).frame(width: labelLines > 0 ? 36 : iconSize)
             if labelLines > 0 {
                 Text(tile["label"].string)
                     .fontWeight(panel["tile_label_bold"].bool ? .bold : .regular)
@@ -41,11 +39,25 @@ struct ToolbarTileContent: View {
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    @ViewBuilder private var glyph: some View {
-        if (tile["resolved_control"].isNull ? tile["control"] : tile["resolved_control"])["kind"].string == "color" {
-            PaintPairIcon(pair: colors, size: iconSize)
+}
+
+private struct PaintPairKey: EnvironmentKey { static let defaultValue = JSON() }
+extension EnvironmentValues {
+    var paintPair: JSON {
+        get { self[PaintPairKey.self] }
+        set { self[PaintPairKey.self] = newValue }
+    }
+}
+
+struct PanelIcon: View {
+    let name: String
+    var size: CGFloat = 16
+    @Environment(\.paintPair) private var pair
+    var body: some View {
+        if name == "colors" {
+            PaintPairIcon(pair: pair, size: size)
         } else {
-            SharedIcon(name: tile["icon"].string, size: iconSize)
+            SharedIcon(name: name, size: size)
         }
     }
 }

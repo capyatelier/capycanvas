@@ -136,6 +136,7 @@ struct EditorView<Canvas: View>: View {
         .environment(\.editorPopupStore, store)
         .environment(\.capyInterfaceLanguage, store.interfaceLanguage)
         .environment(\.capyNativeCopy, store.catalog["native_copy"])
+        .environment(\.paintPair, store.paintPair)
         .environment(\.capyCommonCopy, store.bootstrap["common"])
         .environment(\.locale, store.interfaceLanguage.isEmpty ? Locale.current : Locale(identifier: store.interfaceLanguage))
         .environment(\.editorPalette, palette)

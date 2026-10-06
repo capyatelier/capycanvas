@@ -68,8 +68,7 @@ import kotlin.math.roundToInt
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
                         val glyph = Modifier.size(geometry.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}")
-                        if (kind == "color") PaintPairIcon(host.snapshot!!.getJSONObject("paint_pair"), tile.getString("label"), glyph)
-                        else SharedIcon(icon, tile.getString("label"), glyph)
+                        LiveIcon(host, icon, tile.getString("label"), glyph)
                     }
                     if (labelLines > 0) Text(tile.getString("label"), Modifier.weight(1f).padding(end = if (tile.optBoolean("has_variants")) 16.dp else 4.dp).testTag("tile-label-${panel.getString("id")}-${tile.getInt("id")}"),
                         fontWeight = if (geometry.getBoolean("tile_label_bold")) FontWeight.Bold else FontWeight.Normal,

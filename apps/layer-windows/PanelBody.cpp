@@ -17,6 +17,12 @@ using namespace CapyUi;
 namespace {
 bool shows(J const& panel,wchar_t const* control){return flag(find(array(panel,L"controls"),L"control",control),L"visible_in_panel");}
 }
+FrameworkElement CapyUi::panelIcon(std::shared_ptr<WorkspaceData> const& data,hstring const& name,Bindings& bindings,double size){
+    if(name!=L"colors")return icon(name,data->theme(),size);
+    auto pair=std::make_shared<ColorPair>(data);
+    auto update=[data=data,pair,size]{pair->Update(data,size);};update();
+    bindings.emplace_back(std::move(update));return pair->root;
+}
 PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J const& geometry,
     std::function<void()> layoutChanged,std::shared_ptr<WorkspaceGestures> const& gestures,bool scrollable,std::function<J()> tools):data(std::move(source)){
         auto tileGeometry=object(geometry,L"tiles");
@@ -93,10 +99,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 tooltip(pick,str(tile,L"tooltip"));place(slot,rects.GetObjectAt(i));tiles.Children().Append(slot);
                 AutomationProperties::SetAutomationId(pick,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                 if(kind==L"color"||kind==L"opacity")anchors.insert_or_assign(kind==L"color"?L"brush_color":L"brush_opacity",pick);
-                if(kind==L"color"){
-                    auto pair=std::make_shared<ColorPair>(data);pick.Content(pair->root);
-                    bindings.emplace_back([data=data,pair,size=num(tileGeometry,L"tile_icon_size",16)]{pair->Update(data,size);});
-                }
+                if(*tileIconName==L"colors")pick.Content(panelIcon(data,*tileIconName,bindings,num(tileGeometry,L"tile_icon_size",16)));
                 if(num(tileGeometry,L"tile_label_lines")>0){
                     auto image=pick.Content();pick.Content(nullptr);
                     Grid content;ColumnDefinition mark;mark.Width({36,GridUnitType::Pixel});content.ColumnDefinitions().Append(mark);

@@ -435,7 +435,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 if(kind==L"capy")iconName=str(find(array(data->state,L"commands"),L"id",L"zen_mode"),L"icon");
                 else if(kind==L"settings")iconName=L"settings";else if(kind==L"menu")iconName=L"menu";
                 auto ctl=object(spec,L"resolved_control");if(!ctl.Size())ctl=object(item,L"control");auto ctlKind=str(ctl,L"kind");
-                if(kind==L"tool"&&ctlKind==L"color"){
+                if(kind==L"tool"&&iconName==L"colors"){
                     if(!native.colors)native.colors=std::make_shared<ColorPair>(data);
                     if(pick.Content()!=native.colors->root){pick.Content(native.colors->root);native.iconKey=L"";}
                     native.colors->Update(data,iconSize);
