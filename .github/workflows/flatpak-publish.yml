@@ -1,0 +1,56 @@
+name: Publish Flatpak updates
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: flatpak-pages
+  cancel-in-progress: false
+jobs:
+  repository:
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          test "$RELEASE_TAG" = "$latest"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
+            --jq 'if .isDraft or .isPrerelease then error("Only published stable releases can update Flatpak") else empty end'
+          mkdir downloads
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir downloads \
+            --pattern '*-flatpak-repository.tar.zst' --pattern capycanvas.flatpakref --pattern SHA256SUMS
+          cd downloads
+          sha256sum --check --ignore-missing SHA256SUMS
+          mkdir -p ../public/flatpak
+          tar --zstd -xf capycanvas-*-flatpak-repository.tar.zst --strip-components=1 -C ../public/flatpak
+          cp capycanvas.flatpakref ../public/
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: public
+  deploy:
+    needs: repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: test "$RELEASE_TAG" = "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+      - name: Deploy signed update repository
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

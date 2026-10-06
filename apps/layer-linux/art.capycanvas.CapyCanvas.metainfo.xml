@@ -17,6 +17,15 @@
   <url type="vcs-browser">https://github.com/capyatelier/capycanvas</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.0.5" date="2026-10-05">
+      <description>
+        <p>Capy Canvas is available as a Flatpak for Linux.</p>
+        <ul>
+          <li>Open the downloaded Flatpak installer in your software manager to install Capy Canvas.</li>
+          <li>Flatpak installations receive signed updates through your software manager.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.4" date="2026-10-05">
       <description>
         <p>A small update for Windows.</p>

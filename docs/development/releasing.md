@@ -43,7 +43,7 @@ the same scripts developers run and the Rust version pinned in the workflow:
 
 | Job | Script | Output |
 | --- | --- | --- |
-| Linux | `packaging/appimage/build.sh` in an Arch Linux container | `capycanvas-<version>-linux-x86_64.AppImage` and its `.zsync` file |
+| Linux | `packaging/flatpak/build.sh` and `packaging/flatpak/export.sh` with GNOME Platform and SDK 50 | `capycanvas-<version>-linux-x86_64.flatpak`; on a tag also `capycanvas.flatpakref` and `capycanvas-<version>-flatpak-repository.tar.zst` |
 | Web | `node apps/layer-web/package.mjs` | `capycanvas-<version>-web.zip` |
 | Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-<version>-android.aab`; on a tag also the Play-signed universal `capycanvas-<version>-android.apk` |
 | Windows | `package.ps1`, `package-msix.ps1`, `test-msix.ps1` and `package-installer.ps1` | Portable ZIP, setup program and Store MSIX |
@@ -56,24 +56,53 @@ environment, uploads the iPad build to TestFlight and the Android bundle to
 Play's internal track, and creates a draft GitHub Release holding the release
 notes, every download, `SHA256SUMS` and build provenance attestations.
 
-### Linux AppImage
+### Linux Flatpak
 
-`packaging/appimage/build.sh` runs as root in a disposable Arch Linux container,
-which ships the GTK and libadwaita versions the app needs. It installs the [Arch
-recipe's](../../packaging/arch/README.md) dependencies, runs the native
-packager, installs the result into `/usr`, and lets a pinned `quick-sharun` from
-[Anylinux AppImages](https://github.com/pkgforge-dev/Anylinux-AppImages) bundle
-every library, including glibc, the Vulkan loader and Mesa. NVIDIA's proprietary
-driver always comes from the host. The AppImage carries the project and GTK
-notices, the license texts and versions of every bundled Arch package, and
-update information for AppImage updaters. It does not yet include the
-corresponding sources of its LGPL libraries, which publishing it requires. To
-build one locally:
+`packaging/flatpak/build.sh` builds against `org.gnome.Platform//50` and
+`org.gnome.Sdk//50`, reusing `apps/layer-linux/package.mjs` and its patched GTK
+runtime. `packaging/flatpak/export.sh` exports `art.capycanvas.CapyCanvas` on the
+`stable` branch. Tagged CI builds sign the application commits and repository
+summary with the release key and add the reference and repository archive; the
+key's public half is `packaging/flatpak/release-key.asc`.
+
+AppStream catalog generation runs with temporary `.Devel` build metadata so the
+SDK's Glycin icon loader can run without a desktop portal during builds. The
+exported application keeps `art.capycanvas.CapyCanvas` as its identity.
+
+With Flatpak installed, build and export a local unsigned bundle:
 
 ```bash
-podman run --rm -v "$PWD":/src:Z -w /src docker.io/library/archlinux:latest \
-  bash packaging/appimage/build.sh
+bash packaging/flatpak/build.sh
+bash packaging/flatpak/export.sh
 ```
+
+The local output is `dist/flatpak/capycanvas-<version>-linux-x86_64.flatpak`.
+Unsigned builds do not produce the reference or repository archive and do not
+configure the published update source. Native distribution builds can also use
+the [Arch recipe](../../packaging/arch/README.md).
+
+Users need their distribution's Flatpak package, a Wayland session and hardware
+Vulkan support. The Flatpak runtime supplies toolkit dependencies; it does not
+remove the [canvas requirements](linux.md#prerequisites).
+
+Open the release's `capycanvas.flatpakref` in Fedora Software and choose Install,
+or use `flatpak install capycanvas.flatpakref`, to download the application from
+`https://capyatelier.github.io/capycanvas/flatpak/`. The standalone
+signed `capycanvas-<version>-linux-x86_64.flatpak` bundle installs the same
+application and records that repository as its update source. Both include the
+public key so Flatpak can verify repository signatures. Software manages later
+updates according to its update settings; the command-line equivalent is
+`flatpak update`.
+
+The repository archive contains the OSTree objects and metadata needed to serve
+updates. The bundle and reference alone cannot supply a Flatpak repository.
+`.github/workflows/flatpak-publish.yml` runs when a GitHub Release is published,
+downloads its repository archive and deploys its contents under `flatpak/` on
+GitHub Pages. It also accepts a tag through `workflow_dispatch` to repeat a
+deployment. Only the latest published release that is neither a draft nor a
+prerelease can deploy, so an older release cannot replace the update source.
+Repository settings must select GitHub Actions as the Pages source and allow
+`main` and `v*` tags in the `github-pages` environment's deployment policies.
 
 ### Signing credentials
 
@@ -90,6 +119,8 @@ and require a maintainer's approval.
 | `PLAY_RELEASE_STATUS` | Variable | Optional status of the internal-track release; `draft` until the app is published, then `completed` |
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` | Variables | The Microsoft Entra app the Windows job signs in as through OIDC; it holds the Artifact Signing Certificate Profile Signer role and trusts the `release` environment |
 | `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, `ARTIFACT_SIGNING_PROFILE` | Variables | The Azure Artifact Signing account's regional endpoint, its name and the Public Trust certificate profile |
+| `FLATPAK_GPG_PRIVATE_KEY`, `FLATPAK_GPG_PASSPHRASE` | Secrets | ASCII-armored GPG private key, without base64 encoding, and its passphrase for signing Flatpak commits and the repository summary |
+| `FLATPAK_GPG_FINGERPRINT` | Variable | The full fingerprint of the Flatpak release key; its public key is `packaging/flatpak/release-key.asc` |
 
 Locally, `CAPY_UPLOAD_KEYSTORE` and `CAPY_UPLOAD_KEYSTORE_PASSWORD` sign the
 Android bundle, and `CAPY_APPLE_TEAM`, `CAPY_APPLE_KEY`, `CAPY_APPLE_KEY_ID` and
@@ -109,6 +140,9 @@ executables and the setup program; the Store signs the MSIX.
 3. Roll out the internal-track release in Play Console and promote it, upload the
    MSIX to Partner Center, and submit the TestFlight build for review.
 4. Publish the draft. With immutable releases enabled, its assets and tag can no
-   longer change.
+   longer change. Wait for the Flatpak publishing workflow and verify that the
+   published reference installs from the Pages repository and that Flatpak
+   accepts its signatures. Check updates from the preceding Flatpak release
+   when one exists.
 5. If a check fails, delete the draft, fix `main` and release the next patch
    version. Never move a tag or reuse a version.

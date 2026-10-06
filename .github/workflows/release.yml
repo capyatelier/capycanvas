@@ -49,19 +49,6 @@ jobs:
           status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" -q .status)
           test "$status" = identical || test "$status" = behind
 
-  linux:
-    needs: version
-    runs-on: ubuntu-24.04
-    container: archlinux:latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: bash packaging/appimage/build.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: linux
-          path: dist/*.AppImage*
-          if-no-files-found: error
-
   web:
     needs: version
     runs-on: ubuntu-24.04
@@ -79,6 +66,36 @@ jobs:
         with:
           name: web
           path: dist/*.zip
+          if-no-files-found: error
+
+  flatpak:
+    needs: version
+    runs-on: ubuntu-24.04
+    environment: ${{ github.ref_type == 'tag' && 'release' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update && sudo apt-get install -y flatpak zstd
+      - name: Enable Flatpak build namespaces on the hosted runner
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: bash packaging/flatpak/build.sh
+      - if: env.SIGNED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.assets[] | select(.name | endswith("-flatpak-repository.tar.zst")) | .browser_download_url')
+          if [[ -n "$previous" ]]; then
+            curl --fail --location "$previous" -o "$RUNNER_TEMP/previous-flatpak.tar.zst"
+            tar --zstd -xf "$RUNNER_TEMP/previous-flatpak.tar.zst" -C target/flatpak
+          fi
+      - env:
+          FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+          FLATPAK_GPG_PASSPHRASE: ${{ secrets.FLATPAK_GPG_PASSPHRASE }}
+          FLATPAK_GPG_FINGERPRINT: ${{ vars.FLATPAK_GPG_FINGERPRINT }}
+        run: bash packaging/flatpak/export.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flatpak
+          path: dist/flatpak/*
           if-no-files-found: error
 
   android:
@@ -245,7 +262,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [version, linux, web, android, windows, apple]
+    needs: [version, flatpak, web, android, windows, apple]
     runs-on: ubuntu-24.04
     permissions:
       attestations: write

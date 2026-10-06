@@ -8,6 +8,9 @@ here first, then move to Web and the native ports, as the
 client uses GTK4/libadwaita for controls and the shared wgpu renderer through
 Vulkan.
 
+For the Flatpak runtime, signed downloads and update repository, see
+[Linux Flatpak](releasing.md#linux-flatpak).
+
 ## Prerequisites
 
 Install a recent stable Rust toolchain, a C/C++ toolchain, `pkg-config`, and the
@@ -414,7 +417,8 @@ pinned GTK 4.22.4 with the
 executable finds the bundled `libgtk-4.so.1` through its embedded library path.
 System GTK is never replaced; libadwaita and GTK's other dependencies stay system
 requirements, so this is a native bundle for compatible distributions. The
-[AppImage](releasing.md#linux-appimage) bundles those dependencies too. `share/doc/capycanvas-gtk` carries the GTK source,
+[Flatpak](releasing.md#linux-flatpak) uses the GNOME runtime for those dependencies.
+`share/doc/capycanvas-gtk` carries the GTK source,
 patches, license, checksums and a rebuild script.
 
 The output holds the executable, desktop entry, AppStream metainfo, `.capy` MIME
