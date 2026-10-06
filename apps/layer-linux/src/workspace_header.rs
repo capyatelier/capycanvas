@@ -919,27 +919,13 @@ impl Header {
                 height,
             },
         );
-        let native = self.native.each_ref().map(|c| {
+        let control_widths = self.native.each_ref().map(|c| {
             if c.is_visible() {
-                let natural = c.measure(gtk::Orientation::Horizontal, -1).1 as f32;
-                if natural > 0. { natural + 12. } else { 0. }
+                c.measure(gtk::Orientation::Horizontal, -1).1 as f32
             } else {
                 0.
             }
         });
-        for (i, c) in self.native.iter().enumerate() {
-            if c.is_visible() {
-                allocate_at(
-                    c.upcast_ref(),
-                    Bounds {
-                        x: if i == 0 { 6. } else { width - native[i] + 6. },
-                        y: 6.,
-                        width: (native[i] - 12.).max(0.),
-                        height: model.size.tile(),
-                    },
-                );
-            }
-        }
         let recovery = !self.editing.get()
             && !model.entries().any(|e| {
                 matches!(
@@ -950,22 +936,17 @@ impl Header {
                         | HeaderItem::MenuLabels
                 )
             });
-        self.recovery.set_child_visible(recovery);
-        if recovery {
-            allocate_at(
-                self.recovery.upcast_ref(),
-                Bounds {
-                    x: width - native[1] - model.size.tile(),
-                    y: 6.,
-                    width: model.size.tile(),
-                    height: model.size.tile(),
-                },
-            );
+        let native = model.size.native_geometry(width, control_widths, recovery);
+        for (c, bounds) in self.native.iter().zip(native.controls) {
+            if c.is_visible() {
+                allocate_at(c.upcast_ref(), bounds);
+            }
         }
-        let insets = [
-            native[0],
-            native[1] + if recovery { model.size.tile() } else { 0. },
-        ];
+        self.recovery.set_child_visible(native.recovery.is_some());
+        if let Some(bounds) = native.recovery {
+            allocate_at(self.recovery.upcast_ref(), bounds);
+        }
+        let insets = native.insets;
         self.insets.set(insets);
         let geometry = model.resolve_documents(width, insets, &self.metrics(model.size), self.editing.get(), w.documents.len());
         if self

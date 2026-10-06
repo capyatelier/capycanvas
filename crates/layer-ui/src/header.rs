@@ -40,6 +40,18 @@ impl HeaderSize {
     pub fn height(self) -> f32 {
         self.tile() + 12.
     }
+    pub fn native_geometry(self, width: f32, control_widths: [f32; 2], recovery: bool) -> HeaderNativeGeometry {
+        let controls = std::array::from_fn(|side| Bounds {
+            x: if side == 0 { 6. } else { width - control_widths[side] - 6. },
+            y: 6., width: control_widths[side], height: self.tile(),
+        });
+        let mut insets = control_widths.map(|w| if w > 0. { w + 6. } else { 0. });
+        let recovery = recovery.then(|| {
+            insets[1] += self.tile() + 6.;
+            Bounds { x: width - insets[1], y: 6., width: self.tile(), height: self.tile() }
+        });
+        HeaderNativeGeometry { controls, insets, recovery }
+    }
     /// Space between joined tiles and drawing tabs, matching toolbar tiles.
     pub fn gap(self) -> f32 {
         match self {
@@ -491,6 +503,12 @@ pub struct HeaderMetric {
     pub id: u32,
     pub width: f32,
     pub compact: f32,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeaderNativeGeometry {
+    pub controls: [Bounds; 2],
+    pub insets: [f32; 2],
+    pub recovery: Option<Bounds>,
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct HeaderGeometry {
@@ -1028,6 +1046,38 @@ pub fn header_drag_label(item: &str, localization: &Localizer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_controls_keep_one_gap_at_each_header_boundary() {
+        for size in HeaderSize::ALL {
+            let mut layout = HeaderLayout::for_platform(Platform::Gtk);
+            layout.size = size;
+            for control_widths in [[0.; 2], [0., size.tile()], [size.tile(), 0.], [2. * size.tile() + 3., 3. * size.tile() + 6.]] {
+                for recovery in [false, true] {
+                    let native = size.native_geometry(1600., control_widths, recovery);
+                    let geometry = layout.resolve_documents(1600., native.insets, &[], false, 2);
+                    let left = geometry.items.iter().map(|i| i.bounds.x).fold(f32::INFINITY, f32::min);
+                    let right = geometry.items.iter().map(|i| i.bounds.x + i.bounds.width).fold(0., f32::max);
+                    assert_eq!(left, if control_widths[0] > 0. {
+                        native.controls[0].x + native.controls[0].width + 6.
+                    } else { 6. });
+                    let edge = if let Some(menu) = native.recovery {
+                        assert_eq!(menu.x + menu.width + 6., if control_widths[1] > 0. {
+                            native.controls[1].x
+                        } else { 1600. });
+                        menu.x
+                    } else if control_widths[1] > 0. { native.controls[1].x } else { 1600. };
+                    assert_eq!(right + 6., edge);
+                    assert_eq!(native.controls[0].x, 6.);
+                    assert_eq!(native.controls[1].x + native.controls[1].width, 1594.);
+                    for controls in native.controls {
+                        assert_eq!(controls.y, 6.);
+                        assert_eq!(controls.height, size.tile());
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn active_header_copy_preserves_canonical_aliases_and_typed_context_actions() {
         let japanese = Localizer::shared(UiLanguage::Japanese);

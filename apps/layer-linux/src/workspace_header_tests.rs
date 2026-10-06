@@ -960,6 +960,10 @@ fn native_header_spacing_visual() {
             assert!((image.x() - (close.width() as f32 - image.x() - image.width())).abs() < 1.);
             assert!((image.y() - (close.height() as f32 - image.y() - image.height())).abs() < 1.);
             let h = state(&d.w).workspace.layout.header;
+            let last = h.zones[2].last().unwrap();
+            let item = d.named(&format!("header-item-{}", last.id)).compute_bounds(&d.w.surface).unwrap();
+            assert_eq!(b.x() - item.x() - item.width(), 6., "last tile clears native close by one gap");
+            assert_eq!(d.w.surface.width() as f32 - b.x() - b.width(), 6., "native close outer clearance");
             for entry in h.entries() {
                 let item = d.named(&format!("header-item-{}", entry.id));
                 assert!(item.is_mapped(), "header item {} must be mapped", entry.id);
@@ -1070,6 +1074,19 @@ fn native_header_spacing_visual() {
     }
     d.click_name("workspace-switch-illustrator");
     wait_workspaces(&d.w);
+    for theme in [Theme::Dark, Theme::Light] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for size in HeaderSize::ALL {
+            d.w.dispatch(HeaderAction::SetSize { size }.action());
+            pump(200);
+            let h = state(&d.w).workspace.layout.header;
+            let settings = h.entries().find(|e| e.item == HeaderItem::Settings).unwrap();
+            let settings = d.named(&format!("header-item-{}", settings.id)).compute_bounds(&d.w.surface).unwrap();
+            let close = find_css(d.w.header.root.upcast_ref(), "close").unwrap().compute_bounds(&d.w.surface).unwrap();
+            assert_eq!(close.x() - settings.x() - settings.width(), 6., "Settings clears native close by one gap");
+            crate::capture(&d.w, d.input.dir.join(format!("settings-{theme:?}-{size:?}.png")).to_str().unwrap());
+        }
+    }
     for size in HeaderSize::ALL {
         d.w.dispatch(HeaderAction::SetSize { size }.action());
         pump(200);
@@ -2040,6 +2057,9 @@ fn native_header_editor_controls_input() {
     pump(250);
     d.click_name("header-edit-done");
     assert!(d.named("header-recovery").is_mapped());
+    let recovery = d.named("header-recovery").compute_bounds(&d.w.surface).unwrap();
+    let close = find_css(d.w.header.root.upcast_ref(), "close").unwrap().compute_bounds(&d.w.surface).unwrap();
+    assert_eq!(close.x() - recovery.x() - recovery.width(), 6., "recovery menu clears native close by one gap");
     d.click_name("header-recovery");
     d.click_label("Window");
     d.click_label("Customize Title Bar…");

@@ -90,7 +90,9 @@ a 5px inset and 26px capsule items, 2px apart. Text keeps its size, so these
 tracks and the clock stay 36px tall and centered in Medium and Large bars.
 Text items use 8px side padding, so the full menu still fits beside a centered
 title in a 1200px-wide window.
-Native window-control targets grow equally in both axes, with 6px outer clearance.
+Native window-control targets grow equally in both axes, with 6px outer clearance
+and one 6px gap to the nearest title-bar item. GTK uses shared edge geometry for
+its measured controls and recovery menu; the layout adds the inter-item gap once.
 
 Menu Labels compacts to an icon-sized menu inside its own item when space is
 short. At narrow widths, each region overflows whole items into a More menu. Tools
@@ -138,6 +140,7 @@ bash tools/performance/workspace-motion.sh gtk --native-test=native_header_picke
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_drag_only_bank_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_catalog_preview_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_managed_input --native-storage
+bash tools/performance/workspace-motion.sh gtk --native-test=native_header_spacing_visual --native-storage
 LAYER_MOTION_VIEWPORT=640x600 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_overflow_input
 bash tools/performance/workspace-motion.sh web --tool-picker
 ```
