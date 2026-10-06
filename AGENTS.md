@@ -16,6 +16,11 @@ specific tasks.
   Create another worktree only when none is assigned or the user requests one,
   and put it under `/home`, never `/tmp`
   ([environment](docs/development/environment.md)).
+- Delegate routine, context-heavy verification such as test suites, scripted
+  journeys and performance runs to subagents on the lowest-cost capable model,
+  when supported. Give them the worktree and commands, and ask for concise
+  results with relevant, verbatim failure excerpts. A subagent does its task
+  itself instead of delegating again.
 - Fetch and rebase onto `origin/main` before pushing, then rerun your checks.
   Never force-push `main`, `git reset --hard` or bare `git stash` in a shared
   checkout, or delete another session's worktree, branch, build, install or files.
