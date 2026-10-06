@@ -74,7 +74,7 @@ jobs:
     environment: ${{ github.ref_type == 'tag' && 'release' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: sudo apt-get update && sudo apt-get install -y flatpak zstd
+      - run: sudo apt-get update && sudo apt-get install -y flatpak librsvg2-common zstd
       - name: Enable Flatpak build namespaces on the hosted runner
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: bash packaging/flatpak/build.sh

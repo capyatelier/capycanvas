@@ -69,7 +69,8 @@ AppStream catalog generation runs with temporary `.Devel` build metadata so the
 SDK's Glycin icon loader can run without a desktop portal during builds. The
 exported application keeps `art.capycanvas.CapyCanvas` as its identity.
 
-With Flatpak installed, build and export a local unsigned bundle:
+With Flatpak and its host SVG image loader installed (`librsvg2-common` on
+Debian or Ubuntu), build and export a local unsigned bundle:
 
 ```bash
 bash packaging/flatpak/build.sh
