@@ -88,9 +88,9 @@ impl Inspector {
             let axis_row = gtk::Box::new(gtk::Orientation::Horizontal,0);axis_row.add_css_class("dim-label");for label in &axis {axis_row.append(label);}
             root.append(&chart);root.append(&axis_row);
         }
+        let logarithmic = crate::panel_controls::check("");logarithmic.set_widget_name(&format!("{prefix}-log"));
+        root.append(&logarithmic);
         let footer = Footer::new(prefix);root.append(&footer.root);
-        let logarithmic = gtk::CheckButton::new();logarithmic.set_widget_name(&format!("{prefix}-log"));
-        footer.root.insert_child_after(&logarithmic,Some(&footer.status));
         let panel = Rc::new(Self {root,source,channel,chart,toolbar,footer,axis,logarithmic,
             view:RefCell::default(),colors:Cell::new([[0;3];4]),updating:Cell::new(false),workspace:RefCell::default(),waveform,plot:RefCell::default()});
         for (index,dropdown) in [&panel.source,&panel.channel].into_iter().enumerate() {

@@ -152,6 +152,9 @@ fn native_store_capture() {
     until(|| !w.window.is_maximized() && w.window.width() == job.width && w.window.height() == job.height,
         "requested unmaximized window geometry");
     for step in &scene.steps { stage(&w, step); }
+    for (panel, inspector) in [(layer_ui::Panel::Histogram, &w.histogram), (layer_ui::Panel::Waveform, &w.waveform)] {
+        if inspector.root.is_mapped() { super::histogram::monitor_bounds(&w, panel); }
+    }
     until(|| widgets(w.layer_panel.root.upcast_ref()).filter(|widget| widget.is_mapped())
         .filter_map(|widget| widget.downcast::<gtk::Picture>().ok()).all(|picture| picture.paintable().is_some()), "visible layer thumbnails");
     let paints = Rc::new(std::cell::Cell::new(0));

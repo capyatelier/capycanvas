@@ -95,6 +95,36 @@ fn precision_label(w:&Workspace,output:&std::path::Path,prefix:&str,width:i32,th
     let view=state(w);let expected=if prefix=="waveform" {view.waveform.status.as_ref()} else {view.histogram.status.as_ref()};assert_eq!(label.text().as_str(),expected);
 }
 
+pub(super) fn monitor_bounds(w: &Workspace, panel: Panel) {
+    pump(50);
+    let prefix = if panel == Panel::Waveform {"waveform"} else {"histogram"};
+    let root = histogram_widget::<gtk::Box>(w, &format!("{prefix}-panel"));
+    let group = w.groups.borrow().iter().find(|group| group.panels.contains(&panel)
+        && group.root.is_mapped()).expect("mapped monitor group").root.clone();
+    for widget in widgets(root.upcast_ref()).filter(|widget| widget.is_mapped()) {
+        let bounds = widget.compute_bounds(&group).unwrap();
+        assert!(bounds.x() >= -1. && bounds.y() >= -1.
+            && bounds.x() + bounds.width() <= group.width() as f32 + 1.
+            && bounds.y() + bounds.height() <= group.height() as f32 + 1.,
+            "{} {} fits {}x{} monitor group in {}: {bounds:?}", prefix, widget.widget_name(),
+            group.width(), group.height(), w.localization().language().tag());
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            assert!(label.layout().pixel_size().0 <= label.width() + 1,
+                "{} glyphs fit allocated label in {}: {:?}, layout {:?}, allocation {}",
+                prefix, w.localization().language().tag(), label.text(), label.layout().pixel_size(), label.width());
+        }
+    }
+    let chart = histogram_widget::<gtk::DrawingArea>(w, &format!("{prefix}-chart"));
+    let bounds = chart.compute_bounds(&root).unwrap();
+    assert!(bounds.x() >= -1. && bounds.x() + bounds.width() <= root.width() as f32 + 1.,
+        "complete {prefix} plot including shadow bins fits native panel: {bounds:?}, {}", root.width());
+    let status = histogram_widget::<gtk::Label>(w, &format!("{prefix}-status"));
+    if [layer_ui::MessageId::RESOURCES_HISTOGRAM_EXACT, layer_ui::MessageId::RESOURCES_HISTOGRAM_PREVIEW]
+        .into_iter().any(|message| status.text().as_str() == w.localization().text(message).as_ref()) {
+        assert!(!status.layout().is_ellipsized(), "{prefix} precision is readable: {:?}", status.text());
+    }
+}
+
 fn tab(w: &Workspace, input: &mut RemoteInput, panel: Panel) {
     let button = w.groups.borrow().iter().flat_map(|group| &group.tabs)
         .find(|(candidate, button)| *candidate == panel && button.is_mapped()).unwrap().1.clone();
@@ -454,6 +484,62 @@ fn native_waveform_photo_sources_channels_and_layout() {
 }
 
 #[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_localized_photo_histogram_bounds() {
+    let app = native_test_app("art.capycanvas.PhotoHistogramBounds");
+    let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
+    std::fs::create_dir_all(&output).unwrap();
+    let input = RemoteInput::new();input.ready();
+    let reported = [layer_ui::UiLanguage::French, layer_ui::UiLanguage::German, layer_ui::UiLanguage::Russian];
+    for theme in [Theme::Light, Theme::Dark] {
+        for &language in reported.iter().chain(layer_ui::localization::SHIPPED_LANGUAGES.iter().filter(|language| !reported.contains(language))) {
+            let w = Workspace::with_project_localized(&app, Some((fixture(), None)), layer_ui::Localizer::shared(language));
+            w.dispatch(UiAction::RestoreSettings {settings:layer_ui::Settings {
+                theme:Some(theme), language:layer_ui::LanguagePreference::Explicit(language), ..Default::default()
+            }});
+            w.window.maximize();w.window.present();ready(&w);
+            assert_eq!(w.localization().language(), language);
+            assert!(matches!(w.window.width(), 640 | 1100), "private Histogram viewport");
+            w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+            w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(layer_ui::WorkspaceState {
+                layout:layer_ui::WorkspacePreset::Photographer.layout(Platform::Gtk), ..Default::default()
+            })});
+            for panel in [Panel::Histogram, Panel::Waveform] {
+                let layout = state(&w).workspace.layout;
+                if layout.active_panel(panel) != Some(panel) {
+                    let group = layout.panel_group(panel).unwrap();
+                    w.dispatch(UiAction::SelectPanelTab {group, panel});
+                }
+                w.dispatch(UiAction::Customize {action:CustomizationAction::CloseExpanded});ready(&w);
+                until(|| {
+                    let view = state(&w);
+                    let monitor = if panel == Panel::Histogram {view.histogram} else {view.waveform};
+                    monitor.data.is_some() && monitor.status == w.localization().text(layer_ui::MessageId::RESOURCES_HISTOGRAM_EXACT)
+                }, "exact Photo monitor");
+                let view = state(&w);
+                let monitor = if panel == Panel::Histogram {view.histogram} else {view.waveform};
+                assert!(monitor.data.as_ref().unwrap().pixels > 0);
+                if panel == Panel::Histogram {
+                    let plot = monitor.histogram_plot();assert!(!plot.is_empty());
+                    assert_eq!(plot.iter().flat_map(|(_, bins)| bins.iter()).copied().fold(0_f32, f32::max), 1.);
+                } else {
+                    let (_, pixels) = monitor.waveform_premultiplied_rgba(view.palette.histogram_colors().map(|color| color.0)).unwrap();
+                    assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
+                }
+                let prefix = if panel == Panel::Histogram {"histogram"} else {"waveform"};
+                let logarithmic = histogram_widget::<gtk::CheckButton>(&w, &format!("{prefix}-log"));
+                let caption = logarithmic.label().unwrap();
+                logarithmic.set_label(Some(""));logarithmic.set_label(Some(&caption));
+                monitor_bounds(&w, panel);
+                save_snapshot(&w, 50, || output.join(format!("photo-{panel:?}-{}-{theme:?}.png", language.tag())));
+            }
+            w.window.destroy();pump(100);
+        }
+    }
+    input.finish();
+}
+
+#[test]
 #[ignore = "private Wayland display, hardware GPU and retained histogram language controls"]
 fn native_histogram_live_language() {
     use layer_ui::{HistogramAction, MessageId, PreferenceAction, PreferenceId, PreferenceValue};
@@ -502,6 +588,7 @@ fn native_histogram_live_language() {
         let unavailable_checkpoint = ui_session(&w).engine().checkpoint();
         for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
+            monitor_bounds(&w, Panel::Histogram);
             assert_eq!(status.text(), w.localization().text(MessageId::RESOURCES_HISTOGRAM_UNAVAILABLE).as_ref());
             assert!(state(&w).histogram.data.is_none());
             assert_eq!(source.selected(), 3);
@@ -535,6 +622,7 @@ fn native_histogram_live_language() {
             let persisted = super::place_source::snapshot(&w);
             for &language in layer_ui::localization::SHIPPED_LANGUAGES {
                 switch(language);
+                monitor_bounds(&w, Panel::Histogram);
                 let view = state(&w).histogram;
                 assert!(std::sync::Arc::ptr_eq(view.data.as_ref().unwrap(), &data), "language must retain prepared histogram data");
                 assert_eq!((view.captured_time,&view.captured_source), (captured.captured_time,&captured.captured_source));

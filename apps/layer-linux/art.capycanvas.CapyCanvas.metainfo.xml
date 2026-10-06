@@ -16,7 +16,151 @@
   <url type="homepage">https://capycanvas.art/</url>
   <url type="vcs-browser">https://github.com/capyatelier/capycanvas</url>
   <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot type="default" environment="gnome">
+      <caption>Paint an illustration with expressive brushes and layers</caption>
+      <image type="source" width="2486" height="1686">https://capycanvas.art/store/gtk/en/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ja">https://capycanvas.art/store/gtk/ja/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_CN">https://capycanvas.art/store/gtk/zh-hans/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_TW">https://capycanvas.art/store/gtk/zh-hant/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ko">https://capycanvas.art/store/gtk/ko/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="es">https://capycanvas.art/store/gtk/es/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt_BR">https://capycanvas.art/store/gtk/pt-br/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="id">https://capycanvas.art/store/gtk/id/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="fr">https://capycanvas.art/store/gtk/fr/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="de">https://capycanvas.art/store/gtk/de/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ru">https://capycanvas.art/store/gtk/ru/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="th">https://capycanvas.art/store/gtk/th/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="vi">https://capycanvas.art/store/gtk/vi/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="tr">https://capycanvas.art/store/gtk/tr/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="it">https://capycanvas.art/store/gtk/it/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt">https://capycanvas.art/store/gtk/pt-br/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh">https://capycanvas.art/store/gtk/zh-hans/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_HK">https://capycanvas.art/store/gtk/zh-hant/paint-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_MO">https://capycanvas.art/store/gtk/zh-hant/paint-light.png</image>
+    </screenshot>
+    <screenshot environment="gnome:dark">
+      <caption>Paint an illustration with expressive brushes and layers</caption>
+      <image type="source" width="2486" height="1686">https://capycanvas.art/store/gtk/en/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ja">https://capycanvas.art/store/gtk/ja/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_CN">https://capycanvas.art/store/gtk/zh-hans/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_TW">https://capycanvas.art/store/gtk/zh-hant/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ko">https://capycanvas.art/store/gtk/ko/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="es">https://capycanvas.art/store/gtk/es/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt_BR">https://capycanvas.art/store/gtk/pt-br/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="id">https://capycanvas.art/store/gtk/id/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="fr">https://capycanvas.art/store/gtk/fr/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="de">https://capycanvas.art/store/gtk/de/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ru">https://capycanvas.art/store/gtk/ru/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="th">https://capycanvas.art/store/gtk/th/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="vi">https://capycanvas.art/store/gtk/vi/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="tr">https://capycanvas.art/store/gtk/tr/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="it">https://capycanvas.art/store/gtk/it/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt">https://capycanvas.art/store/gtk/pt-br/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh">https://capycanvas.art/store/gtk/zh-hans/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_HK">https://capycanvas.art/store/gtk/zh-hant/paint-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_MO">https://capycanvas.art/store/gtk/zh-hant/paint-dark.png</image>
+    </screenshot>
+    <screenshot environment="gnome">
+      <caption>Sketch with pencils and charcoal</caption>
+      <image type="source" width="2486" height="1686">https://capycanvas.art/store/gtk/en/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ja">https://capycanvas.art/store/gtk/ja/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_CN">https://capycanvas.art/store/gtk/zh-hans/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_TW">https://capycanvas.art/store/gtk/zh-hant/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ko">https://capycanvas.art/store/gtk/ko/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="es">https://capycanvas.art/store/gtk/es/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt_BR">https://capycanvas.art/store/gtk/pt-br/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="id">https://capycanvas.art/store/gtk/id/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="fr">https://capycanvas.art/store/gtk/fr/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="de">https://capycanvas.art/store/gtk/de/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ru">https://capycanvas.art/store/gtk/ru/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="th">https://capycanvas.art/store/gtk/th/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="vi">https://capycanvas.art/store/gtk/vi/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="tr">https://capycanvas.art/store/gtk/tr/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="it">https://capycanvas.art/store/gtk/it/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt">https://capycanvas.art/store/gtk/pt-br/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh">https://capycanvas.art/store/gtk/zh-hans/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_HK">https://capycanvas.art/store/gtk/zh-hant/sketch-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_MO">https://capycanvas.art/store/gtk/zh-hant/sketch-light.png</image>
+    </screenshot>
+    <screenshot environment="gnome:dark">
+      <caption>Sketch with pencils and charcoal</caption>
+      <image type="source" width="2486" height="1686">https://capycanvas.art/store/gtk/en/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ja">https://capycanvas.art/store/gtk/ja/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_CN">https://capycanvas.art/store/gtk/zh-hans/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_TW">https://capycanvas.art/store/gtk/zh-hant/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ko">https://capycanvas.art/store/gtk/ko/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="es">https://capycanvas.art/store/gtk/es/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt_BR">https://capycanvas.art/store/gtk/pt-br/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="id">https://capycanvas.art/store/gtk/id/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="fr">https://capycanvas.art/store/gtk/fr/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="de">https://capycanvas.art/store/gtk/de/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ru">https://capycanvas.art/store/gtk/ru/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="th">https://capycanvas.art/store/gtk/th/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="vi">https://capycanvas.art/store/gtk/vi/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="tr">https://capycanvas.art/store/gtk/tr/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="it">https://capycanvas.art/store/gtk/it/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt">https://capycanvas.art/store/gtk/pt-br/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh">https://capycanvas.art/store/gtk/zh-hans/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_HK">https://capycanvas.art/store/gtk/zh-hant/sketch-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_MO">https://capycanvas.art/store/gtk/zh-hant/sketch-dark.png</image>
+    </screenshot>
+    <screenshot environment="gnome">
+      <caption>Adjust a photo with curves and color controls</caption>
+      <image type="source" width="2486" height="1686">https://capycanvas.art/store/gtk/en/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ja">https://capycanvas.art/store/gtk/ja/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_CN">https://capycanvas.art/store/gtk/zh-hans/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_TW">https://capycanvas.art/store/gtk/zh-hant/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ko">https://capycanvas.art/store/gtk/ko/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="es">https://capycanvas.art/store/gtk/es/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt_BR">https://capycanvas.art/store/gtk/pt-br/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="id">https://capycanvas.art/store/gtk/id/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="fr">https://capycanvas.art/store/gtk/fr/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="de">https://capycanvas.art/store/gtk/de/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ru">https://capycanvas.art/store/gtk/ru/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="th">https://capycanvas.art/store/gtk/th/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="vi">https://capycanvas.art/store/gtk/vi/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="tr">https://capycanvas.art/store/gtk/tr/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="it">https://capycanvas.art/store/gtk/it/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt">https://capycanvas.art/store/gtk/pt-br/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh">https://capycanvas.art/store/gtk/zh-hans/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_HK">https://capycanvas.art/store/gtk/zh-hant/photo-light.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_MO">https://capycanvas.art/store/gtk/zh-hant/photo-light.png</image>
+    </screenshot>
+    <screenshot environment="gnome:dark">
+      <caption>Adjust a photo with curves and color controls</caption>
+      <image type="source" width="2486" height="1686">https://capycanvas.art/store/gtk/en/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ja">https://capycanvas.art/store/gtk/ja/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_CN">https://capycanvas.art/store/gtk/zh-hans/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_TW">https://capycanvas.art/store/gtk/zh-hant/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ko">https://capycanvas.art/store/gtk/ko/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="es">https://capycanvas.art/store/gtk/es/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt_BR">https://capycanvas.art/store/gtk/pt-br/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="id">https://capycanvas.art/store/gtk/id/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="fr">https://capycanvas.art/store/gtk/fr/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="de">https://capycanvas.art/store/gtk/de/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="ru">https://capycanvas.art/store/gtk/ru/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="th">https://capycanvas.art/store/gtk/th/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="vi">https://capycanvas.art/store/gtk/vi/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="tr">https://capycanvas.art/store/gtk/tr/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="it">https://capycanvas.art/store/gtk/it/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="pt">https://capycanvas.art/store/gtk/pt-br/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh">https://capycanvas.art/store/gtk/zh-hans/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_HK">https://capycanvas.art/store/gtk/zh-hant/photo-dark.png</image>
+      <image type="source" width="2486" height="1686" xml:lang="zh_MO">https://capycanvas.art/store/gtk/zh-hant/photo-dark.png</image>
+    </screenshot>
+  </screenshots>
   <releases>
+    <release version="1.0.7" date="2026-10-06">
+      <description>
+        <p>Linux software centers now show Capy Canvas in your language, with light and dark previews.</p>
+        <ul>
+          <li>Saving a read-only drawing opens a chooser so you can save an editable copy.</li>
+          <li>The battery indicator and clock follow your desktop in Flatpak installations.</li>
+          <li>Translated Histogram controls fit their labels.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.6" date="2026-10-05">
       <description>
         <p>Capy Canvas is available as a Flatpak for Linux.</p>

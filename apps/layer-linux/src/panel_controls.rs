@@ -24,12 +24,16 @@ pub fn menu_choice(button: &gtk::MenuButton, text: &str) {
 }
 
 pub fn check(label: &str) -> gtk::CheckButton {
-    let check = gtk::CheckButton::with_label(label);
-    if let Some(label) = check.child().and_downcast::<gtk::Label>() {
-        label.set_wrap(true);
-        label.set_xalign(0.);
-        label.set_max_width_chars(1);
-    }
+    let check = gtk::CheckButton::new();
+    check.connect_label_notify(|check| {
+        if let Some(label) = std::iter::successors(check.first_child(), |child| child.next_sibling())
+            .find_map(|child| child.downcast::<gtk::Label>().ok()) {
+            label.set_wrap(true);
+            label.set_xalign(0.);
+            label.set_max_width_chars(1);
+        }
+    });
+    check.set_label(Some(label));
     check
 }
 

@@ -4005,8 +4005,8 @@
 			"isa" = "XCBuildConfiguration";
 			"name" = "Debug";
 			"buildSettings" = {
-				"MARKETING_VERSION" = "1.0.6";
-				"CURRENT_PROJECT_VERSION" = "1000006";
+				"MARKETING_VERSION" = "1.0.7";
+				"CURRENT_PROJECT_VERSION" = "1000007";
 				"CAPY_RUST_PROFILE" = "debug";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG";
@@ -4017,8 +4017,8 @@
 			"isa" = "XCBuildConfiguration";
 			"name" = "Release";
 			"buildSettings" = {
-				"MARKETING_VERSION" = "1.0.6";
-				"CURRENT_PROJECT_VERSION" = "1000006";
+				"MARKETING_VERSION" = "1.0.7";
+				"CURRENT_PROJECT_VERSION" = "1000007";
 				"CAPY_RUST_PROFILE" = "release";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "";

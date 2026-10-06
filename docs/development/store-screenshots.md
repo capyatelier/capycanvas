@@ -11,7 +11,8 @@ The helper starts one scene in a fresh private home, application storage, D-Bus
 session and headless Mutter display. It imports through the native file-launch
 path and applies shared editor actions. It waits for document admission, shader
 startup, visible thumbnails, canvas presentation and GTK frames. Missing glyphs,
-an unexpected window size, application errors and clipped shadows fail the run.
+an unexpected window size, application errors, clipped Histogram or Waveform
+content and clipped shadows fail the run.
 Mutter captures the actual window and GPU subsurface. PNG output preserves its
 native corners and shadow with transparent padding; no replacement corners or
 background are drawn.
@@ -110,9 +111,14 @@ images, so replacements may take time to appear. Preserve alpha if optimizing or
 converting the PNGs, and inspect the result at its intended display size.
 
 AppStream metadata references the published images by URL. Use an unlocalized
-English fallback, localized image variants with `xml:lang`, and screenshot
-environment hints such as `gnome:light` and `gnome:dark`. GNOME Software can show
-both theme variants, so each should stand on its own. Captions describe the
+English fallback and localized image variants with `xml:lang`. GNOME Software
+filters images using desktop locales: map website tags `pt-BR`, `zh-Hans` and
+`zh-Hant` to `pt_BR`, `zh_CN` and `zh_TW` in the XML attributes, while keeping
+the canonical website URLs unchanged. Generic `pt` and `zh` aliases cover the
+app's Portuguese and Simplified Chinese fallbacks; `zh_HK` and `zh_MO` reuse
+Traditional Chinese images alongside `zh_TW`. Use `gnome` for light screenshot
+environments and `gnome:dark` for dark. GNOME Software can show both theme
+variants, so each should stand on its own. Captions describe the
 feature shown. Add and validate the final metadata after the image URLs are live.
 See the [AppStream screenshot specification](https://www.freedesktop.org/software/appstream/docs/chap-Metadata.html#tag-screenshots)
 and [Flathub screenshot guidance](https://docs.flathub.org/docs/for-app-authors/metainfo-guidelines/quality-guidelines#screenshots).

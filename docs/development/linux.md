@@ -232,6 +232,11 @@ retained Properties page, numeric focus, selection and targeted adjustment
 buttons in every shipped language and both themes. It preserves the statistics
 data and query time while changing copy, exercises source and channel choices,
 and defers publication while the native channel popup is open.
+`native_localized_photo_histogram_bounds` checks the default Photo workspace's
+Histogram and Waveform plots, controls and translated labels against their
+visible dock bounds in every language and both themes. Their logarithmic-count
+checkbox uses the shared native wrapping control on its own row, keeping the
+plot's edge bins and precision status visible when translated labels are long.
 Properties action and clipping captions wrap inside the native viewport and keep
 complete tooltips. Selected choices use the compact dropdown helper, retaining
 full tooltip and popup text when the closed caption ellipsizes. The same fixture
