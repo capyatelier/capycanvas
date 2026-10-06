@@ -33,4 +33,5 @@ flatpak build --metadata=metadata-compose "$state/app" appstreamcli compose \
     --icons-dir=/app/share/app-info/icons/flatpak --components=art.capycanvas.CapyCanvas /app
 rm "$state/app/metadata-compose"
 test -s "$state/app/files/share/app-info/xmls/art.capycanvas.CapyCanvas.xml.gz"
-flatpak build-finish --command=capycanvas --socket=wayland --device=dri "$state/app"
+flatpak build-finish --command=capycanvas --socket=wayland --device=dri \
+    --system-talk-name=org.freedesktop.UPower "$state/app"

@@ -348,14 +348,11 @@ async fn choose_file(
     {
         let expected=w.gpu.borrow().as_ref().and_then(|gpu|gpu.session.save_destination_expectation());
         let file=gio::File::for_uri(&location.uri);
-        if let Some(expected)=expected.filter(|expected|expected.required) {
-            let path=file.path();
-            let unchanged=gio::spawn_blocking(move || {
-                let observed=path.and_then(|path|layer_ui::DestinationFingerprint::observe_path(&path,expected.fingerprint.as_ref()));
-                expected.matches(observed.as_ref())
-            }).await.map_err(|_|"Saved drawing verification stopped".to_string())?;
-            if unchanged {return Ok(Some((file,false)));}
-        } else {return Ok(Some((file,false)));}
+        let path=file.path();
+        let reusable=gio::spawn_blocking(move || {
+            expected.zip(path).is_some_and(|(expected,path)|expected.can_reuse_path(&path))
+        }).await.map_err(|_|"Saved drawing verification stopped".to_string())?;
+        if reusable {return Ok(Some((file,false)));}
     }
     if matches!(request, DocumentRequest::Open)
         && let Some(incoming) = w.image_drop.borrow_mut().take()

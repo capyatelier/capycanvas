@@ -17,6 +17,11 @@ impl DestinationExpectation {
             _ => false,
         }
     }
+    #[cfg(not(target_arch="wasm32"))]
+    pub fn can_reuse_path(&self,path:&std::path::Path)->bool {
+        std::fs::OpenOptions::new().write(true).open(path).is_ok()
+            && (!self.required || self.matches(DestinationFingerprint::observe_path(path,self.fingerprint.as_ref()).as_ref()))
+    }
 }
 pub struct FingerprintWriter<W> {writer:W,hash:Sha256,bytes:u64}
 impl<W:std::io::Write> FingerprintWriter<W> {
@@ -78,6 +83,32 @@ impl<R: CanvasRenderer> UiSession<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(not(target_arch="wasm32"))]
+    fn saved_destinations_require_write_access_and_unchanged_originals() {
+        let root=std::env::temp_dir().join(format!("capy-save-access-{}",layer_core::PortableId::random()));
+        std::fs::create_dir(&root).unwrap();
+        let path=root.join("drawing.capy");
+        std::fs::write(&path,b"original drawing").unwrap();
+        let permissions=std::fs::metadata(&path).unwrap().permissions();
+        let expected=DestinationExpectation {
+            location:DocumentLocation {uri:path.to_string_lossy().into_owned(),name:"drawing.capy".into()},
+            fingerprint:Some(DestinationFingerprint::read_path(&path).unwrap()),required:true,
+        };
+        assert!(expected.can_reuse_path(&path));
+        let mut readonly=permissions.clone();readonly.set_readonly(true);
+        std::fs::set_permissions(&path,readonly).unwrap();
+        assert!(!expected.can_reuse_path(&path));
+        assert!(!DestinationExpectation {required:false,..expected.clone()}.can_reuse_path(&path));
+        assert_eq!(std::fs::read(&path).unwrap(),b"original drawing");
+        std::fs::set_permissions(&path,permissions).unwrap();
+        std::fs::write(&path,b"modified drawing").unwrap();
+        assert!(!expected.can_reuse_path(&path));
+        assert!(DestinationExpectation {required:false,..expected.clone()}.can_reuse_path(&path));
+        std::fs::remove_file(&path).unwrap();
+        assert!(!expected.can_reuse_path(&path));
+        std::fs::remove_dir(root).unwrap();
+    }
     #[test]
     fn observing_external_originals_bounds_reads_and_protects_unreadable_files() {
         use std::io::Read;

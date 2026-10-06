@@ -26,6 +26,9 @@ pub(crate) struct SystemStatus {
     components: Cell<Option<[bool; 2]>>,
     header_size: Cell<Option<layer_ui::HeaderSize>>,
     settings: Option<gio::Settings>,
+    clock_proxy: RefCell<Option<gio::DBusProxy>>,
+    portal_clock: Cell<Option<bool>>,
+    clock_revision: Cell<u64>,
     proxy: RefCell<Option<gio::DBusProxy>>,
     timer: RefCell<Option<glib::SourceId>>,
 }
@@ -178,6 +181,9 @@ impl SystemStatus {
             components: Cell::new(None),
             header_size: Cell::new(None),
             settings,
+            clock_proxy: RefCell::new(None),
+            portal_clock: Cell::new(None),
+            clock_revision: Cell::new(0),
             proxy: RefCell::new(None),
             timer: RefCell::new(None),
         });
@@ -209,6 +215,7 @@ impl SystemStatus {
                 ),
             );
         }
+        this.observe_clock();
         // Synthetic battery tests must not race the host's real UPower reply.
         if !observe_power {
             return this;
@@ -257,6 +264,54 @@ impl SystemStatus {
             }
         ));
         this
+    }
+    fn observe_clock(self: &Rc<Self>) {
+        glib::MainContext::default().spawn_local(glib::clone!(#[weak(rename_to = this)] self, async move {
+            let Ok(proxy) = gio::DBusProxy::for_bus_future(
+                gio::BusType::Session,
+                gio::DBusProxyFlags::DO_NOT_AUTO_START | gio::DBusProxyFlags::DO_NOT_LOAD_PROPERTIES,
+                None, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.Settings",
+            ).await else { return };
+            proxy.connect_local("g-signal", false, glib::clone!(#[weak] this, #[upgrade_or] None, move |args| {
+                if args[2].get::<String>().ok().as_deref() == Some("SettingChanged")
+                    && let Ok(parameters) = args[3].get::<glib::Variant>()
+                    && let Some((namespace, key, value)) = parameters.get::<(String, String, glib::Variant)>()
+                    && namespace == "org.gnome.desktop.interface" && key == "clock-format"
+                {
+                    this.set_portal_clock(Some(&value));
+                }
+                None
+            }));
+            proxy.connect_notify_local(Some("g-name-owner"), glib::clone!(#[weak] this, move |proxy, _| {
+                this.read_portal_clock(proxy);
+            }));
+            this.read_portal_clock(&proxy);
+            *this.clock_proxy.borrow_mut() = Some(proxy);
+        }));
+    }
+    fn read_portal_clock(self: &Rc<Self>, proxy: &gio::DBusProxy) {
+        self.set_portal_clock(None);
+        let Some(owner) = proxy.name_owner() else { return; };
+        let revision = self.clock_revision.get();
+        let proxy = proxy.clone();
+        glib::MainContext::default().spawn_local(glib::clone!(#[weak(rename_to = this)] self, async move {
+            let result = proxy.call_future("ReadOne",
+                Some(&("org.gnome.desktop.interface", "clock-format").to_variant()),
+                gio::DBusCallFlags::NONE, 3000,
+            ).await;
+            let value = result.ok().and_then(|reply| reply.get::<(glib::Variant,)>().map(|(value,)| value));
+            if this.clock_revision.get() == revision && proxy.name_owner().as_ref() == Some(&owner) {
+                this.set_portal_clock(value.as_ref());
+            }
+        }));
+    }
+    fn set_portal_clock(&self, value: Option<&glib::Variant>) {
+        self.clock_revision.set(self.clock_revision.get().wrapping_add(1));
+        self.portal_clock.set(value.and_then(|value| match value.str()? {
+            "12h" => Some(true), "24h" => Some(false), _ => None,
+        }));
+        self.update_clock();
     }
     pub fn set_visibility(&self, fullscreen: bool) {
         self.fullscreen.set(fullscreen);
@@ -327,7 +382,7 @@ impl SystemStatus {
         // GTK initializes the process locale; nl_langinfo reflects LC_TIME.
         let locale =
             unsafe { std::ffi::CStr::from_ptr(libc::nl_langinfo(libc::T_FMT)) }.to_string_lossy();
-        let twelve = twelve_hour(preference.as_deref(), &locale);
+        let twelve = self.portal_clock.get().unwrap_or_else(|| twelve_hour(preference.as_deref(), &locale));
         if let Ok(now) = glib::DateTime::now_local()
             && let Ok(text) = now.format(if twelve { "%I:%M %p" } else { "%H:%M" })
         {
@@ -448,5 +503,92 @@ mod tests {
         assert!(twelve_hour(None, "%I:%M:%S %p"));
         assert!(twelve_hour(None, "%r"));
         assert!(!twelve_hour(None, "%T"));
+    }
+
+    #[test]
+    #[ignore = "private Wayland display and D-Bus session"]
+    fn native_clock_portal_preferences() {
+        assert!(std::env::var("WAYLAND_DISPLAY").is_ok_and(|display| display.starts_with("layer-bench-")));
+        assert_eq!(std::env::var("GSETTINGS_BACKEND").as_deref(), Ok("memory"));
+        let bus = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE).unwrap();
+        let info = gio::DBusNodeInfo::for_xml("<node><interface name='org.freedesktop.portal.Settings'><method name='ReadOne'><arg type='s' direction='in'/><arg type='s' direction='in'/><arg type='v' direction='out'/></method><signal name='SettingChanged'><arg type='s'/><arg type='s'/><arg type='v'/></signal></interface></node>").unwrap();
+        let reply = Rc::new(RefCell::new("24h".to_variant()));
+        let calls = Rc::new(Cell::new(0));
+        let deferred = Rc::new(Cell::new(false));
+        let pending = Rc::new(RefCell::new(None::<gio::DBusMethodInvocation>));
+        let registration = bus.register_object("/org/freedesktop/portal/desktop", &info.lookup_interface("org.freedesktop.portal.Settings").unwrap())
+            .method_call(glib::clone!(#[strong] reply, #[strong] calls, #[strong] deferred, #[strong] pending,
+                move |_, _, _, _, method, parameters, invocation| {
+                    assert_eq!(method, "ReadOne");
+                    assert_eq!(parameters.get::<(String,String)>().unwrap(), ("org.gnome.desktop.interface".into(), "clock-format".into()));
+                    calls.set(calls.get() + 1);
+                    if deferred.get() { *pending.borrow_mut() = Some(invocation); }
+                    else { invocation.return_value(Some(&(reply.borrow().clone(),).to_variant())); }
+                })).build().unwrap();
+        let own = |acquire| {
+            let parameters = if acquire { ("org.freedesktop.portal.Desktop", 4u32).to_variant() }
+                else { ("org.freedesktop.portal.Desktop",).to_variant() };
+            let answer = bus.call_sync(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                if acquire { "RequestName" } else { "ReleaseName" }, Some(&parameters), None,
+                gio::DBusCallFlags::NONE, 3000, gio::Cancellable::NONE).unwrap();
+            assert_eq!(answer.get::<(u32,)>().unwrap().0, 1);
+        };
+        own(true);
+        let _app = crate::workspace::tests::native_test_app("art.capycanvas.ClockPortalTest");
+        let native = SystemStatus::simulated_power();
+        let settings = native.settings.as_ref().expect("GNOME clock schema");
+        assert!(settings.property::<gio::SettingsBackend>("backend").type_().name().contains("Memory"));
+        settings.set_string("clock-format", "12h").unwrap();
+        let clock = |twelve: bool| native.clock.text().contains(' ') == twelve;
+        crate::workspace::tests::until(|| native.portal_clock.get() == Some(false) && clock(false), "initial portal preference overrides private GSettings");
+        let changed = |namespace: &str, key: &str, value: glib::Variant| {
+            bus.emit_signal(None, "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Settings", "SettingChanged",
+                Some(&(namespace, key, value).to_variant())).unwrap();
+        };
+        for (value, twelve) in [("12h",true),("24h",false)] {
+            changed("org.gnome.desktop.interface", "clock-format", value.to_variant());
+            crate::workspace::tests::until(|| native.portal_clock.get() == Some(twelve) && clock(twelve), "live host clock preference");
+        }
+        changed("unrelated", "clock-format", "12h".to_variant());
+        changed("org.gnome.desktop.interface", "unrelated", "12h".to_variant());
+        crate::workspace::tests::pump(30);
+        assert_eq!(native.portal_clock.get(), Some(false));
+        for value in ["unknown".to_variant(), 42u32.to_variant()] {
+            changed("org.gnome.desktop.interface", "clock-format", value);
+            crate::workspace::tests::until(|| native.portal_clock.get().is_none() && clock(true), "invalid portal value uses private GSettings");
+            changed("org.gnome.desktop.interface", "clock-format", "24h".to_variant());
+            crate::workspace::tests::until(|| native.portal_clock.get() == Some(false) && clock(false), "valid portal preference returns");
+        }
+        own(false);
+        crate::workspace::tests::until(|| native.portal_clock.get().is_none() && clock(true), "portal owner loss restores fallback");
+        settings.set_string("clock-format", "24h").unwrap();
+        crate::workspace::tests::until(|| clock(false), "fallback observes private GSettings changes");
+        *reply.borrow_mut() = "12h".to_variant();
+        own(true);
+        crate::workspace::tests::until(|| native.portal_clock.get() == Some(true) && clock(true), "portal restart reloads host preference");
+        own(false);
+        crate::workspace::tests::until(|| native.portal_clock.get().is_none(), "second portal owner loss");
+        deferred.set(true);
+        let before = calls.get();
+        own(true);
+        crate::workspace::tests::until(|| calls.get() > before && pending.borrow().is_some(), "deferred initial portal read");
+        changed("org.gnome.desktop.interface", "clock-format", "24h".to_variant());
+        crate::workspace::tests::until(|| native.portal_clock.get() == Some(false) && clock(false), "signal supersedes pending read");
+        pending.borrow_mut().take().unwrap().return_value(Some(&("12h".to_variant(),).to_variant()));
+        crate::workspace::tests::pump(50);
+        assert_eq!(native.portal_clock.get(), Some(false), "stale initial reply cannot replace a newer signal");
+        assert!(clock(false));
+        own(false);
+        crate::workspace::tests::until(|| native.portal_clock.get().is_none(), "portal loss after signal");
+        let before = calls.get();
+        own(true);
+        crate::workspace::tests::until(|| calls.get() > before && pending.borrow().is_some(), "deferred read before owner loss");
+        own(false);
+        crate::workspace::tests::until(|| native.portal_clock.get().is_none(), "owner loss invalidates pending read");
+        pending.borrow_mut().take().unwrap().return_value(Some(&("12h".to_variant(),).to_variant()));
+        crate::workspace::tests::pump(50);
+        assert!(native.portal_clock.get().is_none(), "stale reply cannot restore a lost portal preference");
+        assert!(clock(false));
+        bus.unregister_object(registration).unwrap();
     }
 }

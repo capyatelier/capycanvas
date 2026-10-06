@@ -95,6 +95,24 @@ public key so Flatpak can verify repository signatures. Software manages later
 updates according to its update settings; the command-line equivalent is
 `flatpak update`.
 
+The sandbox grants the Wayland socket for windows, clipboard and input, GPU
+devices for rendering, and the `org.freedesktop.UPower` system service for the
+battery indicator. GTK uses the default portals for file dialogs, selected-file
+access and opening links; the clock observes GNOME's time format through the
+Settings portal. Settings, workspace libraries, recovery files and
+caches use Flatpak's private application directories. The exported desktop entry
+forwards files through the document portal when launched from a file manager.
+Software's permission summary does not list these per-file portal grants as
+access to the user's folders.
+
+If opening a selected file fails with `Transport endpoint is not connected`,
+check the document portal's FUSE mount with
+`findmnt -T "$XDG_RUNTIME_DIR/doc"`; its filesystem type should be `fuse.portal`.
+A running `xdg-document-portal` service can still have a disconnected or missing
+mount. Close Flatpak applications before repairing the shared service with
+`systemctl --user restart xdg-document-portal.service`, then reopen them so their
+sandboxes receive the restored mount.
+
 The repository archive contains the OSTree objects and metadata needed to serve
 updates. The bundle and reference alone cannot supply a Flatpak repository.
 `.github/workflows/flatpak-publish.yml` runs when a GitHub Release is published,

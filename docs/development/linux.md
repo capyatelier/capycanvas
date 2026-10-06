@@ -94,6 +94,12 @@ barrier beside those roots. File workers wait for the preceding successful GPU
 submission and use its integrated effect phases; the GTK input thread keeps
 processing events. Native saves write source-only packages without a preview.
 
+The clock reads GNOME's time-format preference asynchronously through the
+Settings portal and follows live changes and service restarts. When unavailable,
+it uses GSettings and the locale. Check the portal and fallback paths on the
+private display with
+`GSETTINGS_BACKEND=memory bash tools/performance/workspace-motion.sh gtk --native-test=native_clock_portal_preferences`.
+
 Imported packages retain their original backing through tab admission, embedded
 effect validation and asynchronous GPU startup. A failed preparation restores the
 current drawing and presents the shared `PackageView`; cancellation stays a
@@ -130,6 +136,8 @@ locks protect live owners;
 unfinished restoration attempts are retained and skipped on subsequent launch.
 Saving to a restored destination verifies its original immutable bytes before
 replacement; an unavailable or externally changed destination opens Save As.
+Save also opens the destination chooser when the retained file is no longer
+writable, including read-only document-portal grants from file transfers.
 Restoring a saved drawing also checks that original on a worker. A missing or
 changed original keeps the private copy unsaved until Save or explicit Discard.
 The private checkpoint never overwrites the artist's project file.
