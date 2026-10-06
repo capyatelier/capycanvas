@@ -133,6 +133,27 @@ fn region_list_changes_repaint_only_added_and_removed_glass() {
     assert_eq!(frame(&mut blur), [shown], "a new shape with the same bounds repaints them once");
 }
 
+#[test]
+fn glass_follows_a_new_surround() {
+    let size = [256, 128];
+    let r = document(size);
+    let surface = texture(&r, size);
+    let glass = [region([150., 32., 90., 64.], [16.; 4])];
+    let show = |presenter: &mut ViewportPresenter, surround: [f32; 4]| {
+        presenter.present(&r, &surface.create_view(&Default::default()), view(size, 0.), surround).unwrap();
+        crate::layer_tests::page_bytes(&r, &surface)
+    };
+    let mut live = ViewportPresenter::for_renderer(&r, FORMAT);
+    live.set_target_retention(false);
+    live.set_backdrop(&r, &glass, Default::default(), false);
+    show(&mut live, [0.05, 0.05, 0.05, 1.]);
+    let restyled = show(&mut live, [0.8, 0.8, 0.8, 1.]);
+    let mut fresh = ViewportPresenter::for_renderer(&r, FORMAT);
+    fresh.set_target_retention(false);
+    fresh.set_backdrop(&r, &glass, Default::default(), false);
+    assert!(restyled == show(&mut fresh, [0.8, 0.8, 0.8, 1.]), "glass over a new surround matches glass placed fresh");
+}
+
 fn paint_near_glass(r: &mut WgpuRasterizer, size: [u32; 2]) {
     let mut dab = crate::layer_tests::dab([0., 0., 0., 1.]);
     dab.center = layer_core::Point { x: 110., y: 64. };

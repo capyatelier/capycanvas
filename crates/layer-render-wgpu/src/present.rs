@@ -966,6 +966,8 @@ impl ViewportPresenter {
         let camera_changed = self.camera_data.is_none_or(|old| {
             old[..placement.start] != data[..placement.start] || old[placement.end..40] != data[placement.end..40]
         });
+        let surround = 12..16;
+        let restyled = self.camera_data.is_some_and(|old| old[surround.clone()] != data[surround]);
         let selection_changed = selection_changed
             || self.camera_data.is_some_and(|old| old[placement.clone()] != data[placement]);
         let artwork_changed = self.camera_data.is_none_or(|old| old[40..] != data[40..]);
@@ -1109,7 +1111,7 @@ impl ViewportPresenter {
             previous.cursor = cursor;
             previous.picker = self.picker.bounds();
             previous.overviews.clone_from(&self.overviews);
-            (regions, full, content_damage, camera_changed && !bindings_changed && !content)
+            (regions, full, content_damage, camera_changed && !restyled && !bindings_changed && !content)
         } else {
             (vec![crate::pixel_rect::PixelRect::full(extent)], true, None, false)
         };
