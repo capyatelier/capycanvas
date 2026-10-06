@@ -2780,7 +2780,7 @@ class AndroidRasterTest {
         motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 60, 4752.0 to 3168.0)
         val runs = org.json.JSONArray()
         val output = File(activity.getExternalFilesDir(null), "filter-preview-drawing.json")
-        for (visible in listOf(false, true, true, false)) {
+        for (visible in listOf(false, true, false, true, false, true)) {
             panel(visible)
             if (visible) {
                 // Invalidate the source without changing its geometry, then

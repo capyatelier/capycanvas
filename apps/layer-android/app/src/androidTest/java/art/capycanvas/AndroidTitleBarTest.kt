@@ -1649,11 +1649,11 @@ class AndroidTitleBarTest {
         assertTrue(state().getJSONObject("layer_tools").getJSONObject("controls").getBoolean("opacity"))
         for(theme in listOf("light","dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            for((name, title) in listOf("Paper" to "Paper (Solid Color)", "Solid Color" to "Solid Color", "Paper" to "Paper (Solid Color)")) {
+            for(name in listOf("Paper", "Solid Color", "Paper")) {
                 action(obj("type" to "layer", "action" to obj("op" to "rename", "id" to 2, "name" to name)))
                 fun hasTitle(n: SemanticsNode): Boolean =
-                    n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == title } == true || n.children.any(::hasTitle)
-                waitFor("Properties heading $title") { node("layer-properties")?.second?.let(::hasTitle) == true }
+                    n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == name } == true || n.children.any(::hasTitle)
+                waitFor("Properties heading $name") { node("layer-properties")?.second?.let(::hasTitle) == true }
             }
             shot("paper-properties-$theme")
         }

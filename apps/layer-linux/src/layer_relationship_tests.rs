@@ -142,6 +142,11 @@ fn native_layer_row_filter_menu() {
         let menu = shown().unwrap();
         let filters = submenu(&mut input, &menu, "Add Filter", "Tone");
         let tone = submenu(&mut input, &filters, "Tone", "Curves");
+        for (popover, label, name) in [(&filters, "Tone", "tone"), (&tone, "Curves", "curves")] {
+            let row = item(popover, label);
+            assert!(widgets(&row).filter_map(|child| child.downcast::<gtk::Image>().ok())
+                .any(|image| image.is_visible() && crate::icons::name(&image).as_deref() == Some(&format!("layer-{name}-symbolic"))));
+        }
         let rows = state(&w).layers.len();
         let curves = screen_point(&item(&tone, "Curves"), &w.window, [0.5, 0.5]);
         for (popover, name) in [(&menu, "row"), (&filters, "filter"), (&tone, "tone")] {

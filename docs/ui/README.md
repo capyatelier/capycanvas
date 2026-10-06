@@ -129,14 +129,13 @@ constrain later painting. Undo restores the previous pixels and mode; returning
 to Full color keeps the converted pixels. Reduced modes appear in the layer
 subtitle. Image objects, masks, selections and effect layers do not offer this control.
 
-GTK Properties gives the layer name its own heading, with the smaller, muted
+Properties gives the layer name its own heading, with the smaller, muted
 layer type below it. **Add Filter** sits at the right of that second row with an
 **fx+** icon, its text label and a menu arrow. The Layers footer uses the same icon.
 GTK Properties dropdowns and their adjacent action buttons share the compact
 24-pixel panel height and 6-pixel horizontal padding, in docks and drawers.
-Other hosts keep the type in parentheses after a differing name, omit it for paint
-layers, and place **Add Filter** after the Properties controls. It is also available
-in each eligible layer's context menu. It opens the menu bar's filter categories and
+**Add Filter** is also available in each eligible layer's context menu. It opens
+the menu bar's filter categories and
 adds a local filter above the owner's existing chain, so it runs last. Selecting
 a local filter keeps its owner as the destination. Paint layers, image object
 layers and isolated groups accept local filters; locked owners and Pass Through
@@ -213,7 +212,9 @@ icon identity for each command, preset, panel and tool setting.
 
 Filters panels and generic effects use **fx**. Actions that add a filter use
 **fx+**, including Properties, Layers, layer context menus and the selection bar.
-Individual filters retain their own symbols.
+Individual filters retain their own symbols, including in nested menus. Categories use
+the same symbols in the picker and menus: a half-lit circle for Tone, color swatches
+for Color, a sharp triangle for Detail, and a warped grid for Distort.
 
 - Use solid silhouettes for painting tools and concrete objects. Keep contour
   geometry where the outline carries the meaning: selection boundaries, shapes,

@@ -536,7 +536,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut item = ContextMenuItem::command(
                     choice.label.to_string(), choice.action,
                 );
-                item.icon = Some(choice.icon);
+                item.icon = Some(choice.icon.into());
                 item.selected = Some(remembered == variant);
                 item.enabled = choice.enabled;
                 if let Some(reason) = self.command_disabled_reason(variant.command()) {

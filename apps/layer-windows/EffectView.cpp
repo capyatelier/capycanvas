@@ -60,10 +60,11 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     std::shared_ptr<WorkspaceData> data;
     StackPanel root,body,actions;
     ContentControl bodyGate;
-    TextBlock title;
+    TextBlock title,layerType;
+    Grid header;
     Button addFilter;
     TextBlock addFilterLabel;
-    Image addFilterIcon;
+    Image addFilterIcon,addFilterArrow;
     hstring addFilterTheme;
     ComboBox page,resource;
     Grid toolbar;
@@ -232,6 +233,12 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
     }
     explicit PropertiesView(std::shared_ptr<WorkspaceData> source):data(std::move(source)){
         root.Spacing(6);body.Spacing(6);title=label(data,L"",true);
+        title.TextTrimming(TextTrimming::CharacterEllipsis);
+        AutomationProperties::SetAutomationId(title,L"properties-layer-name");
+        layerType=label(data,L"");layerType.Opacity(.55);layerType.TextTrimming(TextTrimming::CharacterEllipsis);layerType.VerticalAlignment(VerticalAlignment::Center);
+        AutomationProperties::SetAutomationId(layerType,L"properties-layer-type");
+        header.ColumnSpacing(6);
+        for(auto width:{GridUnitType::Star,GridUnitType::Auto}){ColumnDefinition column;column.Width({1,width});header.ColumnDefinitions().Append(column);}
         AutomationProperties::SetAutomationId(root,L"layer-properties");
         bodyGate.Content(body);bodyGate.IsTabStop(false);bodyGate.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         styleChoice(page,L"properties-page");styleChoice(resource,L"property-resource-choice");
@@ -248,10 +255,10 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",O({{L"op",S(L"select_page")},{L"layer",N(num(view,L"layer"))},{L"page",S(id)}})}}),
                 to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch"))));
         });
-        addFilter=button(data,L"",[]{});
+        addFilter=button(data,L"",[]{});addFilter.MinHeight(24);addFilter.Height(24);addFilter.Padding({6,0,6,0});
         {StackPanel content;content.Orientation(Orientation::Horizontal);content.Spacing(6);
             addFilterLabel=label(data,L"");addFilterLabel.VerticalAlignment(VerticalAlignment::Center);
-            addFilterIcon.Width(16);addFilterIcon.Height(16);content.Children().Append(addFilterIcon);content.Children().Append(addFilterLabel);addFilter.Content(content);}
+            addFilterIcon.Width(16);addFilterIcon.Height(16);content.Children().Append(addFilterIcon);content.Children().Append(addFilterLabel);addFilterArrow.Width(12);addFilterArrow.Height(12);content.Children().Append(addFilterArrow);addFilter.Content(content);}
         addFilter.Click([data=data,weak=make_weak(addFilter)](auto&&,auto&&){
             auto anchor=weak.get();auto model=object(object(data->state,L"layer_properties"),L"add_filter");
             if(data->updating||!anchor||!anchor.XamlRoot()||!model.Size())return;
@@ -261,7 +268,8 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             menu.ShowAt(anchor);
         });
         AutomationProperties::SetAutomationId(addFilter,L"properties-add-filter");
-        for(FrameworkElement part:{FrameworkElement(title),FrameworkElement(toolbar),tonal,FrameworkElement(bodyGate),FrameworkElement(addFilter)})root.Children().Append(part);
+        Grid::SetColumn(addFilter,1);header.Children().Append(layerType);header.Children().Append(addFilter);
+        for(FrameworkElement part:{FrameworkElement(title),FrameworkElement(header),FrameworkElement(toolbar),tonal,FrameworkElement(bodyGate)})root.Children().Append(part);
     }
     void init(){
         resource.SelectionChanged([weak=weak_from_this()](auto&&,auto&&){
@@ -275,8 +283,10 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         auto view=object(data->state,L"layer_properties");
         auto filterMenu=object(view,L"add_filter");addFilter.Visibility(filterMenu.Size()?Visibility::Visible:Visibility::Collapsed);
         addFilterLabel.Text(str(filterMenu,L"title"));AutomationProperties::SetName(addFilter,str(filterMenu,L"title"));
-        if(addFilterTheme!=data->theme()){addFilterTheme=data->theme();addFilterIcon.Source(icon(L"add-filter",addFilterTheme).Source());}
-        title.Text(str(view,L"title"));AutomationProperties::SetName(root,str(view,L"title"));CapyUi::tooltip(title,str(view,L"description"));
+        if(addFilterTheme!=data->theme()){addFilterTheme=data->theme();addFilterIcon.Source(icon(L"add-filter",addFilterTheme).Source());addFilterArrow.Source(icon(L"chevron-down",addFilterTheme).Source());}
+        title.Text(str(view,L"name"));AutomationProperties::SetName(root,str(view,L"title"));CapyUi::tooltip(title,str(view,L"title"));
+        layerType.Text(str(view,L"layer_type"));layerType.FontSize(data->textSize()*.9);CapyUi::tooltip(layerType,str(view,L"layer_type"));
+        header.Visibility(!str(view,L"layer_type").empty()||filterMenu.Size()?Visibility::Visible:Visibility::Collapsed);
         auto pageChoices=array(view,L"pages");
         A pageIds;for(auto choice:pageChoices)pageIds.Append(S(str(choice.GetObject(),L"id")));
         if(auto key=pageIds.Stringify();key!=pages){pages=key;page.Items().Clear();for(auto choice:pageChoices)comboOption(page,str(choice.GetObject(),L"label"));}

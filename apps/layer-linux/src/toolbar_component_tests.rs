@@ -146,7 +146,7 @@ fn choose_group(d: &mut Driver, anchor: DrawerAnchor, group: layer_ui::ToolGroup
         "opening an inactive group's chooser does not activate it");
     let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
     let index = menu.sections.iter().flatten().position(|item|
-        item.icon == Some(group.icon())).unwrap();
+        item.icon.as_deref() == Some(group.icon())).unwrap();
     choose_variant(d, anchor, index);
     assert_eq!(state(&d.w).brush.tool, group.tool());
     assert!(state(&d.w).customization.drawer.is_none());

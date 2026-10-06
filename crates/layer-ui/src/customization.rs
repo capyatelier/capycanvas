@@ -634,7 +634,7 @@ pub enum CustomizationAction {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ContextMenuItem {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub icon: Option<&'static str>,
+    pub icon: Option<std::sync::Arc<str>>,
     pub label: String,
     /// None is an ordinary command; a value is a checked menu item.
     pub selected: Option<bool>,

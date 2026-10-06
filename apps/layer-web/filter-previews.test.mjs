@@ -13,6 +13,11 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
     }check();})`);
   const histogram=histogramJourney({evaluate,settle}).exact;
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/filter-memory';
+  const timing={};
+  const timed=async(name,action,condition)=>{
+    const started=performance.now();await action();await wait(condition);
+    timing[name]=performance.now()-started;
+  };
   await mkdir(directory,{recursive:true});
   const capture=async name=>{
     const shot=await call('Page.captureScreenshot',{format:'png'});
@@ -66,9 +71,10 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
     await wait('layerApp.app.shader_work_pending(true)');
     await new Promise(resolve=>setTimeout(resolve,350));
     assert.equal(await evaluate('previewCheck.pipelineCalls'),0,'Held contact defers optional preview pipelines');
-    await evaluate("document.body.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:987,pointerType:'pen'}));undefined");
-    await wait(`previewCheck.status?.retained.includes('curves')&&!previewCheck.status.pending&&previewCheck.pixels('curves')`);
+    await timed('release_ms',()=>evaluate("document.body.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:987,pointerType:'pen'}));undefined"),
+      `previewCheck.status?.retained.includes('curves')&&!previewCheck.status.pending&&previewCheck.pixels('curves')`);
     assert.ok(await evaluate('previewCheck.pipelineCalls>0'),'Queued previews resume after release');
+    await wait(`previewCheck.ids.every(id=>previewCheck.status.retained.includes(id))&&!previewCheck.status.pending`);
     const first=await status();assert.equal(first.error??null,null);
     for(const theme of ['light','dark']){
       await evaluate(`(()=>{
@@ -96,22 +102,24 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
     await wait(`previewCheck.ids.includes('curves')&&previewCheck.pixels('curves')`);
     const reopened=await status();
     assert.equal(reopened.key,first.key);assert.equal(reopened.requests,first.requests,"Reopening reuses the atlas");
-    await evaluate(`layerApp.dispatch({type:'set_layer_opacity',opacity:.63})`);
-    await wait(`previewCheck.status.key!==${JSON.stringify(first.key)}&&!previewCheck.status.pending&&previewCheck.pixels('curves')`);
+    await timed('source_edit_ms',()=>evaluate(`layerApp.dispatch({type:'set_layer_opacity',opacity:.63})`),
+      `previewCheck.status.key!==${JSON.stringify(first.key)}&&previewCheck.status.retained.includes('curves')&&!previewCheck.status.pending&&previewCheck.pixels('curves')`);
     const edited=await status();assert.ok(edited.requests>first.requests);assert.equal(edited.error??null,null);
-    await evaluate(`layerApp.dispatch({type:'filter_picker',action:{op:'category',category:'color'}})`);
-    await wait(`previewCheck.ids.includes('hue_saturation')&&previewCheck.pixels('hue_saturation')&&!previewCheck.status.pending`);
+    await timed('category_ms',()=>evaluate(`layerApp.dispatch({type:'filter_picker',action:{op:'category',category:'color'}})`),
+      `previewCheck.ids.includes('hue_saturation')&&previewCheck.status.retained.includes('hue_saturation')&&previewCheck.pixels('hue_saturation')&&!previewCheck.status.pending`);
     const category=await status();assert.ok(category.retained.length<=64);assert.equal(category.error??null,null);
     const beforeRestart=await histogram();
     await capture('web-preview-before-restart');
-    await evaluate(`layerApp.restartGpu()`);
+    const restartStarted=performance.now();await evaluate(`layerApp.restartGpu()`);
     await wait('layerApp.app.brush_ready()&&layerApp.startupTimes.complete!==null');
-    await wait(`previewCheck.status.key!==${JSON.stringify(category.key)}&&previewCheck.pixels('hue_saturation')&&!previewCheck.status.pending`);
+    await wait(`previewCheck.status.key!==${JSON.stringify(category.key)}&&previewCheck.status.retained.includes('hue_saturation')&&previewCheck.pixels('hue_saturation')&&!previewCheck.status.pending`);
+    timing.restart_ms=performance.now()-restartStarted;
     const restarted=await status();assert.equal(restarted.error??null,null);
     const afterRestart=await histogram();
     await capture('web-preview-lifecycle');
     assert.deepEqual(afterRestart,beforeRestart,'GPU replacement preserves imported artwork');
-    await writeFile(`${directory}/web-preview-lifecycle.json`,JSON.stringify({first,reopened,edited,category,restarted},null,2));
+    await writeFile(`${directory}/web-preview-lifecycle.json`,JSON.stringify({first,reopened,edited,category,restarted,timing},null,2));
+    console.log(`Filter preview timings: ${JSON.stringify(timing)}`);
     console.log('PASS: GPU preview pixels, hide/reopen cache reuse, source/category changes and GPU replacement');
   } finally { await evaluate(`document.body.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:987,pointerType:'pen'}));previewCheck.restore();delete window.previewCheck`); }
 }

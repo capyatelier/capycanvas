@@ -40,6 +40,7 @@ current-source results.
 | Pan: Hand tool, one or two fingers | 120 | Met on a small document: 118.8 fps, interval p50/p99 8.3/12.0 ms (1024 px document; not yet at 61 MP) | [Android development](../development/android.md#benchmarks), 2026-09-27 |
 | Pinch zoom | 120 | **Met.** 119.3 fps on the 61 MP photo; 117.7 fps, p99 15.6 ms on a 1024 px document | 2026-09-22; `2c3cb244`, 2026-09-27 |
 | Two-finger rotate | 120 | | |
+| Painting with Filters previews pending (61 MP) | 120 | One frame-gap outlier; repeat passes. Completed-update rate unqualified. Curves thumbnail opening 6.782 → 0.943–1.015 s | [Filters previews](#filters-previews), 2026-10-06 |
 | Footer zoom and rotation sliders | 120 | Unmeasured on the reference tablet | |
 | Navigator drag | 120 | | |
 | Brush-cursor hover | 120 | | |
@@ -2098,3 +2099,32 @@ efficiency improvement.
 audit](../../artifacts/illustration-filters/pair1/merged-pair-final-top-bto-resume-physical-diagnostic.json).
 The strict timing failures remain failures; physical evidence establishes no
 total-GPU or phase-time pass.
+
+
+## Filters previews
+
+On 2026-10-05/06, MovinkPad Pro 14 benchmark builds compare the original preview
+scheduler at `f2a56cdc5` with the adaptive preview change based on `2dc8a08cc`.
+Both use the same 9504 × 6336 Sony photo and private application ID. Opening
+All filters until the Curves thumbnail contains photo pixels takes
+**6.782 → 0.943–1.015 s** (one baseline opening, two final openings). This is
+first ordinary-thumbnail readiness, not completion of every source-analysis row.
+
+`AndroidRasterTest#largePhotoFilterPreviewDrawing` alternates three hidden-panel
+controls with three visible-panel strokes of five seconds, after a priming
+stroke. Across two final runs, visible-panel p95 input-queue time is
+7.979–8.433 ms versus 7.794–8.323 ms hidden; CPU time is 9.710–10.194 ms versus
+9.206–9.955 ms, and frame-start gaps are 10.064–10.762 ms versus
+9.573–10.324 ms. All six visible strokes pass the +2 ms queue and CPU limits
+against their run's slowest hidden control. One stroke in the first run misses
+the +0.5 ms frame-gap limit by 0.110 ms; the other two pass. The unchanged repeat
+passes all three comparisons at thermal status 0 before and after the run. The
+baseline passes these interference checks too. Keep the first failure visible:
+these host timings do not establish GPU-completed updates, fresh-input throughput
+or the 120 fps target. Thermal state was not recorded for the first run.
+
+The fixture's post-motion thumbnail wait falls from 7.067–7.844 s to 30–287 ms,
+but starts after telemetry collection and must not be read as physical pen-up
+latency. Raw measurements and build logs are in
+`artifacts/fx-performance/{baseline,final,final-repeat}/`. Low-tier and mid-tier
+performance remain unmeasured for this change.

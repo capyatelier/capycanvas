@@ -97,9 +97,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let items: Vec<_> = self.effect_catalog.filters()
                     .iter()
                     .filter(|f| f.category == category.id && (owner.is_none() || f.program.kind == layer_core::EffectKind::Adjustment))
-                    .map(|f| ContextMenuItem { enabled, ..ContextMenuItem::command(effects::resource_label(f.label(), self.localization()).to_string(), UiAction::Effect { action: owner.map_or_else(|| EffectAction::Insert { effect: f.program.id.clone() }, |owner| EffectAction::InsertAttached { effect: f.program.id.clone(), owner: occurrence_token(owner), epoch: self.state.document_file.epoch }) }) })
+                    .map(|f| ContextMenuItem { enabled, icon: Some(f.icon.clone()), ..ContextMenuItem::command(effects::resource_label(f.label(), self.localization()).to_string(), UiAction::Effect { action: owner.map_or_else(|| EffectAction::Insert { effect: f.program.id.clone() }, |owner| EffectAction::InsertAttached { effect: f.program.id.clone(), owner: occurrence_token(owner), epoch: self.state.document_file.epoch }) }) })
                     .collect();
-                (!items.is_empty()).then(|| ContextMenuItem::submenu(&effects::resource_label(&category.label, self.localization()), vec![items]))
+                (!items.is_empty()).then(|| ContextMenuItem {
+                    icon: Some(effects::category_icon(&category.id).into()),
+                    ..ContextMenuItem::submenu(&effects::resource_label(&category.label, self.localization()), vec![items])
+                })
             })
             .collect()
     }

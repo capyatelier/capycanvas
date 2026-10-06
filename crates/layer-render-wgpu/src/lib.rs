@@ -3534,13 +3534,6 @@ impl CanvasRenderer for WgpuRasterizer {
         &mut self,
         request: layer_render::FilterPreviewRequest,
     ) -> Result<bool, Self::Error> {
-        if self.startup.is_some()
-            && (!self.poll_startup()?.brush_ready || self.effect_validation.is_some())
-        {
-            // Preview rows retry later; they must not synchronously compile the
-            // catalog on the canvas thread while startup work is prioritized.
-            return Ok(false);
-        }
         self.start_filter_previews(request)
     }
     fn request_effect_validation(

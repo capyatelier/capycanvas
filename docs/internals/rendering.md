@@ -731,9 +731,20 @@ Filter-picker previews use the same coordinate contract. Native one-to-one
 image reads use fragment positions directly, avoiding a
 window-size-dependent interpolation error from reconstructed UV coordinates.
 
-Filter previews scan four source tiles per asynchronous completion, including
-the probe's corner-sampling halo. Preview rows then share a source crop expanded
-by their required support. A document edit cancels an unfinished scan after its
+Filter previews visit source tiles in order of their best possible sample score,
+starting at the center and including the probe's corner-sampling halo. A complete
+painted crop ends the search once no remaining tile can improve it; isolated ink
+still requires the full search before falling back. One chunk is in flight at a
+time. Batches grow from one to at most sixteen tiles using measured encoding and
+GPU completion time, with two-millisecond encoding and GPU budgets. Devices without
+encoder timestamps use asynchronous completion latency with a sixteen-millisecond
+budget. Each poll yields to the host before submitting another chunk. Accepted
+requests stay pending while their shaders prepare, including across render-thread
+transport. Admission retries after sixteen milliseconds without
+repeating the idle delay.
+Rows without full-source analysis publish first; analysis-dependent rows run
+individually afterward. Preview rows share a source crop expanded by their required
+support. A document edit cancels an unfinished scan after its
 in-flight completion; no result may combine source revisions. Global samplers
 retain their full declared input. Live display composition uses bounded windows
 and reduced sources; native-resolution filter dependencies execute through the

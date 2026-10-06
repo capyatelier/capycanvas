@@ -92,11 +92,13 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   panels.get("adjustments").append(adjustments);
   const properties=element("div","effect-properties");properties.dataset.control="properties";
   const title=element("h3"),page=element("select"),body=element("div","property-controls");page.dataset.propertiesPage="";page.onchange=()=>send({op:"select_page",layer:state().layer_properties.layer,page:page.value});const toolbar=element("div","property-toolbar"),actions=element("div","property-actions");
-  toolbar.append(page,actions);properties.append(title,toolbar,body);panels.get("properties").append(properties);
+  const header=element("div","properties-header"),layerType=element("span","properties-layer-type");
+  title.id="properties-layer-name";layerType.id="properties-layer-type";
+  toolbar.append(page,actions);properties.append(title,header,toolbar,body);panels.get("properties").append(properties);
   const addFilter=button(()=>state().layer_properties.add_filter?.title??"",()=>openMenu(addFilter));
-  addFilter.prepend(icon("add-filter"));
+  addFilter.prepend(icon("add-filter"));addFilter.append(icon("chevron-down"));
   addFilter.id="properties-add-filter";addFilter.setAttribute("aria-haspopup","menu");
-  addFilter.menuModel=()=>state().layer_properties.add_filter;properties.append(addFilter);
+  addFilter.menuModel=()=>state().layer_properties.add_filter;header.append(layerType,addFilter);
   const tonal=createScope({state,app,element,button,icon,dispatch,tonal:true});properties.insertBefore(tonal.node,body);
   let actionKey,actionNodes=[],groupMenus=[];
   function refreshActions(view) {
@@ -239,7 +241,9 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   }
   function refresh(){
     refreshPicker();
-    const view=state().layer_properties;title.textContent=view.title;title.title=view.description;
+    const view=state().layer_properties;title.textContent=view.name;title.title=view.title;
+    layerType.textContent=view.layer_type;layerType.title=view.layer_type;
+    header.hidden=!view.layer_type&&!view.add_filter;
     addFilter.hidden=!view.add_filter;
     resource.hidden=view.resource_label==null;
     if(!resource.hidden){

@@ -206,14 +206,14 @@ pub struct FilterCategoryChoice {
     pub label: Arc<str>,
     pub icon: &'static str,
 }
-fn category_icon(id: &str) -> &'static str {
+pub(super) fn category_icon(id: &str) -> &'static str {
     match id {
-        "tone" => "levels",
-        "color" => "hue_saturation",
+        "tone" => "tone",
+        "color" => "palette",
         "detail" => "sharpen",
         "blur" => "blur",
         "artistic" => "paint",
-        "distort" => "domain-warp",
+        "distort" => "warp",
         "texture" => "grain",
         "fill" => "fill",
         _ => "adjustments",

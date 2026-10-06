@@ -11,8 +11,25 @@ struct LayerPropertiesPanel: View {
         let actions = view["actions"].array, palette = EditorPalette(source: store.state["palette"])
         let tools = actions.filter { !["lookup_preset", "import_lookup"].contains($0["action"]["op"].string) }
         VStack(alignment: .leading, spacing: 6) {
+            Text(view["name"].string).fontWeight(.bold).lineLimit(1).help(view["title"].string)
+                .accessibilityIdentifier("properties-layer-name")
+            if !view["layer_type"].string.isEmpty || !view["add_filter"].isNull {
+                HStack(spacing: 6) {
+                    Text(view["layer_type"].string).font(.system(size: store.catalog["text_size_pt"].number * 0.9)).foregroundStyle(palette["text"].opacity(0.55))
+                        .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).help(view["layer_type"].string)
+                        .accessibilityIdentifier("properties-layer-type")
+                    if !view["add_filter"].isNull {
+                        EditorMenuButton(menu: { AppleContextMenu(view["add_filter"]) { store.dispatch($0) } }, identifier: "properties-filter-menu") {
+                            HStack(spacing: 6) {
+                                SharedIcon(name: "add-filter")
+                                Text(view["add_filter"]["title"].string)
+                                SharedIcon(name: "chevron-down").frame(width: 12, height: 12)
+                            }.padding(.horizontal, 6).frame(height: 24)
+                        }.buttonStyle(EditorControlButtonStyle()).accessibilityIdentifier("properties-add-filter")
+                    }
+                }
+            }
             VStack(alignment: .leading, spacing: 6) {
-                Text(view["title"].string).fontWeight(.bold).help(view["description"].string)
                 if !view["resource_label"].isNull { lookup(actions, palette: palette) }
                 if pages.count > 1 || !tools.isEmpty {
                     HStack(spacing: 4) {
@@ -42,15 +59,6 @@ struct LayerPropertiesPanel: View {
                     }
                 }
             }.disabled(!view["enabled"].bool).opacity(view["enabled"].bool ? 1 : 0.4)
-            if !view["add_filter"].isNull {
-                EditorMenuButton(menu: { AppleContextMenu(view["add_filter"]) { store.dispatch($0) } }, identifier: "properties-filter-menu") {
-                    HStack(spacing: 6) {
-                        SharedIcon(name: "add-filter")
-                        Text(view["add_filter"]["title"].string)
-                        SharedIcon(name: "chevron-down").frame(width: 12, height: 12)
-                    }.padding(.horizontal, 6).frame(height: 32)
-                }.buttonStyle(EditorControlButtonStyle()).accessibilityIdentifier("properties-add-filter")
-            }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("layer-properties")
     }
     private func effect(_ action: JSON) { store.dispatch(["type": "effect", "action": action.raw]) }

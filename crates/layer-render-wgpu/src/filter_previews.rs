@@ -8,10 +8,34 @@ use layer_render::{FilterPreviewImage, FilterPreviewRequest, FilterPreviewSource
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
 
+const PROBE_BUDGET: Duration = Duration::from_millis(2);
+
+fn probe_batch_size(tiles: usize, encoded: Duration, completed: Duration, gpu_timed: bool) -> usize {
+    let completion_budget = if gpu_timed { PROBE_BUDGET } else { Duration::from_millis(16) };
+    let capacity = |budget: Duration, elapsed: Duration| budget.as_secs_f64() / elapsed.as_secs_f64().max(0.000_001);
+    ((tiles as f64 * capacity(PROBE_BUDGET, encoded).min(capacity(completion_budget, completed))) as usize)
+        .clamp(1, (tiles * 2).clamp(1, 16))
+}
+fn probe_tiles(extent: [u32; 2]) -> Vec<([u32; 2], u32)> {
+    let mut tiles = Vec::new();
+    for y in 0..extent[1].div_ceil(PAGE_SIZE) {
+        for x in 0..extent[0].div_ceil(PAGE_SIZE) {
+            let tile = [x, y];
+            let zig = std::array::from_fn::<_, 2, _>(|i| {
+                let center = extent[i] / 2;
+                let nearest = center.clamp(tile[i] * PAGE_SIZE, ((tile[i] + 1) * PAGE_SIZE).min(extent[i]) - 1);
+                nearest.abs_diff(center) * 2 + u32::from(nearest < center)
+            });
+            tiles.push((tile, u32::MAX - ((zig[1] << 16) | zig[0])));
+        }
+    }
+    tiles.sort_unstable_by_key(|(_, maximum)| std::cmp::Reverse(*maximum));
+    tiles
+}
+
 type Image = (wgpu::Texture, wgpu::TextureView);
 enum Ready {
-    Point(Result<u32, GpuRasterError>),
-    ProbeNext(Result<u32, GpuRasterError>),
+    Probe { scores: Result<[u32; 2], GpuRasterError>, batch_size: usize },
     Pixels(Result<ReadbackImage, GpuRasterError>),
 }
 /// Source revision, insertion scope, extent and blend space.
@@ -19,7 +43,10 @@ type SourceKey = (u64, (u64,FilterPreviewSource), [u32; 2], layer_core::BlendSpa
 pub(crate) struct FilterPreviews {
     scene: Scene,
     source_scene: Scene,
-    probe_next: u32,
+    probe_next: usize,
+    probe_tiles: Vec<([u32; 2], u32)>,
+    probe_batch_size: usize,
+    probe_timing: Option<(wgpu::QuerySet, wgpu::Buffer)>,
     probe_winner: Option<wgpu::Buffer>,
     cancelled: bool,
     programs: HashMap<Arc<str>, OccurrenceHandle>,
@@ -96,6 +123,13 @@ impl FilterPreviews {
             scene,
             source_scene: Scene::new(r),
             probe_next: 0,
+            probe_tiles: Vec::new(),
+            probe_batch_size: 1,
+            probe_timing: r.device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS).then(|| (
+                r.device.create_query_set(&wgpu::QuerySetDescriptor {label: Some("filter probe timing"), ty: wgpu::QueryType::Timestamp, count: 2}),
+                r.device.create_buffer(&wgpu::BufferDescriptor {label: Some("filter probe timing resolve"), size: 256,
+                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false}),
+            )),
             probe_winner: None,
             cancelled: false,
             programs: HashMap::new(),
@@ -163,24 +197,6 @@ impl FilterPreviews {
         let index=Arc::new(SceneIndex::build(&artwork).map_err(GpuRasterError::Effect)?);
         self.program_snapshot=Some(Arc::new(SceneSnapshot::new(artwork,index,request.snapshot.owner,request.snapshot.revision,request.snapshot.context.clone())));
         self.programs=programs;
-        if let Some(startup) = &r.startup {
-            // Visible rows prepare just their own preview variants. No draw or
-            // readback is admitted until their asynchronous pipelines are ready.
-            for effect in &request.filters {
-                self.scene.effects.prepare(r, self.program_snapshot.as_ref().unwrap().view(), &[self.programs[&effect.program.id]], effects::Execution::Preview, 0., 0, preview_space(effect.view(), request.snapshot.view().composition().blend))?;
-            }
-            let source=source_snapshot(&request)?;
-            for (layers,execution) in scene::startup_effect_chains(source.view()){
-                self.source_scene.effects.prepare(r,source.view(),&layers,execution,source.context.elapsed,0,request.snapshot.view().composition().blend)?;
-            }
-            let mut ready = self.scene.effects.enqueue_active(&startup.compiler, startup::OTHER);
-            ready &= self.source_scene.effects.enqueue_active(&startup.compiler, startup::OTHER);
-            startup.compiler.pipeline(&self.probe, startup::OTHER);
-            // Preview readback uses the same conversion as document export.
-            ready &= r.ui_readback_ready() && self.probe.ready();
-            startup.compiler.start();
-            if !ready { return Ok(false); }
-        }
         self.cancelled = false;
         let key = (
             r.filter_source_epoch,
@@ -206,6 +222,8 @@ impl FilterPreviews {
             self.key = Some(key);
             self.point = None;
             self.probe_next = 0;
+            self.probe_tiles = probe_tiles(self.key.unwrap().2);
+            self.probe_batch_size = 1;
             self.probe_winner = Some(r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("preview content coordinate"),
                 size: 8,
@@ -255,6 +273,26 @@ impl FilterPreviews {
         Ok(())
     }
     fn prepare_source(&mut self, r: &mut WgpuRasterizer) -> Result<(), GpuRasterError> {
+        if r.startup.is_some() && (!r.poll_startup()?.brush_ready || r.effect_validation.is_some()) { return Ok(()); }
+        let request = self.request.as_ref().unwrap();
+        if let Some(startup) = &r.startup {
+            // Visible rows prepare just their own preview variants. No draw or
+            // readback is admitted until their asynchronous pipelines are ready.
+            for effect in &request.filters {
+                self.scene.effects.prepare(r, self.program_snapshot.as_ref().unwrap().view(), &[self.programs[&effect.program.id]], effects::Execution::Preview, 0., 0, preview_space(effect.view(), request.snapshot.view().composition().blend))?;
+            }
+            let source=source_snapshot(request)?;
+            for (layers,execution) in scene::startup_effect_chains(source.view()){
+                self.source_scene.effects.prepare(r,source.view(),&layers,execution,source.context.elapsed,0,request.snapshot.view().composition().blend)?;
+            }
+            let mut ready = self.scene.effects.enqueue_active(&startup.compiler, startup::OTHER);
+            ready &= self.source_scene.effects.enqueue_active(&startup.compiler, startup::OTHER);
+            startup.compiler.pipeline(&self.probe, startup::OTHER);
+            // Preview readback uses the same conversion as document export.
+            ready &= r.ui_readback_ready() && self.probe.ready();
+            startup.compiler.start();
+            if !ready { return Ok(()); }
+        }
         if let Some(job) = &mut self.analysis {
             let Some(result) = job.take() else {return Ok(());};
             self.analysis = None;
@@ -282,13 +320,11 @@ impl FilterPreviews {
         if self.probe_winner.is_some() {self.with_analyses(r,Self::probe_batch)}
         else if self.missing_rows() {self.with_analyses(r,Self::render)} else {Ok(())}
     }
-    /// Scan four source tiles per completion. Only one chunk can be in flight;
-    /// the retained source and spatial boundaries cover the tile plus its halo.
     fn probe_batch(&mut self, r: &mut WgpuRasterizer) -> Result<(), GpuRasterError> {
         let request = self.request.as_ref().unwrap();
         let extent = request.snapshot.view().composition().size;
-        let columns = extent[0].div_ceil(PAGE_SIZE);
-        let count = columns * extent[1].div_ceil(PAGE_SIZE);
+        let started = web_time::Instant::now();
+        let first = self.probe_next;
         // Every tile uses the same queue-ordered window. Allocating a texture
         // per tile leaves gigabytes awaiting browser GC on large documents,
         // even though Rust retains only the most recent handle. Edge windows
@@ -307,6 +343,7 @@ impl FilterPreviews {
                 label: Some("filter content probe chunk"),
             },
         );
+        if let Some((query, _)) = &self.probe_timing { encoder.write_timestamp(query, 0); }
         if self.probe_next == 0 {
             encoder.clear_buffer(winner, 0, None);
         }
@@ -324,11 +361,11 @@ impl FilterPreviews {
                 backdrop = std::array::from_fn(|c| color[c] + backdrop[c] * (1. - alpha));
             }
         }
-        for _ in 0..4 {
-            if self.probe_next == count {
+        for _ in 0..self.probe_batch_size {
+            if self.probe_next == self.probe_tiles.len() || (self.probe_next > first && started.elapsed() >= PROBE_BUDGET) {
                 break;
             }
-            let tile = [self.probe_next % columns, self.probe_next / columns];
+            let tile = self.probe_tiles[self.probe_next].0;
             let core = page_rect(tile).intersect(PixelRect::full(extent));
             let region = PixelRect::new(
                 core.min_x().saturating_sub(request.size[0] / 2),
@@ -393,34 +430,45 @@ impl FilterPreviews {
             encoded.submit(&r.queue);
             self.probe_next += 1;
         }
-        let last = self.probe_next == count;
+        let tiles = self.probe_next - first;
+        let encoded = started.elapsed();
+        let timed = self.probe_timing.is_some();
+        let period = f64::from(r.queue.get_timestamp_period());
+        let read_size = if timed { 24 } else { 8 };
         let read = r.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("preview coordinate pair"),
-            size: 8,
+            size: read_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         encoder.copy_buffer_to_buffer(winner, 0, &read, 0, 8);
+        if let Some((query, resolve)) = &self.probe_timing {
+            encoder.write_timestamp(query, 1);
+            encoder.resolve_query_set(query, 0..2, resolve, 0);
+            encoder.copy_buffer_to_buffer(resolve, 0, &read, 8, 16);
+        }
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
         let tx = self.tx.clone();
         crate::raster::map_then(
             &read,
-            8,
-            |bytes| {
-                let preferred = u32::from_le_bytes(bytes[..4].try_into().unwrap());
-                Ok(if preferred > 0 {
-                    preferred
-                } else {
-                    u32::from_le_bytes(bytes[4..8].try_into().unwrap())
-                })
+            read_size,
+            move |bytes| {
+                let scores = std::array::from_fn(|i| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap()));
+                let gpu = timed.then(|| {
+                    let start = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+                    let end = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+                    Duration::from_nanos((end.saturating_sub(start) as f64 * period) as u64)
+                }).filter(|duration| !duration.is_zero());
+                let batch_size = probe_batch_size(tiles, encoded, gpu.unwrap_or_else(|| started.elapsed()), gpu.is_some());
+                Ok((scores, batch_size))
             },
             move |result| {
-                let _ = tx.send(if last {
-                    Ready::Point(result)
-                } else {
-                    Ready::ProbeNext(result)
-                });
+                let (scores, batch_size) = match result {
+                    Ok((scores, batch_size)) => (Ok(scores), batch_size),
+                    Err(error) => (Err(error), 1),
+                };
+                let _ = tx.send(Ready::Probe { scores, batch_size });
             },
         );
         Ok(())
@@ -661,8 +709,12 @@ impl FilterPreviews {
                 Err(GpuRasterError::FilterPreviewCancelled)
             } else {
                 match ready {
-                    Ready::ProbeNext(result) => result.and_then(|_| self.with_analyses(r,Self::probe_batch)),
-                    Ready::Point(value) => value.and_then(|score| {
+                    Ready::Probe { scores, batch_size } => scores.and_then(|scores| {
+                        self.probe_batch_size = batch_size;
+                        if self.probe_tiles.get(self.probe_next).is_some_and(|(_, maximum)| scores[0] < *maximum) {
+                            return self.with_analyses(r, Self::probe_batch);
+                        }
+                        let score = if scores[0] > 0 { scores[0] } else { scores[1] };
                         self.probe_winner = None;
                         if score != 0 {
                             let rank = u32::MAX - score;
@@ -884,6 +936,7 @@ impl FilterPreviews {
             + self.scene.scratch_bytes()
             + self.source_scene.scratch_bytes()
             + self.probe_winner.as_ref().map_or(0, wgpu::Buffer::size)
+            + self.probe_timing.as_ref().map_or(0, |(_, buffer)| buffer.size())
     }
 }
 
@@ -972,16 +1025,13 @@ mod tests {
         r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();r.shader_idle(false);
         for (id,source) in [(1,FilterPreviewSource::OwnerContent(owner)),(2,FilterPreviewSource::EffectInput(target))] {
             let mut candidate=request(&doc,owner,id,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("curves").preview().unwrap())]);candidate.source=source;
+            assert!(r.request_filter_previews(candidate).unwrap());
             if id==1 {
-                assert!(!r.request_filter_previews(candidate.clone()).unwrap());
+                assert!(r.filter_previews_pending());
+                assert!(r.take_filter_previews().is_none());
                 assert!(r.startup.as_ref().unwrap().compiler.pending()>0);
                 assert!(!r.poll_startup().unwrap().complete);
                 r.shader_idle(true);
-            }
-            let deadline=std::time::Instant::now()+Duration::from_secs(5);
-            while !r.request_filter_previews(candidate.clone()).unwrap() {
-                assert!(std::time::Instant::now()<deadline,"Idle preview admission eventually succeeds");
-                std::thread::sleep(Duration::from_millis(200));
             }
             let image=finish(&mut r).image;
             assert_eq!(image.request_id,id);
@@ -1001,26 +1051,21 @@ mod tests {
         crate::test_support::wait_startup(&mut r,std::time::Instant::now()+Duration::from_secs(30),|p|p.complete,format_args!("Preview startup"));
         r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();r.shader_idle(true);
         let curves=request(&doc,owner,1,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("curves").preview().unwrap())]);
-        let deadline=std::time::Instant::now()+Duration::from_secs(5);
-        while !r.request_filter_previews(curves.clone()).unwrap() {
-            assert!(std::time::Instant::now()<deadline);
-            std::thread::sleep(Duration::from_millis(200));
-        }
+        assert!(r.request_filter_previews(curves.clone()).unwrap());
         let original=finish(&mut r).image;
         let preparations=r.filter_previews.as_ref().unwrap().scene.effects.preparation_count();
         r.cancel_filter_previews();r.shader_idle(false);
         let other=request(&doc,owner,2,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("gaussian_blur").preview().unwrap())]);
-        assert!(!r.request_filter_previews(other).unwrap());
+        assert!(r.request_filter_previews(other).unwrap());
+        assert!(r.filter_previews_pending());
+        assert!(r.take_filter_previews().is_none());
         assert!(r.startup.as_ref().unwrap().compiler.pending()>0);
         let progress=r.poll_startup().unwrap();
         assert!(progress.brush_ready);assert!(!progress.complete);
         r.cancel_filter_previews();
         let mut reopened=curves;reopened.request_id=3;
-        let deadline=std::time::Instant::now()+Duration::from_secs(5);
-        while !r.request_filter_previews(reopened.clone()).unwrap() {
-            assert!(std::time::Instant::now()<deadline,"A ready row does not wait for a cancelled category");
-            std::thread::sleep(Duration::from_millis(200));
-        }
+        assert!(!r.filter_previews_pending());
+        assert!(r.request_filter_previews(reopened).unwrap());
         let completed=finish(&mut r).image;
         assert_eq!(completed.request_id,3);
         assert_eq!(completed.bytes,original.bytes);
@@ -1261,6 +1306,39 @@ mod tests {
         assert_ne!(passing, preview(&isolated, 3), "an isolated group's source holds only its own layers");
     }
     #[test]
+    fn filter_probe_budget_grows_gradually_and_yields_on_slow_encoding_or_completion() {
+        let ms = Duration::from_millis;
+        assert_eq!(probe_batch_size(1, ms(0), ms(0), true), 2);
+        assert_eq!(probe_batch_size(8, ms(0), ms(1), true), 16);
+        assert_eq!(probe_batch_size(16, ms(0), ms(8), true), 4);
+        assert_eq!(probe_batch_size(8, ms(4), ms(1), true), 4);
+        assert_eq!(probe_batch_size(4, ms(0), ms(16), false), 4);
+        assert_eq!(probe_batch_size(4, ms(0), ms(64), false), 1);
+    }
+
+    #[test]
+    fn filter_probe_keeps_searching_for_a_full_crop_after_finding_isolated_ink() {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let extent = [1025, 513];
+        for (code, expected, all_tiles) in [
+            ("let ink=all(floor(p)==vec2<f32>(512.,256.)) || (p.x>=950. && p.y>=400.);", [975,410], false),
+            ("let ink=all(floor(p)==vec2<f32>(512.,256.));", [512,256], true),
+            ("let ink=false;", [0,0], true),
+        ] {
+            let mut artwork = Artwork::new(extent).unwrap();
+            let source = generated(&mut artwork, &format!("fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{{code}return select(vec4<f32>(0.),vec4<f32>(.2,.4,.6,1.),ink);}}"));
+            let doc = document(artwork, vec![source]);
+            r.submit(crate::test_support::packet(doc.scene(), extent)).unwrap();
+            r.request_filter_previews(request(&doc, source, 1, [50,20], crate::test_support::view(extent), vec![Arc::new(fixture("curves").preview().unwrap())])).unwrap();
+            finish(&mut r);
+            let previews = r.filter_previews.as_ref().unwrap();
+            assert_eq!(previews.point.unwrap_or([0,0]), expected);
+            assert_eq!(previews.probe_next == previews.probe_tiles.len(), all_tiles);
+            r.cancel_filter_previews();
+        }
+    }
+
+    #[test]
     fn filter_probe_chunks_bound_sources_and_cancel_changed_documents() {
         use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
@@ -1298,14 +1376,14 @@ mod tests {
         let mut scoped=preview_request(&doc,1);scoped.scope=SceneScope::Members(vec![blur,pattern,paper].into());
         r.request_filter_previews(scoped).unwrap();
         let p = r.filter_previews.as_ref().unwrap();
-        assert_eq!(p.probe_next, 4, "first call submits one bounded chunk");
+        assert_eq!(p.probe_next, 1, "first call submits one bounded tile");
         assert!(p.request.is_some());
         let probe_texture = p.source.as_ref().unwrap().0.clone();
         // A view-only frame must compare the caller's paper color, before the
         // compositor applies paper opacity. It must not cancel this scan.
         frame(&mut r, &doc);
         let mut callbacks = 0;
-        let mut previous_probe_next = 4;
+        let mut previous_probe_next = 1;
         loop {
             r.device
                 .poll(wgpu::PollType::Wait {
@@ -1315,7 +1393,7 @@ mod tests {
                 .unwrap();
             let result = r.take_filter_previews();
             let p = r.filter_previews.as_ref().unwrap();
-            assert!(p.probe_next - previous_probe_next <= 4, "one poll advances at most one chunk");
+            assert!(p.probe_next - previous_probe_next <= 16, "one poll advances at most one chunk");
             previous_probe_next = p.probe_next;
             let (texture, _) = p.source.as_ref().unwrap();
             if p.point.is_none() {
@@ -1334,9 +1412,9 @@ mod tests {
             assert!(callbacks < 50);
         }
         let p = r.filter_previews.as_ref().unwrap();
-        assert_eq!(p.probe_next, 27);
+        assert_eq!(p.probe_next, 1, "center content makes the other 26 tiles unnecessary");
         assert_eq!(p.point, Some([1024, 256]));
-        assert!(callbacks >= 7);
+        assert!(callbacks <= 3);
         assert!(p.probe_winner.is_none());
         // A metadata edit between chunks cancels the old request after its
         // in-flight callback. It cannot combine different document revisions.
@@ -1352,7 +1430,7 @@ mod tests {
             .unwrap();
         assert!(matches!(r.take_filter_previews(), Some(Err(GpuRasterError::FilterPreviewCancelled))));
         assert!(!r.filter_previews_pending());
-        assert_eq!(r.filter_previews.as_ref().unwrap().probe_next, 4);
+        assert_eq!(r.filter_previews.as_ref().unwrap().probe_next, 1);
         r.request_filter_previews(preview_request(&doc, 3)).unwrap();
         assert_eq!(finish(&mut r).image.request_id, 3);
         // Explicit hide/input cancellation never waits for the old callback.
@@ -1363,7 +1441,7 @@ mod tests {
         r.cancel_filter_previews();
         assert!(!r.filter_previews_pending());
         assert!(r.take_filter_previews().is_none());
-        assert!(old_sender.send(Ready::ProbeNext(Ok(0))).is_err());
+        assert!(old_sender.send(Ready::Probe { scores: Ok([0; 2]), batch_size: 1 }).is_err());
         r.request_filter_previews(preview_request(&doc, 31)).unwrap();
         assert_eq!(finish(&mut r).image.request_id, 31);
         // A valid conservative support declaration can exceed the adapter's

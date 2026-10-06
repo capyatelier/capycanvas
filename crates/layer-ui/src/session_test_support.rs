@@ -57,6 +57,7 @@ pub(crate) struct Recorder {
     pub(crate) filter_preview_takes: usize,
     pub(crate) filter_preview_cancels: usize,
     pub(crate) reject_filter_previews: bool,
+    pub(crate) preparing_filter_previews: bool,
     pub(crate) max_dimension: Option<u32>,
     pub(crate) crop_overlay: Option<layer_render::CropOverlay>,
     pub(crate) frame_scene: Option<SceneSnapshot>,
@@ -177,6 +178,7 @@ impl CanvasRenderer for Recorder {
         if self.reject_filter_previews {
             return Err(BackendError("preview unavailable"));
         }
+        if self.preparing_filter_previews { return Ok(false); }
         assert!(self.filter_preview.is_none(), "only one request may be in flight");
         self.filter_preview_requests += 1;
         self.filter_preview = Some(request);

@@ -194,12 +194,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             if error.is_none() && driver.pending.is_none() && now_ns >= driver.retry_at {
-                let missing: Vec<_> = visible
-                    .iter()
-                    .filter(|id| !driver.loaded.contains_key(*id))
-                    .take(8)
-                    .cloned()
-                    .collect();
+                let missing: Vec<_> = visible.iter().filter(|id| !driver.loaded.contains_key(*id)).collect();
+                let immediate: Vec<_> = missing.iter().copied()
+                    .filter(|id| self.effect_catalog.get(id).unwrap().program.analysis().is_none()).collect();
+                let missing: Vec<_> = if immediate.is_empty() { missing.into_iter().take(1).cloned().collect() }
+                    else { immediate.into_iter().take(8).cloned().collect() };
                 if !missing.is_empty() {
                     driver.serial = driver.serial.wrapping_add(1);
                     match self.request_filter_previews(driver.serial, missing.clone(), driver.size)
@@ -211,7 +210,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 filters: missing,
                             });
                         }
-                        Ok(false) => driver.retry_at = now_ns.saturating_add(IDLE_NS),
+                        Ok(false) => driver.retry_at = now_ns.saturating_add(16_000_000),
                         Err(e) => error = Some(e),
                     }
                 }
@@ -225,8 +224,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             50
         } else if driver.pending.is_some() {
             0
+        } else if visible.iter().any(|id| !driver.loaded.contains_key(id)) {
+            driver.retry_at.saturating_sub(now_ns).div_ceil(1_000_000) as u32
         } else {
-            driver.retry_at.saturating_sub(now_ns).max(IDLE_NS).div_ceil(1_000_000) as u32
+            (IDLE_NS / 1_000_000) as u32
         };
         let status = FilterPreviewStatus {
             key,
@@ -491,6 +492,39 @@ mod tests {
         assert!(v.poll(&mut s, 3408, &["curves"]).status.pending);
     }
     #[test]
+    fn ordinary_rows_publish_before_filters_that_need_full_source_analysis() {
+        let mut s = session();
+        let mut v = View::default();
+        let ids = ["shadows_highlights", "curves", "levels", "clarity"];
+        v.poll(&mut s, 0, &ids);
+        v.poll(&mut s, 200, &ids);
+        let requested = |s: &mut UiSession<Recorder>| s.renderer_mut().filter_preview.as_ref().unwrap().filters
+            .iter().map(|f| f.program.id.to_string()).collect::<Vec<_>>();
+        assert_eq!(requested(&mut s), ["curves", "levels"]);
+        finish(&mut s);
+        let update = v.poll(&mut s, 208, &ids);
+        assert_eq!(update.image.unwrap().filters.iter().map(AsRef::as_ref).collect::<Vec<&str>>(), ["curves", "levels"]);
+        assert_eq!(requested(&mut s), ["shadows_highlights"]);
+        finish(&mut s);
+        v.poll(&mut s, 216, &ids);
+        assert_eq!(requested(&mut s), ["clarity"]);
+    }
+
+    #[test]
+    fn preparing_shaders_retries_on_the_next_frame_without_repeating_the_idle_delay() {
+        let mut s = session();
+        let mut v = View::default();
+        s.renderer_mut().preparing_filter_previews = true;
+        v.poll(&mut s, 0, &["curves"]);
+        let preparing = v.poll(&mut s, 200, &["curves"]);
+        assert!(!preparing.status.pending);
+        assert_eq!(preparing.status.wait_ms, 16);
+        assert_eq!(v.poll(&mut s, 210, &["curves"]).status.wait_ms, 6);
+        s.renderer_mut().preparing_filter_previews = false;
+        assert!(v.poll(&mut s, 216, &["curves"]).status.pending);
+    }
+
+    #[test]
     fn visible_rows_are_batched_and_host_cache_is_bounded() {
         let mut s = session();
         let mut v = View::default();
@@ -498,6 +532,7 @@ mod tests {
             .effect_catalog
             .filters()
             .iter()
+            .filter(|f| f.program.analysis().is_none())
             .take(10)
             .map(|f| f.program.id.to_string())
             .collect();

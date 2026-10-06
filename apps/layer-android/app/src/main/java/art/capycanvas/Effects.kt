@@ -180,7 +180,25 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
     val pages = view.array("pages").objects()
     key(state.getJSONObject("document_file").optLong("epoch"), layer) {
     Column(Modifier.fillMaxWidth().testTag("layer-properties").alpha(if(enabled) 1f else .4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(view.getString("title"), fontWeight = FontWeight.Bold)
+        Text(view.getString("name"), Modifier.testTag("properties-layer-name"), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (view.getString("layer_type").isNotEmpty() || !view.isNull("add_filter")) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(view.getString("layer_type"), Modifier.weight(1f).testTag("properties-layer-type"), color = LocalPalette.current.secondary,
+                fontSize = LocalTextStyle.current.fontSize * .9f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            view.optJSONObject("add_filter")?.let { model ->
+                var menu by remember { mutableStateOf<JSONObject?>(null) }
+                Box {
+                    TextButton({ menu = model }, colors = ButtonDefaults.textButtonColors(contentColor = LocalPalette.current.text),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        modifier = Modifier.height(24.dp).testTag("properties-add-filter")) {
+                        SharedIcon("add-filter", null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(model.getString("title"))
+                        SharedIcon("chevron-down", null, Modifier.size(12.dp))
+                    }
+                    menu?.let { WorkspaceMenu(host, it) { menu = null } }
+                }
+            }
+        }
         if(!view.isNull("resource_label")) {
             val actions=view.array("actions").objects()
             val choices=actions.withIndex().filter { it.value.getJSONObject("action").getString("op")=="lookup_preset" }
@@ -256,19 +274,6 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                         .clickable(enabled=enabled){host.dispatch(control.getJSONObject("color_action"))},contentAlignment=Alignment.Center) { SharedIcon("fill",host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("use_selected")) }
                 }) { change(it) }
                 "gradient" -> GradientControl(host,control,enabled)
-            }
-        }
-        view.optJSONObject("add_filter")?.let { model ->
-            var menu by remember { mutableStateOf<JSONObject?>(null) }
-            Box {
-                TextButton({ menu = model }, colors = ButtonDefaults.textButtonColors(contentColor = LocalPalette.current.text),
-                    modifier = Modifier.testTag("properties-add-filter")) {
-                    SharedIcon("add-filter", null)
-                    Spacer(Modifier.width(6.dp))
-                    Text(model.getString("title"))
-                    SharedIcon("chevron-down", null, Modifier.size(12.dp))
-                }
-                menu?.let { WorkspaceMenu(host, it) { menu = null } }
             }
         }
     }

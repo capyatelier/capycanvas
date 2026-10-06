@@ -454,8 +454,19 @@ fn all_layer_filter_entry_points_attach_to_the_captured_layer() {
         let filter = s.localization().text(MessageId::RESOURCES_LAYER_ADD_FILTER).to_string();
         let row = s.layer_menu(occurrence_token(base), false).unwrap();
         let submenu = menu_item(&row.sections, &filter).unwrap();
-        assert_eq!(submenu.icon, Some("add-filter"));
+        assert_eq!(submenu.icon.as_deref(), Some("add-filter"));
         assert_eq!(serde_json::to_value(&submenu.sections).unwrap(), serde_json::to_value(&s.state.layer_tools.add_filter.as_ref().unwrap().sections).unwrap());
+        for category in submenu.sections.iter().flatten() {
+            let picker = s.state.filter_categories.iter().find(|choice| choice.label.as_ref() == category.label).unwrap();
+            assert_eq!(category.icon.as_deref(), Some(picker.icon));
+            assert!(crate::icon_ships(picker.icon));
+            for effect in category.sections.iter().flatten() {
+                let Some(UiAction::Effect { action: EffectAction::InsertAttached { effect: id, .. } }) = &effect.action else { panic!("filter action") };
+                let definition = s.effect_catalog.get(id).unwrap();
+                assert_eq!(effect.icon.as_deref(), Some(definition.icon.as_ref()));
+                assert!(crate::icon_ships(effect.icon.as_deref().unwrap()));
+            }
+        }
         assert_eq!(s.state.layer_properties.add_filter, s.state.layer_tools.add_filter);
         assert!(menu_item(&s.application_menu(ApplicationMenu::Layer).sections, &filter).is_none(), "the menu bar keeps a single Filter menu");
         let other = s.layer_menu(occurrence_token(top), false).unwrap();

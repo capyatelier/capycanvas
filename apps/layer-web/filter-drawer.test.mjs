@@ -58,9 +58,10 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   assert.equal(await evaluate('layerApp.state().layer_tools.controls.opacity'),true);
   for(const theme of ['light','dark']) {
     await send({type:'set_theme',theme});
-    for(const [name,expected] of [['Paper','Paper (Solid Color)'],['Solid Color','Solid Color'],['Paper','Paper (Solid Color)']]) {
+    for(const name of ['Paper','Solid Color','Paper']) {
       await send({type:'layer',action:{op:'rename',id:2,name}});
-      assert.equal(await evaluate('document.querySelector(".content-drawer .effect-properties h3").textContent'),expected);
+      assert.equal(await evaluate('document.querySelector(".content-drawer .effect-properties h3").textContent'),name);
+      assert.equal(await evaluate('document.querySelector(".content-drawer .properties-layer-type").textContent'),"Solid Color");
     }
     await capture(`paper-properties-${theme}`);
   }
@@ -162,6 +163,11 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
       await settle();
       await wait(`layerApp.state().layer_properties.controls.find(c=>c.key==='color_mode')?.value.value===${value}`);
     }
+    assert.ok(await evaluate(`(()=>{
+      const root=document.querySelector('.effect-properties'),name=root.querySelector('#properties-layer-name'),type=root.querySelector('#properties-layer-type'),add=root.querySelector('#properties-add-filter'),v=layerApp.state().layer_properties;
+      const n=name.getBoundingClientRect(),t=type.getBoundingClientRect(),a=add.getBoundingClientRect();
+      return name.textContent===v.name&&type.textContent===v.layer_type&&n.bottom<=t.top&&Math.abs(t.top+t.height/2-a.top-a.height/2)<1&&a.left>=t.right&&a.height===24&&!!add.querySelector('[data-asset="chevron-down"]');
+    })()`),'Properties puts the layer name above its type and compact filter dropdown');
     await capture(`layer-properties-${theme}`);
     const before = await evaluate('layerApp.state().layers.length');
     for (const [index,filter] of ['Exposure','Curves','Levels'].entries()) {
@@ -176,6 +182,7 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
         await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Add Filter')).click()`);
       }
       await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Tone'))`);
+      assert.ok(await evaluate(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Tone')).querySelector('[data-asset="tone"]')`));
       await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes('Tone')).click()`);
       await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(filter)}))`);
       await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(b=>b.textContent.includes(${JSON.stringify(filter)})).click()`);
