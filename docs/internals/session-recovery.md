@@ -53,6 +53,8 @@ requires the distinct `capture_session` type, which includes private history.
 The current artwork retains the last submitted frame's evaluation context.
 History restores the corresponding authored output context before an artwork
 transition, so removing an effect cannot leave a captured phase pointing to it.
+That history boundary is prepared even when the renderer supplies its final
+evaluation context after the editor snapshot has been captured.
 Working-only undo and redo retain the captured context and the same artwork
 checkpoint. This distinction applies to both archived sessions and worker
 transfers without adding an undo step or changing the live editor.
@@ -256,7 +258,8 @@ membership staging/remapping, stale completion and interrupted restore batches.
 
 Captured-frame context tests retain finite filter phases while removing and
 restoring their effects through undo and redo, with a working-only entry first
-in each history direction. Both archives and direct worker transfers preserve
+in each history direction, including renderer contexts supplied after capture.
+Both archives and direct worker transfers preserve
 the current view, history length and artwork checkpoints across these transitions.
 
 Keep these tests when adding features. A new edit needs meaningful semantic

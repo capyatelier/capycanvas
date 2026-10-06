@@ -321,6 +321,7 @@ fn dependent_effect_and_output_phase_removal_survive_restart_and_undo() {
 
 #[test]
 fn captured_output_phases_remain_reversible_across_session_history() {
+    for deferred in [false,true] {
     for navigation in [false,true] {
     let mut original=Editor::new(Document::new(PortableId::random(),32,32,DocumentNames {paint:"Layer".into(),paper:"Paper".into()}));
     let document=original.document();let art=&document.artwork;let owner=document.working.occurrence.unwrap();let stack=document.composition().result;
@@ -344,7 +345,8 @@ fn captured_output_phases_remain_reversible_across_session_history() {
     }
     let context=EvaluationContext {elapsed:0.,phases:original.document().scene().order().iter().filter_map(|h|original.document().scene().effect_handle(*h).map(|e|(e,3.25))).collect::<Vec<_>>().into()};
     let authored=original.document().output().context.clone();let checkpoint=original.checkpoint();let cancel=AtomicBool::new(false);
-    let capture=original.capture_session(original.capture(11,context.clone()).unwrap()).unwrap();
+    let mut capture=original.capture_session(original.capture(11,if deferred {authored.clone()}else{context.clone()}).unwrap()).unwrap();
+    let artwork=Arc::make_mut(&mut capture.artwork_mut().artwork);artwork.outputs.get_mut(artwork.default_output).unwrap().context=context.clone();
     let archive=PreparedSession::prepare(&capture,json!({}),&cancel).unwrap();let mut bytes=Vec::new();archive.write(&mut bytes,&cancel).unwrap();
     let archived=open(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap(),ProjectLimits::default(),&cancel).unwrap().editor;
     let transferred=PreparedSessionTransfer::capture(&capture,json!({}),&cancel).unwrap().adopt_verified(ProjectLimits::default(),&cancel).unwrap().editor;
@@ -361,6 +363,7 @@ fn captured_output_phases_remain_reversible_across_session_history() {
         if navigation {assert!(restored.redo().unwrap());assert_eq!(restored.document().output().context,context);assert!(restored.redo().unwrap());assert_eq!(restored.checkpoint(),checkpoint);}
     }
     assert_eq!(original.checkpoint(),checkpoint);assert_eq!(original.document().output().context,authored);
+    }
     }
 }
 

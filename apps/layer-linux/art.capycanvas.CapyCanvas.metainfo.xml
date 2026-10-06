@@ -151,13 +151,14 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="1.0.7" date="2026-10-06">
+    <release version="1.0.8" date="2026-10-06">
       <description>
         <p>Linux software centers now show Capy Canvas in your language, with light and dark previews.</p>
         <ul>
           <li>Saving a read-only drawing opens a chooser so you can save an editable copy.</li>
           <li>The battery indicator and clock follow your desktop in Flatpak installations.</li>
           <li>Translated Histogram controls fit their labels.</li>
+          <li>Drawings with filters reopen correctly after restarting the app.</li>
         </ul>
       </description>
     </release>

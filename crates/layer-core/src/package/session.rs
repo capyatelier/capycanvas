@@ -53,7 +53,7 @@ impl Editor {
             || checkpoint.edit_checkpoint!=*edit_checkpoint {return Err(crate::DocumentError::InvalidLayerOperation("Session capture is stale"));}
         let history=|entries:&[HistoryEntry]|->Result<Vec<(Edit,u64)>,crate::DocumentError> {
             let mut history:Vec<_>=entries.iter().map(|e|(e.edit.clone(),e.checkpoint)).collect();
-            if capture.output().context!=document.output().context && let Some((edit,_))=history.iter_mut().rev().find(|(edit,_)|edit.changes_project()) {
+            if let Some((edit,_))=history.iter_mut().rev().find(|(edit,_)|edit.changes_project()) {
                 let output=crate::RecordChange::replace(&artwork.outputs,artwork.default_output,Some(document.output().clone()))?;
                 *edit=Edit::Batch(vec![Edit::Output(output),edit.clone()]);
             }

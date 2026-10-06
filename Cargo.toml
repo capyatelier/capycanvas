@@ -35,7 +35,7 @@ rav1d = { path = "vendor/rav1d" }
 rust_h265 = { path = "vendor/rust_h265" }
 
 [workspace.package]
-version = "1.0.7"
+version = "1.0.8"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
