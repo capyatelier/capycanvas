@@ -25,6 +25,8 @@ mod effect_color;
 mod export_resize;
 #[path = "new_photo_tests.rs"]
 pub(crate) mod new_photo;
+#[path = "store_capture.rs"]
+mod store_capture;
 #[path = "hdr_tests.rs"]
 mod hdr;
 #[path = "hdr_picker_tests.rs"]

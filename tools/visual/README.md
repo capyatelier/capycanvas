@@ -93,6 +93,11 @@ failure. It never rescales, crops or masks.
 
 ## Full editor captures
 
+- **GTK store images.** The [native capture helper](../../docs/development/store-screenshots.md)
+  reads website-owned scene recipes and captures a real window in an isolated
+  Wayland session, including the GPU canvas, native shadow and transparency.
+  It supports both themes and every registered app language.
+
 - **Mac.** Open the built app and capture its frontmost editor window, including
   the composited Metal canvas. It needs Screen Recording permission. Use the
   printed logical size and the app's theme for the Chrome capture. Mac menus live

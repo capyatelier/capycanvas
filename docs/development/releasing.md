@@ -95,6 +95,10 @@ public key so Flatpak can verify repository signatures. Software manages later
 updates according to its update settings; the command-line equivalent is
 `flatpak update`.
 
+Generate store images with the [GTK capture helper](store-screenshots.md).
+Artwork, recipes and published images belong in `capycanvas-web`; AppStream
+references their public HTTPS URLs.
+
 The sandbox grants the Wayland socket for windows, clipboard and input, GPU
 devices for rendering, and the `org.freedesktop.UPower` system service for the
 battery indicator. GTK uses the default portals for file dialogs, selected-file

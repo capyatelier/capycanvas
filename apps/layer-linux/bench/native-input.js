@@ -15,6 +15,9 @@ if (!output) throw new Error('Set LAYER_NATIVE_INPUT_DIR to an empty temporary d
 // Optional lossless captures of the actual composited monitor, including GSK's
 // incremental window damage. WidgetPaintable.render_texture cannot test that.
 const captureDir = GLib.getenv('LAYER_NATIVE_CAPTURE_DIR');
+imports.searchPath.unshift(GLib.path_get_dirname(imports.system.programPath));
+const windowCapture = new imports['window-capture'].WindowCapture(captureDir);
+let captureFailure;
 let capturePipeline, captureSink;
 const captureFrame = name => {
     if (!captureDir || !/^[a-z0-9-]+$/.test(name)) throw Error('Invalid native capture request');
@@ -108,7 +111,9 @@ const process = launcher.spawnv(launch);
 let passed = false;
 process.wait_async(null, (p, result) => {
     p.wait_finish(result);
-    passed = p.get_successful();
+    if (windowCapture.active) captureFailure ??= Error('Test exited during compositor window capture');
+    windowCapture.close();
+    passed = p.get_successful() && !captureFailure && !windowCapture.error;
     if (capturePipeline) capturePipeline.set_state(imports.gi.Gst.State.NULL);
     tabletProxy?.force_exit();
     loop.quit();
@@ -172,6 +177,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, interval, () => {
             if (GLib.get_monotonic_time() < resumeAt) return GLib.SOURCE_CONTINUE;
             if (Gio.File.new_for_path(`${output}/finished`).query_exists(null)) {
+                windowCapture.close();
                 if (capturePipeline) {
                     capturePipeline.set_state(imports.gi.Gst.State.NULL);
                     capturePipeline = null;
@@ -194,6 +200,16 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
             } else {
                 const event = events[index++];
                 if (tracing) trace.push({ns: GLib.get_monotonic_time() * 1000, event});
+                if ('capture_window' in event) {
+                    try {
+                        if (!windowCapture.capture(event.capture_window)) index--;
+                    } catch (error) {
+                        captureFailure = error;
+                        process.force_exit();
+                        return GLib.SOURCE_REMOVE;
+                    }
+                    return GLib.SOURCE_CONTINUE;
+                }
                 if (event.capture) {
                     if (!captureFrame(event.capture)) index--;
                     return GLib.SOURCE_CONTINUE;
@@ -300,4 +316,6 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, nativeTest ? 180000 : workspaceHold || w
     return GLib.SOURCE_REMOVE;
 });
 loop.run();
+windowCapture.close();
+if (captureFailure || windowCapture.error) throw captureFailure || windowCapture.error;
 if (!passed) throw new Error('Native input benchmark failed');
