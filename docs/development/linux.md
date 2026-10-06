@@ -269,6 +269,16 @@ private-compositor runner:
 bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_modes
 ```
 
+GTK has one battery source: the Linux kernel's power-supply files.
+`system_status::power::tests` cover its file parsing, device symlinks, live changes
+and peripheral exclusion without a window. Shared `layer-ui` tests cover the same
+reader's percentage validation, low warnings and energy-weighted system batteries.
+`native_fullscreen_header_clock_and_battery`
+checks visibility, charging and low-battery presentation; run it in both themes.
+For sandbox acceptance, mount private power-supply fixtures read-only over the
+kernel paths in an isolated namespace and exercise the packaged reader's live
+polling. Do not add Flatpak permissions or override the real system's files.
+
 Photo binding changes use `native_multiple_photo_import_chooser` for native
 multi-select import, retained samples, paint above and below photos, save/reopen
 and undo. `native_photo_file_drops` checks canvas and layer destinations and

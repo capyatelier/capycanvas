@@ -1,20 +1,16 @@
-//! Native clock preferences and UPower observation, independent of GPU startup.
+//! Native clock preferences and battery observation, independent of GPU startup.
 use adw::prelude::*;
 use gtk::{gio, glib};
 #[path = "battery_font.rs"]
 mod battery_font;
+mod power;
+pub(crate) use layer_ui::Battery;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     time::Duration,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Battery {
-    pub percent: u32,
-    pub charging: bool,
-    pub low: bool,
-}
 pub(crate) struct SystemStatus {
     pub root: gtk::Box,
     pub(crate) clock: gtk::Label,
@@ -29,7 +25,7 @@ pub(crate) struct SystemStatus {
     clock_proxy: RefCell<Option<gio::DBusProxy>>,
     portal_clock: Cell<Option<bool>>,
     clock_revision: Cell<u64>,
-    proxy: RefCell<Option<gio::DBusProxy>>,
+    power: RefCell<Option<glib::JoinHandle<()>>>,
     timer: RefCell<Option<glib::SourceId>>,
 }
 fn twelve_hour(preference: Option<&str>, locale_format: &str) -> bool {
@@ -43,13 +39,15 @@ fn twelve_hour(preference: Option<&str>, locale_format: &str) -> bool {
 }
 impl SystemStatus {
     pub fn new() -> Rc<Self> {
-        Self::build(true)
+        let this = Self::build();
+        this.observe_power();
+        this
     }
     #[cfg(test)]
     pub(crate) fn simulated_power() -> Rc<Self> {
-        Self::build(false)
+        Self::build()
     }
-    fn build(observe_power: bool) -> Rc<Self> {
+    fn build() -> Rc<Self> {
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         root.set_widget_name("system-status");
         root.add_css_class("system-status");
@@ -184,7 +182,7 @@ impl SystemStatus {
             clock_proxy: RefCell::new(None),
             portal_clock: Cell::new(None),
             clock_revision: Cell::new(0),
-            proxy: RefCell::new(None),
+            power: RefCell::new(None),
             timer: RefCell::new(None),
         });
         let style = adw::StyleManager::for_display(&this.root.display());
@@ -216,54 +214,20 @@ impl SystemStatus {
             );
         }
         this.observe_clock();
-        // Synthetic battery tests must not race the host's real UPower reply.
-        if !observe_power {
-            return this;
-        }
-        glib::MainContext::default().spawn_local(glib::clone!(
-            #[weak]
-            this,
-            async move {
-                let Ok(proxy) = gio::DBusProxy::for_bus_future(
-                    gio::BusType::System,
-                    gio::DBusProxyFlags::DO_NOT_AUTO_START
-                        | gio::DBusProxyFlags::GET_INVALIDATED_PROPERTIES,
-                    None,
-                    "org.freedesktop.UPower",
-                    "/org/freedesktop/UPower/devices/DisplayDevice",
-                    "org.freedesktop.UPower.Device",
-                )
-                .await
-                else {
-                    return;
-                };
-                proxy.connect_local(
-                    "g-properties-changed",
-                    false,
-                    glib::clone!(
-                        #[weak]
-                        this,
-                        #[upgrade_or]
-                        None,
-                        move |_| {
-                            this.update_power();
-                            None
-                        }
-                    ),
-                );
-                proxy.connect_notify_local(
-                    Some("g-name-owner"),
-                    glib::clone!(
-                        #[weak]
-                        this,
-                        move |_, _| this.update_power()
-                    ),
-                );
-                *this.proxy.borrow_mut() = Some(proxy);
-                this.update_power();
-            }
-        ));
         this
+    }
+    fn observe_power(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        *self.power.borrow_mut() = Some(glib::MainContext::default().spawn_local(async move {
+            loop {
+                let value = gio::spawn_blocking(|| power::read(std::path::Path::new("/sys/class/power_supply")))
+                    .await.ok().flatten();
+                let Some(this) = weak.upgrade() else { break; };
+                this.show_battery(value);
+                drop(this);
+                glib::timeout_future_seconds(30).await;
+            }
+        }));
     }
     fn observe_clock(self: &Rc<Self>) {
         glib::MainContext::default().spawn_local(glib::clone!(#[weak(rename_to = this)] self, async move {
@@ -420,32 +384,6 @@ impl SystemStatus {
             timer.remove();
         }
     }
-    fn update_power(&self) {
-        let proxy = self.proxy.borrow();
-        let battery = proxy.as_ref().and_then(|p| {
-            if p.name_owner().is_none() || !p.cached_property("IsPresent")?.get::<bool>()? {
-                return None;
-            }
-            let percent = p.cached_property("Percentage")?.get::<f64>()?;
-            if !percent.is_finite() || !(0. ..=100.).contains(&percent) {
-                return None;
-            }
-            let state = p
-                .cached_property("State")
-                .and_then(|v| v.get::<u32>())
-                .unwrap_or(0);
-            let warning = p
-                .cached_property("WarningLevel")
-                .and_then(|v| v.get::<u32>())
-                .unwrap_or(0);
-            Some(Battery {
-                percent: percent.round() as u32,
-                charging: matches!(state, 1 | 4 | 5),
-                low: warning >= 3,
-            })
-        });
-        self.show_battery(battery);
-    }
     pub(crate) fn show_battery(&self, value: Option<Battery>) {
         if self.value.replace(value) == value {
             return;
@@ -491,6 +429,9 @@ impl SystemStatus {
 impl Drop for SystemStatus {
     fn drop(&mut self) {
         self.stop_clock();
+        if let Some(task) = self.power.borrow_mut().take() {
+            task.abort();
+        }
     }
 }
 #[cfg(test)]

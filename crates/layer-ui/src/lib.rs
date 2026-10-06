@@ -6,6 +6,8 @@
 
 mod numeric_labels;
 pub use numeric_labels::NumericLabels;
+mod battery;
+pub use battery::{Battery, BatteryCharge, BatteryReading};
 mod document_delivery_copy;
 pub use document_delivery_copy::{DocumentDeliveryCopy, DocumentDeliveryMessage};
 macro_rules! variants {

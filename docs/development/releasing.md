@@ -99,10 +99,14 @@ Generate store images with the [GTK capture helper](store-screenshots.md).
 Artwork, recipes and published images belong in `capycanvas-web`; AppStream
 references their public HTTPS URLs.
 
-The sandbox grants the Wayland socket for windows, clipboard and input, GPU
-devices for rendering, and the `org.freedesktop.UPower` system service for the
-battery indicator. GTK uses the default portals for file dialogs, selected-file
-access and opening links; the clock observes GNOME's time format through the
+The sandbox grants the Wayland socket for windows, clipboard and input, and GPU
+devices for rendering. The battery indicator reads the kernel's
+`/sys/class/power_supply` data on a worker at startup and every 30 seconds;
+Flatpak already exposes these files and their device targets read-only. It needs
+no system-service or extra filesystem permission. System batteries are combined
+by their energy capacities; peripheral batteries are excluded. Unavailable or
+incomplete multi-battery readings hide the indicator. GTK uses the default portals
+for file dialogs, selected-file access and opening links; the clock observes GNOME's time format through the
 Settings portal. Settings, workspace libraries, recovery files and
 caches use Flatpak's private application directories. The exported desktop entry
 forwards files through the document portal when launched from a file manager.
