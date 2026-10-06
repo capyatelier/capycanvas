@@ -218,11 +218,12 @@ impl ColorState {
         self.apply(action).map_err(|reason| reason.message(&crate::Localizer::shared(crate::UiLanguage::English)))
     }
     pub fn new() -> Self {
+        let foreground = RgbColor { linear_rgb: None,
+            space: RgbSpace::Srgb,
+            rgba: [81. / 255., 128. / 255., 58. / 255., 1.],
+        };
         Self {
-            foreground: RgbColor { linear_rgb: None,
-                space: RgbSpace::Srgb,
-                rgba: [0.075, 0.075, 0.07, 1.],
-            },
+            foreground,
             background: RgbColor::WHITE,
             temporary: RgbColor::BLACK,
             rgb_space: RgbSpace::Srgb,
@@ -230,7 +231,7 @@ impl ColorState {
             shape: ColorShape::Circle,
             readout: ColorReadout::Shape,
             paint_slot: ColorSlot::Foreground,
-            hues: [60., 0., 0.],
+            hues: [components(foreground.rgba, ColorSpace::Hsv, 0.)[0], 0., 0.],
             coordinates: [None; 3],
             hdr_picker: None,
             hdr_depth: layer_core::color::SampleDepth::F16,

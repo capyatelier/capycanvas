@@ -470,7 +470,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     tool: Tool::Pen,
                     diameter: brush.diameter,
                     opacity: brush.opacity,
-                    color: [0.075, 0.075, 0.07, 1.0],
+                    color: colors.preview(colors.definition()),
                 },
                 colors,
                 color_library: ColorLibrary::fresh(&localization.text(MessageId::CREATION_PALETTE_MY_COLORS)),
