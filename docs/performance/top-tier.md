@@ -98,7 +98,7 @@ current-source results.
 | Figure or ruler drag | 120 | | |
 | Layer opacity scrub | 120 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 120 | **Met.** Native UI 117.20–119.41 fps; moving-frame gap p99 8.38–16.67 ms | [Layer reorder and retained photo translation](#layer-reorder-and-retained-photo-translation), 2026-10-04 |
-| Layer thumbnail selection animation | 120 | **Not met.** Repeated content/mask selection 76.11–78.12 native UI fps; moving-frame gap p99 33.33 ms | [Layer thumbnail selection](#layer-thumbnail-selection), 2026-10-05 |
+| Layer thumbnail selection animation | 120 | **Not met.** Repeated content/mask selection 77.08–79.86 window frames/s; worst moving-frame gap p99 33.33 ms | [Layer thumbnail selection](#layer-thumbnail-selection), 2026-10-05 |
 | Attached filter drag inside a clipping run | 120 | **Not met.** 93.24–102.71 native UI fps; moving-frame gap p99 25.00–33.33 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
@@ -116,23 +116,37 @@ current-source results.
 ## Layer thumbnail selection
 
 Measured 2026-10-05 on the Wacom MovinkPad Pro 14 at thermal status 0 before
-and after motion, using a benchmark APK with release Rust based on `a71fa4834`
-plus the thumbnail border changes. The 9504 × 6336 reference photo sits beneath
+and after motion, using benchmark APKs with release Rust based on `8f73b600d`
+plus the Android drawing changes. The 9504 × 6336 reference photo sits beneath
 an empty paint layer with a mask, at Fit zoom and default panel glass.
 `AndroidTitleBarTest#layerSwipeFrameTiming` with `layerSelectionBenchmark=true`
 retargets between content and mask every 150 ms. Compose drives the 200 ms
-outline animation using cached squircle contours. The workload also changes
+outline animation in an isolated graphics layer using cached squircle contours.
+The workload also changes
 tools and the canvas action bar; it does not isolate outline drawing cost.
 
-After one second of priming, three five-second runs recorded 76.11, 77.24 and
-78.12 native UI frames/s without screen recording. `FrameMetrics` intervals
-within observed selection animation windows had p99 33.33 ms in every run.
-The panel ran at 120 Hz in dark theme. The 120 fps target is not met. An
-earlier controlled comparison based on `ffc03f522` measured 76.87–78.92 fps
-with uncached contours and 77.05–77.50 fps with cached contours, both at
-33.33 ms p99; caching does not establish an overall throughput improvement.
-Raw frames, APK hashes and the rate calculation are under
-`artifacts/thumbnail-border-all/android/`.
+After one second of priming, each variant ran three five-second gestures without
+screen recording, with the same test APK, dark theme and 120 Hz display.
+
+| Drawing implementation | Window frames/s, three runs | Per-run median draw recording |
+| --- | --- | --- |
+| Original thumbnail drawing | 77.36 / 78.33 / 77.17 | 0.550–0.759 ms |
+| Isolated outline drawing | 77.91 / 79.53 / 76.10 | 0.312–0.389 ms |
+| Retained outer shape and masked hole | 75.98 / 77.80 / 77.18 | 0.011 ms |
+
+`FrameMetrics` intervals within observed selection animation windows had p99
+33.33 ms in all comparison runs, with zero dropped reports. These are unique window-vsync
+timestamps, not SurfaceFlinger actual-present times. The 120 fps target is not
+met. Isolating the outline reduces draw recording while preserving the original
+geometry and antialiasing. The masked variant reduces recording further without
+improving cadence; it needs two additional offscreen surfaces and changes edge
+coverage, so the isolated outline is retained. Raw frames, timing components,
+APK hashes and the rate calculation are under
+`artifacts/android-border-performance/`.
+
+The post-rebase repeat at `2a55ce947`, with identical app and test APK hashes,
+recorded 77.08, 79.86 and 78.65 window frames/s, with p99 gaps of 33.33, 25.00
+and 33.33 ms. Dropped reports remained zero and thermal status remained 0.
 
 ## GTK selected swatch diagnostic
 

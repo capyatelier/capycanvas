@@ -40,6 +40,8 @@ the former 8–10px circular corners.
   the system's reduced-motion or animation-duration setting. Timing belongs
   to GTK/CSS transitions, Compose, SwiftUI and Windows Storyboards. Android,
   Apple and Windows retain the squircle contours during the transition;
+  Android isolates the changing outline in its own graphics layer so animation
+  frames do not rerecord the unchanged thumbnail and surrounding drawing.
   Windows animates only compositor-supported visual scale and opacity.
 - Checkboxes, slider thumbs and other small details
   keep their former visual rounding with squircle corners.

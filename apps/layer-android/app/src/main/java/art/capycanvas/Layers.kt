@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.isShiftPressed as keyShiftPressed
 import androidx.compose.ui.input.key.isCtrlPressed as keyCtrlPressed
@@ -445,8 +446,19 @@ internal class LayerSwipe {
                             host.dispatch(obj("type" to "effect", "action" to obj("op" to "set", "layer" to id, "key" to fill.getString("key"), "value" to obj("kind" to "color", "value" to color))))
                         }
                     }
-                },onLongClick={openContext(mask)})
-                .drawWithCache {
+                },onLongClick={openContext(mask)}),contentAlignment=Alignment.Center) {
+                if(group) {
+                    SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse"),Modifier.size(28.dp))
+                    if(layer.getBoolean("pass_through")) SharedIcon("group-pass-through",null,Modifier.align(Alignment.BottomEnd).padding(end=3.dp,bottom=3.dp).size(14.dp).background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-group-pass-through-$id"))
+                }
+                else {
+                if(mask || layer.getBoolean("has_thumbnail")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).clip(TileShape).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
+                if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,
+                    if(layer.getBoolean("has_thumbnail")) Modifier.align(Alignment.BottomEnd).padding(end=3.dp,bottom=3.dp).size(14.dp)
+                        .background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-type-symbol-$id")
+                    else Modifier.size(24.dp),tint=colors.text)
+                }
+                Spacer(Modifier.matchParentSize().graphicsLayer().drawWithCache {
                     val radius=size.minDimension/2
                     val contour=Path().apply { addSquircle(Rect(Offset.Zero,size),radius,radius,radius,radius) }.asAndroidPath()
                     val transform=android.graphics.Matrix()
@@ -460,8 +472,7 @@ internal class LayerSwipe {
                     }
                     val base=Path().apply { edge(this,0f,1.dp.toPx()) }
                     val outline=Path()
-                    onDrawWithContent {
-                        drawContent()
+                    onDrawBehind {
                         drawPath(base,if(selected) colors.accent else colors.text.copy(alpha=.1f))
                         val progress=selection.value
                         if(progress>0) {
@@ -470,18 +481,7 @@ internal class LayerSwipe {
                         }
                         if(!mask && (attachment || highlight=="attach")) drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density))
                     }
-                },contentAlignment=Alignment.Center) {
-                if(group) {
-                    SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse"),Modifier.size(28.dp))
-                    if(layer.getBoolean("pass_through")) SharedIcon("group-pass-through",null,Modifier.align(Alignment.BottomEnd).padding(end=3.dp,bottom=3.dp).size(14.dp).background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-group-pass-through-$id"))
-                }
-                else {
-                if(mask || layer.getBoolean("has_thumbnail")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).clip(TileShape).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
-                if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,
-                    if(layer.getBoolean("has_thumbnail")) Modifier.align(Alignment.BottomEnd).padding(end=3.dp,bottom=3.dp).size(14.dp)
-                        .background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-type-symbol-$id")
-                    else Modifier.size(24.dp),tint=colors.text)
-                }
+                })
             }
             }
         }

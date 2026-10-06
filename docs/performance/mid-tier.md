@@ -72,7 +72,7 @@ current-source results.
 | Figure or ruler drag | 90 | | |
 | Layer opacity scrub | 90 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 90 | | |
-| Layer thumbnail selection animation | 90 | Unmeasured: both attempts timed out opening the 24 MP reference drawing before motion; device reported 60 Hz | `ffc03f522` + thumbnail border changes, benchmark APK; `artifacts/thumbnail-border-all/android/final-selection-perf-mid.log`, 2026-10-05 |
+| Layer thumbnail selection animation | 90 | **Not met.** 59.705–59.706 window frames/s; p99 gap 16.80–16.91 ms on the device's 60 Hz panel | Isolated outline; measurement below, 2026-10-05 |
 | Attached filter drag inside a clipping run | 90 | Unmeasured: both attempts timed out waiting for the 24 MP drawing's shaders before motion | `7f69a9356` + clipping-filter changes, benchmark APK; `artifacts/clipping-filter/mid-performance{,-retry}.log`, 2026-10-04 |
 | Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android relationship overlay 58.8–59.4 fps, interval p99 16.8–16.9 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | Android `00b2d6e73` + native port, 2026-10-04; Web `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |
@@ -88,6 +88,17 @@ current-source results.
 | List scrolling: layers, brushes, filters | 90 | | |
 | Menu open and close | 90 | | |
 | G-Pen 1536 px stroke with a pending language change | 90 | **Not met.** 56.80 fresh updates/s (52.40–56.99), completion-gap p99 32.08–34.97 ms | Language-change diagnostic below; synthetic owner replay, no scanout qualification |
+
+Layer thumbnail selection uses the Wacom MovinkPad 11 at thermal status 0,
+a benchmark APK with release Rust based on `8f73b600d` plus isolated Android
+outline drawing, and the 6000 × 4000 reference photo beneath an empty paint layer
+with a mask, at Fit zoom and default panel glass. After one second of priming,
+three five-second runs switch content/mask every 150 ms in dark theme, without
+screen recording. Unique `FrameMetrics` window-vsync rates were 59.705, 59.706
+and 59.706/s, with p99 gaps of 16.906, 16.875 and 16.799 ms and zero dropped
+reports. These measure window cadence, not actual screen presentation. The panel
+ran at 60 Hz, so the 90 Hz tier remains unqualified. Raw reports and APK hashes
+are in `artifacts/android-border-performance/final-mid/`.
 
 Layer swipe measurements use the Wacom MovinkPad 11 at thermal status 0, the
 6000 × 4000 reference photo beneath one empty paint layer, Fit zoom and default

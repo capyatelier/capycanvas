@@ -459,10 +459,16 @@ APK calls, so test-APK benchmarks use the unminified build.
   also accepts `-e layerSelectionBenchmark true`, with the same photo and
   dimensions. It switches between the empty paint layer's content and mask
   every 150 ms, including the resulting tool and canvas action bar changes.
+  The theme defaults to dark; `-e layerBenchmarkTheme light` changes it.
+  `-e layerSelectionIntervalMs 400` allows each transition to finish before
+  the next selection for separate settled-transition diagnostics.
   After one second of priming, three five-second runs record native
   `FrameMetrics` in `layer-selection-<run>.json`. The records include observed
   selection-change timestamps and retain frames within their 200 ms animation
-  windows.
+  windows, alongside all received reports, dropped-report counts and named
+  timing components. Vsync timestamps measure window-frame cadence, not actual
+  screen-presentation times. Check dropped reports before comparing rates and
+  exclude gaps between separate animation windows.
 - **Grouped tool drawer scrolling.**
   `AndroidWorkspacePerformanceTest#groupedDrawerScrollFrameTiming` runs with
   `-e groupedToolBenchmark true -e photo <readable-tier-photo.jpg>`. It uses the

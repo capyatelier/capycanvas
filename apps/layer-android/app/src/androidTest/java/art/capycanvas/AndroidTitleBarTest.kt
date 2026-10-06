@@ -1231,7 +1231,11 @@ class AndroidTitleBarTest {
         val width=args.getString("width")?.toInt() ?: 6000
         val height=args.getString("height")?.toInt() ?: 4000
         val label=if(selection) "layer-selection" else if(reorder) "layer-reorder" else "layer-swipe"
+        val selectionInterval=args.getString("layerSelectionIntervalMs")?.toLong() ?: 150L
+        require(selectionInterval>0)
+        val theme=args.getString("layerBenchmarkTheme") ?: "dark"
         host.openDocument(java.io.File(checkNotNull(args.getString("photo"))))
+        action(obj("type" to "set_theme","theme" to theme))
         assertTrue(state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width")==width && it.optInt("height")==height })
         action(obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
         if(args.getString("layerRelationshipBenchmark")=="true") {
@@ -1252,9 +1256,17 @@ class AndroidTitleBarTest {
         val thread=android.os.HandlerThread("$label-frames").apply { start() }
         lateinit var window: android.view.Window
         scenario.onActivity { window=it.window; window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
-        val listener=android.view.Window.OnFrameMetricsAvailableListener { _,metrics,_ ->
+        val listener=android.view.Window.OnFrameMetricsAvailableListener { _,metrics,dropped ->
             frames.add(longArrayOf(metrics.getMetric(android.view.FrameMetrics.VSYNC_TIMESTAMP),
-                metrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION)))
+                metrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION),dropped.toLong(),
+                metrics.getMetric(android.view.FrameMetrics.INTENDED_VSYNC_TIMESTAMP),
+                metrics.getMetric(android.view.FrameMetrics.INPUT_HANDLING_DURATION),
+                metrics.getMetric(android.view.FrameMetrics.ANIMATION_DURATION),
+                metrics.getMetric(android.view.FrameMetrics.LAYOUT_MEASURE_DURATION),
+                metrics.getMetric(android.view.FrameMetrics.DRAW_DURATION),
+                metrics.getMetric(android.view.FrameMetrics.SYNC_DURATION),
+                metrics.getMetric(android.view.FrameMetrics.COMMAND_ISSUE_DURATION),
+                metrics.getMetric(android.view.FrameMetrics.SWAP_BUFFERS_DURATION)))
         }
         instrumentation.runOnMainSync { window.addOnFrameMetricsAvailableListener(listener,android.os.Handler(thread.looper)) }
         tool=if(reorder) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
@@ -1282,7 +1294,7 @@ class AndroidTitleBarTest {
                             if(selection) {
                                 val mask=state().array("layers").objects().first { it.getLong("id")==id }.getBoolean("mask_selected")
                                 if(mask!=observedMask) { observedMask=mask;transitions.add(System.nanoTime()) }
-                                val interval=elapsed/150
+                                val interval=elapsed/selectionInterval
                                 if(interval!=selectedInterval) {
                                     selectedInterval=interval
                                     host.dispatch(obj("type" to "layer","action" to obj("op" to "select","id" to id,"mask" to (interval%2==0L))))
@@ -1303,15 +1315,21 @@ class AndroidTitleBarTest {
                 finally { instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) } }
                 val endNs=System.nanoTime()
                 SystemClock.sleep(200)
-                val rows=synchronized(frames) { frames.filter { it[0] in beginNs..endNs && (!selection || transitions.any { start -> it[0] in start..(start+200_000_000L) }) } }
+                val received=synchronized(frames) { frames.toList() }
+                val rows=received.filter { it[0] in beginNs..endNs && (!selection || transitions.any { start -> it[0] in start..(start+200_000_000L) }) }
                 if(!selection)event(MotionEvent.ACTION_CANCEL)
                 idle()
                 if(selection)shot("$label-$run")
                 if(run>0) {
                     assertTrue("Moving frames were measured",rows.size>1)
                     val result=obj("run" to run,"duration_ms" to duration,"begin_ns" to beginNs,"end_ns" to endNs,
-                        "width" to width,"height" to height,"photo" to args.getString("photo"),"motion" to label,
-                        "transitions_ns" to JSONArray(transitions),"selection_interval_ms" to (if(selection)150 else JSONObject.NULL),
+                        "width" to width,"height" to height,"photo" to args.getString("photo"),"motion" to label,"theme" to theme,
+                        "transitions_ns" to JSONArray(transitions),"selection_interval_ms" to (if(selection)selectionInterval else JSONObject.NULL),
+                        "animation_window_ms" to (if(selection)200 else JSONObject.NULL),
+                        "frame_columns" to JSONArray(listOf("vsync_ns","total_ns","dropped_reports","intended_vsync_ns",
+                            "input_ns","animation_ns","layout_ns","draw_ns","sync_ns","command_ns","swap_ns")),
+                        "dropped_reports" to received.sumOf { it[2] },
+                        "received_frames" to JSONArray(received.map { JSONArray(it.toList()) }),
                         "camera" to state().getJSONObject("camera"),
                         "layers" to state().array("layers"),"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
                     java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"$label-$run.json").writeText(result.toString())

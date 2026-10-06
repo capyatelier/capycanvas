@@ -204,24 +204,28 @@ fun CanvasHost.newDocument(width: Int, height: Int) {
 }
 
 fun CanvasHost.openDocument(file: File) {
-    val task = runBlocking { withNative { handle ->
-        val (id, document) = documentRequest(handle, "open_document")
-        Native.projectTask(handle, id, "null", document.getLong("epoch"), document.getLong("revision"))
-    } }
-    val epoch = try {
-        Native.projectWork(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
-        runBlocking { withNative { handle ->
-            Native.projectAdopt(handle, task, "null")
-            val now = System.nanoTime(); Native.frame(handle, now, now + 16_666_667)
-            Native.dispatch(handle, obj("type" to "close_settings").toString())
-            JSONObject(Native.snapshot(handle)!!).getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+    val hostFileJobs = DocumentController.nativeFileJobsForTest
+    DocumentController.nativeFileJobsForTest = true
+    try {
+        val task = runBlocking { withNative { handle ->
+            val (id, document) = documentRequest(handle, "open_document")
+            Native.projectTask(handle, id, "null", document.getLong("epoch"), document.getLong("revision"))
         } }
-    } finally { Native.projectFree(task) }
-    instrumentation.runOnMainSync { documentChanged() }
-    awaitMain("the opened drawing", 120_000) {
-        snapshot?.optBoolean("shaders_ready") == true &&
-            snapshot?.optJSONObject("state")?.optJSONObject("document_file")?.optLong("epoch") == epoch
-    }
+        val epoch = try {
+            Native.projectWork(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
+            runBlocking { withNative { handle ->
+                Native.projectAdopt(handle, task, "null")
+                val now = System.nanoTime(); Native.frame(handle, now, now + 16_666_667)
+                Native.dispatch(handle, obj("type" to "close_settings").toString())
+                JSONObject(Native.snapshot(handle)!!).getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+            } }
+        } finally { Native.projectFree(task) }
+        instrumentation.runOnMainSync { documentChanged() }
+        awaitMain("the opened drawing", 120_000) {
+            snapshot?.optBoolean("shaders_ready") == true &&
+                snapshot?.optJSONObject("state")?.optJSONObject("document_file")?.optLong("epoch") == epoch
+        }
+    } finally { DocumentController.nativeFileJobsForTest = hostFileJobs }
 }
 
 fun CanvasHost.importImage(file: File) {
