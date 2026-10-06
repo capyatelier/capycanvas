@@ -67,11 +67,11 @@ fn native_layer_thumbnail_squircles() {
                 assert!(active_pixels[border + channel].abs_diff(expected[channel]) <= 1, "the outer edge uses the accent color");
             }
             let origin = picture.compute_bounds(button).unwrap();
-            for (x, y) in [(1usize, 14usize), (26, 14), (14, 1), (14, 26)] {
+            for (x, y) in [(2usize, 14usize), (25, 14), (14, 2), (14, 25)] {
                 let source = y * stride + x * 4;
                 let target = (origin.y() as usize + y) * active_stride + (origin.x() as usize + x) * 4;
                 for channel in 0..4 {
-                    assert!(active_pixels[target + channel].abs_diff(pixels[source + channel]) <= 1, "the active border leaves preview edges unchanged at {x},{y}");
+                    assert!(active_pixels[target + channel].abs_diff(pixels[source + channel]) <= 1, "preview pixels inside the active border stay unchanged at {x},{y}");
                 }
             }
             if let Some(directory) = std::env::var_os("LAYER_TEST_ARTIFACTS") {

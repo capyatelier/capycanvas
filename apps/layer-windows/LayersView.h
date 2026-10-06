@@ -4,7 +4,7 @@
 #include "NativeMenus.h"
 #include "LayerRowDrag.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
-#include <array>
+#include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <optional>
 
 winrt::Microsoft::UI::Xaml::FrameworkElement LayersPanel(
@@ -16,6 +16,15 @@ inline hstring epochOf(std::shared_ptr<WorkspaceData> const& data){
     return to_hstring(uint64_t(num(object(data->state,L"document_file"),L"epoch")));
 }
 struct LayersView;
+struct ThumbnailEdge {
+    Shapes::Path base,outline;
+    ScaleTransform scale;
+    Animation::Storyboard animation{nullptr};
+    std::optional<bool> selected;
+    void init(Canvas const& frame);
+    void update(std::shared_ptr<WorkspaceData> const& data,bool editing);
+    void stop();
+};
 struct LayerRow : std::enable_shared_from_this<LayerRow> {
     std::weak_ptr<LayersView> owner;
     std::shared_ptr<WorkspaceData> data;
@@ -32,8 +41,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     Grid contentTile,maskTile;
     Image lockImage;
     ContentControl contentThumbnail,maskThumbnail;
-    Shapes::Path contentEdge,maskEdge;
-    std::array<GeometryGroup,2> contentEdges{nullptr,nullptr},maskEdges{nullptr,nullptr};
+    ThumbnailEdge contentEdge,maskEdge;
     ImageBrush contentPreview,maskPreview;
     Canvas contentFrame,maskFrame;
     TextBlock title{nullptr},meta{nullptr};

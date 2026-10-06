@@ -2,6 +2,7 @@ package art.capycanvas
 
 import android.graphics.Bitmap
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.*
@@ -35,7 +36,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.isShiftPressed as keyShiftPressed
@@ -411,6 +412,8 @@ internal class LayerSwipe {
         @Composable fun thumb(mask:Boolean) {
             val group=!mask && layer.getBoolean("group")
             val selected=if(mask)layer.getBoolean("mask_selected") else layer.getBoolean("content_selected")
+            val selection=animateFloatAsState(if(selected) 1f else 0f,
+                tween(200,easing=CubicBezierEasing(.25f,.46f,.45f,.94f)),label="layer-thumbnail-selection")
             val operation=if(group)obj("op" to "collapse","id" to id) else obj("op" to "select","id" to id,"mask" to mask)
             val windowed=inSeparateWindow()
             val label=if(group) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse") else if(mask) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_mask") else if(layer.optBoolean("selection_layer")) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_selection") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_content")
@@ -444,18 +447,27 @@ internal class LayerSwipe {
                     }
                 },onLongClick={openContext(mask)})
                 .drawWithCache {
-                    val outside=if(selected) -2.dp.toPx() else 0f
-                    val inside=1.dp.toPx()
-                    val edge=Path().apply {
-                        fillType=PathFillType.EvenOdd
-                        for(inset in listOf(outside,inside)) {
-                            val radius=size.minDimension/2-inset
-                            addSquircle(Rect(inset,inset,size.width-inset,size.height-inset),radius,radius,radius,radius)
+                    val radius=size.minDimension/2
+                    val contour=Path().apply { addSquircle(Rect(Offset.Zero,size),radius,radius,radius,radius) }.asAndroidPath()
+                    val transform=android.graphics.Matrix()
+                    fun edge(path:Path,outside:Float,inside:Float) {
+                        val target=path.asAndroidPath();target.rewind();target.fillType=android.graphics.Path.FillType.EVEN_ODD
+                        fun add(inset:Float) {
+                            transform.setScale((size.width-2*inset)/size.width,(size.height-2*inset)/size.height,size.width/2,size.height/2)
+                            target.addPath(contour,transform)
                         }
+                        add(outside);add(inside)
                     }
+                    val base=Path().apply { edge(this,0f,1.dp.toPx()) }
+                    val outline=Path()
                     onDrawWithContent {
                         drawContent()
-                        drawPath(edge,if(selected) colors.accent else colors.text.copy(alpha=.1f))
+                        drawPath(base,if(selected) colors.accent else colors.text.copy(alpha=.1f))
+                        val progress=selection.value
+                        if(progress>0) {
+                            edge(outline,(-4+3*progress).dp.toPx(),(-4+6*progress).dp.toPx())
+                            drawPath(outline,colors.accent.copy(alpha=progress))
+                        }
                         if(!mask && (attachment || highlight=="attach")) drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density))
                     }
                 },contentAlignment=Alignment.Center) {

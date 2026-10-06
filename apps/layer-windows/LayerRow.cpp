@@ -12,18 +12,48 @@ double renameTarget(std::shared_ptr<WorkspaceData> const& data){
     auto value=object(data->state,L"layer_tools").GetNamedValue(L"rename_layer",JsonValue::CreateNullValue());
     return value.ValueType()==JsonValueType::Number?value.GetNumber():-1;
 }
-GeometryGroup thumbnailEdge(bool editing){
-    float size=editing?34.f:30.f;
-    auto outer=squircleRectangle(size,size,{size/2,size/2,size/2,size/2});
-    auto inner=squircleRectangle(28,28,{14,14,14,14});TranslateTransform inset;inset.X((size-28)/2);inset.Y((size-28)/2);inner.Transform(inset);
-    GeometryGroup edge;edge.FillRule(FillRule::EvenOdd);edge.Children().Append(outer);edge.Children().Append(inner);return edge;
-}
 LayerThumbnail thumbnail(J const& layer,bool mask){
     return {to_hstring(uint64_t(num(layer,L"id"))),to_hstring(uint64_t(num(layer,mask?L"mask_id":L"id"))),
         to_hstring(uint64_t(num(layer,mask?L"mask_revision":L"paint_revision"))),mask};
 }
 J rowSelection(double id,bool checkbox=false){return O({{L"op",S(L"select_row")},{L"id",N(id)},
     {L"extend",B((GetKeyState(VK_SHIFT)&0x8000)!=0)},{L"toggle",B(checkbox||(GetKeyState(VK_CONTROL)&0x8000)!=0)}});}
+}
+void ThumbnailEdge::init(Canvas const& frame){
+    auto ring=[](Geometry const& outside,Geometry const& inside){
+        GeometryGroup edge;edge.FillRule(FillRule::EvenOdd);edge.Children().Append(outside);edge.Children().Append(inside);return edge;
+    };
+    auto inside=squircleRectangle(28,28,{14,14,14,14});TranslateTransform inset;inset.X(1);inset.Y(1);inside.Transform(inset);
+    base.Data(ring(squircleRectangle(30,30,{15,15,15,15}),inside));base.Width(30);base.Height(30);
+    inside=squircleRectangle(26,26,{13,13,13,13});inset=TranslateTransform();inset.X(3);inset.Y(3);inside.Transform(inset);
+    outline.Data(ring(squircleRectangle(32,32,{16,16,16,16}),inside));outline.Width(32);outline.Height(32);outline.Opacity(0);
+    scale.CenterX(16);scale.CenterY(16);outline.RenderTransform(scale);
+    Canvas::SetLeft(outline,-1);Canvas::SetTop(outline,-1);
+    frame.Children().Append(base);frame.Children().Append(outline);
+}
+void ThumbnailEdge::stop(){if(animation){animation.Stop();animation=nullptr;}}
+void ThumbnailEdge::update(std::shared_ptr<WorkspaceData> const& data,bool editing){
+    base.Fill(editing?accent(data):data->brush(L"text"));base.Opacity(editing?1:.1);outline.Fill(accent(data));
+    if(selected==editing)return;
+    bool animate=selected.has_value()&&outline.IsLoaded()&&Windows::UI::ViewManagement::UISettings().AnimationsEnabled();
+    double fromScale=scale.ScaleX(),fromOpacity=outline.Opacity();
+    stop();selected=editing;
+    double toScale=editing?1:38./32,toOpacity=editing?1:0;
+    scale.ScaleX(toScale);scale.ScaleY(toScale);outline.Opacity(toOpacity);
+    if(!animate)return;
+    animation=Animation::Storyboard();
+    auto move=[&](wchar_t const* property,double from,double to){
+        Animation::DoubleAnimationUsingKeyFrames motion;
+        Animation::DiscreteDoubleKeyFrame start;start.KeyTime({std::chrono::milliseconds(0)});start.Value(from);
+        Animation::SplineDoubleKeyFrame end;end.KeyTime({std::chrono::milliseconds(200)});end.Value(to);
+        Animation::KeySpline ease;ease.ControlPoint1({.25f,.46f});ease.ControlPoint2({.45f,.94f});end.KeySpline(ease);
+        motion.KeyFrames().Append(start);motion.KeyFrames().Append(end);
+        Animation::Storyboard::SetTarget(motion,outline);Animation::Storyboard::SetTargetProperty(motion,property);animation.Children().Append(motion);
+    };
+    move(L"(UIElement.RenderTransform).(ScaleTransform.ScaleX)",fromScale,toScale);
+    move(L"(UIElement.RenderTransform).(ScaleTransform.ScaleY)",fromScale,toScale);
+    move(L"Opacity",fromOpacity,toOpacity);
+    animation.Begin();
 }
 J LayerRow::model()const{return findId(array(data->state,L"layers"),id);}
 bool LayerRow::current()const{return epoch==epochOf(data)&&model().Size()!=0;}
@@ -55,7 +85,7 @@ void LayerRow::init(){
     AutomationProperties::SetAutomationId(swipeDelete,L"layer-"+to_hstring(uint64_t(id))+L"-swipe-delete");
     swipeFrame.Children().Append(swipeDelete);swipeFrame.Children().Append(body);body.RenderTransform(swipeTransform);swipe(0);
     swipeFrame.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){RectangleGeometry clip;clip.Rect({0,0,e.NewSize().Width,e.NewSize().Height});self->swipeFrame.Clip(clip);}});
-    root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock())self->swipe(0);});root.MinHeight(40);root.Padding({6,2,6,2});root.BorderThickness({0});
+    root.Unloaded([weak](auto&&,auto&&){if(auto self=weak.lock()){self->swipe(0);self->contentEdge.stop();self->maskEdge.stop();}});root.MinHeight(40);root.Padding({6,2,6,2});root.BorderThickness({0});
     root.BorderBrush(accent(data));body.ColumnSpacing(0);body.VerticalAlignment(VerticalAlignment::Center);
     AutomationProperties::SetAutomationId(root,L"layer-row-"+to_hstring(uint64_t(id)));
     auto rowCaption=[weak]{
@@ -112,13 +142,13 @@ void LayerRow::init(){
         tile.Width(30);tile.Height(30);tile.Children().Append(host);
     };
     preview(contentThumbnail,contentPreview,contentTile);preview(maskThumbnail,maskPreview,maskTile);
-    for(auto* edges:{&contentEdges,&maskEdges})for(int i=0;i<2;++i)(*edges)[i]=thumbnailEdge(i!=0);
     contentSymbol.IsHitTestVisible(false);contentTile.Children().Append(contentSymbol);
     groupMode.IsHitTestVisible(false);groupMode.Width(14);groupMode.Height(14);groupMode.CornerRadius({2,2,2,2});groupMode.Background(data->brush(L"input"));
     groupMode.HorizontalAlignment(HorizontalAlignment::Right);groupMode.VerticalAlignment(VerticalAlignment::Bottom);groupMode.Margin({0,0,3,3});contentTile.Children().Append(groupMode);
-    for(auto pair:{std::pair{contentFrame,contentEdge},std::pair{maskFrame,maskEdge}}){
-        pair.first.Width(30);pair.first.Height(30);pair.first.IsHitTestVisible(false);pair.first.Children().Append(pair.second);
-        pair.first.HorizontalAlignment(HorizontalAlignment::Left);pair.first.VerticalAlignment(VerticalAlignment::Center);body.Children().Append(pair.first);
+    contentEdge.init(contentFrame);maskEdge.init(maskFrame);
+    for(auto frame:{contentFrame,maskFrame}){
+        frame.Width(30);frame.Height(30);frame.IsHitTestVisible(false);
+        frame.HorizontalAlignment(HorizontalAlignment::Left);frame.VerticalAlignment(VerticalAlignment::Center);body.Children().Append(frame);
     }
     Grid::SetColumn(contentFrame,4);Grid::SetColumn(maskFrame,7);
     content.Content(contentTile);mask.Content(maskTile);
@@ -251,12 +281,7 @@ void LayerRow::refresh(){
     AutomationProperties::SetItemStatus(check,flag(layer,L"selected")?data->caption(L"search",L"selected"):data->caption(L"layers",L"unselected"));
     bool hasMask=flag(layer,L"has_mask");
     content.Background(clear());mask.Background(clear());
-    auto edge=[&](Shapes::Path const& path,std::array<GeometryGroup,2> const& shapes,bool editing){
-        path.Data(shapes[editing]);path.Width(editing?34:30);path.Height(editing?34:30);
-        path.Fill(editing?accent(data):data->brush(L"text"));path.Opacity(editing?1:.1);
-        Canvas::SetLeft(path,editing?-2:0);Canvas::SetTop(path,editing?-2:0);
-    };
-    edge(contentEdge,contentEdges,flag(layer,L"content_selected"));edge(maskEdge,maskEdges,flag(layer,L"mask_selected"));
+    contentEdge.update(data,flag(layer,L"content_selected"));maskEdge.update(data,flag(layer,L"mask_selected"));
     mask.Visibility(hasMask?Visibility::Visible:Visibility::Collapsed);link.Visibility(hasMask?Visibility::Visible:Visibility::Collapsed);
     maskFrame.Visibility(hasMask?Visibility::Visible:Visibility::Collapsed);
     body.ColumnDefinitions().GetAt(6).Width({hasMask?12.:0.,GridUnitType::Pixel});

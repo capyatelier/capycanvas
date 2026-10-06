@@ -130,7 +130,7 @@ function Thumbnail-Pixels([string]$Id){
         $name="$Id-$((Model).state.theme)-$((Model).state.layer_tools.editing_layer.mask_selected)"
         $bitmap.Save((Join-Path $run ($name+'.png')))
         @{preview=$r;window=$window}|ConvertTo-Json|Set-Content (Join-Path $run ($name+'-bounds.json'))
-        foreach($point in @(@(14,-2),@(0,0),@(0,-5),@(3,3),@(14,1),@(1,14),@(26,14),@(14,26))){
+        foreach($point in @(@(14,-1),@(0,0),@(0,-5),@(3,3),@(14,2),@(2,14),@(25,14),@(14,25))){
             $x=[int][Math]::Floor($r.X-$window.left+$point[0]*$r.Width/28)
             $y=[int][Math]::Floor($r.Y-$window.top+$point[1]*$r.Height/28)
             $bitmap.GetPixel($x,$y).ToArgb() -band 0xffffff
@@ -153,7 +153,7 @@ function Test-ThumbnailSquircles([long]$Id){
     Capture "thumbnail-squircles-$((Model).state.theme)" -WithModel
     Invoke "layer-$Id-content";Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected} 'Content editing did not publish'
     $idle=Stable-ThumbnailPixels "layer-$Id-mask-thumbnail"
-    if(($active[4..7] -join ',') -ne ($idle[4..7] -join ',') -or $active[0] -eq $idle[0]){throw 'Editing border covered preview edge pixels'}
+    if(($active[4..7] -join ',') -ne ($idle[4..7] -join ',') -or $active[0] -eq $idle[0]){throw 'Editing border changed interior preview pixels or did not move to the target'}
     Invoke "layer-$Id-mask";Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected} 'Mask target did not restore'
 }
 

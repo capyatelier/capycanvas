@@ -455,6 +455,14 @@ APK calls, so test-APK benchmarks use the unminified build.
   retain moving-window `FrameMetrics` timestamps, camera and layer state.
   Add `-e layerRelationshipBenchmark true` to drag an attached filter through
   owner-chain gaps with clipping connectors and attachment feedback visible.
+- **Layer thumbnail selection.** `AndroidTitleBarTest#layerSwipeFrameTiming`
+  also accepts `-e layerSelectionBenchmark true`, with the same photo and
+  dimensions. It switches between the empty paint layer's content and mask
+  every 150 ms, including the resulting tool and canvas action bar changes.
+  After one second of priming, three five-second runs record native
+  `FrameMetrics` in `layer-selection-<run>.json`. The records include observed
+  selection-change timestamps and retain frames within their 200 ms animation
+  windows.
 - **Grouped tool drawer scrolling.**
   `AndroidWorkspacePerformanceTest#groupedDrawerScrollFrameTiming` runs with
   `-e groupedToolBenchmark true -e photo <readable-tier-photo.jpg>`. It uses the

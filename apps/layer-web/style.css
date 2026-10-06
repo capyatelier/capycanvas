@@ -387,7 +387,8 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .layer-row > .layer-icon { height: auto; align-self: stretch; }
 .layer-thumbnails { display: flex; align-items: center; gap: 2px; flex: none; }
 .layer-connection-gutter { width: 3px; flex: none; }
-:is(.panel,.layer-drag-preview) .layer-thumbnail { width: 30px; height: 30px; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); border-radius: calc(15px * var(--corner-fit)); background: transparent; box-shadow: none; position: relative; }
+:is(.panel,.layer-drag-preview) .layer-thumbnail { width: 30px; height: 30px; border: 1px solid color-mix(in srgb, var(--text) 10%, transparent); border-radius: calc(15px * var(--corner-fit)); background: transparent; box-shadow: none; position: relative; outline: 0 solid transparent; outline-offset: 4px; transition: outline-color 200ms cubic-bezier(.25,.46,.45,.94), outline-width 200ms cubic-bezier(.25,.46,.45,.94), outline-offset 200ms cubic-bezier(.25,.46,.45,.94); }
+@media (prefers-reduced-motion: reduce) { :is(.panel,.layer-drag-preview) .layer-thumbnail { transition: none; } }
 .layer-thumbnail canvas { width: 28px; height: 28px; border-radius: calc(14px * var(--corner-fit)); pointer-events: none; }
 .layer-thumbnail .layer-type-symbol { position: absolute; right: 3px; bottom: 3px; width: 14px; height: 14px; padding: 1px; border-radius: 2px; background: var(--input); color: var(--text); pointer-events: none; }
 .layer-folder svg { width: 28px; height: 28px; }
@@ -403,7 +404,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .layer-lock { width: 12px; }
 .layer-grip { width: 16px; touch-action: none; opacity: .6; }
 .layer-name-entry { width: 100%; min-width: 0; height: 24px; padding: 0 2px; border-radius: var(--control-radius); }
-:is(.panel,.layer-drag-preview) .layer-thumbnail.editing-target { border-color: var(--accent); outline: 3px solid var(--accent); outline-offset: -1px; }
+:is(.panel,.layer-drag-preview) .layer-thumbnail.editing-target { border-color: var(--accent); outline: 3px solid var(--accent); outline-offset: -2px; }
 .layer-drop-before { box-shadow: inset 0 2px var(--accent); }
 .layer-drop-after { box-shadow: inset 0 -2px var(--accent); }
 .layer-drop-into { box-shadow: inset 0 0 0 2px var(--accent); }

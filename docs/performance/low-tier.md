@@ -113,6 +113,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Figure or ruler drag | 60 | | |
 | Layer opacity scrub | 60 | **Not met.** Maskless Solid Color over photo: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s | [Solid Color fills](#solid-color-fills); baseline also misses |
 | Layer reorder drag | 60 | | |
+| Layer thumbnail selection animation | 60 | Unmeasured on the reference tablet | [Selection benchmark](../development/android.md#benchmarks) |
 | Attached filter drag inside a clipping run | 60 | **Not met.** 55.64–59.72 native UI fps; moving-frame gap p99 16.75–33.34 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |

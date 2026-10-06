@@ -98,6 +98,7 @@ current-source results.
 | Figure or ruler drag | 120 | | |
 | Layer opacity scrub | 120 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 120 | **Met.** Native UI 117.20–119.41 fps; moving-frame gap p99 8.38–16.67 ms | [Layer reorder and retained photo translation](#layer-reorder-and-retained-photo-translation), 2026-10-04 |
+| Layer thumbnail selection animation | 120 | **Not met.** Repeated content/mask selection 76.11–78.12 native UI fps; moving-frame gap p99 33.33 ms | [Layer thumbnail selection](#layer-thumbnail-selection), 2026-10-05 |
 | Attached filter drag inside a clipping run | 120 | **Not met.** 93.24–102.71 native UI fps; moving-frame gap p99 25.00–33.33 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
@@ -111,6 +112,27 @@ current-source results.
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 120 | | |
 | Menu open and close | 120 | Menu open adds no canvas frames; UI frame p50/p95 11.5/26.6 ms | Canvas-bar `selection-bar-menu-open`, 2026-09-27 |
+
+## Layer thumbnail selection
+
+Measured 2026-10-05 on the Wacom MovinkPad Pro 14 at thermal status 0 before
+and after motion, using a benchmark APK with release Rust based on `a71fa4834`
+plus the thumbnail border changes. The 9504 × 6336 reference photo sits beneath
+an empty paint layer with a mask, at Fit zoom and default panel glass.
+`AndroidTitleBarTest#layerSwipeFrameTiming` with `layerSelectionBenchmark=true`
+retargets between content and mask every 150 ms. Compose drives the 200 ms
+outline animation using cached squircle contours. The workload also changes
+tools and the canvas action bar; it does not isolate outline drawing cost.
+
+After one second of priming, three five-second runs recorded 76.11, 77.24 and
+78.12 native UI frames/s without screen recording. `FrameMetrics` intervals
+within observed selection animation windows had p99 33.33 ms in every run.
+The panel ran at 120 Hz in dark theme. The 120 fps target is not met. An
+earlier controlled comparison based on `ffc03f522` measured 76.87–78.92 fps
+with uncached contours and 77.05–77.50 fps with cached contours, both at
+33.33 ms p99; caching does not establish an overall throughput improvement.
+Raw frames, APK hashes and the rate calculation are under
+`artifacts/thumbnail-border-all/android/`.
 
 ## GTK selected swatch diagnostic
 

@@ -14,6 +14,7 @@ export async function checkLayerHolding({call, evaluate, settle}) {
   const menu=()=>evaluate("document.querySelector('.panel-context-menu').matches(':popover-open')");
   const rect=selector=>evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};})()`);
   const thumbnailPixels = async selector => {
+    await evaluate(`Promise.all(document.querySelector(${JSON.stringify(selector)}).getAnimations().map(animation=>animation.finished.catch(()=>{})))`);
     const shot = await call("Page.captureScreenshot",{format:"png"});
     return evaluate(`(async()=>{
       const button=document.querySelector(${JSON.stringify(selector)}),r=button.getBoundingClientRect(),image=new Image();
@@ -21,9 +22,9 @@ export async function checkLayerHolding({call, evaluate, settle}) {
       const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
       const at=(x,y)=>Array.from(ctx.getImageData(Math.floor(x*devicePixelRatio),Math.floor(y*devicePixelRatio),1,1).data);
-      return {edge:at(r.x+15,r.y-1),accent:[...getComputedStyle(button).outlineColor.match(/[\\d.]+/g).slice(0,3).map(Number),255],
+      return {edge:at(r.x+15,r.y+1),accent:[...getComputedStyle(button).outlineColor.match(/[\\d.]+/g).slice(0,3).map(Number),255],
         corner:at(r.x+2,r.y+2),background:at(r.x-4,r.y+2),inside:at(r.x+4,r.y+4),
-        preview:[[15,2],[2,15],[27,15],[15,27]].map(([x,y])=>at(r.x+x,r.y+y))};
+        preview:[[15,3],[3,15],[26,15],[15,26]].map(([x,y])=>at(r.x+x,r.y+y))};
     })()`);
   };
   const saved=await evaluate("layerApp.state().workspace");
@@ -101,13 +102,64 @@ export async function checkLayerHolding({call, evaluate, settle}) {
       const mask = `${source} [aria-label="Edit layer mask"]`;
       assert.equal((await rect(mask)).width,30,"thumbnail hit area stays fixed");
       assert.equal((await rect(`${source} .layer-link`)).width,10,"mask link is narrower");
+      await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
+      const content = `${source} .layer-thumbnail:not([aria-label="Edit layer mask"])`;
+      const selectionAnimation = async (selector, maskSelected) => evaluate(`(async()=>{
+        const button=document.querySelector(${JSON.stringify(selector)});
+        getComputedStyle(button).outlineWidth;
+        layerApp.dispatch({type:'layer',action:{op:'select',id:${Number(before[0])},mask:${maskSelected}}});
+        const read=()=>{const style=getComputedStyle(button),color=style.outlineColor.match(/[\\d.]+/g).map(Number);return {width:parseFloat(style.outlineWidth),offset:parseFloat(style.outlineOffset),alpha:color.length===4?color[3]:1};};
+        getComputedStyle(button).outlineWidth;
+        const animations=button.getAnimations();
+        const timing=animations.map(animation=>({property:animation.transitionProperty,...animation.effect.getTiming()}));
+        for(const animation of animations){animation.pause();animation.currentTime=100;}
+        const middle=read();
+        for(const animation of animations)animation.finish();
+        await Promise.all(animations.map(animation=>animation.finished));
+        return {timing,middle,end:read(),extent:button.getBoundingClientRect().width+2*(read().offset+read().width)};
+      })()`);
+      for(const [selector,maskSelected] of [[content,false],[mask,true]]) {
+        await evaluate("Promise.all([...document.querySelectorAll('.layer-thumbnail')].flatMap(button=>button.getAnimations().map(animation=>animation.finished.catch(()=>{}))))");
+        const sample=await selectionAnimation(selector,maskSelected);
+        assert.deepEqual(sample.timing.map(t=>t.property).sort(),['outline-color','outline-offset','outline-width'],`${theme}: selection animates all border properties`);
+        for(const timing of sample.timing) {
+          assert.equal(timing.duration,200);
+          assert.equal(timing.easing,'cubic-bezier(0.25, 0.46, 0.45, 0.94)');
+        }
+        assert.ok(sample.middle.width>0 && sample.middle.width<3,JSON.stringify(sample));
+        assert.ok(sample.middle.offset>-2 && sample.middle.offset<4,JSON.stringify(sample));
+        assert.ok(sample.middle.alpha>0 && sample.middle.alpha<1,JSON.stringify(sample));
+        assert.deepEqual(sample.end,{width:3,offset:-2,alpha:1});
+        assert.equal(sample.extent,32);
+        console.log(`PASS: ${theme} ${maskSelected?'mask':'content'} selection animation ${JSON.stringify(sample)}`);
+      }
+      await evaluate(`(()=>{
+        const mask=document.querySelector(${JSON.stringify(mask)}),content=document.querySelector(${JSON.stringify(content)});
+        layerApp.dispatch({type:'layer',action:{op:'select',id:${Number(before[0])},mask:false}});
+        getComputedStyle(content).outlineWidth;
+        for(const animation of [...mask.getAnimations(),...content.getAnimations()]){animation.pause();animation.currentTime=70;}
+        layerApp.dispatch({type:'layer',action:{op:'select',id:${Number(before[0])},mask:true}});
+        getComputedStyle(mask).outlineWidth;
+      })()`);
+      await evaluate(`Promise.all([...document.querySelector(${JSON.stringify(mask)}).getAnimations(),...document.querySelector(${JSON.stringify(content)}).getAnimations()].map(animation=>animation.finished.catch(()=>{})))`);
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(mask)})).outlineWidth`),'3px','rapid retarget settles on mask');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(content)})).outlineWidth`),'0px','rapid retarget clears content');
+      await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
+      try {
+        const reduced=await selectionAnimation(content,false);
+        assert.equal(reduced.timing.length,0,'reduced motion has no selection animations');
+        assert.deepEqual(reduced.end,{width:3,offset:-2,alpha:1});
+        await selectionAnimation(mask,true);
+      } finally {
+        await call('Emulation.setEmulatedMedia',{features:[]});
+      }
       const active = await thumbnailPixels(mask);
       assert.deepEqual(active.edge,active.accent,"outer editing edge uses the accent color");
       await click(`${source} .layer-thumbnail`);
       const idle = await thumbnailPixels(mask);
       assert.deepEqual(idle.corner,idle.background,"full squircle clears the preview corner");
       assert.notDeepEqual(idle.inside,idle.background,"full squircle retains pixels beyond a circular corner");
-      assert.deepEqual(active.preview,idle.preview,"editing border leaves preview edge pixels unchanged");
+      assert.deepEqual(active.preview,idle.preview,"preview pixels inside the editing border stay unchanged");
       assert.notDeepEqual(active.edge,idle.edge,"editing border replaces the idle edge outside the preview");
       await click(mask);
       await capture(`thumbnail-squircles-${theme}`);

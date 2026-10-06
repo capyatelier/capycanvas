@@ -1226,10 +1226,11 @@ class AndroidTitleBarTest {
     @Test fun layerSwipeFrameTiming() {
         val args=androidx.test.platform.app.InstrumentationRegistry.getArguments()
         val reorder=args.getString("layerReorderBenchmark")=="true"
-        org.junit.Assume.assumeTrue(reorder || args.getString("layerSwipeBenchmark")=="true")
+        val selection=args.getString("layerSelectionBenchmark")=="true"
+        org.junit.Assume.assumeTrue(selection || reorder || args.getString("layerSwipeBenchmark")=="true")
         val width=args.getString("width")?.toInt() ?: 6000
         val height=args.getString("height")?.toInt() ?: 4000
-        val label=if(reorder) "layer-reorder" else "layer-swipe"
+        val label=if(selection) "layer-selection" else if(reorder) "layer-reorder" else "layer-swipe"
         host.openDocument(java.io.File(checkNotNull(args.getString("photo"))))
         assertTrue(state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width")==width && it.optInt("height")==height })
         action(obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
@@ -1246,6 +1247,7 @@ class AndroidTitleBarTest {
         showSwipeLayers()
         action(obj("type" to "invoke","command" to "fit_canvas"))
         val id=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+        if(selection)action(obj("type" to "layer","action" to obj("op" to "add_mask","id" to id,"replace" to false)))
         val frames=java.util.Collections.synchronizedList(mutableListOf<LongArray>())
         val thread=android.os.HandlerThread("$label-frames").apply { start() }
         lateinit var window: android.view.Window
@@ -1258,8 +1260,9 @@ class AndroidTitleBarTest {
         tool=if(reorder) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
         try {
             for(run in 0..3) {
-                down("layer-row-$id");val start=point
-                event(MotionEvent.ACTION_MOVE,start+Offset((if(reorder) -24 else 24)*density,0f))
+                if(!selection)down("layer-row-$id")
+                val start=point
+                if(!selection)event(MotionEvent.ACTION_MOVE,start+Offset((if(reorder) -24 else 24)*density,0f))
                 if(reorder)waitFor("moving layer preview") { node("layer-drag-preview")!=null }
                 val done=java.util.concurrent.CountDownLatch(1)
                 val duration=if(run==0)1000L else 5000L
@@ -1267,17 +1270,30 @@ class AndroidTitleBarTest {
                 val beginNs=System.nanoTime()
                 frames.clear()
                 lateinit var callback: android.view.Choreographer.FrameCallback
+                var selectedInterval=-1L
+                var observedMask=state().array("layers").objects().first { it.getLong("id")==id }.getBoolean("mask_selected")
+                val transitions=mutableListOf<Long>()
                 instrumentation.runOnMainSync {
                     val clock=android.view.Choreographer.getInstance()
                     callback=android.view.Choreographer.FrameCallback {
                         val elapsed=SystemClock.uptimeMillis()-begin
                         if(elapsed>=duration)done.countDown()
                         else {
-                            val cycle=(elapsed%1000)/500f
-                            val fraction=if(cycle<=1)cycle else 2-cycle
-                            val delta=if(reorder) Offset(-24*density,40*density*fraction) else Offset((24+40*fraction)*density,0f)
-                            val move=motion(tool,MotionEvent.ACTION_MOVE,start+delta,downAt,button)
-                            try { checkNotNull(pressed).view.dispatchTouchEvent(move) } finally { move.recycle() }
+                            if(selection) {
+                                val mask=state().array("layers").objects().first { it.getLong("id")==id }.getBoolean("mask_selected")
+                                if(mask!=observedMask) { observedMask=mask;transitions.add(System.nanoTime()) }
+                                val interval=elapsed/150
+                                if(interval!=selectedInterval) {
+                                    selectedInterval=interval
+                                    host.dispatch(obj("type" to "layer","action" to obj("op" to "select","id" to id,"mask" to (interval%2==0L))))
+                                }
+                            } else {
+                                val cycle=(elapsed%1000)/500f
+                                val fraction=if(cycle<=1)cycle else 2-cycle
+                                val delta=if(reorder) Offset(-24*density,40*density*fraction) else Offset((24+40*fraction)*density,0f)
+                                val move=motion(tool,MotionEvent.ACTION_MOVE,start+delta,downAt,button)
+                                try { checkNotNull(pressed).view.dispatchTouchEvent(move) } finally { move.recycle() }
+                            }
                             clock.postFrameCallback(callback)
                         }
                     }
@@ -1287,12 +1303,15 @@ class AndroidTitleBarTest {
                 finally { instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) } }
                 val endNs=System.nanoTime()
                 SystemClock.sleep(200)
-                val rows=synchronized(frames) { frames.filter { it[0] in beginNs..endNs } }
-                event(MotionEvent.ACTION_CANCEL);idle()
+                val rows=synchronized(frames) { frames.filter { it[0] in beginNs..endNs && (!selection || transitions.any { start -> it[0] in start..(start+200_000_000L) }) } }
+                if(!selection)event(MotionEvent.ACTION_CANCEL)
+                idle()
+                if(selection)shot("$label-$run")
                 if(run>0) {
                     assertTrue("Moving frames were measured",rows.size>1)
                     val result=obj("run" to run,"duration_ms" to duration,"begin_ns" to beginNs,"end_ns" to endNs,
                         "width" to width,"height" to height,"photo" to args.getString("photo"),"motion" to label,
+                        "transitions_ns" to JSONArray(transitions),"selection_interval_ms" to (if(selection)150 else JSONObject.NULL),
                         "camera" to state().getJSONObject("camera"),
                         "layers" to state().array("layers"),"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
                     java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"$label-$run.json").writeText(result.toString())
@@ -1483,8 +1502,8 @@ class AndroidTitleBarTest {
                 val image=checkNotNull(instrumentation.uiAutomation.takeScreenshot())
                 try {
                     fun pixel(x:Float,y:Float)=image.getPixel((b.left+x*density).toInt(),(b.top+y*density).toInt())
-                    return listOf(pixel(14f,-2f),pixel(0f,0f),pixel(-5f,0f),pixel(3f,3f),
-                        pixel(14f,1f),pixel(1f,14f),pixel(26f,14f),pixel(14f,26f))
+                    return listOf(pixel(14f,-1f),pixel(0f,0f),pixel(-5f,0f),pixel(3f,3f),
+                        pixel(14f,2f),pixel(2f,14f),pixel(25f,14f),pixel(14f,25f))
                 } finally { image.recycle() }
             }
             val activeMask=thumbnailPixels()
@@ -1495,7 +1514,7 @@ class AndroidTitleBarTest {
             val idleMask=thumbnailPixels()
             assertEquals("$theme full squircle clears the preview corner",idleContent[2],idleContent[1])
             assertNotEquals("$theme full squircle retains more than a circular thumbnail",idleContent[2],idleContent[3])
-            assertEquals("$theme editing border preserves preview edge pixels",activeMask.drop(4),idleMask.drop(4))
+            assertEquals("$theme preview pixels inside the editing border stay unchanged",activeMask.drop(4),idleMask.drop(4))
             assertNotEquals("$theme outer editing edge changes with the target",activeMask[0],idleMask[0])
             layer(obj("op" to "select","id" to checked[0],"mask" to true))
             clickRow(checked[0])

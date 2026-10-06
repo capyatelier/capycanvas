@@ -72,6 +72,7 @@ current-source results.
 | Figure or ruler drag | 90 | | |
 | Layer opacity scrub | 90 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 90 | | |
+| Layer thumbnail selection animation | 90 | Unmeasured: both attempts timed out opening the 24 MP reference drawing before motion; device reported 60 Hz | `ffc03f522` + thumbnail border changes, benchmark APK; `artifacts/thumbnail-border-all/android/final-selection-perf-mid.log`, 2026-10-05 |
 | Attached filter drag inside a clipping run | 90 | Unmeasured: both attempts timed out waiting for the 24 MP drawing's shaders before motion | `7f69a9356` + clipping-filter changes, benchmark APK; `artifacts/clipping-filter/mid-performance{,-retry}.log`, 2026-10-04 |
 | Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android relationship overlay 58.8–59.4 fps, interval p99 16.8–16.9 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | Android `00b2d6e73` + native port, 2026-10-04; Web `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |

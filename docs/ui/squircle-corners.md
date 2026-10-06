@@ -26,10 +26,21 @@ the former 8–10px circular corners.
   Controls 24px tall or shorter become capsules.
 - **Concave joins** (tab feet, drawer bridges and expanded-panel joins) keep
   their sizes and use inverted squircle curves.
-- Layer and mask thumbnails use full squircles on every host. Their editing target has
-  a 3px outer border in the resolved accent color, replacing the faint idle
-  edge without covering preview pixels or changing the hit area. Type badges
-  sit inside the preview corners.
+- Layer and mask thumbnails use full squircles on every host. Their editing target
+  has a 3px border in the resolved accent color, replacing the faint idle edge.
+  It sits 2px inside and 1px outside the 30px tile, giving 32px outer bounds
+  and covering 1px of the preview. The hit area stays fixed. Type badges sit
+  inside the preview corners. Selection changes fade and shrink the outline
+  over 200ms with cubic-bezier(.25, .46, .45, .94), following GTK's native
+  transition. GTK, Web, Android and Apple interpolate color, width and offset
+  from a transparent, 0px outline 4px outside the tile. Windows scales and
+  fades its fixed ring through a visual transform, so its stroke scales with
+  the outline rather than growing from zero. Its outer extent follows the
+  same 38px-to-32px transition. The 1px base edge remains visible. Hosts respect
+  the system's reduced-motion or animation-duration setting. Timing belongs
+  to GTK/CSS transitions, Compose, SwiftUI and Windows Storyboards. Android,
+  Apple and Windows retain the squircle contours during the transition;
+  Windows animates only compositor-supported visual scale and opacity.
 - Checkboxes, slider thumbs and other small details
   keep their former visual rounding with squircle corners.
 
@@ -126,6 +137,9 @@ appear in native drag snapshots.
 
 - GTK layer thumbnails: `tools/performance/workspace-motion.sh gtk --native-test=native_layer_thumbnail_squircles`
   checks preview clipping, outer borders, corner clicks and drag previews in both themes.
+- Web `--layer-hold` also checks intermediate selection outlines, rapid retargeting
+  and reduced motion. Android's selection timing fixture is described in
+  [Android benchmarks](../development/android.md#benchmarks).
 - GTK: `tools/performance/workspace-motion.sh gtk --native-test=native_squircle_corners`
   (corner picks reach tiles, shadowed subtrees convert and blurred drawer shadows
   stay finite; add `GDK_DEBUG=color-mgmt MUTTER_DEBUG_FORCE_HDR=1` for the HDR

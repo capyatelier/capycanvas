@@ -289,6 +289,7 @@ private struct LayerButton: View {
 private struct LayerRow: View {
     @State private var rowCaption = ""
     @Environment(\.editorPalette) private var surface
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: EditorStore
     let layer: JSON
     @ObservedObject var previews: LayerThumbnails
@@ -406,9 +407,12 @@ private struct LayerRow: View {
                 .overlay {
                     Path { edge in
                         let bounds = CGRect(x: 0, y: 0, width: 30, height: 30)
-                        edge.addPath(SquircleShape.tile.inset(by: editing ? -2 : 0).path(in: bounds))
+                        edge.addPath(SquircleShape.tile.path(in: bounds))
                         edge.addPath(SquircleShape.tile.inset(by: 1).path(in: bounds))
                     }.fill(editing ? palette["accent"] : palette["text"].opacity(0.1), style: FillStyle(eoFill: true))
+                        .allowsHitTesting(false)
+                    LayerThumbnailOutline(progress: editing ? 1 : 0, color: palette["accent"])
+                        .animation(reduceMotion ? nil : .timingCurve(0.25, 0.46, 0.45, 0.94, duration: 0.2), value: editing)
                         .allowsHitTesting(false)
                 }
                 // Bound the hit region as well as the drawing. Without this,
@@ -437,6 +441,24 @@ private struct LayerRow: View {
         }
         #endif
         return ""
+    }
+}
+
+private struct LayerThumbnailOutline: View, Animatable {
+    private static let contour = SquircleShape.tile.path(in: CGRect(x: 0, y: 0, width: 38, height: 38))
+    var progress: CGFloat
+    let color: Color
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+    var body: some View {
+        Path { edge in
+            for inset in [-4 + 3 * progress, -4 + 6 * progress] {
+                let scale = (30 - 2 * inset) / 38
+                edge.addPath(Self.contour, transform: CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: inset, ty: inset))
+            }
+        }.fill(color.opacity(Double(progress)), style: FillStyle(eoFill: true))
     }
 }
 
