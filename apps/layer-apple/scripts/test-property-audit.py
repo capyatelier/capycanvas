@@ -14,6 +14,11 @@ coverage = json.loads((app / "command-coverage.json").read_text())
 def scenario(model):
     return model["property_scenarios"][0]
 
+def gradient_destination(model):
+    return next(control["gradient"]["destination"] for item in model["property_scenarios"]
+                if item["name"] == "filter:gradient_map" for control in item["locked_properties"]["controls"]
+                if control.get("gradient"))
+
 probes = {
     "missing filter": lambda m, c: m["property_scenarios"].pop(),
     "duplicate filter": lambda m, c: m["property_scenarios"].append(deepcopy(m["property_scenarios"][-1])),
@@ -25,10 +30,14 @@ probes = {
     "failed history": lambda m, c: scenario(m)["edits"][0]["result"].update(undo_restored_all_properties=False),
     "incorrect reset": lambda m, c: scenario(m)["edits"][0]["result"].update(reset={"kind":"number", "value":999}),
     "missing handler": lambda m, c: c["property_kinds"].update(number="missing-property-handler.swift"),
+    "wrong gradient destination": lambda m, c: gradient_destination(m).update(layer=999),
 }
 for platform in ["ios", "mac"]:
     model = inventory["platforms"][platform]
     audit(coverage, platform, model)
+    changed = deepcopy(model)
+    gradient_destination(changed)["epoch"] += 1
+    audit(coverage, platform, changed)
     for name, mutate in probes.items():
         changed, review = deepcopy(model), deepcopy(coverage)
         mutate(changed, review)

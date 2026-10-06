@@ -99,6 +99,73 @@ fn checkpoint(app: &App, exclusion: u64, clean: bool) {
     assert!(!task.0.is_null(), "{:?}", unsafe { &*app.0 }.error);
     task.run();
 }
+
+#[test]
+fn apple_shared_image_objects_keep_f64_poses_pixels_and_history_across_workers_and_restart() {
+    use layer_core::authored::OccurrenceContent;
+    use std::io::Seek;
+    let packages: [(&str, &[u8]); 3] = [
+        ("builtin", include_bytes!("../../../layer-web/fixtures/shared-image-f64-builtin.capy")),
+        ("icc", include_bytes!("../../../layer-web/fixtures/shared-image-f64-icc.capy")),
+        ("nearest", include_bytes!("../../../layer-web/fixtures/shared-image-f64-nearest.capy")),
+    ];
+    for platform in [0, 1] {
+        for (name, bytes) in packages {
+            let path = std::env::temp_dir().join(format!("capy-apple-objects-{}", layer_core::PortableId::random()));
+            let app = launch(platform, &path);
+            let open = ProjectJob::new(&app, true);
+            assert_eq!(unsafe { capy_project_read_bytes(open.0, bytes.as_ptr(), bytes.len(), c"Objects.capy".as_ptr()) }, 0, "{:?}", open.error());
+            assert_eq!(unsafe { capy_apple_project_adopt(app.0, open.0, c"Objects.capy".as_ptr(), c"".as_ptr()) }, 0);
+            app.draw_until_prepared(true);
+            let expected = unsafe { &*app.0 }.host.session.engine().document().clone();
+            let objects: Vec<_> = expected.artwork.objects.iter().map(|(_, _, object)| object).collect();
+            assert_eq!(objects.len(), 3);
+            assert!(objects.iter().all(|object| object.image.same_owner(&objects[0].image)));
+            assert!(objects.iter().any(|object| object.affine.0[4].to_bits() == 16777217.125f64.to_bits()));
+            assert!(expected.artwork.paint.iter().all(|(_, _, paint)| paint.base.as_ref().unwrap().image.same_owner(&objects[0].image)));
+            let owner = expected.scene().order().iter().copied().find(|handle|
+                matches!(expected.scene().occurrence(*handle).unwrap().content, OccurrenceContent::Objects(_))).unwrap();
+            let visible = app.pixels();
+            assert!(visible.chunks_exact(4).any(|pixel| pixel[3] > 0), "{platform} {name}: object pixels");
+            app.layer_action(json!({"op":"visibility","id":layer_ui::occurrence_token(owner),"value":false}));
+            app.draw_until_idle();
+            let hidden = app.pixels();
+            assert!(hidden.chunks_exact(4).all(|pixel| pixel[3] == 0), "{platform} {name}: only objects were visible");
+            for (command, pixels) in [("undo", &visible), ("redo", &hidden), ("undo", &visible)] {
+                app.invoke(command); app.draw_until_idle(); assert_eq!(&app.pixels(), pixels);
+            }
+            let mut file = fixtures::tempfile();
+            let save = ProjectJob::new(&app, false);
+            assert_eq!(unsafe { capy_project_write(save.0, file.as_raw_fd()) }, 0, "{:?}", save.error());
+            file.rewind().unwrap();
+            let reopened = App::new(platform);
+            unsafe { &mut *reopened.0 }.host.session.renderer_mut().0 = Some(native_renderer());
+            reopened.draw_until_idle();
+            let read = ProjectJob::new(&reopened, true);
+            assert_eq!(unsafe { capy_project_read(read.0, file.as_raw_fd(), c"Objects.capy".as_ptr()) }, 0, "{:?}", read.error());
+            assert_eq!(unsafe { capy_apple_project_adopt(reopened.0, read.0, c"Objects.capy".as_ptr(), c"".as_ptr()) }, 0);
+            reopened.draw_until_prepared(true);
+            assert_saved_document(unsafe { &*reopened.0 }.host.session.engine().document(), &expected);
+            assert_eq!(reopened.pixels(), visible);
+            assert_eq!(unsafe { capy_apple_suspend_renderer(reopened.0) }, 0);
+            let native = unsafe { &mut *reopened.0 };
+            let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(expected.composition().color).unwrap();
+            native.metal.install_renderer(&mut native.host, gpu.into()).unwrap();
+            reopened.draw_until_prepared(true);
+            assert_eq!(reopened.pixels(), visible);
+            checkpoint(&app, 0, true);
+            drop((read, reopened, save, open, app));
+            let restored = launch(platform, &path);
+            assert_saved_document(unsafe { &*restored.0 }.host.session.engine().document(), &expected);
+            assert_eq!(restored.pixels(), visible);
+            restored.invoke("redo"); restored.draw_until_idle(); assert_eq!(restored.pixels(), hidden);
+            restored.invoke("undo"); restored.draw_until_idle(); assert_eq!(restored.pixels(), visible);
+            drop(restored);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+}
+
 #[test]
 fn apple_session_restart_preserves_pixels_history_selection_and_close_membership() {
     for platform in [0, 1] {

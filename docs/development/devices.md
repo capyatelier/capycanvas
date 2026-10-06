@@ -54,8 +54,8 @@ tools/devices/devices.py release
   leave it alone even when `list` shows it free.
 - **Run every device command through `run`.** It holds the tablet's lock
   (`/tmp/capy-<serial>.lock`, the same file `flock` users take), waits while
-  another command runs, and refuses tablets reserved by another owner. Inside the
-  command, `adb` targets the tablet through `ANDROID_SERIAL`, and
+  another command runs, and requires a current reservation by this owner. Inside
+  the command, `adb` targets the tablet through `ANDROID_SERIAL`, and
   `CAPY_ANDROID_SERIAL`, `CAPY_APPLICATION_ID`, `CAPY_WEB_PORT` and
   `CAPY_CDP_PORT` are set.
 - Build outside `run`; hold the lock only while the device is in use.
@@ -106,6 +106,23 @@ Apple builds and tests need an Apple Silicon Mac with Xcode; there is no remote
 Mac. The reference hardware is an M2 Pro Mac mini, whose display presents at
 90 Hz, and a 13-inch M4 iPad Pro at 120 Hz. On Linux, only the `layer-apple`
 Rust bridge tests run.
+
+Use `--platform apple` with the same reservation tool. It discovers paired
+physical iPads through Xcode's `devicectl` and shares the reservation and command
+locks used by the Android runner. When several iPads are paired, select one by
+its serial.
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer tools/devices/devices.py --platform apple list
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer tools/devices/devices.py --platform apple reserve ipad
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer tools/devices/devices.py --platform apple run ipad -- \
+  sh -c 'xcrun devicectl device info details --device "$CAPY_APPLE_DEVICE_ID"'
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer tools/devices/devices.py --platform apple release ipad
+```
+
+Apple commands require a current reservation. The runner exports
+`CAPY_APPLE_DEVICE_ID` and the owner's isolated `CAPY_APPLE_BUNDLE_ID`; pass the
+latter as an `xcodebuild` build setting when building the app.
 
 - The iPad must be awake and unlocked, with Settings > Developer > Enable UI
   Automation on.

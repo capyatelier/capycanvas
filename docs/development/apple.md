@@ -181,6 +181,13 @@ hardware GPU, comparing exact document pixels through Undo and Redo. Reuse
 `*_tests.rs` files under `native/src`). The windowless `tests::toolbar_component`
 checks category and subtool choices, remembered Enclose and Fill, and Source
 actions through the native bridge in both themes and platform policies.
+`apple_shared_image_objects_keep_f64_poses_pixels_and_history_across_workers_and_restart`
+opens the fixed built-in, ICC and Nearest image-object packages through Apple
+project workers. It checks shared image ownership, F64 placement, exact visibility
+history, save/reopen, renderer replacement and private recovery with pending Redo.
+Object authoring remains unavailable while the shared editor cutover is pending.
+The photo-owner fixture compares reopened layer rows and swipe targets by stack
+position because runtime handles are allocated afresh when reading a package.
 The ignored 61 MP regression needs a
 disposable sRGB JPEG:
 
@@ -282,6 +289,15 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
   DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
 ```
 
+`testAlphaConversionFilters` and `testAlphaConversionFiltersDark` exercise
+Threshold's color and transparency choices, hidden alpha-threshold retention,
+Brightness to Opacity, exact history and drawing recovery through native controls.
+The compact Properties header keeps Add Filter at its natural width; the layer
+type takes the remaining space, including when the panel needs a scrollbar.
+`testLiveColorTab` and its Dark variant check the initial paint, retained Color
+tab icon updates and the transparency circle. Run these on both native targets;
+simulator compilation does not establish Metal canvas behavior.
+
 - `editorTestApplication()` gives each journey's application a new
   `CAPY_STORAGE_DIR` name, kept across its relaunches, so journeys never touch
   the installation's data. Do not create an `XCUIApplication` for the editor
@@ -323,6 +339,11 @@ python3 apps/layer-apple/scripts/test-property-audit.py "$TMPDIR/capy-inventory.
 ```
 
 Passing the audit establishes catalog coverage, not working native workflows.
+The inventory restores editing memory before each tool path and compares all
+authored filter values, including values hidden by conditional controls. Property
+schema comparisons exclude curve and gradient interaction epochs while retaining
+their action targets. Run its regression checks with
+`cargo test --locked -p layer-host --example inventory`.
 
 ## Debugging and evidence
 

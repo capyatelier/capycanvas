@@ -1,6 +1,102 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor func checkAlphaConversionFilters(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,0.4]},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"},{"type":"invoke","command":"deselect"},{"type":"customize","action":{"type":"set_panel_visible","panel":"properties","visible":true}}]"#
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        func ready() {
+            XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+            expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+            waitForExpectations(timeout: 30)
+            editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+            let tab = app.buttons["panel-tab-properties"]
+            XCTAssertTrue(tab.waitForExistence(timeout: 10))
+            if !tab.isSelected { workspaceActivate(tab) }
+        }
+        func expectValue(_ element: XCUIElement, _ value: String) {
+            expectation(for: NSPredicate(format: "value == %@", value), evaluatedWith: element)
+            waitForExpectations(timeout: 10)
+        }
+        func reveal(_ element: XCUIElement) {
+            revealEditorControl(element, in: app.scrollViews.containing(.any, identifier: "layer-properties").firstMatch)
+        }
+        func add(_ name: String, category: String) {
+            let button = app.buttons["properties-add-filter"]
+            reveal(button); workspaceActivate(button)
+            let menu = app.descendants(matching: .any)["properties-filter-menu"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 10))
+            workspaceActivate(menu.buttons["menu-action-" + category])
+            let filter = menu.buttons["menu-action-" + name]
+            revealEditorControl(filter, in: menu); workspaceActivate(filter)
+            XCTAssertTrue(menu.waitForNonExistence(timeout: 10))
+            let title = app.staticTexts["properties-layer-name"]
+            expectation(for: NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", name, name), evaluatedWith: title)
+            waitForExpectations(timeout: 10)
+            XCTAssertTrue(app.staticTexts["properties-layer-type"].exists)
+        }
+        func choose(_ key: String, _ index: Int, _ label: String) {
+            let button = app.buttons["property-" + key]
+            reveal(button); workspaceActivate(button)
+            workspaceActivate(app.buttons["property-\(key)-option-\(index)"])
+            expectValue(button, label)
+        }
+        func edit(_ key: String, _ value: String) {
+            let readout = app.buttons["number-value-property-" + key]
+            reveal(readout); workspaceActivate(readout)
+            let field = app.textFields["number-entry-property-" + key]
+            XCTAssertTrue(field.waitForExistence(timeout: 5)); field.typeText(value + "\n")
+            XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        }
+        func pixels(_ description: String, _ accepts: @escaping (Int, Int, Int) -> Bool) -> Data {
+            let match = NSPredicate { _, _ in
+                let data = self.editorPixels(in: app)
+                return stride(from: 0, to: data.count, by: 4).allSatisfy { accepts(Int(data[$0]), Int(data[$0 + 1]), Int(data[$0 + 2])) }
+            }
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: match, object: app)], timeout: 15), .completed, description)
+            return editorPixels(in: app)
+        }
+        app.launch(); ready()
+        let blue = pixels("Translucent blue artwork") { r, _, b in b > r + 20 }
+        add("Threshold", category: "Tone")
+        let alpha = app.buttons["number-value-property-alpha_threshold"]
+        XCTAssertFalse(alpha.exists)
+        let gray = pixels("Threshold preserves source coverage") { r, g, b in abs(r - g) <= 2 && abs(g - b) <= 2 && r > 20 && r < 235 }
+        choose("transparency", 1, "Threshold")
+        _ = pixels("The default alpha threshold removes faint ink") { r, g, b in min(r, g, b) >= 253 }
+        edit("alpha_threshold", "37")
+        let black = pixels("A lower alpha threshold makes the ink opaque") { r, g, b in max(r, g, b) <= 2 }
+        choose("colors", 2, "White")
+        _ = pixels("White output removes the dark pixels") { r, g, b in min(r, g, b) >= 253 }
+        editorHistory("Undo", in: app); expectPixels(black, in: app)
+        choose("colors", 1, "Black"); expectPixels(black, in: app)
+        choose("transparency", 0, "Keep"); expectPixels(gray, in: app)
+        XCTAssertTrue(alpha.waitForNonExistence(timeout: 10))
+        editorHistory("Undo", in: app); expectPixels(black, in: app)
+        expectValue(alpha, "37.0 %")
+        edit("threshold", "0.1")
+        _ = pixels("Black output removes the bright pixels") { r, g, b in min(r, g, b) >= 253 }
+        editorHistory("Undo", in: app); expectPixels(black, in: app)
+        attachEditor(in: app, name: "threshold-alpha-\(theme)")
+        let recovery = app.staticTexts["recovery-status"]
+        expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: recovery)
+        waitForExpectations(timeout: 30)
+        app.terminate(); app.launchEnvironment.removeValue(forKey: "CAPY_INITIAL_ACTIONS")
+        app.launch(); ready(); expectPixels(black, in: app)
+        expectValue(app.buttons["property-colors"], "Black")
+        expectValue(app.buttons["property-transparency"], "Threshold")
+        expectValue(alpha, "37.0 %")
+        workspaceActivate(app.buttons["layer-Delete selected layers"]); expectPixels(blue, in: app)
+        add("Brightness to Opacity", category: "Artistic")
+        XCTAssertFalse(app.buttons["property-colors"].exists)
+        XCTAssertFalse(app.buttons["number-value-property-threshold"].exists)
+        let converted = pixels("Brightness becomes black ink with partial coverage") { r, g, b in abs(r - g) <= 2 && abs(g - b) <= 2 && r > 20 && r < 235 }
+        editorHistory("Undo", in: app); expectPixels(blue, in: app)
+        editorHistory("Redo", in: app); expectPixels(converted, in: app)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "brightness-to-opacity-\(theme)")
+    }
+
     @MainActor func checkFilterArtworkAndHistory(in app: XCUIApplication) {
         // Only the starting color/theme are seeded. Create artwork and effects
         // through native controls, then sample the actual displayed canvas.

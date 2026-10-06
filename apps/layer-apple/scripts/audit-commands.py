@@ -24,7 +24,9 @@ def signature(action):
 
 def comparable(control):
     curve = control.get("curve")
-    return {**control, "curve": curve and {**curve, "epoch": None}}
+    gradient = control.get("gradient")
+    return {**control, "curve": curve and {**curve, "epoch": None},
+            "gradient": gradient and {**gradient, "destination": {**gradient["destination"], "epoch": None}}}
 
 
 def settled(control, edits):

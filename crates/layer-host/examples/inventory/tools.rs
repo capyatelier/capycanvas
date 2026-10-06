@@ -39,6 +39,7 @@ pub(super) fn inventory(platform: Platform) -> Vec<Value> {
         Vec::new()
     };
     let baseline = host.session.capture_workspace().unwrap();
+    let editing = host.session.editing_state();
     while let Some(path) = queue.pop_front() {
         let action = path.last().unwrap();
         if !visited.insert(serde_json::to_string(action).unwrap()) {
@@ -55,6 +56,7 @@ pub(super) fn inventory(platform: Platform) -> Vec<Value> {
         host.session
             .adopt_workspace(PreparedWorkspace::new(baseline.clone()).unwrap())
             .unwrap();
+        host.session.restore_editing(editing.clone()).unwrap();
         let error = path
             .iter()
             .find_map(|step| host.dispatch(step.clone()).err());
@@ -73,4 +75,14 @@ pub(super) fn inventory(platform: Platform) -> Vec<Value> {
         assert!(result.len() < 1024, "Tool choice graph did not converge");
     }
     result
+}
+
+#[test]
+fn tool_paths_restore_remembered_brush_families() {
+    for platform in [Platform::Mac, Platform::Ios] {
+        let choices = inventory(platform);
+        let groups: Vec<_> = choices.iter().filter(|choice| choice["select"]["type"] == "select_tool_group").collect();
+        assert!(!groups.is_empty());
+        for group in groups { assert!(group["error"].is_null(), "{group}"); }
+    }
 }

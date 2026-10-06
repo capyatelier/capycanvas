@@ -69,6 +69,8 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testToolbarComponents() { checkToolbarComponents(in: editorCaptureApplication()) }
     @MainActor func testColorPicker() { checkColorPicker(in: editorCaptureApplication()) }
+    @MainActor func testLiveColorTab() { checkLiveColorTab(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testLiveColorTabDark() { checkLiveColorTab(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testTonalSelection() { checkTonalSelection(in: editorCaptureApplication()) }
     @MainActor func testPalettes() { checkPalettes(in: editorCaptureApplication()) }
     @MainActor func testStrokeRecording() { checkStrokeRecording(in: editorCaptureApplication()) }
@@ -122,6 +124,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testEncloseFillTool() { checkEncloseFillTool(in: editorCaptureApplication()) }
     @MainActor func testLayerColorModes() { checkLayerColorModesAndFilters(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testLayerColorModesDark() { checkLayerColorModesAndFilters(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testAlphaConversionFilters() { checkAlphaConversionFilters(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testAlphaConversionFiltersDark() { checkAlphaConversionFilters(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testEditColor() { checkEditColor(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testEditColorDark() { checkEditColor(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testFillThumbnailColor() { checkFillThumbnailColor(in: editorCaptureApplication(), theme: "light") }

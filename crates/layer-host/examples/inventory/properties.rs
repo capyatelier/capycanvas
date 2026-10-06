@@ -9,6 +9,11 @@ fn dispatch(host: &mut NativeHost, action: Value) -> Result<(), String> {
 }
 
 fn values(host: &NativeHost) -> Value {
+    let document = host.session.engine().document();
+    if let Some(effect) = document.working.occurrence.and_then(|handle| document.scene().effect(handle)) {
+        return json!(effect.program.parameters.iter().zip(effect.values).map(|(parameter, value)|
+            (&parameter.key, value)).collect::<std::collections::BTreeMap<_, _>>());
+    }
     json!(
         host.session
             .state()
@@ -179,4 +184,18 @@ pub(super) fn inventory(platform: Platform) -> Vec<Value> {
         ));
     }
     result
+}
+
+#[test]
+fn conditional_controls_keep_hidden_values_through_history_and_reset() {
+    for platform in [Platform::Mac, Platform::Ios] {
+        let scenario = capture(apple_host(platform), "filter:threshold",
+            vec![json!({"type":"effect","action":{"op":"insert","effect":"threshold"}})]);
+        assert!(scenario["error"].is_null());
+        for edit in scenario["edits"].as_array().unwrap() {
+            assert!(edit["error"].is_null(), "{edit}");
+        }
+        assert_eq!(scenario["properties"]["controls"], scenario["locked_properties"]["controls"]);
+        assert_eq!(scenario["locked_edit"]["values_unchanged"], true);
+    }
 }

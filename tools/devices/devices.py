@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reserve the shared Android test tablets and run commands on them one at a time.
+"""Reserve shared test tablets and run commands on them one at a time.
 
 See docs/development/devices.md.
 """
@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zlib
 
@@ -30,10 +31,11 @@ TIERS = ("low", "mid", "top")
 
 
 class Device:
-    def __init__(self, serial, model):
+    def __init__(self, serial, model, platform="android"):
         self.serial = serial
         self.model = model
-        self.name, self.tier = TABLETS.get(model, (model.lower() or serial, None))
+        self.platform = platform
+        self.name, self.tier = ("ipad", None) if platform == "apple" else TABLETS.get(model, (model.lower() or serial, None))
 
     @property
     def lock_path(self):
@@ -63,7 +65,24 @@ def adb():
     sys.exit("adb not found; set ADB or ANDROID_HOME (see docs/development/android.md).")
 
 
-def attached():
+def attached(platform="android"):
+    if platform == "apple":
+        with tempfile.TemporaryDirectory(prefix="capy-apple-devices-") as directory:
+            output = Path(directory) / "devices.json"
+            subprocess.run(["xcrun", "devicectl", "list", "devices", "--json-output", str(output)],
+                           check=True, capture_output=True, text=True)
+            listing = json.loads(output.read_text())
+        devices = []
+        for record in listing["result"]["devices"]:
+            hardware = record.get("hardwareProperties", {})
+            connection = record.get("connectionProperties", {})
+            if (hardware.get("deviceType") != "iPad" or hardware.get("reality") != "physical"
+                    or connection.get("pairingState") != "paired"):
+                continue
+            serial = hardware.get("udid")
+            if serial:
+                devices.append(Device(serial, hardware.get("productType", "iPad"), platform))
+        return devices
     listing = subprocess.run([adb(), "devices", "-l"], check=True, capture_output=True, text=True).stdout
     devices = []
     for line in listing.splitlines()[1:]:
@@ -96,6 +115,8 @@ def find(devices, name):
     if not matches:
         known = ", ".join(device.name for device in devices) or "none"
         sys.exit(f"No attached tablet named {name}; attached: {known}.")
+    if len(matches) > 1:
+        sys.exit(f"More than one tablet matches {name}; use its serial.")
     return matches[0]
 
 
@@ -117,7 +138,7 @@ def describe(record):
 
 
 def list_devices(args):
-    devices = attached()
+    devices = attached(args.platform)
     if not devices:
         print("No tablets attached.")
     for device in devices:
@@ -136,7 +157,7 @@ def claimable(device, owner):
 
 
 def reserve(args):
-    devices = attached()
+    devices = attached(args.platform)
     if args.device:
         device = find(devices, args.device)
         record = device.reservation()
@@ -153,7 +174,7 @@ def reserve(args):
 
 
 def release(args):
-    for device in attached():
+    for device in attached(args.platform):
         if args.device and args.device not in (device.name, device.serial, device.model):
             continue
         record = device.reservation()
@@ -170,14 +191,19 @@ def run(args):
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         sys.exit("Give a command after --.")
-    device = find(attached(), args.device)
+    device = find(attached(args.platform), args.device)
     record = device.reservation()
     if record and record["owner"] != args.owner:
         sys.exit(f"{device.name} is {describe(record)}.")
+    if record is None:
+        sys.exit(f"Reserve {device.name} before running device commands.")
     web_port, cdp_port = ports(args.owner)
-    environment = dict(os.environ, ANDROID_SERIAL=device.serial, CAPY_ANDROID_SERIAL=device.serial,
-                       CAPY_APPLICATION_ID=application_id(args.owner),
+    environment = dict(os.environ, CAPY_APPLICATION_ID=application_id(args.owner),
                        CAPY_WEB_PORT=str(web_port), CAPY_CDP_PORT=str(cdp_port))
+    if device.platform == "apple":
+        environment.update(CAPY_APPLE_DEVICE_ID=device.serial, CAPY_APPLE_BUNDLE_ID=application_id(args.owner))
+    else:
+        environment.update(ANDROID_SERIAL=device.serial, CAPY_ANDROID_SERIAL=device.serial)
     with open(device.lock_path, "a+") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -200,6 +226,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--owner", default=default_owner(),
                         help="reservation owner (default: $CAPY_DEVICE_OWNER or the worktree directory name)")
+    parser.add_argument("--platform", choices=("android", "apple"), default="android",
+                        help="device discovery service (default: android)")
     commands = parser.add_subparsers(required=True, metavar="command")
 
     def command(name, handler, summary):

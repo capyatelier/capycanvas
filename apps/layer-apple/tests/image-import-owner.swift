@@ -65,11 +65,19 @@ import UniformTypeIdentifiers
                 PhotoItem { loaded in clipboardLoads += 1; loaded(.success(.image(bytes))) }
             })) }))
             let files = store.projectFiles
-            func layerState(ignoringSelection: Bool = false) -> String {
+            func layerState(ignoringSelection: Bool = false, relativeHandles: Bool = false) -> String {
                 // Renderer cache generations change after placement/history;
                 // they are not document pixels or persistent layer properties.
-                JSON(store.state["layers"].array.map {
-                    let layer = $0.replacing("paint_revision", with: JSON(0)).replacing("mask_revision", with: JSON(0))
+                let layers = store.state["layers"].array
+                let handles = Dictionary(uniqueKeysWithValues: layers.enumerated().map { ($0.element["id"].uint, $0.offset) })
+                return JSON(layers.map {
+                    var layer = $0.replacing("paint_revision", with: JSON(0)).replacing("mask_revision", with: JSON(0))
+                    if relativeHandles {
+                        layer = layer.replacing("id", with: JSON(handles[$0["id"].uint]!))
+                        if !layer["right_swipe"].isNull {
+                            layer = layer.replacing("right_swipe", with: layer["right_swipe"].replacing("id", with: JSON(handles[layer["right_swipe"]["id"].uint]!)))
+                        }
+                    }
                     // History restores the active layer, not the provisional
                     // placement's multi-row selection. Cancel still checks it.
                     return ignoringSelection ? layer.replacing("selected", with: JSON(false))
@@ -249,13 +257,13 @@ import UniformTypeIdentifiers
             try await replace { files.openURL(url) }
             try require(store.state["colors"]["rgb_space"].string == "DisplayP3", "Photo Open must adopt its P3 working space")
             try require(store.state["document_file"]["location"].isNull, "Opening a photo must not give Save its source destination")
-            let opened = layerState()
+            let opened = layerState(relativeHandles: true)
             try await invoke("save_document"); try await settled("Save photo as project")
             try require(files.error == nil && savePanels == 1 && FileManager.default.fileExists(atPath: saved.path), files.error ?? "Save must choose a native project")
             try require(try Data(contentsOf: url) == sourceBytes, "Open/Place/Paste/Save must leave original photo bytes unchanged")
             try await replace { try await invoke("new_document") }
             try await replace { files.openURL(saved) }
-            try require(layerState() == opened && store.state["colors"]["rgb_space"].string == "DisplayP3", "Native project must reopen retained P3 photo layers")
+            try require(layerState(relativeHandles: true) == opened && store.state["colors"]["rgb_space"].string == "DisplayP3", "Native project must reopen retained P3 photo layers")
             // Untagged 2×1 RGBA PNG: prompt cancellation, invalid profile retry,
             // and an explicit assumption through the real Swift coordinator.
             let untagged = root.appendingPathComponent("Untagged.png")

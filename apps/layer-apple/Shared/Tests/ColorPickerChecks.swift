@@ -1,6 +1,55 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor func checkLiveColorTab(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        app.launch()
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        let tab = app.buttons["panel-tab-color"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 10))
+        if !tab.isSelected { workspaceActivate(tab) }
+        func expectIcon(_ expected: [Int]) {
+            expectation(for: NSPredicate { _, _ in
+                #if os(macOS)
+                let reference = app.windows.firstMatch.frame
+                #else
+                let reference = canvas.frame
+                #endif
+                let frame = tab.frame
+                let iconLeft = frame.width <= 36.5 ? frame.midX - 8 : frame.minX + 8
+                let point = CGPoint(x: (iconLeft + 10 - reference.minX) / reference.width,
+                    y: (frame.midY + 2 - reference.minY) / reference.height)
+                let pixel = self.editorPixels(in: app, at: point, size: 1)
+                return (0..<3).allSatisfy { abs(Int(pixel[$0]) - expected[$0]) <= 3 }
+            }, evaluatedWith: tab)
+            waitForExpectations(timeout: 10)
+        }
+        let green = [81, 128, 58]
+        expectIcon(green)
+        XCTAssertFalse(app.buttons["color-quick-black"].exists)
+        XCTAssertFalse(app.buttons["color-quick-white"].exists)
+        let transparent = app.buttons["color-transparent"], background = app.buttons["color-background"]
+        XCTAssertTrue(transparent.exists)
+        XCTAssertEqual(transparent.frame.width, background.frame.width, accuracy: 1)
+        XCTAssertEqual(transparent.frame.height, background.frame.height, accuracy: 1)
+        workspaceActivate(background); expectIcon([255, 255, 255])
+        workspaceActivate(transparent); expectIcon([255, 255, 255])
+        workspaceActivate(app.buttons["color-foreground"]); expectIcon(green)
+        workspaceActivate(app.buttons["paint-edit-color"].firstMatch)
+        XCTAssertTrue(app.buttons["color-use"].waitForExistence(timeout: 10))
+        editColorValue("hex", "#D93322", in: app)
+        workspaceActivate(app.buttons["color-use"])
+        XCTAssertTrue(app.buttons["color-use"].waitForNonExistence(timeout: 10))
+        expectIcon([217, 51, 34])
+        workspaceActivate(app.buttons["color-swap"]); expectIcon([255, 255, 255])
+        workspaceActivate(app.buttons["color-swap"]); expectIcon([217, 51, 34])
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "live-color-tab-\(theme)")
+    }
+
     @MainActor func checkColorPicker(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launchEnvironment["CAPY_COLOR_PROBE"] = "1"

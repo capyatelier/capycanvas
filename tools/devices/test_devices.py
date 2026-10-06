@@ -78,7 +78,17 @@ class DevicesTest(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn("reserved by alpha", refused.stderr)
 
+    def test_run_requires_a_current_reservation(self):
+        refused = self.devices("alpha", "run", "tcl", "--", "true")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("Reserve tcl", refused.stderr)
+        self.devices("alpha", "reserve", "tcl", "--hours", "-1")
+        refused = self.devices("alpha", "run", "tcl", "--", "true")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("Reserve tcl", refused.stderr)
+
     def test_run_holds_the_lock_and_exports_the_device(self):
+        self.devices("capycanvas-2", "reserve", "movinkpad11")
         probe = (
             "import fcntl, os, sys\n"
             "lock = open(sys.argv[1], 'a+')\n"
@@ -99,6 +109,7 @@ class DevicesTest(unittest.TestCase):
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_run_returns_the_command_status(self):
+        self.devices("alpha", "reserve", "tcl")
         self.assertEqual(self.devices("alpha", "run", "tcl", "--", "false").returncode, 1)
 
     def test_appid_prints_the_owner_application_id(self):
@@ -114,6 +125,48 @@ class DevicesTest(unittest.TestCase):
         devices = load_module()
         self.assertEqual(devices.ports("capycanvas1"), devices.ports("capycanvas1"))
         self.assertNotEqual(devices.ports("capycanvas1"), devices.ports("capycanvas2"))
+
+    def test_apple_reservation_and_device_environment(self):
+        listing = {"result": {"devices": [
+            {"hardwareProperties": {"deviceType": "iPad", "reality": "physical", "productType": "iPad16,6", "udid": "IPAD0001"},
+             "connectionProperties": {"pairingState": "paired"}},
+            {"hardwareProperties": {"deviceType": "iPhone", "reality": "physical", "udid": "PHONE0001"},
+             "connectionProperties": {"pairingState": "paired"}},
+            {"hardwareProperties": {"deviceType": "iPad", "reality": "physical", "udid": "UNPAIRED0001"},
+             "connectionProperties": {"pairingState": "unpaired"}},
+            {"hardwareProperties": {"deviceType": "iPad", "reality": "simulated", "udid": "SIM0001"},
+             "connectionProperties": {"pairingState": "paired"}},
+        ]}}
+        xcrun = self.state / "xcrun"
+        xcrun.write_text(f"#!{sys.executable}\nimport pathlib, sys\npathlib.Path(sys.argv[-1]).write_text({json.dumps(listing)!r})\n")
+        xcrun.chmod(0o755)
+        self.environment["PATH"] = str(self.state) + os.pathsep + os.environ["PATH"]
+        output = self.devices("alpha", "--platform", "apple", "list").stdout
+        self.assertRegex(output, r"ipad\s+iPad16,6\s+no tier\s+IPAD0001\s+free")
+        self.assertNotIn("PHONE0001", output)
+        self.assertNotIn("UNPAIRED0001", output)
+        self.assertNotIn("SIM0001", output)
+        refused = self.devices("alpha", "--platform", "apple", "run", "ipad", "--", "true")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("Reserve ipad", refused.stderr)
+        reserved = self.devices("alpha", "--platform", "apple", "reserve", "ipad")
+        self.assertEqual(reserved.returncode, 0, reserved.stderr)
+        refused = self.devices("beta", "--platform", "apple", "run", "IPAD0001", "--", "true")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("reserved by alpha", refused.stderr)
+        probe = "import os; print(os.environ['CAPY_APPLE_DEVICE_ID'], os.environ['CAPY_APPLE_BUNDLE_ID'])"
+        result = self.devices("alpha", "--platform", "apple", "run", "ipad", "--", sys.executable, "-c", probe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "IPAD0001 art.capycanvas.alpha")
+        self.devices("alpha", "--platform", "apple", "release", "ipad")
+        self.assertIn("free", self.devices("beta", "--platform", "apple", "list").stdout)
+
+    def test_ambiguous_device_names_require_a_serial(self):
+        devices = load_module()
+        tablets = [devices.Device(serial, "iPad16,6", "apple") for serial in ["IPAD0001", "IPAD0002"]]
+        with self.assertRaisesRegex(SystemExit, "use its serial"):
+            devices.find(tablets, "ipad")
+        self.assertEqual(devices.find(tablets, "IPAD0002").serial, "IPAD0002")
 
 
 if __name__ == "__main__":

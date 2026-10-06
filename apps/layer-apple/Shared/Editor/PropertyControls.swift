@@ -25,7 +25,8 @@ struct LayerPropertiesPanel: View {
                                 Text(view["add_filter"]["title"].string)
                                 SharedIcon(name: "chevron-down").frame(width: 12, height: 12)
                             }.padding(.horizontal, 6).frame(height: 24)
-                        }.buttonStyle(EditorControlButtonStyle()).accessibilityIdentifier("properties-add-filter")
+                        }.fixedSize(horizontal: true, vertical: false)
+                            .buttonStyle(EditorControlButtonStyle()).accessibilityIdentifier("properties-add-filter")
                     }
                 }
             }
