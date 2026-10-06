@@ -151,8 +151,8 @@ impl Header {
                 allocate_at(
                     item.root.upcast_ref(),
                     Bounds {
-                        x: 6.,
-                        y: 6.,
+                        x: model.size.item_gap(),
+                        y: model.size.item_gap(),
                         width,
                         height: model.size.tile(),
                     },
@@ -183,8 +183,8 @@ impl Header {
                 allocate_at(
                     button.upcast_ref(),
                     Bounds {
-                        x: 6.,
-                        y: 6.,
+                        x: model.size.item_gap(),
+                        y: model.size.item_gap(),
                         width: model.size.tile(),
                         height: model.size.tile(),
                     },

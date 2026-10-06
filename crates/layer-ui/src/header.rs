@@ -38,17 +38,20 @@ impl HeaderSize {
         }
     }
     pub fn height(self) -> f32 {
-        self.tile() + 12.
+        self.tile() + 2. * self.item_gap()
+    }
+    pub fn item_gap(self) -> f32 {
+        self.tile() / 6.
     }
     pub fn native_geometry(self, width: f32, control_widths: [f32; 2], recovery: bool) -> HeaderNativeGeometry {
         let controls = std::array::from_fn(|side| Bounds {
-            x: if side == 0 { 6. } else { width - control_widths[side] - 6. },
-            y: 6., width: control_widths[side], height: self.tile(),
+            x: if side == 0 { self.item_gap() } else { width - control_widths[side] - self.item_gap() },
+            y: self.item_gap(), width: control_widths[side], height: self.tile(),
         });
-        let mut insets = control_widths.map(|w| if w > 0. { w + 6. } else { 0. });
+        let mut insets = control_widths.map(|w| if w > 0. { w + self.item_gap() } else { 0. });
         let recovery = recovery.then(|| {
-            insets[1] += self.tile() + 6.;
-            Bounds { x: width - insets[1], y: 6., width: self.tile(), height: self.tile() }
+            insets[1] += self.tile() + self.item_gap();
+            Bounds { x: width - insets[1], y: self.item_gap(), width: self.tile(), height: self.tile() }
         });
         HeaderNativeGeometry { controls, insets, recovery }
     }
@@ -529,7 +532,7 @@ impl HeaderGeometry {
     /// Pack neighboring items toward the edges and give the document the space
     /// between them, including in custom side zones. Controls and drag gutters
     /// stay outside this allocation; customization uses the original geometry.
-    pub fn expand_document(&mut self, id: u32, width: f32, insets: [f32; 2], bar_gap: f32) {
+    pub fn expand_document(&mut self, id: u32, width: f32, insets: [f32; 2], size: HeaderSize) {
         let mut slots: Vec<_> = self.items.iter().map(|i| (Some(i.id), None, i.bounds))
             .chain(self.overflow.iter().enumerate().filter_map(|(i, b)| b.map(|b| (None, Some(i), b))))
             .collect();
@@ -539,10 +542,10 @@ impl HeaderGeometry {
             slot.0.is_some_and(|id| b.items.contains(&id)) || slot.1.is_some() && b.overflow == slot.1
         });
         let gaps: Vec<_> = slots.windows(2)
-            .map(|p| if bar(&p[0]).is_some() && bar(&p[0]) == bar(&p[1]) { bar_gap } else { 6. })
+            .map(|p| if bar(&p[0]).is_some() && bar(&p[0]) == bar(&p[1]) { size.gap() } else { size.item_gap() })
             .collect();
-        let mut left = insets[0] + 6.;
-        let mut right = width - insets[1] - 6.;
+        let mut left = insets[0] + size.item_gap();
+        let mut right = width - insets[1] - size.item_gap();
         for (i, slot) in slots[..index].iter_mut().enumerate() {
             slot.2.x = left;
             left += slot.2.width + gaps[i];
@@ -552,8 +555,8 @@ impl HeaderGeometry {
             slot.2.x = right;
             right -= gaps[i - 1];
         }
-        let left = left + if index == 0 { 12. } else { 6. };
-        let right = right - if index + 1 == slots.len() { 12. } else { 6. };
+        let left = left + size.item_gap() * if index == 0 { 2. } else { 1. };
+        let right = right - size.item_gap() * if index + 1 == slots.len() { 2. } else { 1. };
         if right <= left { return; }
         slots[index].2.x = left;
         slots[index].2.width = right - left;
@@ -621,6 +624,7 @@ pub struct HeaderSizeView {
     pub icon: i32,
     pub height: f32,
     pub gap: f32,
+    pub item_gap: f32,
 }
 #[derive(Serialize)]
 pub struct HeaderComponentView {
@@ -684,6 +688,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                     icon: id.icon(),
                     height: id.height(),
                     gap: id.gap(),
+                    item_gap: id.item_gap(),
                 })
                 .collect(),
             components: HeaderItem::COMPONENTS
@@ -714,7 +719,7 @@ impl HeaderLayout {
         if !editing && documents > 1
             && let Some(entry) = self.entries().find(|e| e.item == HeaderItem::DocumentTitle)
         {
-            geometry.expand_document(entry.id, width, insets, self.size.gap());
+            geometry.expand_document(entry.id, width, insets, self.size);
         }
         geometry
     }
@@ -733,11 +738,11 @@ impl HeaderLayout {
             return result;
         }
         let tile = self.size.tile();
-        let left = (insets[0].max(0.) + 6.).min(width);
-        let right = (width - insets[1].max(0.) - 6.).max(left);
+        let item_gap = self.size.item_gap();
+        let left = (insets[0].max(0.) + item_gap).min(width);
+        let right = (width - insets[1].max(0.) - item_gap).max(left);
         let mid = (width / 2.).floor();
-        let gap = 12.; // At least 24 logical px of window-drag space around center.
-        let item_gap = 6.;
+        let gap = 2. * item_gap;
         let bar_gap = self.size.gap();
         let joins = |e: &HeaderEntry| !editing && e.item.joins_bar();
         let barred = |e: &HeaderEntry| !editing && e.item.has_bar();
@@ -770,7 +775,7 @@ impl HeaderLayout {
             .max(span(1, true).min(center_limit));
         let center_left = (mid - center_width / 2.).floor().max(left);
         let center_right = (center_left + center_width).min(right);
-        let y = 6.;
+        let y = item_gap;
         result.zones = [
             Bounds {
                 x: left,
@@ -1048,7 +1053,9 @@ mod tests {
     use super::*;
     #[test]
     fn native_controls_keep_one_gap_at_each_header_boundary() {
-        for size in HeaderSize::ALL {
+        for (size, gap, height) in [(HeaderSize::Small, 6., 48.), (HeaderSize::Medium, 8., 64.), (HeaderSize::Large, 10., 80.)] {
+            assert_eq!(size.item_gap(), gap);
+            assert_eq!(size.height(), height);
             let mut layout = HeaderLayout::for_platform(Platform::Gtk);
             layout.size = size;
             for control_widths in [[0.; 2], [0., size.tile()], [size.tile(), 0.], [2. * size.tile() + 3., 3. * size.tile() + 6.]] {
@@ -1058,19 +1065,19 @@ mod tests {
                     let left = geometry.items.iter().map(|i| i.bounds.x).fold(f32::INFINITY, f32::min);
                     let right = geometry.items.iter().map(|i| i.bounds.x + i.bounds.width).fold(0., f32::max);
                     assert_eq!(left, if control_widths[0] > 0. {
-                        native.controls[0].x + native.controls[0].width + 6.
-                    } else { 6. });
+                        native.controls[0].x + native.controls[0].width + gap
+                    } else { gap });
                     let edge = if let Some(menu) = native.recovery {
-                        assert_eq!(menu.x + menu.width + 6., if control_widths[1] > 0. {
+                        assert_eq!(menu.x + menu.width + gap, if control_widths[1] > 0. {
                             native.controls[1].x
                         } else { 1600. });
                         menu.x
                     } else if control_widths[1] > 0. { native.controls[1].x } else { 1600. };
-                    assert_eq!(right + 6., edge);
-                    assert_eq!(native.controls[0].x, 6.);
-                    assert_eq!(native.controls[1].x + native.controls[1].width, 1594.);
+                    assert_eq!(right + gap, edge);
+                    assert_eq!(native.controls[0].x, gap);
+                    assert_eq!(native.controls[1].x + native.controls[1].width, 1600. - gap);
                     for controls in native.controls {
-                        assert_eq!(controls.y, 6.);
+                        assert_eq!(controls.y, gap);
                         assert_eq!(controls.height, size.tile());
                     }
                 }
@@ -1449,9 +1456,9 @@ mod tests {
                     let b = g.zones[1];
                     assert!((b.x + b.width / 2. - width / 2.).abs() <= 0.5);
                     assert_eq!(b.x.fract(), 0.);
-                    let usable = width - insets[0] - insets[1] - 12.;
+                    let usable = width - insets[0] - insets[1] - 2. * size.item_gap();
                     let centered =
-                        2. * (width / 2. - insets[0] - 6.).min(width / 2. - insets[1] - 6.);
+                        2. * (width / 2. - insets[0] - size.item_gap()).min(width / 2. - insets[1] - size.item_gap());
                     let expected = (usable / 3.).min(centered).min(320.);
                     assert!(b.width <= expected && b.width > expected - 2., "{b:?}");
                     for x in [b.x + 1., b.x + b.width / 2., b.x + b.width - 1.] {
@@ -1473,7 +1480,7 @@ mod tests {
                     }
                     let normal = h.resolve(width, insets, &[], false);
                     assert_eq!(
-                        normal.zones[1].width, 24.,
+                        normal.zones[1].width, 4. * size.item_gap(),
                         "extra space is only reserved while editing"
                     );
                 }

@@ -33,7 +33,7 @@ export async function checkTitleBarOverflow({call,evaluate,settle}) {
     await edit({type:'add',zone:'right',before:null,item:{kind:'settings'}});
     const menu=(await model()).zones[0][1].id,neighbor=(await model()).zones[0][2].id;
     for(const size of ['small','medium','large'])for(device of ['mouse','touch','pen']) {
-      const narrow={small:360,medium:432,large:504}[size];
+      const narrow={small:360,medium:456,large:552}[size];
       await edit({type:'set_size',size});const baseline=await model();
       await edit({type:'edit',editing:true});await resize(1800);
       const body=`[data-header-item="${menu}"]`;
@@ -74,11 +74,13 @@ export async function checkTitleBarOverflow({call,evaluate,settle}) {
       // Neighbor rows stay draggable too, and dropping onto collapsed menus
       // inserts before the hidden items using the frozen shared geometry.
       await edit({type:'edit',editing:true});await click('#header-overflow-0 > summary');
+      const leading=await rect(`[data-header-item="${baseline.zones[0][0].id}"]`);
       await pointer('down',center(await rect(`[data-header-overflow-item="${neighbor}"]`)));
-      await pointer('move',{x:8,y:24});await pointer('up');
+      await pointer('move',{x:leading.x+2,y:leading.y+leading.height/2});await pointer('up');
       assert.equal((await model()).zones[0][0].id,neighbor);
       await click('#header-edit-cancel');await edit({type:'edit',editing:true});
       const overflow=await rect('#header-overflow-0');
+      assert.equal(await evaluate(`document.querySelector('[data-header-item="${baseline.zones[0][0].id}"]').hidden`),false,'Collapsed tail follows one visible Capy tile');
       await pointer('down',center(await rect('#header-component-clock')));
       await pointer('move',{x:overflow.x+2,y:overflow.y+overflow.height/2});await pointer('up');
       assert.deepEqual((await model()).zones[0].map(e=>e.item.kind),['capy','clock','menu_labels','space']);

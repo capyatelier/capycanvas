@@ -65,16 +65,16 @@ export async function checkTitleBarState({call,evaluate,settle,reload,windowId})
   results.push('Project Save via browser download, committed captures, Cancel, Done, one-step workspace Undo/Redo, autosave/reload and manager switching during customization');
   console.log('PASS: title bar Done/Cancel/save/switch/reload');
 
-  // Both themes, all native item sizes and real backing-store scale two.
   await send({type:'restore_workspace',workspace:{...await evaluate('layerApp.state().workspace'),layout:{...await evaluate('layerApp.state().workspace.layout'),header:original,canvas_info:originalInfo}}});
   await begin();
-  for(const theme of ['dark','light'])for(const size of ['small','medium','large'])for(const scale of [1,2]) {
-    await resize(1440,1000,scale);await send({type:'set_theme',theme});await click(`[data-header-size="${size}"]`);
+  const matrixWidth=1800;
+  for(const theme of ['dark','light'])for(const size of ['small','medium','large'])for(const scale of [1,1.5,2]) {
+    await resize(matrixWidth,1000,scale);await send({type:'set_theme',theme});await click(`[data-header-size="${size}"]`);
     const spec=await evaluate('layerApp.app.header_view().sizes.find(s=>s.id===layerApp.state().workspace.layout.header.size)');
     assert.equal(await evaluate('devicePixelRatio'),scale);
     const items=await evaluate("[...document.querySelectorAll('#header .header-item:not([hidden])')].map(n=>({r:n.getBoundingClientRect().toJSON(),grip:n.querySelector('.header-item-grip').getBoundingClientRect().toJSON()}))");
     for(const item of items) {
-      assert.equal(item.r.height,spec.tile);assert.equal(item.r.y,6);
+      assert.equal(item.r.height,spec.tile);assert.equal(item.r.y,spec.item_gap);
       assert.ok(Math.abs(item.grip.y+item.grip.height/2-item.r.y-item.r.height/2)<.1,'Grips vertically centered');
     }
     const pill=await evaluate("(()=>{const p=document.querySelector('.workspace-switcher'),r=p.getBoundingClientRect(),h=document.querySelector('#header').getBoundingClientRect();return{height:r.height,center:r.y+r.height/2,headerCenter:h.y+h.height/2,buttons:[...p.querySelectorAll('[data-workspace-id]')].map(n=>n.getBoundingClientRect().height),radius:getComputedStyle(p).borderRadius}})()");
@@ -82,7 +82,7 @@ export async function checkTitleBarState({call,evaluate,settle,reload,windowId})
     assert.ok(pill.buttons.every(h=>h===26));assert.equal(pill.radius,'999px');
     assert.ok(Math.abs(pill.center-pill.headerCenter)<.1,'Workspace pill stays vertically centered');
     const s=await shot(`${theme}-${size}-${scale}x`);
-    const width=Buffer.from(s.data,'base64').readUInt32BE(16);assert.equal(width,1440*scale,'Capture has physical scale, not a CSS transform');
+    const width=Buffer.from(s.data,'base64').readUInt32BE(16);assert.equal(width,matrixWidth*scale,'Capture has physical scale, not a CSS transform');
   }
   await resize(1440);await click('#header-edit-cancel');
   await begin();
@@ -101,7 +101,7 @@ export async function checkTitleBarState({call,evaluate,settle,reload,windowId})
     await shot(`small-${width}`);
   }
   await resize(1440);await click('#header-edit-cancel');
-  results.push('Both themes × Small/Medium/Large × physical 1×/2×; centered grips; 744/480/360px wrapping/overflow and keyboard access; generous empty-center drop');
+  results.push('Both themes × Small/Medium/Large × physical 1×/1.5×/2×; centered grips; 744/480/360px wrapping/overflow and keyboard access; generous empty-center drop');
   console.log('PASS: title bar themes/sizes/2x/overflow/empty center');
 
   // Status positions remain in the workspace while visibility follows actual

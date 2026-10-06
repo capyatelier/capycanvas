@@ -59,7 +59,7 @@ import SwiftUI
     private var specification: JSON {
         JSON(["model":model.raw, "editing":editing, "height":size["height"].number + (editing ? editorHeight : 0),
             "request":["op":"geometry", "width":store.snapshot["layout"]["viewport"][0].number,
-                "insets":[store.headerLeadingInset + (recoveryMenu ? size["tile"].number + 6 : 0), 0], "metrics":metrics]])
+                "insets":[store.headerLeadingInset + (recoveryMenu ? size["tile"].number + size["item_gap"].number : 0), 0], "metrics":metrics]])
     }
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -86,7 +86,7 @@ import SwiftUI
                     .frame(width: size["tile"].number, height: size["tile"].number) }
                     .buttonStyle(HeaderButtonStyle(radius: radius))
                     .accessibilityLabel(store.bootstrap["application_menus"].string).accessibilityIdentifier("header-recovery-menu")
-                    .offset(x: store.headerLeadingInset + 6, y: 6)
+                    .offset(x: store.headerLeadingInset + size["item_gap"].number, y: size["item_gap"].number)
             }
             ForEach(0..<3, id: \.self) { zone in
                 if !geometry["overflow"][zone].isNull {

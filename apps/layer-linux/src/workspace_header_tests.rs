@@ -936,6 +936,10 @@ fn native_header_picker_journey() {
 #[ignore = "isolated native-input.js --native-test=native_header_spacing_visual"]
 fn native_header_spacing_visual() {
     let mut d = Driver::managed("art.capycanvas.HeaderSpacing");
+    let scale = d.w.window.surface().unwrap().scale();
+    let expected = std::env::var("LAYER_MOTION_SCALE").ok().map(|s| s.parse::<f64>().unwrap()).unwrap_or(1.);
+    assert!((scale - expected).abs() < 0.01, "GTK surface scale {scale}, expected {expected}");
+    eprintln!("GTK surface scale {scale}; logical viewport {}x{}", d.w.surface.width(), d.w.surface.height());
     d.click_name("workspace-switch-painter");
     wait_workspaces(&d.w);
     pump(250);
@@ -944,6 +948,8 @@ fn native_header_spacing_visual() {
         for size in HeaderSize::ALL {
             d.w.dispatch(HeaderAction::SetSize { size }.action());
             pump(250);
+            let gap = match size { HeaderSize::Small => 6., HeaderSize::Medium => 8., HeaderSize::Large => 10. };
+            assert_eq!(d.w.header.height(), size.tile() + 2. * gap);
             assert_shared_icons(d.w.header.root.upcast_ref());
             let close = find_css(d.w.header.root.upcast_ref(), "close").unwrap();
             let b = close.compute_bounds(&d.w.surface).unwrap();
@@ -952,8 +958,8 @@ fn native_header_spacing_visual() {
                 "{size:?}: close not square: {b:?}"
             );
             assert!(
-                (b.y() - 6.).abs() < 1.
-                    && (d.w.header.height() - b.y() - b.height() - 6.).abs() < 1.,
+                (b.y() - gap).abs() < 1.
+                    && (d.w.header.height() - b.y() - b.height() - gap).abs() < 1.,
                 "close vertical padding: {b:?}"
             );
             let image = close.first_child().unwrap().compute_bounds(&close).unwrap();
@@ -962,8 +968,8 @@ fn native_header_spacing_visual() {
             let h = state(&d.w).workspace.layout.header;
             let last = h.zones[2].last().unwrap();
             let item = d.named(&format!("header-item-{}", last.id)).compute_bounds(&d.w.surface).unwrap();
-            assert_eq!(b.x() - item.x() - item.width(), 6., "last tile clears native close by one gap");
-            assert_eq!(d.w.surface.width() as f32 - b.x() - b.width(), 6., "native close outer clearance");
+            assert_eq!(b.x() - item.x() - item.width(), gap, "last tile clears native close by one gap");
+            assert_eq!(d.w.surface.width() as f32 - b.x() - b.width(), gap, "native close outer clearance");
             for entry in h.entries() {
                 let item = d.named(&format!("header-item-{}", entry.id));
                 assert!(item.is_mapped(), "header item {} must be mapped", entry.id);
@@ -995,7 +1001,7 @@ fn native_header_spacing_visual() {
                 let gap = if pair[0].item.joins_bar() && pair[1].item.joins_bar() {
                     size.gap()
                 } else {
-                    6.
+                    size.item_gap()
                 };
                 assert!(
                     (b.x() - a.x() - a.width() - gap).abs() < 1.,
@@ -1083,7 +1089,7 @@ fn native_header_spacing_visual() {
             let settings = h.entries().find(|e| e.item == HeaderItem::Settings).unwrap();
             let settings = d.named(&format!("header-item-{}", settings.id)).compute_bounds(&d.w.surface).unwrap();
             let close = find_css(d.w.header.root.upcast_ref(), "close").unwrap().compute_bounds(&d.w.surface).unwrap();
-            assert_eq!(close.x() - settings.x() - settings.width(), 6., "Settings clears native close by one gap");
+            assert_eq!(close.x() - settings.x() - settings.width(), size.item_gap(), "Settings clears native close by one gap");
             crate::capture(&d.w, d.input.dir.join(format!("settings-{theme:?}-{size:?}.png")).to_str().unwrap());
         }
     }
@@ -2059,7 +2065,7 @@ fn native_header_editor_controls_input() {
     assert!(d.named("header-recovery").is_mapped());
     let recovery = d.named("header-recovery").compute_bounds(&d.w.surface).unwrap();
     let close = find_css(d.w.header.root.upcast_ref(), "close").unwrap().compute_bounds(&d.w.surface).unwrap();
-    assert_eq!(close.x() - recovery.x() - recovery.width(), 6., "recovery menu clears native close by one gap");
+    assert_eq!(close.x() - recovery.x() - recovery.width(), state(&d.w).workspace.layout.header.size.item_gap(), "recovery menu clears native close by one gap");
     d.click_name("header-recovery");
     d.click_label("Window");
     d.click_label("Customize Title Bar…");
@@ -2667,7 +2673,7 @@ fn native_header_slide_remove_input() {
             let preview = d.w.header.drag_for_test().expect("native drag visual");
             assert!(!preview.detached);
             assert!((preview.held.x - (rect.x() + 50.)).abs() < 0.1);
-            assert_eq!(preview.held.y, 6.);
+            assert_eq!(preview.held.y, state(&d.w).workspace.layout.header.size.item_gap());
             let x =
                 |g: &HeaderGeometry| g.items.iter().find(|m| m.id == neighbor).unwrap().bounds.x;
             assert!(

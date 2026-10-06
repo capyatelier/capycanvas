@@ -329,8 +329,8 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     const width=root.clientWidth;
     if(geometry&&allocatedWidth===width&&allocatedModel===modelKey&&allocatedTheme===state().theme&&root.querySelector('details[open]'))return;
     recoveryMenu.hidden=editing||entries().some(e=>['capy','menu','menu_labels','workspaces'].includes(e.item.kind));
-    insets=[0,recoveryMenu.hidden?0:size.tile];
-    if(!recoveryMenu.hidden)place(recoveryMenu,{x:width-size.tile-6,y:6,width:size.tile,height:size.tile});
+    insets=[0,recoveryMenu.hidden?0:size.tile+size.item_gap];
+    if(!recoveryMenu.hidden)place(recoveryMenu,{x:width-size.tile-size.item_gap,y:size.item_gap,width:size.tile,height:size.tile});
     metrics=measure();geometry=app.header_geometry(width,insets,metrics);present(geometry);
     allocatedWidth=width;allocatedModel=modelKey;allocatedTheme=state().theme;
     const items=[...geometry.items];

@@ -51,8 +51,8 @@ designer or opening shortcut.
   there are no other custom editor shortcuts, arrangement buttons or Help.
   The overflow menu also lets you select a hidden item for keyboard editing.
 - **Small / Medium / Large** resizes the bar and its icons together. Items
-  have consistent 6px gaps; **Space** adds exactly one tile, never flexible
-  space. Native window controls remain toolkit-owned and fixed.
+  have 6/8/10px gaps between separate items; **Space** adds exactly one tile, never flexible
+  space. Native window controls remain toolkit-owned and outside customization.
 - **Show footer** toggles the bottom-right canvas readout (zoom and rotation),
   which opens the zoom menu and field.
   Its position is not customizable. Menu labels are added or removed as a
@@ -78,7 +78,7 @@ lets artwork show through at the [panel transparency](panel-transparency.md)
 level; at Off it is opaque. Hover and press add overlays to that surface. The
 selected workspace and tool use the header selection tint, and the selected
 drawing tab the panel color; see [theme colors](theme-colors.md). Capy, menu labels, the switcher, the document title or
-tabs, clock, battery and Space stay separate with 6px gaps, and customization
+tabs, clock, battery and Space stay separate with 6/8/10px gaps at Small/Medium/Large, and customization
 shows every item separately. Drawer origins
 fill their whole tile with square bottom corners until their drawer has closed.
 An open action drawer (for example Color or Layers) gives its tile neutral grey
@@ -90,9 +90,16 @@ a 5px inset and 26px capsule items, 2px apart. Text keeps its size, so these
 tracks and the clock stay 36px tall and centered in Medium and Large bars.
 Text items use 8px side padding, so the full menu still fits beside a centered
 title in a 1200px-wide window.
-Native window-control targets grow equally in both axes, with 6px outer clearance
-and one 6px gap to the nearest title-bar item. GTK uses shared edge geometry for
-its measured controls and recovery menu; the layout adds the inter-item gap once.
+Outer title-bar padding and the gap between separate items scale with the tile:
+6px at Small (36px tiles), 8px at Medium (48px) and 10px at Large (60px).
+The bar is 48/64/80px tall, including equal top and bottom padding. GTK's native
+window-control targets grow equally in both axes and use shared edge geometry
+for their measured bounds and recovery menu; the layout adds the inter-item gap
+once. Windows and Apple retain their system controls and measure their boundaries.
+Hosts use the published `item_gap` for native boundaries and recovery
+controls. Joined tile gaps retain their even 2/2/4px sizing; menu labels and
+workspace choices keep their own compact track spacing. The inline editor's
+form spacing and the workspace's panel gaps remain independent of title-bar size.
 
 Menu Labels compacts to an icon-sized menu inside its own item when space is
 short. At narrow widths, each region overflows whole items into a More menu. Tools

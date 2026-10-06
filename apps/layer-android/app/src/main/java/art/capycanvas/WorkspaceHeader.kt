@@ -222,7 +222,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         }
         PopupOwner(overflowMenu != null)
         overflowMenu?.let { menu ->
-            Box(Modifier.offset(6.dp, height.dp)) {
+            Box(Modifier.offset(size.number("item_gap").dp, height.dp)) {
                 if (overflowSource == "workspaces") WorkspaceMenu(host, workspaceSwitcherMenu(host.workspaceManager)) { overflowMenu = null }
                 else WorkspaceMenu(host, menu, copy = { host.menuCopy(obj("type" to "application_menu", "menu" to "primary")) }) { overflowMenu = null }
             }

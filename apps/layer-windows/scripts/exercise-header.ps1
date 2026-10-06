@@ -378,7 +378,7 @@ try {
     if($Catalog){Check-Catalog}
     $initial=HeaderJson;$footer=(Model).state.workspace.layout.canvas_info.visible
     Edit-Header;Check-WorkspaceOptions;Check-Keyboard
-    foreach($size in @(@('medium',60),@('large',72),@('small',48))){
+    foreach($size in @(@('medium',64),@('large',80),@('small',48))){
         Invoke ('header-size-'+$size[0])
         Wait-Until {(Header).size -eq $size[0] -and (Presentation).height -eq $size[1]} 'Size did not update the native header'
         Check-Geometry

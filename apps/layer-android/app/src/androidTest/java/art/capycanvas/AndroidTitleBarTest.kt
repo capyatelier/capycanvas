@@ -339,8 +339,19 @@ class AndroidTitleBarTest {
 
     @Test fun fullLabelsFitAndMenusAnchorToEachLabelAndEditorActionsAlignRight() {
         tool = MotionEvent.TOOL_TYPE_FINGER
-        for (size in listOf("small", "medium", "large")) {
+        for (theme in listOf("dark", "light")) for ((size, gap, height) in listOf(Triple("small", 6f, 48f), Triple("medium", 8f, 64f), Triple("large", 10f, 80f))) {
+            action(obj("type" to "set_theme", "theme" to theme))
             restore(size)
+            val bar = bounds("title-bar")
+            val capy = bounds("header-item-1")
+            val menus = bounds("header-item-2")
+            val settings = bounds("header-item-3")
+            assertEquals("Titlebar includes scaled padding", height * density, bar.height, density)
+            assertEquals("Capy top clearance", gap * density, capy.top - bar.top, density)
+            assertEquals("Capy left clearance", gap * density, capy.left - bar.left, density)
+            assertEquals("Separate items use scaled spacing", gap * density, menus.left - capy.right, density)
+            assertEquals("Settings right clearance", gap * density, bar.right - settings.right, density)
+            shot("spacing-$theme-$size")
             for (menu in snapshot().array("application_menus").objects()) {
                 val tag = "application-menu-${menu.getString("id")}"
                 instrumentation.runOnMainSync {
@@ -379,7 +390,7 @@ class AndroidTitleBarTest {
                         for (label in listOf("Grow Selection…", "Shrink Selection…", "Feather Selection…", "Border Selection…", "Smooth Selection…", "Transform Selection Outline")) assertNotNull(label, row(label))
                         assertNull(row("Modify"))
                     }
-                    shot("anchored-${menu.getString("id")}")
+                    shot("anchored-$theme-${menu.getString("id")}")
                     key(KeyEvent.KEYCODE_BACK)
                     waitFor("menu dismissed") { node("workspace-menu") == null && node("title-bar")?.first?.view?.hasWindowFocus() == true }
                     idle()
@@ -392,7 +403,7 @@ class AndroidTitleBarTest {
             for (tag in listOf("header-size-small", "header-size-medium", "header-size-large", "header-show-footer", "header-edit-cancel", "header-edit-done")) {
                 assertEquals("Controls share a row", bounds("header-edit-done").center.y, bounds(tag).center.y, density)
             }
-            shot("aligned-editor-$size")
+            shot("aligned-editor-$theme-$size")
             tap("header-edit-cancel"); waitFor("Cancel") { !editing() }
         }
     }

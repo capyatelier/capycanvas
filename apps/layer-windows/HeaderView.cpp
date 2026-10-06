@@ -73,7 +73,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     MenuFlyout activeMenu{nullptr};std::function<void(MenuItems)> menuPopulate;hstring menuSource;
     bool scheduled=false,trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     float leftInset=0,rightInset=0;
-    double tile=36,iconSize=20,height=48,totalHeight=48,menuWidth=0,switchWidth=36;
+    double tile=36,iconSize=20,itemGap=6,height=48,totalHeight=48,menuWidth=0,switchWidth=36;
     uint32_t focusedItem=0;
     std::set<uint32_t> handledRequests;
     Microsoft::UI::Dispatching::DispatcherQueueTimer requestTimer{nullptr},geometryTimer{nullptr};
@@ -554,7 +554,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         }
         bool navigation=false;
         for(auto const& [id,native]:items){auto kind=str(object(native.entry,L"item"),L"kind");navigation|=kind==L"capy"||kind==L"menu"||kind==L"menu_labels";}
-        A insets;insets.Append(N(leftInset+(!editing&&!navigation?tile+6:0)));insets.Append(N(rightInset));
+        A insets;insets.Append(N(leftInset+(!editing&&!navigation?tile+itemGap:0)));insets.Append(N(rightInset));
         configuration=O({{L"op",S(L"geometry")},{L"width",N(width)},{L"insets",insets},{L"metrics",metrics}});
         input->Configure(model,editing,configuration);
         auto key=model.Stringify()+configuration.Stringify()+(editing?L":editing":L":normal");
@@ -651,7 +651,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         }
         bool navigation=false;for(auto const& [id,native]:items){auto k=str(object(native.entry,L"item"),L"kind");navigation|=k==L"capy"||k==L"menu"||k==L"menu_labels";}
         recovery.Visibility(!hidden&&!navigation&&!editing?Visibility::Visible:Visibility::Collapsed);
-        place(recovery,O({{L"x",N(leftInset+6)},{L"y",N(6)},{L"width",N(tile)},{L"height",N(tile)}}));
+        place(recovery,O({{L"x",N(leftInset+itemGap)},{L"y",N(itemGap)},{L"width",N(tile)},{L"height",N(tile)}}));
         bank.Visibility(editing&&!hidden?Visibility::Visible:Visibility::Collapsed);
         if(editing&&input->Selected()!=focusedItem){
             focusedItem=input->Selected();if(auto it=items.find(focusedItem);it!=items.end()&&it->second.frame.Visibility()==Visibility::Visible)it->second.editor.Focus(FocusState::Programmatic);
@@ -672,7 +672,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         data->model=snapshot;data->state=object(snapshot,L"state");data->refreshPalette();view=object(snapshot,L"header");
         if(!view.Size())return;
         editing=flag(view,L"editing");hidden=flag(snapshot,L"chrome_hidden")&&!flag(snapshot,L"windows_rendering_suspended");
-        auto size=find(array(view,L"sizes"),L"id",str(object(view,L"model"),L"size"));tile=num(size,L"tile",36);iconSize=num(size,L"icon",20);height=num(size,L"height",48);
+        auto size=find(array(view,L"sizes"),L"id",str(object(view,L"model"),L"size"));tile=num(size,L"tile",36);iconSize=num(size,L"icon",20);itemGap=num(size,L"item_gap");height=num(size,L"height",48);
         auto nextTheme=data->theme(),nextPalette=object(data->state,L"palette").Stringify();
         if(!built||nextTheme!=theme||nextPalette!=palette){theme=nextTheme;palette=nextPalette;build();}
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);

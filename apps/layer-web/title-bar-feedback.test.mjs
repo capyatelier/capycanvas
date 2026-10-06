@@ -54,7 +54,8 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
   const color = `[data-header-item="${entries.find(e=>e.item.control?.kind==='color').id}"] .header-tool`;
   const brush = tool('drawing_brush'), erase = tool('eraser');
   try {
-    for (const size of ['small','large','medium']) {
+    for (const theme of ['dark','light']) for (const size of ['small','large','medium']) {
+      await send({type:'set_theme',theme});
       await send({type:'customize',action:{type:'header',action:{type:'edit',editing:true}}});
       await click(`[data-header-size="${size}"]`); await click('#header-edit-done');
       const pill = await evaluate("(()=>{const p=document.querySelector('.workspace-switcher'),r=p.getBoundingClientRect(),h=document.querySelector('#header').getBoundingClientRect();return{height:r.height,center:r.y+r.height/2,headerCenter:h.y+h.height/2,buttons:[...p.querySelectorAll('[data-workspace-id]')].map(n=>n.getBoundingClientRect().height)}})()");
@@ -63,8 +64,15 @@ export async function checkTitleBarFeedback({call, evaluate, settle}) {
       await wait("!layerApp.state().customization.header_editing && !!document.querySelector('#header .header-bar:not([hidden])')");
       const bars = await evaluate("(()=>{const r=n=>n.getBoundingClientRect(),items=[...document.querySelectorAll('#header .header-item.in-bar:not([hidden])')].map(r).sort((a,b)=>a.x-b.x);return{gaps:items.slice(1).map((b,i)=>b.x-items[i].x-items[i].width).filter(g=>g<6),heights:[...document.querySelectorAll('#header .header-bar:not([hidden])')].map(n=>r(n).height),tiles:items.map(i=>i.height)}})()");
       const [tile,gap] = {small:[36,2],medium:[48,2],large:[60,4]}[size];
+      const spacing = await evaluate("(()=>{const r=n=>n.getBoundingClientRect(),header=r(document.querySelector('#header')),items=[...document.querySelectorAll('#header .header-item:not([hidden])')].map(r).sort((a,b)=>a.x-b.x);return{height:header.height,top:items[0].y-header.y,left:items[0].x-header.x,right:header.right-items.at(-1).right,gaps:items.slice(1).map((b,i)=>b.x-items[i].right).filter(g=>g>=6)}})()");
+      const itemGap = {small:6,medium:8,large:10}[size];
+      assert.equal(spacing.height,tile+2*itemGap);
+      assert.ok([spacing.top,spacing.left,spacing.right].every(g=>Math.abs(g-itemGap)<.02),`${size}: scaled titlebar padding: ${JSON.stringify(spacing)}`);
+      assert.ok(spacing.gaps.some(g=>Math.abs(g-itemGap)<.02),`${size}: separate titlebar surfaces use ${itemGap}px gaps`);
       assert.ok(bars.gaps.length && bars.gaps.every(g=>Math.abs(g-gap)<.02),`${size}: joined tiles sit ${gap}px apart like toolbar tiles: ${JSON.stringify(bars)}`);
       assert.ok([...bars.heights,...bars.tiles].every(h=>Math.abs(h-tile)<.02),`${size}: bars are flush with their ${tile}px tiles: ${JSON.stringify(bars)}`);
+      const capture = await call('Page.captureScreenshot',{format:'png'});
+      await writeFile(`${dir}/spacing-${theme}-${size}.png`,Buffer.from(capture.data,'base64'));
     }
     for (const theme of ['dark','light']) {
       await send({type:'set_theme',theme});

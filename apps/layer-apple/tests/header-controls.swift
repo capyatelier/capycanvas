@@ -53,6 +53,9 @@ import SwiftUI
                             try await action(["type":"customize", "action":["type":"header", "action":["type":"set_size", "size":size]]])
                             try await action(["type":"window_fullscreen", "fullscreen":true])
                             let height = store.snapshot["header"]["sizes"].array.first { $0["id"].string == size }!["height"].number
+                            let expectedGap: CGFloat = size == "small" ? 6 : size == "medium" ? 8 : 10
+                            let expectedTile: CGFloat = size == "small" ? 36 : size == "medium" ? 48 : 60
+                            precondition(height == expectedTile + 2 * expectedGap)
                             for paper in [false, true] {
                                 let palette = EditorPalette(source: store.state["palette"])
                                 let geometry = HeaderGeometry()
@@ -86,6 +89,7 @@ import SwiftUI
                                 let elements = geometry.frames.mapValues { JSON($0).raw }
                                 let expected = store.header.geometry["items"].array
                                 precondition(!expected.isEmpty)
+                                precondition(expected.allSatisfy { $0["bounds"].rect.minY == expectedGap })
                                 for item in expected {
                                     guard let actual = geometry.frames["header-item-\(item["id"].uint)"] else {
                                         throw HostFailure(message: "Missing visible header item \(item)")

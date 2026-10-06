@@ -294,7 +294,7 @@ impl HeaderDrag {
             y: if self.detached {
                 self.grab.y + point[1] - self.press[1]
             } else {
-                6.
+                self.layout.size.item_gap()
             },
             ..self.grab
         };
@@ -311,6 +311,7 @@ impl HeaderDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HeaderSize;
     fn fixture(source: HeaderDragSource, offset: f32) -> (HeaderLayout, HeaderDrag) {
         let layout = HeaderLayout::painter();
         let metrics = layout
@@ -350,6 +351,24 @@ mod tests {
         (layout, drag)
     }
     #[test]
+    fn attached_drag_uses_the_selected_titlebar_padding() {
+        for (size, padding) in [(HeaderSize::Small, 6.), (HeaderSize::Medium, 8.), (HeaderSize::Large, 10.)] {
+            let mut layout = HeaderLayout::default();
+            layout.size = size;
+            let geometry = layout.resolve(1600., [0.; 2], &[], true);
+            let item = geometry.items[0];
+            let press = [item.bounds.x + 10., item.bounds.y + 10.];
+            let mut drag = HeaderDrag::new(&layout, HeaderDragStart {
+                source: HeaderDragSource::Item(item.id), geometry, metrics: vec![],
+                width: 1600., insets: [0.; 2], press, grab: item.bounds,
+            }).unwrap();
+            let preview = drag.preview([press[0] + 20., press[1] + 4.]).unwrap();
+            assert!(!preview.detached);
+            assert_eq!(preview.held.y, padding);
+            assert!(preview.geometry.items.iter().all(|item| item.bounds.y == padding));
+        }
+    }
+    #[test]
     fn slide_tearoff_reattach_and_cancel_keep_original_layout_and_grab() {
         for offset in [2., 34., 66.] {
             let (layout, mut drag) = fixture(HeaderDragSource::Item(2), offset);
@@ -357,7 +376,7 @@ mod tests {
             let stationary = drag.preview(press).unwrap();
             let shifted = drag.preview([press[0] + 45., press[1] + 12.]).unwrap();
             assert!(!shifted.detached);
-            assert_eq!(shifted.held.y, 6.);
+            assert_eq!(shifted.held.y, layout.size.item_gap());
             let neighbor = |p: &HeaderDragPreview| {
                 p.geometry
                     .items
