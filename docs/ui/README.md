@@ -215,6 +215,7 @@ Filters panels and generic effects use **fx**. Actions that add a filter use
 Individual filters retain their own symbols, including in nested menus. Categories use
 the same symbols in the picker and menus: a half-lit circle for Tone, color swatches
 for Color, a sharp triangle for Detail, and a warped grid for Distort.
+Submenu arrows align at the trailing edge, including rows with icons.
 
 - Use solid silhouettes for painting tools and concrete objects. Keep contour
   geometry where the outline carries the meaning: selection boundaries, shapes,

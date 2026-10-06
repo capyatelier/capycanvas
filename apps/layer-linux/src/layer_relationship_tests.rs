@@ -141,6 +141,13 @@ fn native_layer_row_filter_menu() {
         until(|| shown().is_some(), "the row menu offers Add Filter");
         let menu = shown().unwrap();
         let filters = submenu(&mut input, &menu, "Add Filter", "Tone");
+        let arrow_edges: Vec<_> = ["Tone", "Color", "Detail", "Blur", "Artistic", "Distort", "Texture"].iter().map(|label| {
+            let row = item(&filters, label);
+            let arrow = widgets(&row).find(|node| node.css_name() == "arrow" && node.is_mapped() && node.parent().as_ref() == Some(&row)).unwrap();
+            let bounds = arrow.compute_bounds(&filters).unwrap();
+            bounds.x() + bounds.width()
+        }).collect();
+        assert!(arrow_edges.iter().all(|edge| (edge - arrow_edges[0]).abs() < 1.), "submenu arrows share the menu's trailing edge: {arrow_edges:?}");
         let tone = submenu(&mut input, &filters, "Tone", "Curves");
         for (popover, label, name) in [(&filters, "Tone", "tone"), (&tone, "Curves", "curves")] {
             let row = item(popover, label);

@@ -1658,6 +1658,9 @@ impl Workspace {
                 image.set_visible(true);
                 image.set_hexpand(false);
                 image.set_margin_end(6);
+                if let Some(label) = image.next_sibling().and_downcast::<gtk::Label>() {
+                    label.set_hexpand(true);
+                }
             }
             let mut child = widget.first_child();
             while let Some(widget) = child {
