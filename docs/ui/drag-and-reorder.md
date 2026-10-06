@@ -192,7 +192,6 @@ drag-and-drop with its synthetic serials.
 
 - Physical pen and Apple Pencil acceptance is outstanding on most hosts;
   automated suites inject pen events, which do not qualify physical digitizers.
-- Windows: injected pen and touch workspace-tab tear-off can lose capture.
 - iPadOS: held collapsed-column icons and the expanded toolbar cases
   (disabled commands, dividers, drawers) lack UIKit coverage.
 - macOS: Manage Workspaces rows keep custom vertical row menus, because the

@@ -382,18 +382,23 @@ are your task, and remove an entry when you fix it.
   `AndroidWorkspaceSwitcherTest#nativeOptionsVisibilityInputsAndRestart` fail on
   MovinkPad Pro 14. `AndroidWorkspaceOwnershipTest` expects `focus_window` to be
   a workspace ID, but the view now names the owning window too.
-- Windows `exercise-tab-pickup.ps1 -Device touch`: after the Layers group is torn
-  off, the injected contact reaches neither XAML nor the canvas, so the drag never
-  finishes. Mouse passes.
+- Windows `exercise-layers.ps1` on Iris Xe fails "Outer editing edge did not use
+  the accent color": the PrintWindow thumbnail probe reads `#A94EC1` for palette
+  `#A94DC1`. The `-Relationships` variant passes that check in dark theme, then
+  reads `#AA50C2` in light theme. Both failures and their sampled pixel arrays
+  reproduce on unported `c5624d37`. Keep the exact color assertion.
+- Windows matched Web editor captures do not pass exact image or geometry
+  comparison. Native accent, caption controls, number rows and workspace controls
+  differ. The Web collector also looks for the blend button as a `select` and
+  measures Tool Set children beyond their panel clip. Native layout and control
+  bounds match unported `c5624d37` at 744 and 960 logical pixels; keep the original
+  comparison limits and report the differences.
 - Windows `exercise-multiwindow.ps1`: "Pin preferences did not refresh in the
   inactive window".
 - Windows `exercise-clipboard.ps1`: "Ctrl+X did not write the clipboard", and
   `exercise-persistence.ps1`: "Missing control: Brush size slider" (the slider is
   named "Brush size"). `documents:RecoverGpu` on a VM: "GPU reconstruction did not
   start".
-- `layer-ui` `localization::tests::preparation_chunks_preserve_all_message_values_and_attributes`
-  fails in Windows checkouts with `core.autocrlf`: three multi-line English messages
-  parse into differently split text elements with the same formatted text.
 - Windows `exercise-selection.ps1` exits with an access violation in roughly a third
   of runs, on untouched upstream as well, after it closes the Select drawer and
   switches workspaces. The fault is in WinUI's `ScrollView::OnHideIndicatorsTimerTick`
@@ -401,11 +406,7 @@ are your task, and remove an entry when you fix it.
   references of a panel or drawer `ScrollView` that left the tree.
 - Windows fixtures that also fail on the unported upstream build: `exercise-color-picker.ps1`
   ("Moving the held finger did not sample the stroke above it"), `exercise-pen-buttons.ps1` (Transform is
-  enabled on the empty starting layer), `exercise-tab-drag.ps1` ("Attached native
-  tab preview did not cross the shared insertion threshold"), `exercise-layer-pickup.ps1`
-  ("Layer tab did not begin its native drag" with touch), `exercise-column-stacks.ps1`
-  ("Open column 12 did not match native panels, selected tiles and connector
-  geometry"), `exercise-persistence.ps1` (the unreadable database writes a
+  enabled on the empty starting layer), `exercise-persistence.ps1` (the unreadable database writes a
   storage diagnostic to stderr) and `exercise-proof.ps1` (UI Automation times out
   choosing sRGB in Proof Setup after the drawing is saved and reopened).
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and

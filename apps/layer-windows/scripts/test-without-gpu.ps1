@@ -7,7 +7,9 @@ $packages = 'layer-core','layer-engine','layer-ui','layer-workspace','layer-host
 Push-Location $repo
 $previousSoftwareGpu = $env:LAYER_TEST_SOFTWARE_GPU
 $previousStorage = $env:CAPY_STORAGE_DIR
+$previousPath = $env:PATH
 try {
+    $env:PATH = (Join-Path $repo "artifacts/windows/$Configuration")+';'+$previousPath
     $env:LAYER_TEST_SOFTWARE_GPU = '1'
     & cargo test --locked @packages --lib --features layer-render-wgpu/software-adapter-tests
     if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed.' }
@@ -17,5 +19,6 @@ try {
 } finally {
     $env:LAYER_TEST_SOFTWARE_GPU = $previousSoftwareGpu
     $env:CAPY_STORAGE_DIR = $previousStorage
+    $env:PATH = $previousPath
     Pop-Location
 }

@@ -10,11 +10,11 @@ $run=Join-Path $repo ('artifacts/windows/workspace-pickup/'+[Guid]::NewGuid().To
 [IO.Directory]::CreateDirectory($run)|Out-Null
 
 function Gesture {
-    $workspace=Find 'Drawing workspace' -Name
+    $workspace=Workspace-Root
     if($workspace){try{$workspace.Current.HelpText|ConvertFrom-Json}catch{}}
 }
 function Presentation {
-    $workspace=Find 'Drawing workspace' -Name
+    $workspace=Workspace-Root
     if($workspace){try{$workspace.Current.ItemStatus|ConvertFrom-Json}catch{}}
 }
 function Layout { (Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress }

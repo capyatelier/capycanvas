@@ -1527,6 +1527,66 @@ are kept separate from the 10 s comparison table below.
 | Liquify Expand (38) | Very complex | 512 px | 68.4 updates/s (66.7–69.2); gap p99 38.3 ms | **Not met** |
 | Liquify Crystals (39) | Very complex | 512 px | 41.6 updates/s (39.3–42.2); gap p99 70.0 ms | **Not met** |
 
+## Windows Surface diagnostic
+
+Measured on 2026-10-06 on a Surface Laptop 5, i7-1255U, Intel Iris Xe D3D12,
+driver 32.0.101.6737, 2256 × 1504 at 60 Hz and 150% scale. AC stayed online,
+battery 76%, Balanced power plan. Runs were isolated from builds and other GPU
+work. This is a Windows regression comparison, not reference-tier qualification.
+
+Baseline source is `c5624d37`; the candidate is `8b1bfca6` plus the Windows scope
+and menu port. Native executable SHA-256 prefixes are `2CD17495CB35` and
+`396601C0A6D0`; brush executable prefixes are `ED3EA3416EEE` and `98B66128E6CE`.
+Full hashes, hardware records, raw CSVs, traces and per-run p50/p95/p99 values
+are under `artifacts/windows/port-audit/performance-matched/` and the adjacent
+`performance-hardware.json`.
+
+The brush example uses 1000 px brushes on an empty 9504 × 6336 document, a
+1600 × 1000 managed offscreen presentation, and a priming stroke followed by
+Undo. Each invocation has three 240-frame repetitions. The table counts the
+239 moving frames per repetition; pen-up is separate in the CSV. Rates are
+completed offscreen generations/s, not displayed fps. Every run passed exact
+native Undo/Redo.
+
+| Workload | Baseline median (range), /s | Candidate median (range), /s |
+| --- | ---: | ---: |
+| G-Pen | 83.38 (81.23–86.21) | 83.21 (80.40–84.08) |
+| Eraser, candidate then baseline | 87.87 (82.16–92.25) | 87.97 (87.67–90.04) |
+| Airbrush, baseline then candidate | 90.73 (81.73–97.10) | 87.37 (81.74–95.06) |
+| Airbrush, candidate then baseline | 90.92 (80.15–92.05) | 87.32 (84.28–90.91) |
+| Airbrush, same executable path, ABBA, six repetitions per build | 85.68 (80.88–98.42) | 85.88 (79.23–97.85) |
+
+The first two Airbrush comparisons showed a 3.7–4.0% lower candidate median.
+The benchmark executables have identical code and runtime data; only nine bytes
+of PE/debug timestamps and PDB age differ. A same-path baseline/candidate/
+candidate/baseline check did not reproduce that gap. Median per-repetition
+completion p95 was 16.64 → 16.31 ms and p99 was 18.70 → 17.71 ms across six
+repetitions per build. The live process loaded the bundled DXC, SHA-256 prefix
+`9A5100511E12`. No Airbrush slowdown is established; the earlier observations
+remain in `brush/` and `brush-reverse-airbrush/`, with the controlled check in
+`airbrush-controlled/` and executable comparison in `pe-comparison.json`.
+
+Pen runs use the same plain 8192 × 6336 drawing, G-Pen 18 px, and three
+10-second OS-injected strokes per app in alternating baseline/candidate order.
+The harness waits for the requested drawing, enabled canvas and three seconds
+of settling; it does not prime a stroke. Every run consumed 2401/2401 samples,
+with zero unmatched inputs. Project SHA-256 prefix is `5CDB97C6E4CB`.
+Values below are medians of the three per-run percentiles, with full run ranges,
+in milliseconds.
+
+| Metric | Baseline p95 | Candidate p95 | Baseline p99 | Candidate p99 |
+| --- | ---: | ---: | ---: | ---: |
+| Injection to frame return | 5.26 (5.05–7.65) | 5.08 (4.74–5.38) | 61.64 (52.95–81.84) | 64.88 (56.90–74.53) |
+| Injection to presentation observation bound | 10.87 (10.64–11.51) | 10.83 (10.74–10.88) | 67.88 (66.86–93.56) | 69.87 (63.49–79.38) |
+| Host frame span | 3.65 (3.57–4.10) | 3.54 (3.42–3.56) | 4.72 (4.53–5.43) | 4.43 (4.26–4.55) |
+
+Large p99 tails remain on both builds. Immediate presentation makes the DXGI
+refresh timestamp inapplicable, so exact input-to-display latency remains null;
+the observation metric is an upper bound including intervening host work.
+PresentMon was unavailable without capture privileges and was skipped. These
+runs exclude physical digitizer and panel response and use neither the reference
+photo nor the reference tablet. They do not qualify a tier rate or latency target.
+
 ## Retained-material G-Pen comparison
 
 This earlier comparison is measured on 2026-10-02 at `eb9b8bab1` with the retained-material changes:

@@ -313,6 +313,9 @@ been verified.
 
 ## Test
 
+Fluent catalogs and shared cursor SVGs use LF checkouts through `.gitattributes`.
+Their parser structure and byte hashes must stay identical across hosts.
+
 `exercise-artwork-recovery.ps1 -Executable <path> -Theme dark` checks automatic
 crash and orderly restarts, tab membership, the active drawing, Undo/Redo,
 cancelled and discarded drawing closes, missing or changed saved originals,
@@ -338,8 +341,15 @@ unrelated releases and clock wraparound. Real
 IME checks must distinguish candidate Enter/Escape from the next ordinary press,
 and include selected names, numeric refusal, pointer confirmation and focus
 changes. The `d3d12_` tests that write app storage need `CAPY_STORAGE_DIR` set
-to a fresh absolute folder. In Debug builds the HDR test needs
+to a fresh absolute folder. In Debug builds the HDR and native color tests need
 `RUST_MIN_STACK=8388608`, the native document worker's stack size.
+The test script adds its build folder to the child process DLL search path so
+D3D12 uses the same pinned DXC as the app. Before direct Cargo GPU tests, prepend
+that folder to `$env:PATH`, for example
+`$env:PATH=(Resolve-Path artifacts/windows/Release).Path+';'+$env:PATH`.
+
+Open header menus follow shared command state while document operations finish.
+Their native items retain focus and identity; unchanged menu models skip updates.
 
 Grouped toolbar and header tools retain their shared slot identity while presenting
 `resolved_control`, label, icon and selection from the current snapshot. Secondary
@@ -374,7 +384,10 @@ presents the shared action row (sampling menu, Auto, targeted adjustment), the
 Color Lookup selector and Import LUT, whose `.cube` file is read and parsed on the
 document worker. `exercise-scopes.ps1 -Executable <path> -Theme dark` walks the
 Photo scopes, Levels, Curves and Color Lookup with mouse, pen and touch; the VM
-fixture names are `scopes` and `scopes:light`.
+fixture names are `scopes` and `scopes:light`. Log counts has a wrapping row above
+the precision and clipping controls. The `layout-dark` and `layout-light` theme
+variants check both scope panels in every registered language at 1100 and 1500
+pixels wide.
 
 Canvas cursor shapes come from shared Rust and the shared GPU presenter. Tool
 uses the active tool's icon, aligned to its working point; Tool and brush size
@@ -438,6 +451,9 @@ the focused header journeys also check placement cancellation and keyboard input
 - **Use current menu identifiers.** `NativeMenuItems` uses the shared command ID
   for routed commands; other layer actions use `layer-menu-<op>`. Check the shared
   menu definition when an item cannot be found.
+- **Select the telemetry owner.** Use `Workspace-Root` from `CapyUia.ps1` for
+  drag state and arranged workspace bounds. The outer window and inner workspace
+  share an accessible name; only the inner workspace publishes this state.
 - **One snapshot per assertion.** Read related fields from one state file; check
   its `process_id`, `window_id` and freshness.
 - **Failures keep the app.** A failed fixture leaves its app running for
@@ -469,6 +485,20 @@ Panel tab strips use `ScrollView` with horizontal content and reserve touch and
 pen input for workspace dragging. Wheel scrolling remains native. Run every
 `tab-pickup` device variant and `tab-drag` after changing the strip or its preview
 clipping; they cover direct tear-off, retained contact, cancellation and history.
+
+`exercise-illustration-filters.ps1 -Executable <path> -Theme dark` checks
+Brightness to Opacity and Threshold through the native Filters and Properties
+panels. It compares composed pixels, changes color and transparency choices,
+checks one-step history and saves and reopens the hidden alpha threshold. Repeat
+with `-Theme light`; the VM runner names are `illustration-filters` and
+`illustration-filters:light`.
+
+`exercise-image-objects.ps1 -Executable <path> -Theme dark` opens the fixed shared
+image packages with built-in and ICC profiles, including Nearest sampling with
+F64 placement. It checks displayed pixels and visibility history, then saves and
+reopens each drawing while preserving shared image identities and object poses.
+Repeat with `-Theme light`. This validates existing package support; image object
+authoring remains unexposed.
 
 ### GPU reconstruction
 
@@ -524,6 +554,8 @@ viewport and scale. Build the Web reference with `bash apps/layer-web/build.sh`
 Node.js and the Python packages in
 [`tools/visual/requirements.txt`](../../tools/visual/requirements.txt), and set
 `CAPY_CHROME` to Chrome's executable. Chrome must use hardware WebGPU.
+The reference capture allows 60 seconds for staged GPU startup; layout and
+control acknowledgements retain their separate 25-second limits.
 
 Launch an owned review with a disposable profile, select Sketch, Paint or Photo,
 then capture both themes with fitted and zoomed paper:

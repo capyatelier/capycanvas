@@ -1,5 +1,6 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','layout-dark','layout-light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
+$layoutOnly=$Theme.StartsWith('layout-');if($layoutOnly){$Theme=$Theme.Substring(7)}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
 Add-Type -AssemblyName System.Drawing
@@ -151,7 +152,9 @@ function Undo-To([string]$Before,[string]$Reason){
     Invoke 'Undo' -Name;Wait-Until {(Properties-Json) -eq $Before} "$Reason was not one Undo step"
 }
 function Canvas-Point([double]$X,[double]$Y){
-    $bounds=(Control 'drawing-canvas').Current.BoundingRectangle;$camera=(Model).state.camera;$area=$camera.work_area
+    $canvas=Control 'drawing-canvas' -Arranged
+    Wait-Until {$canvas.Current.IsEnabled -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'The canvas did not become ready for a drag'
+    $bounds=$canvas.Current.BoundingRectangle;$camera=(Model).state.camera;$area=$camera.work_area
     $scale=$bounds.Width/$camera.viewport[0]
     @([int]($bounds.X+($area[0]+$area[2]*$X)*$scale),[int]($bounds.Y+($area[1]+$area[3]*$Y)*$scale))
 }
@@ -181,12 +184,58 @@ function Choose-Path([string]$Path){
     if($owner -ne $review.Id){throw 'Picker button has an unexpected owner'}
     if(![CapyScopeControls]::PostMessage($handle,245,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cannot accept the picker'}
 }
+function Scope-Language([string]$Tag,[int]$Index){
+    $caption=@((Model).application_menus|Where-Object id -eq 'edit')[0].label
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit' -Caption $caption
+    Invoke-Id 'settings'
+    Wait-Until {(Model).preferences -and (Find 'preference-choice-language')} 'Language preference did not open'
+    $row=@((Model).preferences.pages.groups.rows|Where-Object id -eq 'language')[0]
+    Choose 'preference-choice-language' $row.kind.options[$Index]
+    Wait-Until {(Model).windows_active_tag -eq $tag} "Language $tag did not apply" 30
+    Invoke-Id 'CloseButton'
+    Wait-Until {!(Model).preferences} 'Preferences did not close'
+}
+function Localized-Layout{
+    $state=State-File
+    $bootstrap=Join-Path (Split-Path -Parent $state) ((Split-Path -Leaf $state) -replace '^ui-state-','bootstrap-')
+    $tags=@((Read-Snapshot $bootstrap).shipped_tags)
+    if(!$tags.Count){throw 'The native bootstrap has no registered languages'}
+    $seen=@()
+    for($index=0;$index -lt $tags.Count;$index++){
+        Scope-Language $tags[$index] ($index+1)
+        $tag=$tags[$index]
+        foreach($width in 1100,1500){
+            & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width $width -Height 1000
+            foreach($prefix in 'histogram','waveform'){
+                Select-Panel $prefix
+                $null=Reveal ($prefix+'-highlights')
+                $plot=(Control ($prefix+'-chart') -Arranged).Current.BoundingRectangle
+                $log=Control ($prefix+'-log') -Arranged
+                $status=Control ($prefix+'-status') -Arranged
+                $bounds=$log.Current.BoundingRectangle;$footer=$status.Current.BoundingRectangle
+                if($bounds.Bottom -gt $footer.Top+1){throw "$tag $prefix at $width pixels crowds Log counts into the precision row"}
+                foreach($id in 'log','status','shadows','highlights'){
+                    $box=(Control ($prefix+'-'+$id) -Arranged).Current.BoundingRectangle
+                    if($box.Left -lt $plot.Left-1 -or $box.Right -gt $plot.Right+1 -or $box.Width -le 0){throw "$tag $prefix-$id at $width pixels exceeds the plot width"}
+                }
+                Wait-Until {
+                    $view=View $prefix;$log=Find ($prefix+'-log');$status=Find ($prefix+'-status')
+                    $log -and $status -and $log.Current.Name -eq $view.labels[0] -and $status.Current.Name -eq $view.status
+                } "$tag $prefix has stale translated controls"
+                Capture "$tag-$prefix-$width-$Theme" -Composed -WithModel
+            }
+        }
+        $seen+=$tag
+    }
+    $checks.localized_layout=@{languages=$seen;widths=@(1100,1500);panels=@('histogram','waveform')}
+    Scope-Language 'en' ([array]::IndexOf($tags,'en')+1)
+}
 $checks=[ordered]@{}
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
-    $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
+    $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle
     Write-Output "Owned scopes review $($review.Id): $run"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Review did not start' 120
@@ -214,6 +263,12 @@ try{
     Wait-Until {(Chart-Shades 'histogram-chart') -gt 3} 'Histogram did not draw its counts'
     $chart=Control 'histogram-chart'
     if($chart.Current.Name -ne (View 'histogram').description -or $chart.Current.HelpText -ne (View 'histogram').range){throw 'The graph does not expose the shared counts'}
+    if($layoutOnly){
+        Localized-Layout
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+        [pscustomobject]@{theme=$Theme;checks=$checks;evidence=$run}|ConvertTo-Json -Depth 6
+        return
+    }
     $revision=(Model).state.document_file.revision
     $sources=@((View 'histogram').sources);$channels=@((View 'histogram').channels)
     Pick 'histogram-source' $sources[3] 'touch';Wait-Until {(View 'histogram').source -eq 3} 'Touch did not choose Selection'

@@ -444,11 +444,17 @@ tier rate.
 --example brush_frames`, list adapters with `brush_frames.exe --adapters`, then
 run `brush_frames.exe OUT.csv dx12 240 3 [preset-ids]`. It draws a 1000 px brush
 on a 9504 × 6336 canvas and reports completed generations, not displayed frames.
+Build the native Release app first and prepend its folder to `$env:PATH` before
+running the example:
+`$env:PATH=(Resolve-Path artifacts/windows/Release).Path+';'+$env:PATH`.
+This uses the app's pinned DXC compiler instead of falling back to system FXC.
 
 **Pen latency (Windows).** Against a Release build, run
 `tools/performance/windows-pen-latency.ps1 -Executable <exe> -Project <.capy>
 -OutputDirectory <dir>`, then `node tools/performance/windows-pen-report.mjs <dir>`.
-It paces a pen circle at up to 240 Hz and records actual injection timestamps;
+It waits for the requested drawing and enabled canvas, then checks the stroke
+against the arranged canvas bounds. It paces a pen circle at up to 240 Hz and
+records actual injection timestamps;
 a delayed sample never triggers a catch-up burst. The report matches inputs to
 DXGI frame statistics, so it reports software input-to-display time, not
 input-to-photon. Per-window traces use `latency-<pid>-<window>` names. PresentMon

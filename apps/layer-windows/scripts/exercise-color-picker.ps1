@@ -11,10 +11,7 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/color-picker/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 function Center([string]$Id){$b=(Control $Id -Arranged).Current.BoundingRectangle;@{x=[int]($b.X+$b.Width/2);y=[int]($b.Y+$b.Height/2)}}
-function Presentation{
-    $named=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing workspace')
-    foreach($workspace in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$named)){$status=$workspace.Current.ItemStatus;if($status){try{return $status|ConvertFrom-Json}catch{}}}
-}
+function Presentation{try{(Workspace-Root).Current.ItemStatus|ConvertFrom-Json}catch{}}
 function Preview{(Presentation).color_preview}
 function Tool{(Model).state.layer_tools.tool}
 function Picking{(Tool) -like 'pick_*'}

@@ -249,7 +249,7 @@ try {
             [CapyRowPointer]::Down('mouse',$at.x,$at.y);Start-Sleep -Milliseconds 35
             Move-To $to
             Wait-Until {
-                try{$g=(Find 'Drawing workspace' -Name).Current.HelpText|ConvertFrom-Json;$g.phase -eq 'dragging'}catch{$false}
+                try{$g=(Workspace-Root).Current.HelpText|ConvertFrom-Json;$g.phase -eq 'dragging'}catch{$false}
             } 'Layer tab did not begin its native drag'
             [CapyRowPointer]::Up()
             Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'layers' -and $_.floating}).Count -eq 1} 'Layer tab did not tear off into a floating panel'
@@ -414,7 +414,7 @@ try {
     [pscustomobject]@{device=$Device;column_mode=$ColumnMode;short_click='passed';hold_release='passed';row_drag='passed';child_control_drag='passed';immediate_grip='passed';cancel='passed';one_step_undo_redo='passed';row_whitespace='passed';rename_ownership='passed';source_removal='passed';mask_and_selection_children='passed';group_content_and_into_drop='passed';keyboard_context='passed';edge_scroll_retention='passed';minimize_cancellation='passed';native_scroll=$(if($Device -eq 'mouse'){'not_applicable'}else{'passed'});floating_and_drawer_rows='passed';scope='OS-delivered synthetic input; physical-device and presentation-performance acceptance remain separate'}|ConvertTo-Json
 }catch{
     $failure=$_
-    @{case=$script:case;error=$failure.ToString();gesture=(Gesture);rows=(Rows);workspace_presentation=(Find 'Drawing workspace' -Name).Current.ItemStatus}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')
+    @{case=$script:case;error=$failure.ToString();gesture=(Gesture);rows=(Rows);workspace_presentation=(Workspace-Root).Current.ItemStatus}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'failure.json')
     if($review -and !$review.HasExited){
         & (Join-Path $PSScriptRoot 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run 'failure.png') -ClientOnly *> (Join-Path $run 'failure-window.json')
     }

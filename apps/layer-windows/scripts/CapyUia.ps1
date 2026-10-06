@@ -228,3 +228,29 @@ function Fit-Canvas{
     $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Zoom-Item 'zoom-fit_canvas')} 'The zoom menu did not close after Fit'
 }
+function Save-ProjectAs([string]$Path){
+    & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'
+    Invoke-Id 'save_document_as'
+    $hit=@{entry=$null;picker=$null}
+    Wait-Until {
+        $hit.picker=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'#32770'))
+        if(!$hit.picker){return $false}
+        $hit.entry=$hit.picker.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'Edit'),
+            [System.Windows.Automation.OrCondition]::new(
+                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1148'),
+                [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1001'))))
+        $null -ne $hit.entry
+    } 'The Save As filename edit did not appear' 45
+    if($hit.picker.Current.ProcessId -ne $review.Id -or $hit.entry.Current.ProcessId -ne $review.Id){throw 'Wrong picker filename owner'}
+    [CapyWindowApi]::Path([IntPtr]$hit.entry.Current.NativeWindowHandle,$Path)
+    Invoke-PickerButton $hit.picker
+    Wait-Until {(Test-Path -LiteralPath $Path) -and (Model).state.document_file.location.uri -eq $Path -and !(Model).state.document_file.busy -and !(Model).state.document_file.modified} 'The drawing did not save' 90
+    Wait-Until {!(Find 'Save As' -Name) -and (Control 'drawing-canvas').Current.IsEnabled} 'The Save As dialog did not close'
+}
+function Workspace-Root{
+    $named=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing workspace')
+    foreach($workspace in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$named)){
+        if($workspace.Current.ItemStatus){return $workspace}
+    }
+}

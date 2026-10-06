@@ -111,20 +111,21 @@ mod tests {
 
     #[test]
     fn a_relative_override_is_a_folder_in_the_platform_temporary_folder() {
-        let platform = || Ok(StorageRoots::within(Path::new("/app")));
+        let app = std::env::temp_dir().join("app"); let private = std::env::temp_dir().join("private");
+        let platform = || Ok(StorageRoots::within(&app));
         assert_eq!(
             StorageRoots::chosen(Some("capy-test".into()), platform).unwrap(),
-            StorageRoots::within(Path::new("/app/temp/capy-test"))
+            StorageRoots::within(&app.join("temp/capy-test"))
         );
         assert_eq!(
-            StorageRoots::chosen(Some("/private".into()), || Err("unused".into())).unwrap(),
-            StorageRoots::within(Path::new("/private"))
+            StorageRoots::chosen(Some(private.clone()), || Err("unused".into())).unwrap(),
+            StorageRoots::within(&private)
         );
     }
 
     #[test]
     fn relative_platform_folders_are_refused() {
-        let relative = StorageRoots { state: PathBuf::from("state"), ..StorageRoots::within(Path::new("/capy")) };
+        let relative = StorageRoots { state: PathBuf::from("state"), ..StorageRoots::within(&std::env::temp_dir().join("capy")) };
         assert!(StorageRoots::resolve(|| Ok(relative)).is_err());
     }
 }

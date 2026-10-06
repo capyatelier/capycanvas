@@ -29,19 +29,25 @@ do{Start-Sleep -Milliseconds 150;$review.Refresh();if($review.HasExited){throw '
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
 Wait-Until {$script:probe=Trace-File 'presentation-probe';$null -ne $probe} 'Renderer did not become ready' 90
 Open-Project $Project
-Wait-Until {$field=Find 'tool-setting-size';$field -and $field.Current.IsEnabled} 'Project did not become editable' 90
+$projectTitle=[IO.Path]::GetFileName($Project)+' · Capy Canvas'
+Wait-Until {
+ $canvas=Find 'drawing-canvas' -Visible;$field=Find 'tool-setting-size'
+ $root.Current.Name -eq $projectTitle -and $canvas -and $canvas.Current.IsEnabled -and $field -and $field.Current.IsEnabled -and !(Find 'canvas-status' -Visible)
+} 'The requested drawing did not become ready for pen input' 90
 Invoke-Id 'tool-subtool-0'
 $brushName=(Find 'tool-subtool-0').Current.Name
 if($brushName -notmatch 'G[- ]?Pen'){throw "Expected G-Pen, got $brushName"}
 $size=Find 'tool-setting-size';$size.SetFocus();$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$Diameter)
 (Find 'tool-setting-opacity').SetFocus();Fit-Canvas
 Wait-Until {$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq "$Diameter.0 px"} 'Brush size was not committed'
-$canvas=Find 'drawing-canvas'
 [CapyWindowApi]::ShowWindow($review.MainWindowHandle,5)|Out-Null
 [CapyWindowApi]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
 Start-Sleep -Seconds 3
+$canvas=Control 'drawing-canvas' -Arranged
+Wait-Until {$canvas.Current.IsEnabled -and !(Find 'canvas-status' -Visible)} 'The canvas stopped being ready before the stroke'
 $bounds=$canvas.Current.BoundingRectangle
 $cx=[int]($bounds.X+$bounds.Width/2);$cy=[int]($bounds.Y+$bounds.Height/2)
+if($cx-200 -le $bounds.Left -or $cx+200 -ge $bounds.Right -or $cy-120 -le $bounds.Top -or $cy+120 -ge $bounds.Bottom){throw 'The pen path exceeds the arranged canvas'}
 $meta=Read-Snapshot $probe
 [pscustomobject]@{process_id=$review.Id;brush_name=$brushName;diameter=$Diameter;project_sha256=(Get-FileHash $Project).Hash;exe_sha256=(Get-FileHash $Executable).Hash;dll_sha256=(Get-FileHash (Join-Path $directory 'layer_windows.dll')).Hash;surface=$meta;seconds=$Seconds;rate_hz=240;center=@($cx,$cy);radii=@(200,120);qpc_frequency=[Diagnostics.Stopwatch]::Frequency;display=(& (Join-Path $repo 'apps/layer-windows/scripts/probe-displays.ps1')|ConvertFrom-Json)}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $OutputDirectory 'capture.json')
 Add-Type -Path (Join-Path $PSScriptRoot 'WindowsPenMotion.cs')

@@ -23,8 +23,8 @@ function Point([string]$Id,[switch]$Name) {
     @{x=[int]$x;y=[int]($stable.bounds.Y+$stable.bounds.Height*.5)}
 }
 
-function Gesture {try{(Find 'Drawing workspace' -Name).Current.HelpText|ConvertFrom-Json}catch{}}
-function Presentation {try{(Find 'Drawing workspace' -Name).Current.ItemStatus|ConvertFrom-Json}catch{}}
+function Gesture {try{(Workspace-Root).Current.HelpText|ConvertFrom-Json}catch{}}
+function Presentation {try{(Workspace-Root).Current.ItemStatus|ConvertFrom-Json}catch{}}
 function Layout {(Model).layout|ConvertTo-Json -Depth 80 -Compress}
 function Panel-Group([string]$Panel) {(Model).layout.groups|Where-Object {$_.panels -contains $Panel}}
 function Workspace-History([string]$Id) {

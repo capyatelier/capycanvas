@@ -69,7 +69,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::vector<Button> overflow;
     std::vector<Border> zones;
     bool built=false,editing=false,hidden=false,fullscreenActive=false,applying=false,resolvingLink=false,queryBusy=false;
-    bool workspaceMenuOpen=false;
+    using MenuItems=winrt::Windows::Foundation::Collections::IVector<MenuFlyoutItemBase>;
+    MenuFlyout activeMenu{nullptr};std::function<void(MenuItems)> menuPopulate;hstring menuSource;
     bool scheduled=false,trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     float leftInset=0,rightInset=0;
     double tile=36,iconSize=20,height=48,totalHeight=48,menuWidth=0,switchWidth=36;
@@ -223,11 +224,22 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             self->requestTimer.Stop();self->geometryTimer.Stop();
         }});
     }
-    MenuFlyout menu(std::function<void(winrt::Windows::Foundation::Collections::IVector<MenuFlyoutItemBase>)> populate){
+    void refreshMenu(){
+        if(!activeMenu)return;
+        auto source=array(data->model,L"application_menus").Stringify()+object(view,L"primary_menu").Stringify()
+            +object(object(data->model,L"windows_workspace"),L"switcher_menu").Stringify()+to_hstring(data->localizationGeneration)+to_hstring(data->textSize());
+        if(source==menuSource)return;menuSource=source;
+        auto populate=menuPopulate;populate(activeMenu.Items());
+    }
+    MenuFlyout menu(std::function<void(MenuItems)> populate){
         MenuFlyout result;TrackPopup(result,data);
-        result.Opening([populate](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
-            auto value=sender.as<MenuFlyout>();value.Items().Clear();populate(value.Items());
-        });return result;
+        result.Opening([weak=weak_from_this(),populate](winrt::Windows::Foundation::IInspectable const& sender,auto&&){if(auto self=weak.lock()){
+            self->activeMenu=sender.as<MenuFlyout>();self->menuPopulate=populate;self->menuSource=L"";
+            self->activeMenu.Items().Clear();self->refreshMenu();
+        }});
+        result.Closed([weak=weak_from_this()](winrt::Windows::Foundation::IInspectable const& sender,auto&&){if(auto self=weak.lock();self&&self->activeMenu==sender.as<MenuFlyout>()){
+            self->activeMenu=nullptr;self->menuPopulate={};self->menuSource=L"";
+        }});return result;
     }
     void fillMenu(winrt::Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> const& target,J const& model){
         NativeMenuItems(target,array(model,L"sections"),data,[data=data](J action){data->dispatch(action);});
@@ -236,6 +248,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto item=button(data,id,[data=data,id]{data->dispatch(invoke(id));});style(item,data,false);item.Padding({0});return item;
     }
     void build(){
+        auto popup=std::exchange(activeMenu,nullptr);menuPopulate={};menuSource=L"";if(popup)popup.Hide();
         input->Cancel();canvas.Children().Clear();items.clear();bars.clear();bankParts.clear();workspaces.clear();menus.clear();sizes.clear();overflow.clear();zones.clear();
         bankKey=geometryKey=desiredKey=lastMeasurement=L"";systemStatus.reset();
         background=Border();background.Background(clear());canvas.Children().Append(background);
@@ -257,10 +270,14 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         menuOverflow=button(data,data->copyCaption(L"header",L"menus"),[]{});style(menuOverflow,data,false);menuOverflow.Padding({0});
         AutomationProperties::SetAutomationId(menuOverflow,L"application-menus");
         menuOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock()){
+            uint32_t at=0;
             for(auto value:array(self->data->model,L"application_menus")){
-                auto spec=value.GetObject();MenuFlyoutSubItem item;item.Text(str(spec,L"label"));item.FontSize(self->data->textSize());
-                AutomationProperties::SetAutomationId(item,L"application-menu-"+str(spec,L"id"));self->fillMenu(item.Items(),object(spec,L"model"));target.Append(item);
+                auto spec=value.GetObject();auto item=at<target.Size()?target.GetAt(at).as<MenuFlyoutSubItem>():MenuFlyoutSubItem();
+                item.Text(str(spec,L"label"));item.FontSize(self->data->textSize());
+                AutomationProperties::SetAutomationId(item,L"application-menu-"+str(spec,L"id"));self->fillMenu(item.Items(),object(spec,L"model"));
+                if(at==target.Size())target.Append(item);++at;
             }
+            while(target.Size()>at)target.RemoveAtEnd();
         }}));
         menuCapsule=Border();menuCapsule.Height(36);menuCapsule.Padding({5,5,5,5});menuCapsule.CornerRadius({18*CornerFit,18*CornerFit,18*CornerFit,18*CornerFit});menuCapsule.Background(headerSurface(data));
         menuCapsule.VerticalAlignment(VerticalAlignment::Center);menuCapsule.Child(menuLabels);
@@ -291,8 +308,6 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         workspaceOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock())
             self->fillMenu(target,object(object(self->data->model,L"windows_workspace"),L"switcher_menu"));
         }));
-        workspaceOverflow.Flyout().Opened([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->workspaceMenuOpen=true;});
-        workspaceOverflow.Flyout().Closed([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->workspaceMenuOpen=false;});
         workspaceGroup=Grid();workspaceGroup.VerticalAlignment(VerticalAlignment::Center);workspaceGroup.Children().Append(switcherWell);workspaceGroup.Children().Append(workspaceOverflow);
         drawings=std::make_shared<DrawingTabs>();drawings->data=data;drawings->init();
         document=Border();document.Child(drawings->root);document.Background(clear());
@@ -664,7 +679,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         root.TabFocusNavigation(editing?Input::KeyboardNavigationMode::Cycle:Input::KeyboardNavigationMode::Local);
         drawings->refresh();
         applyWorkspaces();
-        if(workspaceMenuOpen)fillMenu(workspaceOverflow.Flyout().as<MenuFlyout>().Items(),object(object(snapshot,L"windows_workspace"),L"switcher_menu"));
+        refreshMenu();
         switchWidth=32+2*std::max(0,int(workspaces.size())-1);
         for(auto const& [item,id]:workspaces){item.Width(std::min(130.,unbox_value<double>(item.Tag())+20));switchWidth+=item.Width();}
         switchWidth=std::clamp(switchWidth,tile,480.);

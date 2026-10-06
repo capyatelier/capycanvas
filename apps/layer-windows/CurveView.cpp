@@ -133,7 +133,7 @@ struct CurveEditor : std::enable_shared_from_this<CurveEditor> {
         for(int axis=0;axis<2;axis++){ColumnDefinition column;column.Width({1,GridUnitType::Star});coordinateRow.ColumnDefinitions().Append(column);}
         for(int axis=0;axis<2;axis++)coordinateRow.Children().Append(coordinate(axis,bindings));
         root.Children().Append(coordinateRow);
-        root.Children().Append(CapyScopes::ScopeFooter(data,L"curve",[data]{return object(data->state,L"tonal_histogram");},bindings,nullptr,reset));
+        root.Children().Append(CapyScopes::ScopeFooter(data,L"curve",[data]{return object(data->state,L"tonal_histogram");},bindings,reset));
         graph.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
         graph.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto raw=e.GetCurrentPoint(self->graph);

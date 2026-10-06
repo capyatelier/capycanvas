@@ -13,7 +13,7 @@ $run=Join-Path $repo ('artifacts/windows/tab-drag/'+[Guid]::NewGuid().ToString('
 function Find-Preview {
  # Preview copies are excluded from the accessible control/content views.
  # Inspect only the workspace's direct raw children for this visual fixture.
- $workspace=Find 'Drawing workspace' -Name
+ $workspace=Workspace-Root
  if(!$workspace){return}
  $walker=[System.Windows.Automation.TreeWalker]::RawViewWalker
  $child=$walker.GetFirstChild($workspace)
@@ -27,7 +27,7 @@ function Preview {
  if($element){try{$element.Current.ItemStatus|ConvertFrom-Json}catch{}}
 }
 function Presentation {
- $workspace=Find 'Drawing workspace' -Name
+ $workspace=Workspace-Root
  if($workspace){try{$workspace.Current.ItemStatus|ConvertFrom-Json}catch{}}
 }
 function Current-Group {

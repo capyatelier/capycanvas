@@ -7,8 +7,8 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/column-stacks/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
-function Presentation {try{(Control 'Drawing workspace' -Name).Current.ItemStatus|ConvertFrom-Json}catch{}}
-function Gesture {try{(Control 'Drawing workspace' -Name).Current.HelpText|ConvertFrom-Json}catch{}}
+function Presentation {try{(Workspace-Root).Current.ItemStatus|ConvertFrom-Json}catch{}}
+function Gesture {try{(Workspace-Root).Current.HelpText|ConvertFrom-Json}catch{}}
 function Column([int]$Id){(Model).layout.collapsed|Where-Object id -eq $Id|Select-Object -First 1}
 function Layout {
     $settled=@{value='';count=0}

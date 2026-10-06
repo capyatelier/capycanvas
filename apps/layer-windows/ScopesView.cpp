@@ -196,11 +196,12 @@ struct ScopeView : std::enable_shared_from_this<ScopeView> {
         if(!tonal){
             logarithmic=CheckBox();logarithmic.MinWidth(0);logarithmic.MinHeight(28);logarithmic.Padding({4,0,0,0});
             AutomationProperties::SetAutomationId(logarithmic,prefix+L"-log");
-            auto text=label(data,L"");logarithmic.Content(text);
+            auto text=label(data,L"");text.TextWrapping(TextWrapping::Wrap);logarithmic.Content(text);
+            logarithmic.HorizontalContentAlignment(HorizontalAlignment::Stretch);root.Children().Append(logarithmic);
             logarithmic.Click([weak](auto&&,auto&&){if(auto self=weak.lock())
                 sendHistogram(self->data,O({{L"type",S(self->waveform?L"waveform_logarithmic":L"logarithmic")},{L"enabled",B(self->logarithmic.IsChecked().Value())}}));});
         }
-        root.Children().Append(ScopeFooter(data,prefix,[weak]{if(auto self=weak.lock())return self->view();return J{};},bindings,logarithmic?FrameworkElement(logarithmic):FrameworkElement(nullptr)));
+        root.Children().Append(ScopeFooter(data,prefix,[weak]{if(auto self=weak.lock())return self->view();return J{};},bindings));
         bindings.emplace_back([self=shared_from_this()]{self->refresh();});
     }
     void refresh(){
@@ -228,12 +229,12 @@ struct ScopeView : std::enable_shared_from_this<ScopeView> {
 };
 }
 FrameworkElement CapyScopes::ScopeFooter(std::shared_ptr<WorkspaceData> const& data,hstring const& prefix,std::function<J()> view,Bindings& bindings,
-    FrameworkElement const& leading,FrameworkElement const& trailing){
+    FrameworkElement const& trailing){
     Grid footer;footer.ColumnSpacing(4);
-    for(auto width:{GridUnitType::Star,GridUnitType::Auto,GridUnitType::Auto,GridUnitType::Auto,GridUnitType::Auto}){ColumnDefinition column;column.Width({1,width});footer.ColumnDefinitions().Append(column);}
+    for(auto width:{GridUnitType::Star,GridUnitType::Auto,GridUnitType::Auto,GridUnitType::Auto}){ColumnDefinition column;column.Width({1,width});footer.ColumnDefinitions().Append(column);}
     auto status=dim(data);status.VerticalAlignment(VerticalAlignment::Center);AutomationProperties::SetAutomationId(status,prefix+L"-status");
     footer.Children().Append(status);
-    for(auto [part,column]:{std::pair{leading,1},std::pair{trailing,4}})if(part){part.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(part,column);footer.Children().Append(part);}
+    if(trailing){trailing.VerticalAlignment(VerticalAlignment::Center);Grid::SetColumn(trailing,3);footer.Children().Append(trailing);}
     std::array<Primitives::ToggleButton,2> clipping{nullptr,nullptr};
     for(int i=0;i<2;++i){
         auto name=i?L"highlights":L"shadows";
@@ -242,7 +243,7 @@ FrameworkElement CapyScopes::ScopeFooter(std::shared_ptr<WorkspaceData> const& d
         AutomationProperties::SetAutomationId(toggle,prefix+L"-"+name);
         toggle.Click([data,name,weak=make_weak(toggle)](auto&&,auto&&){if(auto toggle=weak.get())
             sendHistogram(data,O({{L"type",S(name)},{L"enabled",B(toggle.IsChecked().Value())}}));});
-        Grid::SetColumn(toggle,2+i);footer.Children().Append(toggle);
+        Grid::SetColumn(toggle,1+i);footer.Children().Append(toggle);
     }
     bindings.emplace_back([data,view,status,clipping]{
         auto text=str(view(),L"status");if(status.Text()!=text){status.Text(text);tooltip(status,text);AutomationProperties::SetName(status,text);}

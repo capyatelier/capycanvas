@@ -75,14 +75,7 @@ function Set-Theme([string]$Theme) {
     Invoke 'Close' ([System.Windows.Automation.ControlType]::Button) $dialog
     Wait-Until {!(Find 'Preferences' ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
 }
-function Layout-Evidence {
-    $workspace=Find 'Drawing workspace' ([System.Windows.Automation.ControlType]::Pane)
-    if(!$workspace){
-        $workspace=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing workspace'))
-    }
-    if($workspace){try{$workspace.Current.ItemStatus|ConvertFrom-Json}catch{}}
-}
+function Layout-Evidence {try{(Workspace-Root).Current.ItemStatus|ConvertFrom-Json}catch{}}
 function Settle {
     $script:previousGeometry=$null;$script:stable=0
     Wait-Until {

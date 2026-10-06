@@ -36,7 +36,8 @@ const server = createServer(async (req, res) => {
 server.listen(0, '127.0.0.1');
 await once(server, 'listening');
 const cdp = await launchChrome(['--headless=new', '--force-color-profile=srgb', '--enable-gpu', '--enable-unsafe-webgpu'],
-  {executable: process.env.CAPY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+  {executable: process.env.CAPY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    timeout: method => scenario === 'windows-editor' && method === 'Runtime.evaluate' ? 70000 : 30000});
 const {call, evaluate, errors} = cdp;
 try {
   await cdp.attachPage();

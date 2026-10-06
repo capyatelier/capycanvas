@@ -50,6 +50,7 @@ fn hdr_delivery(
     settle(host);
     let checkpoint = host.session.engine().checkpoint();
     let mut task = begin(host, CommandId::ExportDocument);
+    ready(&mut task, Action::Describe);
     ready(
         &mut task,
         Action::ExportOptions {
@@ -57,7 +58,7 @@ fn hdr_delivery(
             profile_id: None,
         },
     );
-    assert!(task.preview(0).is_ok() && task.preview(1).is_ok());
+    task.preview(0).unwrap(); task.preview(1).unwrap();
     ready(
         &mut task,
         Action::ExportWrite {

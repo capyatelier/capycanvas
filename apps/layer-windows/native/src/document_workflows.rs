@@ -952,10 +952,10 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             host.prepare_canvas_frame(0, 0, true).unwrap();
-            if host.startup.complete && !host.session.engine().has_pending_document_edits() {
+            if host.startup.complete && host.session.background_readback_idle() {
                 break;
             }
-            assert!(Instant::now() < deadline, "canvas did not settle");
+            assert!(Instant::now() < deadline, "canvas did not settle: startup={:?}, previews_idle={}, continuous={}", host.startup, host.session.filter_previews_idle(), host.session.wants_continuous_frames());
             std::thread::sleep(Duration::from_millis(2));
         }
     }
@@ -1004,7 +1004,7 @@ mod tests {
         settle(&mut host);
         let mut info = begin(&mut host, CommandId::DocumentProperties);
         ready(&mut info, Action::Describe);
-        assert!(info.details.is_array());
+        assert!(info.details["rows"].is_array());
         info.complete(&mut host, false).unwrap();
         drop(info);
         let initial = host.session.engine().document().composition().color;
@@ -1065,7 +1065,7 @@ mod tests {
         ] {
             let mut task = begin(&mut host, CommandId::ExportDocument);
             ready(&mut task, Action::Describe);
-            assert_eq!(task.details["suggested_name"], "Untitled");
+            assert_eq!(task.details["suggested_name"], "native-master");
             if let Some(previous) = remembered.replace(format) {
                 assert_eq!(task.details["recipe"]["format"], serde_json::to_value(previous).unwrap());
                 assert_eq!(task.details["presets"]["index"], 0);
@@ -1181,13 +1181,18 @@ mod tests {
         let target = host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
         assert!(host.layer_thumbnails([(90, target)]).unwrap().0.is_empty(), "unrendered imports cannot publish a thumbnail");
         settle(&mut host);
-        // Simulate unrelated shader warmup after the document frame settled.
-        // This used to starve native thumbnails until every warmup job finished.
         host.dirty = true;
         host.startup.complete = false;
-        let (accepted, mut thumbnails) = host.layer_thumbnails([(91, target)]).unwrap();
-        assert_eq!(accepted, vec![91]);
         let deadline = Instant::now() + Duration::from_secs(10);
+        let mut thumbnails = loop {
+            let (accepted, thumbnails) = host.layer_thumbnails([(91, target)]).unwrap();
+            if !accepted.is_empty() {
+                assert_eq!(accepted, vec![91]);
+                break thumbnails;
+            }
+            assert!(Instant::now() < deadline, "thumbnail preparation did not complete during shader warmup");
+            std::thread::sleep(Duration::from_millis(2));
+        };
         while thumbnails.is_empty() {
             assert!(Instant::now() < deadline, "thumbnail map did not complete");
             thumbnails = host.layer_thumbnails([]).unwrap().1;

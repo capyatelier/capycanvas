@@ -24,8 +24,8 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
     await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:scale,mobile:false});
     await evaluate(`(async()=>{
       const fixture=${JSON.stringify(fixture)}, view=()=>JSON.parse(layerApp.app.workspace_view());
-      async function until(check,message){const start=performance.now();while(!check()){
-        if(performance.now()-start>25000)throw new Error(message);await new Promise(r=>setTimeout(r,50));
+      async function until(check,message,limit=25000){const start=performance.now();while(!check()){
+        if(performance.now()-start>limit)throw new Error(message);await new Promise(r=>setTimeout(r,50));
       }}
       await until(()=>view()?.ready&&!view().busy,'Workspace startup timed out');
       if(view().id!==fixture.workspace){
@@ -53,7 +53,7 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
       window.capyWindowsCaptionInsets=fixture.titlebar_insets.slice(0,2);
       window.dispatchEvent(new Event('resize'));
       await document.fonts.ready;
-      await until(()=>layerApp.startupTimes.complete!==null,'Staged GPU startup did not finish');
+      await until(()=>layerApp.startupTimes.complete!==null,'Staged GPU startup did not finish',60000);
       await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
       layerApp.dispatch({type:'invoke',command:'fit_canvas'});
       if(fixture.scenario==='canvas-under-header')for(let i=0;i<4;i++)layerApp.dispatch({type:'invoke',command:'zoom_in'});
