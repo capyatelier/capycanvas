@@ -788,6 +788,9 @@ Where to look:
   Selection uses the ordinary button helper with a 16 dp icon in a 30 dp slot.
   Group badges, contextual attachment, inherited visibility and optional
   right-swipe actions come from shared state.
+  Thumbnail press and hover feedback clips to the squircle. The animated
+  selection border is a sibling outside that clip so it can expand beyond the
+  thumbnail without cutting off its corners.
   Native row and thumbnail hit testing supplies the contact surface to the
   `layer_drop` query; its normalized target and position drive feedback before
   the shared action commits a drop. `AndroidTitleBarTest#layerRelationships`

@@ -419,6 +419,7 @@ internal class LayerSwipe {
             val windowed=inSeparateWindow()
             val label=if(group) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse") else if(mask) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_mask") else if(layer.optBoolean("selection_layer")) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_selection") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_content")
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp).then(if(!mask && !preview) Modifier.testTag("layer-content-$id").onGloballyPositioned { contentBounds(it.boundsInRoot(),shift) } else Modifier)) {
+            Box(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize().then(if(mask && !preview) Modifier.onGloballyPositioned { maskBounds=it.boundsInRoot() } else Modifier)
                 .then(if(group || preview) Modifier else Modifier.pointerInput(id,mask) {
                     awaitEachGesture {
@@ -439,7 +440,7 @@ internal class LayerSwipe {
                         } while(true)
                     }
                 })
-                .combinedClickable(onClick={
+                .clip(TileShape).combinedClickable(onClick={
                     host.layer(operation)
                     layer.optJSONObject("fill_color")?.takeIf { !mask }?.let { fill ->
                         host.colorEditor = ColorEditorRequest(null, fill.getJSONObject("color"), fill.getBoolean("opaque"), windowed) { color, _ ->
@@ -458,6 +459,7 @@ internal class LayerSwipe {
                         .background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-type-symbol-$id")
                     else Modifier.size(24.dp),tint=colors.text)
                 }
+            }
                 Spacer(Modifier.matchParentSize().graphicsLayer().drawWithCache {
                     val radius=size.minDimension/2
                     val contour=Path().apply { addSquircle(Rect(Offset.Zero,size),radius,radius,radius,radius) }.asAndroidPath()
