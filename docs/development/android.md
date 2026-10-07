@@ -8,6 +8,10 @@ a `SurfaceView`. The canvas needs Vulkan shared-demand presentation with
 swapchain-maintenance present fences; a driver without them shows a canvas
 initialization error instead of a canvas.
 
+The app uses no Google Play services. Distribution APKs must also omit Play's
+injected installer and licence checks; the [release workflow](releasing.md#android-apk)
+verifies this while retaining the signing identity for updates.
+
 The native Gradle build tracks shared Rust, filter assets and Fluent catalogs as
 inputs. Catalog-only changes rebuild the embedded native UI text.
 

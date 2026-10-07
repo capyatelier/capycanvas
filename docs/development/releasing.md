@@ -45,7 +45,7 @@ the same scripts developers run and the Rust version pinned in the workflow:
 | --- | --- | --- |
 | Linux | `packaging/flatpak/build.sh` and `packaging/flatpak/export.sh` with GNOME Platform and SDK 50 | `capycanvas-<version>-linux-x86_64.flatpak`; on a tag also `capycanvas.flatpakref` and `capycanvas-<version>-flatpak-repository.tar.zst` |
 | Web | `node apps/layer-web/package.mjs` | `capycanvas-<version>-web.zip` |
-| Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-<version>-android.aab`; on a tag also the Play-signed universal `capycanvas-<version>-android.apk` |
+| Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-<version>-android.aab`; on a tag also a Play-signed `capycanvas-<version>-android.apk` without Play licensing checks |
 | Windows | `package.ps1`, `package-msix.ps1`, `test-msix.ps1` and `package-installer.ps1` | Portable ZIP, setup program and Store MSIX |
 | macOS, iPadOS | `apps/layer-apple/scripts/release.sh mac` and `ipad` | `capycanvas-<version>-macos-arm64.dmg`; the iPad build goes to App Store Connect |
 
@@ -55,6 +55,41 @@ Pushing a `v*` tag checks that the tag names the workspace version and is on
 environment, uploads the iPad build to TestFlight and the Android bundle to
 Play's internal track, and creates a draft GitHub Release holding the release
 notes, every download, `SHA256SUMS` and build provenance attestations.
+
+### Android APK
+
+The GitHub APK must open without Google Play or Google services. Play App Signing
+preserves the signing identity used by existing installations; Automatic
+protection adds an installer and licence check that prevents this use.
+
+[`android_apk.py`](../../tools/build/android_apk.py) downloads the
+[unprotected standalone APKs](https://developers.google.com/android-publisher/api-ref/rest/v3/generatedapks/list)
+provided by Play. When protection is disabled, it can use the universal APK.
+It checks the actual manifest and DEX for Play licensing and Google service code,
+rejects split APKs, checks the package, version, Android 10 minimum and ARM64
+renderer, and verifies the signature before publishing the download. The public
+signing certificate in the script matches existing Android installations; an
+upload-key signature is not a substitute. A signing-key change needs explicit
+upgrade testing before changing this check.
+
+If Play supplies only unprotected splits, turn off Automatic protection for the
+release in Play Console before uploading its bundle. A per-release opt-out does
+not disable protection for later releases. The workflow fails rather than
+publishing a protected or incomplete APK. See Google's
+[unprotected APK instructions](https://support.google.com/googleplay/android-developer/answer/10183279?hl=en).
+
+Run the packaging regression checks without credentials or a device:
+
+```bash
+python3 -m unittest discover -s tools/build -p 'test_android_apk.py'
+python3 tools/build/android_apk.py verify 1.0.9 path/to/capycanvas-1.0.9-android.apk
+```
+
+Use the version of the APK being checked. Before release, test the exact download
+on private Android installs with and without Google services: first launch
+offline, painting, import, save/reopen, export, restart and updating an existing
+installation without losing drawings. Google service independence does not
+relax the [Android GPU requirements](android.md).
 
 ### Linux Flatpak
 
