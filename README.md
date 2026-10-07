@@ -20,28 +20,35 @@
 </p>
 
 Capy Canvas is free, GPU-accelerated painting and photo editing software. We
-started it because we wanted a faster alternative to paid art software,
-especially on Linux, where artists have fewer choices. It also runs on Windows,
-Mac, iPad and Android, and you can try it in your browser without installing
-anything.
+are not copying anything in particular, but instead we want something better.
 
-We want artists to build their own tools. Write your own brush engine. Make a
-shader for an effect you’ve always wanted, and share it with other artists. You
-shouldn’t have to wait for a software company to decide that your idea is worth
-building. That is why Capy Canvas is open source and forever free, and we want
-this to be a community, not a product.
+And this is worst on on Linux, where there are not many choices for
+illustration software. Though, this app also happens to work on Windows, Mac,
+iPad and Android, and web, so nobody is left behind.
 
-Drawing and editing happen on your device. No account, subscription or tracking.
+We want artists to build their own tools. We envision a world where painters
+build their own brush engine, and photographers write their effect shaders.
+And while software may be AI generated, the tools should be used by humans.
+Artists shouldn't have to wait for a software company to decide that your idea is worth
+building.
+
+That is why Capy Canvas is open source and forever free, and we want
+this to be a community of builders and creatives.
 
 ## Sketch
 
-Sketch keeps most of the screen for the drawing. Brushes and layers open in
-drawers when you need them, with brush size and opacity at the edge of the canvas.
-If you hide the controls in Zen mode, the canvas stays where it was. We don’t
-want the drawing moving under your pen because you closed a panel.
+My first foray into the digital art world (like many others) was with Procreate
+over a decade ago. Back when the apple pencil first came out, it was magic.
+Even though the processor was slow by today's standards, the hardware and
+software was so heavily optimized that it gave a real pen-to-paper feeling.
 
-The pencils respond to pressure and tilt, and their grain stays fixed to the
-paper. Repeated strokes build up in the same tooth.
+This was the first time a drawing app was ever fully optimized for the
+hardware, using predictive pen tracking and GPU powered brush+rendering
+engines. Then they dropped a clean and minimalist UI on top of it, which as
+become ubiquitious across all drawing apps.
+
+Capycanvas's *Sketch* workspace is a tribute to our roots. The place where
+everyone starts out.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sketch-workspace-dark.webp">
@@ -50,19 +57,22 @@ paper. Repeated strokes build up in the same tooth.
 
 ## Paint
 
-Oil and watercolor brushes pick up color already on the layer. You can change
-how much paint they carry and how they mix it, or work with dry media and ink.
-Paint puts the brushes, colors and layers beside the canvas, where you can keep
-them open while you work.
+Once you get into proper comic/manga work, the simple tools don't cut it anymore.
+Lasso fill tools exist for a reason, and you need to be using masks left and right
+to keep the shapes clean.
 
-Clipping layers keep shading inside the shapes below. Selection layers hold
-areas you want to return to later, and attached effects stay editable. Add an
-effect to one layer and keep painting through it, then change your mind about
-the settings later.
+There are many tools out there that solve this problem, CSP and medibang are
+often what people learn first. And they are great, easy-to-use and
+inuitive software. All you have to do is follow the process and it usually
+turns out OK.
 
-Sketch, Paint and Photo are starting layouts for the same editor. Move the
-panels, change the toolbars, keep the shortcuts you’re used to. You can save your
-own workspace too. Rearranging it has its own undo history.
+While they are true workhorses, they are slow, built for an era where all
+rendering and compositing was done on the CPU instead of the GPU. So they never
+were able to deliver the responsive painting and powerful paintbrush engine that
+modern apps like Fresco and Rebelle.
+
+Capycanvas's *Paint* workspace brings simulated physical media to digital illustration.
+
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/paint-workspace-dark.webp">
@@ -71,15 +81,17 @@ own workspace too. Rearranging it has its own undo history.
 
 ## Photo
 
-An imported photo keeps its source image and color profile, with painting stored
-on top. Attach Curves and other adjustments to it, mask them, and come back to
-change the settings later. Several effects can stay linked to the same layer;
-they move with it.
+Mobile devices are becoming more capable every day. It seems like OLED screens
+are everywhere, and my 2-year-old phone saves its images in wide-gamut HDR
+format by default. SRGB is a thing of the past.
 
-Tonal selections can isolate highlights or shadows for an adjustment. There’s
-also cloning and healing, wide-gamut color, HDR painting and editing, and print
-proofing. An HDR drawing has an editable SDR rendition for ordinary screens and
-exports. You can work on that version without changing the HDR pixels.
+To this date, the only painting app that properly supports wide gamut HDR is
+Krita. But I feel the experience is still a bit lacking. And when you export
+HDR images, you need control over the gain mapping, so that it still looks good
+on SDR devices. And of course you also need the basics (proofing, effect
+chains, the whole enchilada)
+
+Capycanvas's *Photo* space will enable stunning visuals for a new generation of wide-gamut devices.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.webp">
