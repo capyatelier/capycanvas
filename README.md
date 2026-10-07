@@ -59,8 +59,7 @@ everyone starts out.
 ## Paint
 
 Once you get into proper comic/manga work, the simple tools don't cut it anymore.
-Lasso fill tools exist for a reason, and you need to be using masks left and right
-to keep the shapes clean.
+Lasso fill is your best friend, and you learn to live with the necessary evil of masks.
 
 There are many tools out there that solve this problem, CSP and medibang are
 often what people learn first. And they are great, easy-to-use and
