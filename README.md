@@ -48,7 +48,7 @@ device, using predictive pen tracking and GPU powered brush+rendering
 engines. Then they dropped a clean and minimalist UI on top of it, which
 has become ubiquitious for all modern drawing apps.
 
-Capycanvas's *Sketch* workspace is a tribute to our roots. The place where
+The *Sketch* workspace is a tribute to our roots. The place where
 everyone starts out.
 
 <picture>
@@ -71,7 +71,7 @@ rendering and compositing was done on the CPU instead of the GPU. So they never
 were able to match the powerful, realistic paintbrush engines in modern apps
 like Fresco and Rebelle.
 
-Capycanvas's *Paint* workspace brings simulated physical media to digital illustration.
+The *Paint* workspace brings simulated physical media to digital illustration.
 
 
 <picture>
@@ -91,7 +91,7 @@ HDR and wide-gamut images online, you need control over the gain mapping, so
 that it still looks good on SDR devices. Of course you also need the basics
 (proofing, effect chains, the whole enchilada)
 
-Capycanvas's *Photo* workspace enables stunning visuals for a new generation of wide-gamut screens.
+The *Photo* workspace enables stunning visuals for a new generation of wide-gamut screens.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.svg">
