@@ -82,7 +82,7 @@ The *Paint* workspace brings simulated physical media to digital illustration.
 ## Photo
 
 Mobile devices are becoming more capable every day. It seems like OLED screens
-are everywhere, and my 2-year-old phone saves its images in P3 HDR
+are everywhere, and my old phone saves its images in P3 HDR
 format by default. SRGB is a thing of the past.
 
 To this date, the only painting app that properly supports wide gamut HDR is
