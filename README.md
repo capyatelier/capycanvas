@@ -13,6 +13,7 @@
 <p align="center">Linux · Windows · macOS · iPad · Android · Web</p>
 
 <p align="center">
+  <a href="https://capycanvas.art/">Website</a> ·
   <strong><a href="https://capycanvas.art/download/">Download</a></strong> ·
   <a href="https://editor.capycanvas.art/">Try in your browser</a> ·
   <a href="https://capycanvas.art/docs/">Artist guide</a> ·
@@ -52,7 +53,7 @@ everyone starts out.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sketch-workspace-dark.webp">
-  <img src="docs/assets/sketch-workspace-light.webp" width="1920" height="1080" alt="An ink drawing of a train beneath a large tree in Sketch, with the drawing filling the screen and tools at the edges.">
+  <img src="docs/assets/sketch-workspace-light.webp" width="1920" alt="An ink drawing of a train beneath a large tree in Sketch, with the drawing filling the screen and tools at the edges.">
 </picture>
 
 ## Paint
@@ -76,7 +77,7 @@ Capycanvas's *Paint* workspace brings simulated physical media to digital illust
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/paint-workspace-dark.webp">
-  <img src="docs/assets/paint-workspace-light.webp" width="1920" height="1080" alt="An oil painting of a house by the sea at sunset in Paint, with brushes, colors and layers beside the canvas.">
+  <img src="docs/assets/paint-workspace-light.webp" width="1920" alt="An oil painting of a house by the sea at sunset in Paint, with brushes, colors and layers beside the canvas.">
 </picture>
 
 ## Photo
@@ -95,7 +96,7 @@ Capycanvas's *Photo* workspace enables stunning visuals for a new generation of 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.webp">
-  <img src="docs/assets/photo-workspace-light.webp" width="1920" height="1080" alt="A terrarium photograph in Photo, with the Tonal range selection tool and Curves and Vibrance adjustment layers.">
+  <img src="docs/assets/photo-workspace-light.webp" width="1920" alt="A terrarium photograph in Photo, with the Tonal range selection tool and Curves and Vibrance adjustment layers.">
 </picture>
 
 ## Tools
