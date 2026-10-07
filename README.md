@@ -20,11 +20,11 @@
 </p>
 
 Capy Canvas is free, GPU-accelerated painting and photo editing software. We
-are not copying anything in particular, but instead we want something better.
+want to improve upon the ideas of the past, and build something better.
 
-And this is worst on on Linux, where there are not many choices for
-illustration software. Though, this app also happens to work on Windows, Mac,
-iPad and Android, and web, so nobody is left behind.
+The gap in creative software is most stark Linux, where there are not many good
+options for artists. Though, we think we can help people on Windows, Mac, iPad and
+Android, and web, so nobody is left behind.
 
 We want artists to build their own tools. We envision a world where painters
 build their own brush engine, and photographers write their effect shaders.
@@ -68,8 +68,8 @@ turns out OK.
 
 While they are true workhorses, they are slow, built for an era where all
 rendering and compositing was done on the CPU instead of the GPU. So they never
-were able to deliver the responsive painting and powerful paintbrush engine that
-modern apps like Fresco and Rebelle.
+were able to match the powerful, realistic paintbrush engines in modern apps
+like Fresco and Rebelle.
 
 Capycanvas's *Paint* workspace brings simulated physical media to digital illustration.
 
@@ -82,16 +82,16 @@ Capycanvas's *Paint* workspace brings simulated physical media to digital illust
 ## Photo
 
 Mobile devices are becoming more capable every day. It seems like OLED screens
-are everywhere, and my 2-year-old phone saves its images in wide-gamut HDR
+are everywhere, and my 2-year-old phone saves its images in P3 HDR
 format by default. SRGB is a thing of the past.
 
 To this date, the only painting app that properly supports wide gamut HDR is
 Krita. But I feel the experience is still a bit lacking. And when you export
-HDR images, you need control over the gain mapping, so that it still looks good
-on SDR devices. And of course you also need the basics (proofing, effect
-chains, the whole enchilada)
+HDR and wide-gamut images online, you need control over the gain mapping, so
+that it still looks good on SDR devices. And of course you also need the basics
+(proofing, effect chains, the whole enchilada)
 
-Capycanvas's *Photo* space will enable stunning visuals for a new generation of wide-gamut devices.
+Capycanvas's *Photo* workspace enables stunning visuals for a new generation of wide-gamut screens.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.webp">
