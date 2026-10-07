@@ -15,6 +15,8 @@ Progress notes, validation reports and other work records are not committed
   stack semantics, compositor feasibility and proposed validation gates.
 - [Photo editing: user journeys, gap audit and build list](photo-editing-research.md),
   with its [source reports](photo-editing-research).
+- [PSD import and layer styles](psd-and-layer-styles-research.md): PhotoCraft reuse,
+  compatibility gaps, style compositing and the proposed owner badge and Properties UI.
 - [Vector drawing and editing](vector-drawing-research.md).
 - [Vector layers: tool subset, stroke storage and new-artist journey](vector-layers-research.md),
   with its [source reports](vector-layers-research).
