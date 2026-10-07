@@ -40,13 +40,13 @@ this to be a community of builders and creatives.
 
 My first foray into the digital art world (like many others) was with Procreate
 over a decade ago. Back when the apple pencil first came out, it was magic.
-Even though the processor was slow by today's standards, the hardware and
-software was so heavily optimized that it gave a real pen-to-paper feeling.
+Even though the processor was slow by today's standards, it was so heavily
+optimized that it gave a real pen-to-paper feeling.
 
-This was the first time a drawing app was ever fully optimized for the
-hardware, using predictive pen tracking and GPU powered brush+rendering
-engines. Then they dropped a clean and minimalist UI on top of it, which as
-become ubiquitious across all drawing apps.
+This was the first time a drawing app was ever fully optimized for a mobile
+device, using predictive pen tracking and GPU powered brush+rendering
+engines. Then they dropped a clean and minimalist UI on top of it, which
+has become ubiquitious for all modern drawing apps.
 
 Capycanvas's *Sketch* workspace is a tribute to our roots. The place where
 everyone starts out.
