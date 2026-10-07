@@ -100,9 +100,6 @@ Capycanvas's *Photo* space will enable stunning visuals for a new generation of 
 
 ## Tools
 
-Here’s what’s available across the editor. The linked guides cover the controls
-and their limits.
-
 | Area | Tools and operations |
 | --- | --- |
 | [Brushes](https://capycanvas.art/docs/drawing/brush-tools/) | Pencil, charcoal, ink, bristle, watercolor, oil and airbrush; pressure and tilt, paper grain, textured tips and color mixing. |
@@ -116,59 +113,54 @@ and their limits.
 
 ## Building the engine
 
-We wanted to build the fastest brush and rendering engine we could. The goal is
-120 frames per second and beyond, with brushes thousands of pixels wide. That
-pushed us toward the way game engines work: build around the GPU, and do the
-pixel work in shaders.
+We wanted to build the fastest brush and rendering engine we could, aiming for
+120+ frames per second with brushes thousands of pixels wide. And we want that
+response with physical paint, live effects and HDR too.
 
-A large [wet brush](docs/engineering.md#brush-engine) has a lot to do. It has to
-pick up color, carry paint and mix it into the next part of the stroke. We keep
-that work on the GPU, along with
-the layers it paints into. Pencils and ink take a different path: the shader
-sweeps the tip along the stroke, with paper grain fixed to the canvas.
+We took our cue from game engines. The [brush engine](docs/engineering.md#brush-engine)
+and layer compositor are built around shaders, on top of `wgpu`. Wet paint stays
+on the GPU as the brush picks it up and mixes it into the next part of the stroke.
+The [effects](docs/engineering.md#live-effects) run there too, and compatible
+adjustments can share a shader instead of each writing out another image.
 
-Then there’s the rest of the drawing. Hundreds of layers can hold a lot of
-empty space, so we allocate paint storage in small tiles where marks exist.
-[Edits update the affected regions](docs/engineering.md#incremental-composition).
-Compatible adjustments [run together in one shader](docs/engineering.md#live-effects),
-avoiding an intermediate image between every effect.
+Of course a fast brush is only part of it. There may be hundreds of layers to
+combine after every stroke. We [update the parts that changed](docs/engineering.md#incremental-composition)
+and keep the rest. And a layer with a few marks on it only needs paint storage
+for those areas. This matters when the same engine has to fit on a tablet.
 
-The engine is written in Rust and shared by every platform, including the
-browser. Each [native app](docs/engineering.md#native-apps-and-shared-core) uses
-its platform’s own controls. We wanted the same brushes everywhere, and an
-interface that belongs on the device you’re using.
+We also want a brush or effect someone builds on Linux to work on the other
+platforms. The [shared engine is written in Rust](docs/engineering.md#native-apps-and-shared-core)
+and compiles for all of them, including the browser. Each native app uses its
+platform's own controls around that engine.
 
-We’re still working toward the performance goals. The
-[measurements](docs/PERFORMANCE_TARGETS.md#where-we-stand) show what meets them
-and what doesn’t. Painting requires a hardware GPU.
-
-The [engineering whitepaper](docs/engineering.md) follows the full design,
-including [color and original images](docs/engineering.md#color-and-original-images)
-and [writing new effects](docs/engineering.md#extending-the-engine).
+There is still performance work to do. The [measurements](docs/PERFORMANCE_TARGETS.md#where-we-stand)
+show where we meet the targets and where we don't. The
+[engineering whitepaper](docs/engineering.md) goes into the design, including
+[color and HDR](docs/engineering.md#color-and-original-images).
 
 ## Contributing
 
-We need artists to use Capy Canvas and tell us where it gets in their way. We
-also need help with brushes, shaders and the interface. If you want to work on
-any of that, we’d like to hear from you.
+The idea of artists building their own tools is something we want people to
+actually try. For an effect shader, the [Tent Blur example](examples/filters/tent-blur)
+is a place to start. It defines a filter and its controls in JSON and WGSL,
+without adding a Rust kernel. The [extension guide](docs/engineering.md#extending-the-engine)
+covers how to load it. Building a new brush engine involves the shared code;
+the [brush guide](docs/internals/brushes.md#changing-a-brush) points to that.
 
-For a first shader project, the [Tent Blur example](examples/filters/tent-blur)
-is a small effect defined in JSON and WGSL. Brush-engine work starts in the
-[brush guide](docs/internals/brushes.md). Bring feedback and ideas to
-[GitHub issues](https://github.com/capyatelier/capycanvas/issues).
+We also need help with interface design and testing the app with actual drawings.
+If a tool gets in the way of how you work, [tell us](https://github.com/capyatelier/capycanvas/issues)
+what you were trying to do.
 
-## Try it or build it
+## Development
 
 Capy Canvas is in development. Linux and web are the most complete versions;
-we’re bringing the other ports up to the same level. The
-[download page](https://capycanvas.art/download/) lists available builds, and
-the [browser editor](https://editor.capycanvas.art/) is there to try now.
+we're bringing the other ports up to the same level. Painting requires a hardware
+GPU.
 
-To build from source, follow the guide for
-[Linux](docs/development/linux.md), [Web](docs/development/web.md),
-[Android](docs/development/android.md), [macOS and iPadOS](docs/development/apple.md)
-or [Windows](docs/development/windows.md). The
-[developer guide](docs/development/README.md) covers setup and checks.
+The [download page](https://capycanvas.art/download/) lists available builds.
+To build from source, choose a platform in the
+[developer guide](docs/development/README.md#build-a-client). It also covers the
+checks to run when making changes.
 
 ## Package layout
 
