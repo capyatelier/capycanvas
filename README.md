@@ -40,8 +40,8 @@ this to be a community of builders and creatives.
 
 My first foray into the digital art world (like many others) was with Procreate
 over a decade ago. Back when the apple pencil first came out, it was magic.
-Even though the processor was slow by today's standards, it was so heavily
-optimized that it gave a real pen-to-paper feeling.
+Even though the hardware was slow by today's standards, it was so well done
+that it gave a real pen-to-paper feeling.
 
 This was the first time a drawing app was ever fully optimized for a mobile
 device, using predictive pen tracking and GPU powered brush+rendering
@@ -86,7 +86,7 @@ are everywhere, and my old phone saves its images in P3 HDR
 format by default. SRGB is a thing of the past.
 
 To this date, the only painting app that properly supports wide gamut HDR is
-Krita. But I feel the experience is still a bit lacking. And when you export
+Krita. HDR is a complicated beast and is hard to get right. When you publish
 HDR and wide-gamut images online, you need control over the gain mapping, so
 that it still looks good on SDR devices. Of course you also need the basics
 (proofing, effect chains, the whole enchilada)
