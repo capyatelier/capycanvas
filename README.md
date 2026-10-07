@@ -52,8 +52,8 @@ Capycanvas's *Sketch* workspace is a tribute to our roots. The place where
 everyone starts out.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sketch-workspace-dark.webp">
-  <img src="docs/assets/sketch-workspace-light.webp" width="1920" alt="An ink drawing of a train beneath a large tree in Sketch, with the drawing filling the screen and tools at the edges.">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sketch-workspace-dark.svg">
+  <img src="docs/assets/sketch-workspace-light.svg" width="1920" alt="An ink drawing of a train beneath a large tree in Sketch, with the drawing filling the screen and tools at the edges.">
 </picture>
 
 ## Paint
@@ -75,8 +75,8 @@ Capycanvas's *Paint* workspace brings simulated physical media to digital illust
 
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/paint-workspace-dark.webp">
-  <img src="docs/assets/paint-workspace-light.webp" width="1920" alt="An oil painting of a house by the sea at sunset in Paint, with brushes, colors and layers beside the canvas.">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/paint-workspace-dark.svg">
+  <img src="docs/assets/paint-workspace-light.svg" width="1920" alt="An oil painting of a house by the sea at sunset in Paint, with brushes, colors and layers beside the canvas.">
 </picture>
 
 ## Photo
@@ -88,14 +88,14 @@ format by default. SRGB is a thing of the past.
 To this date, the only painting app that properly supports wide gamut HDR is
 Krita. But I feel the experience is still a bit lacking. And when you export
 HDR and wide-gamut images online, you need control over the gain mapping, so
-that it still looks good on SDR devices. And of course you also need the basics
+that it still looks good on SDR devices. Of course you also need the basics
 (proofing, effect chains, the whole enchilada)
 
 Capycanvas's *Photo* workspace enables stunning visuals for a new generation of wide-gamut screens.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.webp">
-  <img src="docs/assets/photo-workspace-light.webp" width="1920" alt="A terrarium photograph in Photo, with the Tonal range selection tool and Curves and Vibrance adjustment layers.">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.svg">
+  <img src="docs/assets/photo-workspace-light.svg" width="1920" alt="A terrarium photograph in Photo, with the Tonal range selection tool and Curves and Vibrance adjustment layers.">
 </picture>
 
 ## Tools
