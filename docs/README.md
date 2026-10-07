@@ -10,9 +10,11 @@ newest measurements. Check changes that affect frame generation against it.
 
 ## Understand the code
 
-Read [Architecture](architecture.md) first. It introduces the shared editor and
-follows an input event through to the GPU. The guides below cover one system at a
-time and link to implementation details when they become relevant.
+The [engineering whitepaper](engineering.md) explains why we built the brush and
+rendering stack this way, from pen input to live effects and native apps.
+[Architecture](architecture.md) introduces the shared editor and follows an input
+event through to the GPU. The guides below cover one system at a time and link to
+implementation details when they become relevant.
 
 | Topic | What it explains |
 | --- | --- |

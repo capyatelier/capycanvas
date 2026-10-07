@@ -3,319 +3,189 @@
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/assets/capy-dark.svg">
       <source media="(prefers-color-scheme: light)" srcset="docs/assets/capy-light.svg">
-      <img src="docs/assets/capy-light.svg" width="112" height="112" alt="Capy Canvas">
+      <img src="docs/assets/capy-light.svg" width="96" height="96" alt="Capy Canvas">
     </picture>
   </a>
 </p>
 
 <h1 align="center">Capy Canvas</h1>
 
+<p align="center">Linux · Windows · macOS · iPad · Android · Web</p>
+
 <p align="center">
-  <a href="https://capycanvas.art/">Website</a> ·
-  <a href="https://capycanvas.art/download/">Downloads</a> ·
-  <a href="https://capycanvas.art/docs/">Documentation</a> ·
-  <a href="https://editor.capycanvas.art/">Web&nbsp;Demo</a>
+  <strong><a href="https://capycanvas.art/download/">Download</a></strong> ·
+  <a href="https://editor.capycanvas.art/">Try in your browser</a> ·
+  <a href="https://capycanvas.art/docs/">Artist guide</a> ·
+  <a href="docs/engineering.md">Engineering</a>
 </p>
 
-Capy Canvas is an app for sketching, illustration and photography. It is built for
-Linux first, where artists have long had fewer choices in professional software,
-and it also runs on Android, iPad, Mac and Windows. You can
-[try it in your browser](https://editor.capycanvas.art/) without installing anything.
+Capy Canvas is free, GPU-accelerated painting and photo editing software. We
+started it because we wanted a faster alternative to paid art software,
+especially on Linux, where artists have fewer choices. It also runs on Windows,
+Mac, iPad and Android, and you can try it in your browser without installing
+anything.
 
-Its GPU-accelerated brush and compositing engines are designed to improve
-performance and battery life, particularly on mobile devices. The interface comes
-with familiar layouts for sketching, painting and photo editing, and artists can
-rearrange panels, toolbars and shortcuts to match the habits they have built in
-other apps.
+We want artists to build their own tools. Write your own brush engine. Make a
+shader for an effect you’ve always wanted, and share it with other artists. You
+shouldn’t have to wait for a software company to decide that your idea is worth
+building. That is why Capy Canvas is open source and forever free, and we want
+this to be a community, not a product.
 
-This project is fully free and open source, and keeps artists in control of their
-own data. There are no accounts, subscriptions or tracking. Drawing and editing
-happen locally on your device, and the code is licensed under MIT or Apache-2.0.
+Drawing and editing happen on your device. No account, subscription or tracking.
+
+## Sketch
+
+Sketch keeps most of the screen for the drawing. Brushes and layers open in
+drawers when you need them, with brush size and opacity at the edge of the canvas.
+If you hide the controls in Zen mode, the canvas stays where it was. We don’t
+want the drawing moving under your pen because you closed a panel.
+
+The pencils respond to pressure and tilt, and their grain stays fixed to the
+paper. Repeated strokes build up in the same tooth.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sketch-workspace-dark.webp">
+  <img src="docs/assets/sketch-workspace-light.webp" width="1920" height="1080" alt="An ink drawing of a train beneath a large tree in Sketch, with the drawing filling the screen and tools at the edges.">
+</picture>
+
+## Paint
+
+Oil and watercolor brushes pick up color already on the layer. You can change
+how much paint they carry and how they mix it, or work with dry media and ink.
+Paint puts the brushes, colors and layers beside the canvas, where you can keep
+them open while you work.
+
+Clipping layers keep shading inside the shapes below. Selection layers hold
+areas you want to return to later, and attached effects stay editable. Add an
+effect to one layer and keep painting through it, then change your mind about
+the settings later.
+
+Sketch, Paint and Photo are starting layouts for the same editor. Move the
+panels, change the toolbars, keep the shortcuts you’re used to. You can save your
+own workspace too. Rearranging it has its own undo history.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/paint-workspace-dark.webp">
-  <img src="docs/assets/paint-workspace-light.webp" width="1920" alt="Capy Canvas in the Paint workspace, with abstract shapes, watercolor shading and editable layers.">
+  <img src="docs/assets/paint-workspace-light.webp" width="1920" height="1080" alt="An oil painting of a house by the sea at sunset in Paint, with brushes, colors and layers beside the canvas.">
 </picture>
 
-## Overall architecture
+## Photo
 
-When designing Capy Canvas, we did not want to compromise on UI responsiveness.
-Controls and pen input should keep up with the display on every supported
-platform, up to 120 frames per second, even while the drawing engine handles
-large brushes and hundreds of layers. We also need tools and documents to behave consistently across platforms,
-even though each uses different UI and graphics APIs.
+An imported photo keeps its source image and color profile, with painting stored
+on top. Attach Curves and other adjustments to it, mask them, and come back to
+change the settings later. Several effects can stay linked to the same layer;
+they move with it.
 
-To achieve these goals, we designed the app around a shared core written in Rust.
-The core contains the editor's business logic, including tools, UI behavior and
-layout, brushes, layers and document editing. We cross-compile it for each
-platform and wrap it in the native toolkit, which supplies the widgets and OS
-integration. The web client runs the same core compiled to WebAssembly.
+Tonal selections can isolate highlights or shadows for an adjustment. There’s
+also cloning and healing, wide-gamut color, HDR painting and editing, and print
+proofing. An HDR drawing has an editable SDR rendition for ordinary screens and
+exports. You can work on that version without changing the HDR pixels.
 
-For the best user experience, we use each platform's own UI toolkit:
-GTK4/libadwaita on Linux, WinUI 3 on Windows, Jetpack Compose on Android,
-AppKit on macOS and UIKit on iPadOS.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/photo-workspace-dark.webp">
+  <img src="docs/assets/photo-workspace-light.webp" width="1920" height="1080" alt="A terrarium photograph in Photo, with the Tonal range selection tool and Curves and Vibrance adjustment layers.">
+</picture>
 
-The canvas also needs a common way to use each platform's GPU. We built its
-pixel-processing stack on `wgpu`, a Rust graphics library that translates our
-shaders and rendering commands to Vulkan on Linux and Android, Metal on macOS and
-iPadOS, Direct3D 12 on Windows and WebGPU in the browser. This lets us implement
-a brush, filter or layer operation once and use it in every client.
+## Tools
 
-```text
-Native UI toolkit or browser controls
-    | pen samples and tool commands
-    v
-Shared Rust core
-    +-- editor: documents, tools, UI behavior and layout
-    +-- stroke processing: pressure and brush placement
-    +-- renderer: GPU brushes, filters and composition via wgpu
-    |
-    v
-Vulkan / Metal / Direct3D 12 / WebGPU
-    |
-    v
-Native drawing surface or browser canvas
-```
+Here’s what’s available across the editor. The linked guides cover the controls
+and their limits.
 
-To keep a long draw from blocking controls or pen input, we keep GPU waits off the
-native UI threads. We batch new brush marks and update only the regions an edit
-affects, reusing the rest of the image between frames.
-
-Painting requires a hardware GPU. [Performance targets](docs/PERFORMANCE_TARGETS.md)
-sets the frame rates we guarantee on low-, mid- and top-tier tablets. The
-[performance guide](docs/development/testing.md#performance) explains how we
-measure frame time and input-to-display latency. The
-[architecture guide](docs/architecture.md) follows a pen event through the shared
-core to the displayed stroke.
-
-## Package layout
-
-We keep the shared Rust code under `crates/` and the platform clients under `apps/`.
-Most packages have a README that explains their main types and where to start
-reading. The `layer-` prefix is the internal Cargo naming convention.
-
-| Package | Responsibility |
+| Area | Tools and operations |
 | --- | --- |
-| [`layer-core`](crates/layer-core/README.md) | Defines documents, layers and brushes, applies undoable edits, and reads and writes `.capy` projects. |
-| [`layer-engine`](crates/layer-engine/README.md) | Turns pen samples into brush marks, handling pressure and tilt response, prediction and spacing. |
-| [`layer-ui`](crates/layer-ui/README.md) | Implements editor tools, commands, panel layout, preferences and file-operation state shared by the clients. |
-| [`layer-workspace`](crates/layer-workspace) | Saves workspace layouts, keeps the built-in layouts separate from the artist's own, and imports and exports them. |
-| [`layer-color`](crates/layer-color) | Converts colors between ICC profiles, and reads and writes photos with their embedded profiles. |
-| [`layer-render`](crates/layer-render/README.md) | Defines the drawing work and image requests passed between the engine and renderer. |
-| [`layer-render-wgpu`](crates/layer-render-wgpu/README.md) | Draws brushes, combines layers, runs filters and presents the canvas using `wgpu`. |
-| [`layer-host`](crates/layer-host/README.md) | Connects the shared editor and renderer for Android, Apple and Windows. GTK and web connect them directly. |
-| [`layer-bench`](crates/layer-bench/README.md) | Runs repeatable GPU drawing benchmarks and generates the bundled brush previews. |
+| [Brushes](https://capycanvas.art/docs/drawing/brush-tools/) | Pencil, charcoal, ink, bristle, watercolor, oil and airbrush; pressure and tilt, paper grain, textured tips and color mixing. |
+| [Layers](https://capycanvas.art/docs/layers/types/) | Groups, clipping layers, layer masks, blend modes, editable color and gradient fills, and selection layers. |
+| [Selections](https://capycanvas.art/docs/selections/tools/) | Rectangle, ellipse, lasso, polygon, contiguous color and tonal range; Quick Mask, feathering and saved selections. |
+| [Effects](https://capycanvas.art/docs/filters/how-filters-apply/) | Linked non-destructive effect chains, adjustment layers and effect masks; Curves, Levels, color grading, blur, sharpening, halftone and painterly effects. |
+| [Retouching](https://capycanvas.art/docs/retouch/clone-heal/) | Clone Stamp, Healing and Spot Healing, dodge and burn, blending and liquify. |
+| [Color](https://capycanvas.art/docs/color-management/color-spaces/) | sRGB, Display P3, Adobe RGB and ProPhoto RGB; ICC profiles, 8/16-bit SDR, 16/32-bit float HDR, print proofing and gamut warnings. |
+| [Drawing](https://capycanvas.art/docs/drawing/fill/) and [transforms](https://capycanvas.art/docs/transform/move-transform/) | Reference-layer fills, Enclose and Fill, gradients, rulers, crop, resize, perspective and mesh warp. |
+| [Workspace](https://capycanvas.art/docs/customize/workspaces/) | Docked or floating panels, tab groups, configurable toolbars and shortcuts, saved layouts and Zen mode. |
 
-Runtime filter definitions live in [`assets/filters/`](assets/filters). We share the
-interface icons and bundled brush previews in [`apps/layer-web/`](apps/layer-web)
-with the native clients, whose build scripts reuse those files.
+## Building the engine
 
-## Configurable interface
+We wanted to build the fastest brush and rendering engine we could. The goal is
+120 frames per second and beyond, with brushes thousands of pixels wide. That
+pushed us toward the way game engines work: build around the GPU, and do the
+pixel work in shaders.
 
-We built the workspace from configurable panels and toolbars so artists can put the
-controls they use where they expect to find them. Panels can be docked, floated,
-grouped in tabs or collapsed. Toolbars and control sizes can be customized too. The
-app includes Sketch, Paint and Photo workspaces as starting points, and artists can
-save their own.
+A large [wet brush](docs/engineering.md#brush-engine) has a lot to do. It has to
+pick up color, carry paint and mix it into the next part of the stroke. We keep
+that work on the GPU, along with
+the layers it paints into. Pencils and ink take a different path: the shader
+sweeps the tip along the stroke, with paper grain fixed to the canvas.
 
-To clear controls from the canvas without rearranging the workspace, we added Zen
-mode. It temporarily hides controls while keeping the canvas size and position
-fixed, so entering or leaving the mode does not shift the artwork under the pen.
-Artists can choose whether the Capy exit button stays visible and whether panels
-reappear near the screen edges.
+Then there’s the rest of the drawing. Hundreds of layers can hold a lot of
+empty space, so we allocate paint storage in small tiles where marks exist.
+[Edits update the affected regions](docs/engineering.md#incremental-composition).
+Compatible adjustments [run together in one shader](docs/engineering.md#live-effects),
+avoiding an intermediate image between every effect.
 
-We keep this behavior in Rust. A client sends each button press or layout change to
-`UiSession` as a typed `UiAction`. The session applies it and reports which parts of
-the UI changed, so the client can update those controls in place without
-interrupting a slider drag or text edit. Buttons, menus and shortcuts use the same
-command definitions, so they agree on what a command does and when it is available.
+The engine is written in Rust and shared by every platform, including the
+browser. Each [native app](docs/engineering.md#native-apps-and-shared-core) uses
+its platform’s own controls. We wanted the same brushes everywhere, and an
+interface that belongs on the device you’re using.
 
-Workspace changes have their own undo history, so moving a toolbar does not become
-another step in the painting history.
+We’re still working toward the performance goals. The
+[measurements](docs/PERFORMANCE_TARGETS.md#where-we-stand) show what meets them
+and what doesn’t. Painting requires a hardware GPU.
 
-The [workspace guide](docs/ui/README.md) explains how the layout model and shared
-actions connect to native widgets.
-
-## Settings and documents
-
-We define preferences in Rust so every platform uses the same defaults, validation
-and shortcut rules. Each client builds its settings controls from those definitions
-and saves the choices through its own storage APIs. Workspace layouts are stored
-separately from preferences and artwork, so rearranging panels does not mark the
-drawing as modified.
-
-An editable project needs to preserve more than the pixels on screen. A `.capy`
-file keeps everything needed to continue working: the layers, masks and filter
-settings, and any imported photos at their original quality and color profile.
-Undo history is not saved. Export instead flattens the artwork into a standard
-image file, such as PNG, JPEG or TIFF, or an HDR format for HDR documents. The
-Rust core tracks unsaved changes and file requests, while each client supplies
-file pickers and reads or writes the bytes.
-
-The [settings guide](docs/ui/settings.md) explains preference definitions and
-storage. The [document guide](docs/internals/documents.md) covers editable projects,
-undo and save handling.
-
-## Rendering engine
-
-We need to handle illustrations with hundreds of layers, even though many layers
-contain only a few marks. Giving each layer a full-canvas texture would quickly
-use up graphics memory, and recomputing the entire stack after every pen movement
-would repeat work on unchanged pixels.
-
-Instead, we store painted content in 256 × 256 tiles held in GPU textures,
-allocating them only where something has been painted. Shaders update the affected
-tiles, and the compositor combines them with the other layers to produce the
-visible image. It blends layers in linear light, so colors mix the way light does,
-and supports wide-gamut and HDR documents. We track which regions changed and
-which cached results depend on them, so we can reuse the rest.
-
-Those dependencies branch when an adjustment uses a mask. In this example, a color
-adjustment is attached to a paint layer, so it must change that paint without
-changing the background or the ink above it. Its mask and opacity control how much
-filtered color replaces the original, while the paint's coverage stays the same:
-
-```text
-Paint tile ----+----> Color filter ------+
-               |                         |
-               +---------------------+   |
-                                     v   v
-Effect mask + opacity -----------> Mix with original
-                                          |
-                                          v
-Background tile -----------------> Paint over background
-                                          |
-                                          v
-Ink tile ------------------------> Ink over result
-                                          |
-                                          v
-                                      Output tile
-```
-
-If the mask changes, we recompute the adjustment and the composition above it,
-reusing the paint, background and ink tiles. Adjustments that work on one pixel at a
-time are combined with their masks into a single shader, so no texture is written
-between them. Blurs can expand the layer's coverage and need neighboring pixels,
-so we cache their larger intermediate images on the GPU. Some filters still need
-full-image storage.
-
-We keep the composed image in GPU textures through presentation, so there is no
-second copy of the canvas on the CPU. Even on devices where the CPU and GPU share
-memory, a second copy would still use memory and bandwidth. We read results back
-only when export, thumbnails or color sampling need them.
-
-The [rendering guide](docs/internals/rendering.md) explains how we track changes
-and reuse intermediate results. The [runtime filter reference](docs/reference/runtime-filters.md)
-describes how to add filters using JSON definitions and WGSL shader code.
-
-## Brush engine
-
-A brush that stamps small marks, or dabs, can run well on a CPU. Once it needs to
-pick up color, smear paint or deform it with liquify, it must repeatedly sample
-and update the existing image. Large brush tips multiply that work. More elaborate
-watercolor and oil models also need to track and move paint as the stroke advances.
-
-We keep pressure, tilt and path modeling on the CPU and put the pixel work on the
-GPU. Most brushes, including pencils, charcoal and ink, don't stamp overlapping
-copies of the tip. Instead, the CPU records the tip's position, size and tilt as the
-pen moves, and the GPU sweeps the tip from one point to the next. The paper texture
-stays fixed to the page rather than moving with the brush, so repeated strokes build
-up in the same grain, as graphite does on real paper.
-
-Brushes that scatter or push paint around, such as spray, watercolor, oil,
-blending and liquify, still stamp individual dabs. When a dab needs the result of
-an earlier one, we preserve that order across GPU passes. Layer pixels and the
-paint carried by wet brushes stay in GPU textures, so a stroke never reads the
-canvas back to the CPU.
-
-The goal is to make complex brushes substantially faster than a CPU pixel engine
-while reducing CPU overhead and memory traffic. This matters particularly on
-tablets, where battery use and heat limit sustained performance.
-Current measured rates are in the
-[performance targets](docs/PERFORMANCE_TARGETS.md).
-
-The [brush guide](docs/internals/brushes.md) follows a stroke from pen samples to
-GPU paint updates and explains the state used by different brush types.
-
-## Platform support
-
-Pen input, window lifecycle and file access differ across operating systems,
-so each client adapts those services to the shared core:
-
-| Client | UI and graphics | Platform integration |
-| --- | --- | --- |
-| [Linux](docs/development/linux.md) | GTK4/libadwaita and Vulkan on Wayland. | Runs the GPU worker separately from GTK and presents the canvas in a Wayland subsurface beneath the controls. |
-| [Web](docs/development/web.md) | DOM controls and WebGPU. | Runs the shared core as WebAssembly, schedules drawing through browser animation callbacks, and can be installed to work offline. |
-| [Android](docs/development/android.md) | Kotlin/Jetpack Compose and Vulkan. | Calls Rust through JNI, draws pen strokes directly into the displayed buffer to reduce latency, and uses Android document providers for files. |
-| [macOS / iPadOS](docs/development/apple.md) | AppKit / UIKit and Metal. | Presents the canvas through a `CAMetalLayer`, and on iPad forwards Apple Pencil's predicted points and later sample corrections. |
-| [Windows](docs/development/windows.md) | C++/WinRT, WinUI 3 and Direct3D 12. | Hosts the canvas in a `SwapChainPanel` and keeps input and rendering independent of control updates. |
-
-The Linux and web versions are the most complete, and we are still bringing the
-other ports up to the same level. The [platform guide](docs/platforms/README.md)
-links to their implementation notes and device-test records.
-
-## Development workflow
-
-After implementing a feature in GTK, we use coding agents to adapt the interface to
-the web client. Other agents use that browser implementation as the reference when
-adapting the interface to each platform's native toolkit:
-
-```text
-Linux / Wayland (GTK4)
-    |  New features and UI development
-    |
-    |  Coding agents port the interface
-    v
-Web (DOM + Rust/WebAssembly)
-    |
-    |  Coding agents adapt the UI to native toolkits
-    +----> Android (Jetpack Compose)
-    +----> macOS (AppKit)
-    +----> iPadOS (UIKit)
-    +----> Windows (WinUI 3)
-
-Shared Rust editor and renderer compile for every target.
-```
-
-We first compare the web UI with GTK, then compare each native port with the
-web UI, using screenshots and the same interaction tests at each step. The
-[platform guide](docs/platforms/README.md#development-workflow) explains these checks.
-
-## Build and run on Linux
-
-To build the Linux app, install a recent stable Rust toolchain, a C/C++ build
-toolchain, `pkg-config`, and GTK4, libadwaita and Wayland development packages.
-We develop with GTK 4.22 and libadwaita 1.9. Running the canvas requires a Wayland
-session and a hardware Vulkan driver with mailbox presentation and
-premultiplied-alpha surface support.
-
-```bash
-git clone https://github.com/capyatelier/capycanvas.git
-cd capycanvas
-./apps/layer-linux/run.sh
-```
-
-The [Linux setup guide](docs/development/linux.md) covers dependencies and
-packaging. The other clients are also built from source for now, and the
-[developer guide](docs/development/README.md) covers their setup, testing and
-performance measurements.
+The [engineering whitepaper](docs/engineering.md) follows the full design,
+including [color and original images](docs/engineering.md#color-and-original-images)
+and [writing new effects](docs/engineering.md#extending-the-engine).
 
 ## Contributing
 
-We need help with product design and shader development, and with testing from
-artists who sketch, illustrate, draw comics or edit photos. Our current focus is
-getting the user interface right. Once the UX is in good shape, we plan to clean
-up the agent-generated code, optimize performance, and simplify or rewrite the
-brush and compositor engines.
+We need artists to use Capy Canvas and tell us where it gets in their way. We
+also need help with brushes, shaders and the interface. If you want to work on
+any of that, we’d like to hear from you.
+
+For a first shader project, the [Tent Blur example](examples/filters/tent-blur)
+is a small effect defined in JSON and WGSL. Brush-engine work starts in the
+[brush guide](docs/internals/brushes.md). Bring feedback and ideas to
+[GitHub issues](https://github.com/capyatelier/capycanvas/issues).
+
+## Try it or build it
+
+Capy Canvas is in development. Linux and web are the most complete versions;
+we’re bringing the other ports up to the same level. The
+[download page](https://capycanvas.art/download/) lists available builds, and
+the [browser editor](https://editor.capycanvas.art/) is there to try now.
+
+To build from source, follow the guide for
+[Linux](docs/development/linux.md), [Web](docs/development/web.md),
+[Android](docs/development/android.md), [macOS and iPadOS](docs/development/apple.md)
+or [Windows](docs/development/windows.md). The
+[developer guide](docs/development/README.md) covers setup and checks.
+
+## Package layout
+
+<details>
+<summary>Shared Rust crates and platform clients</summary>
+
+Shared code lives in `crates/`, native clients and the browser app in `apps/`.
+
+| Package | Responsibility |
+| --- | --- |
+| [`layer-core`](crates/layer-core/README.md) | Artwork, undoable edits and `.capy` files. |
+| [`layer-engine`](crates/layer-engine/README.md) | Pen input, brush dynamics and stroke generation. |
+| [`layer-ui`](crates/layer-ui/README.md) | Shared tools, commands, editor state and layout. |
+| [`layer-workspace`](crates/layer-workspace) | Saved workspace layouts. |
+| [`layer-color`](crates/layer-color) | Color profiles and photo codecs. |
+| [`layer-render`](crates/layer-render/README.md) | Engine-to-renderer contract. |
+| [`layer-render-wgpu`](crates/layer-render-wgpu/README.md) | GPU painting, effects and composition. |
+| [`layer-host`](crates/layer-host/README.md) | Shared native integration. |
+| [`layer-bench`](crates/layer-bench/README.md) | GPU benchmarks and brush previews. |
+
+</details>
 
 ## License and branding
 
-We license the original code and non-brand assets under [MIT](LICENSE-MIT) or
-[Apache-2.0](LICENSE-APACHE); you can choose either license. Contributions to those
-parts of the project are submitted under both licenses unless agreed otherwise.
+Original code and non-brand assets are licensed under [MIT](LICENSE-MIT) or
+[Apache-2.0](LICENSE-APACHE), your choice. Contributions to those parts are
+submitted under both licenses unless agreed otherwise.
 
 The Capy Canvas and Capy Atelier names and capybara artwork have separate
-[branding terms](BRANDING.md). If you publish a modified version, use your own
-branding unless you have permission. Dependencies keep their own licenses; see
-[third-party notices](THIRD_PARTY_NOTICES.md) and the
-[publication guide](docs/development/publication.md).
+[branding terms](BRANDING.md). Modified versions need their own branding unless
+you have permission. Dependencies retain their own licenses; see
+[third-party notices](THIRD_PARTY_NOTICES.md).
