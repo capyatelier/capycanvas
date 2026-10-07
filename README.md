@@ -24,7 +24,7 @@ Capy Canvas is free, GPU-accelerated painting and photo editing software. We
 want to improve upon the ideas of the past, and build something better.
 
 The gap in creative software is most stark Linux, where there are not many good
-options for artists. Though, we think we can help people on Windows, Mac, iPad and
+options for artists. Though, we can help people on Windows, Mac, iPad and
 Android, and web, so nobody is left behind.
 
 We want artists to build their own tools. We envision a world where painters
