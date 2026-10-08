@@ -8,6 +8,77 @@ const opened=`!!document.querySelector('${menu}:popover-open')`;
 const canvasFocused='document.activeElement===layerApp.canvas';
 const WEBP_LIMIT='WebP export is limited to 16,384 pixels per side';
 
+export async function checkWheelNavigation({call,evaluate,settle}) {
+  const camera = () => evaluate('JSON.parse(JSON.stringify(layerApp.state().camera,(_,v)=>typeof v==="bigint"?Number(v):v))');
+  const browser = () => evaluate('({dpi:devicePixelRatio,width:innerWidth,height:innerHeight,scale:visualViewport.scale})');
+  const send = async action => {await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await settle();};
+  const originalTheme = await evaluate('layerApp.state().settings.theme');
+  await send({type:'invoke',command:'fit_canvas'});
+  const point = await evaluate('(()=>{const [x,y,w,h]=layerApp.state().camera.work_area,c=layerApp.canvas.getBoundingClientRect(),s=c.width/layerApp.canvas.width;return{x:c.x+(x+w/2)*s,y:c.y+(y+h/2)*s}})()');
+  const mouse = (type,button,buttons,p=point) => call('Input.dispatchMouseEvent',{type,...p,button,buttons,clickCount:1});
+  const wheel = async(deltaY,modifiers=0,buttons=0,p=point,deltaX=0) => {
+    await call('Input.dispatchMouseEvent',{type:'mouseWheel',...p,deltaX,deltaY,modifiers,buttons}); await settle();
+  };
+  await evaluate(`window.wheelEvents=[];window.addEventListener('wheel',e=>wheelEvents.push({prevented:e.defaultPrevented,target:e.target.id}),false)`);
+  const initialBrowser = await browser();
+  for (const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    for (const [button,buttons] of [['none',0],['middle',4],['right',2]]) {
+      await mouse('mouseMoved','none',0);
+      if (buttons) await mouse('mousePressed',button,buttons);
+      const before = await camera();
+      await wheel(20,0,buttons);
+      const panned = await camera();
+      assert.ok(panned.translation[1]<before.translation[1],`${theme} ${button}: wheel pans`);
+      assert.equal(panned.zoom,before.zoom);
+      await wheel(20,8,buttons);
+      const horizontal = await camera();
+      assert.ok(horizontal.translation[0]<panned.translation[0]);
+      assert.equal(horizontal.translation[1],panned.translation[1]);
+      await wheel(-40,2,buttons);
+      const zoomed = await camera();
+      assert.ok(zoomed.zoom>horizontal.zoom,`${theme} ${button}: Ctrl-wheel zooms`);
+      assert.equal(zoomed.rotation,horizontal.rotation);
+      const physical = await evaluate(`(()=>{const r=layerApp.canvas.getBoundingClientRect();return[(${point.x}-r.x)*layerApp.canvas.width/r.width,(${point.y}-r.y)*layerApp.canvas.height/r.height]})()`);
+      for(let axis=0;axis<2;axis++)assert.ok(Math.abs((physical[axis]-horizontal.translation[axis])/horizontal.zoom-(physical[axis]-zoomed.translation[axis])/zoomed.zoom)<.001,'zoom stays anchored');
+      await wheel(40,10,buttons);
+      assert.ok(Math.abs((await camera()).zoom-horizontal.zoom)<.00001,'Ctrl takes precedence over Shift');
+      assert.deepEqual(await browser(),initialBrowser,'canvas scroll never zooms the browser');
+      if(buttons) {
+        const beforeMove = await camera();
+        await mouse('mouseMoved',button,buttons,{x:point.x+10,y:point.y+8}); await settle();
+        const moved = await camera();
+        assert.ok(moved.translation[0]>beforeMove.translation[0] && moved.translation[1]>beforeMove.translation[1],'held pointer resumes panning after the wheel');
+        await mouse('mouseReleased',button,0,{x:point.x+10,y:point.y+8}); await settle();
+        const released = await camera();
+        await mouse('mouseMoved','none',0); await settle();
+        assert.deepEqual(await camera(),released,'release ends the pan contact');
+      }
+    }
+    await send({type:'set_zoom_locked',locked:true});
+    const locked = await camera();
+    await wheel(-40,2);
+    assert.deepEqual(await camera(),locked,'wheel respects view lock');
+    await send({type:'set_zoom_locked',locked:false});
+    await mouse('mousePressed','left',1); await settle();
+    const painting = await camera();
+    await wheel(-40,2,1);
+    assert.deepEqual(await camera(),painting,'wheel preserves an active paint contact');
+    await mouse('mouseReleased','left',0); await settle();
+    await send({type:'invoke',command:'undo'});
+  }
+  assert.ok(await evaluate('wheelEvents.length>20 && wheelEvents.every(e=>e.prevented)'),'native canvas wheel events are cancelled before browser defaults');
+  await evaluate(`document.documentElement.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,clientX:${point.x},clientY:${point.y},deltaY:-20,ctrlKey:true}))`);
+  assert.equal(await evaluate('wheelEvents.at(-1).prevented'),true,'ancestor-targeted canvas scroll is owned');
+  const panel = await evaluate('(()=>{const n=document.querySelector(".dock-group:not(.floating-panel)");const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');
+  const beforePanel = await camera();
+  await wheel(20,0,0,panel);
+  assert.deepEqual(await camera(),beforePanel,'panel scrolling does not navigate the canvas');
+  assert.deepEqual(await browser(),initialBrowser);
+  await send({type:'set_theme',theme:originalTheme});
+  console.log('PASS: canvas wheel, held middle/right button, modifiers, anchoring, release, view lock, paint exclusion and browser zoom ownership');
+}
+
 export async function checkZoomReadout({call,evaluate,settle,device=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??(device?'artifacts/zoom-readout/web-tablet':'artifacts/zoom-readout/web');
   await mkdir(directory,{recursive:true});

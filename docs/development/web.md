@@ -134,6 +134,13 @@ node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-ba
 node --test apps/layer-web/{numeric,histogram,raster-worker-client,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
 ```
 
+`test.mjs --wheel-navigation` checks wheel navigation with held middle/right
+mouse buttons, Ctrl/Shift precedence, cursor anchoring, release, view lock,
+active-paint exclusion and browser zoom ownership in both themes. The pointer
+unit suite also covers ancestor-targeted wheel events and pixel/line/page units.
+Run the journey on the private display with
+`bash tools/performance/workspace-motion.sh web --wheel-navigation --native-input`.
+
 The storage regression launches its own temporary Chrome profile and local server:
 
 ```bash

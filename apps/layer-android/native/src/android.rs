@@ -1004,14 +1004,7 @@ pub extern "system" fn Java_art_capycanvas_Native_scroll(
 ) {
     let app = unsafe { app(handle) };
     let dpi = app.host.session.state().camera.viewport[0] as f32 / app.host.logical[0];
-    let previous = app.host.session.state().revision;
-    let result = app
-        .host
-        .session
-        .scroll([x, y], [dx, dy], dpi, zoom != 0, horizontal != 0)
-        .map(|change| {
-            app.host.apply_change(previous, change);
-        });
+    let result = app.host.scroll([x, y], [dx, dy], dpi, zoom != 0, horizontal != 0);
     fail(&mut env, result);
 }
 #[unsafe(no_mangle)]

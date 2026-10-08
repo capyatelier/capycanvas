@@ -269,6 +269,13 @@ private-compositor runner:
 bash tools/performance/workspace-motion.sh gtk --native-test=native_canvas_bar_modes
 ```
 
+`native_scroll_wheel_input` exercises wheel pan, Shift-wheel horizontal pan and
+Ctrl-wheel zoom with the middle or right mouse button held and with neither
+held, in both themes. It also checks release and active-stroke exclusion through
+the private compositor's native mouse and keyboard delivery. Scroll callbacks
+without an event position use the native surface's pointer position and modifier
+state before converting to canvas coordinates.
+
 GTK has one battery source: the Linux kernel's power-supply files.
 `system_status::power::tests` cover its file parsing, device symlinks, live changes
 and peripheral exclusion without a window. Shared `layer-ui` tests cover the same

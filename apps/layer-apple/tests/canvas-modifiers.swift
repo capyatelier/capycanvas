@@ -20,10 +20,23 @@ private final class Contact: UITouch {
 }
 private final class ContactEvent: UIEvent {
     var flags: UIKeyModifierFlags = []
+    var buttons: UIEvent.ButtonMask = .primary
+    var nativeType: UIEvent.EventType = .touches
+    override var type: UIEvent.EventType { nativeType }
     override var modifierFlags: UIKeyModifierFlags { flags }
-    override var buttonMask: UIEvent.ButtonMask { .primary }
+    override var buttonMask: UIEvent.ButtonMask { buttons }
     override func coalescedTouches(for touch: UITouch) -> [UITouch]? { nil }
     override func predictedTouches(for touch: UITouch) -> [UITouch]? { nil }
+}
+private final class Scroll: UIPanGestureRecognizer {
+    var phase: UIGestureRecognizer.State = .changed
+    var delta = CGPoint.zero
+    var flags: UIKeyModifierFlags = []
+    override var state: UIGestureRecognizer.State { get { phase } set { phase = newValue } }
+    override var modifierFlags: UIKeyModifierFlags { flags }
+    override func location(in view: UIView?) -> CGPoint { CGPoint(x: 500, y: 400) }
+    override func translation(in view: UIView?) -> CGPoint { delta }
+    override func setTranslation(_ translation: CGPoint, in view: UIView?) { delta = translation }
 }
 
 @MainActor private final class ModifierChecks: NSObject, UIApplicationDelegate, UIWindowSceneDelegate {
@@ -299,6 +312,69 @@ private final class ContactEvent: UIEvent {
         try await action(["type":"set_color", "rgba":[0,0,1,1]])
         try await action(["type":"set_brush_size", "value":4])
         let paper = try await pixels()
+        let scroll = Scroll(), scrollEvent = ContactEvent(); scrollEvent.nativeType = .scroll
+        func sameCamera(_ before: JSON) -> Bool {
+            ["translation", "zoom", "rotation"].allSatisfy {
+                store.state["camera"][$0].stableKey == before[$0].stableKey
+            }
+        }
+        func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 0.005 }
+        let density = Double(canvas.contentScaleFactor)
+        for cancelled in [false, true] {
+            try await invoke("fit_canvas")
+            let touch = Contact(), event = ContactEvent(); event.buttons = .button(3)
+            canvas.touchesBegan([touch], with: event); try await flush()
+            try require(canvas.gestureRecognizer(scroll, shouldReceive: scrollEvent),
+                "UIKit must deliver scrolling while a middle-button contact is held")
+            scrollEvent.nativeType = .transform
+            try require(!canvas.gestureRecognizer(scroll, shouldReceive: scrollEvent), "Captured contacts must still exclude native transforms")
+            scrollEvent.nativeType = .scroll
+            var before = store.state["camera"]
+            scroll.flags = .control; scroll.delta = CGPoint(x: 0, y: 40)
+            canvas.scrolled(scroll); try await flush()
+            try require(store.state["camera"]["zoom"].number > before["zoom"].number,
+                "A held middle button must admit Control-scroll zoom")
+            before = store.state["camera"]
+            scroll.flags = []; scroll.delta = CGPoint(x: 3, y: 4)
+            canvas.scrolled(scroll); try await flush()
+            try require(near(store.state["camera"]["translation"][0].number - before["translation"][0].number, 3 * density)
+                && near(store.state["camera"]["translation"][1].number - before["translation"][1].number, 4 * density),
+                "A held middle button must admit normal scroll")
+            before = store.state["camera"]
+            touch.time += 0.01; canvas.touchesMoved([touch], with: event); try await flush()
+            try require(sameCamera(before), "Stationary middle-button motion must preserve the scrolled camera")
+            touch.point.x += 5; touch.point.y += 7; touch.time += 0.01
+            canvas.touchesMoved([touch], with: event); try await flush()
+            try require(near(store.state["camera"]["translation"][0].number - before["translation"][0].number, 5 * density)
+                && near(store.state["camera"]["translation"][1].number - before["translation"][1].number, 7 * density),
+                "Middle-button dragging must continue from the scrolled camera")
+            touch.time += 0.01; event.buttons = []
+            if cancelled { canvas.touchesCancelled([touch], with: event) }
+            else { canvas.touchesEnded([touch], with: event) }
+            try await flush()
+            try require(canvas.contacts.isEmpty, "Middle-button release or cancellation must retire the native contact")
+            before = store.state["camera"]
+            scroll.delta = CGPoint(x: 3, y: 4); canvas.scrolled(scroll); try await flush()
+            try require(!sameCamera(before), "Scroll must resume after middle-button release or cancellation")
+        }
+        try await invoke("fit_canvas")
+        try require(try await pixels() == paper, "Middle-button navigation must preserve every artwork pixel")
+        try await action(["type":"select_brush", "id":1])
+        try await wait("Prepare navigation exclusion brush") { store.snapshot["brush_ready"].bool }
+        for device: UITouch.TouchType in [.indirectPointer, .pencil, .direct] {
+            let touch = Contact(), event = ContactEvent(); touch.device = device
+            canvas.touchesBegan([touch], with: event); try await flush()
+            try require(canvas.gestureRecognizer(scroll, shouldReceive: scrollEvent), "Scroll admission must let shared Rust decide primary contact exclusion")
+            let before = store.state["camera"]
+            for flags: UIKeyModifierFlags in [[], .control] {
+                scroll.flags = flags; scroll.delta = CGPoint(x: 3, y: 40)
+                canvas.scrolled(scroll); try await flush()
+                try require(sameCamera(before), "Scroll must preserve the camera during a primary \(device) contact")
+            }
+            touch.time += 0.01; canvas.touchesCancelled([touch], with: event); try await flush()
+        }
+        try await newDocument()
+        passed("PASS: UIKit held middle-button scrolling and zoom, continued drag, release/cancellation and primary contact exclusion")
         for device: UITouch.TouchType in [.indirectPointer, .pencil] {
             for shape in ["line", "rectangle", "ellipse"] {
                 for paint in shape == "line" ? ["outline"] : ["outline", "fill", "both"] {

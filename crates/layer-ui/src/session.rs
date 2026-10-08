@@ -4101,14 +4101,24 @@ impl<R: CanvasRenderer> UiSession<R> {
         zoom: bool,
         horizontal: bool,
     ) -> Result<UiChange, String> {
-        if self.interaction.pointer.is_some() || self.require_idle().is_err() {
+        if !anchor.into_iter().chain(delta).chain([dpi]).all(f32::is_finite) || dpi <= 0. {
+            return Err("Invalid scroll".into());
+        }
+        if self.interaction.pointer.is_some_and(|p| p.paint || p.kind != PointerKind::Mouse)
+            || self.retouch.drag.is_some() || self.touch.is_active() || self.input_held
+            || self.require_idle().is_err() || delta == [0.; 2]
+        {
             return Ok(self.changed(0, false));
         }
         if zoom {
+            if delta[1] == 0. || self.state.camera.zoom_locked { return Ok(self.changed(0, false)); }
+            let current = self.state.camera.zoom;
+            let scale = (-delta[1] * 0.0015 * self.state.settings.zoom_speed)
+                .clamp((camera::MIN_ZOOM / current).ln(), (camera::MAX_ZOOM / current).ln()).exp();
             return self.gesture(
                 anchor,
                 anchor,
-                (-delta[1] * 0.0015 * self.state.settings.zoom_speed).exp(),
+                scale,
                 0.0,
             );
         }
@@ -14895,6 +14905,93 @@ mod tests {
             .unwrap();
         assert!(s.state.camera.zoom > before.zoom);
         assert_eq!(s.state.camera.rotation, before.rotation);
+    }
+    #[test]
+    fn wheel_navigates_during_mouse_pan_and_preserves_contact_lifecycle() {
+        for platform in Platform::ALL {
+            for end in [ContactPhase::Up, ContactPhase::Cancel] {
+                let mut s = session(platform);
+                let anchor = [430., 370.];
+                let input = |phase, position| test_support::pointer_input(77, phase, PointerKind::Mouse, PointerButton::Pan, position, 0);
+                assert!(s.input(input(ContactPhase::Down, anchor)).unwrap().handled);
+                let before = s.state.camera.clone();
+                assert!(s.scroll(anchor, [2.5, 7.5], 2., false, false).unwrap().canvas_wake);
+                assert_eq!(s.state.camera.translation, [before.translation[0] - 5., before.translation[1] - 15.]);
+                s.scroll(anchor, [2.5, 7.5], 2., false, true).unwrap();
+                assert_eq!(s.state.camera.translation, [before.translation[0] - 25., before.translation[1] - 15.]);
+                let before = s.state.camera.clone();
+                s.scroll(anchor, [20., -40.], 2., true, true).unwrap();
+                let after = &s.state.camera;
+                assert!(after.zoom > before.zoom);
+                for axis in 0..2 {
+                    let old = (anchor[axis] - before.translation[axis]) / before.zoom;
+                    let new = (anchor[axis] - after.translation[axis]) / after.zoom;
+                    assert!((old - new).abs() < 0.001, "{platform:?}: wheel zoom retains its anchor");
+                }
+                assert_eq!(after.rotation, before.rotation);
+                s.scroll(anchor, [0., 40.], 2., true, false).unwrap();
+                assert!((s.state.camera.zoom - before.zoom).abs() < 0.00001);
+                let before = s.state.camera.translation;
+                s.input(input(ContactPhase::Move, [anchor[0] + 8., anchor[1] + 6.])).unwrap();
+                assert_eq!(s.state.camera.translation, [before[0] + 8., before[1] + 6.]);
+                s.input(input(end, [anchor[0] + 8., anchor[1] + 6.])).unwrap();
+                assert!(s.interaction.pointer.is_none());
+                let before = s.state.camera.clone();
+                s.input(input(ContactPhase::Move, [0., 0.])).unwrap();
+                assert_eq!(s.state.camera, before);
+                s.input(input(ContactPhase::Down, anchor)).unwrap();
+                s.input(UiInput::Blur).unwrap();
+                assert!(s.interaction.pointer.is_none());
+                assert!(s.scroll(anchor, [0., -40.], 2., true, false).unwrap().canvas_wake);
+                assert!(!s.engine.has_active_stroke());
+            }
+        }
+    }
+    #[test]
+    fn wheel_preserves_paint_touch_and_held_input_contacts() {
+        for (kind, button) in [(PointerKind::Mouse, PointerButton::Primary), (PointerKind::Pen, PointerButton::Primary), (PointerKind::Touch, PointerButton::Primary)] {
+            let mut s = session(Platform::Gtk);
+            s.input(test_support::pointer_input(1, ContactPhase::Down, kind, button, [400., 400.], 0)).unwrap();
+            let before = s.state.camera.clone();
+            for zoom in [false, true] {
+                assert!(!s.scroll([400., 400.], [0., -40.], 1., zoom, false).unwrap().canvas_wake);
+                assert_eq!(s.state.camera, before);
+            }
+        }
+        let mut s = session(Platform::Web);
+        s.set_input_held(true);
+        let before = s.state.camera.clone();
+        assert!(!s.scroll([400., 400.], [0., -40.], 1., true, false).unwrap().canvas_wake);
+        assert_eq!(s.state.camera, before);
+        s.set_input_held(false);
+        assert!(s.scroll([400., 400.], [0., -40.], 1., true, false).unwrap().canvas_wake);
+    }
+    #[test]
+    fn wheel_validates_units_and_handles_empty_locked_and_extreme_deltas() {
+        let mut s = session(Platform::Web);
+        let anchor = [430., 370.];
+        let before = s.state.camera.clone();
+        for (point, delta, dpi) in [(anchor, [f32::NAN, 0.], 1.), (anchor, [0., f32::INFINITY], 1.),
+            ([f32::INFINITY, 0.], [0., 1.], 1.), (anchor, [0., 1.], 0.), (anchor, [0., 1.], -1.), (anchor, [0., 1.], f32::NAN)] {
+            assert!(s.scroll(point, delta, dpi, false, false).is_err());
+            assert_eq!(s.state.camera, before);
+        }
+        for (delta, zoom) in [([0., 0.], false), ([0., 0.], true), ([40., 0.], true)] {
+            assert!(!s.scroll(anchor, delta, 2., zoom, false).unwrap().canvas_wake);
+            assert_eq!(s.state.camera, before);
+        }
+        s.state.camera.zoom_locked = true;
+        let before = s.state.camera.clone();
+        assert!(!s.scroll(anchor, [0., -40.], 2., true, false).unwrap().canvas_wake);
+        assert_eq!(s.state.camera, before);
+        assert!(s.scroll(anchor, [0., 0.25], 2., false, false).unwrap().canvas_wake);
+        assert_eq!(s.state.camera.translation[1], before.translation[1] - 0.5);
+        s.state.camera.zoom_locked = false;
+        for (delta, expected) in [(-f32::MAX, camera::MAX_ZOOM), (f32::MAX, camera::MIN_ZOOM)] {
+            s.scroll(anchor, [0., delta], 2., true, false).unwrap();
+            assert!((s.state.camera.zoom - expected).abs() < 0.00001);
+            assert!(s.state.camera.translation.into_iter().all(f32::is_finite));
+        }
     }
     #[test]
     fn camera_gestures_wait_for_paint_to_finish_without_reporting_an_error() {

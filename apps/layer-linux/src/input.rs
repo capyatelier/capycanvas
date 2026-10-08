@@ -446,18 +446,24 @@ pub fn install(workspace: &Rc<Workspace>) {
         #[upgrade_or]
         glib::Propagation::Proceed,
         move |controller, dx, dy| {
-            let point = controller
+            let pointer = controller
                 .current_event()
                 .and_then(|e| e.position())
-                .and_then(|(x, y)| widget_point(&workspace.area, x, y));
-            if let Some(point) = point {
+                .map(|(x, y)| (x, y, controller.current_event_state()))
+                .or_else(|| {
+                    let native = workspace.area.native()?;
+                    let device = native.display().default_seat()?.pointer()?;
+                    native.surface()?.device_position(&device)
+                });
+            if let Some((x, y, modifiers)) = pointer
+                && let Some(point) = widget_point(&workspace.area, x, y)
+            {
                 let dpi = workspace.area.scale_factor() as f32;
                 let unit = if controller.unit() == gdk::ScrollUnit::Wheel {
                     40.0
                 } else {
                     1.0
                 };
-                let modifiers = controller.current_event_state();
                 let result = workspace.gpu.borrow_mut().as_mut().map(|g| {
                     g.session.scroll(
                         [point.x() * dpi, point.y() * dpi],

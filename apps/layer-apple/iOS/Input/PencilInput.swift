@@ -56,7 +56,7 @@ extension CanvasView {
     @objc func scrolled(_ recognizer: UIPanGestureRecognizer) {
         let delta = recognizer.translation(in: self)
         recognizer.setTranslation(.zero, in: self)
-        guard contacts.isEmpty, [.began, .changed, .ended].contains(recognizer.state) else { return }
+        guard [.began, .changed, .ended].contains(recognizer.state) else { return }
         let point = recognizer.location(in: self), scale = contentScaleFactor
         store.native?.scroll(x: Float(point.x * scale), y: Float(point.y * scale),
             dx: Float(-delta.x), dy: Float(-delta.y), scale: Float(scale),
@@ -273,7 +273,7 @@ extension CanvasView {
 
 extension CanvasView: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
-        contacts.isEmpty && (event.type == .scroll || event.type == .transform)
+        event.type == .scroll || (contacts.isEmpty && event.type == .transform)
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {

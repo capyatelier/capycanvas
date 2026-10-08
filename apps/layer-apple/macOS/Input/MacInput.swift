@@ -154,7 +154,6 @@ import QuartzCore
         contact = nil; modifiers = []
     }
     func scroll(_ event: NSEvent) {
-        guard contact == nil else { return }
         let point = position(event), unit: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 16
         store.native?.scroll(x: Float(point.x), y: Float(point.y),
             dx: Float(-event.scrollingDeltaX * unit), dy: Float(-event.scrollingDeltaY * unit),

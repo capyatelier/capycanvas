@@ -68,7 +68,7 @@ import {checkImageRows} from "./image-rows-journey.test.mjs";
 import {checkImageLayers} from "./image-layers-journey.test.mjs";
 import { checkCanvasBar } from "./canvas-bar-journey.test.mjs";
 import { checkNotices } from "./notice-journey.test.mjs";
-import { checkZoomReadout } from "./zoom-readout-journey.test.mjs";
+import { checkZoomReadout, checkWheelNavigation } from "./zoom-readout-journey.test.mjs";
 import { checkBlendMenu } from "./blend-menu-journey.test.mjs";
 import { checkColorMixing } from "./color-mixing-journey.test.mjs";
 import { checkPassThrough } from "./pass-through-journey.test.mjs";
@@ -213,6 +213,7 @@ try {
   console.log('WebGPU hardware:',JSON.stringify(gpuAdapter));
   const checkErrors = () => assert.deepEqual(errors, []);
   if (!await runJourney([
+    [process.argv.includes("--wheel-navigation"), () => checkWheelNavigation({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--filter-investigation"), async () => {
       await (await import('./filter-investigation.test.mjs')).investigate({call,evaluate,settle});
     }, checkErrors],

@@ -391,15 +391,6 @@ impl NativeHost {
         zoom: bool,
         horizontal: bool,
     ) -> Result<(), String> {
-        if !anchor
-            .into_iter()
-            .chain(delta)
-            .chain([density])
-            .all(f32::is_finite)
-            || density <= 0.0
-        {
-            return Err("Invalid native scroll".into());
-        }
         if self.document_close_prepared { return Ok(()); }
         let previous = self.session.state().revision;
         let change = self

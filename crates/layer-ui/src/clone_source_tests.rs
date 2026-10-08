@@ -131,6 +131,9 @@ fn the_source_disc_drags_at_once_with_every_device_and_a_tap_shows_its_bar() {
         let grab = [at[0] + 3., at[1] - 2.];
         let reply = contact(&mut s, id, kind, ContactPhase::Down, grab);
         assert!(reply.handled && !reply.paint, "{kind:?} grabs the disc");
+        let camera = s.state.camera.clone();
+        assert!(!s.scroll(grab, [0., -40.], 1., true, false).unwrap().canvas_wake);
+        assert_eq!(s.state.camera, camera, "source drags keep the camera fixed");
         assert_eq!(s.canvas_bar_hold() % 2, 1, "the bar stays hidden during the contact");
         let to = [grab[0] + dx, grab[1] + dy];
         contact(&mut s, id, kind, ContactPhase::Move, to);

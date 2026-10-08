@@ -77,7 +77,8 @@ private final class TabletEvent: NSEvent {
         defer { canvas.stop() }
         let originalWindow = window.frame
         var deliveredEvent = -1, nextEvent = 0
-        let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { event in
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp,
+            .otherMouseDown, .otherMouseDragged, .otherMouseUp]) { event in
             if event.window === window { deliveredEvent = event.eventNumber }
             return event
         }
@@ -465,6 +466,54 @@ private final class TabletEvent: NSEvent {
                     store.state["camera"][$0].stableKey == before[$0].stableKey
                 }
             }
+            func middle(_ type: NSEvent.EventType, at point: CGPoint) async throws {
+                nextEvent += 1
+                guard let mouse = NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: nextEvent, clickCount: 1, pressure: 1), let cg = mouse.cgEvent else {
+                    throw HostFailure(message: "No middle-button event")
+                }
+                cg.setIntegerValueField(.mouseEventButtonNumber, value: 2)
+                guard let delivery = NSEvent(cgEvent: cg) else { throw HostFailure(message: "Invalid middle-button event") }
+                try require(delivery.buttonNumber == 2 && delivery.type == type, "Deliver the actual middle-button contact")
+                NSApp.postEvent(delivery, atStart: false)
+                try await wait("Native middle-button event delivery") { deliveredEvent == nextEvent }
+                try await flush()
+            }
+            for cancelled in [true, false] {
+                try await invoke("fit_canvas")
+                var point = local
+                try await middle(.otherMouseDown, at: point)
+                var before = store.state["camera"]
+                event.flags = .control; event.delta = CGPoint(x: 0, y: 40)
+                canvas.scrollWheel(with: event); try await flush()
+                try require(store.state["camera"]["zoom"].number > before["zoom"].number,
+                    "A held middle button must admit Control-scroll zoom")
+                before = store.state["camera"]
+                event.flags = []; event.delta = CGPoint(x: 3, y: 4)
+                canvas.scrollWheel(with: event); try await flush()
+                try require(near(store.state["camera"]["translation"][0].number - before["translation"][0].number, 3 * scale)
+                    && near(store.state["camera"]["translation"][1].number - before["translation"][1].number, 4 * scale),
+                    "A held middle button must admit normal scroll")
+                before = store.state["camera"]
+                try await middle(.otherMouseDragged, at: point)
+                try require(sameCamera(before), "Stationary middle-button motion must preserve the scrolled camera")
+                point.x += 5; point.y += 7
+                try await middle(.otherMouseDragged, at: point)
+                try require(near(store.state["camera"]["translation"][0].number - before["translation"][0].number, 5 * scale)
+                    && near(store.state["camera"]["translation"][1].number - before["translation"][1].number, 7 * scale),
+                    "Middle-button dragging must continue from the scrolled camera")
+                if cancelled { store.input(["type":"blur"]) }
+                else { try await middle(.otherMouseUp, at: point) }
+                try await flush()
+                before = store.state["camera"]
+                point.x += 5
+                try await middle(.otherMouseDragged, at: point)
+                try require(sameCamera(before), "Released or interrupted middle-button contacts must stop dragging")
+                canvas.scrollWheel(with: event); try await flush()
+                try require(!sameCamera(before), "Scroll must resume after middle-button release or interruption")
+            }
+            try await invoke("fit_canvas")
             for precise in [true, false] {
                 let before = store.state["camera"], unit = precise ? 1.0 : 16.0
                 event.precise = precise; event.delta = CGPoint(x: 3, y: 4)
@@ -508,7 +557,7 @@ private final class TabletEvent: NSEvent {
             try await send(.leftMouseDown, lasso[0]); try await send(.leftMouseDragged, lasso[1])
             canvas.scrollWheel(with: event); canvas.magnify(with: event); canvas.rotate(with: event)
             try await flush()
-            try require(sameCamera(before), "Navigation cannot move the camera during a captured contact")
+            try require(sameCamera(before), "Navigation cannot move the camera during a captured primary contact")
             store.input(["type":"blur"]); try await flush()
             // An owner-query acknowledgement does not finish queued input.
             // Complete a real renderer frame before testing idle navigation.

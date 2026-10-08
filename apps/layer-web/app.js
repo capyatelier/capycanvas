@@ -1604,9 +1604,10 @@ function pointerInput(e, stage, point = position(e)) {
   });
 }
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-canvas.addEventListener(
+window.addEventListener(
   "wheel",
   (e) => {
+    if (document.elementFromPoint(e.clientX, e.clientY) !== canvas) return;
     e.preventDefault();
     const point = position(e),
       unit =
@@ -1625,7 +1626,7 @@ canvas.addEventListener(
       message(error);
     }
   },
-  { passive: false },
+  { capture: true, passive: false },
 );
 function keyInput(e, pressed, divider = null) {
   if (pressed && (e.defaultPrevented || composingKey(e))) return;

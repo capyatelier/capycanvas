@@ -374,6 +374,12 @@ interprets two fingers as anchored pan/zoom/rotation; one finger does not paint.
 Mouse and stylus event collectors remain native.
 Wheel input pans; Shift-wheel pans horizontally; Ctrl-wheel zooms around the
 cursor. Hosts normalize native wheel units and Rust applies the camera gesture.
+These gestures also work while a mouse navigation button is held, including
+middle-button TrackPoint scrolling. A wheel gesture keeps that contact alive
+until release or cancellation. Painting, direct touch gestures, source-disc
+drags and queued paint input keep the camera fixed. Ctrl takes precedence over
+Shift, and wheel zoom respects the view's zoom lock. Web captures wheel input
+over the canvas before browser zoom; wheel input over panels stays with them.
 Space + left-drag temporarily pans without pen records. Releasing Space during
 the drag does not turn its remaining motion into paint. Middle/right drag also
 pans; touch retains two-finger rotation. The momentary pan binding defaults to

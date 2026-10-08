@@ -6,6 +6,31 @@ import test from "node:test";
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
 
+test("canvas wheel owns browser zoom even when a scroll sequence targets an ancestor", () => {
+  const listeners = [], scrolls = [], changes = [];
+  const canvas = { width: 1600, clientWidth: 800, clientHeight: 600, addEventListener: (type, handler, options) => listeners.push({target: canvas, type, handler, options}) };
+  let hit = canvas;
+  const window = {addEventListener: (type, handler, options) => listeners.push({target: window, type, handler, options})};
+  const context = {canvas, window, document: {elementFromPoint: () => hit}, position: () => [400, 300],
+    app: {scroll: (...args) => { scrolls.push(args); return 'camera'; }}, applyChange: change => changes.push(change), message: assert.fail};
+  runInNewContext(source.slice(source.indexOf('canvas.addEventListener("contextmenu"'), source.indexOf('function keyInput(')), context);
+  const wheel = listeners.find(listener => listener.type === 'wheel');
+  assert.equal(wheel.target, window);
+  assert.equal(wheel.options.capture, true);
+  assert.equal(wheel.options.passive, false);
+  for (const [deltaMode, unit] of [[0, 1], [1, 16], [2, 600]]) {
+    let prevented = false;
+    wheel.handler({target: {}, clientX: 200, clientY: 150, deltaMode, deltaX: 2, deltaY: -3,
+      ctrlKey: true, shiftKey: true, preventDefault() { prevented = true; }});
+    assert.equal(prevented, true);
+    assert.deepEqual(scrolls.at(-1), [400, 300, 2 * unit, -3 * unit, 2, 3]);
+  }
+  assert.equal(changes.length, 3);
+  hit = {};
+  wheel.handler({target: hit, clientX: 200, clientY: 150, ctrlKey: true, preventDefault: () => assert.fail('panel wheel remains native')});
+  assert.equal(scrolls.length, 3);
+});
+
 test("cursor hover preserves mouse, pen, and eraser device kinds", () => {
   const canvas = {}, samples = [], inputs = [], changes = [];
   const context = {

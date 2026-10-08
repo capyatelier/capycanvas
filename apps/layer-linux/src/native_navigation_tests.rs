@@ -1,6 +1,61 @@
 //! Camera requests through the production GTK owner/worker/presentation path.
 //! Synthetic software gestures do not measure physical device input latency.
 use super::*;
+
+#[test]
+#[ignore = "private Wayland display, hardware GPU and native mouse wheel"]
+fn native_scroll_wheel_input() {
+    let app = native_test_app("art.capycanvas.ScrollWheel");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let mut input = RemoteInput::new();
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+        pump(150);
+        let point = screen_point(w.area.upcast_ref(), &w.window, [0.5, 0.5]);
+        for button in [None, Some(274), Some(273)] {
+            input.perform(serde_json::json!([{ "point": point }]));
+            if let Some(button) = button { input.perform(serde_json::json!([{ "button": button, "down": true }])); }
+            let before = state(&w).camera;
+            input.perform(serde_json::json!([{ "wheel": [0, 1] }]));
+            let after = state(&w).camera;
+            assert!(after.translation[1] < before.translation[1], "{theme:?} {button:?}: wheel pans: {before:?} -> {after:?}");
+            assert_eq!(after.zoom, before.zoom);
+            input.perform(serde_json::json!([{ "key": 65505, "down": true }, { "wheel": [0, 1] }, { "key": 65505, "down": false }]));
+            let horizontal = state(&w).camera;
+            assert!(horizontal.translation[0] < after.translation[0], "Shift-wheel pans horizontally");
+            assert_eq!(horizontal.translation[1], after.translation[1]);
+            input.perform(serde_json::json!([{ "key": 65507, "down": true }, { "wheel": [0, -1] }]));
+            let zoomed = state(&w).camera;
+            assert!(zoomed.zoom > horizontal.zoom, "{theme:?} {button:?}: Ctrl-wheel zooms");
+            assert_eq!(zoomed.rotation, horizontal.rotation);
+            let anchor = [w.area.width(), w.area.height()].map(|v| v as f32 * w.area.scale_factor() as f32 * 0.5);
+            for axis in 0..2 {
+                assert!(((anchor[axis] - horizontal.translation[axis]) / horizontal.zoom
+                    - (anchor[axis] - zoomed.translation[axis]) / zoomed.zoom).abs() < 0.001, "zoom stays anchored");
+            }
+            input.perform(serde_json::json!([{ "key": 65505, "down": true }, { "wheel": [0, 1] },
+                { "key": 65505, "down": false }, { "key": 65507, "down": false }]));
+            assert!((state(&w).camera.zoom - horizontal.zoom).abs() < 0.0001);
+            if let Some(button) = button {
+                input.perform(serde_json::json!([{ "point": [point[0] + 12., point[1] + 8.] }, { "button": button, "down": false }]));
+                let released = state(&w).camera;
+                input.perform(serde_json::json!([{ "point": point }]));
+                assert_eq!(state(&w).camera, released, "release ends navigation");
+            }
+        }
+        input.perform(serde_json::json!([{ "point": point }, { "down": true }]));
+        let painting = state(&w).camera;
+        input.perform(serde_json::json!([{ "key": 65507, "down": true }, { "wheel": [0, -1] }, { "key": 65507, "down": false }]));
+        assert_eq!(state(&w).camera, painting, "wheel does not move an active stroke");
+        input.perform(serde_json::json!([{ "down": false }]));
+    }
+    input.finish();
+}
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use std::sync::Arc;
 use layer_core::authored::{PortableId, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, EffectApplication, Stack};
