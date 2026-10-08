@@ -14,6 +14,8 @@ pub(crate) struct Recorder {
     pub(crate) analysis_retained: Vec<Vec<OccurrenceHandle>>,
     pub(crate) clipping_previews: Vec<(bool,bool)>,
     pub(crate) settling: bool,
+    pub(crate) refining: bool,
+    pub(crate) shader_idle: (bool, bool),
     pub(crate) color: layer_core::color::DocumentColor,
     pub(crate) prepared_color: Option<layer_core::color::DocumentColor>,
     pub(crate) tiled_sources: bool,
@@ -70,6 +72,8 @@ impl CanvasRenderer for Recorder {
     fn seed_evaluation_context(&mut self, context: EvaluationContext) { self.evaluation = context; }
     fn set_clipping_preview(&mut self, shadows:bool, highlights:bool) {self.clipping_previews.push((shadows,highlights));}
     fn has_pending_submission(&self) -> bool { self.settling }
+    fn has_pending_work(&self) -> bool { self.refining }
+    fn shader_idle(&mut self, idle: bool, speculative_idle: bool) { self.shader_idle = (idle, speculative_idle); }
     fn can_submit(&self) -> bool { !self.settling }
     fn set_selection_overlay(&mut self, overlay: Option<layer_render::SelectionOverlay>) {self.overlay=overlay;}
     fn document_color(&self) -> layer_core::color::DocumentColor { self.color }

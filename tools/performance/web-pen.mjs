@@ -5,12 +5,21 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { connectTab } from "../cdp.mjs";
+import { trackWasmBuild } from "./web-build-provenance.mjs";
 
 const exec = promisify(execFile);
 const options = new Set(process.argv.slice(2));
+assert(!process.env.LAYER_WASM_SHA256 || options.has("--reload"), "LAYER_WASM_SHA256 requires --reload");
 for (const option of options)
-  assert(["--os-input", "--reload", "--navigator", "--profile", "--trace", "--picker"].includes(option), `Unknown option: ${option}`);
+  assert(["--os-input", "--reload", "--navigator", "--profile", "--trace", "--picker", "--startup-pending", "--unprimed", "--inflight-warmup"].includes(option), `Unknown option: ${option}`);
 const osInput = options.has("--os-input");
+const startupPending = options.has("--startup-pending");
+const photo = process.env.LAYER_PEN_PHOTO;
+const existingDocument = process.env.LAYER_PEN_EXISTING_DOCUMENT === "true";
+const preset = Number(process.env.LAYER_PEN_PRESET || 1);
+const brushSize = Number(process.env.LAYER_PEN_BRUSH_SIZE || 18);
+const idleMs = Number(process.env.LAYER_PEN_IDLE_MS || 0);
+assert(Number.isSafeInteger(preset) && preset > 0 && Number.isFinite(brushSize) && brushSize > 0 && Number.isFinite(idleMs) && idleMs >= 0);
 const picker = options.has("--picker");
 const sampleWidth = Number(process.env.LAYER_PICKER_SAMPLE_SIZE || 1);
 assert([1,5,15,51,101].includes(sampleWidth), "LAYER_PICKER_SAMPLE_SIZE must be a picker option");
@@ -50,20 +59,38 @@ const cdp = await connectTab(endpoint, tab => tab.url === url, { timeout: 180000
 const { call, evaluate, errors } = cdp;
 // Functions sent here run in the page and must use only their arguments/globals.
 const inPage = (fn, ...args) => evaluate(`(${fn})(...${JSON.stringify(args)})`);
-const waitFor = condition => evaluate(`new Promise((resolve,reject)=>{
-  const deadline=performance.now()+120000;
-  function check(){
-    if(${condition})resolve();
-    else if(performance.now()>deadline)reject(Error('Timed out: '+${JSON.stringify(condition)}));
-    else setTimeout(check,50);
-  }check();
-})`);
-let profiling = false, tracing = false;
+const waitFor = async condition => {
+  const deadline = Date.now() + 300000;
+  while (Date.now() < deadline) {
+    try { if (await evaluate(`Boolean(${condition})`)) return; }
+    catch (error) { if (!/context|navigat/i.test(String(error))) throw error; }
+    await delay(50);
+  }
+  throw Error(`Timed out: ${condition}`);
+};
+let profiling = false, tracing = false, warmupPreload, buildProbe;
 try {
   for (const domain of ["Page", "Runtime"]) await call(`${domain}.enable`);
+  buildProbe = await trackWasmBuild(call, evaluate, process.env.LAYER_WASM_SHA256);
   // Runtime.enable replays old exceptions. Keep all errors from this run's reload.
   errors.length = 0;
   await call("Page.bringToFront");
+  if (options.has("--inflight-warmup")) {
+    assert(options.has("--reload") && startupPending, "In-flight warmup requires --reload --startup-pending");
+    ({ identifier: warmupPreload } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `(() => {
+      window.penWarmupJobs = [];
+      for (const name of ["createComputePipelineAsync", "createRenderPipelineAsync"]) {
+        const original = GPUDevice.prototype[name];
+        GPUDevice.prototype[name] = function(descriptor) {
+          const row = { name, label: descriptor.label, start: performance.now() };
+          penWarmupJobs.push(row);
+          const promise = original.call(this, descriptor);
+          promise.then(() => { row.end = performance.now(); }, error => { row.end = performance.now(); row.error = String(error); });
+          return promise;
+        };
+      }
+    })()` }));
+  }
   if (options.has("--reload")) {
     await call("Runtime.evaluate", { expression: "void 0", userGesture: true });
     await call("Page.reload", { ignoreCache: true });
@@ -71,44 +98,81 @@ try {
   }
   await inPage(() => {
     window.penBenchRecovery = setInterval(() => {
-      [...document.querySelectorAll("dialog[open] button")].find(node => node.textContent === "Keep for Later")?.click();
+      const dialog = [...document.querySelectorAll("dialog[open]")].find(node => node.querySelector("h1,h2")?.textContent.trim() === "Recovery storage needs attention");
+      [...(dialog?.querySelectorAll("button") ?? [])].find(node => node.textContent.trim() === "Later")?.click();
     }, 100);
   });
-  await waitFor("window.layerApp?.app.brush_ready() && layerApp.app.startup_progress().every(Boolean) && JSON.parse(layerApp.app.workspace_view()).ready");
+  await waitFor(`window.layerApp?.app.brush_ready() && ${startupPending ? "true" : "layerApp.app.startup_progress().every(Boolean)"} && JSON.parse(layerApp.app.workspace_view()).ready`);
+  console.log("Selected brush ready", JSON.stringify(await inPage(() => ({ elapsed: performance.now(), startup: layerApp.startupTimes }))));
+  const wasmHash = await buildProbe.verify();
   await delay(500);
-  await inPage(() => {
-    const app = layerApp.app.constructor.create(document.createElement("canvas"));
-    try { layerApp.dispatch({ type: "restore_workspace", workspace: app.state().workspace }); }
-    finally { app.free(); }
-  });
-  await delay(500);
-  await inPage(() => layerApp.dispatch({ type: "invoke", command: "new_document" }));
-  await waitFor("!!document.querySelector('.document-dialog input[type=number]')");
-  await inPage(size => {
-    [...document.querySelectorAll(".document-dialog input[type=number]")].slice(0, 2).forEach(node => node.value = size);
-    [...document.querySelectorAll(".document-dialog button")].find(node => node.textContent === "Create").click();
-  }, size);
-  await waitFor(`!layerApp.state().document_file.busy && layerApp.state().tabs.find(tab=>tab.active)?.width===${size} && layerApp.app.brush_ready()`);
+  if (!existingDocument) {
+    await inPage(() => {
+      const app = layerApp.app.constructor.create(document.createElement("canvas"), null, ["en-US"]);
+      try { layerApp.dispatch({ type: "restore_workspace", workspace: app.state().workspace }); }
+      finally { app.free(); }
+    });
+    await delay(500);
+    if (photo) {
+      await inPage(async url => {
+        const blob = await (await fetch(url)).blob();
+        await layerApp.documents.openFiles([new File([blob], "tier-photo.jpg", { type: "image/jpeg" })]);
+      }, photo);
+      await waitFor("!layerApp.documents.busy() && layerApp.app.brush_ready()");
+      await inPage(() => layerApp.dispatch({ type: "invoke", command: "add_layer" }));
+      const dimensions = await inPage(() => layerApp.state().tabs.find(tab => tab.active));
+      assert.equal(dimensions.width, 4248); assert.equal(dimensions.height, 2832);
+      assert(await inPage(() => layerApp.state().commands.find(command => command.id === "blend_perceptual")?.selected), "Tier photo must use Perceptual blending");
+    } else {
+      await inPage(() => layerApp.dispatch({ type: "invoke", command: "new_document" }));
+      await waitFor("!!document.querySelector('.document-dialog input[type=number]')");
+      await inPage(size => {
+        [...document.querySelectorAll(".document-dialog input[type=number]")].slice(0, 2).forEach(node => node.value = size);
+        [...document.querySelectorAll(".document-dialog button")].find(node => node.textContent === "Create").click();
+      }, size);
+      await waitFor(`!layerApp.state().document_file.busy && layerApp.state().tabs.find(tab=>tab.active)?.width===${size} && layerApp.app.brush_ready()`);
+    }
+  }
   await inPage((panel, transparency) => {
-    layerApp.dispatch({ type: "select_brush", id: 1 });
-    layerApp.dispatch({ type: "set_brush_size", value: 18 });
     layerApp.dispatch({ type: "restore_settings", settings: {
       ...layerApp.state().settings, feedback: true, platform_prediction: false, prediction_ms: 16,
       ...(transparency ? { transparency } : {}),
     } });
     layerApp.dispatch({ type: "invoke", command: "fit_canvas" });
     const group = layerApp.app.layout(innerWidth, innerHeight).groups.find(group => group.panels.includes("stats"));
-    // Selecting the already-active tab would open its configuration popup.
     if (group.active !== panel) layerApp.dispatch({ type: "select_panel_tab", group: group.id, panel });
   }, options.has("--navigator") ? "navigator" : "stats", transparency);
-  await waitFor("layerApp.app.brush_ready() && layerApp.app.startup_progress().every(Boolean)");
-  await delay(1500);
+  await delay(idleMs);
+  const selection = await inPage((preset, brushSize) => {
+    const start = performance.now(), startup = { ...layerApp.startupTimes };
+    layerApp.dispatch({ type: "select_brush", id: preset });
+    layerApp.dispatch({ type: "set_brush_size", value: brushSize });
+    if (["clone", "heal", "spot_heal"].includes(layerApp.state().brush.tool)) layerApp.dispatch({ type: "invoke", command: "use_reference_below" });
+    return { start, startup };
+  }, preset, brushSize);
+  await waitFor("layerApp.app.brush_ready()");
+  selection.ready = await inPage(() => performance.now());
+  selection.ready_ms = selection.ready - selection.start;
+  if (!startupPending) await waitFor("layerApp.app.startup_progress().every(Boolean)");
+  if (!options.has("--unprimed")) await delay(1500);
   const info = await inPage(() => JSON.parse(JSON.stringify({
     agent: navigator.userAgent, viewport: [innerWidth, innerHeight, devicePixelRatio],
     camera: layerApp.app.camera(), brush: layerApp.state().brush, settings: layerApp.state().settings,
     startup: layerApp.startupTimes,
+    document: layerApp.state().tabs.find(tab => tab.active),
+    blending: layerApp.state().commands.filter(command => ["blend_perceptual", "blend_linear"].includes(command.id) && command.selected).map(command => command.id),
     capabilities: { raw: "onpointerrawupdate" in window, prediction: typeof PointerEvent.prototype.getPredictedEvents },
   }, (_, value) => typeof value === "bigint" ? Number(value) : value)));
+  console.log("Photo and brush ready", JSON.stringify({ selection, startup: info.startup }));
+  info.selection = selection; info.photo = photo; info.idle_ms = idleMs;
+  info.wasm_sha256 = wasmHash;
+  info.browser = await inPage(async () => {
+    const adapter = await navigator.gpu.requestAdapter();
+    return { visibility: document.visibilityState, focused: document.hasFocus(),
+      adapter: { vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device,
+        description: adapter.info.description, fallback: adapter.isFallbackAdapter ?? adapter.info.isFallbackAdapter ?? false } };
+  });
+  assert.equal(info.browser.visibility, "visible"); assert(info.browser.focused); assert(!info.browser.adapter.fallback);
   if(picker) {
     await inPage(()=>layerApp.dispatch({type:'move_panel',panel:'color',target:{kind:'float',position:[30,80]}}));
     await delay(500);
@@ -212,8 +276,14 @@ try {
       await Promise.all(inflight);
     } finally { if(!picker)await send("mouseReleased", milliseconds / 1000 * speed); }
   };
-  await stroke(0, 1500);
-  await delay(800);
+  if (!options.has("--unprimed")) {
+    await stroke(0, 1500);
+    await delay(800);
+    if (photo || existingDocument) {
+      await inPage(() => layerApp.dispatch({ type: "invoke", command: "undo" }));
+      await delay(500);
+    }
+  }
   if (profile) {
     await call("Profiler.enable");
     await call("Profiler.setSamplingInterval", { interval: 1000 });
@@ -223,6 +293,11 @@ try {
   if (trace) {
     await call("Tracing.start", { categories: "devtools.timeline,blink.user_timing,cc,viz,gpu,input,latencyInfo,disabled-by-default-devtools.timeline", transferMode: "ReturnAsStream" });
     tracing = true;
+  }
+  if (options.has("--inflight-warmup")) {
+    const warmupAfter = await inPage(() => performance.now());
+    await waitFor(`penWarmupJobs.some(job => job.end == null && job.start >= ${warmupAfter})`);
+    info.inflight_warmup = await inPage(() => ({ observed: performance.now(), pending: penWarmupJobs.filter(job => job.end == null), startup: { ...layerApp.startupTimes } }));
   }
   const runs = [];
   for (let run = 0; run < repeats*(picker?2:1); run++) {
@@ -243,6 +318,7 @@ try {
       frames: penBench.frames, events: penBench.events, raf: penBench.raf, calls: penBench.calls,
       stats: layerApp.app.renderer_stats(), revision: layerApp.state().document_file.revision,
       glass: layerApp.app.backdrop_frames?.() ?? [0, 0],
+      warmup_jobs: window.penWarmupJobs ?? [],
     }, (_, value) => typeof value === "bigint" ? Number(value) : value)));
     await writeFile(`${output}/${label}-latest.json`, JSON.stringify({ info, before, data, errors }, null, 2));
     if(picker){
@@ -259,6 +335,7 @@ try {
     assert(frames.length, "Stroke must submit drawing frames");
     data.summary = {
       ...(picker?{wheel:run%2===1,sample_width:sampleWidth}:{}),
+      measurement: "CPU frame calls; not fresh GPU updates or presented frames",
       frames: frames.length, updates_per_second: frames.length / ((up - down) / 1000),
       glass: { computed: data.glass[0] - glassBefore[0], reused: data.glass[1] - glassBefore[1] },
       frame_cpu_ms: summary(frames.map(frame => frame.end - frame.start)),
@@ -311,5 +388,7 @@ try {
     delete window.penCalibration;
     delete window.penBenchRecovery;
   }).catch(() => {});
+  if (warmupPreload) await call("Page.removeScriptToEvaluateOnNewDocument", { identifier: warmupPreload }).catch(() => {});
+  await buildProbe?.close().catch(() => {});
   await cdp.close();
 }

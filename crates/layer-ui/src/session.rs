@@ -9435,6 +9435,49 @@ mod tests {
         .unwrap();
         assert!(s.state.filter_load.pending && s.filter_previews_idle());
         assert!(!s.background_readback_idle());
+        assert!(s.renderer_mut().validation.is_some());
+        assert_eq!(s.engine.backend().shader_idle, (true, true));
+    }
+
+    #[test]
+    fn shader_catalogue_yields_to_canvas_motion_without_blocking_visible_previews() {
+        let mut s = session(Platform::Gtk);
+        s.frame(0, 0).unwrap();
+        assert_eq!(s.engine.backend().shader_idle, (true, true));
+        insert_effect(&mut s, "domain_warp");
+        let layer = occurrence_token(s.engine.document().working.occurrence.unwrap());
+        s.dispatch(UiAction::Effect { action: EffectAction::Set {
+            layer, key: "animate".into(), value: layer_core::EffectValue::Toggle(false),
+        }}).unwrap();
+        s.frame(1, 1).unwrap();
+        assert!(!s.engine.document().has_animated_effects());
+        assert_eq!(s.engine.backend().shader_idle, (true, true));
+        s.dispatch(UiAction::Effect { action: EffectAction::Set {
+            layer, key: "animate".into(), value: layer_core::EffectValue::Toggle(true),
+        }}).unwrap();
+        s.frame(2, 2).unwrap();
+        assert!(s.engine.document().has_animated_effects() && s.engine.wants_continuous_frames());
+        assert!(s.filter_previews_idle());
+        assert_eq!(s.engine.backend().shader_idle, (true, false));
+        s.dispatch(UiAction::SetLayerVisibility { id: layer, visible: false }).unwrap();
+        s.frame(3, 3).unwrap();
+        assert!(!s.engine.document().has_animated_effects());
+        assert_eq!(s.engine.backend().shader_idle, (true, true));
+        s.dispatch(UiAction::SetLayerVisibility { id: layer, visible: true }).unwrap();
+        s.frame(4, 4).unwrap();
+        assert_eq!(s.engine.backend().shader_idle, (true, false));
+        s.dispatch(UiAction::Effect { action: EffectAction::Set {
+            layer, key: "animate".into(), value: layer_core::EffectValue::Toggle(false),
+        }}).unwrap();
+        s.frame(5, 5).unwrap();
+        assert_eq!(s.engine.backend().shader_idle, (true, true));
+        s.renderer_mut().refining = true;
+        s.frame(6, 6).unwrap();
+        assert!(s.filter_previews_idle() && s.engine.wants_continuous_frames());
+        assert_eq!(s.engine.backend().shader_idle, (true, false));
+        s.renderer_mut().refining = false;
+        s.frame(7, 7).unwrap();
+        assert_eq!(s.engine.backend().shader_idle, (true, true));
     }
 
     #[test]

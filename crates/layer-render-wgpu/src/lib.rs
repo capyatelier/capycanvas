@@ -969,6 +969,7 @@ pub struct WgpuRasterizer {
     dry_jobs: Vec<dry_material::Job>,
     material_gather: Option<material_sources::Gather>,
     retouch: Option<Box<retouch_sources::RetouchSources>>,
+    retouch_pipelines: Option<Arc<retouch_sources::Pipelines>>,
     edge_layout: wgpu::BindGroupLayout,
     watercolor_layout: wgpu::BindGroupLayout,
     transport_layout: wgpu::BindGroupLayout,
@@ -1327,6 +1328,7 @@ impl WgpuRasterizer {
             dry_jobs: Vec::with_capacity(SOURCE_SLOTS),
             material_gather: None,
             retouch: None,
+            retouch_pipelines: None,
             edge_layout,
             watercolor_layout,
             transport_layout,
@@ -3294,7 +3296,7 @@ impl WgpuRasterizer {
 }
 impl CanvasRenderer for WgpuRasterizer {
     fn shader_input(&mut self) { WgpuRasterizer::shader_input(self); }
-    fn shader_idle(&mut self, idle: bool) { WgpuRasterizer::shader_idle(self, idle); }
+    fn shader_idle(&mut self, idle: bool, speculative_idle: bool) { WgpuRasterizer::shader_idle(self, idle, speculative_idle); }
     fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.startup_needs_update(document, brush, transform)
     }

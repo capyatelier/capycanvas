@@ -43,15 +43,18 @@ impl Masks {
     pub fn ready_through(&self, priority: u8) -> bool {
         self.0.iter().all(|m| m.priority > priority || m.uploaded)
     }
-    pub fn take_ready(&mut self) -> Result<Vec<(AssetId, Pixels)>, GpuRasterError> {
+    pub fn take_ready(&mut self, allow_optional: bool) -> Result<Vec<(AssetId, Pixels)>, GpuRasterError> {
         let mut ready = Vec::new();
+        let mut optional = allow_optional;
         for mask in &mut self.0 {
             if !mask.uploaded
+                && (mask.priority < startup::OTHER || optional)
                 && mask.pixels.ready()
                 && let Some(result) = mask.pixels.compile().lock().unwrap().take()
             {
                 ready.push((mask.id.clone(), result?));
                 mask.uploaded = true;
+                if mask.priority >= startup::OTHER { optional = false; }
             }
         }
         Ok(ready)
@@ -104,7 +107,24 @@ fn generated_pixels_do_not_signal_readiness_before_upload() {
     assert!(masks.ready_through(2));
     masks.0[0].pixels.compile();
     assert!(!masks.ready_through(3));
-    assert_eq!(masks.take_ready().unwrap().len(), 1);
+    assert_eq!(masks.take_ready(false).unwrap().len(), 1);
     assert!(masks.ready_through(3));
-    assert!(masks.take_ready().unwrap().is_empty());
+    assert!(masks.take_ready(false).unwrap().is_empty());
+}
+
+#[cfg(test)]
+#[test]
+fn optional_mask_uploads_yield_to_input_and_upload_one_per_poll() {
+    let mut masks = Masks((0..2).map(|i| Mask {
+        id: AssetId::from(format!("test:tip-{i}").as_str()),
+        pixels: Deferred::new(|| std::sync::Mutex::new(Some(Ok((1, 1, vec![255]))))),
+        priority: startup::OTHER,
+        uploaded: false,
+    }).collect());
+    for mask in &masks.0 { mask.pixels.compile(); }
+    assert!(masks.take_ready(false).unwrap().is_empty());
+    assert_eq!(masks.take_ready(true).unwrap().len(), 1);
+    assert!(!masks.ready_through(startup::OTHER));
+    assert_eq!(masks.take_ready(true).unwrap().len(), 1);
+    assert!(masks.ready_through(startup::OTHER));
 }

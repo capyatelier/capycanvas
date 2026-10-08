@@ -111,10 +111,16 @@ def validate_setup(info, requested):
     expected = {key: requested[key] for key in
                 ("preset", "brush_size", "mode", "prediction", "speed", "duration_ms", "repeats")}
     actual = {key: info.get(key) for key in expected}
-    for key in ("pause_ms", "contact_ms", "settle_delay_ms"):
+    for key in ("pause_ms", "contact_ms", "settle_delay_ms", "warmup_idle_ms"):
         if key in requested:
             expected[key] = requested[key]
             actual[key] = info.get(key)
+    if "wait_for_warmup" in requested:
+        expected["wait_for_warmup"] = requested["wait_for_warmup"]
+        actual["wait_for_warmup"] = info.get("wait_for_warmup", False)
+    if "probe_presets" in requested:
+        expected["probe_presets"] = requested["probe_presets"]
+        actual["probe_presets"] = [probe["preset"] for probe in info.get("brush_probes", [])]
     if "color_mode" in requested:
         expected["color_mode"] = requested["color_mode"]
         actual["color_mode"] = info.get("color_mode", "full_color")

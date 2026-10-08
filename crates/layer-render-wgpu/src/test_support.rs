@@ -247,8 +247,11 @@ pub(crate) fn staged_renderer(reference: &WgpuRasterizer, color: layer_core::col
 
 pub(crate) fn wait_startup(renderer: &mut WgpuRasterizer, deadline: std::time::Instant,
     ready: impl Fn(StartupProgress) -> bool, message: std::fmt::Arguments<'_>) {
-    while !ready(renderer.poll_startup().unwrap()) {
-        assert!(std::time::Instant::now() < deadline, "{message}");
+    loop {
+        let progress = renderer.poll_startup().unwrap();
+        if ready(progress) { return; }
+        assert!(std::time::Instant::now() < deadline, "{message}: {progress:?}, pending jobs: {}",
+            renderer.startup.as_ref().map_or(0, |s| s.compiler.pending()));
         std::thread::sleep(Duration::from_millis(1));
     }
 }

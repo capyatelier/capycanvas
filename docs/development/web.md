@@ -362,6 +362,20 @@ beside the package. Serve both files, set
 runner with `--binary-transfer`. It compares every ICC byte with the companion
 file and checks shared resource identities without replacing the open drawing.
 
+For selected-brush preparation on the low tier, run `web-pen.mjs --reload
+--navigator --startup-pending` through the reserved tablet runner.
+Set `LAYER_PEN_PHOTO` to a served 4248 × 2832 tier photo,
+`LAYER_PEN_PRESET` to the preset ID, `LAYER_PEN_BRUSH_SIZE=1024`, and
+`LAYER_PEN_IDLE_MS=0` or `30000` for immediate or idle preparation.
+The report retains selected-brush readiness separately from startup completion,
+and the normal event-to-submission latency and frame interval distributions.
+Add `--inflight-warmup` to wait for a newly admitted asynchronous pipeline before
+starting motion; the report records its label and start/end times beside input.
+The normal primer is undone before motion; `--unprimed` skips it.
+With `--reload`, set `LAYER_WASM_SHA256` to the frozen package's hash to verify
+the loaded Wasm bytes before motion. Reload bypasses the HTTP cache.
+Frame calls measure CPU submissions, not fresh GPU updates or presented frames.
+
 ## Troubleshooting
 
 - **Blank or black canvas in headless Chrome.** Some NVIDIA drivers lose Chrome's

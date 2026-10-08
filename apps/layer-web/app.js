@@ -491,7 +491,10 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) defe
 document.addEventListener('toggle', deferOptionalCompiler, true);
 document.addEventListener('close', deferOptionalCompiler, true);
 function scheduleCompiler() {
-  if (!gpuReady || document.hidden || state.settings_open || compilerScheduled || compilerFailed || !app.shader_work_pending(optionalCompilerReady())) return;
+  if (!gpuReady || document.hidden || state.settings_open || compilerScheduled || compilerFailed) return;
+  const remaining = app.shader_wait_ms();
+  if (remaining > 0) compilerResumeTimer ??= setTimeout(resumeOptionalCompiler, Math.ceil(remaining));
+  if (!app.shader_work_pending(optionalCompilerReady())) return;
   compilerScheduled = true;
   const epoch=compilerEpoch;
   // Start after this display callback can present. The next job is scheduled

@@ -37,6 +37,9 @@ def main():
     p.add_argument("--serial", required=True, help="Target adb device serial")
     p.add_argument("--package", default="art.capycanvas.brushbench")
     p.add_argument("--presets", default=",".join(map(str, DRY_PRESETS)))
+    p.add_argument("--wait-for-warmup", action="store_true", help="Wait for the full shader catalogue after early photo adoption")
+    p.add_argument("--probe-presets", help="Measure selected-brush preparation before the motion workload")
+    p.add_argument("--warmup-idle-ms", type=int, help="Select a brush after this startup idle delay, without waiting for all shaders")
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--duration", type=int, default=10000)
     p.add_argument("--size", type=int, default=1000)
@@ -103,6 +106,8 @@ def main():
         p.error("object workloads require an authored fixture and --photo-layers 2")
     if args.mode == "object-affine" and not args.workload.startswith("objects"):
         p.error("object-affine motion requires an object workload")
+    if args.wait_for_warmup and args.warmup_idle_ms is None:
+        args.warmup_idle_ms = 0
     args.output.mkdir(parents=True, exist_ok=True)
     adb = [args.adb, "-s", args.serial]
     remote = f"/sdcard/Android/data/{args.package}/files/brush-benchmark"
@@ -123,6 +128,8 @@ def main():
                          radii=[args.radius_x, args.radius_y], photo_layers=args.photo_layers,
                          paint_layer_index=args.paint_layer_index,
                          horizon=args.horizon, zoom=args.zoom, blending=args.blending, stats_panel=args.stats)
+        requested.update(wait_for_warmup=args.wait_for_warmup, warmup_idle_ms=args.warmup_idle_ms,
+                         probe_presets=[int(value) for value in args.probe_presets.split(",")] if args.probe_presets else [])
         requested.update(workload=args.workload, effect_radius=args.effect_radius, color_mode=args.color_mode)
         if args.workload.startswith("objects"):
             requested.update(image_count=args.image_count, image_sources=args.image_sources)
@@ -165,6 +172,12 @@ def main():
                                memorySnapshots=str(args.memory).lower(), memoryIdleMs=args.memory_idle_ms, statsPanel=str(args.stats).lower(),
                                waitForTrace="true").items():
             cmd += ["-e", key, str(value)]
+        if args.wait_for_warmup:
+            cmd += ["-e", "waitForWarmup", "true"]
+        if args.probe_presets:
+            cmd += ["-e", "probePresets", args.probe_presets]
+        if args.warmup_idle_ms is not None:
+            cmd += ["-e", "warmupIdleMs", str(args.warmup_idle_ms)]
         cmd += ["-e", "colorMode", args.color_mode]
         if args.live_filter:
             cmd += ["-e", "liveFilter", args.live_filter, "-e", "liveFilterValues", shlex.quote(args.live_filter_values),
@@ -184,7 +197,7 @@ def main():
         profile = None
         with (args.output / f"{label}-instrumentation.txt").open("w") as log:
             process = subprocess.Popen(cmd, stdout=log, stderr=log)
-            deadline = time.monotonic() + 240
+            deadline = time.monotonic() + 600
             while process.poll() is None:
                 check = subprocess.run(adb + ["shell", f"test -f {remote}/{label}-ready"], capture_output=True)
                 if check.returncode == 0:
@@ -222,9 +235,10 @@ data_sources {{ config {{ name: "linux.process_stats" process_stats_config {{ sc
 data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
 '''
                 (args.output / f"{label}.pbtxt").write_text(config)
+                trace_path = f"/data/misc/perfetto-traces/{args.package}-{label}.perfetto-trace"
                 trace_log = (args.output / f"{label}-trace.log").open("w")
                 trace = subprocess.Popen(adb + ["shell", "perfetto", "--txt", "-c", "-", "-o",
-                    "/data/misc/perfetto-traces/capy-brush.perfetto-trace"], stdin=subprocess.PIPE,
+                    trace_path], stdin=subprocess.PIPE,
                     stdout=trace_log, stderr=trace_log)
                 trace.stdin.write(config.encode())
                 trace.stdin.close()
@@ -244,7 +258,7 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
             if trace:
                 trace.wait(timeout=60)
                 trace_log.close()
-                run("pull", "/data/misc/perfetto-traces/capy-brush.perfetto-trace", str(args.output / f"{label}.perfetto-trace"))
+                run("pull", trace_path, str(args.output / f"{label}.perfetto-trace"))
             if profile:
                 if profile.wait(timeout=60):
                     raise RuntimeError(f"CPU profile failed: {label}")
@@ -274,8 +288,10 @@ data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
         suffixes = (["-info.json", "-before.png", "-after.png", "-measurements.json", "-complete.json"]
                     if args.mode == "pinch" else ["-info.json", ".png"]
                     + (["-detail.png"] if args.mode == "visual" else []) + [f"-{i}.json" for i in range(args.repeats)])
+        if args.warmup_idle_ms is not None or args.workload.startswith("objects"):
+            suffixes += ["-prime.json"]
         if args.workload.startswith("objects"):
-            suffixes += ["-cold-setup.json", "-prime.json"]
+            suffixes += ["-cold-setup.json"]
         if args.memory_idle_ms:
             suffixes += ["-idle-before.json", "-idle-after.json"]
         for suffix in suffixes:

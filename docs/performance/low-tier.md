@@ -64,6 +64,8 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
 | Tool cursor hover, with and without brush size | 60 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
+| G-Pen 1024 px, Android with idle brush preparation | 60 | **Meets these strokes.** Pending: 75.57–75.87 fresh updates/s, fresh completion-gap p99 22.64–24.01 ms; fully warm: 75.00–76.19/s, p99 22.50–24.20 ms | [Idle brush preparation](#idle-brush-preparation), Perceptual, 100 × 60 px radii |
+| G-Pen 1024 px, Web while brush warmup is paused | 60 | **Unqualified; CPU proxy below target.** After the in-flight compile: 17.58–22.30 frame calls/s, interval p99 84.6–148.1 ms; fully warm: 21.36–23.31/s. Presentation unmeasured | [Idle brush preparation](#idle-brush-preparation) |
 | Pan during private session checkpoints | 60 | Unqualified: renderer 60.00–60.12 submissions/s, interval p99 18.70–18.92 ms; screen presentation and thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px during private session checkpoints | 60 | Unqualified: 77.6–79.0 fresh completed updates/s, completion gap p99 23.36–24.07 ms; thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px, repeated short contacts during checkpoints | 60 | Diagnostic only: 11.02–14.27 MiB process writes per 50 contacts; observed head age max 3.52–4.37 s. Paused motion has no qualified frame rate | [Session checkpoints](#session-checkpoints) |
@@ -132,6 +134,105 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
 | Menu open and close | 60 | | |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
+
+## Idle brush preparation
+
+Measured on the reference TCL on 2026-10-07–08 with the 4248 × 2832 photo,
+Perceptual blending, Fit, G-Pen 1024 px, default workspace and Navigator,
+Stats closed and thermal status zero. The shared compiler prepares the selected
+brush first, then admits one speculative job at a time after one second without
+input and while the canvas engine has no continuous work. An admitted driver
+call cannot be canceled.
+
+Android uses an optimized release APK with R8, OS-injected 240 Hz stylus input,
+pressure 1 and a 100 × 60 physical-pixel radius path. The selected build's
+qualification consists of three warmed five-second strokes after an undone
+primer, with tracing disabled. The baseline has three such batches in separate
+GPU lifetimes, after the representative tool-preparation probes.
+
+| Android build | Fresh completed updates/s, median (range) | Canvas completed updates/s, median | Fresh completion-gap p99, range |
+| --- | ---: | ---: | ---: |
+| Before idle preparation | 74.87 (70.10–76.60) | 74.87 | 22.15–27.77 ms |
+| Selected build, catalogue pending | 75.72 (75.57–75.87) | 75.72 | 22.64–24.01 ms |
+| Selected build, fully warm | 75.05 (75.00–76.19) | 75.05 | 22.50–24.20 ms |
+
+Both selected workloads meet the 60 completed-updates/s and 33.3 ms p99 limits.
+The matched pair shows no measurable penalty with preparation pending; the
+difference from baseline is also within the observed run spread. The pending run
+enters with an incomplete catalogue after 500 ms idle; the warm control waits
+for completion before selecting the brush. Neither uses tool-preparation probes or
+tracing. This qualifies these G-Pen strokes, not every brush, navigation or
+physical pen latency. Native pauses between contacts are about four seconds,
+unlike the short Web gaps below.
+
+Nine further five-second strokes after immediate tool-selection probes reach
+71.94–76.79 fresh updates/s, median 75.30, with completion-gap p99
+22.79–30.64 ms. All nine meet the stroke limits. Required compilation renews
+the quiet interval before the compiler can resume speculative work, preserving
+the newly ready tool's opportunity to receive input.
+
+At those nine stroke ends, median allocated/reserved GPU resources remain
+793.49/813.40 MB in both baseline and selected builds. Median process PSS rises
+from 1,221,378 to 1,318,024 KiB, an observed 94.4 MiB increase. These sequences
+use the same photo, primer, Undo and path; the selected build also repeats tool
+selection and still has optional work pending. This does not isolate shader
+retention from ongoing compilation.
+
+The selected build's probe-free controls retain 792.3–793.5 MB allocated GPU
+resources while preparation is pending and 794.1 MB when fully warm, with
+813.4 MB reserved in both cases. Their three stroke-end PSS snapshots are
+1,338,555–1,358,081 KiB pending and 1,188,284–1,208,462 KiB fully warm.
+These are retained observations, not sampled peaks. GPU accounting and PSS
+overlap and must not be added.
+
+Chrome 154 uses hardware WebGPU on ARM Bifrost, a visible focused tab and the
+`web-release` build. Each comparison opens a fresh photo and undoes a 1.5-second
+primer. CDP injects nominal 200 Hz pen input with varying pressure over a
+266 × 173 physical-pixel radius path. Each stroke lasts five seconds; actual
+gaps are about 600–700 ms. These are CPU frame calls and event-to-submission
+latencies, not fresh GPU completions, screen presents or physical pen latency.
+
+| Web condition | Frame calls/s, each stroke | Input-to-submission p95, each stroke | Frame-call interval p99, each stroke |
+| --- | --- | --- | --- |
+| Baseline, fully warmed | 20.98 / 22.56 / 22.57 | 40.7 / 27.1 / 29.0 ms | 99.8 / 77.8 / 78.8 ms |
+| Selected build, fully warmed | 21.36 / 23.12 / 23.31 | 26.8 / 27.0 / 28.8 ms | 88.0 / 109.1 / 78.2 ms |
+| Selected build, start during a speculative compile | 17.38 / 21.75 / 17.58 / 21.96 / 22.30 | 36.7 / 28.3 / 28.6 / 28.2 / 29.9 ms | 116.8 / 87.2 / 148.1 / 84.6 / 102.9 ms |
+
+The first stroke overlaps a 4.750-second material-pipeline compilation and is
+24.9% below the fully warm median. Its generic pipeline label does not identify
+the brush family. The following four contacts have a median 21.85 calls/s versus
+23.12 fully warmed, a remaining 5.5% difference. During the third contact, a
+separate document/writeback pipeline batch finishes; its largest frame-call gap
+is 570.7 ms and starts after the recorded asynchronous calls have finished.
+That timing does not establish the stall's cause. No further asynchronous
+pipeline starts during the final two contacts. All five strokes are retained
+above, and both runs report no errors. This comparison does not establish zero
+contention or qualify the 60 fps target.
+
+With a 200 ms admission interval, speculative compilation restarted in
+each gap: three matched primed strokes measured 18.57–19.54 calls/s and
+35.7–40.1 ms input-to-submission p95, versus 22.25–23.57 calls/s and
+26.7–33.5 ms after full warmup. The one-second interval prevents that repeated
+overlap while retaining required-shader priority.
+
+The baseline source is `fe15a1c42`; the selected build adds idle brush preparation
+on `9f9342d91`. Its queue prepares common brushes, then transforms, then specialty
+brushes. Baseline APK SHA-256:
+`f9613708eb5a07790bdfc84f201d922234475af8c3efc920c9d1a60439e02fd1`.
+Selected APK SHA-256:
+`aaa3da579210b916ec1fe2b04e208fa8ce4fd05707a0c59bbb2073c304741ceb`.
+Native raw records are in `artifacts/shader-warmup/baseline/android/probes-0-{0,1,2}`
+and `candidate5/android/{pending-untraced,warm-untraced,probes-0-{0,1,2}}` under
+the same artifact root. Baseline Web Wasm SHA-256:
+`f2afeaea8117fb305abf468a16788b4a1b213d82c68d4ad441909b033d3c84fb`.
+Selected Web Wasm SHA-256, verified from the loaded response bytes:
+`26c9c5e16719c77eb7ad98ee25981b43a1621b14228922a44f294d264d47e914`.
+Raw samples and source patches are under
+`artifacts/shader-warmup/baseline/web-warm-primed` and
+`candidate5/web-{pending,warm}-primed` under that root.
+Earlier admission experiments and harness deadline failures are retained
+separately in `candidate{,2,3,4}`. Startup and tool-readiness measurements
+are in [Responsiveness](responsiveness.md#idle-brush-preparation).
 
 ## Fixed filter controls
 

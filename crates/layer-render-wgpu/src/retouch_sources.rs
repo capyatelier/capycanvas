@@ -67,6 +67,11 @@ impl Pipelines {
         };
         Self { layout, gather: pipeline("gather_main"), copy: pipeline("copy_main"), heal: Arc::new(heal::Pipelines::new(device)) }
     }
+
+    pub fn all(&self) -> (Vec<Deferred<wgpu::RenderPipeline>>, Vec<Deferred<wgpu::ComputePipeline>>) {
+        let (render, compute) = self.heal.all();
+        ([&self.gather, &self.copy].into_iter().chain(render).cloned().collect(), compute.into_iter().cloned().collect())
+    }
 }
 
 /// Work the sources did, cumulative. A capture that could block uploads
@@ -280,7 +285,7 @@ impl Mapping {
 }
 
 pub(super) struct RetouchSources {
-    pipelines: Pipelines,
+    pipelines: Arc<Pipelines>,
     parameters: wgpu::Buffer,
     prepared: Option<layer_render::RetouchPreparation>,
     stroke: Option<StrokePages>,
@@ -303,9 +308,9 @@ pub(super) struct RetouchSources {
 }
 
 impl RetouchSources {
-    fn new(r: &WgpuRasterizer) -> Self {
+    fn new(r: &mut WgpuRasterizer) -> Self {
         Self {
-            pipelines: Pipelines::new(&r.device),
+            pipelines: r.retouch_pipelines(),
             parameters: r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("retouch source mapping"),
                 size: PARAMETER_BYTES,
@@ -331,8 +336,7 @@ impl RetouchSources {
 
     /// The pipelines retouching strokes draw with, from pen-down to pen-up.
     pub fn pipelines(&self) -> (Vec<Deferred<wgpu::RenderPipeline>>, Vec<Deferred<wgpu::ComputePipeline>>) {
-        let (render, compute) = self.pipelines.heal.all();
-        ([&self.pipelines.gather, &self.pipelines.copy].into_iter().chain(render).cloned().collect(), compute.into_iter().cloned().collect())
+        self.pipelines.all()
     }
 
     pub fn prepared(&self) -> bool {
@@ -870,6 +874,10 @@ impl WgpuRasterizer {
     }
     pub(crate) fn retouch_sources(&mut self) -> Box<RetouchSources> {
         self.retouch.take().unwrap_or_else(|| Box::new(RetouchSources::new(self)))
+    }
+
+    pub(super) fn retouch_pipelines(&mut self) -> Arc<Pipelines> {
+        self.retouch_pipelines.get_or_insert_with(|| Arc::new(Pipelines::new(&self.device))).clone()
     }
 
     pub(crate) fn release_unused_retouch(&mut self) {

@@ -19,7 +19,7 @@ impl CanvasRenderer for AttachedRenderer {
         self.0.as_deref().ok_or(GpuRasterError::AdapterUnavailable)?.preflight_image_object_affine(scene, object, affine, view)
     }
     fn shader_input(&mut self) { if let Some(gpu) = &self.0 { gpu.shader_input(); } }
-    fn shader_idle(&mut self, idle: bool) { if let Some(gpu) = &self.0 { gpu.shader_idle(idle); } }
+    fn shader_idle(&mut self, idle: bool, speculative_idle: bool) { if let Some(gpu) = &self.0 { gpu.shader_idle(idle, speculative_idle); } }
     fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.0.as_ref().is_some_and(|gpu| gpu.startup_needs_update(document, brush, transform))
     }

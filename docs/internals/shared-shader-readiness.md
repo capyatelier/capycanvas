@@ -8,20 +8,42 @@ policy in `layer-render-wgpu`.
 ## Order
 
 Startup prepares paper/presentation, the actual document, then the selected
-brush and physical eraser. Unused brushes, procedural masks, region tools and
-filter programs retain recipes; adding one no longer adds a startup compile.
-Visible previews request their own variants later. Already compiled variants
-are reused for subsequent selections and document effects.
+brush and physical eraser. Only after that brush is ready does it queue idle
+preparation of the built-in brushes for the document's blend space. Common dry
+brushes lead, followed by Smudge, Wet Round, Liquify and retouching, then
+transform and warp shaders, and finally the remaining specialty brushes. Shared
+pipeline recipes deduplicate the work. Visible previews and requested document
+dependencies take priority over brush warmup. Region tools and unused filter
+programs retain recipes.
+Custom brush settings still request any variants that have not been prepared.
 
 The existing native compiler thread and browser task runner share
-`shader_admission.rs`: optional work waits for 200 ms without input and an idle
-session. Strokes, held gestures, queued input, pending document edits and
+`shader_admission.rs`: visible optional previews wait for 200 ms without input;
+speculative brush and transform preparation waits for one second. Both require
+an idle session. Required compilation renews the quiet interval on completion,
+giving the newly ready tool time to receive input before another speculative
+job starts. Optional completions do not renew it. Short pauses between strokes
+do not restart the catalogue.
+Strokes, held gestures, queued input, pending document edits and
 settings hold that gate closed. Native workers sleep on their existing
 condition variable; browsers use a host timer. Window input observers forward
 activity without changing gesture routing or drag conventions. Required
 canvas/brush dependencies and explicit package validation retain priority and
 can progress while input is arriving. An in-flight driver call cannot be
 interrupted; this is admission between jobs, not preemption.
+Speculative jobs also wait while the canvas engine requests continuous frames,
+including visible animation and unfinished refinement. Visible previews keep
+their separate eligibility, so animation does not block requested preview
+shaders or create a dependency on completing the speculative queue.
+The browser admits one optional pipeline per task; required pipeline batches
+remain bounded to four. Optional mask publication also respects the input gate
+and uploads at most one mask per poll. Selecting a brush promotes its shaders
+and masks ahead of the remaining queue. Readiness of the current brush does not
+wait for full background completion.
+
+Retouch shader handles belong to the renderer and survive tool changes. Its
+source pixels and healing buffers are still released when unused; warming these
+shaders does not allocate retouch source pages.
 
 Readiness continues after initial startup. Shared `UiSession` wakes the host
 when a UI-only brush change needs preparation. Native readiness snapshots use
@@ -46,6 +68,5 @@ refreshes are no-ops on all three hosts. Existing native pipeline caches remain;
 there is no additional platform cache or compiler worker. A renderer created
 while another still holds the startup cache, such as a restored or opened
 document's, starts from the saved cache read-only; only the holder cleans or
-replaces it. Current native cache
-saving still closes the initial cache after required startup work; this change
-does not add persistence for later first-use variants.
+replaces it. The native cache closes after required startup work; later first-use
+variants are not persisted in that cache.

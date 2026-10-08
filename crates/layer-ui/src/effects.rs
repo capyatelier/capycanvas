@@ -78,7 +78,8 @@ pub(super) fn validate_catalog_labels(catalog: &layer_core::EffectCatalog, l: &L
 impl<B: CanvasRenderer> UiSession<B> {
     pub(crate) fn update_shader_idle(&mut self) {
         let idle = self.filter_previews_idle() && !self.state.settings_open;
-        self.engine.backend_mut().shader_idle(idle);
+        let speculative_idle = idle && !self.engine.wants_continuous_frames();
+        self.engine.backend_mut().shader_idle(idle, speculative_idle);
     }
     pub(crate) fn filter_drawer_open(&self) -> bool {
         self.state.customization.drawer.as_ref().is_some_and(|d|

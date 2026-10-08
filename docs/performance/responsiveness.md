@@ -16,9 +16,128 @@ otherwise.
 | Tonal selection, warm mask on the tier canvas | 350 ms | | Huion: 244–266 ms on 61 MP ([tonal performance](../internals/tonal-performance.md), 2026-09-24) | |
 | Filter preview after a parameter change | 100 ms p95 | | | |
 | Command search open or query → drawn | 50 ms p95 | | Huion: 20.5 ms (`9b830b42`, 2026-09-25) | |
-| Warm launch → canvas ready for a stroke | 2 s | | Huion: workspace ready 1.72–1.80 s ([shader readiness](../internals/shared-shader-readiness.md), 2026-09-25) | |
-| Cold launch with an empty shader cache → ready | 10 s | About 18 s in instrumented runs | Huion: 3.50 s to all shaders; workspace 2.34 s ([shader readiness](../internals/shared-shader-readiness.md), 2026-09-25) | |
+| Warm launch → canvas ready for a stroke | 2 s | **Not met.** Android median 7.50 s to selected-brush readiness ([idle preparation](#idle-brush-preparation), 2026-10-08) | Huion: workspace ready 1.72–1.80 s ([shader readiness](../internals/shared-shader-readiness.md), 2026-09-25) | |
+| Cold launch with an empty shader cache → ready | 10 s | **Not met.** Android median 35.29 s to selected-brush readiness ([idle preparation](#idle-brush-preparation), 2026-10-08) | Huion: 3.50 s to all shaders; workspace 2.34 s ([shader readiness](../internals/shared-shader-readiness.md), 2026-09-25) | |
 | Open the tier photo → first frame | 3 / 4 / 6 s | | | |
+
+## Idle brush preparation
+
+Measured on the low-tier TCL TAB 11 Gen 2 on 2026-10-07–08 with optimized Android
+and `web-release` builds. Native startup uses a fresh private workspace;
+brush-selection probes use the 4248 × 2832 reference photo, Perceptual blending, Fit and the
+default workspace with Navigator and Stats closed. Selection-to-ready includes
+host dispatch and readiness observation, not physical pen-to-photon latency.
+
+Native cold runs clear only the dedicated benchmark application's data and
+shader cache. Each following warm run retains that cache and starts a new
+process. Chrome runs use a dedicated test origin and foreground tab with hardware
+WebGPU; its driver cache cannot be cleared independently without affecting
+other sessions. Browser reload measurements therefore do not establish
+shader-cold startup.
+
+Initial selected-brush readiness and complete idle preparation are separate
+milestones. The latter includes all built-in brush families in the new build;
+painting starts at the former. The native initial-cache save remains early,
+so a short first session still saves required startup shaders. Later warmed
+variants are not added to that saved cache by this change.
+
+| Android startup stage, median of three launches | Cold before | Cold after | Cached before | Cached after |
+| --- | ---: | ---: | ---: | ---: |
+| Canvas | 6.705 s | 6.700 s | 6.483 s | 6.502 s |
+| Document | 20.374 s | 20.375 s | 7.403 s | 7.389 s |
+| Selected brush ready | 35.352 s | 35.293 s | 7.516 s | 7.501 s |
+| Complete background preparation | 63.464 s | 173.483 s | 7.519 s | 152.702 s |
+
+Initial readiness shows no regression in these samples. The absolute 10-second
+cold and 2-second cached-launch targets remain unmet. Full preparation takes
+longer because its scope is larger, and its later variants compile again on
+relaunch. Native startup records are under
+`artifacts/shader-warmup/{baseline,candidate5}/android/startup`.
+
+The Chrome startup comparison uses three reloads per build, bypassing the HTTP
+cache and verifying the loaded Wasm hash. Each preceding shader queue finishes
+before the next reload. Canvas, document and brush timings use their first
+readiness marks; complete preparation refers to the final adopted renderer.
+
+| Web reload stage, median of three | Before | After |
+| --- | ---: | ---: |
+| UI | 2.430 s | 2.343 s |
+| Canvas | 10.263 s | 10.445 s |
+| Document | 28.481 s | 28.751 s |
+| Selected brush ready | 44.568 s | 44.590 s |
+| Complete background preparation | 117.845 s | 191.286 s |
+
+Selected-brush readiness differs by 23 ms in these medians. Browser driver-cache
+state remains uncontrolled, and these reloads do not qualify warm-cache or
+shader-cold launch targets. Raw captures are in
+`artifacts/shader-warmup/baseline/web-startup-matched` and
+`artifacts/shader-warmup/candidate5/web-startup`. Earlier normal-reload baseline
+captures use a different HTTP-cache policy and are excluded from this comparison.
+
+Android selection-to-ready medians below use three fresh GPU lifetimes per
+condition. Each sequence selects G-Pen, Dual Texture, Wet Round, Smudge, Liquify
+and Healing, then repeats that order. The baseline immediate sequence contains
+only the first pass. These are sequential tool probes, so later tools can reuse
+dependencies requested by earlier tools.
+
+| Android tool | Before, immediate first selection | Idle preparation, immediate first selection | Idle preparation, first selection after 30 s |
+| --- | ---: | ---: | ---: |
+| G-Pen | 30.6 ms | 21.5 ms | 21.1 ms |
+| Dual Texture | 7394.0 ms | 6408.6 ms | 4911.2 ms |
+| Wet Round | 8626.6 ms | 4398.9 ms | 162.9 ms |
+| Smudge | 4733.0 ms | 4759.0 ms | 168.0 ms |
+| Liquify | 2986.1 ms | 3049.4 ms | 182.3 ms |
+| Healing | 14347.4 ms | 14305.9 ms | 14436.2 ms |
+
+Repeat-selection medians are 102.1–172.1 ms in the immediate batches and
+119.7–162.2 ms after idle. A single baseline 30-second idle control still needs
+3987.5 ms for Wet Round, 4696.8 ms for Smudge, 3019.8 ms for Liquify and
+14434.8 ms for Healing; its repeated Healing selection takes 1507.0 ms.
+Common tools benefit from the early idle work, but 30 seconds does not complete
+the entire catalogue or remove Healing's first-use delay. Even warmed
+selection-to-ready medians can exceed 100 ms; these probes do not qualify the
+separate visible-response target.
+
+One additional native lifetime waits for the full catalogue before probing.
+First selections take 53.4 ms for G-Pen, 188.9 ms for Dual Texture, 228.2 ms
+for Wet Round, 179.4 ms for Smudge, 99.4 ms for Liquify and 233.5 ms for Healing;
+repeats take 135.5–213.7 ms. These single observations confirm the eventual
+benefit for the later recipes; they are not three-run medians. Records are in
+`artifacts/shader-warmup/candidate5/android/full-tools`.
+
+Chrome uses the same sequential probes in three GPU lifetimes per condition,
+starting with G-Pen selected. Every retained lifetime verifies the loaded Wasm
+hash and bypasses the HTTP cache. Values are selection-to-ready medians.
+
+| Web tool | Before, immediate | After, immediate | Before, after 30 s idle | After, after 30 s idle |
+| --- | ---: | ---: | ---: | ---: |
+| G-Pen | 131.5 ms | 159.0 ms | 236.0 ms | 150.5 ms |
+| Dual Texture | 4099.4 ms | 3984.8 ms | 8328.5 ms | 2788.0 ms |
+| Wet Round | 4484.4 ms | 4761.3 ms | 5011.0 ms | 247.4 ms |
+| Smudge | 13373.7 ms | 5390.4 ms | 10180.9 ms | 277.4 ms |
+| Liquify | 10353.3 ms | 4106.3 ms | 8050.5 ms | 2175.3 ms |
+| Healing | 17416.8 ms | 10327.5 ms | 13412.4 ms | 9776.4 ms |
+
+Immediate selection still requests unprepared shaders: Wet Round is 277 ms
+slower in these medians, while Smudge, Liquify and Healing improve. After idle,
+Wet Round and Smudge need no multi-second wait; Liquify and Healing still do.
+Repeat-selection medians are 195.6–243.7 ms immediately and 197.3–282.7 ms
+after idle. Baseline Healing repeats take 1066.7 and 368.0 ms respectively.
+The browser driver cache remains outside this experiment's control. Raw probe
+records are in `artifacts/shader-warmup/{baseline,candidate5}/web-tools-{0,30000}`;
+discarded trials with a different initial preset remain separate diagnostics.
+
+In a single fully warmed Chrome lifetime, first selections take 42.3 ms for
+G-Pen, 161.0 ms for Dual Texture, 187.6 ms for Wet Round, 208.9 ms for Smudge,
+193.2 ms for Liquify and 162.4 ms for Healing; repeats take 137.6–238.8 ms.
+The photo's complete preparation takes 136.835 seconds. These probes reuse
+the fully warmed motion test's document and GPU context, with the loaded Wasm
+hash verified. Records are in
+`artifacts/shader-warmup/candidate5/web-full-tools`.
+
+Motion, compile-overlap and memory results are in
+[the low-tier table](low-tier.md#idle-brush-preparation). Physical Apple/Windows
+startup and reference-tier measurements above the low tier remain unverified.
 
 ## Export Again
 

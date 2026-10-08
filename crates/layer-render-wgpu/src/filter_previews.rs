@@ -1029,7 +1029,7 @@ mod tests {
         let mut r=crate::test_support::staged_renderer(&reference,doc.composition().color);
         r.prepare_startup(&doc,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
         crate::test_support::wait_startup(&mut r,std::time::Instant::now()+Duration::from_secs(30),|p|p.complete,format_args!("Preview startup"));
-        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();r.shader_idle(false);
+        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();r.shader_idle(false, false);
         for (id,source) in [(1,FilterPreviewSource::OwnerContent(owner)),(2,FilterPreviewSource::EffectInput(target))] {
             let mut candidate=request(&doc,owner,id,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("curves").preview().unwrap())]);candidate.source=source;
             assert!(r.request_filter_previews(candidate).unwrap());
@@ -1038,7 +1038,7 @@ mod tests {
                 assert!(r.take_filter_previews().is_none());
                 assert!(r.startup.as_ref().unwrap().compiler.pending()>0);
                 assert!(!r.poll_startup().unwrap().complete);
-                r.shader_idle(true);
+                r.shader_idle(true, true);
             }
             let image=finish(&mut r).image;
             assert_eq!(image.request_id,id);
@@ -1056,12 +1056,12 @@ mod tests {
         let mut r=crate::test_support::staged_renderer(&reference,doc.composition().color);
         r.prepare_startup(&doc,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
         crate::test_support::wait_startup(&mut r,std::time::Instant::now()+Duration::from_secs(30),|p|p.complete,format_args!("Preview startup"));
-        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();r.shader_idle(true);
+        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();r.shader_idle(true, true);
         let curves=request(&doc,owner,1,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("curves").preview().unwrap())]);
         assert!(r.request_filter_previews(curves.clone()).unwrap());
         let original=finish(&mut r).image;
         let preparations=r.filter_previews.as_ref().unwrap().scene.effects.preparation_count();
-        r.cancel_filter_previews();r.shader_idle(false);
+        r.cancel_filter_previews();r.shader_idle(false, false);
         let other=request(&doc,owner,2,[414,68],crate::test_support::view(extent),vec![Arc::new(fixture("gaussian_blur").preview().unwrap())]);
         assert!(r.request_filter_previews(other).unwrap());
         assert!(r.filter_previews_pending());
@@ -1078,7 +1078,7 @@ mod tests {
         assert_eq!(completed.bytes,original.bytes);
         assert!(r.startup.as_ref().unwrap().compiler.pending()>0,"Unrelated optional shaders remain unready");
         assert_eq!(r.filter_previews.as_ref().unwrap().scene.effects.preparation_count(),preparations,"Cancelled lookup dispatches never run");
-        r.shader_idle(true);
+        r.shader_idle(true, true);
     }
     #[test]
     fn attached_curves_preview_retains_owner_alpha_when_the_row_exceeds_the_document() {

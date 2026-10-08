@@ -42,10 +42,11 @@ pub(crate) struct Compiler(Arc<Shared>, Option<std::thread::JoinHandle<()>>);
 pub struct Activity(Arc<Shared>);
 impl Activity {
     pub fn input(&self) { self.0.queue.lock().unwrap().admission.input(); }
-    pub fn idle(&self, idle: bool) {
+    pub fn idle(&self, idle: bool, speculative_idle: bool) {
         let mut queue = self.0.queue.lock().unwrap();
-        if queue.admission.idle != idle {
+        if queue.admission.idle != idle || queue.admission.speculative_idle != speculative_idle {
             queue.admission.idle = idle;
+            queue.admission.speculative_idle = speculative_idle;
             self.0.wake.notify_one();
         }
     }
@@ -53,8 +54,12 @@ impl Activity {
 impl Compiler {
     pub fn activity(&self) -> Activity { Activity(self.0.clone()) }
     pub fn input(&self) { self.activity().input(); }
-    pub fn idle(&self, idle: bool) { self.activity().idle(idle); }
-    pub fn delay(&self) -> std::time::Duration { self.0.queue.lock().unwrap().admission.delay() }
+    pub fn idle(&self, idle: bool, speculative_idle: bool) { self.activity().idle(idle, speculative_idle); }
+    pub fn delay(&self) -> std::time::Duration {
+        let queue = self.0.queue.lock().unwrap();
+        queue.admission.delay(queue.jobs.iter().map(|job| job.priority))
+    }
+    pub fn optional_allowed(&self) -> bool { self.0.queue.lock().unwrap().admission.allows(WARM_BRUSH) }
     pub fn new() -> Result<Self, GpuRasterError> {
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue::default()),
@@ -76,7 +81,7 @@ impl Compiler {
                                 .min_by_key(|(_, job)| job.priority).map(|(index, _)| index) {
                                 break queue.jobs.remove(index).unwrap();
                             }
-                            let delay = queue.admission.delay();
+                            let delay = queue.admission.delay(queue.jobs.iter().map(|job| job.priority));
                             queue = if queue.started && queue.admission.idle && !delay.is_zero() {
                                 worker.wake.wait_timeout(queue, delay).unwrap().0
                             } else { worker.wake.wait(queue).unwrap() };
@@ -92,6 +97,7 @@ impl Compiler {
                     if let Err(error) = result {
                         *worker.error.lock().unwrap() = Some(error);
                     }
+                    worker.queue.lock().unwrap().admission.finished(job.priority);
                     worker.pending.fetch_sub(1, Ordering::Release);
                 }
             })
@@ -161,7 +167,7 @@ mod tests {
     #[test]
     fn input_admission_resumes_without_polling_and_promoted_dependencies_run_once() {
         let compiler = Compiler::new().unwrap();
-        compiler.idle(false);
+        compiler.idle(false, false);
         compiler.input();
         let (ran, events) = mpsc::channel();
         let promoted = {
@@ -169,18 +175,38 @@ mod tests {
             Deferred::new(move || { ran.send("required").unwrap(); 1 })
         };
         compiler.pipeline(&promoted, OTHER);
+        let warmed = ran.clone();
+        compiler.enqueue(WARM_BRUSH, move || { warmed.send("warm").unwrap(); Ok(()) });
         compiler.enqueue(OTHER, move || { ran.send("optional").unwrap(); Ok(()) });
         compiler.start();
         assert!(events.recv_timeout(Duration::from_millis(250)).is_err(), "a held gesture outlasts the quiet period");
         compiler.pipeline(&promoted, BRUSH);
         assert_eq!(events.recv_timeout(Duration::from_secs(2)).unwrap(), "required");
         compiler.input();
-        compiler.idle(true);
+        compiler.idle(true, false);
         assert!(events.recv_timeout(Duration::from_millis(100)).is_err());
         assert_eq!(events.recv_timeout(Duration::from_secs(2)).unwrap(), "optional");
+        assert!(events.recv_timeout(Duration::from_secs(1)).is_err());
+        compiler.idle(true, true);
+        assert_eq!(events.recv_timeout(Duration::from_secs(2)).unwrap(), "warm");
         drop(compiler);
         finish_shader_compiler_shutdown();
         assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn required_completion_leaves_a_quiet_interval_before_speculation() {
+        let compiler = Compiler::new().unwrap();
+        let (ran, events) = mpsc::channel();
+        for (priority, label) in [(BRUSH, "required"), (WARM_BRUSH, "first"), (WARM_BRUSH, "second")] {
+            let ran = ran.clone();
+            compiler.enqueue(priority, move || { ran.send(label).unwrap(); Ok(()) });
+        }
+        compiler.start();
+        assert_eq!(events.recv_timeout(Duration::from_secs(2)).unwrap(), "required");
+        assert!(events.recv_timeout(Duration::from_millis(200)).is_err());
+        assert_eq!(events.recv_timeout(Duration::from_secs(2)).unwrap(), "first");
+        assert_eq!(events.recv_timeout(Duration::from_millis(200)).unwrap(), "second");
     }
 
     #[test]

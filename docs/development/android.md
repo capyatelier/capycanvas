@@ -669,6 +669,15 @@ canonical promotion after paint and before prediction. It excludes CPU
 preparation and backing-worker readback. A scope that cannot fit the current
 command encoder or obtain a timer slot records its renderer frame ID in
 `Capy GPU native capture omitted`; treat those frames as missing phase data.
+`--warmup-idle-ms 0` starts photo setup after the selected brush is ready, then
+measures brush preparation without waiting for the remaining shader catalogue.
+Use `--probe-presets 1,9,11,10,12,41` to record representative preparation times
+in `-info.json`; repeat with `--warmup-idle-ms 30000` for idle preparation.
+These diagnostic runs also retain the first unprimed stroke in `-prime.json`.
+For a matched fully warm control, use `--wait-for-warmup`: it adopts the photo
+after current-brush readiness, then waits for the catalogue once in that context.
+Setup has a ten-minute bound for slow reference-driver compilation.
+
 `--presets` accepts every built-in preset, including wet, smudge, Liquify, and
 Clone Stamp, Healing Brush and Spot Healing Brush, which read the photo as a
 reference layer.

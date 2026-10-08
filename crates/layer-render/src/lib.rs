@@ -689,7 +689,7 @@ pub trait CanvasRenderer {
     /// Input postpones optional shader work. Shared editor state separately
     /// holds admission during a stroke/gesture or unfinished document edit.
     fn shader_input(&mut self) {}
-    fn shader_idle(&mut self, _idle: bool) {}
+    fn shader_idle(&mut self, _idle: bool, _speculative_idle: bool) {}
     /// UI-only tool changes may still need a first-use preparation callback.
     fn shaders_need_update(&self, _document: &layer_core::Document, _brush: &layer_core::BrushSnapshot, _transform: bool) -> bool { false }
     /// Native interpretation configured on this renderer. Adoption/recovery

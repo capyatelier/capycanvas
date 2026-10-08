@@ -114,9 +114,11 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 active.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             }
             val host = active.host
+            val waitForWarmup = arguments.getString("waitForWarmup") == "true"
+            val warmupIdleMs = arguments.getString("warmupIdleMs")?.toLong() ?: 0L.takeIf { waitForWarmup }
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
             fun waitFor(condition: () -> Boolean) {
-                val deadline = SystemClock.uptimeMillis() + 180_000
+                val deadline = SystemClock.uptimeMillis() + 600_000
                 while (!condition()) {
                     check(host.failure == null) { host.failure!! }
                     check(host.actionError == null) { host.actionError!! }
@@ -185,7 +187,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                     }
                 }
             }
-            waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
+            waitFor { host.snapshot?.optBoolean(if (warmupIdleMs == null) "shaders_ready" else "brush_ready") == true &&
                 host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             stage("workspace-ready")
             val coldSetupBegin = System.nanoTime()
@@ -218,7 +220,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             } finally { Native.projectFree(task) }
             stage("photo-adopted")
             runOnMainSync { host.documentChanged() }
-            waitFor { host.snapshot?.optBoolean("shaders_ready") == true &&
+            waitFor { host.snapshot?.optBoolean(if (warmupIdleMs == null) "shaders_ready" else "brush_ready") == true &&
                 host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any {
                     it.optBoolean("active") && it.optInt("width") == photoWidth && it.optInt("height") == photoHeight
                 } == true }
@@ -345,7 +347,23 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 native { Unit }
                 waitFor { abs(state().getJSONObject("camera").getDouble("zoom") - requested) < .001 }
             }
+            if (waitForWarmup) waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
+            warmupIdleMs?.let { check(it in 0..120_000); SystemClock.sleep(it) }
+            val brushProbes = JSONArray()
+            arguments.getString("probePresets")?.split(",")?.forEach { id ->
+                val began = System.nanoTime()
+                val complete = host.snapshot?.optBoolean("shaders_ready") == true
+                action(obj("type" to "select_brush", "id" to id.toInt()))
+                waitFor { host.snapshot?.optBoolean("brush_ready") == true }
+                brushProbes.put(obj("preset" to id.toInt(), "selected_ns" to began,
+                    "ready_ns" to System.nanoTime(), "shaders_complete_at_selection" to complete,
+                    "shaders_complete_at_ready" to (host.snapshot?.optBoolean("shaders_ready") == true)))
+            }
+            val shadersCompleteAtSelection = host.snapshot?.optBoolean("shaders_ready") == true
+            val brushSelectedNs = System.nanoTime()
             action(obj("type" to "select_brush", "id" to preset))
+            waitFor { host.snapshot?.optBoolean("brush_ready") == true }
+            val brushReadyNs = System.nanoTime()
             if (state().getJSONObject("brush").getString("tool") in setOf("clone", "heal", "spot_heal")) invoke("use_reference_below")
             action(obj("type" to "set_brush_size", "value" to size))
             arguments.getString("paintLoad")?.let {
@@ -489,6 +507,12 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val displayInfo = display()
             check(displayInfo.getString("present_mode") in listOf("SharedDemandRefresh", "Fifo"))
             File(output, "$label-info.json").writeText(obj("label" to label, "preset" to preset,
+                "brush_probes" to brushProbes,
+                "shaders_complete_at_selection" to shadersCompleteAtSelection,
+                "shaders_complete_at_ready" to (host.snapshot?.optBoolean("shaders_ready") == true),
+                "wait_for_warmup" to waitForWarmup,
+                "warmup_idle_ms" to warmupIdleMs, "brush_selected_ns" to brushSelectedNs,
+                "brush_ready_ns" to brushReadyNs, "brush_ready_ms" to (brushReadyNs - brushSelectedNs) / 1e6,
                 "brush_size" to size, "mode" to mode, "prediction" to prediction, "speed" to speed,
                 "memory_snapshots" to memorySnapshots,
                 "stats_panel" to statsPanel,
@@ -516,7 +540,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             }
             val primeBefore = if (objectWorkload) stats() else null
             val primeDisplay = if (objectWorkload) display() else null
-            if (objectWorkload) {
+            if (objectWorkload || warmupIdleMs != null) {
                 report(true)
                 native { Native.completionTimings(it, true) }
             }
@@ -525,7 +549,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             SystemClock.sleep(1500)
             waitFor { state().getJSONObject("document_file").getLong("revision") > unprimed }
             waitFor { !native { Native.renderingPending(it) } }
-            if (objectWorkload) {
+            if (objectWorkload || warmupIdleMs != null) {
                 File(output, "$label-prime.json").writeText(report(false)
                     .put("motion", primeMotion).put("renderer_before", primeBefore)
                     .put("renderer_after", stats()).put("display_before", primeDisplay)

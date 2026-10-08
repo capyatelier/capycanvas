@@ -10,6 +10,7 @@ const DOCUMENT: u8 = 2;
 pub(super) const BRUSH: u8 = 3;
 pub(super) const VALIDATION: u8 = 4;
 pub(super) const OTHER: u8 = 5;
+const WARM_BRUSH: u8 = OTHER + 1;
 #[path = "shader_admission.rs"]
 mod admission;
 #[cfg(not(target_arch = "wasm32"))]
@@ -187,6 +188,7 @@ pub(super) struct Startup {
     effects_ready: bool,
     pub(super) host_catalog_pending: bool,
     pub(super) finished: bool,
+    warmed_blend: Option<layer_core::BlendSpace>,
 }
 #[derive(PartialEq, Eq)]
 struct ShaderBrushKey {
@@ -235,6 +237,7 @@ impl Startup {
             effects_ready: false,
             host_catalog_pending: false,
             finished: false,
+            warmed_blend: None,
         })
     }
     /// Pipelines a selected tool draws with, compiled before pen-down.
@@ -249,8 +252,8 @@ impl WgpuRasterizer {
     pub fn shader_input(&self) {
         if let Some(startup) = &self.startup { startup.compiler.input(); }
     }
-    pub fn shader_idle(&self, idle: bool) {
-        if let Some(startup) = &self.startup { startup.compiler.idle(idle); }
+    pub fn shader_idle(&self, idle: bool, speculative_idle: bool) {
+        if let Some(startup) = &self.startup { startup.compiler.idle(idle, speculative_idle); }
     }
     pub fn shader_wait_ms(&self) -> f64 {
         self.startup.as_ref().map_or(0., |s| s.compiler.delay().as_secs_f64() * 1000.)
@@ -281,7 +284,7 @@ impl WgpuRasterizer {
             .is_some_and(|s| s.compiler.has_work(allow_optional))
     }
     /// Call after the host has submitted its initial filter catalog. Saving runs
-    /// behind all shader jobs, never on the canvas/input thread. The worker drops
+    /// on the compiler, never on the canvas/input thread. The worker drops
     /// the driver's cache after saving; runtime edits cannot keep growing it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn finish_startup_cache(&mut self) {
@@ -458,15 +461,6 @@ impl WgpuRasterizer {
             current.compute.extend(compute);
         }
         current.enqueue(&startup.compiler, BRUSH);
-        let transforms = self.transforms.as_ref().unwrap();
-        startup.compiler.require(transforms.pipelines(), OTHER);
-        startup.compiler.require(self.selection_clip.pipelines(), OTHER);
-        startup.compiler.require(transforms.display_pipelines().into_iter().chain([&self.scene_pipelines.resample.area]), OTHER);
-        startup.compiler.require(transforms.mesh_pipelines(), OTHER);
-        startup.compiler.require(&self.scene_pipelines.resample.mesh, OTHER);
-        let mip = self.display_pipelines
-            .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-        startup.compiler.require([&mip.reduce, &mip.fused_reduce], OTHER);
         startup.current = current;
         startup.brush = Some(ShaderBrushKey::new(brush));
         startup.transform = transform;
@@ -476,7 +470,7 @@ impl WgpuRasterizer {
     }
     pub fn poll_startup(&mut self) -> Result<StartupProgress, GpuRasterError> {
         if let Some(startup) = &mut self.startup {
-            let masks = startup.masks.take_ready()?;
+            let masks = startup.masks.take_ready(startup.compiler.optional_allowed())?;
             for (id, (width, height, pixels)) in masks {
                 self.upload_mask(&id, width, height, width, &pixels)?;
             }
@@ -522,8 +516,8 @@ impl WgpuRasterizer {
         startup.finished = brush_ready
             && !startup.host_catalog_pending
             && startup.compiler.pending() == 0
-            && startup.masks.ready_through(OTHER);
-        let progress = StartupProgress {
+            && startup.masks.ready_through(WARM_BRUSH + 2);
+        let mut progress = StartupProgress {
             canvas_ready,
             brush_ready,
             complete: startup.finished,
@@ -531,9 +525,64 @@ impl WgpuRasterizer {
         if canvas_ready && self.scene.is_none() {
             self.scene = Some(scene::Scene::new(self));
         }
+        if brush_ready && self.warm_brushes() {
+            progress.complete = false;
+        }
         Ok(progress)
     }
+
+    fn warm_brushes(&mut self) -> bool {
+        let startup = self.startup.as_ref().unwrap();
+        let blend = startup.document_key.as_ref().unwrap().key.blend_space;
+        if startup.warmed_blend == Some(blend) { return false; }
+        let mut startup = self.startup.take().unwrap();
+        startup.warmed_blend = Some(blend);
+        startup.finished = false;
+        startup.compiler.input();
+        for (priority, presets) in WARM_BRUSHES {
+            for &preset in presets {
+                let brush = layer_core::default_brush(preset);
+                let mut required = Requirements::default();
+                for tool in [StrokeTool::Brush, StrokeTool::Eraser] {
+                    let style = layer_render::DabStyle { blend_space: blend, ..layer_render::DabStyle::for_brush(&brush, tool) };
+                    startup.masks.style(&startup.compiler, &style, priority);
+                    required.style(self, &style, false, true);
+                }
+                if brush.execution.retouches() {
+                    let (render, compute) = self.retouch_pipelines().all();
+                    required.render.extend(render);
+                    required.compute.extend(compute);
+                }
+                required.enqueue(&startup.compiler, priority);
+            }
+        }
+        let transforms = self.transforms.as_ref().unwrap();
+        startup.compiler.require(transforms.pipelines(), WARM_BRUSH + 1);
+        startup.compiler.require(self.selection_clip.pipelines(), WARM_BRUSH + 1);
+        startup.compiler.require(transforms.display_pipelines().into_iter().chain([&self.scene_pipelines.resample.area]), WARM_BRUSH + 1);
+        startup.compiler.require(transforms.mesh_pipelines(), WARM_BRUSH + 1);
+        startup.compiler.require(&self.scene_pipelines.resample.mesh, WARM_BRUSH + 1);
+        let mip = self.display_pipelines
+            .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+        startup.compiler.require([&mip.reduce, &mip.fused_reduce], WARM_BRUSH + 1);
+        self.startup = Some(startup);
+        true
+    }
 }
+
+const WARM_BRUSHES: [(u8, &[layer_core::DefaultBrushPreset]); 2] = {
+    use layer_core::DefaultBrushPreset::*;
+    [(WARM_BRUSH, &[GPen, Eraser, Pencil, Airbrush, Paintbrush, Marker, Smudge, WetRound,
+        LiquifyPush, CloneStamp, HealingBrush, SpotHealingBrush]),
+     (WARM_BRUSH + 2, &[Chalk, Spray,
+        RoughGPen, CalligraphyPen, AntiquePen, RealisticPen, PointyPencil,
+        ShadingPencil, Charcoal, PastelBlock, DualTexture, TexturedFlat,
+        DryScumble, TransparentGlaze, OpaqueGouache, MultiplyGlaze,
+        WetInk, BlottyInk, BrushedInk, BristlePaintbrush,
+        NaturalBlender, LoadedOil, PaletteKnife, WatercolorWash,
+        WetWatercolor, LiquifyTwirl, LiquifyTwirlClockwise,
+        LiquifyPinch, LiquifyExpand, LiquifyCrystals])]
+};
 
 #[cfg(test)]
 fn object_document(icc:bool)->Document {
@@ -711,6 +760,7 @@ mod gpu_tests {
         assert!(renderer.pipelines.dry_material.kernels.iter().all(|p| !p.ready()));
         let document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        renderer.shader_idle(false, false);
         renderer.prepare_startup(&document, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("Native brush compilation timed out"));
@@ -738,7 +788,26 @@ mod gpu_tests {
                 .kernel(&layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush), MaterialOperation::Coverage, coverage).ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }
+        let watercolor = layer_core::default_brush(layer_core::DefaultBrushPreset::WatercolorWash);
+        let mut required = Requirements::default();
+        required.style(&renderer, &layer_render::DabStyle::for_brush(&watercolor, StrokeTool::Brush), false, true);
+        assert!(!required.ready(), "optional brush recipes wait while input is active");
+        renderer.shader_idle(true, true);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.complete, format_args!("Startup compilation timed out"));
+        assert!(required.ready(), "idle preparation includes unselected brush families");
+        for &preset in WARM_BRUSHES.into_iter().flat_map(|(_, presets)| presets) {
+            renderer.prepare_startup(&document, &layer_core::default_brush(preset), false).unwrap();
+            assert!(renderer.poll_startup().unwrap().brush_ready, "{preset:?} must reuse idle preparation");
+        }
+        let retouch = renderer.retouch_sources();
+        let pipelines = renderer.retouch_pipelines();
+        assert!(Arc::ptr_eq(&pipelines, &renderer.retouch_pipelines()));
+        let (render, compute) = retouch.pipelines();
+        assert!(render.iter().all(Deferred::ready) && compute.iter().all(Deferred::ready));
+        drop(retouch);
+        let (render, compute) = renderer.retouch_sources().pipelines();
+        assert!(render.iter().all(Deferred::ready) && compute.iter().all(Deferred::ready), "releasing retouch pixels retains its shaders");
+        renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.regions.as_ref().is_none_or(|regions| regions.flood.pipelines().all(|p| !p.ready())),
             "unused region recipes must remain uncompiled");
         let transforms = renderer.transforms.as_ref().unwrap();

@@ -26,8 +26,16 @@ pub(crate) struct Compiler {
 }
 impl Compiler {
     pub fn input(&self) { self.queue.borrow_mut().admission.input(); }
-    pub fn idle(&self, idle: bool) { self.queue.borrow_mut().admission.idle = idle; }
-    pub fn delay(&self) -> std::time::Duration { self.queue.borrow().admission.delay() }
+    pub fn idle(&self, idle: bool, speculative_idle: bool) {
+        let mut queue = self.queue.borrow_mut();
+        queue.admission.idle = idle;
+        queue.admission.speculative_idle = speculative_idle;
+    }
+    pub fn delay(&self) -> std::time::Duration {
+        let queue = self.queue.borrow();
+        queue.admission.delay(queue.jobs.iter().map(|job| job.priority))
+    }
+    pub fn optional_allowed(&self) -> bool { self.queue.borrow().admission.allows(WARM_BRUSH) }
     pub fn new(device: &PipelineDevice) -> Result<Self, GpuRasterError> {
         Ok(Self {
             queue: Rc::default(),
@@ -147,6 +155,8 @@ impl Compiler {
                 done();
             }
             let mut queue = shared.borrow_mut();
+            let priority = queue.busy.unwrap();
+            queue.admission.finished(priority);
             queue.busy = None;
             if let Err(error) = &result {
                 queue.error = Some(error.clone());

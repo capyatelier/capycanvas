@@ -102,6 +102,24 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duration_ms"):
             validate_setup(self.info, self.requested)
 
+    def test_rejects_reusing_a_completed_run_for_different_warmup(self):
+        self.requested.update(warmup_idle_ms=0, probe_presets=[1, 9])
+        self.info.update(warmup_idle_ms=0, brush_probes=[dict(preset=1), dict(preset=9)])
+        validate_setup(self.info, self.requested)
+        self.requested["warmup_idle_ms"] = 30000
+        with self.assertRaisesRegex(ValueError, "warmup_idle_ms"):
+            validate_setup(self.info, self.requested)
+        self.requested.update(warmup_idle_ms=0, probe_presets=[1, 11])
+        with self.assertRaisesRegex(ValueError, "probe_presets"):
+            validate_setup(self.info, self.requested)
+
+    def test_rejects_reusing_an_early_run_as_a_fully_warm_control(self):
+        self.requested["wait_for_warmup"] = False
+        validate_setup(self.info, self.requested)
+        self.requested["wait_for_warmup"] = True
+        with self.assertRaisesRegex(ValueError, "wait_for_warmup"):
+            validate_setup(self.info, self.requested)
+
     def test_reduced_color_mode_requires_the_live_layer_to_match(self):
         self.requested["color_mode"] = "grayscale"
         self.info.update(color_mode="grayscale")

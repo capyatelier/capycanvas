@@ -53,7 +53,7 @@ class UiStartupInstrumentation : Instrumentation() {
                 choreographer.postFrameCallback(frameObserver!!)
             }
             fun waitFor(condition: () -> Boolean): Long {
-                val deadline = SystemClock.uptimeMillis() + 120_000
+                val deadline = SystemClock.uptimeMillis() + 600_000
                 do {
                     var ready = false
                     runOnMainSync { check(host.failure == null) { host.failure!! }; check(host.actionError == null) { host.actionError!! }; ready = condition() }

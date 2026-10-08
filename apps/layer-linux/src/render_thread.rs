@@ -703,7 +703,7 @@ impl Drop for RenderWorker {
 }
 impl CanvasRenderer for RenderWorker {
     fn shader_input(&mut self) { if let Some(activity) = &self.shader_activity { activity.input(); } }
-    fn shader_idle(&mut self, idle: bool) { if let Some(activity) = &self.shader_activity { activity.idle(idle); } }
+    fn shader_idle(&mut self, idle: bool, speculative_idle: bool) { if let Some(activity) = &self.shader_activity { activity.idle(idle, speculative_idle); } }
     fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.startup_needs_update(document, brush, transform)
     }
