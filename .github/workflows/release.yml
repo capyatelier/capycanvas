@@ -224,8 +224,8 @@ jobs:
       - if: env.SIGNED == 'true'
         env:
           API_KEY: ${{ secrets.APPLE_API_KEY }}
-          DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
-          DEVELOPER_ID_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}
+          SIGNING_CERTIFICATE: ${{ secrets[matrix.platform == 'ipad' && 'APPLE_DEVELOPMENT_P12' || 'APPLE_DEVELOPER_ID_P12'] }}
+          SIGNING_PASSWORD: ${{ secrets[matrix.platform == 'ipad' && 'APPLE_DEVELOPMENT_PASSWORD' || 'APPLE_DEVELOPER_ID_PASSWORD'] }}
         run: |
           base64 --decode <<< "${API_KEY:?}" > "$RUNNER_TEMP/api-key.p8"
           {
@@ -234,15 +234,19 @@ jobs:
             echo "CAPY_APPLE_KEY_ID=${{ vars.APPLE_API_KEY_ID }}"
             echo "CAPY_APPLE_ISSUER=${{ vars.APPLE_API_ISSUER_ID }}"
           } >> "$GITHUB_ENV"
-          if [[ ${{ matrix.platform }} == mac ]]; then
-            keychain="$RUNNER_TEMP/signing.keychain-db"
-            base64 --decode <<< "${DEVELOPER_ID:?}" > "$RUNNER_TEMP/developer-id.p12"
-            security create-keychain -p '' "$keychain"
-            security set-keychain-settings -lut 21600 "$keychain"
-            security unlock-keychain -p '' "$keychain"
-            security import "$RUNNER_TEMP/developer-id.p12" -P "${DEVELOPER_ID_PASSWORD:?}" -A -t cert -f pkcs12 -k "$keychain"
-            security set-key-partition-list -S apple-tool:,apple: -k '' "$keychain"
-            security list-keychains -d user -s "$keychain"
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          base64 --decode <<< "${SIGNING_CERTIFICATE:?}" > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p '' "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p '' "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -P "${SIGNING_PASSWORD:?}" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k '' "$keychain"
+          security list-keychains -d user -s "$keychain"
+          signing_identity='Apple Development'
+          if [[ ${{ matrix.platform }} == mac ]]; then signing_identity='Developer ID Application'; fi
+          if ! security find-identity -v -p codesigning "$keychain" | grep -Fq "\"$signing_identity:"; then
+            echo "The signing certificate must include a valid $signing_identity private key." >&2
+            exit 1
           fi
       - run: apps/layer-apple/scripts/release.sh ${{ matrix.platform }}
       - if: matrix.platform == 'mac'

@@ -181,6 +181,7 @@ and require a maintainer's approval.
 | `ANDROID_UPLOAD_KEYSTORE`, `ANDROID_UPLOAD_KEYSTORE_PASSWORD` | Secrets | Base64 PKCS12 upload keystore with the alias `upload`, and its password |
 | `APPLE_API_KEY` | Secret | Base64 App Store Connect team API key (`.p8`) with the Admin role, for cloud signing, upload and notarization |
 | `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_TEAM_ID` | Variables | That key's identifiers and the team |
+| `APPLE_DEVELOPMENT_P12`, `APPLE_DEVELOPMENT_PASSWORD` | Secrets | Base64 PKCS12 Apple Development certificate with its private key, and its password, reused for iPad archives |
 | `APPLE_DEVELOPER_ID_P12`, `APPLE_DEVELOPER_ID_PASSWORD` | Secrets | Base64 Developer ID Application certificate and its password; Xcode cannot cloud-sign Developer ID builds with an API key |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` | Variables | The Google Cloud workload identity provider that trusts the `release` environment, and the service account it acts as; Play Console grants that account release access |
 | `PLAY_RELEASE_STATUS` | Variable | Optional status of the internal-track release; `draft` until the app is published, then `completed` |
@@ -188,6 +189,14 @@ and require a maintainer's approval.
 | `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, `ARTIFACT_SIGNING_PROFILE` | Variables | The Azure Artifact Signing account's regional endpoint, its name and the Public Trust certificate profile |
 | `FLATPAK_GPG_PRIVATE_KEY`, `FLATPAK_GPG_PASSPHRASE` | Secrets | ASCII-armored GPG private key, without base64 encoding, and its passphrase for signing Flatpak commits and the repository summary |
 | `FLATPAK_GPG_FINGERPRINT` | Variable | The full fingerprint of the Flatpak release key; its public key is `packaging/flatpak/release-key.asc` |
+
+Each Apple job imports its stored signing identity into a temporary keychain and
+checks that the certificate has a valid private key before building. The iPad
+archive reuses an Apple Development identity; App Store export uses cloud
+distribution signing through the API key. Retain the development identity across
+runs: disposable runners otherwise create certificates whose private keys are
+lost when the job ends. Rotate the stored identity before it expires, and revoke
+an old certificate only after confirming no active developer or build uses it.
 
 Locally, `CAPY_UPLOAD_KEYSTORE` and `CAPY_UPLOAD_KEYSTORE_PASSWORD` sign the
 Android bundle, and `CAPY_APPLE_TEAM`, `CAPY_APPLE_KEY`, `CAPY_APPLE_KEY_ID` and
