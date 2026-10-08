@@ -165,6 +165,16 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.0.10" date="2026-10-07">
+      <description>
+        <p>Android downloads open without requiring installation through Google Play.</p>
+        <ul>
+          <li>Android updates keep the signing identity of existing installations.</li>
+          <li>The app name follows your language on supported platforms.</li>
+          <li>Title bar spacing follows the selected control size.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.9" date="2026-10-06">
       <description>
         <p>The Linux battery indicator works without access to system services.</p>
