@@ -27,6 +27,8 @@ scans pushes and pull requests to `main`, and runs weekly. It compiles Android
 Kotlin and both Apple clients explicitly; the other supported languages use
 analysis without a full build. Scanner findings are separate from app tests.
 Keep advanced setup enabled: default setup cannot find the Android build.
+The Apple scan disables compiler caches and the integrated Swift driver so
+CodeQL can trace compilation. Failed scans retain diagnostic logs for seven days.
 
 Dependabot checks pinned GitHub Actions weekly through
 [its configuration](.github/dependabot.yml). Review update pull requests and

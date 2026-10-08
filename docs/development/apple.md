@@ -50,6 +50,7 @@ CAPY_APPLE_TEAM=YOUR_TEAM_ID bash apps/layer-apple/scripts/build.sh device
 Rust library through `scripts/rust.sh`. Mac and simulator builds use generic
 destinations, so the project's ARM64 target does not depend on the architecture
 of the build process, including when CodeQL traces it.
+Arguments after the platform are passed to `xcodebuild`.
 
 - `CAPY_CONFIGURATION=Release` builds optimized Swift and Rust.
 - `CAPY_DESTINATION='id=DEVICE_UDID'` selects a device destination.

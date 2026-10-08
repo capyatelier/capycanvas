@@ -70,8 +70,20 @@ jobs:
       - name: Build Mac and iPad source
         if: matrix.language == 'swift'
         run: |
-          bash apps/layer-apple/scripts/build.sh macos
-          bash apps/layer-apple/scripts/build.sh simulator
+          for platform in macos simulator; do
+            bash apps/layer-apple/scripts/build.sh "$platform" \
+              COMPILATION_CACHE_ENABLE_CACHING=NO SWIFT_ENABLE_COMPILE_CACHE=NO \
+              SWIFT_USE_INTEGRATED_DRIVER=NO
+          done
       - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           category: /language:${{ matrix.language }}
+      - name: Preserve failed scan diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-${{ matrix.language }}-logs
+          path: |
+            ${{ runner.temp }}/codeql_databases/**/log
+            ${{ runner.temp }}/codeql_databases/**/diagnostic
+          retention-days: 7
