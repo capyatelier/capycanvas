@@ -169,9 +169,9 @@ pub enum DocumentRequest {
     ColorHistory { redo: bool },
     Place,
     Paste { mode: PasteMode },
-    /// Copy the active layer's pixels or selected images, with `merged` the
-    /// visible image, with `pixels` an image layer's pixels; `cut` erases them
-    /// once the host reports the copy complete.
+    /// Copy selected layers, pixels, images or the focused mask. `merged` copies
+    /// the visible image; `pixels` copies the active layer's source pixels.
+    /// `cut` erases the copied content after successful clipboard publication.
     Copy { merged: bool, cut: bool, pixels: bool },
     Properties,
     RepairSourceProfile { layer: u64 },

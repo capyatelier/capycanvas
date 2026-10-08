@@ -421,6 +421,7 @@ impl SnapshotRenderer {
         consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
     ) -> Result<T, GpuRasterError> {
         let output=match (&self.scope,output) {
+            (SceneScope::Raw(target),scene::Output::Artwork(None)) if target.is_coverage()=>scene::Output::MaskImage(*target),
             (SceneScope::Raw(target),scene::Output::Artwork(None))=>scene::Output::Source(*target),
             (SceneScope::RawObjects(handle),scene::Output::Artwork(None))=>scene::Output::Objects(*handle),_=>output,
         };

@@ -54,7 +54,7 @@ impl CoverageSource {
             return Err(DocumentError::InvalidLayerOperation("Invalid mask value"));
         }
         for op in self.operations.iter() {
-            if !matches!(op.kind, RasterOperationKind::Transform(_) | RasterOperationKind::Coverage) {
+            if !matches!(op.kind, RasterOperationKind::Transform(_) | RasterOperationKind::Coverage | RasterOperationKind::Bake { .. } | RasterOperationKind::Erase { alpha_locked: false }) {
                 return Err(DocumentError::InvalidLayerOperation("Unsupported mask operation"));
             }
             op.validate()?;

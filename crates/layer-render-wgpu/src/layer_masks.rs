@@ -378,10 +378,11 @@ impl WgpuRasterizer {
     pub(super) fn encode_mask_dabs(
         &mut self,
         encoder: &mut crate::submission::CommandEncoder,
-        scene: SceneView<'_>,
+        packet: FramePacket<'_>,
         batches: &[DabBatch],
         committed: &[(SourceTarget, u32)],
     ) -> Result<(), GpuRasterError> {
+        let scene = packet.scene;
         for (index, batch) in batches
             .iter()
             .enumerate()
@@ -398,6 +399,14 @@ impl WgpuRasterizer {
                                 self.layer_masks.pages.insert((batch.target, coordinate), page);
                             }
                         }
+                        continue;
+                    }
+                    if !matches!(operation.kind, layer_core::RasterOperationKind::Transform(_)) {
+                        let mut compositor = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+                        let damage = batch_pixel_rect(batch, self.target_extent(batch.target));
+                        let result = compositor.apply_operation(self, packet, batch.target, op as usize, damage, encoder);
+                        self.scene = Some(compositor);
+                        result?;
                         continue;
                     }
                     let mut transforms = self.transforms.take().unwrap();

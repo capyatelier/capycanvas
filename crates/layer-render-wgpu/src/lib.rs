@@ -4120,7 +4120,7 @@ impl WgpuRasterizer {
 
         self.encode_mask_dabs(
             &mut encoder,
-            packet.scene,
+            packet,
             original_batches,
             &committed_preview,
         )?;

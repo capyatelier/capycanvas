@@ -54,6 +54,42 @@ mod clipboard_checks {
         [offset[0] as f32, offset[1] as f32]
     }
 
+    fn selected_pair(s: &mut UiSession<Recorder>) -> [OccurrenceHandle; 2] {
+        let first = s.engine.document().working.occurrence.unwrap();
+        invoke(s, CommandId::AddLayer);
+        let second = s.engine.document().working.occurrence.unwrap();
+        let mut working = s.engine.document().working.clone();
+        working.layer_selection = [first, second].into();
+        s.layer_edit(Edit::Working(working)).unwrap();
+        [first, second]
+    }
+
+    fn focused_mask(s: &mut UiSession<Recorder>) -> SourceTarget {
+        let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
+        layer(s, LayerAction::AddMask { id, replace: false });
+        layer(s, LayerAction::Select { id, mask: true });
+        s.engine.document().working.target.unwrap()
+    }
+
+    fn mixed_region_selection(s: &mut UiSession<Recorder>) -> [OccurrenceHandle; 3] {
+        let paint = s.engine.document().working.occurrence.unwrap();
+        let images = ["First photo", "Second photo"].map(|name| {
+            let (layer, edit) = s.engine.document().create_object_layer_edit(name, None, 0).unwrap();
+            s.layer_edit(edit).unwrap();
+            let image = layer_core::ImageObject::new(rgba8_source([40, 30], |_, _| [255; 4]).into(), name);
+            let (_, edit) = s.engine.document().add_image_object_edit(layer, image, 0).unwrap();
+            s.layer_edit(edit).unwrap();
+            layer
+        });
+        s.layer_edit(s.engine.document().select_occurrence_edit(images[1]).unwrap()).unwrap();
+        let layers = [paint, images[0], images[1]];
+        let mut working = s.engine.document().working.clone();
+        working.objects.clear(); working.layer_selection = layers.into();
+        s.layer_edit(Edit::Working(working)).unwrap();
+        select(s, Some(rectangle([10., 10., 20., 20.])));
+        layers
+    }
+
     #[test]
     fn copy_captures_the_active_layer_alone_before_its_properties() {
         let mut s = clip_session();
@@ -153,11 +189,15 @@ mod clipboard_checks {
         assert!(s.state.requests.is_empty());
         select(&mut s, Some(rectangle([10., 10., 60., 60.])));
         assert!(s.command(CommandId::Cut).enabled && s.command(CommandId::PasteInto).enabled);
+        let paint = s.engine.document().working.occurrence.unwrap();
         let paper = occurrence_handle(2).unwrap();
         s.layer_edit(s.engine.document().select_occurrence_edit(paper).unwrap()).unwrap();
+        assert!(s.command(CommandId::Copy).enabled, "a fill layer supplies its own pixels");
+        select(&mut s, None);
+        insert_effect(&mut s, "gaussian_blur");
+        select(&mut s, Some(rectangle([10., 10., 60., 60.])));
         assert_eq!(reason(&s, CommandId::Copy).as_deref(), Some("An effect layer has no pixels of its own"));
         assert!(s.command(CommandId::CopyMerged).enabled, "Copy Merged ignores the active layer");
-        let paint = s.engine.document().scene().order()[0];
         s.layer_edit(s.engine.document().select_occurrence_edit(paint).unwrap()).unwrap();
         let mut layer = s.engine.document().scene().occurrence(paint).unwrap().clone();
         layer.alpha_locked = true;
@@ -473,6 +513,300 @@ mod clipboard_checks {
     }
 
     #[test]
+    fn selected_regions_keep_group_structure_offsets_and_masks_when_pasted() {
+        let mut s = clip_session();
+        let [first, second] = selected_pair(&mut s);
+        layer(&mut s, LayerAction::AddMask { id: occurrence_token(second), replace: false });
+        invoke(&mut s, CommandId::EditLayerContent);
+        let edit = s.engine.document().group_layers_edit(&[first, second], LayerBlend::Normal, "Region group").unwrap();
+        s.layer_edit(edit).unwrap();
+        let group = s.engine.document().scene().parent(first).unwrap();
+        let doc = s.engine.document();
+        let mut occurrence = doc.scene().occurrence(group).unwrap().clone();
+        occurrence.offset = [20, -10]; occurrence.opacity = 0.625;
+        s.layer_edit(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, group, Some(occurrence)).unwrap())).unwrap();
+        let doc = s.engine.document();
+        let mut occurrence = doc.scene().occurrence(second).unwrap().clone();
+        occurrence.offset = [-3, 7]; occurrence.blend = LayerBlend::Multiply; occurrence.opacity = 0.4;
+        occurrence.mask.as_mut().unwrap().offset = [8, -2];
+        s.layer_edit(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, second, Some(occurrence)).unwrap())).unwrap();
+        let mask = s.engine.document().scene().occurrence(second).unwrap().mask.as_ref().unwrap().source;
+        let mask_origin = s.engine.document().target_offset(SourceTarget::Coverage(mask));
+        s.layer_edit(s.engine.document().select_occurrence_edit(group).unwrap()).unwrap();
+        let mut working = s.engine.document().working.clone();
+        working.layer_selection.insert(first);
+        s.layer_edit(Edit::Working(working)).unwrap();
+        let selection = rectangle([30., 40., 90., 80.]);
+        select(&mut s, Some(selection.clone()));
+        invoke(&mut s, CommandId::Copy);
+        let (id, _) = pending(&s);
+        let mut capture = s.capture_clipboard(id).unwrap();
+        assert_eq!(capture.layers.as_ref().unwrap().roots, [group], "selected descendants are copied once");
+        assert_eq!(capture.crop, [30, 40, 60, 40]);
+        assert_eq!(capture.origin, [30, 40]);
+        let captures = capture.layer_captures();
+        assert_eq!(captures.len(), 2);
+        for (layer, part) in captures {
+            assert!([first, second].contains(&layer));
+            assert_eq!(part.scope, SceneScope::Raw(s.engine.document().scene().source_target(layer).unwrap()));
+            assert_eq!(part.coverage.as_deref(), Some(&selection));
+            assert_eq!(part.crop, capture.crop);
+            assert!(part.layers.is_none() && part.layer_captures().is_empty());
+            capture.set_layer_source(layer, rgba8_source([60, 40], |_, _| [90, 120, 200, 128])).unwrap();
+        }
+        capture.finish_layer_sources().unwrap();
+        assert!(capture.coverage.is_none(), "each layer's pixels already contain the selected coverage");
+        assert!(capture.layer_captures().is_empty());
+        let scene = capture.scene.view();
+        for layer in [first, second] {
+            let paint = scene.paint_source(layer).unwrap();
+            assert_eq!(paint.domain, [60, 40]);
+            assert_eq!(scene.layer_origin(Some(layer)), [30, 40]);
+            assert_eq!(paint.base.as_ref().unwrap().image.extent, [60, 40]);
+        }
+        assert_eq!(scene.target_offset(SourceTarget::Coverage(mask)), mask_origin);
+        let copied = capture.finish("regions".into(), rgba8_source([60, 40], |_, _| [0; 4]), vec![]).unwrap();
+        s.complete_document_request(id, Ok(true)).unwrap();
+        let mut destination = clip_session();
+        let before = destination.engine.document().clone();
+        destination.paste_clip(&copied, PasteMode::InPlace).unwrap();
+        let doc = destination.engine.document();
+        let pasted = doc.working.occurrence.unwrap();
+        assert_eq!(doc.scene().occurrence(pasted).unwrap().name.as_ref(), "Region group");
+        assert_eq!(doc.layer_offset(pasted), [20, -10]);
+        let children = doc.scene().children(Some(pasted));
+        assert_eq!(children.len(), 2);
+        for &layer in children { assert_eq!(doc.layer_offset(layer), [30, 40]); }
+        let masked = doc.scene().occurrence(children[0]).unwrap();
+        assert_eq!((masked.blend, masked.opacity), (LayerBlend::Multiply, 0.4));
+        assert_eq!(doc.target_offset(SourceTarget::Coverage(masked.mask.as_ref().unwrap().source)), mask_origin);
+        doc.validate(Default::default()).unwrap();
+        invoke(&mut destination, CommandId::Undo);
+        assert_live_artwork_eq(destination.engine.document(), &before);
+    }
+
+    #[test]
+    fn multi_layer_region_cut_waits_for_publication_and_undoes_in_one_step() {
+        let mut s = clip_session();
+        let layers = selected_pair(&mut s);
+        select(&mut s, Some(rectangle([30., 40., 90., 80.])));
+        let before = s.engine.document().clone();
+        for published in [false, true] {
+            invoke(&mut s, CommandId::Cut);
+            let (id, _) = pending(&s);
+            let capture = s.capture_clipboard(id).unwrap();
+            assert_eq!(capture.layer_captures().len(), 2);
+            assert_live_artwork_eq(s.engine.document(), &before);
+            s.complete_document_request(id, Ok(published)).unwrap();
+            s.frame(2, 2).unwrap();
+            if !published {
+                assert_live_artwork_eq(s.engine.document(), &before);
+                assert!(s.renderer_mut().pending_operations.is_empty());
+                continue;
+            }
+            assert_eq!(s.engine.document().scene().order().len(), before.scene().order().len());
+            assert_eq!(s.engine.document().working, before.working);
+            let operations = s.renderer_mut().pending_operations.clone();
+            assert_eq!(operations.len(), 2);
+            for layer in layers {
+                let target = before.scene().source_target(layer).unwrap();
+                assert!(operations.iter().any(|(actual, op)| *actual == target && matches!(op.kind, RasterOperationKind::Erase { alpha_locked: false })));
+            }
+            invoke(&mut s, CommandId::Undo);
+            assert_live_artwork_eq(s.engine.document(), &before);
+            assert_eq!(s.engine.document().working, before.working);
+        }
+    }
+
+    #[test]
+    fn region_copy_keeps_own_pixels_while_whole_layer_copy_keeps_adjustments() {
+        let mut s = clip_session();
+        let [first, second] = selected_pair(&mut s);
+        s.dispatch(UiAction::Effect { action: EffectAction::InsertAttached {
+            effect: "gaussian_blur".into(), owner: occurrence_token(first), epoch: s.state.document_file.epoch,
+        } }).unwrap();
+        let blur = s.engine.document().working.occurrence.unwrap();
+        s.layer_edit(s.engine.document().select_occurrence_edit(second).unwrap()).unwrap();
+        let mut working = s.engine.document().working.clone(); working.layer_selection = [first, second].into();
+        s.layer_edit(Edit::Working(working)).unwrap();
+        for regional in [false, true] {
+            select(&mut s, regional.then(|| rectangle([30., 40., 90., 80.])));
+            invoke(&mut s, CommandId::Copy);
+            let (id, _) = pending(&s);
+            let mut capture = s.capture_clipboard(id).unwrap();
+            let extent = [capture.crop[2], capture.crop[3]];
+            for (layer, part) in capture.layer_captures() {
+                assert!([first, second].contains(&layer));
+                assert!(matches!(part.scope, SceneScope::Raw(_)));
+                capture.set_layer_source(layer, rgba8_source(extent, |_, _| [255; 4])).unwrap();
+            }
+            capture.finish_layer_sources().unwrap();
+            let copied = capture.finish("effects".into(), rgba8_source(extent, |_, _| [255; 4]), vec![]).unwrap();
+            let layers = copied.layers.as_ref().unwrap();
+            let has_blur = layers.scene.artwork.effects.iter().any(|(_, _, effect)| effect.program.id.as_ref() == "gaussian_blur");
+            assert_eq!(has_blur, !regional);
+            assert_eq!(layers.roots.len(), if regional { 2 } else { 3 });
+            Document::from_artwork(layers.scene.artwork.clone()).unwrap().validate(Default::default()).unwrap();
+            assert!(s.engine.document().scene().effect(blur).is_some(), "copy never changes the source effects");
+            s.complete_document_request(id, Ok(true)).unwrap();
+        }
+    }
+
+    #[test]
+    fn generators_and_their_groups_copy_regions_and_cut_atomically_after_capture() {
+        for select_group in [false, true] {
+            let mut s = clip_session();
+            insert_effect(&mut s, "gradient_fill");
+            let fill = s.engine.document().working.occurrence.unwrap();
+            s.layer_edit(s.engine.document().group_layers_edit(&[fill], LayerBlend::Normal, "Fill group").unwrap()).unwrap();
+            let group = s.engine.document().scene().parent(fill).unwrap();
+            s.layer_edit(s.engine.document().select_occurrence_edit(if select_group { group } else { fill }).unwrap()).unwrap();
+            select(&mut s, Some(rectangle([30., 40., 90., 80.])));
+            let before = s.engine.document().clone();
+            for command in [CommandId::Copy, CommandId::Cut] {
+                assert!(s.command(command).enabled, "{command:?}: {:?}", s.command_disabled_reason(command));
+                invoke(&mut s, command);
+                let (id, _) = pending(&s);
+                let mut capture = s.capture_clipboard(id).unwrap();
+                let parts = capture.layer_captures();
+                assert_eq!(parts.len(), 1);
+                assert_eq!(parts[0].0, fill);
+                assert!(matches!(&parts[0].1.scope, SceneScope::Members(ids) if ids.contains(&fill) && ids.contains(&group)));
+                assert_eq!(capture.crop, [30, 40, 60, 40]);
+                capture.set_layer_source(fill, rgba8_source([60, 40], |_, _| [128, 64, 32, 255])).unwrap();
+                capture.finish_layer_sources().unwrap();
+                let copied = capture.finish("fill-region".into(), rgba8_source([60, 40], |_, _| [0; 4]), vec![]).unwrap();
+                let layers = copied.layers.as_ref().unwrap();
+                assert!(layers.scene.artwork.effects.is_empty());
+                assert_eq!(layers.scene.artwork.paint.len(), 1);
+                Document::from_artwork(layers.scene.artwork.clone()).unwrap().validate(Default::default()).unwrap();
+                s.complete_document_request(id, Ok(true)).unwrap();
+                assert_live_artwork_eq(s.engine.document(), &before);
+                if command == CommandId::Copy { continue; }
+                assert!(s.conversion_busy());
+                s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::Image(Some((rgba8_source([60, 40], |_, _| [128, 64, 32, 255]), [30, 40])))));
+                s.frame(2, 2).unwrap();
+                assert!(!s.conversion_busy());
+                assert_eq!(s.engine.document().scene().occurrence(fill).unwrap().kind(), LayerKind::Paint);
+                assert_eq!(s.engine.document().scene().parent(fill), Some(group));
+                assert_eq!(s.engine.document().working.selection, before.working.selection);
+                let operations = s.renderer_mut().pending_operations.clone();
+                assert!(matches!(operations.as_slice(), [(_, layer_core::RasterOperation { kind: RasterOperationKind::Erase { alpha_locked: false }, .. })]));
+                invoke(&mut s, CommandId::Undo);
+                assert_live_artwork_eq(s.engine.document(), &before);
+            }
+        }
+    }
+
+    #[test]
+    fn region_cut_of_image_and_paint_layers_restores_objects_on_undo() {
+        let mut s = clip_session();
+        let [_, first, second] = mixed_region_selection(&mut s);
+        let before = s.engine.document().clone();
+        invoke(&mut s, CommandId::Cut);
+        let (id, _) = pending(&s);
+        let capture = s.capture_clipboard(id).unwrap();
+        for images in [first, second] { assert!(capture.layer_captures().iter().any(|(id, part)| *id == images && part.scope == SceneScope::RawObjects(images))); }
+        s.complete_document_request(id, Ok(true)).unwrap();
+        for (index, images) in [first, second].into_iter().enumerate() {
+            assert!(s.conversion_busy());
+            assert_live_artwork_eq(s.engine.document(), &before);
+            let Some(layer_render::SnapshotRequest::Image(capture)) = s.engine.backend().snapshot_requests.last() else { panic!("an image layer capture"); };
+            assert_eq!(capture.scope, SceneScope::RawObjects(images));
+            s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::Image(Some((rgba8_source([40, 30], |_, _| [255; 4]), [0, 0])))));
+            s.frame(2 + index as u64, 2 + index as u64).unwrap();
+        }
+        assert!(!s.conversion_busy());
+        for images in [first, second] {
+            assert!(s.engine.document().scene().object_layer(images).is_none());
+            assert!(s.engine.document().scene().paint_source(images).is_some());
+        }
+        assert_eq!(s.engine.document().scene().order().len(), before.scene().order().len());
+        let operations = s.renderer_mut().pending_operations.clone();
+        assert_eq!(operations.len(), 3);
+        assert!(operations.iter().all(|(_, op)| matches!(op.kind, RasterOperationKind::Erase { .. })), "image snapshots finish before live raster work");
+        invoke(&mut s, CommandId::Undo);
+        assert_live_artwork_eq(s.engine.document(), &before);
+        assert_eq!(layer_core::WorkingState { generation: before.working.generation, ..s.engine.document().working.clone() }, before.working);
+    }
+
+    #[test]
+    fn region_cut_never_publishes_partial_image_conversions() {
+        for interruption in 0..3 {
+            let mut s = clip_session();
+            mixed_region_selection(&mut s);
+            invoke(&mut s, CommandId::Cut);
+            let (id, _) = pending(&s);
+            s.capture_clipboard(id).unwrap();
+            s.complete_document_request(id, Ok(true)).unwrap();
+            s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::Image(Some((rgba8_source([40, 30], |_, _| [255; 4]), [0, 0])))));
+            s.frame(2, 2).unwrap();
+            assert!(s.conversion_busy());
+            match interruption {
+                0 => s.engine.backend_mut().snapshot_reply = Some(Err(layer_render::BackendError("capture failed"))),
+                1 => {
+                    let mut working = s.engine.document().working.clone();
+                    working.selection = Some(rectangle([100., 120., 130., 140.]));
+                    s.engine.apply_edit(Edit::Working(working)).unwrap();
+                }
+                _ => { assert!(s.cancel_conversion()); }
+            }
+            let before = s.engine.document().clone();
+            let checkpoint = s.engine.checkpoint();
+            s.frame(3, 3).unwrap();
+            assert!(!s.conversion_busy());
+            assert_live_artwork_eq(s.engine.document(), &before);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert!(s.renderer_mut().pending_operations.is_empty());
+        }
+    }
+
+    #[test]
+    fn group_region_cut_refuses_any_locked_or_alpha_locked_descendant() {
+        for alpha in [false, true] {
+            let mut s = clip_session();
+            let layers = selected_pair(&mut s);
+            s.layer_edit(s.engine.document().group_layers_edit(&layers, LayerBlend::Normal, "Group").unwrap()).unwrap();
+            let group = s.engine.document().scene().parent(layers[0]).unwrap();
+            let doc = s.engine.document();
+            let mut occurrence = doc.scene().occurrence(layers[0]).unwrap().clone();
+            occurrence.alpha_locked = alpha; occurrence.locked = !alpha;
+            s.layer_edit(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, layers[0], Some(occurrence)).unwrap())).unwrap();
+            s.layer_edit(s.engine.document().select_occurrence_edit(group).unwrap()).unwrap();
+            select(&mut s, Some(rectangle([30., 40., 90., 80.])));
+            assert!(s.command(CommandId::Copy).enabled);
+            assert!(!s.command(CommandId::Cut).enabled);
+            let before = s.engine.document().clone();
+            assert!(s.dispatch(UiAction::Invoke { command: CommandId::Cut }).is_err());
+            assert!(s.state.requests.is_empty());
+            assert_live_artwork_eq(s.engine.document(), &before);
+        }
+    }
+
+    #[test]
+    fn pending_region_cuts_never_erase_a_changed_selection_or_layer_set() {
+        for change_layers in [false, true] {
+            let mut s = clip_session();
+            let [first, second] = selected_pair(&mut s);
+            select(&mut s, Some(rectangle([30., 40., 90., 80.])));
+            invoke(&mut s, CommandId::Cut);
+            let (id, _) = pending(&s);
+            s.capture_clipboard(id).unwrap();
+            let mut working = s.engine.document().working.clone();
+            if change_layers { working.layer_selection = [second].into(); }
+            else { working.selection = Some(rectangle([100., 120., 130., 140.])); }
+            s.engine.apply_edit(Edit::Working(working)).unwrap();
+            let before = s.engine.document().clone();
+            s.complete_document_request(id, Ok(true)).unwrap();
+            s.frame(2, 2).unwrap();
+            assert_live_artwork_eq(s.engine.document(), &before);
+            assert!(s.renderer_mut().pending_operations.is_empty());
+            assert!(s.engine.document().scene().occurrence(first).is_some());
+            assert!(s.state.notice.as_ref().is_some_and(|n| n.text.contains("copied but not erased")));
+        }
+    }
+
+    #[test]
     fn full_size_external_paste_and_cursor_position_survive_delivery_delay() {
         let mut s = clip_session();
         let image = Arc::unwrap_or_clone(rgba8_source([800, 600], |_, _| [255; 4]));
@@ -571,6 +905,228 @@ mod clipboard_checks {
         s.complete_document_request(id, Ok(false)).unwrap();
         s.frame(4, 4).unwrap();
         assert!(s.renderer_mut().pending_operations.is_empty(), "a cancelled cut erases nothing");
+    }
+
+    #[test]
+    fn mask_copy_captures_raw_coverage_and_cut_keeps_the_mask_record() {
+        let mut s = clip_session();
+        let target = focused_mask(&mut s);
+        let owner = s.engine.document().working.occurrence.unwrap();
+        let doc = s.engine.document();
+        let mut occurrence = doc.scene().occurrence(owner).unwrap().clone();
+        occurrence.offset = [20, 30];
+        let mask = occurrence.mask.as_mut().unwrap();
+        mask.offset = [7, -2]; mask.linked = false; mask.inverted = true; mask.enabled = false;
+        s.layer_edit(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, owner, Some(occurrence)).unwrap())).unwrap();
+        let selection = rectangle([10., 20., 30., 40.]);
+        select(&mut s, Some(selection.clone()));
+        for command in [CommandId::Copy, CommandId::CopyPixels, CommandId::Cut, CommandId::PasteImage] {
+            assert!(s.command(command).enabled, "{command:?}: {:?}", s.command_disabled_reason(command));
+        }
+        invoke(&mut s, CommandId::Copy);
+        let (id, _) = pending(&s);
+        let capture = s.capture_clipboard(id).unwrap();
+        assert_eq!(capture.scope, SceneScope::Raw(target));
+        assert_eq!(capture.crop, [10, 20, 20, 20]);
+        assert_eq!(capture.coverage.as_deref(), Some(&selection));
+        assert!(capture.layers.is_none() && capture.objects.is_none() && capture.original.is_none());
+        assert_eq!(capture.scene.view().target_offset(target), [7, -2]);
+        s.complete_document_request(id, Ok(true)).unwrap();
+        let before = s.engine.document().clone();
+        for published in [false, true] {
+            invoke(&mut s, CommandId::Cut);
+            let (id, _) = pending(&s);
+            s.capture_clipboard(id).unwrap();
+            s.complete_document_request(id, Ok(published)).unwrap();
+            s.frame(2, 2).unwrap();
+            if !published {
+                assert_live_artwork_eq(s.engine.document(), &before);
+                assert!(s.renderer_mut().pending_operations.is_empty());
+                continue;
+            }
+            assert_eq!(s.engine.document().scene().occurrence(owner), before.scene().occurrence(owner));
+            assert_eq!(s.engine.document().working.target, Some(target));
+            let operations = s.renderer_mut().pending_operations.clone();
+            assert_eq!(operations.len(), 1);
+            assert_eq!(operations[0].0, target);
+            assert!(matches!(operations[0].1.kind, RasterOperationKind::Erase { alpha_locked: false }));
+            assert_eq!(operations[0].1.coverage.selection.as_ref(), Some(&selection.translated(Point { x: -7., y: 2. })));
+            invoke(&mut s, CommandId::Undo);
+            assert_live_artwork_eq(s.engine.document(), &before);
+        }
+    }
+
+    #[test]
+    fn mask_paste_preserves_focus_selection_offsets_and_layer_count_with_one_undo() {
+        for linked in [false, true] {
+            let mut s = clip_session();
+            let target = focused_mask(&mut s);
+            let owner = s.engine.document().working.occurrence.unwrap();
+            let doc = s.engine.document();
+            let mut occurrence = doc.scene().occurrence(owner).unwrap().clone();
+            occurrence.offset = [20, 30]; occurrence.alpha_locked = true;
+            let mask = occurrence.mask.as_mut().unwrap();
+            mask.offset = [7, -2]; mask.linked = linked; mask.inverted = true; mask.enabled = false;
+            s.layer_edit(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, owner, Some(occurrence)).unwrap())).unwrap();
+            let selection = rectangle([110., 55., 115., 58.]);
+            select(&mut s, Some(selection.clone()));
+            let before = s.engine.document().clone();
+            let mut copied = clip([20, 10], [100, 50], before.composition().color);
+            if linked { copied.layers = Some(Arc::new(crate::session::clipboard::LayerClip { scene: before.snapshot(), roots: vec![owner] })); }
+            assert!(s.command(CommandId::Cut).enabled, "alpha lock applies to paint, not mask coverage");
+            s.paste_clip(&copied, PasteMode::Paste).unwrap();
+            s.frame(2, 2).unwrap();
+            let doc = s.engine.document();
+            assert_eq!(doc.scene().order(), before.scene().order());
+            assert_eq!(doc.working, before.working);
+            assert_eq!(doc.scene().occurrence(owner), before.scene().occurrence(owner));
+            assert!(!s.operation.active(), "mask paste does not enter image placement");
+            let origin = before.target_offset(target);
+            let operations = s.renderer_mut().pending_operations.clone();
+            assert_eq!(operations.len(), 1);
+            assert_eq!(operations[0].0, target);
+            let operation = &operations[0].1;
+            assert_eq!(operation.coverage.selection.as_ref(), Some(&selection.translated(Point { x: -origin[0] as f32, y: -origin[1] as f32 })));
+            let RasterOperationKind::Bake { scene, scope, offset } = &operation.kind else { panic!("mask paste needs an image operation"); };
+            assert_eq!(*scope, SceneScope::All);
+            assert_eq!(*offset, Point { x: 100. - origin[0] as f32, y: 50. - origin[1] as f32 });
+            assert_eq!(scene.view().composition().size, [20, 10]);
+            s.engine.document().validate(Default::default()).unwrap();
+            invoke(&mut s, CommandId::Undo);
+            assert_live_artwork_eq(s.engine.document(), &before);
+            assert_eq!(s.engine.document().working, before.working);
+        }
+    }
+
+    #[test]
+    fn external_mask_paste_centres_in_selection_and_rejects_changed_targets() {
+        let mut s = clip_session();
+        let target = focused_mask(&mut s);
+        select(&mut s, Some(rectangle([100., 60., 160., 100.])));
+        let before = s.engine.document().clone();
+        let sources = || vec![("External".into(), Arc::unwrap_or_clone(rgba8_source([20, 10], |_, _| [60, 120, 180, 128])))];
+        let context = s.image_placement_context(None, None).unwrap();
+        s.state.camera.center_on([300., 250.]);
+        s.paste_layer_sources(sources(), PasteMode::Paste, &context).unwrap();
+        s.frame(2, 2).unwrap();
+        assert_eq!(s.engine.document().scene().order(), before.scene().order());
+        assert_eq!(s.engine.document().working, before.working);
+        assert!(!s.operation.active());
+        let operations = s.renderer_mut().pending_operations.clone();
+        assert!(matches!(operations.as_slice(), [(actual, layer_core::RasterOperation { kind: RasterOperationKind::Bake { offset: Point { x: 120., y: 75. }, .. }, .. })] if *actual == target));
+        invoke(&mut s, CommandId::Undo);
+        assert_live_artwork_eq(s.engine.document(), &before);
+        let context = s.image_placement_context(None, None).unwrap();
+        invoke(&mut s, CommandId::EditLayerContent);
+        let content = s.engine.document().clone();
+        assert!(s.paste_layer_sources(sources(), PasteMode::Paste, &context).is_err());
+        assert_live_artwork_eq(s.engine.document(), &content);
+        let context = s.image_placement_context(None, None).unwrap();
+        invoke(&mut s, CommandId::EditLayerMask);
+        assert!(s.paste_layer_sources(sources(), PasteMode::Paste, &context).is_err());
+        assert_live_artwork_eq(s.engine.document(), &content);
+    }
+
+    #[test]
+    fn mask_clipboard_edits_reopen_with_exact_tiles_and_session_history() {
+        use layer_core::package::{ImmutableBacking, session::{PreparedSession, open}};
+        use std::sync::atomic::AtomicBool;
+        let signature = |document: &Document| {
+            let (_, _, source) = document.artwork.coverage.iter().next().unwrap();
+            assert!(source.operations.is_empty());
+            let pixels = source.raster.wait_data().unwrap().tiles.iter().map(|(key, tile)|
+                (*key, tile.wait_backing().unwrap().decode().unwrap())).collect::<Vec<_>>();
+            (source.domain, source.default_coverage, pixels)
+        };
+        let mut s = clip_session();
+        let target = focused_mask(&mut s);
+        let owner = s.engine.document().working.occurrence.unwrap();
+        let doc = s.engine.document();
+        let mut occurrence = doc.scene().occurrence(owner).unwrap().clone();
+        let mask = occurrence.mask.as_mut().unwrap();
+        mask.offset = [7, -2]; mask.linked = false; mask.inverted = true; mask.enabled = false;
+        s.layer_edit(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, owner, Some(occurrence)).unwrap())).unwrap();
+        select(&mut s, Some(rectangle([10., 20., 30., 40.])));
+        let before = signature(s.engine.document());
+        let before_checkpoint = s.engine.checkpoint();
+        let copied = clip([20, 20], [10, 20], s.engine.document().composition().color);
+        s.paste_clip(&copied, PasteMode::Paste).unwrap();
+        assert!(s.engine.capture_artwork(0).is_err());
+        assert!(s.capture_session().is_err());
+        s.frame(2, 2).unwrap();
+        let pasted = signature(s.engine.document());
+        let pasted_checkpoint = s.engine.checkpoint();
+        invoke(&mut s, CommandId::Cut);
+        let (id, _) = pending(&s); s.capture_clipboard(id).unwrap();
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(s.engine.capture_artwork(0).is_err());
+        assert!(s.capture_session().is_err());
+        s.frame(3, 3).unwrap();
+        let cut = signature(s.engine.document());
+        let cut_checkpoint = s.engine.checkpoint();
+        let capture = s.engine.capture_artwork(0).unwrap();
+        let reopened = reopen_capture(&capture);
+        assert_eq!(signature(&reopened), cut);
+        let mask = reopened.artwork.occurrences.iter().find_map(|(_, _, layer)| layer.mask.as_ref()).unwrap();
+        assert_eq!((mask.offset, mask.linked, mask.inverted, mask.enabled), ([7, -2], false, true, false));
+        let cancel = AtomicBool::new(false);
+        let capture = s.engine.capture_session(0).unwrap();
+        let prepared = PreparedSession::prepare(&capture, serde_json::json!({}), &cancel).unwrap();
+        let mut bytes = Vec::new(); prepared.write(&mut bytes, &cancel).unwrap();
+        let backing = ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+        let mut restored = open(backing, Default::default(), &cancel).unwrap().editor;
+        assert_eq!(restored.document().working, s.engine.document().working);
+        assert_eq!(restored.document().working.target, Some(target));
+        assert_eq!(signature(restored.document()), cut);
+        assert_eq!(restored.checkpoint(), cut_checkpoint);
+        for (expected, checkpoint) in [(&pasted, pasted_checkpoint), (&before, before_checkpoint)] {
+            assert!(restored.undo().unwrap());
+            assert_eq!(&signature(restored.document()), expected);
+            assert_eq!(restored.checkpoint(), checkpoint);
+        }
+        for (expected, checkpoint) in [(&pasted, pasted_checkpoint), (&cut, cut_checkpoint)] {
+            assert!(restored.redo().unwrap());
+            assert_eq!(&signature(restored.document()), expected);
+            assert_eq!(restored.checkpoint(), checkpoint);
+        }
+    }
+
+    #[test]
+    fn locked_masks_allow_copy_but_refuse_cut_and_paste_without_changing_artwork() {
+        let mut s = clip_session();
+        focused_mask(&mut s);
+        let owner = s.engine.document().working.occurrence.unwrap();
+        let doc = s.engine.document();
+        let mut occurrence = doc.scene().occurrence(owner).unwrap().clone(); occurrence.locked = true;
+        s.layer_edit(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, owner, Some(occurrence)).unwrap())).unwrap();
+        let before = s.engine.document().clone();
+        let copied = clip([20, 10], [0; 2], before.composition().color);
+        for command in [CommandId::Copy, CommandId::CopyPixels, CommandId::CopyMerged] { assert!(s.command(command).enabled, "{command:?}"); }
+        for command in [CommandId::Cut, CommandId::PasteImage, CommandId::PasteInPlace, CommandId::PasteAtView] {
+            assert!(!s.command(command).enabled, "{command:?}");
+            assert!(s.dispatch(UiAction::Invoke { command }).is_err());
+        }
+        assert!(s.paste_clip(&copied, PasteMode::Paste).is_err());
+        assert!(s.state.requests.is_empty());
+        assert_live_artwork_eq(s.engine.document(), &before);
+        assert!(s.command(CommandId::PasteAsNewImage).enabled);
+    }
+
+    #[test]
+    fn clipboard_stays_unavailable_while_editing_quick_or_saved_selections() {
+        for saved in [false, true] {
+            let mut s = clip_session();
+            invoke(&mut s, if saved { CommandId::NewSelectionLayer } else { CommandId::QuickMask });
+            let before = s.engine.document().clone();
+            for command in [CommandId::Copy, CommandId::Cut, CommandId::CopyMerged, CommandId::PasteImage, CommandId::PasteInPlace] {
+                assert!(!s.command(command).enabled, "{command:?}, saved={saved}");
+                assert!(s.dispatch(UiAction::Invoke { command }).is_err());
+            }
+            let copied = clip([20, 10], [0; 2], before.composition().color);
+            assert!(s.paste_clip(&copied, PasteMode::Paste).is_err());
+            assert!(s.state.requests.is_empty());
+            assert_live_artwork_eq(s.engine.document(), &before);
+        }
     }
 
     #[test]

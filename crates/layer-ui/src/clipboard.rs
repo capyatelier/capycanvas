@@ -166,10 +166,109 @@ pub struct ClipboardCapture {
     pub window: Option<([i64; 2], [u32; 2])>,
     pub objects: Option<Arc<ObjectClip>>,
     pub layers: Option<Arc<LayerClip>>,
+    pub regions: Vec<OccurrenceHandle>,
 }
+fn clipboard_pixel_layer(scene: layer_core::SceneView<'_>, id: OccurrenceHandle) -> bool {
+    scene.occurrence(id).is_some_and(|o| matches!(o.kind(), LayerKind::Paint | LayerKind::Object))
+        || scene.effect(id).is_some_and(|effect| effect.program.kind == layer_core::EffectKind::Generator)
+}
+
+fn clipboard_pixel_scope(mut scene: Arc<SceneSnapshot>, id: OccurrenceHandle) -> (Arc<SceneSnapshot>, SceneScope) {
+    if let Some(target) = scene.view().source_target(id) { return (scene, SceneScope::Raw(target)); }
+    if scene.view().object_layer(id).is_some() { return (scene, SceneScope::RawObjects(id)); }
+    let mut members = vec![id];
+    let mut parent = scene.view().parent(id);
+    while let Some(id) = parent { members.push(id); parent = scene.view().parent(id); }
+    for &id in &members {
+        let occurrence = Arc::make_mut(&mut scene).artwork.occurrences.get_mut(id).unwrap();
+        occurrence.visible = true; occurrence.opacity = 1.; occurrence.blend = layer_core::LayerBlend::Normal;
+        occurrence.mask = None; occurrence.attachment = layer_core::Attachment::None;
+    }
+    (scene, SceneScope::Members(members.into()))
+}
+
 impl ClipboardCapture {
     pub fn color(&self) -> DocumentColor {
         self.scene.view().composition().color
+    }
+    pub fn layer_captures(&self) -> Vec<(OccurrenceHandle, ClipboardCapture)> {
+        self.regions.iter().map(|&id| {
+            let (scene, scope) = clipboard_pixel_scope(self.scene.clone(), id);
+            (id, ClipboardCapture { scene, scope, layers: None, regions: Vec::new(), ..self.clone() })
+        }).collect()
+    }
+    pub fn set_layer_source(&mut self, id: OccurrenceHandle, source: Arc<SourceImage>) -> Result<(), String> {
+        let layers = Arc::make_mut(self.layers.as_mut().ok_or("Missing copied layers")?);
+        for scene in [&mut self.scene, &mut layers.scene] {
+            let scene = Arc::make_mut(scene);
+            let view = scene.view();
+            let old = view.occurrence(id).ok_or("Missing copied layer")?.clone();
+            let parent = view.layer_origin(view.parent(id));
+            let offset = layer_core::offsets::checked_sub(self.origin, parent).ok_or("The copied pixels exceed the editor's range")?;
+            let paint = PaintSource { color_mode: view.paint_source(id).map_or(Default::default(), |paint| paint.color_mode), domain: source.extent,
+                raster: Default::default(), base: Some(PaintBase { image: source.clone().into(), offset: [0; 2], policy: PaintBasePolicy::WorkingPixels }),
+                operations: Arc::default() };
+            let handle = match old.content {
+                OccurrenceContent::Paint(handle) => { *scene.artwork.paint.get_mut(handle).ok_or("Missing paint")? = paint; handle }
+                OccurrenceContent::Objects(handle) => {
+                    let children = scene.artwork.object_layers.get(handle).ok_or("Missing image layer")?.children.clone();
+                    for child in children {
+                        let change = RecordChange::remove(&scene.artwork.objects, child)?;
+                        scene.artwork.objects.change(change.handle, change.id, change.value)?;
+                    }
+                    let change = RecordChange::remove(&scene.artwork.object_layers, handle)?;
+                    scene.artwork.object_layers.change(change.handle, change.id, change.value)?;
+                    let change = RecordChange::insert(&scene.artwork.paint, paint);
+                    scene.artwork.paint.change(change.handle, change.id, change.value)?;
+                    change.handle
+                }
+                OccurrenceContent::Effect(handle) => {
+                    let change = RecordChange::remove(&scene.artwork.effects, handle)?;
+                    scene.artwork.effects.change(change.handle, change.id, change.value)?;
+                    let change = RecordChange::insert(&scene.artwork.paint, paint);
+                    scene.artwork.paint.change(change.handle, change.id, change.value)?;
+                    change.handle
+                }
+                _ => return Err("The copied layer has no pixels".into()),
+            };
+            let occurrence = scene.artwork.occurrences.get_mut(id).unwrap();
+            occurrence.content = OccurrenceContent::Paint(handle);
+            occurrence.offset = offset;
+            if let Some(mask) = occurrence.mask.as_mut().filter(|mask| mask.linked) {
+                mask.offset = layer_core::offsets::checked_sub(if old.positioned() { old.offset } else { [0; 2] }, offset).and_then(|shift| layer_core::offsets::checked_add(mask.offset, shift))
+                    .ok_or("The copied mask exceeds the editor's range")?;
+            }
+            scene.index = Arc::new(layer_core::SceneIndex::build(&scene.artwork)?);
+        }
+        Ok(())
+    }
+    pub fn finish_layer_sources(&mut self) -> Result<(), String> {
+        if self.regions.is_empty() { return Ok(()); }
+        let layers = Arc::make_mut(self.layers.as_mut().ok_or("Missing copied layers")?);
+        for snapshot in [&mut self.scene, &mut layers.scene] {
+            let scene = Arc::make_mut(snapshot);
+            let removed: std::collections::BTreeSet<_> = scene.view().order().iter().copied().filter(|&id|
+                scene.view().effect(id).is_some_and(|effect| effect.program.kind == layer_core::EffectKind::Adjustment)).collect();
+            for handle in scene.artwork.stacks.iter().map(|(handle, _, _)| handle).collect::<Vec<_>>() {
+                scene.artwork.stacks.get_mut(handle).unwrap().entries.retain(|id| !removed.contains(id));
+            }
+            for id in &removed {
+                let occurrence = scene.artwork.occurrences.get(*id).unwrap();
+                if let Some(mask) = &occurrence.mask {
+                    let change = RecordChange::remove(&scene.artwork.coverage, mask.source)?;
+                    scene.artwork.coverage.change(change.handle, change.id, change.value)?;
+                }
+                let OccurrenceContent::Effect(effect) = occurrence.content else { unreachable!() };
+                let change = RecordChange::remove(&scene.artwork.effects, effect)?;
+                scene.artwork.effects.change(change.handle, change.id, change.value)?;
+                let change = RecordChange::remove(&scene.artwork.occurrences, *id)?;
+                scene.artwork.occurrences.change(change.handle, change.id, change.value)?;
+            }
+            scene.index = Arc::new(layer_core::SceneIndex::build(&scene.artwork)?);
+            layers.roots.retain(|id| !removed.contains(id));
+        }
+        self.coverage = None; self.regions.clear();
+        Ok(())
     }
     pub fn finish(mut self, nonce: String, source: Arc<SourceImage>, png: Vec<u8>) -> Result<PixelClip, String> {
         if let Some(layers) = &mut self.layers {
@@ -207,6 +306,8 @@ pub(super) struct PendingCut {
     target: Option<SourceTarget>,
     objects: std::collections::BTreeSet<layer_core::ImageObjectHandle>,
     layers: Vec<OccurrenceHandle>,
+    pixels: Vec<OccurrenceHandle>,
+    working: layer_core::WorkingState,
 }
 
 /// Whether `selection` covers every pixel of `canvas` fully, as Select All does.
@@ -249,6 +350,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.copies_layers(command) {
             let roots = self.clipboard_layer_roots();
             if roots.is_empty() { return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_LAYERS_FIRST)); }
+            if document.working.selection.is_some() {
+                if !self.selection_meets_canvas() { return Some(l.text(NO_COVERAGE)); }
+                let members = document.layer_subtrees(&roots);
+                if !members.iter().any(|&id| clipboard_pixel_layer(document.scene(), id)) {
+                    return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_AN_EFFECT_LAYER_HAS_NO_PIXELS_OF_ITS_OWN));
+                }
+                if command == CommandId::Cut {
+                    if members.iter().any(|&id| document.is_locked(id)) { return Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED)); }
+                    if members.iter().any(|&id| document.scene().occurrence(id).is_some_and(|o| o.alpha_locked)) {
+                        return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_ALPHA_LOCK_KEEPS_TRANSPARENCY_UNLOCK_THE_LAYER_FIRST));
+                    }
+                }
+                return None;
+            }
             return (command == CommandId::Cut && !document.can_delete_layers(&document.layer_subtrees(&roots).into_iter().collect::<Vec<_>>()))
                 .then(|| l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED));
         }
@@ -259,7 +374,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             return None;
         }
         if matches!(document.working.target, Some(SourceTarget::Coverage(_))) {
-            return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST));
+            return (command == CommandId::Cut).then(|| document.try_drawing_target().err()
+                .map(|reason| notices::drawing_refusal_text(reason, l))).flatten();
         }
         let Some(layer) = document.working.occurrence.and_then(|id| document.scene().occurrence(id)) else {
             return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_A_LAYER_FIRST));
@@ -279,8 +395,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn paste_refusal(&self) -> Option<Arc<str>> {
-        if self.selection_masks.target().is_some() || matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) {
+        if self.selection_masks.quick() || self.selection_masks.target().is_some() {
             return Some(self.localization().text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
+        }
+        if matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) {
+            return self.engine.document().try_drawing_target().err().map(|reason| notices::drawing_refusal_text(reason, self.localization()));
         }
         self.image_layer_destination(None).err().map(|_| self.localization().text(MessageId::COMMANDS_REFUSAL_RETOUCH_LAYERS_THE_DESTINATION_GROUP_IS_LOCKED))
     }
@@ -327,7 +446,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn request_copy(&mut self, command: CommandId) -> Result<(), String> {
         self.require_document_idle()?;
         refused(self.copy_refusal(command))?;
-        if command == CommandId::Cut && !self.copies_objects(command) && !self.copies_layers(command) && self.refuse_image_content() {
+        if command == CommandId::Cut && !self.copies_objects(command) && !self.copies_layers(command) && !matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) && self.refuse_image_content() {
             return Ok(());
         }
         if self.copies_objects(command) { self.object_clip_window()?; } else { self.clipboard_crop()?; }
@@ -382,6 +501,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             let active = active.ok_or("Select a layer first")?;
             let occurrence = document.scene().occurrence(active).ok_or("Select a layer first")?;
+            if let Some(target @ SourceTarget::Coverage(_)) = document.working.target {
+                self.files.cut = cut.then(|| PendingCut {
+                    epoch: self.state.document_file.epoch, revision: document.revision, layer: active,
+                    target: Some(target), objects: Default::default(), layers: Vec::new(),
+                    pixels: Vec::new(), working: document.working.clone(),
+                });
+                let mut mask_scene = (*scene).clone();
+                let color = &mut mask_scene.artwork.compositions.get_mut(mask_scene.artwork.root).unwrap().color;
+                color.space = layer_core::color::RgbSpace::Srgb;
+                color.depth = color.depth.coverage();
+                return Ok(self.pixel_capture(Arc::new(mask_scene), SceneScope::Raw(target), crop, coverage, None,
+                    PaintBasePolicy::WorkingPixels, occurrence.name.to_string(), None));
+            }
             if document.scene().object_layer(active).is_some() {
                 return Ok(self.pixel_capture(scene, SceneScope::RawObjects(active), crop, coverage, None, PaintBasePolicy::WorkingPixels, occurrence.name.to_string(), None));
             }
@@ -401,7 +533,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             layer: active.expect("cut requires an active paint layer"),
             target: document.working.target,
             objects: Default::default(),
-            layers: Vec::new(),
+            layers: Vec::new(), pixels: Vec::new(), working: document.working.clone(),
         });
         Ok(self.pixel_capture(scene, scope, crop, coverage, original, policy, name, None))
     }
@@ -416,7 +548,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             origin: window.map_or([i64::from(crop[0]), i64::from(crop[1])], |(origin, _)| origin),
             window,
             objects,
-            layers: None,
+            layers: None, regions: Vec::new(),
         }
     }
 
@@ -426,7 +558,13 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn copies_layers(&self, command: CommandId) -> bool {
         matches!(command, CommandId::Copy | CommandId::Cut) && !self.copies_objects(command)
-            && self.engine.document().working.selection.is_none()
+            && (self.engine.document().working.selection.is_none()
+                || self.engine.document().working.layer_selection.len() > 1
+                || self.engine.document().working.occurrence.is_some_and(|id| {
+                    let scene = self.engine.document().scene();
+                    scene.occurrence(id).is_some_and(|o| o.kind() == LayerKind::Group)
+                        || scene.effect(id).is_some_and(|effect| effect.program.kind == layer_core::EffectKind::Generator)
+                }))
             && !matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_)))
     }
 
@@ -464,14 +602,26 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         public.index = Arc::new(layer_core::SceneIndex::build(&public.artwork)?);
         let scope = SceneScope::Members(members.into_iter().collect::<Vec<_>>().into());
-        let (at, extent) = document.bake_window(public.view().with_scope(&scope)).map_err(|_| self.localization().text(MessageId::COMMANDS_COPY_PIXELS_TOO_LARGE).to_string())?;
-        let origin = layer_core::offsets::rounded(at).ok_or("The copied layers exceed the editor's range")?;
         let name = document.scene().occurrence(document.working.occurrence.unwrap_or(roots[0])).unwrap().name.to_string();
         self.files.cut = cut.then(|| PendingCut {
             epoch: self.state.document_file.epoch, revision: document.revision,
             layer: document.working.occurrence.unwrap_or(roots[0]), target: document.working.target,
             objects: Default::default(), layers: document.layer_subtrees(&roots).into_iter().collect(),
+            pixels: Vec::new(), working: document.working.clone(),
         });
+        if let Some(selection) = document.working.selection.clone() {
+            let pixels: Vec<_> = document.layer_subtrees(&roots).into_iter().filter(|&id|
+                clipboard_pixel_layer(document.scene(), id)).collect();
+            if let Some(cut) = &mut self.files.cut { cut.layers.clear(); cut.pixels = pixels.clone(); }
+            let crop = self.clipboard_crop()?;
+            let mut capture = self.pixel_capture(Arc::new(public), scope, crop, Some(Arc::new(selection)), None,
+                PaintBasePolicy::WorkingPixels, name, None);
+            capture.layers = Some(layers); capture.regions = pixels;
+            capture.large |= u64::from(crop[2]) * u64::from(crop[3]) * capture.regions.len() as u64 > LARGE_CLIP_PIXELS;
+            return Ok(capture);
+        }
+        let (at, extent) = document.bake_window(public.view().with_scope(&scope)).map_err(|_| self.localization().text(MessageId::COMMANDS_COPY_PIXELS_TOO_LARGE).to_string())?;
+        let origin = layer_core::offsets::rounded(at).ok_or("The copied layers exceed the editor's range")?;
         let mut capture = self.pixel_capture(Arc::new(public), scope,
             [0, 0, extent[0], extent[1]], None, None, PaintBasePolicy::WorkingPixels, name, None);
         capture.origin = origin; capture.window = Some((origin, extent)); capture.layers = Some(layers);
@@ -514,7 +664,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             layer,
             target: None,
             objects: selected,
-            layers: Vec::new(),
+            layers: Vec::new(), pixels: Vec::new(), working: document.working.clone(),
         });
         Ok(self.pixel_capture(Arc::new(scene), SceneScope::RawObjects(layer), [0, 0, extent[0], extent[1]], None, None,
             PaintBasePolicy::WorkingPixels, name, Some((Arc::new(ObjectClip { objects }), origin))))
@@ -528,15 +678,76 @@ impl<R: CanvasRenderer> UiSession<R> {
             || cut.revision != document.revision
             || Some(cut.layer) != document.working.occurrence
             || cut.target != document.working.target
+            || cut.working != document.working
         {
             self.notify("The drawing changed while cutting, so the pixels were copied but not erased");
+        } else if !cut.pixels.is_empty() {
+            if let Err(error) = self.cut_layer_pixels(&cut.pixels) { self.notify(error); }
         } else if !cut.layers.is_empty() {
             if let Err(error) = document.delete_layers_edit(&cut.layers).map_err(super::error).and_then(|edit| self.layer_edit(edit)) { self.notify(error); }
         } else if !cut.objects.is_empty() {
             if let Err(error) = document.delete_image_objects_edit(&cut.objects).map_err(super::error).and_then(|edit| self.layer_edit(edit)) { self.notify(error); }
+        } else if let Some(target @ SourceTarget::Coverage(_)) = cut.target {
+            let selection = document.working.selection.clone().unwrap_or_else(|| Selection::polygon(Rect::from_extent(document.composition().size).corners().to_vec()).unwrap());
+            let result = self.erase_operation(target, &selection, false)
+                .and_then(|operation| self.engine.append_raster_operation(target, operation).map_err(error));
+            if let Err(error) = result { self.notify(error); }
         } else if let Err(error) = self.clear_selection(false) {
             self.notify(error);
         }
+    }
+
+    fn cut_layer_pixels(&mut self, layers: &[OccurrenceHandle]) -> Result<(), String> {
+        let mut staged = self.engine.document().clone();
+        let selection = staged.working.selection.clone().ok_or("Make a selection first")?;
+        let mut working = staged.working.clone();
+        let mut plans = std::collections::VecDeque::new();
+        let mut operations = Vec::new();
+        for &id in layers {
+            if staged.scene().paint_source(id).is_none() {
+                let plan = if staged.scene().object_layer(id).is_some() {
+                    staged.rasterize_plan(id, false).map_err(|reason| layer_conversions::conversion_refusal_text(reason, self.localization()).to_string())?
+                } else { self.clipboard_generator_plan(&staged, id)? };
+                staged.apply(Edit::Batch(plan.edits.clone())).map_err(error)?;
+                if working.occurrence == Some(id) { working.target = Some(plan.target); }
+                plans.push_back(plan);
+            }
+            let target = staged.scene().source_target(id).ok_or("Select a paint layer")?;
+            let origin = layer_core::offsets::point(staged.target_offset(target));
+            let mut coverage = layer_core::CoverageSnapshot::reveal_all(self.engine.allocate_coverage_handle(), staged.target_extent(target), [0; 2]);
+            coverage.source.default_coverage = f32::from(selection.inverted);
+            coverage.selection = Some(selection.translated(Point { x: -origin.x, y: -origin.y }));
+            operations.push((target, layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY, coverage,
+                kind: layer_core::RasterOperationKind::Erase { alpha_locked: false } }));
+        }
+        if !plans.is_empty() { return self.start_clipboard_cut(plans, Vec::new(), operations, working); }
+        self.engine.insert_with_operations(vec![Edit::Working(working)], operations, None).map_err(error)?;
+        self.layer_interaction.changed = true;
+        Ok(())
+    }
+
+    fn clipboard_generator_plan(&self, document: &layer_core::Document, id: OccurrenceHandle) -> Result<layer_core::MergePlan, String> {
+        let mut occurrence = document.scene().occurrence(id).ok_or("Missing copied layer")?.clone();
+        let OccurrenceContent::Effect(effect) = occurrence.content else { return Err("The layer has no pixels".into()); };
+        let (scene, scope) = clipboard_pixel_scope(document.snapshot(), id);
+        let (origin, extent) = document.bake_window(scene.view().with_scope(&scope)).map_err(|reason|
+            layer_conversions::conversion_refusal_text(reason.into(), self.localization()).to_string())?;
+        let offset = layer_core::offsets::exact(origin).and_then(|at| layer_core::offsets::checked_sub(at, document.scene().layer_origin(document.scene().parent(id))))
+            .ok_or("The copied pixels exceed the editor's range")?;
+        let paint = RecordChange::insert(&document.artwork.paint, PaintSource { color_mode: Default::default(), domain: extent,
+            raster: Default::default(), base: None, operations: Arc::default() });
+        let target = SourceTarget::Paint(paint.handle);
+        occurrence.content = OccurrenceContent::Paint(paint.handle); occurrence.offset = offset;
+        if let Some(mask) = occurrence.mask.as_mut().filter(|mask| mask.linked) {
+            mask.offset = layer_core::offsets::checked_sub(mask.offset, offset).ok_or("The copied mask exceeds the editor's range")?;
+        }
+        let edits = vec![Edit::Paint(paint),
+            Edit::Effect(RecordChange::remove(&document.artwork.effects, effect)?),
+            Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, id, Some(occurrence))?)];
+        let operation = layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY,
+            coverage: layer_core::CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, [0; 2]),
+            kind: layer_core::RasterOperationKind::Bake { scene, scope, offset: Point { x: -origin.x, y: -origin.y } } };
+        Ok(layer_core::MergePlan { edits, result: id, target, operation })
     }
 
     fn paste_center(&self, mode: PasteMode) -> [f64; 2] {
@@ -576,6 +787,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if mode == PasteMode::NewImage { return Err("Open the clipboard as a new drawing".into()); }
         refused(self.paste_refusal())?;
         let position = self.clip_position(clip, mode);
+        if matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) {
+            return self.paste_mask_sources(vec![(clip.source_for(self.engine.document().composition().color), position)]);
+        }
         if mode != PasteMode::Into && let Some(layers) = &clip.layers
             && layers.scene.view().composition().color == self.engine.document().composition().color {
             self.require_document_idle()?;
@@ -610,6 +824,20 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(), String> {
         self.validate_image_placement(context)?;
         refused(self.paste_refusal())?;
+        if mode != PasteMode::NewImage && matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) {
+            let sources = sources.into_iter().map(|(_, source)| {
+                let position = if mode == PasteMode::InPlace { Point::default() }
+                    else if matches!(mode, PasteMode::AtView | PasteMode::AtCursor) { self.centred_clip(source.extent, mode) }
+                    else {
+                        let bounds = self.engine.document().working.selection.as_ref().filter(|s| !s.inverted)
+                            .map_or(Rect::from_extent(self.engine.document().composition().size), Selection::bounds);
+                        Point { x: ((bounds.min.x + bounds.max.x - source.extent[0] as f32) * 0.5).round(),
+                            y: ((bounds.min.y + bounds.max.y - source.extent[1] as f32) * 0.5).round() }
+                    };
+                (PaintBase::new(Arc::new(source).into()), position)
+            }).collect();
+            return self.paste_mask_sources(sources);
+        }
         match mode {
             PasteMode::NewImage => Err("Open the clipboard as a new drawing".into()),
             PasteMode::Paste | PasteMode::AtView | PasteMode::AtCursor => {
@@ -628,6 +856,44 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.paste_objects(objects, context.destination, true)
             }
         }
+    }
+
+    fn paste_mask_sources(&mut self, sources: Vec<(PaintBase, Point)>) -> Result<(), String> {
+        self.require_document_idle()?;
+        refused(self.paste_refusal())?;
+        if sources.is_empty() { return Err("Copy an image to paste".into()); }
+        let document = self.engine.document();
+        let target = document.working.target.ok_or("Select a layer mask")?;
+        let domain = document.target_extent(target);
+        let origin = layer_core::offsets::point(document.target_offset(target));
+        let selection = document.working.selection.clone();
+        let color = document.composition().color;
+        let mut operations = Vec::with_capacity(sources.len());
+        for (source, position) in sources {
+            let extent = source.image.extent;
+            let mut artwork = layer_core::Artwork::new(extent).map_err(error)?;
+            artwork.compositions.get_mut(artwork.root).unwrap().color = color;
+            let paint = RecordChange::insert(&artwork.paint, PaintSource { color_mode: Default::default(), domain: extent,
+                raster: Default::default(), base: Some(source), operations: Arc::default() });
+            artwork.paint.change(paint.handle, paint.id, paint.value.clone())?;
+            let occurrence = RecordChange::insert(&artwork.occurrences, Occurrence::new(OccurrenceContent::Paint(paint.handle), String::new()));
+            artwork.occurrences.change(occurrence.handle, occurrence.id, occurrence.value.clone())?;
+            let stack = artwork.compositions.get(artwork.root).unwrap().result;
+            artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence.handle);
+            let scene = layer_core::Document::from_artwork(artwork).map_err(error)?.snapshot();
+            let mut coverage = layer_core::CoverageSnapshot::reveal_all(self.engine.allocate_coverage_handle(), domain, [0; 2]);
+            if let Some(selection) = &selection {
+                coverage.source.default_coverage = f32::from(selection.inverted);
+                coverage.selection = Some(selection.translated(Point { x: -origin.x, y: -origin.y }));
+            }
+            operations.push((target, layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY, coverage,
+                kind: layer_core::RasterOperationKind::Bake { scene, scope: SceneScope::All,
+                    offset: Point { x: position.x - origin.x, y: position.y - origin.y } } }));
+        }
+        self.engine.insert_with_operations(Vec::new(), operations, None).map_err(error)?;
+        self.layer_interaction.changed = true;
+        self.refresh_document(); self.refresh_commands();
+        Ok(())
     }
 
     fn insert_pasted(

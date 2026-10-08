@@ -10,11 +10,16 @@ use layer_core::authored::{Image, OccurrenceHandle};
 enum Publish {
     Object(OccurrenceHandle),
     Bake { plan: Box<MergePlan>, reselect: Option<layer_core::Selection> },
+    ClipboardCut {
+        plan: Box<MergePlan>, remaining: std::collections::VecDeque<MergePlan>, edits: Vec<layer_core::Edit>,
+        operations: Vec<(layer_core::SourceTarget, layer_core::RasterOperation)>, working: Box<layer_core::WorkingState>,
+    },
 }
 
 pub(super) struct PendingConversion {
     epoch: u64,
     revision: u64,
+    working: layer_core::WorkingState,
     capture: ImageCapture,
     publish: Publish,
     submitted: bool,
@@ -77,11 +82,25 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
+    pub(super) fn start_clipboard_cut(&mut self, mut plans: std::collections::VecDeque<MergePlan>, edits: Vec<layer_core::Edit>,
+        operations: Vec<(layer_core::SourceTarget, layer_core::RasterOperation)>, working: layer_core::WorkingState,
+    ) -> Result<(), String> {
+        let plan = plans.pop_front().ok_or("Missing image layer capture")?;
+        let extent = plan.edits.iter().find_map(|edit| match edit {
+            layer_core::Edit::Paint(change) if layer_core::SourceTarget::Paint(change.handle) == plan.target => change.value.as_ref().map(|paint| paint.domain),
+            _ => None,
+        }).ok_or("Missing rasterized layer")?;
+        let layer_core::RasterOperationKind::Bake { scene, scope, offset } = &plan.operation.kind else { return Err("Missing image layer capture".into()); };
+        let capture = ImageCapture { scene: scene.clone(), scope: scope.clone(), offset: *offset, extent,
+            window: [0, 0, extent[0], extent[1]], trim: None, selection: None };
+        self.start_capture(capture, Publish::ClipboardCut { plan: Box::new(plan), remaining: plans, edits, operations, working: Box::new(working) })
+    }
+
     fn start_capture(&mut self, capture: ImageCapture, publish: Publish) -> Result<(), String> {
         self.require_raster_snapshot()?;
         self.cancel_auto_levels();
         self.yield_histogram();
-        let mut pending = PendingConversion { epoch: self.state.document_file.epoch, revision: self.engine.document().revision, capture, publish, submitted: false };
+        let mut pending = PendingConversion { epoch: self.state.document_file.epoch, revision: self.engine.document().revision, working: self.engine.document().working.clone(), capture, publish, submitted: false };
         pending.submitted = self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::Image(pending.capture.clone())).map_err(error)?;
         self.conversion = Some(pending);
         self.refresh_commands();
@@ -107,7 +126,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let l = self.localization().clone();
         let (epoch, revision) = (self.state.document_file.epoch, self.engine.document().revision);
         let Some(pending) = self.conversion.as_mut() else { return 0; };
-        let changed = pending.epoch != epoch || pending.revision != revision;
+        let changed = pending.epoch != epoch || pending.revision != revision
+            || matches!(pending.publish, Publish::ClipboardCut { .. }) && pending.working != self.engine.document().working;
         let result = if changed {
             self.engine.backend_mut().cancel_snapshot();
             Err(l.text(MessageId::COMMANDS_REFUSAL_CONVERSIONS_LAYER_CHANGED).to_string())
@@ -131,6 +151,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let edit = self.engine.document().object_conversion_edit(layer, image)
                         .map_err(|refusal| conversion_refusal_text(refusal, &l).to_string())?;
                     self.layer_edit(edit)?;
+                }
+                Publish::ClipboardCut { plan, remaining, mut edits, operations, working } => {
+                    edits.extend(plan.with_image(image)?);
+                    if remaining.is_empty() {
+                        edits.push(layer_core::Edit::Working(*working));
+                        self.engine.insert_with_operations(edits, operations, None).map_err(error)?;
+                    } else {
+                        return self.start_clipboard_cut(remaining, edits, operations, *working);
+                    }
                 }
                 Publish::Bake { plan, reselect } => {
                     self.engine.insert_with_operations(plan.with_image(image)?, Vec::new(), reselect.as_ref().map(|_| None)).map_err(error)?;

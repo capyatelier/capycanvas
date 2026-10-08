@@ -1165,7 +1165,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let frame = |document: &Document| (document.composition().size, document.working.view_origin,
             document.scene().targets().map(|target| document.scene().target_extent(target)).collect::<Vec<_>>());
         let before = frame(self.document());
+        let rasters: std::collections::BTreeMap<_, _> = self.document().scene().targets().filter_map(|target|
+            self.document().target_raster(target).map(|raster| (target, raster.clone()))).collect();
         let changed = if redo { self.editor.redo()? } else { self.editor.undo()? };
+        if changed {
+            let changed: Vec<_> = self.document().scene().targets().filter_map(|target| {
+                let raster = self.document().target_raster(target)?;
+                (rasters.get(&target) != Some(raster)).then(|| (target, raster.clone()))
+            }).collect();
+            let document = self.editor.document();
+            self.restore_rasters.retain(|(target, _)| document.target_raster(*target).is_some() && !changed.iter().any(|(id, _)| id == target));
+            self.restore_rasters.extend(changed);
+        }
         self.transform_preview = None;
         self.rebuild_all |= changed && frame(self.document()) != before;
         self.composite_all |= changed && image && !raster_only;
@@ -2758,6 +2769,7 @@ mod tests {
         persistent_batches: Vec<(StrokeId, bool, bool, u32)>,
         material_batches: Vec<(u32, u32)>,
         operation_batches: Vec<(SourceTarget, u32, layer_core::Rect, bool)>,
+        restored_rasters: Vec<(SourceTarget, u64)>,
         preview: Vec<Dab>,
         styles: Vec<DabStyle>,
         saw_reset: bool,
@@ -2836,6 +2848,7 @@ mod tests {
 
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
             if self.fail_submit { return Err(BackendError("submission failed")); }
+            self.restored_rasters = packet.restore_rasters.iter().map(|(target, raster)| (*target, raster.identity())).collect();
             self.time_seconds = packet.time_seconds;
             self.bake_members = packet.dab_batches.iter().filter_map(|batch| {
                 let DabBatchKind::RasterOperation(index) = batch.kind else { return None; };
@@ -3841,6 +3854,85 @@ mod tests {
         assert_eq!(engine.document().working.selection, before.working.selection);
         assert!(engine.redo().unwrap());
         assert_eq!(engine.document().artwork.occurrences.len(), before.artwork.occurrences.len() + 1);
+    }
+
+    #[test]
+    fn undo_then_operation_before_a_frame_restores_the_operation_input() {
+        for mask in [false, true] {
+            let (_, mut engine) = engine("undo then operation", 64, 64);
+            let target = if mask {
+                let edit = mask_edit(&mut engine, [0; 2]);
+                engine.apply_edit(edit).unwrap();
+                SourceTarget::Coverage(active_occurrence(engine.document()).mask.as_ref().unwrap().source)
+            } else { engine.document().working.target.unwrap() };
+            engine.render_frame().unwrap();
+            let original = engine.document().target_raster(target).unwrap().identity();
+            let selection = layer_core::Selection::polygon(Rect::from_extent([32, 32]).corners().to_vec()).unwrap();
+            let operation = erase(&mut engine, &selection);
+            engine.append_raster_operation(target, operation).unwrap();
+            engine.render_frame().unwrap();
+            assert_ne!(engine.document().target_raster(target).unwrap().identity(), original);
+            assert!(engine.undo().unwrap());
+            let operation = erase(&mut engine, &selection);
+            engine.append_raster_operation(target, operation).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.backend().restored_rasters, [(target, original)]);
+            assert!(engine.restore_rasters.is_empty());
+            engine.render_frame().unwrap();
+            assert!(engine.backend().restored_rasters.is_empty(), "the restored input is submitted once");
+        }
+    }
+
+    #[test]
+    fn consecutive_history_steps_keep_each_targets_latest_restore_until_submission() {
+        for redo in [false, true] {
+            let (_, mut engine) = engine("multiple history restores", 64, 64);
+            let paint = engine.document().working.target.unwrap();
+            let edit = mask_edit(&mut engine, [0; 2]);
+            engine.apply_edit(edit).unwrap();
+            let mask = SourceTarget::Coverage(active_occurrence(engine.document()).mask.as_ref().unwrap().source);
+            engine.render_frame().unwrap();
+            let original: std::collections::BTreeMap<_, _> = [paint, mask].map(|target|
+                (target, engine.document().target_raster(target).unwrap().identity())).into();
+            let selection = layer_core::Selection::polygon(Rect::from_extent([32, 32]).corners().to_vec()).unwrap();
+            for target in [paint, mask] {
+                let operation = erase(&mut engine, &selection);
+                engine.append_raster_operation(target, operation).unwrap();
+                engine.render_frame().unwrap();
+            }
+            let changed_paint = engine.document().target_raster(paint).unwrap().identity();
+            assert!(engine.undo().unwrap());
+            assert!(engine.undo().unwrap());
+            let mut expected = original;
+            if redo {
+                assert!(engine.redo().unwrap());
+                expected.insert(paint, changed_paint);
+            }
+            let operation = erase(&mut engine, &selection);
+            engine.append_raster_operation(mask, operation).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.backend().restored_rasters.iter().copied().collect::<std::collections::BTreeMap<_, _>>(), expected);
+            assert_eq!(engine.backend().restored_rasters.len(), 2, "only the latest restored version of each target is submitted");
+        }
+    }
+
+    #[test]
+    fn undoing_a_layer_insertion_drops_its_queued_raster_restore() {
+        let (_, mut engine) = engine("removed restore target", 64, 64);
+        engine.render_frame().unwrap();
+        let (_, target, insertion) = paint_insert(engine.document(), empty_paint(engine.document()), "Pasted", 0);
+        engine.apply_edit(Edit::Batch(insertion)).unwrap();
+        engine.render_frame().unwrap();
+        let selection = layer_core::Selection::polygon(Rect::from_extent([32, 32]).corners().to_vec()).unwrap();
+        let operation = erase(&mut engine, &selection);
+        engine.append_raster_operation(target, operation).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.undo().unwrap());
+        assert_eq!(engine.restore_rasters.len(), 1);
+        assert!(engine.undo().unwrap());
+        assert!(engine.document().target_raster(target).is_none());
+        engine.render_frame().unwrap();
+        assert!(engine.backend().restored_rasters.is_empty());
     }
 
     #[test]

@@ -35,7 +35,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.append_raster_operation(target,operation).map_err(error)?;
         self.layer_interaction.changed=true;Ok(())
     }
-    fn erase_operation(&mut self,target:SourceTarget,selection:&Selection,alpha_locked:bool)->Result<RasterOperation,String> {
+    pub(super) fn erase_operation(&mut self,target:SourceTarget,selection:&Selection,alpha_locked:bool)->Result<RasterOperation,String> {
         let doc=self.engine.document();let domain=doc.target_extent(target);
         let inverse=Affine::translation(layer_core::offsets::point(doc.target_offset(target))).inverse().ok_or("Invalid layer placement")?;
         let mut coverage=CoverageSnapshot::reveal_all(self.engine.allocate_coverage_handle(),domain,[0;2]);

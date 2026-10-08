@@ -38,32 +38,39 @@ impl ClipTask {
     /// Worker-side composition and encoding. `nonce` identifies the clip on
     /// the system clipboard.
     pub fn run(self, nonce: String, control: CaptureControl) -> Result<PixelClip, String> {
-        let capture = self.capture;
+        let mut capture = self.capture;
+        for (id, layer) in capture.layer_captures() {
+            let (source, _) = Self::pixels(&self.gpu, &layer, control.clone())?;
+            capture.set_layer_source(id, source)?;
+        }
+        capture.finish_layer_sources()?;
+        let (source, png) = Self::pixels(&self.gpu, &capture, control)?;
+        capture.finish(nonce, source, png)
+    }
+
+    fn pixels(gpu: &SnapshotGpu, capture: &ClipboardCapture, control: CaptureControl)
+        -> Result<(Arc<layer_core::color::source::SourceImage>, Vec<u8>), String> {
         let limit = layer_color::photo::PhotoMemoryBudget::current().encode_bytes;
         let color = capture.color();
         if let Some(original) = capture.original.clone().filter(|_| !color.depth.is_float()) {
             let png = layer_color::source_png(&original, color, limit, || control.is_cancelled())?;
-            return capture.finish(nonce, original, png);
+            return Ok((original, png));
         }
-        let mut renderer = self
-            .gpu
-            .capture_scene(capture.scene.clone(), capture.scope.clone(), control)
-            .map_err(|e| e.to_string())?;
+        let mut renderer = gpu.capture_scene(capture.scene.clone(), capture.scope.clone(), control).map_err(|e| e.to_string())?;
         if let Some((origin, extent)) = capture.window { renderer.capture_window(origin, extent).map_err(|e| e.to_string())?; }
-        let (source, png) =
-            renderer.write_clip(capture.crop, capture.coverage.as_ref(), capture.original.is_none(), limit)?;
-        drop(renderer);
+        let (source, png) = renderer.write_clip(capture.crop, capture.coverage.as_ref(), capture.original.is_none(), limit)?;
         let source = match (&capture.original, source) {
             (Some(original), _) => original.clone(),
             (None, Some(source)) => Arc::new(source),
             (None, None) => return Err("The copy has no pixels".into()),
         };
-        capture.finish(nonce, source, png)
+        Ok((source, png))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    mod regions;
     use super::*;
     use crate::NativeHost;
     use layer_core::{

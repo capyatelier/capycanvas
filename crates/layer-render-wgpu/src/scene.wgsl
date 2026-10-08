@@ -209,6 +209,12 @@ fn scene_value(v: Vertex) -> vec4<f32> {
     // round trip quantizing feather coverage through a color channel.
     if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m); }
     let dst = scene_read(back,v);
+    if op == 20u { return working_decode(vec4<f32>(vec3<f32>(raw.r), 1.)); }
+    if op == 21u {
+        let gray = clamp(dot(sdr_encode(working_to_srgb(working_unassociate(raw)), 0u), vec3<f32>(.2126, .7152, .0722)), 0., 1.) * raw.a;
+        return vec4<f32>(clamp(gray + dst.r * (1. - raw.a), 0., 1.));
+    }
+    if op == 22u { return vec4<f32>(raw.r * (1. - dst.a)); }
     if op == 16u { return raw * settings.options.y + dst * settings.options.z; }
     if op == 3u { return raw*mix(dst.a,1.-dst.a,settings.options.z); }
     if op == 5u { let a = (1.-raw.a)*.42; return scene_space(vec4<f32>(.46,.12,.8,1.)*a); }

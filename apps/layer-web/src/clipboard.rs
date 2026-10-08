@@ -35,7 +35,19 @@ async fn copy(
     control: layer_render_wgpu::snapshot::CaptureControl,
     nonce: String,
 ) -> Result<JsValue, JsValue> {
-    let capture = task.capture;
+    let mut capture = task.capture;
+    for (id, layer) in capture.layer_captures() {
+        let (source, _) = pixels(&layer, &task.gpu, control.clone()).await?;
+        capture.set_layer_source(id, source).map_err(js)?;
+    }
+    capture.finish_layer_sources().map_err(js)?;
+    let (source, png) = pixels(&capture, &task.gpu, control).await?;
+    Ok(WebClip { clip: capture.finish(nonce, source, png).map_err(js)? }.into())
+}
+
+async fn pixels(capture: &ClipboardCapture, gpu: &layer_render_wgpu::snapshot::SnapshotGpu,
+    control: layer_render_wgpu::snapshot::CaptureControl,
+) -> Result<(std::sync::Arc<layer_core::color::source::SourceImage>, Vec<u8>), JsValue> {
     artwork_transfer::wait_backing(&capture.scene.artwork).await?;
     let document = capture.scene.view();
     let crop = capture.crop;
@@ -45,9 +57,7 @@ async fn copy(
         document: capture.window.map_or(document.composition().size, |(_, extent)| extent),
         source: capture.original.is_none(),
     };
-    let mut snapshot = task
-        .gpu
-        .capture_scene(capture.scene.clone(), capture.scope.clone(), control.clone())
+    let mut snapshot = gpu.capture_scene(capture.scene.clone(), capture.scope.clone(), control.clone())
         .map_err(js)?;
     if let Some((origin, extent)) = capture.window { snapshot.capture_window(origin, extent).map_err(js)?; }
     let buffers = js_sys::Array::new();
@@ -114,7 +124,7 @@ async fn copy(
                 .ok_or_else(|| js("Missing clipboard source"))?
         }
     };
-    Ok(WebClip { clip: capture.finish(nonce, source, png).map_err(js)? }.into())
+    Ok((source, png))
 }
 
 #[wasm_bindgen]

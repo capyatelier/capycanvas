@@ -142,7 +142,7 @@ fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blu
     wgpu::Color { r: f64::from(red), g: f64::from(green), b: f64::from(blue), a: f64::from(alpha) }
 }
 #[derive(Clone, Copy)]
-pub(super) enum Output { Artwork(Option<OccurrenceHandle>), OwnerContent(OccurrenceHandle), Objects(OccurrenceHandle), EffectInput(OccurrenceHandle), EffectChannels(OccurrenceHandle), EffectComposite(OccurrenceHandle), Source(SourceTarget), Display }
+pub(super) enum Output { Artwork(Option<OccurrenceHandle>), OwnerContent(OccurrenceHandle), Objects(OccurrenceHandle), EffectInput(OccurrenceHandle), EffectChannels(OccurrenceHandle), EffectComposite(OccurrenceHandle), Source(SourceTarget), MaskImage(SourceTarget), Display }
 
 pub(super) struct Scene {
     valid: Arc<std::sync::atomic::AtomicBool>,
@@ -185,7 +185,7 @@ pub(super) struct Scene {
     capacity: usize,
     record_count: usize,
     upload: Vec<u8>,
-    pipeline: [Deferred<wgpu::RenderPipeline>; 2],
+    pipeline: [Deferred<wgpu::RenderPipeline>; 3],
     pub(super) effects: effects::Effects,
     pub effect_passes: u64,
     images: images::ImageStages,
@@ -204,7 +204,7 @@ pub(super) struct Pipelines {
     pub resample: resample::Resample,
     uniforms: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
-    pub pipeline: [Deferred<wgpu::RenderPipeline>; 2],
+    pub pipeline: [Deferred<wgpu::RenderPipeline>; 3],
     pub source: sources::Pipelines,
     pub constant: (wgpu::BindGroupLayout, wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>),
 }
@@ -1245,6 +1245,20 @@ impl Scene {
         if let RasterOperationKind::FrequencyDetail { scene, scope, offset, low } = &op.kind {
             return self.bake(r, packet, target, operation_index as u32, scene, scope, *offset, damage, &op.coverage, Some(SourceTarget::Paint(*low)), encoder);
         }
+        if target.is_coverage() {
+            let pages: Vec<_> = r.layer_masks.pages.iter().filter(|((id, c), _)| *id == target && !damage.page_local(*c).is_empty())
+                .map(|((_, c), page)| (*c, page.clone())).collect();
+            for (coordinate, page) in pages {
+                let mask = self.command_mask_at(r, &op.coverage, coordinate, (target, operation_index as u32));
+                let out = self.reserve_format(r, true);
+                self.draw(r, out, page.view.clone(), Some(self.pool[mask].view.clone()),
+                    [0., 0., 256., 256.], [22., 1., 0., 0.], false, Convert::None);
+                self.copy_window_tile(out, &Image { texture: page.texture, view: page.view,
+                    plan: display_mips::Plan::window(extent, 0, page_rect(coordinate).intersect(PixelRect::full(extent))) }, coordinate);
+                self.free(mask);
+            }
+            return self.encode_jobs(r, encoder);
+        }
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == target) else {
             return Ok(());
         };
@@ -1449,14 +1463,14 @@ impl Scene {
         {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let window = if matches!(output,Output::Source(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
+        let window = if matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
         let dirty = match output { Output::Display => PixelRect::EMPTY, _ => window.in_frame(packet.document_extent) };
         self.object_display = self.object_live || matches!(output, Output::Display);
         let raw = match output { Output::Objects(owner) => Some(owner), _ => None };
-        if !matches!(output, Output::Source(_)) && !self.prepare_object_pages(r, packet, raw, page_coordinates(window.in_frame(packet.document_extent)))? {
+        if !matches!(output, Output::Source(_) | Output::MaskImage(_)) && !self.prepare_object_pages(r, packet, raw, page_coordinates(window.in_frame(packet.document_extent)))? {
             return Err(GpuRasterError::DeferredObjectWork);
         }
-        self.prepare_region(r, packet, window, dirty, matches!(output,Output::Source(_) | Output::Objects(_)), encoder)?;
+        self.prepare_region(r, packet, window, dirty, matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)), encoder)?;
         let destination = Image { texture: destination.clone(), view: destination.create_view(&Default::default()),
             plan: display_mips::Plan::window(packet.document_extent, 0, region) };
         self.capture_prepared_regions(r, packet, &destination, &[region], output, preview, None, encoder)
@@ -1550,9 +1564,9 @@ impl Scene {
         encoder: &mut crate::submission::CommandEncoder,
         mut consume: impl FnMut(&mut WgpuRasterizer, &wgpu::TextureView, PixelRect, &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError>,
     ) -> Result<(), GpuRasterError> {
-        let window = if matches!(output,Output::Source(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
+        let window = if matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
         loop {
-            match self.prepare_region(r, packet, window, window.in_frame(packet.document_extent), matches!(output,Output::Source(_) | Output::Objects(_)), encoder) {
+            match self.prepare_region(r, packet, window, window.in_frame(packet.document_extent), matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)), encoder) {
                 Err(GpuRasterError::DeferredObjectWork)=> {
                     r.uploads.finish(encoder);
                     std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
@@ -1637,14 +1651,19 @@ impl Scene {
                     let image = if matches!(output, Output::EffectInput(_)) { image } else { self.effect(r, packet, &[id], tile, image)? };
                     if matches!(output, Output::EffectComposite(_)) { image } else { self.converted(r, image, Convert::linear(packet)) }
                 }
-                Output::Source(target) => {
+                Output::Source(target) | Output::MaskImage(target) => {
                     let owner=packet.scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
                     match target {
                         SourceTarget::Paint(_) => self.paint_tile(r, packet, owner, tile)?,
                         SourceTarget::Coverage(_) => {
                             let (use_,source)=packet.scene.mask(owner).ok_or(GpuRasterError::MissingPaintLayer(target))?;
                             let mut use_=use_.clone(); use_.inverted=false;
-                            self.mask_at(r,&use_,source,packet.scene.target_offset(target),tile)
+                            let mask = self.mask_at(r,&use_,source,packet.scene.target_offset(target),tile);
+                            if matches!(output, Output::MaskImage(_)) {
+                                let image = self.alloc(r, wgpu::Color::TRANSPARENT);
+                                self.draw(r, image, self.pool[mask].view.clone(), None, [0., 0., 256., 256.], [20., 1., 0., 0.], false, Convert::None);
+                                self.free(mask); image
+                            } else { mask }
                         }
                         SourceTarget::Selection(_) => return Err(GpuRasterError::MissingPaintLayer(target)),
                     }
@@ -2142,8 +2161,8 @@ impl Scene {
                                     })
                                 });
                                 pass.set_bind_group(3, masks, &[]);
-                            } else if let Job::Draw { over, .. } = job {
-                                pass.set_pipeline(&self.pipeline[usize::from(*over)]);
+                            } else if let Job::Draw { over, data, .. } = job {
+                                pass.set_pipeline(&self.pipeline[if matches!(data[8] as u32, 21 | 22) { 2 } else { usize::from(*over) }]);
                             }
                             pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                             pass.set_bind_group(1, binding, &[]);
@@ -2223,7 +2242,7 @@ impl Pipelines {
             bind_group_layouts: &[Some(&uniforms), Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = [None, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)].map(|blend| {
+        let pipeline = [None, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), None].into_iter().enumerate().map(|(i, blend)| {
             let (device, pipeline_layout, shader) =
                 (device.clone(), pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
@@ -2234,11 +2253,11 @@ impl Pipelines {
                     &shader,
                     "fragment_main",
                     blend,
-                    device.working_format(),
+                    if i == 2 { device.scalar_format() } else { device.working_format() },
                     "tile layer composition",
                 )
             })
-        });
+        }).collect::<Vec<_>>().try_into().ok().unwrap();
         let constant = {
             let inputs = crate::bindings::layout(device, "scene normal stack inputs", &[
                 texture_entry(0), texture_entry(1),

@@ -44,7 +44,7 @@ impl Scene {
             time_seconds: snapshot.context.elapsed,
             blend_space: scene.composition().blend,
         };
-        let pages: Vec<_> = r
+        let mut pages: Vec<_> = r
             .paint_layers
             .iter()
             .filter(|stored| stored.id == target)
@@ -55,6 +55,11 @@ impl Scene {
                 plan: display_mips::Plan::window(extent, 0, page_rect(page.coordinate).intersect(PixelRect::full(extent))),
             }))
             .collect();
+        if target.is_coverage() {
+            pages.extend(r.layer_masks.pages.iter().filter(|((id, c), _)| *id == target && !damage.page_local(*c).is_empty())
+                .map(|((_, c), page)| (*c, Image { texture: page.texture.clone(), view: page.view.clone(),
+                    plan: display_mips::Plan::window(extent, 0, page_rect(*c).intersect(PixelRect::full(extent))) })));
+        }
         self.placement_display = false;
         self.stop_before = None;
         let budget = match &r.native_edit {
@@ -138,6 +143,12 @@ impl Scene {
                     self.free(output); self.free(mask); output = clipped;
                 }
                 let output = self.converted(r, output, Convert::stored(source));
+                let output = if command.0.is_coverage() {
+                    let scalar = self.reserve_format(r, true);
+                    self.draw(r, scalar, self.pool[output].view.clone(), Some(destination.view.clone()),
+                        [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32], [21., 1., 0., 0.], false, Convert::None);
+                    self.free(output); scalar
+                } else { output };
                 self.copy_window_tile(output, destination, *coordinate);
             }
             self.encode_jobs(r, encoder)?;

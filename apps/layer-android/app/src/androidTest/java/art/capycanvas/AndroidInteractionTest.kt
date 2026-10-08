@@ -2856,6 +2856,96 @@ class AndroidInteractionTest {
         return checkNotNull(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) { "Another app cannot decode ${bytes.size} clipboard bytes" }
     }
 
+    @Test fun clipboardSelectedGroupAndFocusedMask() {
+        InstrumentationRegistry.getArguments().getString("theme")?.let { theme ->
+            require(theme in listOf("light", "dark"))
+            action(obj("type" to "set_theme", "theme" to theme))
+        }
+        val keep = layerStates().map { it.getLong("id") }.toSet()
+        val selection = blueSelection(keep)
+        command("deselect")
+        layerAction(obj("op" to "new", "group" to false, "clipped" to false))
+        val second = editingLayer()
+        command("select_all"); command("fill_selection"); command("deselect")
+        action(obj("type" to "set_layer_opacity", "id" to second, "opacity" to .37))
+        layerAction(obj("op" to "toggle_selection", "id" to selection.layer))
+        layerAction(obj("op" to "group_selected"))
+        val group = editingLayer()
+        assertTrue(layerStates().first { it.getLong("id") == group }.getBoolean("group"))
+        command("rectangle_select")
+        val extent = state().array("tabs").objects().first { it.getBoolean("active") }
+        val width = extent.getInt("width").toDouble(); val height = extent.getInt("height").toDouble()
+        tool = MotionEvent.TOOL_TYPE_STYLUS
+        drag(documentPoint(width * .4, height * .35), documentPoint(width * .6, height * .55))
+        waitFor("the group region is selected") { hasSelection() }
+        val originals = layerStates().map { it.getLong("id") }.toSet()
+        fun publish(id: String) {
+            val nonce = clipboardNonce()
+            command(id)
+            waitFor("$id publishes the native clipboard", 30_000) { clipboardNonce().let { it != null && it != nonce } && documentIdle() }
+        }
+        publish("copy")
+        clipboardImage().let { image ->
+            try { assertTrue("the grouped region exports blue pixels", blue(image.getPixel(image.width / 2, image.height / 2))) }
+            finally { image.recycle() }
+        }
+        command("paste_in_place")
+        waitFor("the selected group pastes as three editable rows", 30_000) { layerStates().size == originals.size + 3 && documentIdle() }
+        val added = layerStates().filter { it.getLong("id") !in originals }
+        assertEquals(1, added.count { it.getBoolean("group") })
+        assertTrue("child opacity survives selected-region copy", added.any { !it.getBoolean("group") && kotlin.math.abs(it.getDouble("opacity") - .37) < 1e-6 })
+        command("undo")
+        waitFor("one undo removes the whole pasted group") { layerStates().size == originals.size }
+        val revisions = listOf(selection.layer, second).associateWith(::paintRevision)
+        publish("cut")
+        waitFor("Cut erases each child without deleting the group", 30_000) {
+            layerStates().map { it.getLong("id") }.toSet() == originals && revisions.all { (id, revision) -> paintRevision(id) != revision }
+        }
+        command("undo")
+        waitFor("one undo restores both cut children") { revisions.all { (id, revision) -> paintRevision(id) == revision } }
+        command("deselect")
+        layerAction(obj("op" to "select", "id" to selection.layer, "mask" to false))
+        command("select_all"); command("mask_selection")
+        waitFor("the child mask owns editing") { barKind() == "layer_mask" }
+        fun maskRevision() = layerStates().first { it.getLong("id") == selection.layer }.getLong("mask_revision")
+        val rows = layerStates().size
+        val contentRevision = paintRevision(selection.layer)
+        val mask = maskRevision()
+        publish("copy")
+        clipboardImage().let { image ->
+            try { assertEquals("the focused mask exports raw white coverage", android.graphics.Color.WHITE, image.getPixel(image.width / 2, image.height / 2)) }
+            finally { image.recycle() }
+        }
+        publish("cut")
+        waitFor("Cut changes only the focused mask", 30_000) { maskRevision() != mask && documentIdle() }
+        assertEquals(rows, layerStates().size)
+        assertEquals(contentRevision, paintRevision(selection.layer))
+        assertTrue(layerStates().first { it.getLong("id") == selection.layer }.getBoolean("has_mask"))
+        val erased = maskRevision()
+        command("paste_image")
+        waitFor("Paste writes into the focused mask", 30_000) { maskRevision() != erased && documentIdle() }
+        assertEquals(rows, layerStates().size)
+        assertEquals(contentRevision, paintRevision(selection.layer))
+        val restored = maskRevision()
+        val external = File(AppStorage.of(instrumentation.targetContext).clipboard, "mask-external.png")
+        external.parentFile!!.mkdirs()
+        android.graphics.Bitmap.createBitmap(32, 24, android.graphics.Bitmap.Config.ARGB_8888).let { image ->
+            try { image.eraseColor(android.graphics.Color.BLACK); external.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+            finally { image.recycle() }
+        }
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(instrumentation.targetContext, "${instrumentation.targetContext.packageName}.clipboard", external)
+            onMain { clipboardManager().setPrimaryClip(android.content.ClipData.newUri(instrumentation.targetContext.contentResolver, "External mask", uri)) }
+            command("paste_image")
+            waitFor("external PNG writes to the same focused mask", 30_000) { maskRevision() != restored && documentIdle() }
+            assertEquals(rows, layerStates().size)
+            assertEquals(contentRevision, paintRevision(selection.layer))
+            assertEquals("layer_mask", barKind())
+            command("undo")
+            waitFor("one undo restores the mask before external paste") { maskRevision() == restored }
+        } finally { external.delete() }
+    }
+
     @Test fun clipboardCopyPasteAcrossDevices() {
         InstrumentationRegistry.getArguments().getString("theme")?.let { theme ->
             require(theme in listOf("light", "dark"))

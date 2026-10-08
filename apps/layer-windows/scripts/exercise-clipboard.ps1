@@ -106,6 +106,18 @@ function Copied([scriptblock]$Action,[string]$Message){
  Wait-Until {(Formats) -contains 'art.capycanvas.clip.nonce' -and (Formats) -contains 'PNG' -and (Requests) -eq 0} $Message
 }
 function Settled{Wait-Until {(Requests) -eq 0 -and !(Model).state.document_file.busy} 'The clipboard request did not finish'}
+function Changed([scriptblock]$Action){
+ $revision=(Model).state.document_file.revision
+ & $Action
+ Wait-Until {(Model).state.document_file.revision -gt $revision} 'The clipboard edit was not acknowledged'
+ Settled
+}
+function Mask-Changed([scriptblock]$Action){
+ $id=(Model).state.layer_tools.editing_layer.id
+ $revision=@((Model).state.layers|Where-Object id -eq $id)[0].mask_revision
+ Changed $Action
+ Wait-Until {@((Model).state.layers|Where-Object id -eq $id)[0].mask_revision -ne $revision} 'The pasted mask pixels did not change'
+}
 function Tool([string]$Command){
  Invoke-Id (Tool-Tile $Command)
 }
@@ -171,6 +183,24 @@ try {
  Wait-Until {(Layers) -eq $count+1} 'Paste in Place did not paste the window copy'
  Invoke 'Undo' -Name;Wait-Until {(Layers) -eq $count} 'One Undo did not remove Paste in Place'
  $checks.own_paste_and_paste_in_place='passed'
+ $first=(Model).state.layer_tools.editing_layer.id
+ Invoke 'layer-new';Wait-Until {(Layers) -eq $count+1} 'The multi-layer clipboard source was not created'
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
+ Invoke "layer-$first-selection";Wait-Until {@((Model).state.layers|Where-Object selected).Count -eq 2} 'The clipboard sources were not both selected'
+ Chord @(0x11) 0x41
+ Copied {Chord @(0x11) 0x43} 'Selected-region Copy did not publish both layers'
+ Chord @(0x11) 0x56;Settled
+ Wait-Until {(Layers) -eq $count+3 -and @((Model).state.layers|Where-Object selected).Count -eq 2} 'Selected-region Paste did not preserve separate layers'
+ Invoke 'Undo' -Name;Wait-Until {(Layers) -eq $count+1} 'One Undo did not remove both pasted layers'
+ Copied {Chord @(0x11) 0x58} 'Selected-region Cut did not publish both layers'
+ Chord @(0x11) 0x56;Settled
+ Wait-Until {(Layers) -eq $count+3} 'Selected-region Cut flattened its layers'
+ Invoke 'Undo' -Name;Wait-Until {(Layers) -eq $count+1} 'Undo did not remove the pasted multi-layer cut'
+ Invoke 'Undo' -Name;Settled
+ Invoke "layer-$first-selection"
+ Chord @(0x11) 0x44
+ Invoke 'layer-delete';Wait-Until {(Layers) -eq $count} 'Delete did not remove the temporary clipboard source'
+ $checks.selected_region_preserves_multiple_layers='passed'
  Chord @(0x11) 0x41;Wait-Until {(Model).state.layer_tools.has_selection} 'Ctrl+A did not select the canvas'
  $revision=(Model).state.document_file.revision
  Copied {Chord @(0x11) 0x58} 'Ctrl+X did not write the clipboard'
@@ -192,6 +222,24 @@ try {
  Chord @(0x11) 0x44;Wait-Until {!((Model).state.layer_tools.has_selection)} 'Deselect did not clear the pixel selection before image-object checks'
  $foreign=Join-Path $run 'foreign.png'
  $bitmap=[Drawing.Bitmap]::new(40,30);try{$g=[Drawing.Graphics]::FromImage($bitmap);$g.Clear([Drawing.Color]::FromArgb(255,30,160,90));$g.Dispose();$bitmap.Save($foreign,[Drawing.Imaging.ImageFormat]::Png)}finally{$bitmap.Dispose()}
+ $maskLayer=(Model).state.layer_tools.editing_layer.id
+ Invoke 'layer-add-mask';Wait-Until {(Model).state.layer_tools.editing_layer.has_mask} 'The clipboard mask was not added'
+ Invoke "layer-$maskLayer-mask";Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected} 'The clipboard mask did not receive focus'
+ Chord @(0x11) 0x41
+ Copied {Chord @(0x11) 0x43} 'Focused-mask Copy did not publish pixels'
+ $paintRevision=@((Model).state.layers|Where-Object id -eq $maskLayer)[0].paint_revision
+ Copied {Chord @(0x11) 0x58} 'Focused-mask Cut did not publish pixels'
+ Mask-Changed {Chord @(0x11) 0x56}
+ if((Layers) -ne $count -or !(Model).state.layer_tools.editing_layer.mask_selected -or @((Model).state.layers|Where-Object id -eq $maskLayer)[0].paint_revision -ne $paintRevision){throw 'Mask Cut/Paste changed layer content or created a layer'}
+ Changed {Chord @(0x11) 0x5a}
+ Changed {Chord @(0x11) 0x5a}
+ Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null
+ Mask-Changed {Chord @(0x11) 0x56}
+ if((Layers) -ne $count -or !(Model).state.layer_tools.editing_layer.mask_selected -or @((Model).state.layers|Where-Object id -eq $maskLayer)[0].paint_revision -ne $paintRevision){throw 'External image Paste escaped the focused mask'}
+ Changed {Chord @(0x11) 0x5a}
+ Chord @(0x11) 0x44
+ Changed {Chord @(0x11) 0x5a};Wait-Until {!(Model).state.layer_tools.editing_layer.has_mask} 'Undo did not remove the temporary clipboard mask'
+ $checks.focused_mask_copy_cut_and_external_paste='passed'
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null
  New-Image {& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke-Id 'paste_as_new_image'} '40x30' 'external-paste-as-new-image'
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);$png=[IO.MemoryStream]::new([byte[]](137,80,78,71,13,10,26,10,0,0,0,0));try{$data=[Windows.Forms.DataObject]::new();$data.SetImage($image);$data.SetData('PNG',$false,$png);[Windows.Forms.Clipboard]::SetDataObject($data,$true)}finally{$png.Dispose();$image.Dispose()}} @($foreign)|Out-Null

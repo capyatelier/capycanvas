@@ -9,9 +9,9 @@ Apple uses Command in place of Ctrl.
 
 | Command | Default | Result |
 | --- | --- | --- |
-| **Copy** | Ctrl+C | Selected image objects, or the active layer's own pixels through the pixel selection. Without either selection, the selected layers and folders, including masks, effects and positions. |
+| **Copy** | Ctrl+C | Selected image objects, or the pixel selection from every selected layer and folder. A focused layer mask copies its raw grayscale pixels. Without either selection, the selected layers and folders, including masks, effects and positions. |
 | **Copy Pixels** | none | The active layer's own pixels before opacity, mask, blend and clipping, even where Copy would take images or whole layers. |
-| **Cut** | Ctrl+X | Copy first, then remove the copied images, selected paint pixels or whole layers after the system write succeeds. |
+| **Cut** | Ctrl+X | Copy first, then remove the copied images, selected pixels from every selected layer, mask coverage or whole layers after the system write succeeds. |
 | **Copy Merged** | Ctrl+Shift+C | The visible image, including visible paper, multiplied by the pixel selection's coverage. |
 | **Paste** | Ctrl+V | Retained content keeps its copied position, even off screen. The Photoshop preset centres it in the document. External images open placement handles at full pixel size, centred in the view (document centre in Photoshop). |
 | **Paste to Shown Position** | Ctrl+Shift+V | Centre retained or external content in the visible canvas at full size, without placement handles. |
@@ -29,7 +29,12 @@ User shortcut overrides remain in effect.
 - **One edit:** each paste or cut is one undo step. Undoing Paste Into restores
   the selection. Pixel copies add a paint layer; selected image objects can join
   an editable image layer. Whole-layer copies add independent authored records
-  and share immutable pixel resources. Only clipping/effect relationships whose
+  and share immutable pixel resources. Regional copies keep separate cropped paint
+  layers and group structure; image objects and generators become pixels in the
+  copy. Regional copies contain source pixels before adjustment filters; use
+  Copy Merged for the visible result. Whole-layer copies retain live filters.
+  Cutting a region from several layers rasterizes images and generators on the
+  capture worker, then publishes all changes together. Only clipping/effect relationships whose
   targets are also copied are retained; other attachments are detached.
 - **Starting from the clipboard:** ordinary Paste creates a clipboard-sized
   drawing on the untouched startup canvas. After editing, or in a drawing
@@ -41,10 +46,12 @@ User shortcut overrides remain in effect.
   include the composition frame and the copied layers' full rendering bounds.
 - **Position:** the view centre or cursor is captured when Paste is requested,
   before clipboard delivery or decoding can move the view or pointer.
-- **Refusals:** Copy Pixels and pixel-selection Copy require a paint or image
-  layer. Whole-layer Cut refuses locked layers and dependencies that cannot be
-  detached. Pixel Cut also refuses alpha lock. Copy/Cut without an active or
-  selected layer are disabled; Copy Merged remains independent of layer focus.
+- **Refusals:** Copy Pixels requires paint, images or a focused layer mask.
+  Pixel-selection Copy accepts selected paint/image layers, generators and
+  folders containing them. Whole-layer Cut refuses locked layers and dependencies
+  that cannot be detached. Regional Cut refuses the whole operation if a selected layer or
+  descendant is locked or alpha locked. Alpha lock does not protect a layer mask.
+  Copy/Cut without an active or selected layer are disabled; Copy Merged remains independent of layer focus.
   A locked destination group disables paste into that drawing, while Paste as
   New Image remains available. File operations and unfinished canvas gestures
   block clipboard commands consistently for pixels and objects.
@@ -60,16 +67,33 @@ User shortcut overrides remain in effect.
 - **Edit menu and bar:** the clipboard commands stay in the existing Edit menu.
   The selection bar's Copy ▾ holds Copy, Copy Merged and Cut.
 
+## Layer masks
+
+Focusing a layer-mask thumbnail makes Copy, Cut and Paste operate on that mask.
+No extra command or mode is needed. Copy exports opaque grayscale, with the
+pixel selection as alpha when present. Without a selection it copies the canvas
+bounds. Disabled or inverted masks still copy their stored coverage; their
+presentation does not change the gray values. Cut writes black through the
+selection after publication succeeds, and Undo restores the mask in one step.
+
+Paste converts the image to grayscale on the GPU and writes into the focused
+mask. Transparent image pixels leave the mask unchanged, and an active pixel
+selection clips the write. The mask's position, link, inversion and enabled state
+stay unchanged. Internal content keeps its copied position. External images
+centre on the selection, or on the canvas without a selection; Paste in Place
+starts at the canvas origin. The existing shown-position and cursor commands
+keep their explicit placement. Mask paste does not add a layer or placement
+handles, and Undo restores the previous mask. Gray values remain consistent
+across drawing colour spaces and HDR/SDR depths.
+
 ## Current limits
 
-Mask, Quick Mask and saved-selection editing do not yet accept clipboard
-coverage. Copy/Cut and paste into the current drawing are disabled in those
-contexts; Paste as New Image remains available. This prevents mask-focused
-Paste from silently adding artwork. Cutting selected pixels from an image layer
-still offers Add Mask (or Edit Mask), New Paint Layer and Rasterize Layer.
+Quick Mask and saved-selection editing do not accept clipboard coverage.
+Copy/Cut and paste into the current drawing stay disabled in those contexts;
+Paste as New Image remains available. Cutting selected pixels from a single
+image layer still offers Add Mask (or Edit Mask), New Paint Layer and Rasterize
+Layer.
 
-A pixel selection copies only the active paint/image layer. Multi-layer pixel
-selections and selected regions of groups are not yet a structured clipboard.
 Whole layers preserve their structure across destination colour spaces and
 SDR depths. Conversion runs on the import worker, promotes depth before changing
 profiles and reduces depth afterward. It preserves original photos, masks and
@@ -108,7 +132,10 @@ windows, an older copy finishing late cannot replace a newer published clip.
   with its explicit profile, converted like an opened photo. Whole-layer copies
   keep their structure through the colour conversion described above.
 - **Cut** captures, then erases once the host reports the copy written. If the
-  drawing changed meanwhile, the source stays and a notice says so. A failed system write or cancellation cannot acknowledge Cut.
+  drawing changed meanwhile, the source stays and a notice says so. A failed system write or cancellation cannot acknowledge Cut. Changing the
+  selection, selected layers or focused target also prevents a delayed Cut from
+  erasing the drawing. A multi-layer image conversion failure leaves all source
+  layers unchanged.
 
 ## Hosts
 
@@ -139,21 +166,25 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
 
 ## Tests
 
-- Shared: `crates/layer-ui/src/clipboard_tests.rs`, `crates/layer-color/src/clip.rs`
+- Shared: `crates/layer-ui/src/clipboard_tests.rs`, `crates/layer-color/src/clip.rs`,
   the layer-import and undo tests in `crates/layer-core/src/authored/occurrence_edits.rs`,
-  and the GPU round trips in `crates/layer-host/src/clipboard.rs`, including
-  off-canvas group pixels and retained editable layers in new drawings.
+  and the GPU round trips in `crates/layer-host/src/clipboard.rs` and its
+  `clipboard/tests/regions.rs` module, including off-canvas groups, separate regional
+  layers, mask transparency and colour conversion, and immediate Undo/Paste.
 - GTK: `native_clipboard_copy_paste_round_trips` in
   `apps/layer-linux/src/clipboard_tests.rs` (keyboard, Copy ▾ with mouse and
   touch, another app reading and writing through `wl-paste` and `wl-copy`,
-  another drawing, Paste Into, Cut, a focused text field, copied file URIs and new-image tabs; run without
+  another drawing, Paste Into, Cut, selected-layer regions, focused masks,
+  a focused text field, copied file URIs and new-image tabs; run without
   `--tablet`, whose proxy does not forward clipboard requests) and
   `native_clipboard_copy_latency_24mp`.
-- Web: `node apps/layer-web/test.mjs --headless --clipboard` with pen, touch and mouse, including internal and external new-image tabs. `color-controls-copy.test.mjs` checks denied or unavailable writes, late cancellation, stale ownership, mixed clipboard items and native paste events.
+- Web: `node apps/layer-web/test.mjs --headless --clipboard` with pen, touch and mouse, including internal and external new-image tabs, selected-layer regions and focused masks. `color-controls-copy.test.mjs` checks denied or unavailable writes, late cancellation, stale ownership, mixed clipboard items and native paste events.
 - Android: `AndroidInteractionTest#clipboardCopyPasteAcrossDevices` (another app
   reads the URI, mixed external items and external/internal new-image tabs with
   immediate Copy; the foreground test receiver reads with automatic URI grants
   under a separate application ID; run with `-e theme light` and `-e theme dark`),
+  `AndroidInteractionTest#clipboardSelectedGroupAndFocusedMask` (regional group
+  Copy/Cut/Paste and focused-mask clipboard round trips, including another app),
   `AndroidColorPanelTest#clipboardKeyboardKeepsColorAndTextFocusAcrossWindows`
   (both themes, color/text focus, native Dialog and windowless presentation), and
   `AndroidRasterTest#clipboardCopyLatency24mp`.
@@ -164,4 +195,5 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
   Paste, Paste in Place and Cut, Copy Merged from the selection bar, standard
   Bitmap delivery, external images and file batches, internal pixel and image-object
   copies opened as new drawings, startup Paste, source-tab preservation, Unicode
-  saves and a focused text field). Run with `-Theme dark` and `-Theme light`.
+  saves, selected-layer regions, focused masks and a focused text field).
+  Run with `-Theme dark` and `-Theme light`.
