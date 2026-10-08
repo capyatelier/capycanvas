@@ -615,3 +615,6 @@ menu-lock-zoom = Заблокировать масштаб
 
 command-enclose-fill = Обвести и залить
 commands-help-enclose-fill = Обведите контур, чтобы залить замкнутые прозрачные области внутри него.
+
+command-paste-as-new-image = Вставить как новое изображение
+commands-help-paste-as-new-image = Открыть содержимое буфера обмена как новый рисунок в исходном размере.

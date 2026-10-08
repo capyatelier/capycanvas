@@ -429,6 +429,7 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
             CopyMerged => l.text(MessageId::COMMANDS_HELP_COPY_MERGED).to_string(),
             CopyPixels => l.text(MessageId::COMMANDS_HELP_COPY_PIXELS).to_string(),
             PasteImage => l.text(MessageId::COMMANDS_HELP_PASTE_IMAGE).to_string(),
+            PasteAsNewImage => l.text(MessageId::COMMANDS_HELP_PASTE_AS_NEW_IMAGE).to_string(),
             PasteInPlace => l.text(MessageId::COMMANDS_HELP_PASTE_IN_PLACE).to_string(),
             PasteInto => l.text(MessageId::COMMANDS_HELP_PASTE_INTO).to_string(),
             NewDodgeBurnLayer => l.text(MessageId::COMMANDS_HELP_NEW_DODGE_BURN_LAYER).to_string(),
@@ -997,6 +998,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ChangeBitDepth
             | C::ImportImage
             | C::PasteImage
+            | C::PasteAsNewImage
             | C::PasteInPlace
             | C::PasteInto
             | C::Copy

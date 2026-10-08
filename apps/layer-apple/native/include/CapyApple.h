@@ -74,6 +74,7 @@ int32_t capy_apple_proof_apply(CapyApple *app, const CapyProjectTask *task, bool
 int32_t capy_apple_proof_failed(CapyApple *app, const CapyProjectTask *task, const char *message);
 int32_t capy_project_new(const CapyProjectTask *task, const char *options_json);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd, const char *name); /* -1: new */
+int32_t capy_project_finish_images(const CapyProjectTask *task);
 int32_t capy_project_read_bytes(const CapyProjectTask *task, const uint8_t *bytes, size_t count, const char *name);
 char *capy_photo_formats(void);
 char *capy_project_profile(const CapyProjectTask *task); /* owned JSON interpretation or null */

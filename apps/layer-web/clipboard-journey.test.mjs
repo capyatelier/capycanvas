@@ -119,6 +119,11 @@ export async function checkClipboard({call,evaluate,settle}) {
   assert.equal(await layers(),count,'Ctrl+V in a text field pastes no layer');
   assert.equal((await state()).requests.filter(r=>r.kind.type==='document').length,0);
   await evaluate(`document.getElementById('clipboard-typing').remove();layerApp.canvas.focus()`);
+  assert.deepEqual(await evaluate(`(()=>{const editor=document.createElement('div'),text=document.createElement('span');
+    editor.contentEditable='true';text.textContent='Nested text';editor.append(text);document.body.append(editor);
+    const native=['c','x','v'].map(key=>{const options={key,ctrlKey:true,bubbles:true,cancelable:true};
+      const unhandled=text.dispatchEvent(new KeyboardEvent('keydown',options));text.dispatchEvent(new KeyboardEvent('keyup',options));return unhandled;});
+    editor.remove();return native;})()`),[true,true,true],'nested editable text keeps native Cut, Copy and Paste');
 
   const external=await evaluate(`(async()=>{const c=new OffscreenCanvas(64,48),x=c.getContext('2d');x.fillStyle='#e04010';x.fillRect(0,0,64,48);
     await navigator.clipboard.write([new ClipboardItem({'image/png':await c.convertToBlob()})]);return true;})()`);
@@ -130,5 +135,19 @@ export async function checkClipboard({call,evaluate,settle}) {
   await wait(`layerApp.state().layers.length===${count+1}`);await idle();
   assert.notEqual((await state()).canvas_bar?.context.kind,'placement','Paste in Place centres another app\'s image without handles');
   await invoke('undo');await wait(`layerApp.state().layers.length===${count}`);
+  const drawings=()=>evaluate('layerApp.app.document_tabs(0).tabs.map(tab=>String(tab.id))');
+  let previous=await drawings(),selected=await evaluate('String(layerApp.app.document_tabs(0).selected)');
+  await editMenu('Paste as New Image','mouse');
+  await wait(`layerApp.app.document_tabs(0).tabs.length===${previous.length+1}&&String(layerApp.app.document_tabs(0).selected)!==${JSON.stringify(selected)}&&!layerApp.documents.busy()`);
+  await wait('layerApp.state().tabs[0].width===64&&layerApp.state().tabs[0].height===48');await idle();
+  assert.equal((await state()).document_file.location??null,null);
+  assert.equal((await state()).document_file.modified,true,'pasted image needs its own save');
+  assert.notEqual((await state()).canvas_bar?.context.kind,'placement','new image is ready to edit');
+  const publicCopy=await nonce();await key('c');await copied(publicCopy);
+  previous=await drawings();selected=await evaluate('String(layerApp.app.document_tabs(0).selected)');
+  await editMenu('Paste as New Image','mouse');
+  await wait(`layerApp.app.document_tabs(0).tabs.length===${previous.length+1}&&String(layerApp.app.document_tabs(0).selected)!==${JSON.stringify(selected)}&&!layerApp.documents.busy()`);await idle();
+  await wait('layerApp.state().tabs[0].width===64&&layerApp.state().tabs[0].height===48');
+  assert.equal((await state()).document_file.modified,true,'internal clipboard new image needs its own save');
   console.log('Keyboard copy, paste, Copy Merged, Paste Into, text focus and another app\'s image');
 }

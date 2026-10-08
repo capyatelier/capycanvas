@@ -518,7 +518,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         destination: Option<ImageLayerDestination>,
     ) -> Result<ImagePlacementContext, String> {
         self.require_document_idle()?;
-        self.object_destination(destination)?;
+        if !self.pasting_new_image() { self.object_destination(destination)?; }
         Ok(ImagePlacementContext {
             epoch: self.state.document_file.epoch,
             revision: self.engine.document().revision,
@@ -535,7 +535,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err("The document or selected layer changed while importing; try again".into());
         }
-        self.object_destination(context.destination)?;
+        if !self.pasting_new_image() { self.object_destination(context.destination)?; }
         Ok(())
     }
     pub fn image_layer_drop_hint(&self, target: u64, fraction: f32) -> Option<LayerDropPosition> {

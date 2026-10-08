@@ -54,13 +54,15 @@ import UIKit
     }
     private static var provider: PNGProvider?
     #endif
-    static func write(png: Data, nonce: String) {
+    static func write(png: Data, nonce: String, failure: String) throws {
         #if os(macOS)
         let item = NSPasteboardItem(), provider = PNGProvider(png)
         item.setDataProvider(provider, forTypes: [.png])
         item.setString(nonce, forType: NSPasteboard.PasteboardType(nonceType))
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([item])
+        guard NSPasteboard.general.writeObjects([item]) else {
+            throw HostFailure(message: failure)
+        }
         self.provider = provider
         #else
         let item = NSItemProvider()

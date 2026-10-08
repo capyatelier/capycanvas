@@ -77,6 +77,8 @@ pub(crate) fn recovery_environment(session: &UiSession<Renderer>) -> Result<Open
 }
 struct Opening { environment: OpenEnvironment, imported: layer_ui::ImportedDocument, profiles: Vec<layer_ui::profile_library::ProfileEntry>, profile_view: serde_json::Value, language: layer_ui::UiLanguage }
 enum Source {
+    Clip(Box<layer_ui::PixelClip>),
+    Images(Vec<(String, layer_core::color::source::SourceImage)>),
     Create(layer_ui::NewDocumentOptions),
     Interpret(Box<layer_ui::ImportedDocument>, crate::color_storage::ProfileChoice),
     Open(PathBuf),
@@ -300,6 +302,8 @@ fn prepare(
 ) -> Result<Completed, String> {
     let mut opened_destination=None;
     let imported = match source {
+        Source::Clip(clip) => return environment.prepare(clip.document(&environment.localization)?, || cancel.load(Ordering::Acquire)).map(Completed::PhotoPrepared),
+        Source::Images(sources) => return environment.prepare(layer_ui::clipboard_document(sources, environment.photo_policy, &environment.localization)?, || cancel.load(Ordering::Acquire)).map(Completed::PhotoPrepared),
         Source::Create(options) => layer_ui::ImportOutcome::Editable(layer_ui::ImportedDocument::new(options.project(&environment.localization)?,layer_ui::ImportSource::Master)),
         Source::Interpret(mut imported, profile) => {
             let profile=match profile.resolve(cancel, &environment.localization) { Ok(profile)=>profile,Err(reason)=>return Ok(Completed::ProfileFailure(reason)) };
@@ -496,12 +500,20 @@ impl DocumentService {
     fn paste_clip(&mut self, host: &mut NativeHost, id: u32, nonce: &str) -> Result<(), String> {
         let DocumentRequest::Paste { mode } = Self::request(host, id)? else { return Err("The paste request is no longer active".into()) };
         let clip = self.window.documents.clip.as_ref().filter(|clip| clip.nonce == nonce).ok_or("Nothing was copied in this window")?;
+        if mode == layer_ui::PasteMode::NewImage { return self.open_clipboard(host, id, Source::Clip(Box::new(clip.clone()))); }
         let previous = host.session.state().revision;
         host.session.paste_clip(clip, mode)?;
         let mut change = host.session.complete_document_request(id, Ok(true))?;
         change.canvas_wake = true;
         change.regions |= layer_ui::regions::ALL;
         host.apply_change(previous, change);
+        Ok(())
+    }
+    fn open_clipboard(&mut self, host: &NativeHost, id: u32, source: Source) -> Result<(), String> {
+        let environment = OpenEnvironment::capture(&host.session, self.window.documents.admission(&host.session.retained_document_tiles()), host.renderer_options(None))?;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.active = Some(Active { id, epoch: host.session.state().document_file.epoch, revision: host.session.engine().document().revision, location: None, cancelled: Some(cancelled.clone()) });
+        self.worker.submit(Job::Prepare { environment: Box::new(environment), source, cancelled });
         Ok(())
     }
     const MAX_QUEUED_OPENS: usize = 64;
@@ -654,6 +666,7 @@ impl DocumentService {
             let result = match action {
                 crate::document_workflows::Action::Cancel => task.complete(host, false),
                 crate::document_workflows::Action::Commit if task.awaits_clipboard() => self.adopt_clip(host, &mut task).or_else(|error| Self::complete(host, id, Err(error))),
+                crate::document_workflows::Action::Commit if host.session.pasting_new_image() => task.import_sources(host).and_then(|(sources, _)| self.open_clipboard(host, id, Source::Images(sources))).or_else(|error| Self::complete(host, id, Err(error))),
                 crate::document_workflows::Action::Commit => task.commit(host),
                 crate::document_workflows::Action::PasteClip { nonce } => self.paste_clip(host, id, &nonce).or_else(|error| Self::complete(host, id, Err(error))),
                 other => {

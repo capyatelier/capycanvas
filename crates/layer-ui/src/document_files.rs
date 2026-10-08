@@ -204,6 +204,7 @@ impl DocumentRequest {
             Self::Place => MessageId::DOCUMENTS_PLACE,
             Self::Paste { mode: PasteMode::Paste } => MessageId::COMMAND_PASTE_IMAGE,
             Self::Paste { mode: PasteMode::InPlace } => MessageId::COMMAND_PASTE_IN_PLACE,
+            Self::Paste { mode: PasteMode::NewImage } => MessageId::COMMAND_PASTE_AS_NEW_IMAGE,
             Self::Paste { mode: PasteMode::Into } => MessageId::COMMAND_PASTE_INTO,
             Self::Copy { cut: true, .. } => MessageId::COMMAND_CUT,
             Self::Copy { merged: true, .. } => MessageId::COMMAND_COPY_MERGED,
@@ -313,6 +314,7 @@ enum DocumentRequestCopy {
 
 #[derive(Default)]
 pub(super) struct DocumentFiles {
+    pub(super) startup: bool,
     pub(super) saved_checkpoint: u64,
     pub(super) unpublished: bool,
     pub(super) destination: Option<super::session_recovery::DestinationFingerprint>,
@@ -330,7 +332,7 @@ pub(super) struct DocumentFiles {
 }
 impl DocumentFiles {
     pub(super) fn session_state(&self,file:&DocumentFileState,camera:super::session_recovery::SessionCamera)->super::session_recovery::SessionDocumentState {
-        let Self {saved_checkpoint,unpublished,destination,last_export,pending_export:_,check_destination:_,pending_modified_change:_,replace_in_place:_,replace_after:_,pending:_,close_after:_,pending_copy:_,cut:_,host_error_copy:_}=self;
+        let Self {startup:_,saved_checkpoint,unpublished,destination,last_export,pending_export:_,check_destination:_,pending_modified_change:_,replace_in_place:_,replace_after:_,pending:_,close_after:_,pending_copy:_,cut:_,host_error_copy:_}=self;
         let DocumentFileState {epoch:_,revision:_,location,export_uri:_,unsaved_name,modified:_,recovered,busy:_,close_ready:_,untitled:_}=file;
         super::session_recovery::SessionDocumentState {camera,location:location.clone(),unsaved_name:unsaved_name.clone(),saved_checkpoint:*saved_checkpoint,
             unpublished:*unpublished,recovered:*recovered,destination:destination.clone(),last_export:last_export.as_ref().map(super::session_recovery::detach_export)}
@@ -423,8 +425,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let photo_name = location.is_none().then(|| {
             document.scene().order().iter().find_map(|handle| {
                 let occurrence = document.scene().occurrence(*handle)?;
-                let OccurrenceContent::Paint(paint) = occurrence.content else { return None; };
-                document.artwork.paint.get(paint)?.base.as_ref().map(|_| occurrence.name.to_string())
+                match occurrence.content {
+                    OccurrenceContent::Paint(paint) => document.artwork.paint.get(paint)?.base.as_ref().map(|_| occurrence.name.to_string()),
+                    OccurrenceContent::Objects(layer) => (!document.artwork.object_layers.get(layer)?.children.is_empty()).then(|| occurrence.name.to_string()),
+                    _ => None,
+                }
             })
         }).flatten();
         let mut session = Self::new_localized(renderer, document, viewport, platform, localization)?;
@@ -732,7 +737,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn opening_drawing(&self) -> bool {
-        self.files.pending.as_ref().is_some_and(|(id, _)| matches!(self.document_request(*id), Ok(DocumentRequest::New | DocumentRequest::Open)))
+        self.files.pending.as_ref().is_some_and(|(id, _)| matches!(self.document_request(*id), Ok(DocumentRequest::New | DocumentRequest::Open | DocumentRequest::Paste { mode: PasteMode::NewImage })))
     }
 
     pub fn request_document_close(&mut self) -> Result<UiChange, String> {

@@ -612,3 +612,6 @@ menu-lock-zoom = Bloquear zoom
 
 command-enclose-fill = Rodear y rellenar
 commands-help-enclose-fill = Dibuja un contorno para rellenar las regiones transparentes cerradas de su interior.
+
+command-paste-as-new-image = Pegar como imagen nueva
+commands-help-paste-as-new-image = Abrir el portapapeles como un dibujo nuevo a su tamaño original.

@@ -29,6 +29,7 @@ pub enum PasteMode {
     InPlace,
     /// In place, with a mask from the selection.
     Into,
+    NewImage,
 }
 
 /// Pixels on the clipboard, held by the window, or on GTK the application.
@@ -43,6 +44,7 @@ pub struct PixelClip {
     /// Document pixels of the source's top-left corner where it was copied.
     pub origin: [i64; 2],
     pub color: DocumentColor,
+    pub blend: layer_core::BlendSpace,
     /// sRGB 8-bit rendition for other applications.
     pub png: Arc<[u8]>,
     pub objects: Option<Arc<ObjectClip>>,
@@ -55,6 +57,24 @@ pub struct ObjectClip {
     pub objects: Vec<layer_core::ImageObject>,
 }
 impl PixelClip {
+    pub fn document(&self, localization: &Localizer) -> Result<layer_core::Document, String> {
+        let mut document = layer_color::photo_project((*self.source).clone(), Default::default(),
+            photo_document_names(&self.name, localization), self.color.depth)?;
+        let composition = document.artwork.compositions.get_mut(document.artwork.root).unwrap();
+        composition.color = self.color;
+        composition.blend = self.blend;
+        let SourceTarget::Paint(paint) = document.working.target.unwrap() else { unreachable!() };
+        document.artwork.paint.get_mut(paint).unwrap().base = Some(self.source_for(self.color));
+        if let Some(objects) = &self.objects {
+            let shift = layer_core::Affine64([1., 0., 0., 1., -self.origin[0] as f64, -self.origin[1] as f64]);
+            clipboard_objects(&mut document, &self.name, objects.objects.iter().map(|object| layer_core::ImageObject {
+                affine: shift.compose(object.affine), ..object.clone()
+            }).collect())?;
+        }
+        document.validate(Default::default())?;
+        layer_color::validate_document_color(&document)?;
+        Ok(document)
+    }
     /// The source as a paste into a drawing of `color` holds it: document
     /// pixels when the colour settings match, otherwise an original image
     /// converted through its explicit profile.
@@ -62,6 +82,39 @@ impl PixelClip {
         PaintBase { image: self.source.clone().into(), offset: [0; 2],
             policy: if color == self.color { self.policy } else { PaintBasePolicy::SourceProfile } }
     }
+}
+
+pub fn clipboard_document(sources: Vec<(String, SourceImage)>, policy: PhotoOpenPolicy, localization: &Localizer) -> Result<layer_core::Document, String> {
+    let (name, first) = sources.first().ok_or("Copy an image to paste")?;
+    let extent = sources.iter().fold([0, 0], |extent, (_, source)| std::array::from_fn(|i| extent[i].max(source.extent[i])));
+    let depth = sources.iter().map(|(_, source)| policy.editing_depth(source.interpretation.depth)).max_by_key(|depth| (depth.is_float(), depth.bits())).unwrap();
+    let mut document = layer_color::photo_project(first.clone(), Default::default(), photo_document_names(name, localization), depth)?;
+    if sources.len() > 1 {
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().size = extent;
+        let objects = sources.into_iter().map(|(name, source)| {
+            let at = std::array::from_fn(|i| f64::from((extent[i] - source.extent[i]) / 2));
+            placed(&name, Arc::new(source).into(), at)
+        }).collect();
+        clipboard_objects(&mut document, &localization.text(MessageId::OBJECTS_LAYER_NAME), objects)?;
+    }
+    document.validate(Default::default())?;
+    layer_color::validate_document_color(&document)?;
+    Ok(document)
+}
+
+fn clipboard_objects(document: &mut layer_core::Document, name: &str, objects: Vec<layer_core::ImageObject>) -> Result<(), String> {
+    let paint = document.working.occurrence.unwrap();
+    let (layer, edit) = document.create_object_layer_edit(layer_core::bounded_name(name), None, 0).map_err(error)?;
+    document.apply(edit).map_err(error)?;
+    let (handles, edit) = document.import_image_objects_edit(layer, objects, 0).map_err(error)?;
+    document.apply(edit).map_err(error)?;
+    document.apply(document.delete_layers_edit(&[paint]).map_err(error)?).map_err(error)?;
+    document.working.occurrence = Some(layer);
+    document.working.target = None;
+    document.working.layer_selection = [layer].into();
+    document.working.layer_anchor = Some(layer);
+    document.working.objects = handles.into_iter().collect();
+    Ok(())
 }
 
 /// A frozen copy request for the host's clip worker.
@@ -95,6 +148,7 @@ impl ClipboardCapture {
             nonce,
             name: self.name,
             color: self.scene.view().composition().color,
+            blend: self.scene.view().composition().blend,
             source,
             policy: self.policy,
             origin: self.origin,
@@ -132,6 +186,11 @@ fn selects_everything(selection: &Selection, [width, height]: [u32; 2]) -> bool 
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn mark_startup_drawing(&mut self) { self.files.startup = true; }
+    pub fn pasting_new_image(&self) -> bool {
+        self.state.requests.iter().any(|request| matches!(request.kind,
+            HostRequestKind::Document { request: DocumentRequest::Paste { mode: PasteMode::NewImage } }))
+    }
     /// Why Copy, Cut or Copy Merged can't run on the idle document.
     pub(super) fn copy_refusal(&self, command: CommandId) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
@@ -228,6 +287,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn request_paste(&mut self, mode: PasteMode) -> Result<(), String> {
+        let mode = if mode == PasteMode::Paste && self.files.startup
+            && self.state.document_file.location.is_none() && !self.state.document_file.modified
+            && !self.engine.can_undo() && !self.engine.can_redo() && self.engine.document().working.selection.is_none()
+        { PasteMode::NewImage } else { mode };
         if mode == PasteMode::Into
             && let Some(reason) = self.paste_into_refusal()
         {
@@ -405,6 +468,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Paste the window's clip as one new layer, with no placement handles.
     pub fn paste_clip(&mut self, clip: &PixelClip, mode: PasteMode) -> Result<(), String> {
+        if mode == PasteMode::NewImage { return Err("Open the clipboard as a new drawing".into()); }
         let position = self.clip_position(clip, mode);
         if let Some(objects) = &clip.objects {
             let delta = [f64::from(position.x) - clip.origin[0] as f64, f64::from(position.y) - clip.origin[1] as f64];
@@ -431,6 +495,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     ) -> Result<(), String> {
         self.validate_image_placement(context)?;
         match mode {
+            PasteMode::NewImage => Err("Open the clipboard as a new drawing".into()),
             PasteMode::Paste => self.place_layer_sources(sources, context.center, context.destination),
             PasteMode::InPlace => self.place_image_objects(sources, None, context.destination, false),
             PasteMode::Into => {

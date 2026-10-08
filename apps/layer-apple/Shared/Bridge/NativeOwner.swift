@@ -344,11 +344,12 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(error.localizedDescription) }
         }
     }
-    func pasteClip(id: UInt64, nonce: String, completion: @escaping @Sendable (Bool, String?) -> Void) {
+    func pasteClip(id: UInt64, nonce: String, checkOnly: Bool = false, completion: @escaping @Sendable (Bool, String?) -> Void) {
         queue.async { [self] in
             let current = capy_apple_clip_nonce(handle)
             defer { if let current { capy_apple_string_free(current) } }
             guard let current, String(cString: current) == nonce else { completion(false, nil); return }
+            if checkOnly { completion(true, nil); return }
             do { try check(capy_apple_paste_clip(handle, UInt32(id))); try publish(); completion(true, nil) }
             catch { completion(true, error.localizedDescription) }
         }

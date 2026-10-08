@@ -102,7 +102,7 @@ mod clipboard;
 mod object_editing;
 pub use object_editing::{ObjectAction, ObjectRow, object_handle, object_token};
 pub use source_edit::SourceUse;
-pub use clipboard::{ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
+pub use clipboard::{clipboard_document, ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
 pub use notices::{Notice, NoticeAction, NoticeActionId};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
@@ -321,7 +321,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn blank_localized(renderer: R, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
-        Self::new_localized(renderer, NewDocumentOptions::default().project(&localization)?, viewport, platform, localization)
+        let mut session = Self::new_localized(renderer, NewDocumentOptions::default().project(&localization)?, viewport, platform, localization)?;
+        session.mark_startup_drawing();
+        Ok(session)
     }
 
     pub fn new(renderer: R, document: Document, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
@@ -2386,7 +2388,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::RasterizeLayer | CommandId::ConvertToObject => self.conversion_refusal(id).is_none(),
             CommandId::ExportAgain => self.files.last_export.is_some() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::PasteInPlace | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
+            CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::PasteAsNewImage | CommandId::PasteInPlace | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
             }
             CommandId::PasteInto => {
@@ -4614,8 +4616,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request_document(DocumentRequest::Place)?;
                 Ok((DOCUMENT | HOST, false))
             }
-            CommandId::PasteImage | CommandId::PasteInPlace | CommandId::PasteInto => {
+            CommandId::PasteImage | CommandId::PasteAsNewImage | CommandId::PasteInPlace | CommandId::PasteInto => {
                 self.request_paste(match command {
+                    CommandId::PasteAsNewImage => PasteMode::NewImage,
                     CommandId::PasteInPlace => PasteMode::InPlace,
                     CommandId::PasteInto => PasteMode::Into,
                     _ => PasteMode::Paste,

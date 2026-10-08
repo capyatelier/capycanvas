@@ -608,3 +608,6 @@ menu-lock-zoom = 확대/축소 잠금
 
 command-enclose-fill = 둘러싸서 채우기
 commands-help-enclose-fill = 선을 둘러 그려 안쪽의 닫힌 투명 영역을 채웁니다.
+
+command-paste-as-new-image = 새 이미지로 붙여넣기
+commands-help-paste-as-new-image = 클립보드 내용을 원래 크기의 새 그림으로 엽니다.

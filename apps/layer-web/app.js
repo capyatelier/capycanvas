@@ -1645,7 +1645,7 @@ function keyInput(e, pressed, divider = null) {
     editing:
       composingKey(e) ||
       (e.target instanceof Element &&
-        e.target.matches("input,select,textarea,[contenteditable=true]")),
+        !!e.target.closest("input,select,textarea,[contenteditable]:not([contenteditable=false])")),
     divider,
   });
   if (reply.handled) {

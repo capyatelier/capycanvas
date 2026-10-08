@@ -612,3 +612,6 @@ menu-lock-zoom = Verrouiller le zoom
 
 command-enclose-fill = Entourer et remplir
 commands-help-enclose-fill = Tracez un contour pour remplir les zones transparentes fermées à l’intérieur.
+
+command-paste-as-new-image = Coller comme nouvelle image
+commands-help-paste-as-new-image = Ouvrir le presse-papiers dans un nouveau dessin à sa taille d’origine.

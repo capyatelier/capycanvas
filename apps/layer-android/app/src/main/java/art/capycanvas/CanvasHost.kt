@@ -946,6 +946,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         proof.pause()
         hdr.pause()
         documents.images.cancel()
+        documents.clipboard.cancel()
         recovery.close {worker.post {
             disposed = true
             languageWorker.shutdown()

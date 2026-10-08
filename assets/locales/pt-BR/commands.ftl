@@ -613,3 +613,6 @@ menu-lock-zoom = Bloquear zoom
 
 command-enclose-fill = Contornar e preencher
 commands-help-enclose-fill = Desenhe um contorno para preencher as regiões transparentes fechadas em seu interior.
+
+command-paste-as-new-image = Colar como nova imagem
+commands-help-paste-as-new-image = Abra o conteúdo da área de transferência como um novo desenho no tamanho original.

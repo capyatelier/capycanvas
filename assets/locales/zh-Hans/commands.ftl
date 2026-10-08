@@ -608,3 +608,6 @@ menu-lock-zoom = 锁定缩放
 
 command-enclose-fill = 围住填充
 commands-help-enclose-fill = 画一个圈，填充圈内封闭的透明区域。
+
+command-paste-as-new-image = 粘贴为新图像
+commands-help-paste-as-new-image = 以原始尺寸将剪贴板内容打开为新画作。

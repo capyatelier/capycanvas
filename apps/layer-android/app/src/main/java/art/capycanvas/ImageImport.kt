@@ -21,9 +21,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-internal fun ClipData.imageUris(failure:String): List<Uri> = (0 until itemCount).map { index ->
-    getItemAt(index).uri ?: run { android.util.Log.e("CapyCanvas.ImageImport","Every item in the image batch must be a file");throw ImageImportMessage(failure) }
-}
+internal fun ClipData.imageUris(failure:String): List<Uri> = (0 until itemCount).mapNotNull { getItemAt(it).uri }
+    .ifEmpty { throw ImageImportMessage(failure) }
 private class ImageImportMessage(message:String): IllegalStateException(message)
 internal data class IncomingImages(val uris: List<Uri>, val context: String, val release: () -> Unit, val finished: ((Boolean) -> Unit)? = null)
 
@@ -115,7 +114,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
         }
         return true
     }
-    fun start(request: JSONObject, paste: Boolean, fromDrop:Boolean=false) {
+    fun start(request: JSONObject, paste: Boolean, fromDrop:Boolean=false, clipNonce:String?=null) {
         if (working || (receiving&&!fromDrop)) return
         working = true; cancelled = false
         val drop = incoming; incoming = null
@@ -123,12 +122,13 @@ internal class ImageImportController(private val host: CanvasHost, private val a
             val id = request.getInt("id")
             var task = 0L
             var adopted=false
+            var transitioning=false
             try {
                 control = Native.captureControl()
                 providerSignal = android.os.CancellationSignal()
                 val context = drop?.context ?: host.withNative { Native.imageImportContext(it, "null", "null") }
-                task = host.withNative { Native.imageImportTask(it, id, context, control) }
-                val uris = drop?.uris ?: if (paste) {
+                task = host.withNative { Native.imageImportTask(it, id, context, control, clipNonce.orEmpty()) }
+                val uris = if (clipNonce != null) emptyList() else drop?.uris ?: if (paste) {
                     application.getSystemService(android.content.ClipboardManager::class.java).primaryClip?.imageUris(host.bootstrap!!.getString("action_failed"))
                         ?: throw ImageImportMessage(host.withNative { Native.query(it,obj("type" to "document_delivery_message","message" to obj("type" to "clipboard_formats","formats" to formats.joinToString { it.getString("name") })).toString()) }.let { org.json.JSONTokener(it).nextValue() as String })
                 } else {
@@ -136,7 +136,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                     try { decision.await() } finally { selection = null; choosing = false; pickerLaunched = false }
                 }
                 if (uris == null || cancelled) { finish(id, false); return@launch }
-                check(uris.isNotEmpty()) { diagnostic("Choose at least one image") }
+                check(uris.isNotEmpty() || clipNonce != null) { diagnostic("Choose at least one image") }
                 for (uri in uris) {
                     if (cancelled) { finish(id, false); return@launch }
                     withContext(Dispatchers.IO) {
@@ -179,14 +179,20 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                     }
                 }
                 if (cancelled) { finish(id, false); return@launch }
-                host.withNative { Native.imageImportAdopt(it, task) }; adopted=true; host.documentChanged()
+                withContext(Dispatchers.IO) { Native.imageImportPrepare(task) }
+                if (request.getJSONObject("kind").getJSONObject("request").optString("mode") == "new_image") {
+                    host.drawingTabs.beforeAdopt { host.withNative { Native.imageImportParkReady(it, task) } }; transitioning=true
+                }
+                host.withNative { Native.imageImportAdopt(it, task); adopted=true }; host.documentChanged()
             } catch (e: CancellationException) {
-                withContext(NonCancellable) { finish(id, false) }; throw e
-            } catch (e: Exception) { finish(id, false, if (cancelled) null else failure(e)) }
+                if (!adopted) withContext(NonCancellable) { finish(id, false) }; throw e
+            } catch (e: Exception) { if (!adopted) finish(id, false, if (cancelled) null else failure(e)) }
             finally {
                 withContext(NonCancellable + Dispatchers.IO) { if (task != 0L) Native.imageImportFree(task) }
                 if (control != 0L) Native.captureFree(control)
-                control = 0; providerSignal = null; working = false; drop?.release?.invoke();drop?.finished?.invoke(adopted)
+                control = 0; providerSignal = null
+                try { if(transitioning)withContext(NonCancellable) { host.drawingTabs.afterAdopt() } }
+                finally { working = false; drop?.release?.invoke();drop?.finished?.invoke(adopted) }
             }
         }
     }

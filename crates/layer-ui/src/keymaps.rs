@@ -123,7 +123,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "krita",
-        revision: 2,
+        revision: 3,
         title: "Krita Style",
         app: "Krita",
         source: "Krita 5.3 manual default shortcuts, US layout; checked 2026-09-25",
@@ -133,6 +133,8 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             "https://docs.krita.org/en/user_manual/introduction_from_other_software/introduction_from_photoshop.html",
         ],
         keys: &[
+            ("command.PasteAsNewImage", &["primary+shift+n"]),
+            ("command.NewWindow", &[]),
             ("command.Redo", &["primary+shift+z"]),
             ("command.SoftProof", &["primary+y"]),
             ("hold.eyedropper", &["control"]),
@@ -223,7 +225,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "gimp",
-        revision: 8,
+        revision: 9,
         title: "GIMP Style",
         app: "GIMP",
         source: "GIMP 3.2 default shortcuts, US layout; checked 2026-09-26",
@@ -275,6 +277,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.CopySelectionToLayer", &[]),
             ("command.CutSelectionToLayer", &[]),
             ("command.PasteInPlace", &["primary+alt+v"]),
+            ("command.PasteAsNewImage", &["primary+shift+v"]),
             ("command.MergeDown", &[]),
             ("command.MergeVisible", &["primary+m"]),
             ("command.Settings", &[]),
@@ -289,7 +292,6 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("Ctrl+E", "Capy has no quick re-export. Export with Ctrl+Shift+E; Merge Down has no key in this keymap."),
             ("{ and }", "Capy has no large brush size steps."),
             ("B", "Capy has no Paths tool. B keeps Capy's paint tools."),
-            ("Ctrl+Shift+V", "Capy has no Paste as New Image. Create a drawing, then paste into it."),
         ],
     },
     KeymapPreset {

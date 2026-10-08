@@ -41,6 +41,7 @@ mod clipboard_checks {
             policy: layer_core::PaintBasePolicy::WorkingPixels,
             origin,
             color,
+            blend: layer_core::BlendSpace::Linear.for_depth(color.depth),
             png: Arc::from(&b"png"[..]),
             objects: None,
         }
@@ -373,7 +374,7 @@ mod clipboard_checks {
         assert!(KeyChord::new("c", Modifiers { command: true, shift: true, alt: false }).available(Platform::Web));
         let edit = s.application_menu(ApplicationMenu::Edit);
         let labels: Vec<_> = edit.sections[2].iter().map(|item| item.label.as_str()).collect();
-        assert_eq!(labels, ["Cut", "Copy", "Copy Pixels", "Copy Merged", "Paste", "Paste in Place", "Paste Into"]);
+        assert_eq!(labels, ["Cut", "Copy", "Copy Pixels", "Copy Merged", "Paste", "Paste as New Image", "Paste in Place", "Paste Into"]);
 
         assert!(!key(&mut s, "c", true, true, true).handled, "a focused text field keeps Ctrl+C");
         assert!(s.state.requests.is_empty());
@@ -398,11 +399,89 @@ mod clipboard_checks {
         for (preset, id, chord) in [
             ("photoshop", "command.PasteInto", ("v", true, true)),
             ("gimp", "command.PasteInPlace", ("v", true, false)),
+            ("gimp", "command.PasteAsNewImage", ("v", false, true)),
+            ("krita", "command.PasteAsNewImage", ("n", false, true)),
         ] {
             let keys = crate::keymaps::preset(preset).unwrap().keys_for(id).unwrap();
             assert_eq!(keys.len(), 1);
             assert_eq!((keys[0].key.as_str(), keys[0].command, keys[0].alt, keys[0].shift), (chord.0, true, chord.1, chord.2), "{preset}");
         }
+    }
+
+    #[test]
+    fn new_image_retains_depth_samples_transparency_and_object_geometry() {
+        use layer_core::color::{ColorProfile, source::{SourceBuilder, SourceChannels, SourceInterpretation}};
+        let localization = Localizer::shared(UiLanguage::English);
+        let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
+        let mut builder = SourceBuilder::new([2, 1], SourceInterpretation { channels: SourceChannels::Rgba,
+            depth: color.depth, profile: ColorProfile::Builtin(color.space), profile_assumed: false }, 1024 * 1024).unwrap();
+        builder.push_row(&[1, 0, 2, 0, 3, 0, 0, 0, 4, 0, 5, 0, 6, 0, 255, 255]).unwrap();
+        let mut copied = clip([2, 1], [-10, 23], color);
+        copied.source = Arc::new(builder.finish().unwrap());
+        let document = copied.document(&localization).unwrap();
+        assert_eq!(document.composition().size, [2, 1]);
+        assert_eq!(document.composition().color, color);
+        assert_eq!(document.composition().blend, copied.blend);
+        let base = document.scene().paint_source(document.working.occurrence.unwrap()).unwrap().base.as_ref().unwrap();
+        assert!(Arc::ptr_eq(base.image.storage(), &copied.source));
+        assert_eq!(base.policy, copied.policy);
+        assert_eq!(base.offset, [0, 0]);
+        assert!(!document.scene().occurrence(document.scene().order()[1]).unwrap().visible);
+        let mut object = layer_core::ImageObject::new(copied.source.clone().into(), "Original");
+        object.affine = layer_core::Affine64([1., 0., 0., 1., -10., 23.]);
+        copied.objects = Some(Arc::new(super::super::clipboard::ObjectClip { objects: vec![object.clone()] }));
+        let objects = copied.document(&localization).unwrap();
+        let kept = objects.artwork.objects.iter().next().unwrap().2;
+        assert_eq!(kept.affine, layer_core::Affine64([1., 0., 0., 1., 0., 0.]));
+        assert_eq!(kept.image.extent, object.image.extent);
+        assert_eq!(kept.image.interpretation, object.image.interpretation);
+        assert_eq!(kept.image.tiles.values().next().unwrap().owner_identity(), object.image.tiles.values().next().unwrap().owner_identity());
+        assert_eq!(objects.working.objects.len(), 1);
+        assert_eq!(objects.scene().order().len(), 2);
+        assert!(objects.artwork.paint.is_empty());
+        objects.validate(Default::default()).unwrap();
+    }
+
+    #[test]
+    fn new_image_includes_every_external_image_without_scaling() {
+        let sources = vec![("Wide".into(), Arc::unwrap_or_clone(rgba8_source([9, 3], |_, _| [9; 4]))),
+            ("Tall".into(), Arc::unwrap_or_clone(rgba8_source([2, 11], |_, _| [7; 4])))];
+        let document = clipboard_document(sources, Default::default(), &Localizer::shared(UiLanguage::English)).unwrap();
+        assert_eq!(document.composition().size, [9, 11]);
+        let objects: Vec<_> = document.artwork.objects.iter().map(|(_, _, object)| (object.name.as_ref(), object.affine.0)).collect();
+        assert_eq!(objects, [("Wide", [1., 0., 0., 1., 0., 4.]), ("Tall", [1., 0., 0., 1., 3., 0.])]);
+        assert!(clipboard_document(Vec::new(), Default::default(), &Localizer::shared(UiLanguage::English)).is_err());
+    }
+
+    #[test]
+    fn paste_sizes_only_the_untouched_startup_drawing_automatically() {
+        let mut startup = clip_session();
+        startup.mark_startup_drawing();
+        invoke(&mut startup, CommandId::PasteImage);
+        assert!(matches!(pending(&startup).1, DocumentRequest::Paste { mode: PasteMode::NewImage }));
+        let mut working = clip_session();
+        working.mark_startup_drawing();
+        invoke(&mut working, CommandId::AddLayer);
+        invoke(&mut working, CommandId::PasteImage);
+        assert!(matches!(pending(&working).1, DocumentRequest::Paste { mode: PasteMode::Paste }));
+        let mut explicit = clip_session();
+        invoke(&mut explicit, CommandId::PasteImage);
+        assert!(matches!(pending(&explicit).1, DocumentRequest::Paste { mode: PasteMode::Paste }));
+        for platform in Platform::ALL { assert!(CommandId::PasteAsNewImage.available_on(platform)); }
+    }
+
+    #[test]
+    fn new_image_does_not_need_an_editable_destination() {
+        let mut s = clip_session();
+        let target = s.engine.document().working.occurrence.unwrap();
+        let mut layer = s.engine.document().scene().occurrence(target).unwrap().clone();
+        layer.locked = true;
+        s.layer_edit(Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences, target, Some(layer)).unwrap())).unwrap();
+        let before = s.engine.document().clone();
+        invoke(&mut s, CommandId::PasteAsNewImage);
+        let context = s.image_placement_context(None, None).unwrap();
+        s.validate_image_placement(&context).unwrap();
+        assert_eq!(*s.engine.document(), before);
     }
 
     #[test]

@@ -589,6 +589,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.CopyMerged" => key("c", true, true),
         "command.PasteImage" => key("v", true, false),
         "command.PasteInPlace" => key("v", true, true),
+        "command.PasteAsNewImage" => KeyChord { key: "n".into(), command: true, shift: false, alt: true },
         "command.SaveDocument" => key("s", true, false),
         "command.SaveDocumentAs" => key("s", true, true),
         "command.ExportDocument" => key("e", true, true),
@@ -617,7 +618,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
     use CommandId as C;
     match command {
         C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::Copy | C::Cut | C::CopyMerged | C::CopyPixels | C::PasteImage
-        | C::PasteInPlace | C::PasteInto | C::ClearLayer | C::FillSelection
+        | C::PasteAsNewImage | C::PasteInPlace | C::PasteInto | C::ClearLayer | C::FillSelection
         | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection | C::ImageSize
         | C::RotateImageLeft | C::RotateImageRight | C::RotateImage180 | C::FlipImageHorizontal
         | C::FlipImageVertical | C::Trim | C::RevealAll => ShortcutSection::Edit,

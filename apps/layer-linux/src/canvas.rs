@@ -65,6 +65,7 @@ impl GpuCanvas {
                 Default::default()
             }
         });
+        let startup = project.is_none();
         let (project, location) = match project {
             Some(project) => project,
             None => (settings.new_document.defaults.project(&localization)?, None),
@@ -73,6 +74,7 @@ impl GpuCanvas {
         let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into(), color)?;
         let mut session =
             UiSession::from_project_localized(renderer, project, location, extent(area), layer_ui::Platform::Gtk, localization)?;
+        if startup { session.mark_startup_drawing(); }
         session.dispatch(layer_ui::UiAction::RestoreWorkspace {
             workspace: Box::new(layer_ui::WorkspaceState::for_platform(
                 layer_ui::Platform::Gtk,

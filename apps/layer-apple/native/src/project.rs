@@ -57,6 +57,8 @@ enum Payload {
         context: layer_ui::ImagePlacementContext,
         request: u32,
         device: wgpu::Device,
+        environment: Option<OpenEnvironment>,
+        clip: Option<PixelClip>,
     },
     Export(Box<ExportTask>),
     Clip {
@@ -195,7 +197,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
             Payload::Clip { task: Some(Box::new(ClipTask::capture(session, request)?)), clip: None, request, operation:session.document_request(request)?.clone() }
         } else if opening == 3 {
             #[derive(Default, serde::Deserialize)]
-            struct Placement { screen: Option<layer_core::Point>, layer: Option<Row> }
+            struct Placement { screen: Option<layer_core::Point>, layer: Option<Row>, nonce: Option<String> }
             #[derive(serde::Deserialize)]
             struct Row { target: u64, fraction: f32 }
             let placement: Placement = if placement.is_null() { Default::default() } else {
@@ -217,6 +219,8 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 images: layer_ui::ImageImportBatch::new(session.state().settings.photo_open,
                     session.engine().document().composition().color.space, Default::default()),
                 context, request, device,
+                environment: session.pasting_new_image().then(|| OpenEnvironment::capture(session, admission, options)).transpose()?,
+                clip: placement.nonce.map(|nonce| app.window.documents.clip.as_ref().filter(|clip| clip.nonce == nonce).cloned().ok_or_else(|| "The clipboard changed; paste again".to_string())).transpose()?,
             }
         } else if opening == 1 {
             session.require_document_idle()?;
@@ -382,6 +386,24 @@ enum Input<'a> {
     File(i32),
     Bytes(&'a [u8]),
     Assume(layer_core::color::ColorProfile),
+}
+
+/// # Safety
+/// Worker only, after all clipboard images and profile choices have been read.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_finish_images(task: *const CapyProjectTask) -> i32 {
+    let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
+    task.perform(|payload| {
+        let Payload::Placed { images, environment, clip, .. } = payload else { return Err("Not an image import".into()); };
+        let Some(environment) = environment.take() else { return Ok(()); };
+        let document = match clip.take() {
+            Some(clip) => clip.document(&environment.localization)?,
+            None => layer_ui::clipboard_document(images.take_sources(task.control.is_cancelled())?, environment.photo_policy, &environment.localization)?,
+        };
+        let candidate = environment.prepare(document, || task.check_cancelled().is_err())?;
+        *payload = Payload::Open { environment: None, candidate: Some(candidate), source: layer_ui::ImportSource::Photo, imported: None };
+        Ok(())
+    })
 }
 /// Shared decoder capabilities drive native picker and clipboard preferences.
 #[unsafe(no_mangle)]
@@ -607,7 +629,7 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
             app.host.apply_change(previous, change);
             return Ok(());
         }
-        if let Payload::Placed { images, context, request, device } = &mut state.payload {
+        if let Payload::Placed { images, context, request, device, .. } = &mut state.payload {
             let session = &mut app.host.session;
             session.validate_image_placement(context)?;
             if session.renderer_mut().0.as_ref().map(|gpu| gpu.device()) != Some(device)
@@ -616,8 +638,12 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
             }
             if unsafe { capy_project_begin_commit(task) } < 0 { return Err("Document operation cancelled".into()); }
             let previous = session.state().revision;
-            session.place_layer_sources(images.take_sources(task.control.is_cancelled())?,
-                context.center, context.destination)?;
+            let sources = images.take_sources(task.control.is_cancelled())?;
+            let mode = match session.document_request(*request)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None };
+            match mode {
+                Some(mode) => session.paste_layer_sources(sources, mode, context)?,
+                None => session.place_layer_sources(sources, context.center, context.destination)?,
+            }
             let mut change = session.complete_document_request(*request, Ok(true))?;
             change.canvas_wake = true;
             change.regions |= layer_ui::regions::ALL;

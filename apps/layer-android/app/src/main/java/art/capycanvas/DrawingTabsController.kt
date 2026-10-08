@@ -68,12 +68,13 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         refresh()
     }
     /** File candidate is fully prepared before completing its initiating request. */
-    suspend fun beforeAdopt(task: Long) {
+    suspend fun beforeAdopt(task: Long) = beforeAdopt { host.withNative { Native.projectParkReady(it, task) } }
+    suspend fun beforeAdopt(ready: suspend () -> Boolean) {
         check(!switching) { "Another drawing transition is active" }
         transition(true)
         try {
             drain()
-            withTimeout(30_000) { while (!host.withNative { Native.projectParkReady(it, task) }) { host.documentChanged(); delay(16) } }
+            withTimeout(30_000) { while (!ready()) { host.documentChanged(); delay(16) } }
             host.recovery.capture()?.join()
         } catch(e:Exception) { afterAdopt(); throw e }
     }

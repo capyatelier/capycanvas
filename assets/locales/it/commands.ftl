@@ -611,3 +611,6 @@ menu-lock-zoom = Blocca zoom
 
 command-enclose-fill = Racchiudi e riempi
 commands-help-enclose-fill = Disegna un contorno per riempire le aree trasparenti chiuse al suo interno.
+
+command-paste-as-new-image = Incolla come nuova immagine
+commands-help-paste-as-new-image = Apri il contenuto degli appunti come un nuovo disegno nelle dimensioni originali.

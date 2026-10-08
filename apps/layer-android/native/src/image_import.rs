@@ -4,7 +4,7 @@ use crate::android::{app, error, fail, or_throw, read, string};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
-    sys::{jint, jlong, jstring},
+    sys::{jboolean, jint, jlong, jstring},
 };
 use layer_ui::{DocumentRequest, ImagePlacementContext};
 use std::{
@@ -23,6 +23,13 @@ struct Batch {
     context: Context,
     control: layer_render_wgpu::snapshot::CaptureControl,
     images: layer_ui::ImageImportBatch,
+    open: Option<NewImage>,
+}
+struct NewImage {
+    environment: layer_host::open::OpenEnvironment,
+    clip: Option<layer_ui::PixelClip>,
+    candidate: Option<Box<layer_ui::UiSession<layer_host::Renderer>>>,
+    retired: Option<Box<layer_render_wgpu::WgpuRasterizer>>,
 }
 fn active(a: &crate::app::App, id: u32) -> Result<(), String> {
     if matches!(a.host.session.document_request(id), Ok(DocumentRequest::Place | DocumentRequest::Paste { .. })) {
@@ -73,6 +80,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportTask(
     id: jint,
     context: JString,
     cancel: jlong,
+    nonce: JString,
 ) -> jlong {
     let result = (|| {
         let a = unsafe { app(handle) };
@@ -84,15 +92,54 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportTask(
         if context.generation != a.gpu_generation {
             return Err("The canvas changed while importing; try again".into());
         }
+        let open = if a.host.session.pasting_new_image() {
+            let nonce = read(&mut env, &nonce)?;
+            let clip = if nonce.is_empty() { None } else { Some(a.window.documents.clip.as_ref().filter(|clip| clip.nonce == nonce).ok_or("The clipboard changed; paste again")?.clone()) };
+            Some(NewImage {
+                environment: layer_host::open::OpenEnvironment::capture(&a.host.session,
+                    a.window.documents.admission(&a.host.session.retained_document_tiles()), a.host.renderer_options(Some(a.cache_directory.clone().into())))?,
+                clip, candidate: None, retired: None,
+            })
+        } else { None };
         Ok(Box::into_raw(Box::new(Batch {
             id: id as u32,
             context,
             control: crate::inspection::control(cancel),
             images: layer_ui::ImageImportBatch::new(a.host.session.state().settings.photo_open,
                 a.host.session.engine().document().composition().color.space, Default::default()),
+            open,
         })) as jlong)
     })();
     or_throw(&mut env, result, 0)
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_imageImportPrepare(mut env: JNIEnv, _: JClass, handle: jlong) {
+    let b = unsafe { crate::inspection::borrow::<Batch>(handle) };
+    let result = (|| {
+        let Some(open) = &mut b.open else { return Ok(()); };
+        if b.control.is_cancelled() { return Err("Paste cancelled".into()); }
+        let project = match open.clip.take() {
+            Some(clip) => clip.document(&open.environment.localization)?,
+            None => layer_ui::clipboard_document(b.images.take_sources(b.control.is_cancelled())?, open.environment.photo_policy, &open.environment.localization)?,
+        };
+        open.candidate = Some(open.environment.prepare(project, || b.control.is_cancelled())?);
+        Ok(())
+    })();
+    fail(&mut env, result);
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_imageImportParkReady(mut env: JNIEnv, _: JClass, handle: jlong, task: jlong) -> jboolean {
+    let result = (|| {
+        let a = unsafe { app(handle) };
+        let b = unsafe { crate::inspection::borrow::<Batch>(task) };
+        if b.control.is_cancelled() || b.open.as_ref().and_then(|open| open.candidate.as_ref()).is_none() { return Err("Paste cancelled or not prepared".into()); }
+        if a.host.session.state().document_file.epoch != b.context.placement.epoch || a.host.session.engine().document().revision != b.context.placement.revision || a.gpu_generation != b.context.generation {
+            return Err("The drawing changed while pasting; try again".into());
+        }
+        active(a, b.id)?;
+        a.window.adoption_ready(&a.host)
+    })();
+    or_throw(&mut env, result.map(u8::from), 0)
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_imageImportRead(
@@ -164,6 +211,14 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportAdopt(
         let a = unsafe { app(handle) };
         let b = unsafe { crate::inspection::borrow::<Batch>(task) };
         active(a, b.id)?;
+        if let Some(open) = &mut b.open {
+            if b.control.is_cancelled() || a.gpu_generation != b.context.generation || a.gpu_watch.failure().is_some() { return Err("Paste cancelled or canvas changed".into()); }
+            let adoption = layer_host::window::OpenAdoption { epoch: b.context.placement.epoch, revision: b.context.placement.revision, location: None };
+            open.retired = a.window.adopt(&mut a.host, &mut open.candidate, adoption, || !b.control.is_cancelled(), |s| s)?;
+            a.document_retired();
+            a.project_adopted();
+            return Ok(());
+        }
         a.host
             .session
             .validate_image_placement(&b.context.placement)?;

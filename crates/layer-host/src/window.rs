@@ -717,7 +717,7 @@ fn opening(kind: &HostRequestKind) -> bool {
     matches!(
         kind,
         HostRequestKind::Document {
-            request: DocumentRequest::New | DocumentRequest::Open
+            request: DocumentRequest::New | DocumentRequest::Open | DocumentRequest::Paste { mode: layer_ui::PasteMode::NewImage }
         }
     )
 }
@@ -838,6 +838,37 @@ mod tests {
         let mut digests: Vec<_> = tiles.blobs().unwrap().iter().map(|b| b.content_digest().unwrap()).collect();
         digests.sort();
         digests
+    }
+
+    #[test]
+    fn clipboard_drawing_adoption_keeps_the_source_and_cancels_before_commit() {
+        let mut host = host();
+        let mut window = Window::default();
+        fill(&mut host);
+        let original = host.session.engine().document().clone();
+        let original_id = window.documents.selected();
+        invoke(&mut host, CommandId::PasteAsNewImage);
+        let request = host.session.state().requests[0].id;
+        let source = layer_core::color::source::rgba8_source([7, 5], |_, _| [31, 72, 145, 90]);
+        let project = layer_ui::clipboard_document(vec![("Clipboard".into(), std::sync::Arc::unwrap_or_clone(source))], Default::default(), host.session.localization()).unwrap();
+        let environment = OpenEnvironment::capture(&host.session, window.documents.admission(&host.session.retained_document_tiles()), Default::default()).unwrap();
+        let mut next = Some(environment.prepare(project, || false).unwrap());
+        let adoption = opened(&host);
+        assert!(window.adopt(&mut host, &mut next, adoption, || false, |s| s).is_err());
+        assert!(next.is_some());
+        assert!(host.session.document_request(request).is_ok());
+        assert_eq!(*host.session.engine().document(), original);
+        let adoption = opened(&host);
+        drop(window.adopt(&mut host, &mut next, adoption, || true, |s| s).unwrap());
+        settle(&mut host);
+        assert_eq!(window.documents.order().len(), 2);
+        assert_ne!(window.documents.selected(), original_id);
+        assert_eq!(host.session.engine().document().composition().size, [7, 5]);
+        assert!(host.session.state().document_file.modified);
+        assert!(host.session.state().document_file.location.is_none());
+        assert!(host.session.state().requests.is_empty());
+        assert_eq!(window.session(&host, original_id).unwrap().engine().document().owner, original.owner);
+        finish(host, window);
     }
 
     #[test]

@@ -608,3 +608,6 @@ menu-lock-zoom = ズームをロック
 
 command-enclose-fill = 囲って塗る
 commands-help-enclose-fill = 囲んだ範囲内の閉じた透明領域を塗りつぶします。
+
+command-paste-as-new-image = 新しい画像として貼り付け
+commands-help-paste-as-new-image = クリップボードの内容を元のサイズで新しい作品として開きます。

@@ -56,10 +56,14 @@ pub extern "system" fn Java_art_capycanvas_Native_clipWritePng(mut env: JNIEnv, 
 }
 /// Keep the clip for the window and complete its copy, which erases a Cut.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_clipAdopt(mut env: JNIEnv, _: JClass, handle: jlong, id: jint, clip: jlong) {
+pub extern "system" fn Java_art_capycanvas_Native_clipAdopt(mut env: JNIEnv, _: JClass, handle: jlong, id: jint, clip: jlong, control: jlong) {
     let clip = unsafe { Box::from_raw(clip as *mut PixelClip) };
     let result = (|| {
         let a = unsafe { app(handle) };
+        if control != 0 && crate::inspection::control(control).is_cancelled() {
+            return Err("Copy cancelled".into());
+        }
+        a.host.session.document_request(id as u32)?;
         a.window.documents.clip = Some(*clip);
         let previous = a.host.session.state().revision;
         let mut change = a.host.session.complete_document_request(id as u32, Ok(true))?;

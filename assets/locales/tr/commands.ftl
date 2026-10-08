@@ -609,3 +609,6 @@ menu-lock-zoom = Yakınlaştırmayı kilitle
 
 command-enclose-fill = Çevrele ve doldur
 commands-help-enclose-fill = İçindeki kapalı saydam alanları doldurmak için bir çevre çiz.
+
+command-paste-as-new-image = Yeni Görüntü Olarak Yapıştır
+commands-help-paste-as-new-image = Pano içeriğini özgün boyutunda yeni bir çizim olarak açın.

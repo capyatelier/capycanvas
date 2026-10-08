@@ -610,3 +610,6 @@ menu-lock-zoom = Khóa thu phóng
 
 command-enclose-fill = Khoanh và tô
 commands-help-enclose-fill = Vẽ một đường bao để tô các vùng trong suốt khép kín bên trong.
+
+command-paste-as-new-image = Dán thành ảnh mới
+commands-help-paste-as-new-image = Mở nội dung bảng nhớ tạm thành bản vẽ mới với kích thước gốc.

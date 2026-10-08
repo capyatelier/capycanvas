@@ -6,16 +6,16 @@ use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
 #[wasm_bindgen]
 pub struct WebImageImport {
-    id: u32,
-    context: ImagePlacementContext,
-    lost: Arc<Mutex<Option<String>>>,
+    pub(super) id: u32,
+    pub(super) context: ImagePlacementContext,
+    pub(super) lost: Arc<Mutex<Option<String>>>,
 }
 
 #[wasm_bindgen]
 pub struct WebPreparedImages {
-    request: WebImageImport,
-    sources: Vec<(String, layer_core::color::source::SourceImage)>,
-    control: layer_render_wgpu::snapshot::CaptureControl,
+    pub(super) request: WebImageImport,
+    pub(super) sources: Vec<(String, layer_core::color::source::SourceImage)>,
+    pub(super) control: layer_render_wgpu::snapshot::CaptureControl,
 }
 
 fn active(session: &UiSession<AttachedRenderer>, id: u32) -> Result<(), JsValue> {

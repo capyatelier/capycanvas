@@ -67,10 +67,12 @@ internal object Native {
     @JvmStatic external fun importSource(prefix: ByteArray): String
     @JvmStatic external fun photoFormats(): String
     @JvmStatic external fun imageImportContext(handle: Long, screen: String, destination: String): String
-    @JvmStatic external fun imageImportTask(handle: Long, request: Int, context: String, cancel: Long): Long
+    @JvmStatic external fun imageImportTask(handle: Long, request: Int, context: String, cancel: Long, nonce: String = ""): Long
     @JvmStatic external fun imageImportRead(task: Long, fd: Int, name: String)
     @JvmStatic external fun imageImportProfilePrompt(task: Long): String
     @JvmStatic external fun imageImportAssumeProfile(task: Long, profile: String)
+    @JvmStatic external fun imageImportPrepare(task: Long)
+    @JvmStatic external fun imageImportParkReady(handle: Long, task: Long): Boolean
     @JvmStatic external fun imageImportAdopt(handle: Long, task: Long)
     @JvmStatic external fun imageImportFree(task: Long)
     @JvmStatic external fun clipTask(handle: Long, request: Int): Long
@@ -79,7 +81,7 @@ internal object Native {
     @JvmStatic external fun clipRun(task: Long, control: Long, nonce: String): Long
     @JvmStatic external fun clipTaskFree(task: Long)
     @JvmStatic external fun clipWritePng(clip: Long, path: String)
-    @JvmStatic external fun clipAdopt(handle: Long, request: Int, clip: Long)
+    @JvmStatic external fun clipAdopt(handle: Long, request: Int, clip: Long, control: Long = 0)
     @JvmStatic external fun clipFree(clip: Long)
     @JvmStatic external fun clipNonce(handle: Long): String?
     @JvmStatic external fun pasteClip(handle: Long, request: Int)

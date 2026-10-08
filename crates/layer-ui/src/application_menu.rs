@@ -169,7 +169,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             M::Edit => ContextMenu { title: menu.localized_label(self.localization()).to_string(), sections: vec![
                 vec![command(CommandId::SearchCommands)],
                 [CommandId::Undo, CommandId::Redo].map(command).into(),
-                [CommandId::Cut, CommandId::Copy, CommandId::CopyPixels, CommandId::CopyMerged, CommandId::PasteImage, CommandId::PasteInPlace, CommandId::PasteInto]
+                [CommandId::Cut, CommandId::Copy, CommandId::CopyPixels, CommandId::CopyMerged, CommandId::PasteImage, CommandId::PasteAsNewImage, CommandId::PasteInPlace, CommandId::PasteInto]
                     .into_iter()
                     .filter(|id| id.available_on(self.state.platform))
                     .map(command)

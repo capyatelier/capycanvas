@@ -51,39 +51,47 @@ internal class ClipboardController(private val host: CanvasHost, private val app
         host.viewModelScope.launch {
             var task = 0L
             var clip = 0L
+            var capture = 0L
+            var completed = false
+            var published = false
+            var file: File? = null
             try {
                 task = host.withNative { Native.clipTask(it, id) }
                 val nonce = UUID.randomUUID().toString()
-                control = Native.captureControl()
+                capture = Native.captureControl(); control = capture
                 cancelling = false
-                if (Native.clipTaskLarge(task)) progress = id
-                val running = task; task = 0L
-                val file = File(directory, "$nonce.png")
-                clip = withContext(Dispatchers.IO) {
-                    val finished = Native.clipRun(running, control, nonce)
+                progress = if (Native.clipTaskLarge(task)) id else null
+                val output = File(directory, "$nonce.png"); file = output
+                withContext(Dispatchers.IO) {
+                    val running = task; task = 0L
+                    clip = Native.clipRun(running, capture, nonce)
                     directory.mkdirs()
-                    Native.clipWritePng(finished, file.path)
-                    finished
+                    Native.clipWritePng(clip, output.path)
                 }
-                val uri = FileProvider.getUriForFile(application, "${application.packageName}.clipboard", file)
+                ensureActive()
+                if (cancelling) throw CancellationException("Copy cancelled")
+                val uri = FileProvider.getUriForFile(application, "${application.packageName}.clipboard", output)
                 val data = ClipData.newUri(application.contentResolver, host.catalog.getString("app_name"), uri)
                 data.description.extras = PersistableBundle().apply { putString(NONCE, nonce) }
-                clipboard.setPrimaryClip(data)
-                prune(nonce)
-                val adopted = clip; clip = 0L
-                host.withNative { Native.clipAdopt(it, id, adopted) }
+                clipboard.setPrimaryClip(data); published = true
+                withContext(NonCancellable + Dispatchers.IO) { runCatching { prune(nonce) } }
+                host.withNative {
+                    val adopted = clip; clip = 0L
+                    Native.clipAdopt(it, id, adopted, capture); completed = true
+                }
                 host.documentChanged()
             } catch (e: CancellationException) {
-                withContext(NonCancellable) { finish(id, false, null) }; throw e
+                if (!completed) withContext(NonCancellable) { finish(id, false, null) }; throw e
             } catch (e: Exception) {
-                finish(id, false, if (cancelling) null else e.message ?: host.bootstrap!!.getString("action_failed"))
+                if (!completed) finish(id, false, if (cancelling) null else e.message ?: host.bootstrap!!.getString("action_failed"))
             } finally {
-                withContext(NonCancellable + Dispatchers.IO) {
+                if (task != 0L || clip != 0L || !published) withContext(NonCancellable + Dispatchers.IO) {
                     if (task != 0L) Native.clipTaskFree(task)
                     if (clip != 0L) Native.clipFree(clip)
+                    if (!published) file?.delete()
                 }
-                if (control != 0L) Native.captureFree(control)
-                control = 0L; progress = null; cancelling = false
+                if (capture != 0L) Native.captureFree(capture)
+                if (control == capture) { control = 0L; progress = null; cancelling = false }
             }
         }
     }
@@ -92,6 +100,10 @@ internal class ClipboardController(private val host: CanvasHost, private val app
     suspend fun paste(request: JSONObject): Boolean {
         val nonce = nonce() ?: return false
         if (host.withNative { Native.clipNonce(it) } != nonce) return false
+        if (nonce() != nonce) return false
+        if (request.getJSONObject("kind").getJSONObject("request").optString("mode") == "new_image") {
+            host.documents.images.start(request, true, clipNonce=nonce); return true
+        }
         try { host.withNative { Native.pasteClip(it, request.getInt("id")) }; host.documentChanged() }
         catch (e: Exception) { finish(request.getInt("id"), false, e.message ?: host.bootstrap!!.getString("action_failed")) }
         return true

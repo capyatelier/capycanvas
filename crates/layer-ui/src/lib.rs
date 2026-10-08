@@ -128,7 +128,7 @@ pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceComma
 mod stats;
 pub use session::{HistogramAction, HistogramView};
 pub use session::{
-    AdjustmentChoice, ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS, ClipboardCapture, CloseDecision,
+    AdjustmentChoice, ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS, clipboard_document, ClipboardCapture, CloseDecision,
     LARGE_CLIP_PIXELS, PasteMode, PixelClip,
     DEFAULT_DOCUMENT_EXTENT,
     DocumentColorOperation, DocumentIdleReason, ExportRepeat, DocumentHostError, DocumentHostErrorCopy, HostRequestFailure, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
@@ -615,6 +615,7 @@ command_ids! {
     Cut,
     CopyMerged,
     CopyPixels,
+    PasteAsNewImage,
     PasteInPlace,
     PasteInto,
     MergeDown,
@@ -869,6 +870,7 @@ impl CommandId {
             Self::CopyMerged => "copy-merged",
             Self::CopyPixels => "copy",
             Self::PasteImage => "paste",
+            Self::PasteAsNewImage => "new-document",
             Self::PasteInPlace => "paste-in-place",
             Self::PasteInto => "paste-into",
             Self::MergeDown => "merge-down",
@@ -1137,6 +1139,7 @@ impl CommandId {
             Self::Cut => MessageId::COMMAND_CUT,
             Self::CopyMerged => MessageId::COMMAND_COPY_MERGED,
             Self::CopyPixels => MessageId::COMMAND_COPY_PIXELS,
+            Self::PasteAsNewImage => MessageId::COMMAND_PASTE_AS_NEW_IMAGE,
             Self::PasteInPlace => MessageId::COMMAND_PASTE_IN_PLACE,
             Self::PasteInto => MessageId::COMMAND_PASTE_INTO,
             Self::MergeDown => MessageId::COMMAND_MERGE_DOWN,

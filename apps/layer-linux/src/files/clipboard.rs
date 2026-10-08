@@ -75,8 +75,9 @@ fn publish(w: &Workspace, clip: PixelClip) -> Result<(), String> {
         gdk::ContentProvider::for_bytes("image/png", &glib::Bytes::from(&clip.png[..])),
         gdk::ContentProvider::for_bytes(CLIP_MIME, &glib::Bytes::from(clip.nonce.as_bytes())),
     ]);
+    w.window.clipboard().set_content(Some(&provider)).map_err(|e| e.to_string())?;
     CLIP.set(Some(clip));
-    w.window.clipboard().set_content(Some(&provider)).map_err(|e| e.to_string())
+    Ok(())
 }
 
 /// The nonce the system clipboard carries, when it holds a copy from this application.
@@ -92,6 +93,12 @@ async fn clipboard_nonce(clipboard: &gdk::Clipboard) -> Option<String> {
 pub(super) async fn paste(w: &Rc<Workspace>, mode: PasteMode) -> Result<bool, String> {
     let nonce = clipboard_nonce(&w.window.clipboard()).await;
     if let Some(clip) = current().filter(|clip| nonce.as_deref() == Some(clip.nonce.as_str())) {
+        if mode == PasteMode::NewImage {
+            let localization = w.localization();
+            let project = gio::spawn_blocking(move || clip.document(&localization)).await.map_err(|_| "The paste failed")??;
+            w.documents.enqueue_imported(w, layer_ui::ImportedDocument::new(project, layer_ui::ImportSource::Photo), None);
+            return Ok(true);
+        }
         let mut owner = w.gpu.borrow_mut();
         owner.as_mut().ok_or("Canvas unavailable")?.session.paste_clip(&clip, mode)?;
         drop(owner);

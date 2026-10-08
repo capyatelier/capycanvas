@@ -321,8 +321,10 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             auto file=co_await winrt::Windows::Storage::StorageFile::GetFileFromPathAsync(str(details,L"file"));
             auto bytes=co_await winrt::Windows::Storage::FileIO::ReadBufferAsync(file);
             winrt::Windows::Storage::Streams::InMemoryRandomAccessStream png;co_await png.WriteAsync(bytes);png.Seek(0);
+            if(stopping)co_return;
             DataPackage package;package.RequestedOperation(DataPackageOperation::Copy);
             package.SetData(L"PNG",png);package.SetData(ClipNonce,box_value(str(details,L"nonce")));
+            package.SetBitmap(winrt::Windows::Storage::Streams::RandomAccessStreamReference::CreateFromStream(png));
             Clipboard::SetContent(package);action=O({{L"op",S(L"commit")}});
         }catch(hresult_error const&){if(!stopping)report(to_string(str(object(details,L"delivery"),L"clipboard_unavailable")));}
         if(!stopping)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(id)},{L"action",action}}).Stringify()));
@@ -340,7 +342,8 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                     own=O({{L"op",S(L"paste_clip")},{L"nonce",S(nonce)}});
                 }else if(content.Contains(StandardDataFormats::StorageItems())){
                     auto items=co_await content.GetStorageItemsAsync();for(auto item:items)if(auto file=item.try_as<winrt::Windows::Storage::StorageFile>())paths.Append(S(file.Path()));
-                }else{
+                }
+                if(!own.Size()&&!paths.Size()){
                     if(content.Contains(L"PNG"))input=(co_await content.GetDataAsync(L"PNG")).try_as<winrt::Windows::Storage::Streams::IRandomAccessStream>();
                     if(!input&&content.Contains(StandardDataFormats::Bitmap()))input=co_await (co_await content.GetBitmapAsync()).OpenReadAsync();
                     if(!input)report(to_string(str(object(details,L"delivery"),L"clipboard_empty")));

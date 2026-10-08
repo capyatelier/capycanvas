@@ -721,27 +721,30 @@ impl Task {
         task.prepare(host, self.control.is_cancelled())?;
         Ok(Some(Action::Compare))
     }
+    pub fn import_sources(&mut self, host: &NativeHost) -> Result<(Vec<(String, layer_core::color::source::SourceImage)>, layer_ui::ImagePlacementContext), String> {
+        if self.stage != "commit" || self.error.is_some() { return Err("Images are not ready to paste".into()); }
+        let Payload::Import(task) = &mut self.payload else { return Err("Not an image import".into()); };
+        let session = &host.session;
+        session.validate_image_placement(&task.context)?;
+        if self.control.is_cancelled() || session.engine().backend().0.as_ref().map(|g| g.device()) != Some(&task.device)
+            || !session.state().requests.iter().any(|r| r.id == self.id) {
+            return Err("The canvas or import request changed; try again".into());
+        }
+        Ok((task.images.take_sources(self.control.is_cancelled())?, task.context))
+    }
     pub fn commit(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.error_reason=None;
         if !matches!(self.stage, "preview" | "commit") || self.error.is_some() {
             return Err("Preview the result before applying it".into());
         }
         match &mut self.payload {
-            Payload::Import(task) => {
+            Payload::Import(_) => {
+                let (sources, context) = self.import_sources(host)?;
                 let session = &mut host.session;
-                session.validate_image_placement(&task.context)?;
-                if self.control.is_cancelled()
-                    || session.engine().backend().0.as_ref().map(|g| g.device())
-                        != Some(&task.device)
-                    || !session.state().requests.iter().any(|r| r.id == self.id)
-                {
-                    return Err("The canvas or import request changed; try again".into());
-                }
                 let previous = session.state().revision;
-                let sources = task.images.take_sources(self.control.is_cancelled())?;
                 match session.document_request(self.id)? {
-                    DocumentRequest::Paste { mode } => { let mode = *mode; session.paste_layer_sources(sources, mode, &task.context)? }
-                    _ => session.place_layer_sources(sources, task.context.center, task.context.destination)?,
+                    DocumentRequest::Paste { mode } => { let mode = *mode; session.paste_layer_sources(sources, mode, &context)? }
+                    _ => session.place_layer_sources(sources, context.center, context.destination)?,
                 }
                 let mut change = session.complete_document_request(self.id, Ok(true))?;
                 change.canvas_wake = true;

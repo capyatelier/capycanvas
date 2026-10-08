@@ -612,3 +612,6 @@ menu-lock-zoom = Zoom sperren
 
 command-enclose-fill = Umranden und füllen
 commands-help-enclose-fill = Zeichne eine Umrandung, um geschlossene transparente Bereiche darin zu füllen.
+
+command-paste-as-new-image = Als neues Bild einfügen
+commands-help-paste-as-new-image = Die Zwischenablage als neue Zeichnung in Originalgröße öffnen.

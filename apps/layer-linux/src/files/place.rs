@@ -19,7 +19,8 @@ const CLIPBOARD_FILE_LIMIT: usize = 512 * 1024 * 1024;
 struct TemporaryImage(PathBuf);
 impl Drop for TemporaryImage {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let path = self.0.clone();
+        gio::spawn_blocking(move || { let _ = std::fs::remove_file(path); });
     }
 }
 
@@ -31,16 +32,15 @@ async fn spool(clipboard: &gdk::Clipboard) -> Result<TemporaryImage, String> {
         .read_future(&mimes, glib::Priority::DEFAULT)
         .await
         .map_err(|e| format!("Copy a supported image ({}) to paste: {e}", layer_color::photo::format_names()))?;
-    // Establish the unlink guard before the first cancellable write. Async
-    // creation could finish after its future is dropped and orphan the file.
-    // This is one private-file creation; all payload I/O stays asynchronous.
-    let directory = layer_core::temp_files::directory()?;
-    std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
-    let path = directory.join(format!("clipboard-image-{}", layer_core::PortableId::random()));
-    let output = gio::File::for_path(&path)
-        .create(gio::FileCreateFlags::PRIVATE, gio::Cancellable::NONE)
-        .map_err(|e| e.to_string())?;
-    let temporary = TemporaryImage(path);
+    let temporary = gio::spawn_blocking(|| {
+        use std::os::unix::fs::OpenOptionsExt;
+        let directory = layer_core::temp_files::directory()?;
+        std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+        let path = directory.join(format!("clipboard-image-{}", layer_core::PortableId::random()));
+        std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| e.to_string())?;
+        Ok::<_, String>(TemporaryImage(path))
+    }).await.map_err(|_| "Clipboard transfer failed")??;
+    let output = gio::File::for_path(&temporary.0).append_to_future(gio::FileCreateFlags::NONE, glib::Priority::DEFAULT).await.map_err(|e| e.to_string())?;
     let mut total = 0usize;
     loop {
         let bytes = input
@@ -161,7 +161,14 @@ pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) ->
     );
     dialog.present(Some(&w.window));
     let result = async {
-        let temporary = if paste {
+        let clipboard = w.window.clipboard();
+        let paths = if paste && clipboard.formats().union_deserialize_types().contains_type(gdk::FileList::static_type()) {
+            let value = gio::CancellableFuture::new(clipboard.read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT), transfer.clone())
+                .await.map_err(|_| "Image import cancelled")?.map_err(|e| e.to_string())?;
+            value.get::<gdk::FileList>().map_err(|e| e.to_string())?.files().iter()
+                .map(|file| file.path().ok_or_else(|| "Choose images stored on this device".to_string())).collect::<Result<Vec<_>, _>>()?
+        } else { paths };
+        let temporary = if paste && paths.is_empty() {
             Some(
                 gio::CancellableFuture::new(spool(&w.window.clipboard()), transfer)
                     .await
@@ -196,6 +203,14 @@ pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) ->
     let mut gpu = w.gpu.borrow_mut();
     let session = &mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
     let sources = interpreted.take_sources(false)?;
+    if mode == Some(layer_ui::PasteMode::NewImage) {
+        session.validate_image_placement(&context)?;
+        drop(gpu);
+        let localization = w.localization();
+        let project = gio::spawn_blocking(move || layer_ui::clipboard_document(sources, policy, &localization)).await.map_err(|_| "The paste failed")??;
+        w.documents.enqueue_imported(w, layer_ui::ImportedDocument::new(project, layer_ui::ImportSource::Photo), None);
+        return Ok(true);
+    }
     match mode {
         Some(mode) => session.paste_layer_sources(sources, mode, &context)?,
         None => {

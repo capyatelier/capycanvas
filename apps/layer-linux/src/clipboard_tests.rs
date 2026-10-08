@@ -70,13 +70,15 @@ fn external_png() -> Vec<u8> {
 }
 
 /// Put an image on the clipboard from another Wayland client.
-fn external_copy(png: &[u8]) {
+fn external_copy(png: &[u8]) { external_copy_type(png, "image/png"); }
+
+fn external_copy_type(bytes: &[u8], mime: &str) {
     let mut child = std::process::Command::new("wl-copy")
-        .args(["--type", "image/png"])
+        .args(["--type", mime])
         .stdin(std::process::Stdio::piped())
         .spawn()
         .expect("wl-copy");
-    std::io::Write::write_all(&mut child.stdin.take().unwrap(), png).unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), bytes).unwrap();
     until(|| child.try_wait().unwrap().is_some(), "wl-copy offers the image");
 }
 
@@ -209,6 +211,28 @@ fn native_clipboard_copy_paste_round_trips() {
     assert!(state(&w).requests.is_empty());
     entry.emit_activate();
     pump(200);
+
+    let path = layer_core::temp_files::directory().unwrap().join(format!("clipboard-file-{}.png", layer_core::PortableId::random()));
+    std::fs::write(&path, &png).unwrap();
+    external_copy_type(format!("{}\r\n", gtk::gio::File::for_path(&path).uri()).as_bytes(), "text/uri-list");
+    until(|| clipboard_formats(&w).iter().any(|mime| mime == "text/uri-list"), "a copied file is offered");
+    let owner = document(&w).owner;
+    w.dispatch(UiAction::Invoke { command: CommandId::PasteAsNewImage });
+    until(|| w.gpu.borrow().is_some() && !w.documents.changing.get() && document(&w).owner != owner && idle(&w), "Paste as New Image opens a copied file in another tab");
+    assert_eq!(document(&w).composition().size, photo.extent);
+    assert!(state(&w).document_file.modified);
+    assert!(state(&w).document_file.location.is_none());
+    assert_eq!(w.documents.model.borrow().order().len(), 2);
+    let before = nonce();
+    chord(&mut native, &[CONTROL], 0x63);
+    let clip = copied(&w, before, "copy the newly opened image");
+    let owner = document(&w).owner;
+    w.dispatch(UiAction::Invoke { command: CommandId::PasteAsNewImage });
+    until(|| w.gpu.borrow().is_some() && !w.documents.changing.get() && document(&w).owner != owner && idle(&w), "Paste as New Image opens the retained copy");
+    assert_eq!(document(&w).composition().size, clip.source.extent);
+    assert_source_samples(active_paint(&document(&w)).base.as_ref().unwrap().image.as_ref(), &clip.source);
+    assert_eq!(w.documents.model.borrow().order().len(), 3);
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

@@ -128,10 +128,17 @@ import UIKit
         case "copy": copyPixels()
         case "paste":
             guard let nonce = PhotoClipboard.nonce, let native = store?.native, let id = requestID else { pasteImages(); return }
-            native.pasteClip(id: id, nonce: nonce) { [weak self] handled, error in
+            let newImage = document["mode"].string == "new_image"
+            native.pasteClip(id: id, nonce: nonce, checkOnly: newImage) { [weak self] handled, error in
                 DispatchQueue.main.async {
                     guard let self, self.requestID == id else { return }
-                    if !handled { self.pasteImages() } else if let error { self.fail(error) } else { self.finish(true) }
+                    if !handled { self.pasteImages() } else if let error { self.fail(error) }
+                    else if newImage {
+                        guard PhotoClipboard.nonce == nonce else { self.pasteImages(); return }
+                        self.task(.place, placement: JSON(["nonce": nonce])) { [weak self] task in
+                            self?.prepare(task, url: nil) { try task.finishImages() }
+                        }
+                    } else { self.finish(true) }
                 }
             }
         case "change_color", "color_history", "properties", "repair_source_profile", "rasterize_source":
@@ -175,7 +182,8 @@ import UIKit
                     if cancelled { finish(); return }
                     switch result {
                     case .success(let png):
-                        PhotoClipboard.write(png: png, nonce: nonce)
+                        do { try PhotoClipboard.write(png: png, nonce: nonce, failure: store?.catalog["document_delivery_copy"]["clipboard_unavailable"].string ?? "") }
+                        catch { fail(error.localizedDescription); return }
                         native.finishProject(task, opening: true, title: "", url: nil) { [weak self] error in
                             DispatchQueue.main.async { [weak self] in
                                 guard let self else { return }
@@ -495,7 +503,7 @@ import UIKit
         return true
     }
     private func place(_ task: NativeProjectTask, inputs: [PhotoItem], index: Int = 0) {
-        guard index < inputs.count else { prepare(task, url: nil) {}; return }
+        guard index < inputs.count else { prepare(task, url: nil) { try task.finishImages() }; return }
         let id = requestID, item = inputs[index]
         loadingPhoto = true
         item.load { [weak self, weak task] result in

@@ -1192,3 +1192,6 @@ menu-lock-zoom = Kunci zoom
 
 command-enclose-fill = Lingkari dan Isi
 commands-help-enclose-fill = Gambar lingkaran untuk mengisi area transparan tertutup di dalamnya.
+
+command-paste-as-new-image = Tempel sebagai Gambar Baru
+commands-help-paste-as-new-image = Buka isi papan klip sebagai gambar baru dengan ukuran aslinya.

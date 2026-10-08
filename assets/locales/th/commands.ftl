@@ -608,3 +608,6 @@ menu-lock-zoom = ล็อกการซูม
 
 command-enclose-fill = ล้อมแล้วเติมสี
 commands-help-enclose-fill = วาดเส้นล้อมเพื่อเติมสีในพื้นที่โปร่งใสที่ปิดอยู่ภายใน
+
+command-paste-as-new-image = วางเป็นภาพใหม่
+commands-help-paste-as-new-image = เปิดเนื้อหาในคลิปบอร์ดเป็นภาพวาดใหม่ตามขนาดต้นฉบับ

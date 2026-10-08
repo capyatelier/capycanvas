@@ -612,3 +612,6 @@ menu-lock-zoom = Lock zoom
 
 command-enclose-fill = Enclose and Fill
 commands-help-enclose-fill = Draw a loop to fill closed transparent regions inside it.
+
+command-paste-as-new-image = Paste as New Image
+commands-help-paste-as-new-image = Open the clipboard as a new drawing at its original size.

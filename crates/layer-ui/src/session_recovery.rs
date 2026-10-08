@@ -209,6 +209,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         self.state.camera=camera;
         self.initial_fit=false;
         self.files.saved_checkpoint=restore.state.saved_checkpoint;
+        self.files.startup=false;
         self.files.unpublished=restore.state.unpublished || (restore.state.location.is_some()
             && !restore.state.destination.as_ref().zip(observed.as_ref()).is_some_and(|(expected,actual)|expected==actual));
         self.files.destination=restore.state.destination;

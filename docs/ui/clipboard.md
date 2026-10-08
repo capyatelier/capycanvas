@@ -8,18 +8,20 @@ them.
 
 | Command | Default | Result |
 | --- | --- | --- |
-| **Copy** | Ctrl+C | The active layer's own pixels, before its opacity, mask, blend mode and clipping, times the selection's coverage. Without a selection, the whole layer within the canvas. With Move or Transform on an image layer, the selected images, which paste as images. |
+| **Copy** | Ctrl+C | The active layer's own pixels, before its opacity, mask, blend mode and clipping, times the selection's coverage. Without a selection, the whole layer within the canvas. When image objects are targeted, the selected images, which paste as images. |
 | **Copy Pixels** | none | The active layer's own pixels even where Copy would take images. |
 | **Cut** | Ctrl+X | Copy, then Clear Selected on the same layer. It needs a selection and follows Clear Selected's rules. Selected images are removed once they are on the clipboard. |
 | **Copy Merged** | Ctrl+Shift+C | The visible image, as an export would show it (visible paper included), times the coverage. |
 | **Paste** | Ctrl+V | A copy from Capy Canvas lands where it was copied when that position is in view, otherwise centred in the view, with no handles. An image from another app opens the placement handles. |
+| **Paste as New Image** | Ctrl+Alt+N (Ctrl+Shift+V in GIMP, Ctrl+Shift+N in Krita) | Open a new drawing at the clipboard bounds, with a transparent background and no placement step. Internal copies retain their depth, colour, blending and image objects. External batches keep every image at full size, centred on a canvas large enough for all of them. |
 | **Paste in Place** | Ctrl+Shift+V (Ctrl+Alt+V in the GIMP keymap) | Always at the copied position, with no handles. An image from another app is centred in the view at full size. |
 | **Paste Into** | none (Ctrl+Alt+Shift+V in the Photoshop keymap) | A new image layer with a mask from the selection, which the mask consumes. The pasted pixels or images are centred on the selection's bounds, on whole pixels. It needs a selection. |
 
-- **One layer, one step:** every paste adds one layer above the active layer's
-  clipping stack and is one undo step; undoing Paste Into restores the selection.
-- **The copied rectangle** is the selection's bounds on the canvas. Hidden
-  pixels past the canvas are not copied.
+- **One edit:** pasting into a drawing is one undo step; undoing Paste Into restores the selection. Pixel copies add a paint layer; image objects can join the active image layer. Paste as New Image opens an unsaved tab and leaves the source drawing unchanged.
+- **Starting from the clipboard:** ordinary Paste uses the clipboard size on the untouched startup canvas. After editing, or in a drawing deliberately created, opened or restored, Paste adds to that drawing.
+- **The copied pixel rectangle** is the selection's bounds on the canvas. Hidden
+  pixels past the canvas are not copied. Selected image objects retain their full
+  bounds, including parts outside the canvas.
 - **Refusals:** Copy is unavailable on the paper, groups, effect and Selection
   Layers, in Quick Mask and while editing a mask, and when the selection misses
   the canvas; Cut also refuses locked and alpha-locked layers. Each gives its reason.
@@ -28,7 +30,7 @@ them.
 - **Text fields keep their keys:** Ctrl+C, Ctrl+X and Ctrl+V in a focused text
   field copy and paste text, not pixels.
 - **Edit menu and bar:** Edit lists Cut, Copy, Copy Pixels, Copy Merged, Paste,
-  Paste in Place and Paste Into. The selection bar's Copy ▾ holds Copy, Copy Merged
+  Paste as New Image, Paste in Place and Paste Into. The selection bar's Copy ▾ holds Copy, Copy Merged
   and Cut; with a selection tool, Copy already takes pixels.
 
 ## The clip
@@ -55,17 +57,24 @@ from another app.
   holds document pixels; otherwise it keeps the clip as an original image with its
   explicit profile, converted like an opened photo.
 - **Cut** captures, then erases once the host reports the copy written. If the
-  drawing changed meanwhile, the pixels stay and a notice says so.
+  drawing changed meanwhile, the pixels stay and a notice says so. A failed system write or cancellation cannot acknowledge Cut.
 
 ## Hosts
 
 | Host | Writes | Recognizes its own copy |
 | --- | --- | --- |
 | GTK | A `ContentProvider` union of `image/png` and `application/x-capycanvas-clip` holding the nonce. | The clipboard offers the private type with the current nonce. |
-| Web | `navigator.clipboard.write` with a `ClipboardItem` created synchronously in the key or click task, whose promises settle when the worker finishes; plus `web application/x-capycanvas-clip` where `ClipboardItem.supports` allows it. The raster worker encodes the clip. | The custom format holds the nonce; without custom formats, the page has not lost focus since its last copy. |
+| Web | `navigator.clipboard.write` with a `ClipboardItem` created synchronously in the key or click task, whose promises settle when the worker finishes; plus `web application/x-capycanvas-clip` where `ClipboardItem.supports` allows it. The raster worker encodes the clip. | The custom format holds the nonce. Without it, Paste reads the current system image; a retained copy and focus history do not establish ownership. |
 | Android | `cacheDir/clipboard/<nonce>.png` through a `FileProvider` URI in `ClipData.newUri`, with the nonce in `ClipDescription.extras`. Only the latest file is kept. | The clip description's nonce. Reading the description shows no clipboard toast. |
-| Windows | A `DataPackage` with a `PNG` stream and `art.capycanvas.clip.nonce` holding the nonce. The copy workflow captures on the render owner, encodes on the document worker and spools the PNG, which the UI thread reads asynchronously before writing the clipboard. Only copies over 2 MP show progress. | The private format with the current nonce. Other apps that read only device-independent bitmaps do not see the copy, since converting it would decode on the UI thread. |
+| Windows | A `DataPackage` with a `PNG` stream, a standard Bitmap stream reference and `art.capycanvas.clip.nonce` holding the nonce. The copy workflow captures on the render owner, encodes on the document worker and spools the PNG, which the UI thread reads asynchronously before writing the clipboard. Only copies over 2 MP show progress. | The private format with the current nonce. The standard Bitmap representation lets consumers request the system bitmap format without an app-side UI-thread decode. |
 | macOS and iPadOS | One pasteboard item with a lazily provided `public.png` and `art.capycanvas.clip.nonce` holding the nonce (an `NSPasteboardItem` data provider, or an `NSItemProvider`). A project task (kind 8) captures on the owner and encodes on the file worker. | The private type with the current nonce; iPadOS checks for the type before reading it, so another app's content shows no paste prompt. On macOS, ⌘X, ⌘C and ⌘V reach a focused text field first. |
+
+GTK accepts copied local files through GDK's file list as well as encoded image
+formats. The Web also accepts files supplied by a native Paste event, including
+when the browser has no asynchronous clipboard reader; focused text fields keep
+native text paste. Web clipboard items without a supported image and Android
+items without an image URI do not discard neighboring image items. Windows falls
+back to bitmap data when a StorageItems payload contains no files.
 
 The shared parts are `crates/layer-ui/src/clipboard.rs` (commands, capture,
 paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
@@ -79,10 +88,10 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
 - GTK: `native_clipboard_copy_paste_round_trips` in
   `apps/layer-linux/src/clipboard_tests.rs` (keyboard, Copy ▾ with mouse and
   touch, another app reading and writing through `wl-paste` and `wl-copy`,
-  another drawing, Paste Into, Cut and a focused text field; run without
+  another drawing, Paste Into, Cut, a focused text field, copied file URIs and new-image tabs; run without
   `--tablet`, whose proxy does not forward clipboard requests) and
   `native_clipboard_copy_latency_24mp`.
-- Web: `node apps/layer-web/test.mjs --headless --clipboard` with pen, touch and mouse.
+- Web: `node apps/layer-web/test.mjs --headless --clipboard` with pen, touch and mouse, including internal and external new-image tabs. `color-controls-copy.test.mjs` checks denied or unavailable writes, late cancellation, stale ownership, mixed clipboard items and native paste events.
 - Android: `AndroidInteractionTest#clipboardCopyPasteAcrossDevices` (another app
   reads the URI) and `AndroidRasterTest#clipboardCopyLatency24mp`.
 - macOS and iPadOS: `EditorLaunchTests/testPixelClipboard` (keyboard on macOS,

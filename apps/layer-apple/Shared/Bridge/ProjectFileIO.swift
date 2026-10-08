@@ -70,6 +70,7 @@ final class NativeProjectTask: @unchecked Sendable {
     func prepareEdit(_ choice: JSON?, copy: Bool) throws {
         try check(try (choice ?? JSON()).encoded().withCString { capy_project_edit_work(handle, $0, copy) })
     }
+    func finishImages() throws { try check(capy_project_finish_images(handle)) }
     func compare() throws { try check(capy_project_compare(handle)) }
     var clipProgress: String? {
         guard let text = capy_project_clip_progress(handle) else { return nil }
