@@ -245,6 +245,12 @@ deletes afterwards. Both Apple policies run on the Mac with that storage. Point
 filter assets. Fixtures that open windows take focus: run them one at a time and
 never alongside a UI test batch.
 
+`tests/drawing-tabs.swift` checks independent drawing history, save destinations,
+recovery and close cancellation. It also checks the memory-only owner used when
+storage locations are unavailable: checkpoint and close callbacks complete
+without retrying an absent session store. No private recovery copy is written
+in that mode.
+
 Fixtures for a single Swift file compile directly, for example:
 
 ```sh

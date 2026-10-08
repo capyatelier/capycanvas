@@ -56,7 +56,7 @@ import UIKit
     }
     private func finish(_ failure: String?, accepted: Bool = false) {
         saving = false; error = failure
-        if failure == nil && !waiters.isEmpty && (observed != durable || finalCheckpoint) {
+        if failure == nil && store?.native?.sessions != nil && !waiters.isEmpty && (observed != durable || finalCheckpoint) {
             if Date() < (flushDeadline ?? .distantFuture) { write(); return }
             error = store?.catalog["document_delivery_copy"]["change_in_progress"].string ?? ""
         }

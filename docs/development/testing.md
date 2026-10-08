@@ -417,6 +417,9 @@ are your task, and remove an entry when you fix it.
   choosing sRGB in Proof Setup after the drawing is saved and reopened).
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
+- Apple `tests/drawing-tabs.swift` fails ordered multi-file open after closing a
+  drawing: "Close drawings explicitly before removing them from the saved
+  session". The unchanged fixture from `9f9342d9` reproduces the same failure.
 - Headless Web `--toolbar-components`, `--tonal-selection`, `--editor`, `--hdr`,
   `--proof`, `--raster`, `--selection-tools` and `--shared-workflows`.
 - Tablet Chrome `--workspace-manager` cannot find its new-workspace name input

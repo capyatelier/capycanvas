@@ -7,11 +7,30 @@ import QuartzCore
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         for platform: UInt32 in [0, 1] {
+            let memory = EditorStore(platform: platform, persistence: EditorPersistence(root: nil), managedWorkspaces: false)
+            let native = memory.native!, surface = attachSurface(memory, CGSize(width: 256, height: 192))
+            defer { native.detach(); withExtendedLifetime(surface) {} }
+            try await CapyTest.wait("Memory-only startup", seconds: 60, step: { await frame(native) }) {
+                memory.snapshot["shaders_ready"].bool && !memory.recovery.restoring
+            }
+            precondition(native.sessions == nil)
+            for cleanExit in [false, true] {
+                let flushed = await withCheckedContinuation { done in
+                    memory.recovery.flush(cleanExit: cleanExit) { done.resume(returning: $0) }
+                }
+                precondition(flushed && !memory.recovery.saving && memory.recovery.error == nil)
+            }
+            let removed = await withCheckedContinuation { done in memory.recovery.removeDrawing(1) { done.resume(returning: $0) } }
+            let closed = await withCheckedContinuation { done in memory.recovery.close { done.resume(returning: $0) } }
+            precondition(removed && closed && !memory.recovery.saving)
+            FileHandle.standardError.write(Data("Apple \(platform): memory-only checkpoint, removal and close callbacks completed\n".utf8))
+        }
+        for platform: UInt32 in [0, 1] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root.appendingPathComponent("owner-\(platform)")), managedWorkspaces: false)
             let native = store.native!, surface = attachSurface(store, CGSize(width: 256, height: 192))
             defer { native.detach(); withExtendedLifetime(surface) {} }
             func wait(_ name: String, _ ready: () -> Bool) async throws {
-                try await CapyTest.wait(name, seconds: 60, failure: { (store.failure ?? store.projectFiles.error).map { "\(name): \($0)" } },
+                try await CapyTest.wait(name, seconds: 60, failure: { (store.recovery.error ?? store.failure ?? store.projectFiles.error).map { "\(name): \($0)" } },
                     step: { await frame(native) }, ready)
             }
             func invoke(_ command: String) async throws {
