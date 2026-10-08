@@ -1,0 +1,77 @@
+name: CodeQL
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '37 8 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+env:
+  RUST_VERSION: "1.99.0"
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.language == 'swift' && 'macos-26' || 'ubuntu-24.04' }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: c-cpp
+            build-mode: none
+          - language: csharp
+            build-mode: none
+          - language: java-kotlin
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: rust
+            build-mode: none
+          - language: swift
+            build-mode: manual
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Rust
+        if: contains(fromJSON('["java-kotlin", "rust", "swift"]'), matrix.language)
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - name: Set up Android build dependencies
+        if: matrix.language == 'java-kotlin'
+        run: |
+          rustup component add rust-docs
+          rustup target add aarch64-linux-android
+          cargo install --locked cargo-about --version 0.9.2 --features cli
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0" "ndk;29.0.14206865"
+      - name: Set up Apple build dependencies
+        if: matrix.language == 'swift'
+        run: rustup target add aarch64-apple-ios-sim
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+      - name: Compile Android source
+        if: matrix.language == 'java-kotlin'
+        working-directory: apps/layer-android
+        run: ./gradlew :app:compileDebugKotlin :app:compileDebugJavaWithJavac -PcapyAbi=arm64-v8a -Pkotlin.compiler.execution.strategy=in-process --no-daemon --no-build-cache --rerun-tasks
+      - name: Build Mac and iPad source
+        if: matrix.language == 'swift'
+        run: |
+          bash apps/layer-apple/scripts/build.sh macos
+          bash apps/layer-apple/scripts/build.sh simulator
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}

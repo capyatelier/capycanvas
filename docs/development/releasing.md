@@ -4,6 +4,10 @@
 
 ## Access and public documentation
 
+The [security policy](../../SECURITY.md) covers private vulnerability reporting
+and repository protections. Security automation opens findings and update pull
+requests; publication still follows the testing and signing steps in this guide.
+
 This is the publishing guide for maintainers and agents. Read the workflows
 before a release and check live store status; previous release reports do not
 establish the next release's state. Use an authorized GitHub session with access
