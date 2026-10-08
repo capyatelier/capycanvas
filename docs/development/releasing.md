@@ -72,6 +72,11 @@ signing certificate in the script matches existing Android installations; an
 upload-key signature is not a substitute. A signing-key change needs explicit
 upgrade testing before changing this check.
 
+APK verification uses Java 25 and Android Build Tools 37.0.0. Play's APK
+Signature Scheme v3.2 signatures use ML-DSA; Java 17 cannot verify them. The
+download step selects the runner's Java 25 through `JAVA_HOME_25_X64`. For local
+verification, point `JAVA_HOME` at Java 25 and prepend `$JAVA_HOME/bin` to `PATH`.
+
 If Play supplies only unprotected splits, turn off Automatic protection for the
 release in Play Console before uploading its bundle. A per-release opt-out does
 not disable protection for later releases. The workflow fails rather than

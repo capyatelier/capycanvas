@@ -146,7 +146,10 @@ jobs:
         env:
           TOKEN: ${{ steps.google.outputs.access_token }}
           VERSION: ${{ needs.version.outputs.version }}
-        run: python3 tools/build/android_apk.py download "$VERSION" "dist/capycanvas-$VERSION-android.apk"
+        run: |
+          export JAVA_HOME="${JAVA_HOME_25_X64:?}"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          python3 tools/build/android_apk.py download "$VERSION" "dist/capycanvas-$VERSION-android.apk"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android
