@@ -398,7 +398,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         publishedHostError = error
         hostError = error
     }
-    internal fun commandFocus() = if (editingText) "text" else if (palettes.focus != null) "palette" else "canvas"
+    internal var colorKeyHandler: ((android.view.KeyEvent) -> Boolean)? = null
+    internal fun commandFocus() = if (editingText || colorKeyHandler != null) "text" else if (palettes.focus != null) "palette" else "canvas"
     fun dispatch(action: JSONObject) {
         // Capture the editor owner before a menu action opens a native dialog.
         val focus = if (action.optString("type") == "invoke" && action.optString("command") == "search_commands") commandFocus() else null

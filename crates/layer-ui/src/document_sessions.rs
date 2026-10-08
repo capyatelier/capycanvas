@@ -6,6 +6,52 @@ use layer_core::{Document, raster_storage::RetainedTiles};
 use serde::{Serialize, Deserialize};
 use std::{collections::BTreeMap, ops::Deref};
 
+#[derive(Clone, Copy, Default)]
+pub struct RetainedClipboard;
+
+#[derive(Default)]
+struct ClipboardState {
+    sequence: u64,
+    publication: u64,
+    clip: Option<PixelClip>,
+}
+#[cfg(not(target_arch = "wasm32"))]
+static CLIPBOARD: std::sync::Mutex<ClipboardState> = std::sync::Mutex::new(ClipboardState { sequence: 0, publication: 0, clip: None });
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static CLIPBOARD: std::cell::RefCell<ClipboardState> = const { std::cell::RefCell::new(ClipboardState { sequence: 0, publication: 0, clip: None }) };
+}
+
+impl RetainedClipboard {
+    fn with<T>(apply: impl FnOnce(&mut ClipboardState) -> T) -> T {
+        #[cfg(not(target_arch = "wasm32"))]
+        { apply(&mut CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner())) }
+        #[cfg(target_arch = "wasm32")]
+        { CLIPBOARD.with_borrow_mut(apply) }
+    }
+    pub fn get(&self) -> Option<PixelClip> {
+        Self::with(|state| state.clip.clone())
+    }
+    pub fn capture(&self, nonce: &str, localization: &Localizer) -> Result<PixelClip, String> {
+        self.get().filter(|clip| clip.nonce == nonce)
+            .ok_or_else(|| crate::DocumentDeliveryMessage::ClipboardChanged.message(localization))
+    }
+    pub fn publication() -> u64 {
+        Self::with(|state| { state.sequence += 1; state.sequence })
+    }
+    pub fn set_published(&self, clip: PixelClip, publication: u64) {
+        Self::with(|state| {
+            if publication > state.publication && publication <= state.sequence {
+                state.publication = publication;
+                state.clip = Some(clip);
+            }
+        });
+    }
+    pub fn set(&self, clip: PixelClip) {
+        self.set_published(clip, Self::publication());
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct DocumentBudget {
     pub inactive_ram: usize,
@@ -35,8 +81,7 @@ pub struct DocumentSessions<T> {
     untitled: String,
     pub budget: DocumentBudget,
     storage_error: Option<String>,
-    /// The window's last copy, pasted at full depth into any of its drawings.
-    pub clip: Option<PixelClip>,
+    pub clip: RetainedClipboard,
 }
 impl<T> Default for DocumentSessions<T> {
     fn default() -> Self { Self::localized(&Localizer::shared(crate::UiLanguage::English)) }
@@ -63,7 +108,7 @@ impl<T> DocumentSessions<T> {
         Self {
             tabs: Default::default(), parked: Default::default(), clock: 0, language: localization.language(),
             untitled: DocumentTabLabel::untitled(1, localization),
-            budget: Default::default(), storage_error: None, clip: None,
+            budget: Default::default(), storage_error: None, clip: RetainedClipboard,
         }
     }
     pub fn set_localization(&mut self, localization: &Localizer) -> bool {
@@ -155,7 +200,6 @@ impl<T> DocumentSessions<T> {
         let id = next.tabs.add();
         next.untitled = DocumentTabLabel::untitled(id, localization);
         next.budget = self.budget;
-        next.clip = self.clip.clone();
         next.storage_error = self.storage_error.clone();
         Ok(next)
     }
@@ -424,6 +468,61 @@ mod tests {
     fn english() -> std::sync::Arc<Localizer> { Localizer::shared(crate::UiLanguage::English) }
     fn inventory() -> RetainedTiles {
         RetainedTiles::default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn independent_document_collections_keep_the_same_clip_after_the_source_collection_closes() {
+        use crate::session::test_support::{Recorder, invoke, assert_live_artwork_eq};
+        use layer_core::color::{DocumentColor, source::rgba8_source};
+        use std::sync::Arc;
+        struct RestoreClipboard(ClipboardState);
+        impl Drop for RestoreClipboard {
+            fn drop(&mut self) {
+                *CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner()) = std::mem::take(&mut self.0);
+            }
+        }
+        let _restore = RestoreClipboard(std::mem::take(&mut *CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner())));
+        let first = DocumentSessions::<()>::default();
+        let second = DocumentSessions::<()>::default();
+        let original = rgba8_source([3, 1], |x, _| [x as u8, 29, 47, 255]);
+        let copied = PixelClip {
+            nonce: "retained-clipboard-test".into(), name: "Retained pixels".into(),
+            source: original.clone(), policy: layer_core::PaintBasePolicy::WorkingPixels,
+            origin: [11, 17], color: DocumentColor::default(), blend: Default::default(),
+            png: Arc::from(&b"clipboard rendition"[..]), objects: None, layers: None,
+        };
+        let mut older = copied.clone();
+        older.nonce = "superseded-clipboard-test".into();
+        older.source = rgba8_source([3, 1], |x, _| [x as u8, 211, 7, 255]);
+        older.origin = [2, 5];
+        first.clip.set(older.clone());
+        let first_publication = RetainedClipboard::publication();
+        let second_publication = RetainedClipboard::publication();
+        first.clip.set_published(copied.clone(), second_publication);
+        second.clip.set_published(older.clone(), first_publication);
+        let unpublished = RetainedClipboard::publication();
+        first.clip.set_published(older.clone(), 0);
+        first.clip.set_published(older.clone(), unpublished + 1);
+        first.clip.set_published(older, second_publication);
+        drop(first);
+        let localization = Localizer::shared(crate::UiLanguage::English);
+        assert_eq!(second.clip.capture("superseded-clipboard-test", &localization).err().unwrap(),
+            crate::DocumentDeliveryMessage::ClipboardChanged.message(&localization));
+        let retained = second.clip.capture(&copied.nonce, &localization).unwrap();
+        assert_eq!(retained.nonce, copied.nonce);
+        let document = Document::new(layer_core::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let mut pasted = crate::UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, document, [128, 128], crate::Platform::Gtk).unwrap();
+        let before = pasted.engine().document().clone();
+        pasted.paste_clip(&retained, crate::PasteMode::InPlace).unwrap();
+        let document = pasted.engine().document();
+        let owner = document.working.occurrence.unwrap();
+        let base = document.scene().paint_source(owner).unwrap().base.as_ref().unwrap();
+        assert!(Arc::ptr_eq(base.image.storage(), &original));
+        assert_eq!(document.layer_offset(owner), copied.origin);
+        invoke(&mut pasted, crate::CommandId::Undo);
+        assert_live_artwork_eq(pasted.engine().document(), &before);
+        assert_eq!(pasted.engine().document().working.occurrence, before.working.occurrence);
+        assert_eq!(pasted.engine().document().working.target, before.working.target);
     }
     #[test]
     fn session_admission_counts_the_whole_batch_before_gpu_preparation() {

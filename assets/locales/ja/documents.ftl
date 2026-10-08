@@ -116,6 +116,7 @@ documents-photo-name = 写真
 documents-delivery-clipboard-unavailable = このブラウザーでは画像を貼り付けられません。「画像をレイヤーとして読み込む」を使ってください。
 documents-delivery-clipboard-too-large = クリップボードの画像が512 MiBを超えています
 documents-delivery-clipboard-empty = 貼り付ける画像をコピーするか、元のファイルを読み込んでください。
+documents-delivery-clipboard-changed = クリップボードが変更されました。もう一度貼り付けてください。
 documents-delivery-images = 画像
 documents-delivery-drawing-or-photo = 描画または写真
 documents-delivery-drawing-type = { common-app-name }の描画

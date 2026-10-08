@@ -13,6 +13,10 @@ function Center([string]$Id){$b=(Control $Id -Arranged).Current.BoundingRectangl
 function Shown([string]$Id){$name=(Control $Id).Current.Name;$name.Substring($name.LastIndexOf(' ')+1)}
 function Row([int]$Row){@(0..2|ForEach-Object {Shown "edit-color-$Row-$_"})}
 function Foreground{(Model).state.colors.foreground.rgba}
+function Artwork-Identity{
+ $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)[0].stamp
+ [ordered]@{drawing=$stamp|Select-Object artwork,checkpoint,revision,working_generation;file=$m.state.document_file|Select-Object revision,modified,location;layers=$m.state.layers|Select-Object id,label,paint_revision,mask_revision,object_count}|ConvertTo-Json -Depth 20 -Compress
+}
 function Same($a,$b){$a -and $b -and @(0..3|Where-Object {[Math]::Abs($a[$_]-$b[$_]) -gt .002}).Count -eq 0}
 function Open-Editor{
     Invoke-Id 'color-edit'
@@ -80,6 +84,31 @@ try {
     Invoke 'edit-color-copy-0';Wait-Until {(Clipboard-Text) -eq 'rgb(202 75 53)'} 'RGB copy did not use the standard notation'
     Invoke 'edit-color-hex-copy';Wait-Until {(Clipboard-Text) -eq '#CA4B35'} 'Hex copy did not copy the hex'
     if(!(Same (Foreground) $white)){throw 'Editing the draft changed the paint'}
+    $artwork=Artwork-Identity
+    Set-Clipboard -Value 'native clipboard sentinel'
+    (Control 'edit-color-current').SetFocus()
+    [CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),0x43)
+    Wait-Until {(Clipboard-Text) -eq '#CA4B35'} 'Ctrl+C outside a color text field did not copy the whole color'
+    Set-Clipboard -Value 'native clipboard sentinel'
+    [CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),0x58)
+    Start-Sleep -Milliseconds 400
+    if((Clipboard-Text) -ne 'native clipboard sentinel' -or (Artwork-Identity) -ne $artwork){throw 'Ctrl+X outside a color text field fell through to the artwork'}
+    Invoke 'edit-color-hex'
+    $entry=Control 'edit-color-hex-entry';$entry.SetFocus()
+    $text=$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+    [CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),0x41);Key 0x27
+    Set-Clipboard -Value 'native clipboard sentinel'
+    foreach($key in @(0x43,0x58)){
+        [CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),$key);Start-Sleep -Milliseconds 200
+        if((Clipboard-Text) -ne 'native clipboard sentinel' -or $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -ne $text){throw 'Copy or Cut without a native text selection fell through to the color or artwork'}
+    }
+    [CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),0x41)
+    [CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),0x58)
+    Wait-Until {(Clipboard-Text) -eq $text -and $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq ''} 'Ctrl+X did not cut the selected native color text'
+    [CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),0x56)
+    Wait-Until {$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $text} 'Ctrl+V did not restore the selected native color text'
+    Key 0x1B;Wait-Until {!(Find 'edit-color-hex-entry')} 'Escape did not leave the color text field'
+    if((Artwork-Identity) -ne $artwork -or !(Same (Foreground) $white)){throw 'Native color clipboard keys changed the original artwork or paint'}
 
     Choose-Form 1 'hsl'
     Wait-Until {(Control 'edit-color-form-1').Current.Name -eq 'HSL'} 'The second row did not switch to HSL'
@@ -174,7 +203,7 @@ try {
 
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{theme=$Theme;rows='passed';paste_and_copy='passed';formats='passed';typing_and_refusal='passed';scrub_and_step='passed';revert='passed';sheet='passed';memory='passed';canvas_pick='passed';use_color='passed';fill_thumbnail='passed';evidence=$run}|ConvertTo-Json
+    [pscustomobject]@{theme=$Theme;rows='passed';paste_and_copy='passed';native_clipboard_ownership='passed';formats='passed';typing_and_refusal='passed';scrub_and_step='passed';revert='passed';sheet='passed';memory='passed';canvas_pick='passed';use_color='passed';fill_thumbnail='passed';evidence=$run}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure' -WithModel}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

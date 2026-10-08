@@ -22,6 +22,7 @@ function Clip-Size{
  [string]$size
 }
 function Start-Review([string]$Name){
+ $script:CapyStateFile=$null
  $script:stderr=Join-Path $run "$Name-stderr.log"
  $script:review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
  $null=$review.Handle
@@ -42,6 +43,29 @@ function Active-Tab{@((Model).state.tabs|Where-Object active)[0]}
 function Document-Identity{
  $view=Model;$m=$view.state;$stamp=@($view.windows_tabs.session_stamps|Where-Object id -eq $view.windows_tabs.selected)[0].stamp
  [ordered]@{drawing=$stamp|Select-Object artwork,checkpoint,revision,working_generation;file=$m.document_file|Select-Object revision,modified,location;layers=$m.layers|Select-Object id,label,group,adjustment_effect,visible,locked,paint_revision,mask_revision,object_count;depth=$view.color_panel.document_depth}|ConvertTo-Json -Depth 20 -Compress
+}
+function Cross-Window-Clip{
+ $identity=Document-Identity;$sourceRoot=$root;$sourceHandle=$drawingWindow;$sourceState=$script:CapyStateFile
+ $label=(Model).state.layer_tools.editing_layer.label;$windowsFile=Join-Path $run ("windows-"+$review.Id+".json")
+ $before=@((Read-Snapshot $windowsFile).windows).Count
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
+ Invoke 'New Window' -Name
+ Wait-Until {@((Read-Snapshot $windowsFile).windows).Count -eq $before+1} 'New Window did not create an owned clipboard destination' 90
+ $peer=@((Read-Snapshot $windowsFile).windows|Where-Object {[long]$_.hwnd -ne $sourceHandle.ToInt64()})[-1]
+ try{
+  $native=Owned-DrawingWindow $review ([long]$peer.hwnd)
+  $script:root=$native.Root;$script:drawingWindow=$native.Handle
+  $script:CapyStateFile=Join-Path $run ("ui-state-"+$review.Id+"-"+$peer.id+".json")
+  Wait-Until {(Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'The clipboard destination window did not become ready' 90
+  Chord @(0x11) 0x56
+  Wait-Until {(Requests) -eq 0 -and (Model).state.document_file.modified -and (Model).brush_ready} 'The copied layer did not paste into the second window' 90
+  Capture "cross-window-layer-$Theme" -WithModel
+  if((Model).state.layer_tools.editing_layer.label -ne $label -or (Model).state.layer_tools.editing_layer.object_count -ne 0){throw 'The second window imported the public PNG instead of retaining the copied layer'}
+  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
+ }finally{$script:root=$sourceRoot;$script:drawingWindow=$sourceHandle;$script:CapyStateFile=$sourceState;[CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null}
+ Wait-Until {@((Read-Snapshot $windowsFile).windows).Count -eq $before -and (Model).brush_ready} 'Closing the clipboard destination did not return to the source window'
+ if((Document-Identity) -ne $identity){throw 'Pasting in another window changed the original artwork'}
+ $checks.same_process_cross_window_layer_copy='passed'
 }
 function New-Image([scriptblock]$Action,[string]$Extent,[string]$Name,[int]$Objects=-1,[string[]]$Sources=@()){
  $source=(Model).windows_tabs.selected;$count=@((Model).windows_tabs.tabs).Count;$identity=Document-Identity
@@ -85,6 +109,23 @@ function Settled{Wait-Until {(Requests) -eq 0 -and !(Model).state.document_file.
 function Tool([string]$Command){
  Invoke-Id (Tool-Tile $Command)
 }
+function Native-Clipboard-NoEffect($Target,[string]$Name){
+ $identity=Document-Identity;$source=(Model).windows_tabs.selected;$tabs=@((Model).windows_tabs.tabs).Count;$requests=Requests;$notice=(Model).state.notice|ConvertTo-Json -Depth 10 -Compress
+ foreach($key in @(0x43,0x58,0x56)){
+  if($key -eq 0x56){Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null}
+  else{Sta {[Windows.Forms.Clipboard]::SetText('native clipboard sentinel')}|Out-Null}
+  $Target.SetFocus();Wait-Until {$Target.Current.HasKeyboardFocus} "$Name did not take keyboard focus"
+  [CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),$key)
+  $watch=[Diagnostics.Stopwatch]::StartNew()
+  do{
+   if((Requests) -ne $requests -or (Document-Identity) -ne $identity -or (Model).windows_tabs.selected -ne $source -or @((Model).windows_tabs.tabs).Count -ne $tabs){throw "$Name sent a native clipboard key to the artwork"}
+   if(((Model).state.notice|ConvertTo-Json -Depth 10 -Compress) -ne $notice){throw "$Name ran an artwork clipboard action that produced a notice"}
+   if($key -ne 0x56 -and [string](Sta {[Windows.Forms.Clipboard]::GetText()}) -ne 'native clipboard sentinel'){throw "$Name replaced the clipboard without a native selection"}
+   Start-Sleep -Milliseconds 50
+  }while($watch.Elapsed.TotalSeconds -lt 1)
+ }
+ $checks[$Name]='passed'
+}
 function Paste-In-Place{
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
  (Control 'Paste in Place' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
@@ -112,6 +153,15 @@ try {
  $bitmapSize=[string](Sta {$image=[Windows.Forms.Clipboard]::GetImage();if($image){try{"$($image.Width)x$($image.Height)"}finally{$image.Dispose()}}})
  if($bitmapSize -ne (Clip-Size)){throw 'The standard Bitmap consumer did not receive the copied image'}
  $checks.standard_bitmap_consumer=$bitmapSize
+ $paletteIdentity=Document-Identity;$paletteExtent=Clip-Size
+ Invoke 'panel-tab-palettes'
+ Wait-Until {@((Model).palette_panel.swatches).Count -gt 0} 'The palette clipboard review did not expose saved swatches'
+ $swatch=Control ('palette-swatch-'+@((Model).palette_panel.swatches)[0].id) -Arranged
+ Copied {$swatch.SetFocus();Wait-Until {$swatch.Current.HasKeyboardFocus} 'The palette swatch did not take focus';[CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),0x43)} 'A focused palette swatch blocked artwork Copy'
+ if((Clip-Size) -ne $paletteExtent -or (Document-Identity) -ne $paletteIdentity){throw 'Copy from a focused palette swatch changed the original artwork or clipboard pixels'}
+ $checks.palette_swatch_keeps_artwork_copy='passed'
+ Invoke 'panel-tab-color'
+ Cross-Window-Clip
  New-Image {Chord @(0x11,0x12) 0x4e} (Clip-Size) 'internal-paste-as-new-image'
  Chord @(0x11) 0x56;Settled
  Wait-Until {(Layers) -eq $count+1} 'Ctrl+V did not paste the window copy'
@@ -144,6 +194,9 @@ try {
  $bitmap=[Drawing.Bitmap]::new(40,30);try{$g=[Drawing.Graphics]::FromImage($bitmap);$g.Clear([Drawing.Color]::FromArgb(255,30,160,90));$g.Dispose();$bitmap.Save($foreign,[Drawing.Imaging.ImageFormat]::Png)}finally{$bitmap.Dispose()}
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null
  New-Image {& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke-Id 'paste_as_new_image'} '40x30' 'external-paste-as-new-image'
+ Sta {param($path)$image=[Drawing.Image]::FromFile($path);$png=[IO.MemoryStream]::new([byte[]](137,80,78,71,13,10,26,10,0,0,0,0));try{$data=[Windows.Forms.DataObject]::new();$data.SetImage($image);$data.SetData('PNG',$false,$png);[Windows.Forms.Clipboard]::SetDataObject($data,$true)}finally{$png.Dispose();$image.Dispose()}} @($foreign)|Out-Null
+ if((Formats) -notcontains 'PNG' -or (Formats) -notcontains 'Bitmap'){throw 'The fallback producer did not advertise both the corrupt PNG and valid Bitmap'}
+ New-Image {Chord @(0x11,0x12) 0x4e} '40x30' 'corrupt-png-falls-back-to-bitmap' 0 @('40x30')
  Paste-In-Place;Settled
  try{Wait-Until {(Layers) -eq $count+1} 'Paste in Place did not paste the image from another application'}catch{throw "$_ formats=$((Formats) -join ',') notice=$((Model).state.notice|ConvertTo-Json -Compress -Depth 4) requests=$(Requests)"}
  if((Model).state.layer_tools.editing_layer.object_count -ne 1){throw 'The image from another application did not become an image layer'}
@@ -159,6 +212,30 @@ try {
  New-Image {Chord @(0x11,0x12) 0x4e} '80x30' 'external-batch-as-new-image' 2 @('40x30','80x20')
  (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x42)
  Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected -and @((Model).state.tool_settings).Count} 'B did not return to the brush after the image paste'
+ $tabSource=(Model).windows_tabs.selected;$tabIdentity=Document-Identity;$tabCount=@((Model).windows_tabs.tabs).Count
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'new_document'
+ Invoke 'Create' -Name -Within (Control 'document-dialog')
+ Wait-Until {@((Model).windows_tabs.tabs).Count -eq $tabCount+1 -and (Model).windows_tabs.selected -ne $tabSource -and (Requests) -eq 0 -and (Model).brush_ready} 'The tab clipboard review did not create a second drawing' 90
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
+ Wait-Until {(Model).state.document_file.modified} 'The tab clipboard review stroke did not reach the drawing'
+ Save-ProjectAs (Join-Path $run 'Tab clipboard.capy')
+ $tabCopyIdentity=Document-Identity
+ Copied {Chord @(0x11) 0x43} 'The tab clipboard review could not copy its drawing'
+ $tabExtent=Clip-Size
+ $nativeTab=$null
+ foreach($id in @(('drawing-tab-'+(Model).windows_tabs.selected),'drawing-selector')){$candidate=Find $id;if($candidate -and !$candidate.Current.IsOffscreen -and $candidate.Current.IsEnabled){$nativeTab=$candidate;break}}
+ if(!$nativeTab){throw 'The drawing tabs did not expose a visible native keyboard target'}
+ Copied {$nativeTab.SetFocus();Wait-Until {$nativeTab.Current.HasKeyboardFocus} 'The drawing tab did not take focus';[CapyRowPointer]::Chord([uint32]$review.Id,@(0x11),0x43)} 'A focused drawing tab blocked artwork Copy'
+ if((Clip-Size) -ne $tabExtent -or (Document-Identity) -ne $tabCopyIdentity){throw 'Copy from a focused drawing tab changed the artwork or clipboard pixels'}
+ $checks.drawing_tabs_keep_artwork_copy='passed'
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
+ Wait-Until {@((Model).windows_tabs.tabs).Count -eq $tabCount -and (Model).windows_tabs.selected -eq $tabSource -and (Model).brush_ready} 'The tab clipboard review did not return to the original drawing' 90
+ if((Document-Identity) -ne $tabIdentity){throw 'Clipboard keys on a drawing tab changed the original artwork'}
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'new_document'
+ $newDialog=Control 'document-dialog'
+ Native-Clipboard-NoEffect (Control 'Cancel' -Name -Within $newDialog) 'modal_button_keeps_native_clipboard_keys'
+ Invoke 'Cancel' -Name -Within $newDialog
+ Wait-Until {!(Find 'document-dialog') -and (Requests) -eq 0} 'Cancel did not close the new drawing dialog'
  Sta {[Windows.Forms.Clipboard]::SetText('clipboard sentinel')}|Out-Null
  $entry=Control ('tool-setting-'+@((Model).state.tool_settings)[0].id)
  $entry.SetFocus();Wait-Until {$entry.Current.HasKeyboardFocus} 'The brush size field did not take focus'

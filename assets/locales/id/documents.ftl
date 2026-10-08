@@ -227,6 +227,7 @@ documents-delivery-clipboard-unavailable = Penempelan gambar tidak tersedia di p
 documents-delivery-clipboard-too-large = Gambar papan klip melebihi 512 MiB
 
 documents-delivery-clipboard-empty = Salin gambar untuk ditempelkan, atau impor berkas aslinya.
+documents-delivery-clipboard-changed = Papan klip berubah. Tempelkan lagi.
 
 documents-delivery-images = Gambar
 

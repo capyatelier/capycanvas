@@ -27,7 +27,7 @@ pub enum PasteMode {
     NewImage,
 }
 
-/// Pixels on the clipboard, held by the window, or on GTK the application.
+/// Pixels and editable content retained while the system clipboard identifies them.
 #[derive(Clone)]
 pub struct PixelClip {
     /// Written to the system clipboard beside the PNG. A clipboard that still
@@ -58,6 +58,18 @@ pub struct LayerClip {
     pub roots: Vec<OccurrenceHandle>,
 }
 impl PixelClip {
+    pub fn convert_layers(&mut self, color: DocumentColor, max_bytes: usize, mut cancelled: impl FnMut() -> bool) -> Result<(), String> {
+        let Some(layers) = &self.layers else { return Ok(()); };
+        if layers.scene.view().composition().color == color { return Ok(()); }
+        let mut document = layer_core::Document::from_artwork(layers.scene.artwork.clone()).map_err(error)?;
+        for change in clipboard_color_changes(document.composition().color, color) {
+            document = layer_color::prepare_document_color(&document, change, max_bytes, &mut cancelled)?.document;
+        }
+        let mut scene = document.snapshot();
+        Arc::make_mut(&mut scene).context = layers.scene.context.clone();
+        self.layers = Some(Arc::new(LayerClip { scene, roots: layers.roots.clone() }));
+        Ok(())
+    }
     pub fn document(&self, localization: &Localizer) -> Result<layer_core::Document, String> {
         let mut document = layer_color::photo_project((*self.source).clone(), Default::default(),
             photo_document_names(&self.name, localization), self.color.depth)?;
@@ -90,6 +102,14 @@ impl PixelClip {
         PaintBase { image: self.source.clone().into(), offset: [0; 2],
             policy: if color == self.color { self.policy } else { PaintBasePolicy::SourceProfile } }
     }
+}
+
+pub fn clipboard_color_changes(from: DocumentColor, to: DocumentColor) -> impl Iterator<Item = layer_color::DocumentColorChange> {
+    let promote = (to.depth.is_float(), to.depth.bits()) > (from.depth.is_float(), from.depth.bits());
+    let depth = (from.depth != to.depth).then_some(layer_color::DocumentColorChange::Depth { depth: to.depth, dither: Default::default() });
+    [depth.filter(|_| promote),
+     (from.space != to.space).then_some(layer_color::DocumentColorChange::Convert { space: to.space, options: Default::default() }),
+     depth.filter(|_| !promote)].into_iter().flatten()
 }
 
 pub fn clipboard_document(sources: Vec<(String, SourceImage)>, policy: PhotoOpenPolicy, localization: &Localizer) -> Result<layer_core::Document, String> {
@@ -557,7 +577,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.paste_refusal())?;
         let position = self.clip_position(clip, mode);
         if mode != PasteMode::Into && let Some(layers) = &clip.layers
-            && clip.color == self.engine.document().composition().color {
+            && layers.scene.view().composition().color == self.engine.document().composition().color {
             self.require_document_idle()?;
             let (index, parent) = self.image_layer_destination(None)?;
             let at = layer_core::offsets::rounded(position).ok_or("The pasted layers exceed the editor's range")?;

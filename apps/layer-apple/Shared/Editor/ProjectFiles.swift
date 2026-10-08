@@ -128,17 +128,16 @@ import UIKit
         case "copy": copyPixels()
         case "paste":
             guard let nonce = PhotoClipboard.nonce, let native = store?.native, let id = requestID else { pasteImages(); return }
-            let newImage = document["mode"].string == "new_image"
-            native.pasteClip(id: id, nonce: nonce, checkOnly: newImage) { [weak self] handled, error in
+            native.hasClip(nonce: nonce) { [weak self] handled in
                 DispatchQueue.main.async {
                     guard let self, self.requestID == id else { return }
-                    if !handled { self.pasteImages() } else if let error { self.fail(error) }
-                    else if newImage {
+                    if !handled { self.pasteImages() }
+                    else {
                         guard PhotoClipboard.nonce == nonce else { self.pasteImages(); return }
                         self.task(.place, placement: JSON(["nonce": nonce])) { [weak self] task in
                             self?.prepare(task, url: nil) { try task.finishImages() }
                         }
-                    } else { self.finish(true) }
+                    }
                 }
             }
         case "change_color", "color_history", "properties", "repair_source_profile", "rasterize_source":
@@ -184,6 +183,7 @@ import UIKit
                     case .success(let png):
                         do { try PhotoClipboard.write(png: png, nonce: nonce, failure: store?.catalog["document_delivery_copy"]["clipboard_unavailable"].string ?? "") }
                         catch { fail(error.localizedDescription); return }
+                        capy_project_clip_published(task.handle)
                         native.finishProject(task, opening: true, title: "", url: nil) { [weak self] error in
                             DispatchQueue.main.async { [weak self] in
                                 guard let self else { return }
@@ -502,17 +502,19 @@ import UIKit
         }
         return true
     }
-    private func place(_ task: NativeProjectTask, inputs: [PhotoItem], index: Int = 0) {
+    private func place(_ task: NativeProjectTask, inputs: [PhotoItem], index: Int = 0, representation: Int = 0) {
         guard index < inputs.count else { prepare(task, url: nil) { try task.finishImages() }; return }
         let id = requestID, item = inputs[index]
         loadingPhoto = true
-        item.load { [weak self, weak task] result in
+        item.representations[representation] { [weak self, weak task] result in
             guard let self, let task, requestID == id, !finishing else { return }
             loadingPhoto = false
             if cancelled { finish(); return }
             prepare(task, url: nil, next: { [weak self] in
                 self?.place(task, inputs: inputs, index: index + 1)
-            }) {
+            }, retry: representation + 1 < item.representations.count ? { [weak self] in
+                self?.place(task, inputs: inputs, index: index, representation: representation + 1)
+            } : nil) {
                 switch try result.get() {
                 case .file(let url): try task.read(from: url)
                 case .image(let data): try task.read(image: data, name: item.name)
@@ -554,7 +556,7 @@ import UIKit
             self?.prepare(task, url: url) { try task.read(from: url, options: options) }
         }
     }
-    private func prepare(_ task: NativeProjectTask, url: URL?, next: (() -> Void)? = nil, work: @escaping () throws -> Void) {
+    private func prepare(_ task: NativeProjectTask, url: URL?, next: (() -> Void)? = nil, retry: (() -> Void)? = nil, work: @escaping () throws -> Void) {
         NativeProjectTask.io.async { [weak self] in
             do {
                 try work()
@@ -604,6 +606,7 @@ import UIKit
                     self.interpreting = false
                     if self.cancelled { self.finish() }
                     else if self.pendingProfile != nil { self.profileError = message }
+                    else if let retry { retry() }
                     else { self.fail(message) }
                 }
             }

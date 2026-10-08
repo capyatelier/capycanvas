@@ -47,6 +47,8 @@ pub(crate) enum Action {
     },
     ReadImages {
         paths: Vec<String>,
+        #[serde(default)]
+        alternatives: Vec<Vec<String>>,
     },
     InterpretImage {
         profile: crate::color_storage::ProfileChoice,
@@ -58,6 +60,7 @@ pub(crate) enum Action {
     },
     Compare,
     Commit,
+    ClipPublished { publication: u64 },
     Cancel,
     SaveCopy {
         path: String,
@@ -71,13 +74,18 @@ struct Import {
     context: layer_ui::ImagePlacementContext,
     device: wgpu::Device,
     paths: std::collections::VecDeque<String>,
+    alternatives: Option<(layer_ui::ImageImportBatch, std::collections::VecDeque<Vec<String>>)>,
     clipboard: Option<std::path::PathBuf>,
     clip_nonce: Option<String>,
+    clip: Option<layer_ui::PixelClip>,
+    color: layer_core::color::DocumentColor,
+    mode: Option<layer_ui::PasteMode>,
 }
 impl Drop for Import {
     fn drop(&mut self) {
         if let Some(path) = &self.clipboard {
             let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(path.with_extension("bitmap"));
         }
     }
 }
@@ -115,7 +123,7 @@ enum Payload {
         repeat: Option<layer_ui::ExportRepeat>,
         master: Option<std::path::PathBuf>,
     },
-    Import(Import),
+    Import(Box<Import>),
     Clip(Clip),
     Color(Box<ColorTask>),
     Source(Box<SourceTask>),
@@ -200,7 +208,7 @@ impl Task {
                 };
                 (
                     kind,
-                    Payload::Import(Import {
+                    Payload::Import(Box::new(Import {
                         images: layer_ui::ImageImportBatch::new(
                             session.state().settings.photo_open,
                             session.engine().document().composition().color.space,
@@ -216,9 +224,12 @@ impl Task {
                             .device()
                             .clone(),
                         paths: Default::default(),
+                        alternatives: None,
                         clipboard: if kind == "paste" { Some(clipboard_file()?) } else { None },
-                        clip_nonce: None,
-                    }),
+                        clip_nonce: None, clip: None,
+                        color: session.engine().document().composition().color,
+                        mode: match session.document_request(id)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None },
+                    })),
                 )
             }
             HostRequestKind::Document {
@@ -366,7 +377,7 @@ impl Task {
                     })?;
                 }
                 json!({"pending":task.images.pending_source().map(|s| &s.interpretation),"extensions":layer_color::photo::extensions().collect::<Vec<_>>(),
-                    "profiles":profiles.clone(), "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"name":p.file_name().and_then(|s| s.to_str())})),
+                    "profiles":profiles.clone(), "clipboard":task.clipboard.as_ref().map(|p| json!({"path":p,"folder":p.parent(),"bitmap_name":p.with_extension("bitmap").file_name().map(|s|s.to_string_lossy().into_owned()),"name":p.file_name().and_then(|s| s.to_str())})),
                     "clip_nonce":task.clip_nonce, "delivery":layer_ui::DocumentDeliveryCopy::new(&self.localization)})
             }
             Payload::Clip(clip) => {
@@ -544,17 +555,26 @@ impl Task {
                     self.stage = "options";
                     self.describe()
                 }
-                Action::ReadImages { paths } => {
+                Action::PasteClip { nonce } => {
+                    let Payload::Import(task) = &mut self.payload else { return Err("No paste is pending".into()); };
+                    let mut clip = layer_ui::RetainedClipboard.capture(&nonce, &self.localization)?;
+                    if task.mode != Some(layer_ui::PasteMode::Into) {
+                        clip.convert_layers(task.color, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || self.control.is_cancelled())?;
+                    }
+                    task.clip = Some(clip); self.stage = "commit"; self.describe()
+                }
+                Action::ReadImages { paths, alternatives } => {
                     let Payload::Import(task) = &mut self.payload else {
                         return Err("No image placement is pending".into());
                     };
                     if self.stage != "options" || paths.is_empty() {
                         return Err("Choose images to place".into());
                     }
-                    for path in &paths {
+                    for path in paths.iter().chain(alternatives.iter().flatten()) {
                         crate::document_io::location(path)?;
                     }
                     task.paths = paths.into();
+                    task.alternatives = (!alternatives.is_empty()).then(|| (task.images.clone(), alternatives.into()));
                     self.read_images()
                 }
                 Action::InterpretImage { profile } => {
@@ -620,6 +640,7 @@ impl Task {
             return Err("No image batch".into());
         };
         while let Some(path) = task.paths.pop_front() {
+            let result = (|| {
             let path = std::path::Path::new(&path);
             let file = std::fs::File::open(path)
                 .map_err(|e| crate::document_io::io_error("read image", e))?;
@@ -635,7 +656,16 @@ impl Task {
                 },
                 name,
                 self.control.cancellation_flag(),
-            )?;
+            )
+            })();
+            if let Err(error) = result {
+                if !self.control.is_cancelled()
+                    && let Some((initial, alternatives)) = &mut task.alternatives
+                    && let Some(paths) = alternatives.pop_front() {
+                    task.images = initial.clone(); task.paths = paths.into(); continue;
+                }
+                return Err(error);
+            }
             if task.images.pending_source().is_some() {
                 self.stage = "interpret_image";
                 return self.describe();
@@ -721,15 +751,20 @@ impl Task {
         task.prepare(host, self.control.is_cancelled())?;
         Ok(Some(Action::Compare))
     }
-    pub fn import_sources(&mut self, host: &NativeHost) -> Result<(Vec<(String, layer_core::color::source::SourceImage)>, layer_ui::ImagePlacementContext), String> {
+    fn validate_import(&self, host: &NativeHost) -> Result<(), String> {
         if self.stage != "commit" || self.error.is_some() { return Err("Images are not ready to paste".into()); }
-        let Payload::Import(task) = &mut self.payload else { return Err("Not an image import".into()); };
+        let Payload::Import(task) = &self.payload else { return Err("Not an image import".into()); };
         let session = &host.session;
         session.validate_image_placement(&task.context)?;
         if self.control.is_cancelled() || session.engine().backend().0.as_ref().map(|g| g.device()) != Some(&task.device)
             || !session.state().requests.iter().any(|r| r.id == self.id) {
             return Err("The canvas or import request changed; try again".into());
         }
+        Ok(())
+    }
+    pub fn import_sources(&mut self, host: &NativeHost) -> Result<(Vec<(String, layer_core::color::source::SourceImage)>, layer_ui::ImagePlacementContext), String> {
+        self.validate_import(host)?;
+        let Payload::Import(task) = &mut self.payload else { unreachable!() };
         Ok((task.images.take_sources(self.control.is_cancelled())?, task.context))
     }
     pub fn commit(&mut self, host: &mut NativeHost) -> Result<(), String> {
@@ -738,6 +773,19 @@ impl Task {
             return Err("Preview the result before applying it".into());
         }
         match &mut self.payload {
+            Payload::Import(task) if task.clip.is_some() => {
+                self.validate_import(host)?;
+                let Payload::Import(task) = &mut self.payload else { unreachable!() };
+                let clip = task.clip.as_ref().unwrap();
+                let mode = task.mode.ok_or("No paste is pending")?;
+                let previous = host.session.state().revision;
+                host.session.paste_clip(clip, mode)?;
+                let mut change = host.session.complete_document_request(self.id, Ok(true))?;
+                change.canvas_wake = true;
+                change.regions |= 255;
+                host.apply_change(previous, change);
+                Ok(())
+            }
             Payload::Import(_) => {
                 let (sources, context) = self.import_sources(host)?;
                 let session = &mut host.session;
@@ -1176,6 +1224,7 @@ mod tests {
             &mut import,
             Action::ReadImages {
                 paths: vec![path.clone(), path],
+                alternatives: Vec::new(),
             },
         );
         assert_eq!(import.stage, "commit");

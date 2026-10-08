@@ -84,7 +84,6 @@ internal object Native {
     @JvmStatic external fun clipAdopt(handle: Long, request: Int, clip: Long, control: Long = 0)
     @JvmStatic external fun clipFree(clip: Long)
     @JvmStatic external fun clipNonce(handle: Long): String?
-    @JvmStatic external fun pasteClip(handle: Long, request: Int)
     /** File worker only; consumes the detached descriptor, retains the task. */
     @JvmStatic external fun exportPresets(bytes: ByteArray, request: String, color: String): Array<Any?>
     @JvmStatic external fun sessionStamp(handle: Long, id: Long): String

@@ -3479,7 +3479,12 @@ class AndroidRasterTest {
                 assertClipboardPixels("p23-$theme-original.png", "p23-$theme-copy.png", 0)
                 val adopted = clip; clip = 0
                 native { Native.clipAdopt(it, id, adopted) }
-                native { handle -> Native.pasteClip(handle, request(handle, "paste_in_place").first) }
+                var paste = 0L
+                try {
+                    paste = native { handle -> Native.imageImportTask(handle, request(handle, "paste_in_place").first, Native.imageImportContext(handle, "null", "null"), control, Native.clipNonce(handle)!!) }
+                    Native.imageImportPrepare(paste)
+                    native { Native.imageImportAdopt(it, paste) }
+                } finally { if (paste != 0L) Native.imageImportFree(paste) }
                 refresh(); pixels("p23-$theme-paste.png")
                 assertClipboardPixels("p23-$theme-original.png", "p23-$theme-paste.png", 2)
                 invoke("undo")

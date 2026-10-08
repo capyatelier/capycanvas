@@ -24,12 +24,9 @@ impl Drop for TemporaryImage {
     }
 }
 
-async fn spool(clipboard: &gdk::Clipboard) -> Result<TemporaryImage, String> {
-    // GDK prefers MIME types in order. Ask for lossless/deeper source formats
-    // before JPEG, without downloading a display texture as untagged RGBA8.
-    let mimes: Vec<_> = layer_color::photo::mime_types().collect();
+async fn spool(clipboard: &gdk::Clipboard, mime: &str) -> Result<TemporaryImage, String> {
     let (input, _) = clipboard
-        .read_future(&mimes, glib::Priority::DEFAULT)
+        .read_future(&[mime], glib::Priority::DEFAULT)
         .await
         .map_err(|e| format!("Copy a supported image ({}) to paste: {e}", layer_color::photo::format_names()))?;
     let temporary = gio::spawn_blocking(|| {
@@ -161,30 +158,33 @@ pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) ->
     );
     dialog.present(Some(&w.window));
     let result = async {
-        let clipboard = w.window.clipboard();
-        let paths = if paste && clipboard.formats().union_deserialize_types().contains_type(gdk::FileList::static_type()) {
-            let value = gio::CancellableFuture::new(clipboard.read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT), transfer.clone())
-                .await.map_err(|_| "Image import cancelled")?.map_err(|e| e.to_string())?;
-            value.get::<gdk::FileList>().map_err(|e| e.to_string())?.files().iter()
-                .map(|file| file.path().ok_or_else(|| "Choose images stored on this device".to_string())).collect::<Result<Vec<_>, _>>()?
-        } else { paths };
-        let temporary = if paste && paths.is_empty() {
-            Some(
-                gio::CancellableFuture::new(spool(&w.window.clipboard()), transfer)
-                    .await
-                    .map_err(|_| "Image import cancelled")??,
-            )
+        let sources = if paste {
+            let clipboard = w.window.clipboard();
+            let mut result = Err(format!("Copy a supported image ({}) to paste", layer_color::photo::format_names()));
+            if clipboard.formats().union_deserialize_types().contains_type(gdk::FileList::static_type()) {
+                result = async {
+                    let value = gio::CancellableFuture::new(clipboard.read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT), transfer.clone())
+                        .await.map_err(|_| "Image import cancelled")?.map_err(|e| e.to_string())?;
+                    let paths = value.get::<gdk::FileList>().map_err(|e| e.to_string())?.files().iter()
+                        .map(|file| file.path().ok_or_else(|| "Choose images stored on this device".to_string())).collect::<Result<Vec<_>, _>>()?;
+                    let control = cancelled.clone();
+                    gio::spawn_blocking(move || read_sources(paths, true, control)).await.map_err(|_| "Image reader failed")?
+                }.await;
+            }
+            for mime in layer_color::photo::mime_types() {
+                if result.is_ok() || cancelled.load(Ordering::Acquire) { break; }
+                if !clipboard.formats().contain_mime_type(mime) { continue; }
+                result = async {
+                    let temporary = gio::CancellableFuture::new(spool(&clipboard, mime), transfer.clone()).await.map_err(|_| "Image import cancelled")??;
+                    let control = cancelled.clone();
+                    gio::spawn_blocking(move || read_sources(vec![temporary.0.clone()], true, control)).await.map_err(|_| "Image reader failed")?
+                }.await;
+            }
+            result?
         } else {
-            None
+            let control = cancelled.clone();
+            gio::spawn_blocking(move || read_sources(paths, false, control)).await.map_err(|_| "Image reader failed")??
         };
-        let paths = temporary.as_ref().map_or(paths, |t| vec![t.0.clone()]);
-        let cancelled = cancelled.clone();
-        // Keep the request reserved until this worker acknowledges cancellation;
-        // repeated Cancel/Import cannot leave an unbounded set of decode workers.
-        let sources = gio::spawn_blocking(move || read_sources(paths, paste, cancelled))
-        .await
-        .map_err(|_| "Image reader failed")??;
-        drop(temporary);
         Ok::<_, String>(sources)
     }
     .await;

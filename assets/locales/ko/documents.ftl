@@ -116,6 +116,7 @@ documents-photo-name = 사진
 documents-delivery-clipboard-unavailable = 이 브라우저에서는 이미지를 붙여넣을 수 없습니다. 이미지를 레이어로 가져오기를 사용하세요.
 documents-delivery-clipboard-too-large = 클립보드 이미지가 512 MiB를 초과합니다
 documents-delivery-clipboard-empty = 붙여넣을 이미지를 복사하거나 원본 파일을 가져오세요.
+documents-delivery-clipboard-changed = 클립보드가 변경되었습니다. 다시 붙여넣으세요.
 documents-delivery-images = 이미지
 documents-delivery-drawing-or-photo = 그림 또는 사진
 documents-delivery-drawing-type = { common-app-name } 그림

@@ -113,6 +113,7 @@ documents-open-photos-filter = Disegni e foto
 documents-delivery-clipboard-unavailable = Non è possibile incollare immagini in questo browser. Usa Importa immagine come livello.
 documents-delivery-clipboard-too-large = L'immagine negli appunti supera 512 MiB
 documents-delivery-clipboard-empty = Copia un'immagine da incollare oppure importa il file originale.
+documents-delivery-clipboard-changed = Gli appunti sono cambiati. Incolla di nuovo.
 documents-delivery-images = Immagini
 documents-delivery-drawing-or-photo = Disegno o foto
 documents-delivery-drawing-type = Disegno { common-app-name }

@@ -70,6 +70,19 @@ async fn unpack_with_selection(metadata:&str,buffers:js_sys::Array)->Result<(Art
     receiver.finish().map_err(js)?.adopt_verified_with_selection(limits(ProjectLimits::default().dimension),&AtomicBool::new(false)).map_err(js)
 }
 fn parts(wire:&JsValue)->Result<(String,js_sys::Array),JsValue>{Ok((js_sys::Reflect::get(wire,&js("metadata"))?.as_string().ok_or_else(||js("Missing artwork transfer metadata"))?,js_sys::Reflect::get(wire,&js("buffers"))?.dyn_into()?))}
+pub(super) async fn convert_color(original: &layer_core::Document, change: layer_color::DocumentColorChange, control: &layer_render_wgpu::snapshot::CaptureControl) -> Result<(layer_core::Document, u64), JsValue> {
+    output::cancelled(control)?;
+    let wire = pack(layer_color::color_job_artwork(&original.artwork)).await?;
+    let (metadata, buffers) = parts(&wire)?;
+    let request = serde_json::to_string(&serde_json::json!({"project":metadata,"change":change})).map_err(js)?;
+    let result = JsFuture::from(raster_worker::call("color-convert", &request, &buffers)?).await?;
+    output::cancelled(control)?;
+    let (metadata, buffers) = parts(&result)?;
+    let clipped = js_sys::Reflect::get(&result, &js("clipped"))?.as_f64().unwrap_or(0.) as u64;
+    let artwork = unpack(&metadata, buffers).await?;
+    Ok((layer_color::adopt_color_job_artwork(original, artwork).map_err(js)?, clipped))
+}
+
 pub(super) async fn save(capture:ArtworkCapture)->Result<JsValue,JsValue>{let wire=pack_capture(capture).await?;let (metadata,buffers)=parts(&wire)?;JsFuture::from(raster_worker::call("write",&metadata,&buffers)?).await}
 #[derive(Serialize,Deserialize)]
 pub(super) struct OpenOptions {pub dimension:u32,pub photo_policy:layer_ui::PhotoOpenPolicy,pub names:layer_core::DocumentNames,pub intent:layer_ui::ImportIntent,#[serde(default)]pub source_bytes:Option<usize>}

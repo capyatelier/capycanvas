@@ -1,5 +1,5 @@
 //! Pixel copies: frozen on the render Looper, composed and encoded on a file
-//! worker. The window keeps the clip; Kotlin shares its PNG through a
+//! worker. The application keeps the clip; Kotlin shares its PNG through a
 //! FileProvider URI whose clip description carries the nonce.
 use crate::android::{app, error, fail, or_throw, read, string};
 use jni::{
@@ -8,7 +8,7 @@ use jni::{
     sys::{jboolean, jint, jlong, jstring},
 };
 use layer_host::clipboard::ClipTask;
-use layer_ui::{DocumentRequest, PixelClip};
+use layer_ui::PixelClip;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipTask(mut env: JNIEnv, _: JClass, handle: jlong, id: jint) -> jlong {
@@ -54,7 +54,7 @@ pub extern "system" fn Java_art_capycanvas_Native_clipWritePng(mut env: JNIEnv, 
     let result = read(&mut env, &path).and_then(|path| std::fs::write(path, &unsafe { crate::inspection::borrow_ref::<PixelClip>(handle) }.png[..]).map_err(error));
     fail(&mut env, result);
 }
-/// Keep the clip for the window and complete its copy, which erases a Cut.
+/// Keep the clip for the application and complete its copy, which erases a Cut.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipAdopt(mut env: JNIEnv, _: JClass, handle: jlong, id: jint, clip: jlong, control: jlong) {
     let clip = unsafe { Box::from_raw(clip as *mut PixelClip) };
@@ -64,7 +64,7 @@ pub extern "system" fn Java_art_capycanvas_Native_clipAdopt(mut env: JNIEnv, _: 
             return Err("Copy cancelled".into());
         }
         a.host.session.document_request(id as u32)?;
-        a.window.documents.clip = Some(*clip);
+        a.window.documents.clip.set(*clip);
         let previous = a.host.session.state().revision;
         let mut change = a.host.session.complete_document_request(id as u32, Ok(true))?;
         change.canvas_wake = true;
@@ -82,28 +82,8 @@ pub extern "system" fn Java_art_capycanvas_Native_clipFree(_: JNIEnv, _: JClass,
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_clipNonce(mut env: JNIEnv, _: JClass, handle: jlong) -> jstring {
     let a = unsafe { app(handle) };
-    match &a.window.documents.clip {
+    match a.window.documents.clip.get() {
         Some(clip) => string(&mut env, Ok(clip.nonce.clone())),
         None => std::ptr::null_mut(),
     }
-}
-/// Answer the pending Paste request `id` with the window's clip.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_pasteClip(mut env: JNIEnv, _: JClass, handle: jlong, id: jint) {
-    let result = (|| {
-        let a = unsafe { app(handle) };
-        let Ok(DocumentRequest::Paste { mode }) = a.host.session.document_request(id as u32) else {
-            return Err("The paste request is no longer active".into());
-        };
-        let mode = *mode;
-        let clip = a.window.documents.clip.clone().ok_or("Nothing was copied in this window")?;
-        let previous = a.host.session.state().revision;
-        a.host.session.paste_clip(&clip, mode)?;
-        let mut change = a.host.session.complete_document_request(id as u32, Ok(true))?;
-        change.canvas_wake = true;
-        change.regions |= 255;
-        a.host.apply_change(previous, change);
-        Ok(())
-    })();
-    fail(&mut env, result);
 }

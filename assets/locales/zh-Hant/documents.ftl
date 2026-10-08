@@ -115,6 +115,7 @@ documents-open-photos-filter = 繪畫與照片
 documents-delivery-clipboard-unavailable = 此瀏覽器無法貼上影像。請使用「將影像匯入為圖層」。
 documents-delivery-clipboard-too-large = 剪貼簿影像超過 512 MiB
 documents-delivery-clipboard-empty = 請先複製要貼上的影像，或匯入原始檔案。
+documents-delivery-clipboard-changed = 剪貼簿已變更，請重新貼上。
 documents-delivery-images = 影像
 documents-delivery-drawing-or-photo = 繪畫或相片
 documents-delivery-drawing-type = { common-app-name } 繪畫

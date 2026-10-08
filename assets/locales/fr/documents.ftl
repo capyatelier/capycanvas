@@ -115,6 +115,7 @@ documents-open-photos-filter = Dessins et photos
 documents-delivery-clipboard-unavailable = Le collage d’images n’est pas disponible dans ce navigateur. Utiliser Importer une image comme calque.
 documents-delivery-clipboard-too-large = L’image du presse-papiers dépasse 512 MiB
 documents-delivery-clipboard-empty = Copier une image à coller ou importer le fichier d’origine.
+documents-delivery-clipboard-changed = Le presse-papiers a changé. Collez à nouveau.
 documents-delivery-images = Images
 documents-delivery-drawing-or-photo = Dessin ou photo
 documents-delivery-drawing-type = Dessin { common-app-name }

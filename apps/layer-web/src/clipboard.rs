@@ -1,5 +1,5 @@
 use super::*;
-use layer_ui::{ClipboardCapture, DocumentRequest, HostRequestKind, PixelClip};
+use layer_ui::{ClipboardCapture, PixelClip};
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
 #[wasm_bindgen]
@@ -133,28 +133,9 @@ impl WebApp {
     }
     /// Keep a finished copy for every drawing in this window.
     pub fn adopt_clip(&mut self, clip: WebClip) {
-        self.documents.clip = Some(clip.clip);
+        self.documents.clip.set(clip.clip);
     }
     pub fn clip_nonce(&self) -> Option<String> {
-        self.documents.clip.as_ref().map(|clip| clip.nonce.clone())
-    }
-    /// Answer the pending Paste request `id` with this window's copy.
-    pub fn paste_clip(&mut self, id: u32) -> Result<JsValue, JsValue> {
-        let mode = self
-            .session
-            .state()
-            .requests
-            .iter()
-            .find_map(|r| match &r.kind {
-                HostRequestKind::Document { request: DocumentRequest::Paste { mode } } if r.id == id => Some(*mode),
-                _ => None,
-            })
-            .ok_or_else(|| js("The paste request is no longer active"))?;
-        let clip = self.documents.clip.clone().ok_or_else(|| js("Nothing was copied in this window"))?;
-        self.session.paste_clip(&clip, mode).map_err(js)?;
-        let mut change = self.session.complete_document_request(id, Ok(true)).map_err(js)?;
-        change.canvas_wake = true;
-        change.regions |= 255;
-        serialize(&change)
+        self.documents.clip.get().map(|clip| clip.nonce.clone())
     }
 }

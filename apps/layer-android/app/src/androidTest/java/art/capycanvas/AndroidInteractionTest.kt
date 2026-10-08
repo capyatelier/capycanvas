@@ -2839,12 +2839,21 @@ class AndroidInteractionTest {
         state().array("requests").objects().none { it.getJSONObject("kind").getString("type") == "document" }
     /** Read the clipboard's image as another app would, through its content URI. */
     private fun clipboardImage(): android.graphics.Bitmap {
-        var uri: android.net.Uri? = null
-        onMain { uri = clipboardManager().primaryClip?.getItemAt(0)?.uri }
-        val shared = checkNotNull(uri) { "The clipboard holds no image URI" }
-        instrumentation.targetContext.grantUriPermission("com.android.shell", shared, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val bytes = android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("content read --uri $shared")).use { it.readBytes() }
-        return checkNotNull(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) { "Another app cannot decode ${bytes.size} bytes from $shared" }
+        val finished = java.util.concurrent.CountDownLatch(1)
+        var result: android.os.Bundle? = null
+        val receiver = object : android.os.ResultReceiver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onReceiveResult(code: Int, data: android.os.Bundle) { result = data; finished.countDown() }
+        }
+        val reader = android.content.Intent().setClassName(instrumentation.context.packageName, ClipboardReaderActivity::class.java.name)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("result", receiver)
+        onMain { activity.startActivity(reader) }
+        assertTrue("The foreground clipboard recipient replies", finished.await(15, java.util.concurrent.TimeUnit.SECONDS))
+        val delivered = checkNotNull(result)
+        assertNotEquals("The recipient runs under a different UID", android.os.Process.myUid(), delivered.getInt("uid"))
+        assertNull("The system grants the recipient URI access", delivered.getString("error"))
+        waitFor("the editor regains focus") { activity.window.decorView.hasWindowFocus() }
+        val bytes = checkNotNull(delivered.getByteArray("png"))
+        return checkNotNull(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) { "Another app cannot decode ${bytes.size} clipboard bytes" }
     }
 
     @Test fun clipboardCopyPasteAcrossDevices() {
@@ -2903,6 +2912,12 @@ class AndroidInteractionTest {
             waitFor("Copy without a selection publishes the whole layer", 30_000) {
                 clipboardNonce().let { it != null && it != beforeLayerCopy } && documentIdle()
             }
+            val copiedNonce = clipboardNonce()!!
+            val otherWindow = createEnglishHostForTest()
+            try {
+                assertEquals("A separate native window retains the rich clip", copiedNonce, Native.clipNonce(otherWindow))
+            } finally { Native.destroy(otherWindow) }
+            assertEquals("Closing another window keeps clipboard ownership", copiedNonce, kotlinx.coroutines.runBlocking { host.withNative { Native.clipNonce(it) } })
             command("paste_image")
             waitFor("Paste adds an editable copied layer", 30_000) { layerStates().size == count + 1 && documentIdle() }
             val copiedLayer = editingLayer()
@@ -2927,18 +2942,42 @@ class AndroidInteractionTest {
                 layerStates().size == count && layerStates().first { it.getLong("id") == sourceLayer }.getDouble("opacity") == 1.0
             }
 
+            fun imageObjects() = kotlinx.coroutines.runBlocking { host.withNative { JSONArray(Native.imageObjects(it)).objects() } }
             val external = File(AppStorage.of(instrumentation.targetContext).clipboard, "external.png")
             external.parentFile!!.mkdirs()
             android.graphics.Bitmap.createBitmap(64, 48, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.RED) }
                 .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, external.outputStream())
             val uri = androidx.core.content.FileProvider.getUriForFile(instrumentation.targetContext, "${instrumentation.targetContext.packageName}.clipboard", external)
-            onMain { clipboardManager().setPrimaryClip(android.content.ClipData.newUri(instrumentation.targetContext.contentResolver, "Another app", uri).apply {
+            val missing = androidx.core.content.FileProvider.getUriForFile(instrumentation.targetContext, "${instrumentation.targetContext.packageName}.clipboard", File(external.parentFile, "missing.png"))
+            fun externalClip(second: android.net.Uri? = null) = android.content.ClipData.newUri(instrumentation.targetContext.contentResolver, "Another app", missing).apply {
+                addItem(android.content.ClipData.Item(uri)); second?.let { addItem(android.content.ClipData.Item(it)) }
                 addItem(android.content.ClipData.Item("Accompanying text"))
-            }) }
+            }
+            val beforeExternal = imageObjects().map { it.getString("id") }.toSet()
+            onMain { clipboardManager().setPrimaryClip(externalClip()) }
             command("paste_image")
-            waitFor("another app's image opens the placement handles", 30_000) { layerStates().size == count + 1 && barKind() == "placement" }
+            waitFor("a missing URI does not discard the valid image", 30_000) { layerStates().size == count + 1 && barKind() == "placement" && layerStates().sumOf { it.getInt("object_count") } == beforeExternal.size + 1 }
+            assertEquals(listOf(64, 48), imageObjects().single { it.getString("id") !in beforeExternal }.getJSONArray("extent").let { listOf(it.getInt(0), it.getInt(1)) })
             command("cancel_transform")
             waitFor("cancelling removes it", 10_000) { layerStates().size == count && documentIdle() }
+            assertEquals(beforeExternal, imageObjects().map { it.getString("id") }.toSet())
+            val second = File(external.parentFile, "second.png")
+            android.graphics.Bitmap.createBitmap(24, 16, android.graphics.Bitmap.Config.ARGB_8888).let { bitmap ->
+                try { bitmap.eraseColor(android.graphics.Color.GREEN); second.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                finally { bitmap.recycle() }
+            }
+            val secondUri = androidx.core.content.FileProvider.getUriForFile(instrumentation.targetContext, "${instrumentation.targetContext.packageName}.clipboard", second)
+            onMain { clipboardManager().setPrimaryClip(externalClip(secondUri)) }
+            command("paste_image")
+            waitFor("both valid image URIs enter one placement", 30_000) { layerStates().size == count + 1 && barKind() == "placement" && layerStates().sumOf { it.getInt("object_count") } == beforeExternal.size + 2 }
+            val batch = imageObjects().filter { it.getString("id") !in beforeExternal }
+            assertEquals(setOf(listOf(64, 48), listOf(24, 16)), batch.map { it.getJSONArray("extent").let { a -> listOf(a.getInt(0), a.getInt(1)) } }.toSet())
+            batch.forEach { image -> assertEquals(1.0, image.getJSONArray("affine").getDouble(0), 1e-9); assertEquals(1.0, image.getJSONArray("affine").getDouble(3), 1e-9) }
+            command("cancel_transform")
+            waitFor("cancelling removes the complete image batch", 10_000) { layerStates().size == count && documentIdle() }
+            assertEquals(beforeExternal, imageObjects().map { it.getString("id") }.toSet())
+            second.delete()
+            onMain { clipboardManager().setPrimaryClip(externalClip()) }
             command("paste_in_place")
             waitFor("Paste in Place centres another app's image without handles", 30_000) { layerStates().size == count + 1 && documentIdle() }
             assertNotEquals("placement", barKind())
@@ -2969,7 +3008,6 @@ class AndroidInteractionTest {
                     assertEquals(android.graphics.Color.RED, image.getPixel(32, 24))
                 } finally { image.recycle() }
             }
-            fun imageObjects() = kotlinx.coroutines.runBlocking { host.withNative { JSONArray(Native.imageObjects(it)).objects() } }
             fun objectIds() = imageObjects().map { it.getString("id") }.toSet()
             fun addedImageBounds(previous: Set<String>): List<Double> {
                 val image = imageObjects().single { it.getString("id") !in previous }

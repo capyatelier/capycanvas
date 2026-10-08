@@ -115,6 +115,7 @@ documents-open-photos-filter = Dibujos y fotos
 documents-delivery-clipboard-unavailable = Este navegador no permite pegar imágenes. Usa Importar imagen como capa.
 documents-delivery-clipboard-too-large = La imagen del portapapeles supera 512 MiB
 documents-delivery-clipboard-empty = Copia una imagen para pegarla o importa el archivo original.
+documents-delivery-clipboard-changed = El portapapeles ha cambiado. Vuelve a pegar.
 documents-delivery-images = Imágenes
 documents-delivery-drawing-or-photo = Dibujo o foto
 documents-delivery-drawing-type = Dibujo de { common-app-name }

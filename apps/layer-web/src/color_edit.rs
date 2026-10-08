@@ -3,7 +3,7 @@
 use super::*;
 use layer_render_wgpu::snapshot::{CaptureControl, SnapshotPreview};
 use layer_ui::{ColorWorkflow, ColorPreparation};
-use wasm_bindgen_futures::{JsFuture, future_to_promise};
+use wasm_bindgen_futures::future_to_promise;
 
 #[wasm_bindgen]
 pub struct WebColorCandidate {
@@ -98,31 +98,7 @@ impl WebApp {
                     clipped,
                 )
             } else {
-                let transfer = layer_color::color_job_artwork(&original.artwork);
-                let wire = artwork_transfer::pack(transfer).await?;
-                let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
-                    .as_string()
-                    .ok_or_else(|| js("Missing color metadata"))?;
-                let buffers =
-                    js_sys::Reflect::get(&wire, &js("buffers"))?.dyn_into::<js_sys::Array>()?;
-                let request =
-                    serde_json::to_string(&serde_json::json!({"project":metadata,"change":change}))
-                        .map_err(js)?;
-                let result =
-                    JsFuture::from(raster_worker::call("color-convert", &request, &buffers)?)
-                        .await?;
-                output::cancelled(&control)?;
-                let metadata = js_sys::Reflect::get(&result, &js("metadata"))?
-                    .as_string()
-                    .ok_or_else(|| js("Missing color result"))?;
-                let buffers =
-                    js_sys::Reflect::get(&result, &js("buffers"))?.dyn_into::<js_sys::Array>()?;
-                let clipped = js_sys::Reflect::get(&result, &js("clipped"))?
-                    .as_f64()
-                    .unwrap_or(0.) as u64;
-                let artwork = artwork_transfer::unpack(&metadata, buffers).await?;
-                let project=layer_color::adopt_color_job_artwork(&original,artwork).map_err(js)?;
-                (project, clipped)
+                artwork_transfer::convert_color(&original, change.ok_or_else(|| js("Choose a color conversion"))?, &control).await?
             };
             hdr::admit_document(&project)?;
             layer_render::remap_document_colors(original.composition().color.space, project.composition().color.space, &mut brush);

@@ -182,12 +182,20 @@ fn native_clipboard_copy_paste_round_trips() {
     w.window.present();
     pump(400);
 
-    external_copy(&png);
+    let missing = layer_core::temp_files::directory().unwrap().join(format!("missing-clipboard-{}.png", layer_core::PortableId::random()));
+    let uri = format!("{}\r\n", gtk::gio::File::for_path(missing).uri());
+    let provider = gdk::ContentProvider::new_union(&[
+        gdk::ContentProvider::for_bytes("text/uri-list", &glib::Bytes::from(uri.as_bytes())),
+        gdk::ContentProvider::for_bytes("image/tiff", &glib::Bytes::from_static(b"broken preferred TIFF")),
+        gdk::ContentProvider::for_bytes("image/png", &glib::Bytes::from(&png[..])),
+    ]);
+    w.window.clipboard().set_content(Some(&provider)).unwrap();
     until(|| !clipboard_formats(&w).iter().any(|m| m == CLIP_MIME), "the clipboard now holds another application's image");
     let layers = document(&w).scene().order().len();
     chord(&mut native, &[CONTROL], 0x76);
     until(|| document(&w).scene().order().len() == layers + 1, "an image from another app pastes");
-    until(|| state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Placement), "with placement handles");
+    until(|| state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Placement), "failed file list and TIFF fall back to PNG with placement handles");
+    assert!(state(&w).host_error.is_none());
     w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
     until(|| document(&w).scene().order().len() == layers && idle(&w), "cancelling the placement removes it");
     chord(&mut native, &[CONTROL, SHIFT], 0x76);
@@ -195,6 +203,21 @@ fn native_clipboard_copy_paste_round_trips() {
     assert!(state(&w).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement), "centred without handles");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| document(&w).scene().order().len() == layers, "one undo step");
+
+    let before_dialog = document(&w).artwork.clone();
+    let previous = nonce();
+    let dialog = adw::AlertDialog::builder().heading("Clipboard focus").build();
+    dialog.add_response("close", "Close");
+    dialog.present(Some(&w.window));
+    pump(150);
+    for key in [0x63, 0x78, 0x76] { chord(&mut native, &[CONTROL], key); }
+    pump(300);
+    assert_eq!(document(&w).artwork, before_dialog, "a native dialog owns Copy, Cut and Paste");
+    assert_eq!(nonce(), previous);
+    assert!(state(&w).requests.is_empty());
+    dialog.close();
+    pump(150);
+    w.area.grab_focus();
 
     w.dispatch(UiAction::Layer { action: LayerAction::BeginRename { id: layer_ui::occurrence_token(paint) } });
     let entry: gtk::Entry = until_some(
@@ -301,6 +324,31 @@ fn native_clipboard_copy_paste_round_trips() {
     assert_eq!(pasted.object_document_affine(object).unwrap().0[..4], [1., 0., 0., 1.], "external Paste keeps full pixel size beyond the canvas");
     w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
     until(|| document(&w).scene().order().len() == layers && idle(&w), "oversized placement cancels completely");
+
+    let before = nonce();
+    chord(&mut native, &[CONTROL], 0x63);
+    assert!(copied(&w, before, "retain a whole layer for another colour mode").layers.is_some());
+    let copied_layer = active_occurrence(&document(&w)).clone();
+    let color = layer_core::color::DocumentColor { space: layer_core::color::RgbSpace::DisplayP3, depth: layer_core::color::SampleDepth::U16 };
+    let mut project = new_drawing(64, 48, &w.localization()).unwrap();
+    composition_mut(&mut project).color = color;
+    let destination = Workspace::with_project(&app, Some((project, None)));
+    apply_fixture_theme(&destination);
+    destination.window.present();
+    until(|| destination.gpu.borrow().as_ref().is_some_and(|g| g.session.require_document_idle().is_ok()), "the retained-layer colour destination");
+    pump(600);
+    destination.area.grab_focus();
+    let count = document(&destination).scene().order().len();
+    chord(&mut native, &[CONTROL], 0x76);
+    until(|| document(&destination).scene().order().len() == count + 1 && idle(&destination), "retained whole-layer paste across colour and depth");
+    let pasted = document(&destination);
+    assert_eq!(pasted.composition().color, color);
+    let layer = active_occurrence(&pasted);
+    assert_eq!((&layer.name, layer.opacity, layer.blend, layer.offset), (&copied_layer.name, copied_layer.opacity, copied_layer.blend, copied_layer.offset));
+    assert!(state(&destination).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement));
+    destination.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    until(|| document(&destination).scene().order().len() == count, "cross-colour retained Paste is one undo step");
+    destination.window.destroy();
 }
 
 #[test]

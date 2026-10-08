@@ -362,6 +362,87 @@ class AndroidColorPanelTest {
             waitFor("Edit Color closed") { findTag("color-cancel") == null }
         }
     }
+    @Test fun clipboardKeyboardKeepsColorAndTextFocusAcrossWindows() {
+        fun click(tag: String) = instrumentation.runOnMainSync { assertTrue(tag, findTag(tag)!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+        fun hex() = findTag("color-value-hex")!!.second.config[SemanticsProperties.ContentDescription].single().substringAfterLast(' ')
+        fun text(tag: String) = findTag(tag)!!.second.config[SemanticsProperties.EditableText].text
+        val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+        fun publish(value: String) = instrumentation.runOnMainSync { clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Fixture", value)) }
+        fun copied(): String { var result = ""; instrumentation.runOnMainSync { result = clipboard.primaryClip!!.getItemAt(0).text.toString() }; return result }
+        val control = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        fun terminal(code: Int) {
+            val now = SystemClock.uptimeMillis()
+            instrumentation.sendKeySync(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 1, control, -1, 0, 0, InputDevice.SOURCE_KEYBOARD))
+            instrumentation.sendKeySync(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0, control, -1, 0, 0, InputDevice.SOURCE_KEYBOARD))
+            settle()
+        }
+        action(obj("type" to "invoke", "command" to "brush"))
+        tool = MotionEvent.TOOL_TYPE_MOUSE
+        event(MotionEvent.ACTION_DOWN, canvasPoint()); event(MotionEvent.ACTION_MOVE, point + Offset(40f * density, 0f)); event(MotionEvent.ACTION_UP)
+        waitFor("authored source ink") { state().getJSONObject("document_file").getBoolean("modified") }
+        for (theme in listOf("light", "dark")) for (windowed in listOf(false, true)) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val revision = state().getJSONObject("document_file").getLong("revision")
+            val layers = state().array("layers").objects().map { it.getLong("id") }
+            val sourceTool = state().getJSONObject("layer_tools").getString("tool")
+            val foreground = colors().getJSONObject("foreground").toString()
+            fun unchanged() {
+                assertEquals("$theme/$windowed keeps source artwork", revision, state().getJSONObject("document_file").getLong("revision"))
+                assertEquals(layers, state().array("layers").objects().map { it.getLong("id") })
+                assertEquals(sourceTool, state().getJSONObject("layer_tools").getString("tool"))
+                assertTrue(state().array("requests").objects().none { it.getJSONObject("kind").getString("type") == "document" })
+            }
+            instrumentation.runOnMainSync { editSlot(host, "foreground", windowed) }
+            waitFor("focused color editor") { host.colorKeyHandler != null && findTag("color-editor")?.first?.view?.rootView?.hasWindowFocus() == true }
+            assertEquals(windowed, findTag("color-editor")!!.first.view.rootView !== activity.window.decorView)
+            publish("#123456"); pressKey(KeyEvent.KEYCODE_V, control)
+            waitFor("color paste") { hex() == "#123456" }
+            pressKey(KeyEvent.KEYCODE_C, control); assertEquals("#123456", copied())
+            publish("#ABCDEF"); terminal(KeyEvent.KEYCODE_C); assertEquals("#ABCDEF", copied())
+            terminal(KeyEvent.KEYCODE_V); assertEquals("#123456", hex())
+            pressKey(KeyEvent.KEYCODE_X, control); settle(); assertEquals("#ABCDEF", copied()); assertEquals("#123456", hex()); unchanged()
+            click("color-value-hex")
+            waitFor("hex owns native text input") { host.editingText && findTag("color-value-hex-input") != null }
+            pressKey(KeyEvent.KEYCODE_C, control); assertEquals("#123456", copied())
+            pressKey(KeyEvent.KEYCODE_X, control)
+            waitFor("native Cut changes only selected text") { text("color-value-hex-input").isEmpty() }
+            publish("#654321"); pressKey(KeyEvent.KEYCODE_V, control)
+            waitFor("native Paste changes the field") { text("color-value-hex-input") == "#654321" }
+            var imeVisible = false
+            instrumentation.runOnMainSync {
+                assertFalse(host.textComposition.active)
+                val root = findTag("color-value-hex-input")!!.first.view
+                imeVisible = androidx.core.view.ViewCompat.getRootWindowInsets(root)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+                activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java).hideSoftInputFromWindow(root.windowToken, 0)
+            }
+            waitFor("soft keyboard dismissed before physical-key cancellation") { androidx.core.view.ViewCompat.getRootWindowInsets(findTag("color-editor")!!.first.view)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) != true }
+            pressKey(KeyEvent.KEYCODE_ESCAPE)
+            try { waitFor("hex editing cancelled") { !host.editingText && findTag("color-value-hex-input") == null } }
+            catch (failure: AssertionError) {
+                var details = ""
+                instrumentation.runOnMainSync {
+                    val input = findTag("color-value-hex-input")
+                    details = "$theme/$windowed editingText=${host.editingText}, input=${input != null}, focused=${input?.second?.config?.getOrNull(SemanticsProperties.Focused)}, editor=${host.colorEditor != null}, handler=${host.colorKeyHandler != null}, imeBefore=$imeVisible, imeNow=${input?.first?.view?.let { androidx.core.view.ViewCompat.getRootWindowInsets(it)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) }}"
+                }
+                throw AssertionError("Escape did not retire native hex input: $details", failure)
+            }
+            assertEquals("#123456", hex()); unchanged()
+            click("color-swatches")
+            waitFor("swatch search owns native text input") { host.editingText && findTag("color-sheet-search") != null }
+            publish("swatch query"); pressKey(KeyEvent.KEYCODE_V, control)
+            waitFor("native search Paste") { text("color-sheet-search") == "swatch query" }
+            pressKey(KeyEvent.KEYCODE_A, control); pressKey(KeyEvent.KEYCODE_C, control); assertEquals("swatch query", copied())
+            pressKey(KeyEvent.KEYCODE_X, control)
+            waitFor("native search Cut") { text("color-sheet-search").isEmpty() }
+            unchanged()
+            click("color-sheet-close")
+            waitFor("swatch search retired") { !host.editingText && findTag("color-sheet-search") == null }
+            click("color-cancel")
+            waitFor("color keyboard owner retired") { host.colorKeyHandler == null && findTag("color-editor") == null }
+            assertEquals(foreground, colors().getJSONObject("foreground").toString())
+            unchanged()
+        }
+    }
     @Test fun retainedPaintIconsAndCompactControlFollowCommittedContext() {
         paintPairFixture()
         val ids = paintIconTags.map { node(it).id }

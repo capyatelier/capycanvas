@@ -115,6 +115,7 @@ documents-open-photos-filter = Desenhos e fotos
 documents-delivery-clipboard-unavailable = Não é possível colar imagens neste navegador. Use Importar imagem como camada.
 documents-delivery-clipboard-too-large = A imagem da área de transferência excede 512 MiB
 documents-delivery-clipboard-empty = Copie uma imagem para colar ou importe o arquivo original.
+documents-delivery-clipboard-changed = A área de transferência mudou. Cole novamente.
 documents-delivery-images = Imagens
 documents-delivery-drawing-or-photo = Desenho ou foto
 documents-delivery-drawing-type = Desenho do { common-app-name }

@@ -115,6 +115,7 @@ documents-open-photos-filter = Drawings and photos
 documents-delivery-clipboard-unavailable = Image paste is unavailable in this browser. Use Import Image as Layer.
 documents-delivery-clipboard-too-large = Clipboard image exceeds 512 MiB
 documents-delivery-clipboard-empty = Copy an image to paste, or import the original file.
+documents-delivery-clipboard-changed = The clipboard changed; paste again.
 documents-delivery-images = Images
 documents-delivery-drawing-or-photo = Drawing or photo
 documents-delivery-drawing-type = { common-app-name } drawing

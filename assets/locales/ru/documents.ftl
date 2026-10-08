@@ -115,6 +115,7 @@ documents-open-photos-filter = Рисунки и фотографии
 documents-delivery-clipboard-unavailable = Вставка изображения недоступна в этом браузере. Используйте импорт изображения как слоя.
 documents-delivery-clipboard-too-large = Размер изображения в буфере превышает 512 MiB
 documents-delivery-clipboard-empty = Скопируйте изображение для вставки или импортируйте исходный файл.
+documents-delivery-clipboard-changed = Буфер обмена изменился. Повторите вставку.
 documents-delivery-images = Изображения
 documents-delivery-drawing-or-photo = Рисунок или фотография
 documents-delivery-drawing-type = Рисунок { common-app-name }

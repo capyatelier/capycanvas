@@ -43,20 +43,19 @@ pub struct WebLookup { request:u32, resource:std::sync::Arc<layer_core::Lut3d> }
 
 #[wasm_bindgen]
 impl WebApp {
-    pub fn prepare_clipboard_document(&self, id: u32, images: Option<image_import::WebPreparedImages>, cancelled: js_sys::Function) -> Result<js_sys::Promise, JsValue> {
+    pub fn prepare_clipboard_document(&self, id: u32, images: image_import::WebPreparedImages, cancelled: js_sys::Function) -> Result<js_sys::Promise, JsValue> {
         if !matches!(self.session.document_request(id).map_err(js)?, DocumentRequest::Paste { mode: layer_ui::PasteMode::NewImage }) {
             return Err(js("The paste request is no longer active"));
         }
         let lost = self.gpu_owner().ok_or_else(|| js("Wait for the canvas"))?;
-        let project = if let Some(images) = images {
-            output::cancelled(&images.control)?;
-            if images.request.id != id || !std::sync::Arc::ptr_eq(&lost, &images.request.lost) || lost.lock().unwrap().is_some() {
-                return Err(js("The canvas changed while importing; try again"));
-            }
-            self.session.validate_image_placement(&images.request.context).map_err(js)?;
-            layer_ui::clipboard_document(images.sources, self.session.state().settings.photo_open, self.session.localization()).map_err(js)?
+        output::cancelled(&images.control)?;
+        if images.request.id != id || !std::sync::Arc::ptr_eq(&lost, &images.request.lost) || lost.lock().unwrap().is_some() {
+            return Err(js("The canvas changed while importing; try again"));
+        }
+        self.session.validate_image_placement(&images.request.context).map_err(js)?;
+        let project = if let Some(clip) = images.clip { clip.document(self.session.localization()).map_err(js)?
         } else {
-            self.documents.clip.as_ref().ok_or_else(|| js("Nothing was copied in this window"))?.document(self.session.localization()).map_err(js)?
+            layer_ui::clipboard_document(images.sources, self.session.state().settings.photo_open, self.session.localization()).map_err(js)?
         };
         let live = self.session.engine().backend().0.as_ref().ok_or_else(|| js("Wait for the canvas"))?;
         let (adapter, device, queue) = (live.adapter().clone(), live.device().clone(), live.queue().clone());

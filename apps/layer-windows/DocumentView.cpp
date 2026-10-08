@@ -325,34 +325,44 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             DataPackage package;package.RequestedOperation(DataPackageOperation::Copy);
             package.SetData(L"PNG",png);package.SetData(ClipNonce,box_value(str(details,L"nonce")));
             package.SetBitmap(winrt::Windows::Storage::Streams::RandomAccessStreamReference::CreateFromStream(png));
-            Clipboard::SetContent(package);action=O({{L"op",S(L"commit")}});
+            Clipboard::SetContent(package);action=O({{L"op",S(L"clip_published")},{L"publication",N(capy_clipboard_publication())}});
         }catch(hresult_error const&){if(!stopping)report(to_string(str(object(details,L"delivery"),L"clipboard_unavailable")));}
         if(!stopping)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(id)},{L"action",action}}).Stringify()));
     }
     fire_and_forget pickImages(J request){
-        auto lifetime=shared_from_this();showing=true;changed();A paths;J own;auto id=num(request,L"id");
+        auto lifetime=shared_from_this();showing=true;changed();A paths,alternatives;J own;auto id=num(request,L"id");
         try{
             auto details=object(request,L"details");
             if(str(request,L"kind")==L"paste"){
                 using namespace winrt::Windows::ApplicationModel::DataTransfer;
                 auto content=Clipboard::GetContent();
-                winrt::Windows::Storage::Streams::IRandomAccessStream input{nullptr};
                 auto nonce=str(details,L"clip_nonce");
-                if(!nonce.empty()&&content.Contains(ClipNonce)&&unbox_value_or<hstring>(co_await content.GetDataAsync(ClipNonce),L"")==nonce){
-                    own=O({{L"op",S(L"paste_clip")},{L"nonce",S(nonce)}});
-                }else if(content.Contains(StandardDataFormats::StorageItems())){
-                    auto items=co_await content.GetStorageItemsAsync();for(auto item:items)if(auto file=item.try_as<winrt::Windows::Storage::StorageFile>())paths.Append(S(file.Path()));
-                }
-                if(!own.Size()&&!paths.Size()){
-                    if(content.Contains(L"PNG"))input=(co_await content.GetDataAsync(L"PNG")).try_as<winrt::Windows::Storage::Streams::IRandomAccessStream>();
-                    if(!input&&content.Contains(StandardDataFormats::Bitmap()))input=co_await (co_await content.GetBitmapAsync()).OpenReadAsync();
-                    if(!input)report(to_string(str(object(details,L"delivery"),L"clipboard_empty")));
-                }
-                if(input){
-                    auto target=object(details,L"clipboard");auto folder=co_await winrt::Windows::Storage::StorageFolder::GetFolderFromPathAsync(str(target,L"folder"));
-                    auto file=co_await folder.CreateFileAsync(str(target,L"name"),winrt::Windows::Storage::CreationCollisionOption::ReplaceExisting);
-                    auto output=co_await file.OpenAsync(winrt::Windows::Storage::FileAccessMode::ReadWrite);
-                    co_await winrt::Windows::Storage::Streams::RandomAccessStream::CopyAsync(input,output);co_await output.FlushAsync();output.Close();input.Close();paths.Append(S(file.Path()));
+                try {
+                    if(!nonce.empty()&&content.Contains(ClipNonce)&&unbox_value_or<hstring>(co_await content.GetDataAsync(ClipNonce),L"")==nonce)
+                        own=O({{L"op",S(L"paste_clip")},{L"nonce",S(nonce)}});
+                }catch(hresult_error const&){}
+                if(!own.Size()){
+                    try {
+                        if(content.Contains(StandardDataFormats::StorageItems())){
+                            auto items=co_await content.GetStorageItemsAsync();for(auto item:items)if(auto file=item.try_as<winrt::Windows::Storage::StorageFile>())paths.Append(S(file.Path()));
+                        }
+                    }catch(hresult_error const&){}
+                    for(bool bitmap:{false,true}){
+                        try {
+                            winrt::Windows::Storage::Streams::IRandomAccessStream input{nullptr};
+                            if(bitmap&&content.Contains(StandardDataFormats::Bitmap()))input=co_await (co_await content.GetBitmapAsync()).OpenReadAsync();
+                            if(!bitmap&&content.Contains(L"PNG"))input=(co_await content.GetDataAsync(L"PNG")).try_as<winrt::Windows::Storage::Streams::IRandomAccessStream>();
+                            if(!input)continue;
+                            if(input.Size()>512ull*1024*1024)throw hresult_error(E_OUTOFMEMORY);
+                            auto target=object(details,L"clipboard");auto folder=co_await winrt::Windows::Storage::StorageFolder::GetFolderFromPathAsync(str(target,L"folder"));
+                            auto file=co_await folder.CreateFileAsync(str(target,bitmap?L"bitmap_name":L"name"),winrt::Windows::Storage::CreationCollisionOption::ReplaceExisting);
+                            auto output=co_await file.OpenAsync(winrt::Windows::Storage::FileAccessMode::ReadWrite);
+                            co_await winrt::Windows::Storage::Streams::RandomAccessStream::CopyAsync(input,output);co_await output.FlushAsync();output.Close();input.Close();
+                            A candidate;candidate.Append(S(file.Path()));if(!paths.Size())paths=candidate;else alternatives.Append(candidate);
+                        }catch(hresult_error const&){}
+                        if(stopping)co_return;
+                    }
+                    if(!paths.Size())report(to_string(str(object(details,L"delivery"),L"clipboard_empty")));
                 }
             }else{
                 Pickers::FileOpenPicker open(window.AppWindow().Id());open.CommitButtonText(recovery(L"import"));
@@ -362,7 +372,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         }catch(hresult_canceled const&){}catch(hresult_error const& e){if(!stopping)report(to_string(e.message()));}
         multiplePicker=nullptr;
         if(!stopping)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(id)},
-            {L"action",own.Size()?own:paths.Size()?O({{L"op",S(L"read_images")},{L"paths",paths}}):O({{L"op",S(L"cancel")}})}}).Stringify()));
+            {L"action",own.Size()?own:paths.Size()?O({{L"op",S(L"read_images")},{L"paths",paths},{L"alternatives",alternatives}}):O({{L"op",S(L"cancel")}})}}).Stringify()));
         showing=false;changed();
     }
     void preview(Image const& image,uint32_t id,uint32_t index){

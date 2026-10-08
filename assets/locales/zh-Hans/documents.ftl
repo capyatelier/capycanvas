@@ -115,6 +115,7 @@ documents-open-photos-filter = 绘画和照片
 documents-delivery-clipboard-unavailable = 此浏览器无法粘贴图像。请使用“将图像导入为图层”。
 documents-delivery-clipboard-too-large = 剪贴板图像超过 512 MiB
 documents-delivery-clipboard-empty = 请先复制要粘贴的图像，或导入原始文件。
+documents-delivery-clipboard-changed = 剪贴板已更改，请重新粘贴。
 documents-delivery-images = 图像
 documents-delivery-drawing-or-photo = 绘画或照片
 documents-delivery-drawing-type = { common-app-name } 绘画

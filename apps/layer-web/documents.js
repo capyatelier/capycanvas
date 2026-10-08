@@ -16,7 +16,7 @@ export const exportFormats={
 import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged}) {
+export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged,refreshInputContext}) {
   const common=bootstrap.common,exportCopy=liveCopy(app,"export_copy");
   const formatLabels=()=>({Exr:exportCopy.format_exr,PngHdr:exportCopy.format_pq,PngHdrMapped:exportCopy.format_pq_clipped,
     JpegHdr:exportCopy.format_jpeg_hdr,JpegHdrMapped:exportCopy.format_jpeg_hdr,AvifHdr:exportCopy.format_avif_hdr,AvifHdrMapped:exportCopy.format_avif_hdr,
@@ -48,7 +48,8 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   window.addEventListener('blur',cancelNativePaste);
   window.addEventListener('pagehide',cancelNativePaste);
   document.addEventListener('paste',event=>{
-    if(event.defaultPrevented||editing(event.target)){finishNativePaste();return;}
+    refreshInputContext?.();
+    if(event.defaultPrevented||editing(event.target)||editing(document.activeElement)||document.querySelector('dialog[open], details[open]')||document.querySelector(':popover-open:not(.hover-tooltip)')){finishNativePaste();return;}
     const files=[...event.clipboardData?.files??[]];
     if(nativePending){
       const current=app.state().requests.some(request=>request.id===nativePending.id);
@@ -183,7 +184,9 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     if(!nonce)return {own:false};
     if(!customClip)return {own:false};
     const items=await clipboardRead();
-    for(const item of items)if(item.types.includes(clipMime)&&await(await item.getType(clipMime)).text()===nonce)return {own:true};
+    for(const item of items)if(item.types.includes(clipMime)) {
+      try {const data=await item.getType(clipMime);if(data.size<=256&&await data.text()===nonce)return {own:true,nonce};} catch {}
+    }
     return {own:false,items};
   }
   async function clipboardImage(read) {
@@ -191,11 +194,13 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     const formats=app.photo_formats(),preferred=formats.flatMap(f=>f.mime_types.flatMap(m=>[`web ${m}`,m]));
     const files=[];
     for(const item of items) {
-      const type=preferred.find(type=>item.types.includes(type));if(!type)continue;
-      const blob=await item.getType(type),mime=type.replace(/^web /,"");
-      if(blob.size>512*1024*1024)throw deliveryFailure("clipboard_too_large");
-      const extension=formats.find(f=>f.mime_types.includes(mime)).extensions[0];
-      files.push(new File([blob],deliveryMessage("pasted_image",{extension}),{type:mime}));
+      const types=preferred.filter(type=>item.types.includes(type));if(!types.length)continue;
+      files.push(types.map(type=>async()=>{
+        const blob=await item.getType(type),mime=type.replace(/^web /,"");
+        if(blob.size>512*1024*1024)throw deliveryFailure("clipboard_too_large");
+        const extension=formats.find(f=>f.mime_types.includes(mime)).extensions[0];
+        return new File([blob],deliveryMessage("pasted_image",{extension}),{type:mime});
+      }));
     }
     if(!items.length)throw deliveryFailure("clipboard_empty");
     if(!files.length)throw deliveryFailure("clipboard_formats",{formats:formats.map(f=>f.name).join(", ")});
@@ -319,8 +324,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
           await images.run(id,()=>files);return;
         }
         const clipboard=await ownedClipboard();
-        if(clipboard.own&&r.mode==="new_image")await openClipboard(id);
-        else if(clipboard.own){applyChange(app.paste_clip(id));wake();}
+        if(clipboard.own)await images.run(id,()=>clipboard.nonce);
         else await images.run(id,()=>clipboardImage(clipboard.items));
       } else if(r.type==="place") {
         await images.run(id,async()=>(await chooseFile(true))?.map(c=>c.file));
@@ -401,16 +405,10 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     } finally {candidate?.free();active.delete(request.id);pruneHandles();}
   }
   async function openClipboard(id,images,control){
-    const ownControl=!control;
-    control??=app.capture_control();
     const retire=()=>control.cancel();
     window.addEventListener('pagehide',retire);
-    let candidate,progress;
+    let candidate;
     try {
-      if(ownControl){
-        progress=element('aside','file-progress');progress.setAttribute('role','status');
-        progress.append(element('span','',()=>bootstrap.preparing_document),button(()=>common.cancel,retire));document.body.append(progress);
-      }
       candidate=await gpuOperation(()=>app.prepare_clipboard_document(id,images,()=>control.cancelled()));
       if(control.cancelled())throw new DOMException("Paste cancelled","AbortError");
       applyChange(app.finish_document(id,true));
@@ -418,7 +416,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
         if(control.cancelled())throw new DOMException("Paste cancelled","AbortError");
         const prepared=candidate;candidate=null;applyChange(app.adopt_document(prepared,null));
       });
-    } finally {window.removeEventListener('pagehide',retire);candidate?.free();progress?.remove();if(ownControl)control.free();}
+    } finally {window.removeEventListener('pagehide',retire);candidate?.free();}
   }
   async function readyToPark(){
     const deadline=performance.now()+30000;

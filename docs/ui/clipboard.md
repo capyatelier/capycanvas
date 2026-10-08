@@ -49,8 +49,12 @@ User shortcut overrides remain in effect.
   New Image remains available. File operations and unfinished canvas gestures
   block clipboard commands consistently for pixels and objects.
 - **Text fields keep their keys:** Ctrl+C, Ctrl+X and Ctrl+V edit native text.
+  Drawing tabs, palette swatches and ordinary toolbar buttons keep the canvas
+  shortcuts when no text editor or modal control owns focus.
   Shortcut recording captures the chord; settings and modal contexts protect
-  the artwork. Browser image paste follows the shared bindings and gates, even
+  the artwork. Color editors copy the whole color with Ctrl+C and accept color text
+  with Ctrl+V when no text field owns focus; Ctrl+X has no color action. Browser image
+  paste follows the shared bindings and gates, even
   without an asynchronous clipboard reader. Missing native delivery cancels
   the request instead of leaving the drawing busy.
 - **Edit menu and bar:** the clipboard commands stay in the existing Edit menu.
@@ -66,9 +70,12 @@ still offers Add Mask (or Edit Mask), New Paint Layer and Rasterize Layer.
 
 A pixel selection copies only the active paint/image layer. Multi-layer pixel
 selections and selected regions of groups are not yet a structured clipboard.
-Whole layers preserve their structure when the destination colour space and
-depth match. A different colour space/depth or Paste Into uses the rendered
-image with its explicit profile. Native data from other applications needs a
+Whole layers preserve their structure across destination colour spaces and
+SDR depths. Conversion runs on the import worker, promotes depth before changing
+profiles and reduces depth afterward. It preserves original photos, masks and
+layer properties. HDR layers require an HDR destination; reducing an editable
+HDR copy to SDR is refused. Paste Into uses the rendered image with its explicit
+profile. Native data from other applications needs a
 supported raster or image-file representation; text, SVG and foreign layer
 formats are not imported as artwork.
 
@@ -87,15 +94,19 @@ untouched photo's original samples. Whole-layer copies retain those samples in
 the authored layer graph and render a separate public PNG. Copies of more than 2 MP show the import-style
 progress with Cancel.
 
-The clip (`PixelClip`) belongs to the window, in `DocumentSessions`, so any of
-its drawings can paste it; GTK keeps one clip for the whole application. Beside
+The clip (`PixelClip`) is retained across native windows through
+`RetainedClipboard`; closing its source window does not discard it. Web retains
+one clip per browser window. Beside
 the PNG, the system clipboard carries the clip's nonce. A paste whose clipboard
 still carries that nonce reads the clip at full depth; anything else is an image
-from another app.
+from another app. Native paste captures the matching clip before asynchronous
+preparation and checks the destination again before committing. Across native
+windows, an older copy finishing late cannot replace a newer published clip.
 
-- **Colour:** in a drawing with the same colour space and depth, the pasted layer
-  holds document pixels; otherwise it keeps the clip as an original image with its
-  explicit profile, converted like an opened photo.
+- **Colour:** pixel copies pasted into a drawing with the same colour space and
+  depth hold document pixels; otherwise they keep the clip as an original image
+  with its explicit profile, converted like an opened photo. Whole-layer copies
+  keep their structure through the colour conversion described above.
 - **Cut** captures, then erases once the host reports the copy written. If the
   drawing changed meanwhile, the source stays and a notice says so. A failed system write or cancellation cannot acknowledge Cut.
 
@@ -105,7 +116,7 @@ from another app.
 | --- | --- | --- |
 | GTK | A `ContentProvider` union of `image/png` and `application/x-capycanvas-clip` holding the nonce. | The clipboard offers the private type with the current nonce. |
 | Web | `navigator.clipboard.write` with a `ClipboardItem` created synchronously in the key or click task, whose promises settle when the worker finishes; plus `web application/x-capycanvas-clip` where `ClipboardItem.supports` allows it. The raster worker encodes the clip. | The custom format holds the nonce. Without it, Paste reads the current system image; a retained copy and focus history do not establish ownership. |
-| Android | `cacheDir/clipboard/<nonce>.png` through a `FileProvider` URI in `ClipData.newUri`, with the nonce in `ClipDescription.extras`. Only the latest file is kept. | The clip description's nonce. Reading the description shows no clipboard toast. |
+| Android | `cacheDir/clipboard/<nonce>.png` through a `FileProvider` URI in `ClipData.newUri`, with the nonce in `ClipDescription.extras`. Publication and pruning are serialized across windows; only the latest file is kept. | The clip description's nonce. Reading the description shows no clipboard toast. |
 | Windows | A `DataPackage` with a `PNG` stream, a standard Bitmap stream reference and `art.capycanvas.clip.nonce` holding the nonce. The copy workflow captures on the render owner, encodes on the document worker and spools the PNG, which the UI thread reads asynchronously before writing the clipboard. Only copies over 2 MP show progress. | The private format with the current nonce. The standard Bitmap representation lets consumers request the system bitmap format without an app-side UI-thread decode. |
 | macOS and iPadOS | One pasteboard item with a lazily provided `public.png` and `art.capycanvas.clip.nonce` holding the nonce (an `NSPasteboardItem` data provider, or an `NSItemProvider`). A project task (kind 8) captures on the owner and encodes on the file worker. | The private type with the current nonce; iPadOS checks for the type before reading it, so another app's content shows no paste prompt. On macOS, ⌘X, ⌘C and ⌘V reach a focused text field first. |
 
@@ -114,7 +125,12 @@ formats. The Web also accepts files supplied by a native Paste event, including
 when the browser has no asynchronous clipboard reader; focused text fields keep
 native text paste. Web clipboard items without a supported image and Android
 items without an image URI do not discard neighboring image items. Windows falls
-back to bitmap data when a StorageItems payload contains no files.
+back from unreadable file lists or PNG data to its Bitmap representation.
+GTK, Web and Apple try the next advertised image representation when loading
+or decoding fails. Each item contributes one successful representation. Android
+skips unreadable clipboard URIs while retaining neighboring images. Ordinary
+file imports remain atomic: a failed selected file prevents the whole import.
+Cancellation retires the complete batch, including sources decoded earlier.
 
 The shared parts are `crates/layer-ui/src/clipboard.rs` (commands, capture,
 paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
@@ -136,7 +152,10 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
 - Web: `node apps/layer-web/test.mjs --headless --clipboard` with pen, touch and mouse, including internal and external new-image tabs. `color-controls-copy.test.mjs` checks denied or unavailable writes, late cancellation, stale ownership, mixed clipboard items and native paste events.
 - Android: `AndroidInteractionTest#clipboardCopyPasteAcrossDevices` (another app
   reads the URI, mixed external items and external/internal new-image tabs with
-  immediate Copy; run with `-e theme light` and `-e theme dark`) and
+  immediate Copy; the foreground test receiver reads with automatic URI grants
+  under a separate application ID; run with `-e theme light` and `-e theme dark`),
+  `AndroidColorPanelTest#clipboardKeyboardKeepsColorAndTextFocusAcrossWindows`
+  (both themes, color/text focus, native Dialog and windowless presentation), and
   `AndroidRasterTest#clipboardCopyLatency24mp`.
 - macOS and iPadOS: `EditorLaunchTests/testPixelClipboard` (keyboard on macOS,
   where the test reads the PNG back from the pasteboard; the in-app Edit menu on

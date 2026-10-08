@@ -102,7 +102,7 @@ mod clipboard;
 mod object_editing;
 pub use object_editing::{ObjectAction, ObjectRow, object_handle, object_token};
 pub use source_edit::SourceUse;
-pub use clipboard::{clipboard_document, ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
+pub use clipboard::{clipboard_document, clipboard_color_changes, ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
 pub use notices::{Notice, NoticeAction, NoticeActionId};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{

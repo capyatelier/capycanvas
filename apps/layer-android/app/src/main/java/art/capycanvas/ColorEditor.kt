@@ -2,6 +2,7 @@ package art.capycanvas
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -174,11 +175,36 @@ private val Shapes = listOf("circle" to "OKLCH", "square" to "HSB", "triangle" t
     }
     val wide = LocalConfiguration.current.screenWidthDp >= 744
     val invalidOpen = editing != null && errorTarget == editing && error != null
+    val currentKeyHandler by rememberUpdatedState<(AndroidKeyEvent) -> Boolean> { event ->
+        if (host.editingText || host.textComposition.owns(event)) false
+        else if (event.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE) {
+            if (event.action == AndroidKeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                if (sheet) sheet = false else close(null)
+            }
+            true
+        } else if ((event.isCtrlPressed || event.isMetaPressed) && !event.isAltPressed && !event.isShiftPressed &&
+            event.keyCode in listOf(AndroidKeyEvent.KEYCODE_C, AndroidKeyEvent.KEYCODE_X, AndroidKeyEvent.KEYCODE_V)) {
+            if (event.action == AndroidKeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                if (event.keyCode == AndroidKeyEvent.KEYCODE_C) copyText(context, view.getString("hex"))
+                if (event.keyCode == AndroidKeyEvent.KEYCODE_V) {
+                    context.getSystemService(ClipboardManager::class.java).primaryClip?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)?.text?.let { act(obj("op" to "text", "text" to it.toString()), "hex") }
+                }
+            }
+            true
+        } else false
+    }
+    val keyHandler = remember(host, request) { { event: AndroidKeyEvent -> currentKeyHandler(event) } }
+    val cardFocus = remember { FocusRequester() }
+    DisposableEffect(host, keyHandler) {
+        host.colorKeyHandler = keyHandler
+        onDispose { if (host.colorKeyHandler === keyHandler) host.colorKeyHandler = null }
+    }
+    LaunchedEffect(Unit) { cardFocus.requestFocus() }
     val card = @Composable {
         Surface(Modifier.padding(16.dp).widthIn(max = 720.dp).fillMaxWidth().heightIn(max = (LocalConfiguration.current.screenHeightDp - 32).dp)
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape && editing == null) { if (sheet) sheet = false else close(null); true } else false
-            }.testTag("color-editor"), shape = SquircleShape(20.dp), color = colors.settingsBackground) {
+            .focusRequester(cardFocus).onPreviewKeyEvent { keyHandler(it.nativeKeyEvent) }.focusable()
+            .testTag("color-editor"), shape = SquircleShape(20.dp), color = colors.settingsBackground) {
             Column {
                 Box(Modifier.weight(1f, fill = false).clipToBounds()) {
                     val body = @Composable {
@@ -359,6 +385,7 @@ private fun copyText(context: android.content.Context, text: String) {
         val focus = remember { FocusRequester() }
         var value by remember { mutableStateOf(TextFieldValue(edit, TextRange(0, edit.length))) }
         var focused by remember { mutableStateOf(false) }
+        var cancelled by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) { focus.requestFocus() }
         DisposableEffect(owner) { onDispose { host.textComposition.clear(owner); if (focused) host.editingText = false } }
         BasicTextField(value, { value = it; host.textComposition.update(owner, value, focused) }, singleLine = true, textStyle = style, cursorBrush = SolidColor(colors.accent),
@@ -366,9 +393,9 @@ private fun copyText(context: android.content.Context, text: String) {
             modifier = Modifier.width(width).height(if (hex) 40.dp else 28.dp).clip(ControlShape).background(colors.input)
                 .border(2.dp, if (invalid) MaterialTheme.colorScheme.error else colors.accent, ControlShape).padding(horizontal = 4.dp, vertical = 4.dp)
                 .focusRequester(focus).testTag("color-value-$tag-input")
-                .onPreviewKeyEvent { event -> if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { onCancel(); true } else false }
+                .onPreviewKeyEvent { event -> if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { cancelled = true; onCancel(); true } else false }
                 .onFocusChanged { state ->
-                    if (focused && !state.isFocused && value.text != edit) onCommit(value.text)
+                    if (!cancelled && focused && !state.isFocused && value.text != edit) onCommit(value.text)
                     focused = state.isFocused; host.editingText = focused; host.textComposition.update(owner, value, focused)
                 }.semantics { contentDescription = name })
         return
@@ -453,17 +480,21 @@ private fun copyText(context: android.content.Context, text: String) {
     var shown by remember { mutableStateOf<JSONObject?>(null) }
     var revision by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
+    val owner = remember { Any() }
+    var focused by remember { mutableStateOf(false) }
+    DisposableEffect(owner) { onDispose { host.textComposition.clear(owner); if (focused) host.editingText = false } }
     LaunchedEffect(query.text, revision) {
         host.query(obj("type" to "swatch_sheet", "query" to query.text, "current" to view.getJSONObject("value"))) { value -> shown = value as? JSONObject }
     }
     LaunchedEffect(Unit) { focus.requestFocus() }
     Column(Modifier.fillMaxSize().background(colors.settingsBackground).padding(start = 20.dp, end = 20.dp, top = 20.dp).testTag("color-sheet")
-        .onPreviewKeyEvent { event -> if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { if (query.text.isNotEmpty()) { query = TextFieldValue(""); search("") } else close(); true } else false },
+        .onPreviewKeyEvent { event -> if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { if (query.text.isNotEmpty()) { query = TextFieldValue(""); host.textComposition.update(owner, query, focused); search("") } else close(); true } else false },
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            BasicTextField(query, { query = it; search(it.text) }, singleLine = true, textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.text), cursorBrush = SolidColor(colors.accent),
+            BasicTextField(query, { query = it; host.textComposition.update(owner, query, focused); search(it.text) }, singleLine = true, textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.text), cursorBrush = SolidColor(colors.accent),
                 modifier = Modifier.weight(1f).height(34.dp).clip(ControlShape).background(colors.input).padding(horizontal = 10.dp, vertical = 8.dp)
-                    .focusRequester(focus).testTag("color-sheet-search").semantics { contentDescription = copy.getJSONObject("color").getString("swatch_search") },
+                    .focusRequester(focus).onFocusChanged { state -> focused = state.isFocused; host.editingText = focused; host.textComposition.update(owner, query, focused) }
+                    .testTag("color-sheet-search").semantics { contentDescription = copy.getJSONObject("color").getString("swatch_search") },
                 decorationBox = { inner -> Box { if (query.text.isEmpty()) Text(copy.getJSONObject("color").getString("swatch_search"), color = colors.secondary); inner() } })
             IconButton(close, Modifier.size(34.dp).testTag("color-sheet-close")) { SharedIcon("chevron-down", copy.getJSONObject("color").getString("close_swatches"), Modifier.size(16.dp)) }
         }

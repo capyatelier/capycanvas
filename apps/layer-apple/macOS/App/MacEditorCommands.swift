@@ -7,8 +7,16 @@ import SwiftUI
 @MainActor func nativeTextMenuAction(_ action: JSON) -> Bool {
     let selectors = ["select_all": #selector(NSText.selectAll(_:)), "cut": #selector(NSText.cut(_:)),
         "copy": #selector(NSText.copy(_:)), "paste_image": #selector(NSText.paste(_:))]
-    guard action["type"].string == "invoke", let selector = selectors[action["command"].string] else { return false }
-    return NSApp.sendAction(selector, to: nil, from: nil)
+    guard action["type"].string == "invoke" else { return false }
+    let command = action["command"].string
+    let selector = selectors[command]
+    guard selector != nil || ["copy_pixels", "copy_merged", "paste_as_new_image", "paste_in_place", "paste_at_view", "paste_at_cursor", "paste_into"].contains(command) else { return false }
+    let window = NSApp.keyWindow
+    let responder = window?.firstResponder
+    let native = responder is NSText || responder is NSTextField
+        || (responder as? NSTextInputClient)?.hasMarkedText() == true
+        || window?.sheetParent != nil || window?.attachedSheet != nil || NSApp.modalWindow != nil
+    return selector.map { NSApp.sendAction($0, to: nil, from: nil) } == true || native
 }
 
 private struct FocusedEditorKey: FocusedValueKey { typealias Value = EditorStore }

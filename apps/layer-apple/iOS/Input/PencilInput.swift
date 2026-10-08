@@ -245,6 +245,11 @@ extension CanvasView {
     func routeKeys(_ presses: Set<UIPress>, pressed: Bool) {
         for press in presses {
             guard let key = press.key else { continue }
+            if pressed {
+                guard isFirstResponder, window?.isKeyWindow == true,
+                    window?.rootViewController?.presentedViewController == nil,
+                    !NativeTextContext.composing else { continue }
+            }
             if AppleKeyName.name(key) == "tab" && key.modifierFlags.contains(.control) {
                 if pressed { store.drawingTabs.adjacent(!key.modifierFlags.contains(.shift)) }
                 continue

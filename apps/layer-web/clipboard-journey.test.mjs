@@ -126,9 +126,19 @@ export async function checkClipboard({call,evaluate,settle}) {
       const unhandled=text.dispatchEvent(new KeyboardEvent('keydown',options));text.dispatchEvent(new KeyboardEvent('keyup',options));return unhandled;});
     editor.remove();return native;})()`),[true,true,true],'nested editable text keeps native Cut, Copy and Paste');
 
+  const protectedNonce=await nonce();
+  await evaluate(`(()=>{const dialog=document.createElement('dialog');document.body.append(dialog);dialog.showModal();
+    for(const key of ['c','x','v']){const options={key,ctrlKey:true,bubbles:true,cancelable:true};layerApp.canvas.dispatchEvent(new KeyboardEvent('keydown',options));layerApp.canvas.dispatchEvent(new KeyboardEvent('keyup',options));}
+    const data=new DataTransfer();data.items.add(new File(['pixels'],'late.png',{type:'image/png'}));
+    layerApp.canvas.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));dialog.close();dialog.remove();layerApp.canvas.focus();})()`);
+  await pause(100);
+  assert.equal(await nonce(),protectedNonce,'a new native dialog blocks artwork Cut and Copy');
+  assert.equal(await layers(),count,'a late canvas-targeted paste cannot bypass a new dialog');
+  assert.equal((await state()).requests.length,0);
+
   const external=await evaluate(`(async()=>{const c=new OffscreenCanvas(64,48),x=c.getContext('2d');x.fillStyle='#e04010';x.fillRect(0,0,64,48);
-    await navigator.clipboard.write([new ClipboardItem({'image/png':await c.convertToBlob()})]);return true;})()`);
-  assert.ok(external);
+    await navigator.clipboard.write([new ClipboardItem({'web image/tiff':new Blob(['broken preferred TIFF'],{type:'image/tiff'}),'image/png':await c.convertToBlob()})]);return (await navigator.clipboard.read())[0].types.includes('web image/tiff');})()`);
+  assert.ok(external,'the clipboard offers malformed preferred TIFF plus valid PNG');
   await key('v');
   await wait(`layerApp.state().layers.length===${count+1}&&layerApp.state().canvas_bar?.context.kind==='placement'`);
   await invoke('cancel_transform');await wait(`layerApp.state().layers.length===${count}`);await idle();
@@ -190,5 +200,17 @@ export async function checkClipboard({call,evaluate,settle}) {
   } finally {
     await evaluate('window.showSaveFilePicker=clipboardGeometry.save;delete window.clipboardGeometry');
   }
+  const retainedLayer=await active(),retainedNonce=await nonce();await key('c');await copied(retainedNonce);
+  await invoke('new_document');
+  await wait(`!!document.querySelector('dialog[open] [data-document-field="width"]')`);
+  await evaluate(`(()=>{const dialog=document.querySelector('dialog[open]');for(const [field,value] of [['width','64'],['height','48']]){const input=dialog.querySelector('[data-document-field='+field+']');input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}
+    dialog.querySelector('[data-document-field="space"]').value='DisplayP3';dialog.querySelector('[data-document-field="depth"]').value='U16';dialog.querySelector('[data-document-action="create"]').click();})()`);
+  await wait(`!layerApp.documents.busy()&&layerApp.app.brush_ready()&&layerApp.app.document_color().space==='DisplayP3'&&layerApp.app.document_color().depth==='U16'`);
+  const targetCount=await layers();await key('v');await wait(`layerApp.state().layers.length===${targetCount+1}`);await idle();
+  const converted=await active();
+  assert.deepEqual([converted.label,converted.opacity,converted.blend],[retainedLayer.label,retainedLayer.opacity,retainedLayer.blend],'worker colour conversion preserves retained layer properties');
+  assert.notEqual((await state()).canvas_bar?.context.kind,'placement');
+  assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'DisplayP3',depth:'U16'});
+  await invoke('undo');await wait(`layerApp.state().layers.length===${targetCount}`);
   console.log('Keyboard copy, paste, Copy Merged, Paste Into, text focus, new images, whole-layer Cut/Undo, shown position and full-size external paste');
 }

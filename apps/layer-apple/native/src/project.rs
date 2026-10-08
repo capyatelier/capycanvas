@@ -59,11 +59,14 @@ enum Payload {
         device: wgpu::Device,
         environment: Option<OpenEnvironment>,
         clip: Option<PixelClip>,
+        color: layer_core::color::DocumentColor,
+        mode: Option<layer_ui::PasteMode>,
     },
     Export(Box<ExportTask>),
     Clip {
         task: Option<Box<ClipTask>>,
         clip: Option<Box<PixelClip>>,
+        publication: Option<u64>,
         request: u32,
         operation:DocumentRequest,
     },
@@ -194,7 +197,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
             let request = session.state().requests.iter().find(|r| matches!(r.kind,
                 HostRequestKind::Document { request: DocumentRequest::Copy { .. } }))
                 .ok_or("No copy is pending")?.id;
-            Payload::Clip { task: Some(Box::new(ClipTask::capture(session, request)?)), clip: None, request, operation:session.document_request(request)?.clone() }
+            Payload::Clip { task: Some(Box::new(ClipTask::capture(session, request)?)), clip: None, publication: None, request, operation:session.document_request(request)?.clone() }
         } else if opening == 3 {
             #[derive(Default, serde::Deserialize)]
             struct Placement { screen: Option<layer_core::Point>, layer: Option<Row>, nonce: Option<String> }
@@ -219,8 +222,10 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 images: layer_ui::ImageImportBatch::new(session.state().settings.photo_open,
                     session.engine().document().composition().color.space, Default::default()),
                 context, request, device,
+                color: session.engine().document().composition().color,
+                mode: match session.document_request(request)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None },
                 environment: session.pasting_new_image().then(|| OpenEnvironment::capture(session, admission, options)).transpose()?,
-                clip: placement.nonce.map(|nonce| app.window.documents.clip.as_ref().filter(|clip| clip.nonce == nonce).cloned().ok_or_else(|| "The clipboard changed; paste again".to_string())).transpose()?,
+                clip: placement.nonce.map(|nonce| app.window.documents.clip.capture(&nonce, session.localization())).transpose()?,
             }
         } else if opening == 1 {
             session.require_document_idle()?;
@@ -394,8 +399,13 @@ enum Input<'a> {
 pub unsafe extern "C" fn capy_project_finish_images(task: *const CapyProjectTask) -> i32 {
     let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
     task.perform(|payload| {
-        let Payload::Placed { images, environment, clip, .. } = payload else { return Err("Not an image import".into()); };
-        let Some(environment) = environment.take() else { return Ok(()); };
+        let Payload::Placed { images, environment, clip, color, mode, .. } = payload else { return Err("Not an image import".into()); };
+        let Some(environment) = environment.take() else {
+            if *mode != Some(layer_ui::PasteMode::Into) && let Some(clip) = clip {
+                clip.convert_layers(*color, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || task.control.is_cancelled())?;
+            }
+            return Ok(());
+        };
         let document = match clip.take() {
             Some(clip) => clip.document(&environment.localization)?,
             None => layer_ui::clipboard_document(images.take_sources(task.control.is_cancelled())?, environment.photo_policy, &environment.localization)?,
@@ -510,7 +520,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
             *resource = Some(std::sync::Arc::new(layer_core::Lut3d::parse_cube_named(&bytes, name?)?));
             return Ok(());
         }
-        if let Payload::Placed { images, .. } = payload {
+        if let Payload::Placed { images, mode, .. } = payload {
             let interpreting = matches!(&input, Ok(Input::Assume(_)));
             let result = (|| {
                 let name = name?;
@@ -518,15 +528,15 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
                 match input? {
                     Input::File(fd) => {
                         let file = host_file(fd);
-                        images.read(layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() },
+                        images.read_candidate(layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() },
                             stem, task.control.cancellation_flag())
                     }
-                    Input::Bytes(bytes) => images.read(Cursor::new(bytes), stem, task.control.cancellation_flag()),
+                    Input::Bytes(bytes) => images.read_candidate(Cursor::new(bytes), stem, task.control.cancellation_flag()),
                     Input::Assume(profile) => images.interpret(profile, task.control.is_cancelled()),
                     Input::New(_) => Err("Choose images to place".into()),
                 }
             })();
-            if result.is_err() && !interpreting { images.invalidate(); }
+            if result.is_err() && !interpreting && mode.is_none() { images.invalidate(); }
             return result;
         }
         let input = input?;
@@ -618,8 +628,8 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
         if let Payload::Source(source) = &mut state.payload {
             return source.adopt(&mut app.host, task.control.is_cancelled(), || unsafe { capy_project_begin_commit(task) } >= 0);
         }
-        if let Payload::Clip { clip, request, .. } = &mut state.payload {
-            return clipboard::adopt_clip(app, task, clip, *request);
+        if let Payload::Clip { clip, publication, request, .. } = &mut state.payload {
+            return clipboard::adopt_clip(app, task, clip, publication.ok_or("The copy was not published")?, *request);
         }
         if let Payload::Lookup { resource, request } = &mut state.payload {
             let session = &mut app.host.session;
@@ -629,7 +639,7 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
             app.host.apply_change(previous, change);
             return Ok(());
         }
-        if let Payload::Placed { images, context, request, device, .. } = &mut state.payload {
+        if let Payload::Placed { images, context, request, device, clip, .. } = &mut state.payload {
             let session = &mut app.host.session;
             session.validate_image_placement(context)?;
             if session.renderer_mut().0.as_ref().map(|gpu| gpu.device()) != Some(device)
@@ -638,11 +648,13 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
             }
             if unsafe { capy_project_begin_commit(task) } < 0 { return Err("Document operation cancelled".into()); }
             let previous = session.state().revision;
-            let sources = images.take_sources(task.control.is_cancelled())?;
             let mode = match session.document_request(*request)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None };
-            match mode {
-                Some(mode) => session.paste_layer_sources(sources, mode, context)?,
-                None => session.place_layer_sources(sources, context.center, context.destination)?,
+            if let (Some(clip), Some(mode)) = (clip.as_ref(), mode) { session.paste_clip(clip, mode)?; } else {
+                let sources = images.take_sources(task.control.is_cancelled())?;
+                match mode {
+                    Some(mode) => session.paste_layer_sources(sources, mode, context)?,
+                    None => session.place_layer_sources(sources, context.center, context.destination)?,
+                }
             }
             let mut change = session.complete_document_request(*request, Ok(true))?;
             change.canvas_wake = true;

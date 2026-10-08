@@ -62,8 +62,8 @@ int32_t capy_project_export_options(const CapyProjectTask *task, const char *rec
 char *capy_project_clip_progress(const CapyProjectTask *task); /* NULL unless large */
 int32_t capy_project_clip_run(const CapyProjectTask *task, const char *nonce); /* worker */
 int32_t capy_project_clip_png(const CapyProjectTask *task, const uint8_t **bytes, size_t *count); /* worker */
+void capy_project_clip_published(const CapyProjectTask *task);
 char *capy_apple_clip_nonce(CapyApple *app);
-int32_t capy_apple_paste_clip(CapyApple *app, uint32_t id);
 /* Proof preparation borrows no editor. Build and profile copying run on the
    worker; check/apply/failed run on the owner. Request 0 restores viewing only. */
 CapyProjectTask *capy_apple_proof_task(CapyApple *app, uint32_t request, const char *recipe_json);

@@ -115,6 +115,7 @@ documents-open-photos-filter = Zeichnungen und Fotos
 documents-delivery-clipboard-unavailable = Bilder können in diesem Browser nicht eingefügt werden. Bild als Ebene importieren verwenden.
 documents-delivery-clipboard-too-large = Das Zwischenablagebild überschreitet 512 MiB
 documents-delivery-clipboard-empty = Ein Bild zum Einfügen kopieren oder die Originaldatei importieren.
+documents-delivery-clipboard-changed = Die Zwischenablage hat sich geändert. Füge erneut ein.
 documents-delivery-images = Bilder
 documents-delivery-drawing-or-photo = Zeichnung oder Foto
 documents-delivery-drawing-type = { common-app-name }-Zeichnung

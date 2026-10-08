@@ -23,11 +23,14 @@ struct Batch {
     context: Context,
     control: layer_render_wgpu::snapshot::CaptureControl,
     images: layer_ui::ImageImportBatch,
+    clipboard: bool,
+    clip: Option<layer_ui::PixelClip>,
+    color: layer_core::color::DocumentColor,
+    mode: Option<layer_ui::PasteMode>,
     open: Option<NewImage>,
 }
 struct NewImage {
     environment: layer_host::open::OpenEnvironment,
-    clip: Option<layer_ui::PixelClip>,
     candidate: Option<Box<layer_ui::UiSession<layer_host::Renderer>>>,
     retired: Option<Box<layer_render_wgpu::WgpuRasterizer>>,
 }
@@ -92,21 +95,24 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportTask(
         if context.generation != a.gpu_generation {
             return Err("The canvas changed while importing; try again".into());
         }
+        let nonce = read(&mut env, &nonce)?;
+        let clip = if nonce.is_empty() { None } else { Some(a.window.documents.clip.capture(&nonce, a.host.session.localization())?) };
         let open = if a.host.session.pasting_new_image() {
-            let nonce = read(&mut env, &nonce)?;
-            let clip = if nonce.is_empty() { None } else { Some(a.window.documents.clip.as_ref().filter(|clip| clip.nonce == nonce).ok_or("The clipboard changed; paste again")?.clone()) };
             Some(NewImage {
                 environment: layer_host::open::OpenEnvironment::capture(&a.host.session,
                     a.window.documents.admission(&a.host.session.retained_document_tiles()), a.host.renderer_options(Some(a.cache_directory.clone().into())))?,
-                clip, candidate: None, retired: None,
+                candidate: None, retired: None,
             })
         } else { None };
         Ok(Box::into_raw(Box::new(Batch {
             id: id as u32,
             context,
+            clipboard: matches!(a.host.session.document_request(id as u32), Ok(DocumentRequest::Paste { .. })),
             control: crate::inspection::control(cancel),
             images: layer_ui::ImageImportBatch::new(a.host.session.state().settings.photo_open,
                 a.host.session.engine().document().composition().color.space, Default::default()),
+            clip, color: a.host.session.engine().document().composition().color,
+            mode: match a.host.session.document_request(id as u32)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None },
             open,
         })) as jlong)
     })();
@@ -116,9 +122,12 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportTask(
 pub extern "system" fn Java_art_capycanvas_Native_imageImportPrepare(mut env: JNIEnv, _: JClass, handle: jlong) {
     let b = unsafe { crate::inspection::borrow::<Batch>(handle) };
     let result = (|| {
+        if b.open.is_none() && b.mode != Some(layer_ui::PasteMode::Into) && let Some(clip) = &mut b.clip {
+            clip.convert_layers(b.color, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || b.control.is_cancelled())?;
+        }
         let Some(open) = &mut b.open else { return Ok(()); };
         if b.control.is_cancelled() { return Err("Paste cancelled".into()); }
-        let project = match open.clip.take() {
+        let project = match b.clip.take() {
             Some(clip) => clip.document(&open.environment.localization)?,
             None => layer_ui::clipboard_document(b.images.take_sources(b.control.is_cancelled())?, open.environment.photo_policy, &open.environment.localization)?,
         };
@@ -164,9 +173,10 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportRead(
             .map_or(name.as_str(), |(stem, _)| stem);
         let control = b.control.clone();
         let file = layer_core::Cancellable { inner: file, cancelled: move || control.is_cancelled() };
-        b.images.read(BufReader::new(file), name, b.control.cancellation_flag())
+        if b.clipboard { b.images.read_candidate(BufReader::new(file), name, b.control.cancellation_flag()) }
+        else { b.images.read(BufReader::new(file), name, b.control.cancellation_flag()) }
     })();
-    if result.is_err() {
+    if result.is_err() && !b.clipboard {
         b.images.invalidate();
     }
     fail(&mut env, result);
@@ -229,14 +239,17 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportAdopt(
             return Err("The canvas changed while importing; try again".into());
         }
         let previous = a.host.session.state().revision;
-        let sources = b.images.take_sources(b.control.is_cancelled())?;
+        if b.control.is_cancelled() { return Err("Paste cancelled".into()); }
         let mode = match a.host.session.document_request(b.id) {
             Ok(DocumentRequest::Paste { mode }) => Some(*mode),
             _ => None,
         };
-        match mode {
-            Some(mode) => a.host.session.paste_layer_sources(sources, mode, &b.context.placement)?,
-            None => a.host.session.place_layer_sources(sources, b.context.placement.center, b.context.placement.destination)?,
+        if let (Some(clip), Some(mode)) = (b.clip.as_ref(), mode) { a.host.session.paste_clip(clip, mode)?; } else {
+            let sources = b.images.take_sources(b.control.is_cancelled())?;
+            match mode {
+                Some(mode) => a.host.session.paste_layer_sources(sources, mode, &b.context.placement)?,
+                None => a.host.session.place_layer_sources(sources, b.context.placement.center, b.context.placement.destination)?,
+            }
         }
         let mut change = a.host.session.complete_document_request(b.id, Ok(true))?;
         change.canvas_wake = true;

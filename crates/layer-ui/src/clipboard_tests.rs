@@ -331,6 +331,102 @@ mod clipboard_checks {
     }
 
     #[test]
+    fn converted_layer_clips_keep_hierarchy_masks_originals_and_atomic_paste() {
+        let mut source_session = clip_session();
+        let first = source_session.engine.document().working.occurrence.unwrap();
+        let original_pixels = rgba8_source([2, 1], |x, _| [31 + x as u8, 73, 127, 255]);
+        source_session.import_layer_source("Original", Arc::unwrap_or_clone(original_pixels)).unwrap();
+        let second = source_session.engine.document().working.occurrence.unwrap();
+        let document = source_session.engine.document();
+        let original = document.scene().paint_source(second).unwrap().base.as_ref().unwrap().image.storage().clone();
+        let OccurrenceContent::Paint(handle) = document.scene().occurrence(first).unwrap().content else { unreachable!() };
+        let mut paint = document.artwork.paint.get(handle).unwrap().clone();
+        paint.base = Some(layer_core::PaintBase { image: rgba8_source([2, 1], |_, _| [64, 128, 192, 128]).into(), offset: [0; 2], policy: layer_core::PaintBasePolicy::WorkingPixels });
+        source_session.layer_edit(Edit::Paint(RecordChange::replace(&document.artwork.paint, handle, Some(paint)).unwrap())).unwrap();
+        layer(&mut source_session, LayerAction::AddMask { id: occurrence_token(second), replace: false });
+        let document = source_session.engine.document();
+        let mut masked = document.scene().occurrence(second).unwrap().clone();
+        masked.opacity = 0.375;
+        masked.blend = LayerBlend::Multiply;
+        let mask = masked.mask.as_mut().unwrap();
+        mask.offset = [7, 11]; mask.linked = false; mask.enabled = false; mask.inverted = true;
+        source_session.layer_edit(Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, second, Some(masked)).unwrap())).unwrap();
+        invoke(&mut source_session, CommandId::EditLayerContent);
+        let edit = source_session.engine.document().group_layers_edit(&[first, second], LayerBlend::Normal, "Clipboard group").unwrap();
+        source_session.layer_edit(edit).unwrap();
+        let group = *source_session.engine.document().scene().order().iter().find(|h| source_session.engine.document().scene().occurrence(**h).unwrap().name.as_ref() == "Clipboard group").unwrap();
+        let edit = source_session.engine.document().select_occurrence_edit(group).unwrap();
+        source_session.layer_edit(edit).unwrap();
+        let document = source_session.engine.document();
+        let mut occurrence = document.scene().occurrence(group).unwrap().clone();
+        occurrence.offset = [20, 30]; occurrence.opacity = 0.625;
+        source_session.layer_edit(Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, group, Some(occurrence)).unwrap())).unwrap();
+        invoke(&mut source_session, CommandId::Copy);
+        let (id, _) = pending(&source_session);
+        let capture = source_session.capture_clipboard(id).unwrap();
+        let extent = [capture.crop[2], capture.crop[3]];
+        let copied = capture.finish("convert-layers".into(), rgba8_source(extent, |_, _| [0; 4]), vec![]).unwrap();
+        source_session.complete_document_request(id, Ok(true)).unwrap();
+        let retained = copied.layers.as_ref().unwrap().clone();
+        let source_artwork = retained.scene.artwork.clone();
+        let colors = [DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 }, DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::F32 }];
+        for color in colors {
+            let mut converted = copied.clone();
+            converted.convert_layers(color, 16 * 1024 * 1024, || false).unwrap();
+            assert_eq!(converted.layers.as_ref().unwrap().scene.view().composition().color, color);
+            assert!(Arc::ptr_eq(&converted.source, &copied.source));
+            let mut document = Document::new(PortableId::random(), 400, 300, layer_core::DocumentNames { paint: "Destination".into(), paper: "Paper".into() });
+            document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = color;
+            let mut destination = UiSession::new(Recorder { color, tiled_sources: true, ..Default::default() }, document, [800, 600], Platform::Gtk).unwrap();
+            let before = destination.engine.document().clone();
+            destination.paste_clip(&converted, PasteMode::InPlace).unwrap();
+            let document = destination.engine.document();
+            assert_eq!(document.composition().color, color);
+            let group = document.working.occurrence.unwrap();
+            assert_eq!(document.scene().occurrence(group).unwrap().name.as_ref(), "Clipboard group");
+            assert_eq!(document.scene().occurrence(group).unwrap().opacity, 0.625);
+            assert_eq!(document.layer_offset(group), [20, 30]);
+            let children = document.scene().children(Some(group));
+            assert_eq!(children.len(), 2);
+            let masked = document.scene().occurrence(children[0]).unwrap();
+            assert_eq!((masked.name.as_ref(), masked.opacity, masked.blend), ("Original", 0.375, LayerBlend::Multiply));
+            let mask = masked.mask.as_ref().unwrap();
+            assert_eq!((mask.offset, mask.linked, mask.enabled, mask.inverted), ([7, 11], false, false, true));
+            assert_eq!(document.artwork.coverage.get(mask.source).unwrap().default_coverage, 1.);
+            assert!(Arc::ptr_eq(document.scene().paint_source(children[0]).unwrap().base.as_ref().unwrap().image.storage(), &original));
+            let working = document.scene().paint_source(children[1]).unwrap().base.as_ref().unwrap();
+            assert_eq!((working.policy, working.image.interpretation.depth, &working.image.interpretation.profile), (layer_core::PaintBasePolicy::WorkingPixels, color.depth, &layer_core::color::ColorProfile::Builtin(color.space)));
+            let mut row = vec![0; working.image.row_bytes()];
+            working.image.rows().read(0, &mut row).unwrap();
+            match color.depth {
+                SampleDepth::U16 => assert_eq!(u16::from_le_bytes(row[6..8].try_into().unwrap()), 128 * 257),
+                SampleDepth::F32 => assert!((f32::from_le_bytes(row[12..16].try_into().unwrap()) - 128. / 255.).abs() < 1e-6),
+                _ => unreachable!(),
+            }
+            document.validate(Default::default()).unwrap();
+            layer_color::validate_document_color(document).unwrap();
+            invoke(&mut destination, CommandId::Undo);
+            crate::session::test_support::assert_live_artwork_eq(destination.engine.document(), &before);
+
+            let converted_layers = converted.layers.as_ref().unwrap().clone();
+            if color.depth.is_float() {
+                assert!(converted.convert_layers(DocumentColor::default(), 16 * 1024 * 1024, || false).is_err());
+                assert!(Arc::ptr_eq(converted.layers.as_ref().unwrap(), &converted_layers));
+            } else {
+                converted.convert_layers(DocumentColor::default(), 16 * 1024 * 1024, || false).unwrap();
+                assert_eq!(converted.layers.as_ref().unwrap().scene.view().composition().color, DocumentColor::default());
+            }
+        }
+        for cancel_after in [0, 3] {
+            let mut cancelled = copied.clone();
+            let mut checks = 0;
+            assert!(cancelled.convert_layers(colors[0], 16 * 1024 * 1024, || { checks += 1; checks > cancel_after }).is_err());
+            assert!(Arc::ptr_eq(cancelled.layers.as_ref().unwrap(), &retained));
+        }
+        assert_eq!(copied.layers.as_ref().unwrap().scene.artwork, source_artwork);
+    }
+
+    #[test]
     fn whole_layer_clipboard_preserves_multiple_layers_and_cuts_only_after_publication() {
         let mut s = clip_session();
         let first = s.engine.document().working.occurrence.unwrap();

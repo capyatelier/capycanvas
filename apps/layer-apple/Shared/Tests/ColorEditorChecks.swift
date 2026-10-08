@@ -52,6 +52,7 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        let originalPixels = editorPixels(in: app)
         func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
         func expectHex(_ hex: String, _ message: String) {
             let match = NSPredicate { _, _ in self.colorValueText("hex", in: app).uppercased() == hex }
@@ -67,6 +68,47 @@ extension XCTestCase {
             XCTAssertTrue(element(id).waitForExistence(timeout: 5), "Edit Color shows \(id)")
         }
         expectHex("#E61A1A", "The editor starts from the paint")
+        #if os(macOS)
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString("native clipboard sentinel", forType: .string)
+        workspaceActivate(element("color-current"))
+        app.typeKey("c", modifierFlags: .command)
+        expectation(for: NSPredicate { _, _ in NSPasteboard.general.string(forType: .string) == "#E61A1A" }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString("native clipboard sentinel", forType: .string)
+        app.typeKey("x", modifierFlags: .command)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "native clipboard sentinel", "Cut without a color text field cannot reach artwork")
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        app.typeKey("v", modifierFlags: .option)
+        app.typeKey("n", modifierFlags: [.command, .option])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "native clipboard sentinel", "Artwork clipboard variants stay inactive in the color sheet")
+        XCTAssertTrue(use.exists, "Artwork paste variants cannot replace the color sheet")
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString("#CA4B35", forType: .string)
+        app.typeKey("v", modifierFlags: .command)
+        expectHex("#CA4B35", "Paste outside a text field edits the color draft")
+        workspaceActivate(element("color-current"))
+        workspaceActivate(element("color-value-hex"))
+        let clipboardField = app.textFields["color-entry-hex"]
+        XCTAssertTrue(clipboardField.waitForExistence(timeout: 5))
+        let fieldText = clipboardField.value as? String ?? ""
+        clipboardField.typeKey("a", modifierFlags: .command)
+        clipboardField.typeKey(XCUIKeyboardKey.rightArrow.rawValue, modifierFlags: [])
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString("native clipboard sentinel", forType: .string)
+        for key in ["c", "x"] {
+            clipboardField.typeKey(key, modifierFlags: .command)
+            XCTAssertEqual(NSPasteboard.general.string(forType: .string), "native clipboard sentinel", "Native Copy/Cut without selected text stays native")
+            XCTAssertEqual(clipboardField.value as? String, fieldText)
+        }
+        clipboardField.typeKey("a", modifierFlags: .command)
+        clipboardField.typeKey("x", modifierFlags: .command)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), fieldText)
+        XCTAssertEqual(clipboardField.value as? String, "", "Cut removes the native text selection")
+        clipboardField.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(clipboardField.value as? String, fieldText, "Paste restores native text instead of changing the artwork")
+        clipboardField.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+        XCTAssertTrue(clipboardField.waitForNonExistence(timeout: 5))
+        expectHex("#E61A1A", "Native text clipboard keys preserve the color draft after cancellation")
+        #endif
         let current = elementPixel(element("color-current"), in: app)
         XCTAssertTrue(current.0 > 200 && current.1 < 60 && current.2 < 60, "Current shows the paint without tone mapping: \(current)")
         attachEditor(in: app, name: "edit-color-\(theme)")
@@ -132,6 +174,7 @@ extension XCTestCase {
         XCTAssertTrue(element("color-tile-recent").waitForExistence(timeout: 10), "Recent colors fill the footer")
         workspaceActivate(app.buttons["color-cancel"])
         XCTAssertTrue(use.waitForNonExistence(timeout: 10))
+        expectPixels(originalPixels, in: app)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
     @MainActor func checkFillThumbnailColor(in app: XCUIApplication, theme: String) {

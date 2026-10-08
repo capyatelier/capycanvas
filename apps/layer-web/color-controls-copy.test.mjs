@@ -26,8 +26,8 @@ class Element extends FakeElement {
   replaceWith(node){const parent=this.parentNode;parent.insertBefore(node,this);this.remove();}
   getContext(){return{fillRect(){},putImageData(){},drawImage(){}};}
   getBoundingClientRect(){return{left:0,top:0,right:242,bottom:100,width:242,height:100};}
-  showModal(){}
-  close(){for(const listener of this.listeners.close??[])listener();}
+  showModal(){this.open=true;}
+  close(){this.open=false;for(const listener of this.listeners.close??[])listener();}
   querySelectorAll(tags){const wanted=tags.split(',').map(tag=>tag.toUpperCase());return this.children.flatMap(node=>node.tagName?[...(wanted.includes(node.tagName)?[node]:[]),...node.querySelectorAll(tags)]:[]);}
   querySelector(tag){return this.querySelectorAll(tag)[0]??null;}
 }
@@ -103,20 +103,20 @@ test('sampler and selection menu publication retains native controls and semanti
 });
 
 
-function documentsHarness(t){
+function documentsHarness(t,{refreshInputContext,clipboardItem}={}){
   const previous=Object.fromEntries(['document','window','navigator','innerWidth','innerHeight','ResizeObserver','matchMedia','setInterval','clearInterval','ClipboardItem'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   const listeners=new Map();let dispatchAction=()=>{};
-  const doc={hidden:true,createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),addEventListener(type,fn){listeners.set(type,fn);},querySelectorAll:()=>[],querySelector:selector=>doc.getElementById(selector.slice(1)),getElementById:id=>[doc.body,...doc.body.querySelectorAll('div,canvas')].find(node=>node.id===id)};doc.body=new Element('body',doc);
+  const doc={hidden:true,createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),addEventListener(type,fn){listeners.set(type,fn);},querySelectorAll:()=>[],querySelector:selector=>selector.startsWith('#')?doc.getElementById(selector.slice(1)):doc.body.querySelectorAll('dialog,details,div').find(node=>node.open&&selector.includes(node.tagName.toLowerCase()+'[open]')||node.popoverOpen&&selector.includes(':popover-open'))??null,getElementById:id=>[doc.body,...doc.body.querySelectorAll('div,canvas')].find(node=>node.id===id)};doc.body=new Element('body',doc);
   const element=(tag,cls,text)=>{const node=new Element(tag,doc);node.className=cls??'';if(text!=null){if(typeof text==='function')bindCopy(node,text);else node.textContent=text;}return node;},button=(text,action,cls)=>{const node=element('button',cls,text);node.click=action;return node;};
   for(const id of ['document-title','canvas-status','canvas']){const node=element('div');node.id=id;doc.body.append(node);}
-  Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1200,innerHeight:900,ResizeObserver:class{observe(){}},matchMedia:()=>({matches:false,addEventListener(){}}),setInterval:()=>0,clearInterval(){}});Object.defineProperty(globalThis,'navigator',{configurable:true,value:{}});
+  Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1200,innerHeight:900,ResizeObserver:class{observe(){}},matchMedia:()=>({matches:false,addEventListener(){}}),setInterval:()=>0,clearInterval(){}});Object.defineProperty(globalThis,'navigator',{configurable:true,value:{}});if(clipboardItem)globalThis.ClipboardItem=clipboardItem;
   t.after(()=>{for(const[key,descriptor]of Object.entries(previous))if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];});
   let language='en',inspections=0,copyCalls=0,resolveInspection,rejectInspection;const info={sources:[{name:'Literal Éİı 雪 {draft}'}]},requests=[],completed=[],responses=[],messages=[];
   const app={catalog:()=>({native_copy:{color:{},header:{}}}),bootstrap_view:()=>({preparing_document:language+':Preparing',common:{cancel:language+':Cancel',save:language+':Save',done:language+':Done'}}),document_delivery_copy:()=>({cancelling:language+':Cancelling'}),export_copy:()=>({}),document_color_copy:()=>({}),proof_copy:()=>({}),profile_copy:()=>({}),proof_choices_copy:()=>({}),session_checkpoint_interval:()=>0,gpu_ready:()=>false,proof_status:()=>({text:'',needed:false}),state:()=>({requests,commands:[{id:'paste_image',enabled:true}],document_file:{epoch:1},customization:{header_editing:false}}),document_tabs:()=>({selected:1,tabs:[],compact:false}),
     editor_models:()=>({document_options:{unsaved_description:language+':Unsaved',discard_label:language+':Discard'}}),
     document_properties(){inspections++;return new Promise((resolve,reject)=>{resolveInspection=resolve;rejectInspection=reject;});},document_properties_copy(value){assert.equal(value,info);copyCalls++;return{title:language+':Properties',done:language+':Done',rows:[[language+':Canvas','96 × 96 px']],sources:[[info.sources[0].name,language+':Source']]};},
     finish_document(id,success,error){assert.ok(requests.some(request=>request.id===id));completed.push({id,success,error});requests.splice(requests.findIndex(request=>request.id===id),1);return{};},respond_document(id,decision){responses.push({id,decision});return{};}};
-  const docs=createDocuments({app,bootstrap:liveCopy(app,'bootstrap_view'),delivery:liveCopy(app,'document_delivery_copy'),state:app.state,canvas:element('canvas'),element,button,icon:()=>element('svg'),dispatch(action){dispatchAction(action);},applyChange(){},wake(){},message:error=>messages.push(error),gpuOperation:fn=>fn(),rasterWorker:async()=>{},contentChanged(){}});
+  const docs=createDocuments({app,bootstrap:liveCopy(app,'bootstrap_view'),delivery:liveCopy(app,'document_delivery_copy'),state:app.state,canvas:element('canvas'),element,button,icon:()=>element('svg'),dispatch(action){dispatchAction(action);},applyChange(){},wake(){},message:error=>messages.push(error),gpuOperation:fn=>fn(),rasterWorker:async()=>{},contentChanged(){},refreshInputContext});
   return{app,docs,doc,info,requests,completed,responses,messages,listeners,onDispatch(fn){dispatchAction=fn;},resolve:()=>resolveInspection(info),reject:error=>rejectInspection(error),stats:()=>({inspections,copyCalls}),switch(next){language=next;requests.filter(request=>request.kind.request.type==='confirm_close').forEach(request=>request.kind.request.title=language+':Close Literal Éİı 雪 {draft}');refreshCopy(app);docs.localize();refreshBindings();}};
 }
 
@@ -134,7 +134,7 @@ test('document async completion retains nominal color failures, literal diagnost
 
 
 test('known clipboard delivery guards and active-document transport refusals retain explicit shared reasons',async t=>{
-  const h=documentsHarness(t);h.app.clip_nonce=()=>null;h.app.capture_image_import=()=>({free(){}});const formats='Literal Éİı ไทย 雪 { $name }';h.app.photo_formats=()=>[{name:formats,mime_types:['image/png'],extensions:['png']}];
+  const h=documentsHarness(t);h.app.clip_nonce=()=>null;h.app.capture_image_import=()=>({free(){}});h.app.capture_control=()=>({cancel(){},cancelled:()=>false,free(){}});h.app.prepare_images=async(_,items)=>{await clipboardFiles(items);return {};};const formats='Literal Éİı ไทย 雪 { $name }';h.app.photo_formats=()=>[{name:formats,mime_types:['image/png'],extensions:['png']}];
   const cases=[
     [undefined,{type:'clipboard_unavailable'}],
     [{read:async()=>[]},{type:'clipboard_empty'}],
@@ -202,7 +202,7 @@ test('external images replace stale private copies and ignore unrelated clipboar
   h.app.clip_nonce=()=> 'previous internal copy';h.app.paste_clip=()=>assert.fail('must read the external image');
   h.app.photo_formats=()=>[{name:'PNG',mime_types:['image/png'],extensions:['png']}];h.app.document_delivery_message=()=> 'Pasted.png';
   h.app.capture_image_import=()=>({free(){}});h.app.capture_control=()=>({cancel(){},cancelled:()=>false,free(){}});
-  h.app.prepare_images=async(request,files)=>{received=files;prepared++;return {};};
+  h.app.prepare_images=async(request,files)=>{received=await clipboardFiles(files);prepared++;return {};};
   h.app.adopt_images=()=>h.app.finish_document(100,true);
   navigator.clipboard={read:async()=>[{types:['text/plain']},{types:['image/png'],getType:async()=>new Blob(['fresh'],{type:'image/png'})}]};
   const request={id:100,kind:{type:'document',request:{type:'paste',mode:'paste'}}};h.requests.push(request);await h.docs.handle(request);
@@ -244,4 +244,102 @@ test('browser-menu paste uses shared context authorization',async t=>{
   const event={target:{closest:()=>null},clipboardData:{files:[new File(['pixels'],'screenshot.png',{type:'image/png'})]},preventDefault(){prevented++;}};
   h.listeners.get('paste')(event);
   assert.equal(calls,1);assert.equal(prevented,0);assert.equal(h.requests.length,0);
+});
+
+
+async function clipboardFiles(items){
+  const files=[];
+  for(const item of items){
+    if(!Array.isArray(item)){files.push(item);continue;}
+    let failure;
+    for(const load of item)try{files.push(await load());failure=null;break;}catch(error){failure=error;}
+    if(failure)throw failure;
+  }
+  return files;
+}
+
+function nativeClipboardHarness(t,options){
+  const h=documentsHarness(t,options);let prepared=0;
+  h.app.capture_image_import=()=>({free(){}});
+  h.app.capture_control=()=>({cancel(){},cancelled:()=>false,free(){}});
+  h.app.prepare_images=async(_,items)=>{h.loaded=await clipboardFiles(items);prepared++;return {};};
+  h.app.adopt_images=()=>h.app.finish_document(h.requests.find(r=>r.kind.request.type==='paste').id,true);
+  const files=[new File(['pixels'],'screenshot.png',{type:'image/png'})];
+  const event={target:{closest:()=>null},clipboardData:{files},preventDefault(){this.defaultPrevented=true;}};
+  const arm=id=>{
+    const request={id,kind:{type:'document',request:{type:'paste',mode:'paste'}}};
+    h.docs.key({target:event.target,ctrlKey:true,key:'v'},()=>{h.requests.push(request);assert.equal(h.docs.allowNativePaste(),true);});
+    return h.docs.handle(request);
+  };
+  return {...h,event,arm,prepared:()=>prepared,loaded:()=>h.loaded};
+}
+
+for(const owner of ['popup','editor','dialog'])test(`browser-menu paste refreshes context and respects a new ${owner}`,async t=>{
+    let refreshed=0,checked=0,popup=false;
+    const h=nativeClipboardHarness(t,{refreshInputContext(){refreshed++;popup=!!h.doc.querySelector('details[open]');}});
+    h.app.native_paste_input=()=>{checked++;assert.equal(popup,true);return {regions:0};};
+    if(owner==='editor')h.doc.activeElement={closest:()=>({})};
+    else {const node=new Element(owner==='dialog'?'dialog':'details',h.doc);node.open=true;h.doc.body.append(node);}
+    h.listeners.get('paste')(h.event);
+    assert.equal(refreshed,1);
+    assert.equal(checked,0);
+    assert.equal(h.prepared(),0);assert.equal(h.requests.length,0);assert.equal(h.event.defaultPrevented,undefined);
+});
+
+for(const owner of ['editor','dialog','stale'])test(`pending native paste retires after ${owner} ownership`,async t=>{
+    const h=nativeClipboardHarness(t);const task=h.arm(110);
+    if(owner==='editor')h.doc.activeElement={closest:()=>({})};
+    else if(owner==='dialog'){const node=new Element('dialog',h.doc);node.showModal();h.doc.body.append(node);}
+    else h.requests.length=0;
+    h.listeners.get('paste')(h.event);await task;
+    assert.equal(h.prepared(),0);assert.equal(h.docs.busy(),false);
+    if(owner==='stale')assert.deepEqual(h.completed,[]);
+    else assert.equal(h.completed.at(-1).success,false);
+});
+
+test('pending native paste yields to a popup opened after keyboard authorization',async t=>{
+  let popup=false,refreshed=0;
+  const h=nativeClipboardHarness(t,{refreshInputContext(){refreshed++;popup=!!h.doc.querySelector('details[open]');}});
+  h.app.native_paste_input=()=>{assert.equal(popup,true);return {regions:0};};
+  const task=h.arm(111),menu=new Element('details',h.doc);menu.open=true;h.doc.body.append(menu);
+  h.listeners.get('paste')(h.event);await task;
+  assert.equal(refreshed,1);assert.equal(popup,true);assert.equal(h.prepared(),0);
+  assert.equal(h.completed.at(-1).success,false);assert.equal(h.docs.busy(),false);
+});
+
+
+for(const privateType of ['unreadable','oversize'])test(`unusable ${privateType} private ownership data falls back to PNG`,async t=>{
+  const h=nativeClipboardHarness(t,{clipboardItem:class{static supports(){return true;}}}),mime='web application/x-capycanvas-clip',reads=[];
+  h.app.clip_nonce=()=> 'previous retained copy';h.app.paste_clip=()=>assert.fail('unusable private data cannot select retained pixels');
+  h.app.photo_formats=()=>[{name:'PNG',mime_types:['image/png'],extensions:['png']}];h.app.document_delivery_message=()=> 'Pasted.png';
+  navigator.clipboard={read:async()=>[{types:[mime,'image/png'],getType:async type=>{
+    reads.push(type);
+    if(type===mime){if(privateType==='unreadable')throw Error('Private representation unavailable');return{size:257,text:()=>assert.fail('oversize nonce text must not be read')};}
+    return new Blob(['fresh PNG'],{type:'image/png'});
+  }}]};
+  const request={id:121,kind:{type:'document',request:{type:'paste',mode:'paste'}}};h.requests.push(request);await h.docs.handle(request);
+  assert.deepEqual(reads,[mime,'image/png']);assert.equal(h.prepared(),1);assert.equal(await h.loaded()[0].text(),'fresh PNG');assert.equal(h.completed.at(-1).success,true);
+});
+
+test('clipboard candidates load lazily and retry per item without duplicating successful representations',async t=>{
+  const h=nativeClipboardHarness(t),reads=[];
+  h.app.clip_nonce=()=>null;h.app.photo_formats=()=>[{name:'TIFF',mime_types:['image/tiff'],extensions:['tif']},{name:'PNG',mime_types:['image/png'],extensions:['png']},{name:'JPEG',mime_types:['image/jpeg'],extensions:['jpg']}];h.app.document_delivery_message=()=> 'Pasted image';
+  navigator.clipboard={read:async()=>[
+    {types:['image/tiff','image/png'],getType:async type=>{reads.push('first/'+type);if(type==='image/tiff')throw Error('TIFF read failed');return new Blob(['first'],{type});}},
+    {types:['image/png','image/jpeg'],getType:async type=>{reads.push('second/'+type);return new Blob(['second'],{type});}},
+  ]};
+  h.app.prepare_images=async(_,items)=>{assert.deepEqual(reads,[],'transport is deferred to the decoder owner');assert.equal(items.length,2);h.files=await clipboardFiles(items);return {};};
+  const request={id:122,kind:{type:'document',request:{type:'paste',mode:'paste'}}};h.requests.push(request);await h.docs.handle(request);
+  assert.deepEqual(reads,['first/image/tiff','first/image/png','second/image/png']);
+  assert.deepEqual(await Promise.all(h.files.map(file=>file.text())),['first','second']);assert.equal(h.completed.at(-1).success,true);
+});
+
+
+test('retained clipboard nonce uses the frozen image import pipeline',async t=>{
+  const h=nativeClipboardHarness(t,{clipboardItem:class{static supports(){return true;}}}),nonce='retained clipboard',mime='web application/x-capycanvas-clip';
+  h.app.clip_nonce=()=>nonce;h.app.paste_clip=()=>assert.fail('retained paste must prepare before adoption');
+  navigator.clipboard={read:async()=>[{types:[mime],getType:async()=>new Blob([nonce])}]};
+  let prepared=0;h.app.prepare_images=async(request,input)=>{assert.equal(input,nonce);prepared++;return {};};
+  const request={id:123,kind:{type:'document',request:{type:'paste',mode:'paste'}}};h.requests.push(request);await h.docs.handle(request);
+  assert.equal(prepared,1);assert.equal(h.completed.at(-1).success,true);assert.equal(h.docs.busy(),false);
 });

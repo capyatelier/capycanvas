@@ -115,6 +115,7 @@ documents-open-photos-filter = Bản vẽ và ảnh
 documents-delivery-clipboard-unavailable = Trình duyệt này không hỗ trợ dán ảnh. Hãy dùng Nhập ảnh thành lớp.
 documents-delivery-clipboard-too-large = Ảnh trong bảng nhớ tạm vượt quá 512 MiB
 documents-delivery-clipboard-empty = Sao chép ảnh để dán hoặc nhập tệp gốc.
+documents-delivery-clipboard-changed = Bảng nhớ tạm đã thay đổi. Hãy dán lại.
 documents-delivery-images = Ảnh
 documents-delivery-drawing-or-photo = Bản vẽ hoặc ảnh
 documents-delivery-drawing-type = Bản vẽ { common-app-name }

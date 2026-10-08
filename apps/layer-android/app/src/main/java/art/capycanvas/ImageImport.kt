@@ -137,9 +137,11 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                 }
                 if (uris == null || cancelled) { finish(id, false); return@launch }
                 check(uris.isNotEmpty() || clipNonce != null) { diagnostic("Choose at least one image") }
+                var imported = 0
+                var unreadable: Exception? = null
                 for (uri in uris) {
                     if (cancelled) { finish(id, false); return@launch }
-                    withContext(Dispatchers.IO) {
+                    try { withContext(Dispatchers.IO) {
                         val name = application.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null, providerSignal)?.use {
                             if (it.moveToFirst()) it.getString(0) else null
                         } ?: uri.lastPathSegment ?: host.catalog.getJSONObject("document_delivery_copy").getString("image_name")
@@ -170,6 +172,11 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                             }
                         }
                     }
+                    } catch (error: Exception) {
+                        if (!paste || cancelled || error is CancellationException) throw error
+                        unreadable = error; continue
+                    }
+                    imported++
                     val prompt = Native.imageImportProfilePrompt(task)
                     if (prompt != "null" && !cancelled) {
                         val decision = CompletableDeferred<JSONObject?>(); interpretation = decision; profilePrompt = JSONObject(prompt)
@@ -179,6 +186,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                     }
                 }
                 if (cancelled) { finish(id, false); return@launch }
+                if (clipNonce == null && imported == 0) throw unreadable ?: ImageImportMessage(diagnostic("No readable clipboard image"))
                 withContext(Dispatchers.IO) { Native.imageImportPrepare(task) }
                 if (request.getJSONObject("kind").getJSONObject("request").optString("mode") == "new_image") {
                     host.drawingTabs.beforeAdopt { host.withNative { Native.imageImportParkReady(it, task) } }; transitioning=true

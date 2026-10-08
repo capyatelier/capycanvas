@@ -14,18 +14,20 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
 /**
- * Pixel copies. The window keeps the full-depth clip; other apps read its PNG
+ * Pixel copies. The application keeps the full-depth clip; other apps read its PNG
  * through a FileProvider URI whose clip description carries the nonce, so a
- * paste of this window's own copy reads the clip instead of the PNG.
+ * paste of the application's own copy reads the clip instead of the PNG.
  */
 internal class ClipboardController(private val host: CanvasHost, private val application: Application) {
     companion object {
         const val NONCE = "art.capycanvas.clip.nonce"
+        private val publication = Mutex()
     }
     private val clipboard = application.getSystemService(ClipboardManager::class.java)
     private val directory get() = host.storage.clipboard
@@ -33,7 +35,7 @@ internal class ClipboardController(private val host: CanvasHost, private val app
     var cancelling by mutableStateOf(false); private set
     private var control = 0L
 
-    /** The copy the system clipboard still names, when it is this window's. */
+    /** The copy the system clipboard still names. */
     fun nonce(): String? = clipboard.primaryClipDescription?.extras?.getString(NONCE)
 
     /** Keep only the latest copy's file, which the system clipboard names. */
@@ -55,12 +57,14 @@ internal class ClipboardController(private val host: CanvasHost, private val app
             var completed = false
             var published = false
             var file: File? = null
+            var locked = false
             try {
                 task = host.withNative { Native.clipTask(it, id) }
                 val nonce = UUID.randomUUID().toString()
                 capture = Native.captureControl(); control = capture
                 cancelling = false
                 progress = if (Native.clipTaskLarge(task)) id else null
+                publication.lock(); locked = true
                 val output = File(directory, "$nonce.png"); file = output
                 withContext(Dispatchers.IO) {
                     val running = task; task = 0L
@@ -79,6 +83,7 @@ internal class ClipboardController(private val host: CanvasHost, private val app
                     val adopted = clip; clip = 0L
                     Native.clipAdopt(it, id, adopted, capture); completed = true
                 }
+                publication.unlock(); locked = false
                 host.documentChanged()
             } catch (e: CancellationException) {
                 if (!completed) withContext(NonCancellable) { finish(id, false, null) }; throw e
@@ -92,20 +97,17 @@ internal class ClipboardController(private val host: CanvasHost, private val app
                 }
                 if (capture != 0L) Native.captureFree(capture)
                 if (control == capture) { control = 0L; progress = null; cancelling = false }
+                if (locked) publication.unlock()
             }
         }
     }
 
-    /** Paste this window's copy, or return false for another app's image. */
+    /** Paste the retained copy, or return false for another app's image. */
     suspend fun paste(request: JSONObject): Boolean {
         val nonce = nonce() ?: return false
         if (host.withNative { Native.clipNonce(it) } != nonce) return false
         if (nonce() != nonce) return false
-        if (request.getJSONObject("kind").getJSONObject("request").optString("mode") == "new_image") {
-            host.documents.images.start(request, true, clipNonce=nonce); return true
-        }
-        try { host.withNative { Native.pasteClip(it, request.getInt("id")) }; host.documentChanged() }
-        catch (e: Exception) { finish(request.getInt("id"), false, e.message ?: host.bootstrap!!.getString("action_failed")) }
+        host.documents.images.start(request, true, clipNonce=nonce)
         return true
     }
 

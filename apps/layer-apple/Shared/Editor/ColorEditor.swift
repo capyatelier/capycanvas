@@ -44,7 +44,7 @@ private struct ColorEditingHost: View {
     @ObservedObject var session: ColorEditorSession
     var body: some View {
         Color.clear.allowsHitTesting(false)
-            .sheet(isPresented: Binding(get: { !session.picking }, set: { if !$0 && !session.picking { session.close(apply: false) } })) {
+            .sheet(isPresented: Binding(get: { !session.picking }, set: { if !$0 && !session.picking { session.close(apply: false) } }), onDismiss: { store?.focusCanvas?() }) {
                 ColorEditor(session: session).presentationSizing(.fitted).modifier(EditorPopupPresentation())
             }
             .overlay(alignment: .topLeading) { if session.picking, let store { ColorPickStrip(store: store, session: session) } }
@@ -94,6 +94,10 @@ struct ColorEditor: View {
                 }
             }
             .onCopyCommand { [NSItemProvider(object: view["hex"].string as NSString)] }
+            #else
+            .background(ColorClipboardKeys(editing: focused != nil,
+                copy: { Self.copy(view["hex"].string) },
+                paste: { if let text = UIPasteboard.general.string { session.act(["op": "text", "text": text]) } }))
             #endif
     }
     private var shapes: some View {
@@ -299,6 +303,46 @@ struct ColorEditor: View {
         #endif
     }
 }
+
+#if os(iOS)
+private struct ColorClipboardKeys: UIViewRepresentable {
+    let editing: Bool
+    let copy: () -> Void
+    let paste: () -> Void
+    func makeUIView(context: Context) -> CaptureView { CaptureView() }
+    func updateUIView(_ view: CaptureView, context: Context) {
+        view.editing = editing; view.copyColor = copy; view.pasteColor = paste
+        if !editing { DispatchQueue.main.async { view.claimFocus() } }
+    }
+    static func dismantleUIView(_ view: CaptureView, coordinator: ()) { view.copyColor = nil; view.pasteColor = nil; if view.isFirstResponder { view.resignFirstResponder() } }
+    final class CaptureView: UIView {
+        var editing = false
+        var copyColor: (() -> Void)?
+        var pasteColor: (() -> Void)?
+        override var canBecomeFirstResponder: Bool { true }
+        override func didMoveToWindow() { super.didMoveToWindow(); DispatchQueue.main.async { self.claimFocus() } }
+        private func firstResponder(in view: UIView) -> UIView? {
+            view.isFirstResponder ? view : view.subviews.lazy.compactMap { self.firstResponder(in: $0) }.first
+        }
+        func claimFocus() {
+            guard let window, window.isKeyWindow, !editing, !isFirstResponder, copyColor != nil, !NativeTextContext.composing else { return }
+            let responder = firstResponder(in: window)
+            guard !(responder is UITextInput) else { return }
+            becomeFirstResponder()
+        }
+        override var keyCommands: [UIKeyCommand]? {
+            [UIKeyModifierFlags.command, .control].flatMap { modifier in
+                [UIKeyCommand(input: "c", modifierFlags: modifier, action: #selector(copyValue)),
+                 UIKeyCommand(input: "x", modifierFlags: modifier, action: #selector(cutValue)),
+                 UIKeyCommand(input: "v", modifierFlags: modifier, action: #selector(pasteValue))]
+            }
+        }
+        @objc private func copyValue() { if isFirstResponder && !NativeTextContext.composing { copyColor?() } }
+        @objc private func cutValue() {}
+        @objc private func pasteValue() { if isFirstResponder && !NativeTextContext.composing { pasteColor?() } }
+    }
+}
+#endif
 
 private struct ColorEditorLayout: Layout {
     private let columns: CGFloat = 24, rows: CGFloat = 16, below: CGFloat = 18

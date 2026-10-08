@@ -11,13 +11,16 @@ import UIKit
 @MainActor struct PhotoItem {
     enum Content { case file(URL), image(Data) }
     let name: String
-    let load: (@escaping (Result<Content, Error>) -> Void) -> Void
+    typealias Loader = (@escaping (Result<Content, Error>) -> Void) -> Void
+    let representations: [Loader]
+    var load: Loader { representations[0] }
     init(name: String = "Pasted image", load: @escaping (@escaping (Result<Content, Error>) -> Void) -> Void) {
-        self.name = name; self.load = load
+        self.name = name; self.representations = [load]
     }
     init(fileURL: URL) {
-        name = fileURL.lastPathComponent; load = { $0(.success(.file(fileURL))) }
+        name = fileURL.lastPathComponent; representations = [{ $0(.success(.file(fileURL))) }]
     }
+    init(name: String = "Pasted image", representations: [Loader]) { self.name = name; self.representations = representations }
     static func content(_ data: Data, file: Bool) throws -> Content {
         if !file { return .image(data) }
         guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL else {
@@ -28,17 +31,18 @@ import UIKit
     static func provider(_ provider: NSItemProvider) -> PhotoItem? { makeProvider(provider, types: UTType.capyPhotoTypes) }
     static func drawingProvider(_ provider: NSItemProvider) -> PhotoItem? { makeProvider(provider, types: [.capyProject] + UTType.capyPhotoTypes) }
     private static func makeProvider(_ provider: NSItemProvider, types: [UTType]) -> PhotoItem? {
-        let file = provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
-        let type = file ? UTType.fileURL : types.first { provider.hasItemConformingToTypeIdentifier($0.identifier) }
-        guard let type else { return nil }
-        return PhotoItem(name: provider.suggestedName ?? "Imported image") { done in
-            provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
-                DispatchQueue.main.async {
-                    if let data { done(Result { try content(data, file: file) }) }
-                    else { done(.failure(error ?? HostFailure(message: "Could not read an image"))) }
+        let available = ([UTType.fileURL] + types).filter { provider.hasItemConformingToTypeIdentifier($0.identifier) }
+        guard !available.isEmpty else { return nil }
+        return PhotoItem(name: provider.suggestedName ?? "Imported image", representations: available.map { type in
+            { done in
+                provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
+                    DispatchQueue.main.async {
+                        if let data { done(Result { try content(data, file: type == .fileURL) }) }
+                        else { done(.failure(error ?? HostFailure(message: "Could not read an image"))) }
+                    }
                 }
             }
-        }
+        })
     }
 }
 
@@ -84,14 +88,15 @@ import UIKit
         #if os(macOS)
         let types = UTType.capyPhotoTypes
         let images = (NSPasteboard.general.pasteboardItems ?? []).compactMap { item -> PhotoItem? in
-            guard let type = ([UTType.fileURL] + types).map({ NSPasteboard.PasteboardType($0.identifier) })
-                .first(where: { item.types.contains($0) }) else { return nil }
-            return PhotoItem { done in
-                if let data = item.data(forType: type) {
-                    done(Result { try PhotoItem.content(data, file: type.rawValue == UTType.fileURL.identifier) })
+            let available = ([UTType.fileURL] + types).map { NSPasteboard.PasteboardType($0.identifier) }.filter { item.types.contains($0) }
+            guard !available.isEmpty else { return nil }
+            return PhotoItem(representations: available.map { type in
+                { done in
+                    if let data = item.data(forType: type) {
+                        done(Result { try PhotoItem.content(data, file: type.rawValue == UTType.fileURL.identifier) })
+                    } else { done(.failure(HostFailure(message: "Could not read a clipboard image"))) }
                 }
-                else { done(.failure(HostFailure(message: "Could not read a clipboard image"))) }
-            }
+            })
         }
         #else
         let images = UIPasteboard.general.itemProviders.compactMap(PhotoItem.provider)

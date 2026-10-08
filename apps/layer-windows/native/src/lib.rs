@@ -58,6 +58,11 @@ pub use shared_controls::*;
 mod color;
 pub use color::*;
 
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_clipboard_publication() -> u64 {
+    layer_ui::RetainedClipboard::publication()
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod gpu_recovery_tests;
 

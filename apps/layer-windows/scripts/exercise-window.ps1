@@ -11,6 +11,7 @@ public static class CapyWindowExercise {
  [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
+ [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
  [StructLayout(LayoutKind.Sequential)] public struct Mouse {public int dx,dy;public uint data,flags,time;public UIntPtr extra;}
  [StructLayout(LayoutKind.Explicit,Size=40)] public struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Mouse mouse;}
@@ -47,12 +48,14 @@ $rect=New-Object CapyWindowExercise+Rect
 [CapyWindowExercise]::GetWindowRect($handle,[ref]$rect)|Out-Null
 if($Action -eq 'Close') {
     $dirty=$false
+    $windowOnly=$false
     if($DiscardUnsaved){
         if($p.ProcessName -ne 'CapyCanvas'){throw 'Discard requires a controlled CapyCanvas review.'}
         if(!$StateDirectory){$StateDirectory=Split-Path -Parent $p.Path}
         $windows=Read-Snapshot (Join-Path $StateDirectory "windows-$ProcessId.json")
         $window=@($windows.windows|Where-Object hwnd -eq ([int64]$handle))[0]
         if($windows.process_id -ne $ProcessId -or !$window){throw 'Discard requires the traced window of this review.'}
+        $windowOnly=$WindowHandle -and @($windows.windows).Count -gt 1
         $stateFile=Join-Path $StateDirectory "ui-state-$ProcessId-$($window.id).json"
         $snapshot=Read-Snapshot $stateFile
         if($snapshot.process_id -ne $ProcessId -or !$snapshot.model.windows_isolated_settings){
@@ -65,6 +68,7 @@ if($Action -eq 'Close') {
         $watch=[Diagnostics.Stopwatch]::StartNew();$lastEpoch=$null;$lastDecision=$null
         $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
         while(!$p.HasExited){
+          if($windowOnly -and ![CapyWindowExercise]::IsWindow($handle)){break}
           try {
             $snapshot=Read-Snapshot $stateFile
             if($snapshot.process_id -ne $ProcessId -or !$snapshot.model.windows_isolated_settings){throw 'Discard trace ownership changed'}
@@ -78,9 +82,13 @@ if($Action -eq 'Close') {
                 $discard.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();$lastDecision=$epoch;$watch.Restart()
             }
             if($watch.Elapsed.TotalSeconds -gt 5){throw 'A drawing close exceeded five seconds after authorization'}
-          }catch{$p.Refresh();if($p.HasExited){break};throw}
+          }catch{$p.Refresh();if($p.HasExited -or ($windowOnly -and ![CapyWindowExercise]::IsWindow($handle))){break};throw}
             Start-Sleep -Milliseconds 75;$p.Refresh()
         }
+    }
+    if($windowOnly -and !$p.HasExited){
+        if([CapyWindowExercise]::IsWindow($handle)){throw 'The owned drawing window did not close.'}
+        'Completed Close';return
     }
     if(!$p.WaitForExit(5000)){throw 'Close exceeded five seconds after authorization.'}
     $code=$p.ExitCode

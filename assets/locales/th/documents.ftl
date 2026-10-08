@@ -113,6 +113,7 @@ documents-open-photos-filter = ภาพวาดและภาพถ่าย
 documents-delivery-clipboard-unavailable = วางภาพในเบราว์เซอร์นี้ไม่ได้ ใช้นำเข้าภาพเป็นเลเยอร์
 documents-delivery-clipboard-too-large = ภาพในคลิปบอร์ดใหญ่กว่า 512 MiB
 documents-delivery-clipboard-empty = คัดลอกภาพเพื่อวาง หรือนำเข้าไฟล์ต้นฉบับ
+documents-delivery-clipboard-changed = คลิปบอร์ดเปลี่ยนไปแล้ว ให้วางอีกครั้ง
 documents-delivery-images = ภาพ
 documents-delivery-drawing-or-photo = ภาพวาดหรือภาพถ่าย
 documents-delivery-drawing-type = ภาพวาด { common-app-name }

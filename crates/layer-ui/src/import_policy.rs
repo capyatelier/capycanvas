@@ -207,6 +207,7 @@ pub fn read_import(
 
 /// Bounded, all-or-nothing retained-image preparation. Worker adapters may
 /// decode locally or supply decoded sources from a browser worker.
+#[derive(Clone)]
 pub struct ImageImportBatch {
     limits: layer_color::photo::DecodeLimits,
     policy: PhotoOpenPolicy,
@@ -288,23 +289,26 @@ impl ImageImportBatch {
         name: &str,
         cancelled: &AtomicBool,
     ) -> Result<(), String> {
-        let result = (|| {
-            self.check(cancelled.load(std::sync::atomic::Ordering::Acquire))?;
-            let photo = layer_color::photo::read_photo_detailed_with_cancel(
-                BufReader::new(input),
-                self.limits,
-                cancelled,
-            )?;
-            self.append(
-                photo.display_name(name),
-                photo.source,
-                cancelled.load(std::sync::atomic::Ordering::Acquire),
-            )
-        })();
+        let result = self.read_candidate(input, name, cancelled);
         if result.is_err() {
             self.invalidate();
         }
         result
+    }
+    pub fn read_candidate(
+        &mut self,
+        input: impl Read + Seek,
+        name: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<(), String> {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) { self.invalidate(); return Err("Image import cancelled".into()); }
+        self.check(false)?;
+        let photo = layer_color::photo::read_photo_detailed_with_cancel(
+            BufReader::new(input), self.limits, cancelled,
+        ).inspect_err(|_| {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) { self.invalidate(); }
+        })?;
+        self.append(photo.display_name(name), photo.source, cancelled.load(std::sync::atomic::Ordering::Acquire))
     }
     pub fn interpret(&mut self, profile: ColorProfile, cancelled: bool) -> Result<(), String> {
         if cancelled {
@@ -579,6 +583,70 @@ mod tests {
         batch.read(std::io::Cursor::new(&png), "placed", &Default::default()).unwrap();
         assert_eq!(batch.take_sources(false).unwrap().len(), 1, "imports carry only their pixels");
     }
+    #[test]
+    fn failed_clipboard_representation_can_fall_back_without_poisoning_file_batches() {
+        let original = source();
+        let mut png = Vec::new();
+        layer_color::photo::write_png(&mut png, &original).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let mut clipboard = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+        assert!(clipboard.read_candidate(std::io::Cursor::new(b"invalid image"), "Invalid", &cancelled).is_err());
+        clipboard.read_candidate(std::io::Cursor::new(&png), "Fallback", &cancelled).unwrap();
+        let accepted = clipboard.take_sources(false).unwrap();
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].0, "Fallback");
+        assert_eq!((accepted[0].1.extent, accepted[0].1.interpretation.depth), (original.extent, original.interpretation.depth));
+        let mut before = vec![0; original.row_bytes()];
+        let mut after = vec![0; accepted[0].1.row_bytes()];
+        original.rows().read(0, &mut before).unwrap();
+        accepted[0].1.rows().read(0, &mut after).unwrap();
+        assert_eq!(after, before);
+        assert!(clipboard.take_sources(false).is_err());
+
+        let mut files = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+        files.read(std::io::Cursor::new(&png), "First", &cancelled).unwrap();
+        assert!(files.read(std::io::Cursor::new(b"invalid image"), "Invalid", &cancelled).is_err());
+        assert!(files.read(std::io::Cursor::new(&png), "Later", &cancelled).is_err());
+        assert!(files.take_sources(false).is_err());
+
+        let mut empty = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+        for name in ["First", "Last"] {
+            assert!(empty.read_candidate(std::io::Cursor::new(b"invalid image"), name, &cancelled).is_err());
+        }
+        assert!(empty.take_sources(false).is_err());
+    }
+
+    #[test]
+    fn cancelled_clipboard_candidates_cannot_publish_previously_accepted_sources() {
+        struct CancellingReader<'a> {
+            input: std::io::Cursor<&'a [u8]>,
+            cancelled: &'a AtomicBool,
+        }
+        impl Read for CancellingReader<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let result = self.input.read(buffer);
+                self.cancelled.store(true, std::sync::atomic::Ordering::Release);
+                result
+            }
+        }
+        impl Seek for CancellingReader<'_> {
+            fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+                self.input.seek(position)
+            }
+        }
+        let mut png = Vec::new();
+        layer_color::photo::write_png(&mut png, &source()).unwrap();
+        for before_read in [false, true] {
+            let cancelled = AtomicBool::new(false);
+            let mut batch = ImageImportBatch::new(Default::default(), RgbSpace::Srgb, Default::default());
+            batch.read_candidate(std::io::Cursor::new(&png), "Accepted", &cancelled).unwrap();
+            cancelled.store(before_read, std::sync::atomic::Ordering::Release);
+            let candidate = CancellingReader { input: std::io::Cursor::new(png.as_slice()), cancelled: &cancelled };
+            assert!(batch.read_candidate(candidate, "Cancelled", &cancelled).is_err());
+            assert!(batch.take_sources(false).is_err(), "cancelled before reading: {before_read}");
+        }
+    }
+
     #[test]
     fn batch_budget_interpretation_and_cancellation_never_publish_a_partial_batch() {
         let source = source();

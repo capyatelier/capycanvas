@@ -10,6 +10,7 @@ typedef struct CapyHost CapyHost;
 typedef struct CapyLaunch CapyLaunch;
 typedef struct CapyLocalization CapyLocalization;
 typedef struct CapyPreview CapyPreview;
+__declspec(dllimport) uint64_t capy_clipboard_publication(void);
 /* Render-owner-only request/poll, nonblocking GPU readback. CPU-only packet
    transfers to a worker and is freed once; buffers live until that free. */
 __declspec(dllimport) CapyPreview* capy_filter_previews(CapyHost*, const char* json);

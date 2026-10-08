@@ -115,6 +115,7 @@ documents-open-photos-filter = Çizimler ve fotoğraflar
 documents-delivery-clipboard-unavailable = Bu tarayıcıda görüntü yapıştırılamıyor. Görüntüyü katman olarak içe aktarın.
 documents-delivery-clipboard-too-large = Panodaki görüntü 512 MiB sınırını aşıyor
 documents-delivery-clipboard-empty = Yapıştırmak için bir görüntü kopyalayın veya özgün dosyayı içe aktarın.
+documents-delivery-clipboard-changed = Pano değişti. Yeniden yapıştırın.
 documents-delivery-images = Görüntüler
 documents-delivery-drawing-or-photo = Çizim veya fotoğraf
 documents-delivery-drawing-type = { common-app-name } çizimi

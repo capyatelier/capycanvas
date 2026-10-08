@@ -33,7 +33,7 @@ mod camera;
 mod document_tabs;
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
-pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument};
+pub use document_sessions::{DocumentSessionError, DocumentTransportRefusal, document_storage_retained, document_recovery_unavailable, DocumentAdmission, DocumentBudget, DocumentSessions, DocumentTabLabel, ParkedDocument, RetainedClipboard};
 mod document_creation;
 pub use document_creation::{BlendingChoice, DocumentBackground, NewDocumentAction, NewDocumentBlending, NewDocumentOptions, NewDocumentPreset, NewDocumentPresetId, NewDocumentPresetView, NewDocumentSettings, NewDocumentError, NewDocumentForm, NewDocumentText, NewDocumentAppearance};
 mod document_workflow;
@@ -129,7 +129,7 @@ mod stats;
 pub use session::{HistogramAction, HistogramView};
 pub use session::{
     AdjustmentChoice, ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS, clipboard_document, ClipboardCapture, CloseDecision,
-    LARGE_CLIP_PIXELS, PasteMode, PixelClip,
+    LARGE_CLIP_PIXELS, PasteMode, PixelClip, clipboard_color_changes,
     DEFAULT_DOCUMENT_EXTENT,
     DocumentColorOperation, DocumentIdleReason, ExportRepeat, DocumentHostError, DocumentHostErrorCopy, HostRequestFailure, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
