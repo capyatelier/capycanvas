@@ -10,6 +10,8 @@ Progress notes, validation reports and other work records are not committed
 
 ## Research
 
+- [Physical paint runtime cost](physical-paint-runtime-cost.md): calculations and
+  break-even conditions for local brush updates and continuously flowing paint.
 - [Capy file format: compatibility, containers and future artwork types](capy-format-foundation.md).
 - [One authored graph for layers and nodes](authored-graph-research.md): artist workflows,
   stack semantics, compositor feasibility and proposed validation gates.
