@@ -77,7 +77,12 @@ State lives in `~/.local/share/capycanvas/windows-vm` (`CAPYCANVAS_VM_DIR`): the
 base image in `base` and the VMs in `vms`. `CAPYCANVAS_VM_CPUS` (default up to 8),
 `CAPYCANVAS_VM_MEMORY` (default `16G`) and `CAPYCANVAS_VM_DISPLAY` (default
 `2560x1600`) apply when a VM starts. The generated account password is in
-`password` there.
+`password` there. Setup and creation restrict the state directory to its owner;
+the password and unattended-install answer file are readable and writable only
+by that owner. These local test credentials remain in plaintext for unattended
+Windows setup and console login. A successful installation removes the seed
+directory and ISO; failed installation files remain inside the private state
+directory for diagnosis.
 
 Windows Update is disabled so the VMs keep the ISO's build. The evaluation
 licence expires 90 days after `create`; stop every VM, then run `destroy` and

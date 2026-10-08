@@ -265,8 +265,11 @@ and require a maintainer's approval.
 | `FLATPAK_GPG_FINGERPRINT` | Variable | The full fingerprint of the Flatpak release key; its public key is `packaging/flatpak/release-key.asc` |
 
 Each Apple job imports its stored signing identity into a temporary keychain and
-checks that the certificate has a valid private key before building. The iPad
-archive reuses an Apple Development identity; App Store export uses cloud
+checks that the certificate has a valid private key before building. Signing
+expressions reference each secret by name so the runner receives only explicitly
+referenced secrets. A missing platform credential fails instead of selecting the
+other platform's identity. The iPad archive reuses an Apple Development identity;
+App Store export uses cloud
 distribution signing through the API key. Retain the development identity across
 runs: disposable runners otherwise create certificates whose private keys are
 lost when the job ends. Rotate the stored identity before it expires, and revoke

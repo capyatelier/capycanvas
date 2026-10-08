@@ -236,8 +236,8 @@ jobs:
       - if: env.SIGNED == 'true'
         env:
           API_KEY: ${{ secrets.APPLE_API_KEY }}
-          SIGNING_CERTIFICATE: ${{ secrets[matrix.platform == 'ipad' && 'APPLE_DEVELOPMENT_P12' || 'APPLE_DEVELOPER_ID_P12'] }}
-          SIGNING_PASSWORD: ${{ secrets[matrix.platform == 'ipad' && 'APPLE_DEVELOPMENT_PASSWORD' || 'APPLE_DEVELOPER_ID_PASSWORD'] }}
+          SIGNING_CERTIFICATE: ${{ matrix.platform == 'ipad' && secrets.APPLE_DEVELOPMENT_P12 || matrix.platform == 'mac' && secrets.APPLE_DEVELOPER_ID_P12 || '' }}
+          SIGNING_PASSWORD: ${{ matrix.platform == 'ipad' && secrets.APPLE_DEVELOPMENT_PASSWORD || matrix.platform == 'mac' && secrets.APPLE_DEVELOPER_ID_PASSWORD || '' }}
         run: |
           base64 --decode <<< "${API_KEY:?}" > "$RUNNER_TEMP/api-key.p8"
           {

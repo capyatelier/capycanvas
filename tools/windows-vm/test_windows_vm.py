@@ -1,8 +1,11 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +13,67 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("windows_vm", Path(__file__).with_name("windows-vm.py"))
 vm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vm)
+
+
+class CredentialTests(unittest.TestCase):
+    def test_setup_restricts_existing_state_directory(self):
+        with TemporaryDirectory() as directory:
+            state = Path(directory)
+            iso = state / "windows.iso"
+            iso.touch()
+            state.chmod(0o755)
+            with patch.multiple(vm, STATE=state, ISO_RECORD=state / "iso"), \
+                    patch.object(vm, "install_packages"), patch.object(vm, "ensure_kvm_access"), \
+                    patch.object(vm.shutil, "which", return_value=None), patch("builtins.print"):
+                vm.setup(SimpleNamespace(iso=iso))
+            self.assertEqual(state.stat().st_mode & 0o777, 0o700)
+
+    def test_installer_credentials_are_private_with_permissive_umask(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing), TemporaryDirectory() as directory:
+                state = Path(directory)
+                paths = {"STATE": state, "BASE": state / "base", "INSTALL": state / "install",
+                         "ISO_RECORD": state / "iso", "FIRMWARE": state / "firmware.json",
+                         "KEY": state / "id_ed25519", "PASSWORD": state / "password"}
+                iso = state / "windows.iso"
+                iso.touch()
+                paths["ISO_RECORD"].write_text(str(iso))
+                paths["KEY"].touch()
+                paths["KEY"].with_suffix(".pub").write_text("test-public-key")
+                variables = state / "vars"
+                variables.touch()
+                state.chmod(0o755)
+                if existing:
+                    paths["PASSWORD"].write_text("old" * 40)
+                    paths["PASSWORD"].chmod(0o666)
+                previous_umask = os.umask(0)
+                try:
+                    with patch.multiple(vm, **paths), patch.object(vm, "running", return_value=False), \
+                            patch.object(vm, "firmware", return_value={"vars": str(variables)}), \
+                            patch.object(vm, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                            patch.object(vm, "launch", side_effect=InterruptedError), \
+                            self.assertRaises(InterruptedError):
+                        vm.create(SimpleNamespace(gui=False))
+                finally:
+                    os.umask(previous_umask)
+                answer = paths["INSTALL"] / "seed/autounattend.xml"
+                self.assertEqual(state.stat().st_mode & 0o777, 0o700)
+                for path in (paths["PASSWORD"], answer):
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                value = paths["PASSWORD"].read_text().strip()
+                self.assertEqual(len(value), 24)
+                self.assertIn(f"<Value>{value}</Value>", answer.read_text())
+                self.assertNotIn("@PASSWORD@", answer.read_text())
+
+    def test_private_write_rejects_symlinks(self):
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "unrelated"
+            target.write_text("preserved")
+            link = Path(directory) / "credential"
+            link.symlink_to(target)
+            with self.assertRaises(OSError):
+                vm.write_private(link, "replacement")
+            self.assertEqual(target.read_text(), "preserved")
 
 
 class FixtureRunnerTests(unittest.TestCase):

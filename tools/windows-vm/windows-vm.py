@@ -112,6 +112,14 @@ def remove(path):
         path.unlink(missing_ok=True)
 
 
+def write_private(path, text):
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
+    with os.fdopen(os.open(path, flags, 0o600), "w") as output:
+        os.fchmod(output.fileno(), 0o600)
+        output.truncate()
+        output.write(text)
+
+
 def firmware():
     descriptors = {}
     for directory in ("/usr/share/qemu/firmware", "/etc/qemu/firmware"):
@@ -201,6 +209,7 @@ def setup(args):
     if not iso.is_file():
         sys.exit(f"{iso} is not a file.")
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    STATE.chmod(0o700)
     if shutil.which("chattr"):
         subprocess.run(["chattr", "+C", STATE], stderr=subprocess.DEVNULL)
     ISO_RECORD.write_text(f"{iso}\n")
@@ -342,6 +351,7 @@ def create(args):
     selected_firmware = firmware()
     if selected_firmware is None:
         sys.exit(f"No Secure Boot OVMF firmware was found; run `{PROGRAM} setup`.")
+    STATE.chmod(0o700)
     FIRMWARE.write_text(json.dumps(selected_firmware))
     remove(INSTALL)
     seed = INSTALL / "seed"
@@ -352,9 +362,9 @@ def create(args):
     if not KEY.exists():
         run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "capycanvas-windows-vm", "-f", KEY)
     password = secrets.token_urlsafe(18)
-    PASSWORD.write_text(f"{password}\n")
+    write_private(PASSWORD, f"{password}\n")
     unattend = (GUEST_FILES / "autounattend.xml").read_text().replace("@PASSWORD@", password)
-    (seed / "autounattend.xml").write_text(unattend)
+    write_private(seed / "autounattend.xml", unattend)
     for name in ("bootstrap.ps1", "provision.ps1", "prepare.ps1"):
         shutil.copy(GUEST_FILES / name, seed)
     shutil.copy(KEY.with_suffix(".pub"), seed / "administrators_authorized_keys")
