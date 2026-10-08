@@ -190,10 +190,9 @@ private final class TabletEvent: NSEvent {
             try require(matches && !outline(115, 115), "Presented preview must reflect Shift before mouse-up: \(name)")
         }
         func rulers() async throws -> JSON {
-            try? FileManager.default.removeItem(at: project)
             try await invoke("save_document_as")
-            try await wait("Committed ruler project") {
-                FileManager.default.fileExists(atPath: project.path) && !store.projectFiles.busy
+            try await wait("Committed ruler project", failure: { store.projectFiles.error ?? store.failure }) {
+                FileManager.default.fileExists(atPath: project.path) && !store.projectFiles.busy && store.state["requests"].array.isEmpty
             }
             try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             return try savedRulers(project)
@@ -369,23 +368,23 @@ private final class TabletEvent: NSEvent {
             try await action(["type": "close_settings"])
             window.setFrame(originalWindow, display: true)
         }
-        func moveOverCanvas() async throws {
+        func moveOverCanvas() throws {
             let point = canvas.convert(CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY), to: nil)
             guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
                 eventNumber: 0, clickCount: 0, pressure: 0) else { throw HostFailure(message: "No mouse event") }
-            canvas.mouseMoved(with: event); try await drain(0.05)
+            canvas.mouseMoved(with: event)
         }
-        try await moveOverCanvas()
+        try moveOverCanvas()
         try require(NSCursor.current.image.size == NSSize(width: 1, height: 1), "The system arrow hides over the canvas")
         let painting = store.state["commands"].array.first {
             $0["selected"].bool && ["pen", "pencil", "brush", "drawing_brush", "airbrush"].contains($0["id"].string)
         }?["id"].string
         try await invoke("hand")
-        try await moveOverCanvas()
+        try moveOverCanvas()
         try require(NSCursor.current == NSCursor.openHand, "The Hand tool shows the open hand over the canvas")
         try await invoke(painting ?? "pen")
-        try await moveOverCanvas()
+        try moveOverCanvas()
         try require(NSCursor.current.image.size == NSSize(width: 1, height: 1), "Leaving the Hand tool hides the cursor again")
         // Match the existing UIKit figure checks with actual AppKit mouse and
         // modifier delivery through the assembled editor's canvas hit target.

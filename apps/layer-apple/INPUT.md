@@ -98,5 +98,20 @@ watercolor and smudge against input that had final sensor values from the start.
 key, wheel, pinch and rotation events, application suspend and resume, and a
 Metal restart. The UIKit fixtures `canvas-hover.swift`, `pencil-estimates.swift`
 and `canvas-modifiers.swift` supply recognizer states and touches to the real
-iPad callbacks. None of these replace a physical Pencil or tablet check.
+iPad callbacks. The AppKit input fixture and UIKit modifier fixture check wheel
+navigation while mouse buttons are held, continued contact after scrolling,
+cancellation, and exclusion during painting. None of these replace a physical
+Pencil or tablet check.
+
+AppKit cursor assertions run before yielding after a supplied hover event, since the
+system pointer can update the cursor independently of that event.
+UIKit file fixtures supply the export-delivery callback for project saves as
+well as image exports. Before capturing pixels, they wait for completed input
+through the native snapshot barrier; one renderer frame does not guarantee that
+queued artwork edits have finished.
+
+Transform contact cancellation restores the pose at the start of that drag;
+the fixture then cancels the open transform before checking unchanged pixels.
+Transform checks wait for published controls after content measurement, target
+the painted bounds, and check X/Y as the reference point's document position.
 Ruler fixtures read the new package manifest with `tests/support/PackageManifest.swift`.

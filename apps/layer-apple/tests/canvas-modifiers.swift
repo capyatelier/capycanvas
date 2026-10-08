@@ -85,8 +85,11 @@ private final class Scroll: UIPanGestureRecognizer {
         let store = EditorStore(platform: 0,
             persistence: EditorPersistence(root: root.appendingPathComponent("state")), managedWorkspaces: false)
         store.projectFiles = ProjectFiles(store: store, dialogs: .init(
-            open: { _, done in done([]) }, save: { _, _, done in done(url) },
-            create: { _, done in done(nil) }, exportOptions: { $0.choose($0.recipe) }))
+            open: { _, done in done([]) }, save: { _, _, done in done(nil) },
+            create: { _, done in done(nil) }, export: { staging, done in
+                do { try FileManager.default.copyItem(at: staging, to: url); done(url) }
+                catch { store.failure = error.localizedDescription; done(nil) }
+            }, exportOptions: { $0.choose($0.recipe) }))
         let canvas = CanvasView(store: store)
         canvas.contentScaleFactor = 1
         defer { canvas.stop() }
@@ -105,7 +108,7 @@ private final class Scroll: UIPanGestureRecognizer {
         }
         func flush() async throws {
             await withCheckedContinuation { done in
-                native.submit(2, JSON(["type":"catalog"])) { _ in done.resume() }
+                native.submit(2, JSON(["type":"catalog"])) { _ in DispatchQueue.main.async { done.resume() } }
             }
             try require(store.failure == nil, store.failure ?? "")
         }
@@ -219,7 +222,9 @@ private final class Scroll: UIPanGestureRecognizer {
             await withCheckedContinuation { done in
                 native.frame(now: now, target: now + 16_666_667) { _, _, _ in done.resume() }
             }
-            await withCheckedContinuation { done in native.submit(2, JSON(["type":"catalog"])) { _ in done.resume() } }
+            await withCheckedContinuation { done in
+                native.submit(2, JSON(["type":"catalog"])) { _ in DispatchQueue.main.async { done.resume() } }
+            }
             try require(store.failure == nil, store.failure ?? "Prepare canvas work")
         }
         func wait(_ description: String, _ ready: () -> Bool) async throws {
@@ -277,6 +282,10 @@ private final class Scroll: UIPanGestureRecognizer {
             try await flush()
         }
         func pixels() async throws -> Data {
+            try require(canvas.contacts.isEmpty, "Finish supplied contacts before capturing artwork")
+            let prepared = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning: $0) } }
+            try require(prepared, "Prepare completed artwork for export")
+            try await flush()
             try? FileManager.default.removeItem(at: png)
             try await invoke("export_document")
             try await wait("Finish PNG export") { !store.projectFiles.busy && FileManager.default.fileExists(atPath: png.path) }
@@ -457,8 +466,6 @@ private final class Scroll: UIPanGestureRecognizer {
             try await path([CGPoint(x:32,y:32), CGPoint(x:96,y:96)], device: device)
             let original = try await pixels()
             try require(colored(original, 64, 64) && !colored(original, 20, 20), "Transform fixture contains finite artwork")
-            // Values are shared document units: X/Y pixels, scale fractions,
-            // and radians. Handles surround the finite 128px raster canvas.
             struct TransformCase {
                 let name: String
                 let start: CGPoint
@@ -468,25 +475,29 @@ private final class Scroll: UIPanGestureRecognizer {
                 var rotation = false
             }
             var cases: [TransformCase] = [
-                .init(name:"edge", start:CGPoint(x:128,y:64), end:CGPoint(x:96,y:64), flags:[], pose:[-16,0,0.75,1,0]),
-                .init(name:"Shift edge", start:CGPoint(x:128,y:64), end:CGPoint(x:96,y:64), flags:.shift, pose:[-16,0,0.75,0.75,0]),
-                .init(name:"Alt edge", start:CGPoint(x:128,y:64), end:CGPoint(x:96,y:64), flags:.alternate, pose:[0,0,0.5,1,0]),
-                .init(name:"corner", start:CGPoint(x:128,y:128), end:CGPoint(x:96,y:112), flags:[], pose:[-16,-8,0.75,0.875,0]),
-                .init(name:"Shift corner", start:CGPoint(x:128,y:128), end:CGPoint(x:96,y:112), flags:.shift, pose:[-16,-16,0.75,0.75,0]),
-                .init(name:"Alt corner", start:CGPoint(x:128,y:128), end:CGPoint(x:96,y:112), flags:.alternate, pose:[0,0,0.5,0.75,0]),
-                .init(name:"move", start:CGPoint(x:64,y:64), end:CGPoint(x:80,y:72), flags:[], pose:[16,8,1,1,0]),
-                .init(name:"Shift move", start:CGPoint(x:64,y:64), end:CGPoint(x:80,y:72), flags:.shift, pose:[16,0,1,1,0])
+                .init(name:"edge", start:CGPoint(x:96,y:64), end:CGPoint(x:80,y:64), flags:[], pose:[56,64,0.75,1,0]),
+                .init(name:"Shift edge", start:CGPoint(x:96,y:64), end:CGPoint(x:80,y:64), flags:.shift, pose:[56,64,0.75,0.75,0]),
+                .init(name:"Alt edge", start:CGPoint(x:96,y:64), end:CGPoint(x:80,y:64), flags:.alternate, pose:[64,64,0.5,1,0]),
+                .init(name:"corner", start:CGPoint(x:96,y:96), end:CGPoint(x:80,y:88), flags:[], pose:[56,60,0.75,0.875,0]),
+                .init(name:"Shift corner", start:CGPoint(x:96,y:96), end:CGPoint(x:80,y:88), flags:.shift, pose:[56,56,0.75,0.75,0]),
+                .init(name:"Alt corner", start:CGPoint(x:96,y:96), end:CGPoint(x:80,y:88), flags:.alternate, pose:[64,64,0.5,0.75,0]),
+                .init(name:"move", start:CGPoint(x:48,y:48), end:CGPoint(x:64,y:56), flags:[], pose:[80,72,1,1,0]),
+                .init(name:"Shift move", start:CGPoint(x:48,y:48), end:CGPoint(x:64,y:56), flags:.shift, pose:[80,64,1,1,0])
             ]
-            let radius = 16 + 30 / store.state["camera"]["zoom"].number
+            let radius = 8 + 30 / store.state["camera"]["zoom"].number
             let angle = 71.0 * Double.pi / 180
             for shift in [false, true] {
                 cases.append(.init(name:shift ? "Shift rotation" : "rotation",
                     start:CGPoint(x:64,y:64-radius), end:CGPoint(x:64+sin(angle)*radius,y:64-cos(angle)*radius),
-                    flags:shift ? .shift : [], pose:[0,0,0.5,0.25,(shift ? 75 : 71) * Double.pi / 180], rotation:true))
+                    flags:shift ? .shift : [], pose:[64,64,0.5,0.25,(shift ? 75 : 71) * Double.pi / 180], rotation:true))
             }
             for test in cases {
                 func begin() async throws {
                     try await invoke("scale_rotate")
+                    try await wait("Prepare transform controls") {
+                        store.state["tool_settings"].array.contains { $0["id"].string == "transform_x" }
+                            && store.snapshot["brush_ready"].bool
+                    }
                     if test.rotation {
                         try await action(["type":"set_tool_setting", "id":"transform_width", "value":0.5])
                         try await action(["type":"set_tool_setting", "id":"transform_height", "value":0.25])
@@ -501,8 +512,12 @@ private final class Scroll: UIPanGestureRecognizer {
                     }
                 }
                 try await begin()
+                let initialControls = store.state["tool_settings"].stableKey
                 try await path([test.start,test.end], device:device, modifiers:test.flags, cancel:true)
-                try require(store.state["tool_settings"].array.isEmpty, "Cancelled contact retires the transform preview")
+                try await wait("Cancelled contact restores the transform's starting pose") {
+                    store.state["tool_settings"].stableKey == initialControls && canvas.contacts.isEmpty
+                }
+                try await invoke("cancel_transform")
                 try require(try await pixels() == original, "Cancelled transform contact preserves every pixel")
                 for apply in [false, true] {
                     try await begin()
@@ -513,13 +528,13 @@ private final class Scroll: UIPanGestureRecognizer {
                     if apply {
                         try require(colored(changed,64,64), "Transformed artwork retains its expected center")
                         if test.rotation {
-                            try require(colored(changed,64,48) && !colored(changed,48,64), "Rotation changes actual artwork orientation")
+                            try require(colored(changed,64,54) && !colored(changed,54,64), "Rotation changes actual artwork orientation")
                         } else if test.name.contains("move") {
                             try require(!colored(changed,40,64) && colored(changed,104,64), "Moving artwork updates both old and new positions")
                         } else {
                             try require(!colored(changed,88,64), "Scaling moves the original right edge inward")
                             if test.flags.contains(.alternate) { try require(!colored(changed,40,64), "Alt scaling keeps the center fixed") }
-                            else { try require(colored(changed,26,64), "Ordinary scaling keeps the opposite edge fixed") }
+                            else { try require(colored(changed,40,64), "Ordinary scaling keeps the opposite edge fixed") }
                         }
                         try await history(original, changed)
                     } else {
