@@ -15,7 +15,7 @@ case "$CAPY_PLATFORM" in
     CAPY_OPTIONS+=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration "DEVELOPMENT_TEAM=$CAPY_APPLE_TEAM")
     ;;
   macos)
-    CAPY_DEST='platform=macOS,arch=arm64'; CAPY_SCHEME=CapyCanvas-Mac
+    CAPY_DEST='generic/platform=macOS'; CAPY_SCHEME=CapyCanvas-Mac
     if [[ -n "${CAPY_APPLE_TEAM:-}" ]]; then
       CAPY_OPTIONS+=("DEVELOPMENT_TEAM=$CAPY_APPLE_TEAM" 'CODE_SIGN_IDENTITY=Apple Development')
     else
