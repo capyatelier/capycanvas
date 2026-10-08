@@ -60,7 +60,8 @@ function New-Image([scriptblock]$Action,[string]$Extent,[string]$Name,[int]$Obje
   $extents=@($manifest.objects|Where-Object type -eq 'capy.image/1'|ForEach-Object {$_.data.extent -join 'x'}|Sort-Object)
   if(($extents -join ',') -ne (($Sources|Sort-Object) -join ',')){throw "$Name changed the source image extents"}
   foreach($object in $manifest.objects|Where-Object type -eq 'capy.image-object/1'){
-   if(($object.data.affine[0..3] -join ',') -ne '1,0,0,1'){throw "$Name scaled or rotated a clipboard image"}
+   $affine=if($null -eq $object.data.affine){@(1,0,0,1,0,0)}else{$object.data.affine}
+   if(($affine[0..3] -join ',') -ne '1,0,0,1'){throw "$Name scaled or rotated a clipboard image"}
   }
  }
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
