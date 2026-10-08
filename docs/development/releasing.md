@@ -105,6 +105,13 @@ not establish review approval or tester availability: check Play Console and
 install through Play with an enrolled tester account. Keep tester lists and
 group membership configured in Play Console.
 
+For an app still classified as a draft, Play can reject closed-track rollout
+with `Only releases with status draft may be created on draft app.` Internal
+testing remains available. Finish the app setup in Play Console, select the
+tested bundle for the closed release, save it, and send the changes for review
+from Publishing overview. Reuse the uploaded bundle; this does not need a new
+build or version. A saved draft alone is not a review submission.
+
 If Play supplies only unprotected splits, turn off Automatic protection for the
 release in Play Console before uploading its bundle. A per-release opt-out does
 not disable protection for later releases. The workflow fails rather than
