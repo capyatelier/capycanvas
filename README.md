@@ -23,14 +23,14 @@
 Capy Canvas is free, GPU-accelerated painting and photo editing software. We
 want to improve upon the ideas of the past, and build something better.
 
-The gap in creative software is most stark Linux, where there are not many good
+The gap in creative software is most stark on Linux, where there are not many good
 options for artists. Though, we can help people on Windows, Mac, iPad and
 Android, and web, so nobody is left behind.
 
 We want artists to build their own tools. We envision a world where painters
 build their own brush engine, and photographers write their effect shaders.
 And while software may be AI generated, the tools should be used by humans.
-Artists shouldn't have to wait for a software company to decide that your idea is worth
+Artists shouldn't have to wait for a software company to decide that their idea is worth
 building.
 
 That is why Capy Canvas is open source and forever free, and we want
@@ -43,10 +43,10 @@ over a decade ago. Back when the apple pencil first came out, it was magic.
 Even though the hardware was slow by today's standards, it was so well done
 that it gave a real pen-to-paper feeling.
 
-This was the first time a drawing app was ever fully optimized for a mobile
+This was the first time a drawing app was fully optimized for a mobile
 device, using predictive pen tracking and GPU powered brush+rendering
 engines. Then they dropped a clean and minimalist UI on top of it, which
-has become ubiquitious for all modern drawing apps.
+then became the industry standard for all modern drawing apps.
 
 The *Sketch* workspace is a tribute to our roots. The place where
 everyone starts out.
@@ -61,8 +61,8 @@ everyone starts out.
 Once you get into proper comic/manga work, the simple tools don't cut it anymore.
 Lasso fill is your best friend, and you learn to live with the necessary evil of masks.
 
-There are many tools out there that solve this problem, CSP and medibang are
-often what people learn first. And they are great, easy-to-use and
+There are many tools out there for professional illustration workflows, CSP and
+medibang are often what people learn first. And they are great, easy-to-use and
 inuitive software. All you have to do is follow the process and it usually
 turns out OK.
 
@@ -87,9 +87,9 @@ format by default. SRGB is a thing of the past.
 
 To this date, the only painting app that properly supports wide gamut HDR is
 Krita. HDR is a complicated beast and is hard to get right. When you publish
-HDR and wide-gamut images online, you need control over the gain mapping, so
-that it still looks good on SDR devices. Of course you also need the basics
-(proofing, effect chains, the whole enchilada)
+HDR and wide-gamut images online, you need to control the gain mapping so
+that it still looks good on SDR devices. Of course no photo editor is complete
+without the all of the basics (proofing, effect chains, the whole enchilada)
 
 The *Photo* workspace enables stunning visuals for a new generation of wide-gamut screens.
 
