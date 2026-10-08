@@ -332,12 +332,12 @@ commands-help-flip-image-horizontal = Mirror the whole image, with its selection
 commands-help-trim = Shrink the canvas to the visible pixels, removing transparent edges. Pixels outside stay on their layers, hidden.
 commands-help-reveal-all = Grow the canvas to show every layer's pixels, including hidden layers and pixels outside the canvas.
 commands-help-move-leave-copy = When Move drags selected pixels, place a copy and keep the original in place. Holding Alt as the drag starts does the opposite.
-commands-help-copy = Copy the active layer's own pixels within the selection, before its opacity, mask and effects. Without a selection, copy the whole layer within the canvas. On an image layer, copy the selected images.
-commands-help-cut = Copy the active layer's selected pixels, then erase them from the layer. On an image layer, copy the selected images, then remove them.
+commands-help-copy = Copy selected pixels or selected images. Without a pixel or image selection, copy the selected layers and folders with their properties.
+commands-help-cut = Copy selected pixels, selected images or whole layers, then remove them after the clipboard write succeeds.
 commands-help-copy-merged = Copy the visible image within the selection, as an export would show it.
 commands-help-copy-pixels = Copy the active layer's pixels within the selection, before its opacity, mask and effects. On an image layer, its images are copied as pixels.
-commands-help-paste-image = Add the clipboard. Pixels copied in { common-app-name } become a paint layer at their copied position when that is in view, and copied images stay images. An image from another app opens with placement handles.
-commands-help-paste-in-place = Add the clipboard where it was copied from, with no placement handles. An image from another app is placed as an image, centred at full size.
+commands-help-paste-image = Add the clipboard as layers or images. An image from another app opens with placement handles at its original size.
+commands-help-paste-in-place = Paste at the copied position. Images from other apps start at the canvas origin, at their original size.
 commands-help-paste-into = Add the clipboard as an image in a new image layer whose mask shows only the selection. Move the image to change what shows.
 commands-help-new-dodge-burn-layer = Add a Soft Light layer of neutral gray above the active layer. Paint on it in white to lighten and in black to darken.
 commands-help-frequency-separation = Split the active layer into Low, its colors and tones blurred to a radius, and High, its fine texture, in a new group. The layer stays below, hidden.
@@ -615,3 +615,11 @@ commands-help-enclose-fill = Draw a loop to fill closed transparent regions insi
 
 command-paste-as-new-image = Paste as New Image
 commands-help-paste-as-new-image = Open the clipboard as a new drawing at its original size.
+
+command-paste-at-view = Paste to Shown Position
+
+command-paste-at-cursor = Paste at Cursor
+
+commands-help-paste-at-view = Paste the clipboard at the centre of the visible canvas, at its original size.
+
+commands-help-paste-at-cursor = Paste the clipboard centred on the pointer, at its original size.

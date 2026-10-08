@@ -329,12 +329,12 @@ commands-help-flip-image-horizontal = Görüntünün tamamını seçimi ve kıla
 commands-help-trim = Saydam kenarları kaldırarak tuvali görünür piksellere küçültün. Dışarıdaki pikseller katmanlarında gizli kalır.
 commands-help-reveal-all = Gizli katmanlar ve tuval dışındakiler dâhil, tüm katman piksellerini göstermek için tuvali büyütün.
 commands-help-move-leave-copy = Taşı aracı seçili pikselleri sürüklediğinde bir kopya yerleştirin ve özgünü yerinde tutun. Sürüklemeye başlarken Alt'ı basılı tutmak tersini yapar.
-commands-help-copy = Etkin katmanın kendi piksellerini seçim içinde opaklık, maske ve efektlerden önce kopyalayın. Seçim yoksa tuval içindeki katmanın tamamını kopyalayın. Görsel katmanında seçili görselleri kopyalayın.
-commands-help-cut = Etkin katmanın seçili piksellerini kopyalayın, sonra katmandan silin. Görsel katmanında seçili görselleri kopyalayın, sonra kaldırın.
+commands-help-copy = Seçili pikselleri veya görüntüleri kopyalar. Piksel veya görüntü seçimi yoksa seçili katmanları ve klasörleri özellikleriyle birlikte kopyalar.
+commands-help-cut = Seçili pikselleri, görüntüleri veya tüm katmanları kopyalar ve panoya başarıyla yazıldıktan sonra kaldırır.
 commands-help-copy-merged = Seçim içindeki görünür görüntüyü dışa aktarıldığında görüneceği şekilde kopyalayın.
 commands-help-copy-pixels = Etkin katmanın seçim içindeki piksellerini opaklık, maske ve efektlerden önce kopyalayın. Görsel katmanında görseller piksel olarak kopyalanır.
-commands-help-paste-image = Panoyu ekleyin. { common-app-name }’ta kopyalanan pikseller, görünürse kopyalandıkları konumda bir boya katmanı olur ve kopyalanan görseller görsel olarak kalır. Başka bir uygulamadan gelen görsel, yerleştirme tutamaçlarıyla açılır.
-commands-help-paste-in-place = Panoyu kopyalandığı konuma, yerleştirme tutamaçları olmadan ekleyin. Başka bir uygulamadan gelen görsel, tam boyutta ortalanmış bir görsel olarak yerleştirilir.
+commands-help-paste-image = Panoyu katman veya görüntü olarak ekler. Başka bir uygulamadan gelen görüntü, özgün boyutunda yerleştirme tutamaçlarıyla açılır.
+commands-help-paste-in-place = Kopyalanan konuma yapıştırır. Diğer uygulamalardan gelen görüntüler özgün boyutlarında tuvalin başlangıç noktasına yerleştirilir.
 commands-help-paste-into = Panoyu, maskesi yalnızca seçimi gösteren yeni bir görsel katmanında görsel olarak ekleyin. Görüneni değiştirmek için görseli taşıyın.
 commands-help-new-dodge-burn-layer = Etkin katmanın üstüne nötr gri bir Yumuşak ışık katmanı ekleyin. Açıklaştırmak için beyazla, koyulaştırmak için siyahla boyayın.
 commands-help-frequency-separation = Etkin katmanı yeni bir grupta, renk ve tonları bir yarıçapla bulanıklaştırılmış Düşük frekans ile ince dokusu olan Yüksek frekans katmanlarına ayırın. Katman altta gizli kalır.
@@ -612,3 +612,11 @@ commands-help-enclose-fill = İçindeki kapalı saydam alanları doldurmak için
 
 command-paste-as-new-image = Yeni Görüntü Olarak Yapıştır
 commands-help-paste-as-new-image = Pano içeriğini özgün boyutunda yeni bir çizim olarak açın.
+
+command-paste-at-view = Görünen konuma yapıştır
+
+command-paste-at-cursor = İmleçte yapıştır
+
+commands-help-paste-at-view = Panoyu görünür tuvalin ortasına özgün boyutunda yapıştırır.
+
+commands-help-paste-at-cursor = Panoyu işaretçinin etrafında ortalayarak özgün boyutunda yapıştırır.

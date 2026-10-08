@@ -1099,6 +1099,8 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 CommandId::CopyPixels => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_COPY_PIXELS).to_string(),
                 CommandId::PasteImage => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PASTE_IMAGE).to_string(),
                 CommandId::PasteAsNewImage => localization.text(MessageId::COMMANDS_HELP_PASTE_AS_NEW_IMAGE).to_string(),
+                CommandId::PasteAtView => localization.text(MessageId::COMMANDS_HELP_PASTE_AT_VIEW).to_string(),
+                CommandId::PasteAtCursor => localization.text(MessageId::COMMANDS_HELP_PASTE_AT_CURSOR).to_string(),
                 CommandId::PasteInPlace => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PASTE_IN_PLACE).to_string(),
                 CommandId::PasteInto => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PASTE_INTO).to_string(),
                 CommandId::Pen => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PEN).to_string(),

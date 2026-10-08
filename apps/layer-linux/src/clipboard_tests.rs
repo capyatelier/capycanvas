@@ -75,6 +75,8 @@ fn external_copy(png: &[u8]) { external_copy_type(png, "image/png"); }
 fn external_copy_type(bytes: &[u8], mime: &str) {
     let mut child = std::process::Command::new("wl-copy")
         .args(["--type", mime])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::piped())
         .spawn()
         .expect("wl-copy");
@@ -164,15 +166,18 @@ fn native_clipboard_copy_paste_round_trips() {
         depth: layer_core::color::SampleDepth::U16,
     };
     let second = Workspace::with_project(&app, Some((other, None)));
+    apply_fixture_theme(&second);
     second.window.present();
     until(|| second.gpu.borrow().as_ref().is_some_and(|g| g.session.require_document_idle().is_ok()), "the second drawing");
     pump(600);
     let copy = current().unwrap();
     chord(&mut native, &[CONTROL, SHIFT], 0x76);
-    until(|| document(&second).scene().order().len() == 3 && idle(&second), "Paste in Place into another drawing");
+    until(|| document(&second).scene().order().len() == 3 && idle(&second), "Paste to Shown Position into another drawing");
     let pasted = document(&second);
     assert_eq!(active_paint(&pasted).base.as_ref().unwrap().policy, PaintBasePolicy::SourceProfile, "another colour mode keeps an explicit profile");
-    assert_eq!(active_occurrence(&pasted).offset, copy.origin.map(i64::from));
+    let camera = state(&second).camera;
+    let centre = camera.surface_to_document64(camera.work_area_center().map(f64::from));
+    assert_eq!(active_occurrence(&pasted).offset, std::array::from_fn(|i| (centre[i] - f64::from(copy.source.extent[i]) / 2.).round() as i64));
     second.window.destroy();
     w.window.present();
     pump(400);
@@ -186,7 +191,7 @@ fn native_clipboard_copy_paste_round_trips() {
     w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
     until(|| document(&w).scene().order().len() == layers && idle(&w), "cancelling the placement removes it");
     chord(&mut native, &[CONTROL, SHIFT], 0x76);
-    until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), "Paste in Place of another app's image");
+    until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), "Paste to Shown Position of another app's image");
     assert!(state(&w).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement), "centred without handles");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| document(&w).scene().order().len() == layers, "one undo step");
@@ -233,6 +238,69 @@ fn native_clipboard_copy_paste_round_trips() {
     assert_source_samples(active_paint(&document(&w)).base.as_ref().unwrap().image.as_ref(), &clip.source);
     assert_eq!(w.documents.model.borrow().order().len(), 3);
     std::fs::remove_file(path).unwrap();
+
+    let original = document(&w).working.occurrence.unwrap();
+    w.dispatch(UiAction::SetLayerOpacity { id: Some(layer_ui::occurrence_token(original)), opacity: 0.37 });
+    let original_doc = document(&w);
+    let original_layer = active_occurrence(&original_doc).clone();
+    let layers = original_doc.scene().order().len();
+    assert!(original_doc.working.selection.is_none());
+    let before = nonce();
+    chord(&mut native, &[CONTROL], 0x63);
+    let whole = copied(&w, before, "whole-layer Copy without a selection");
+    let retained = whole.layers.as_ref().unwrap();
+    assert_eq!(retained.roots.len(), 1);
+    assert_eq!(retained.scene.view().order().len(), 1);
+    let retained_layer = retained.scene.view().occurrence(retained.roots[0]).unwrap();
+    assert_eq!((&retained_layer.name, retained_layer.opacity, retained_layer.blend, retained_layer.offset),
+        (&original_layer.name, original_layer.opacity, original_layer.blend, original_layer.offset));
+    chord(&mut native, &[CONTROL], 0x76);
+    until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), "whole-layer Paste");
+    let pasted = document(&w);
+    let pasted_layer = active_occurrence(&pasted);
+    assert_eq!((&pasted_layer.name, pasted_layer.opacity, pasted_layer.blend, pasted_layer.offset),
+        (&original_layer.name, original_layer.opacity, original_layer.blend, original_layer.offset));
+    assert_source_samples(active_paint(&pasted).base.as_ref().unwrap().image.as_ref(), active_paint(&original_doc).base.as_ref().unwrap().image.as_ref());
+    let pasted_id = pasted.working.occurrence.unwrap();
+    let before = nonce();
+    chord(&mut native, &[CONTROL], 0x78);
+    assert!(copied(&w, before, "whole-layer Cut without a selection").layers.is_some());
+    until(|| document(&w).scene().order().len() == layers && idle(&w), "Cut removes the copied layer");
+    assert!(document(&w).scene().occurrence(pasted_id).is_none());
+    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    until(|| document(&w).scene().order().len() == layers + 1, "Undo restores the cut layer");
+    assert_eq!(document(&w).scene().occurrence(pasted_id).unwrap(), pasted_layer);
+    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    until(|| document(&w).scene().order().len() == layers, "Undo removes the pasted layer");
+
+    w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+    let point = screen_point(w.area.upcast_ref(), &w.window, [0.5, 0.5]);
+    native.perform(json!([{"point": point}, {"wheel": [0, 1]}]));
+    let camera = state(&w).camera;
+    let centre = camera.surface_to_document64(camera.work_area_center().map(f64::from));
+    let expected: [i64; 2] = std::array::from_fn(|i| (centre[i] - f64::from(whole.source.extent[i]) / 2.).round() as i64 + original_layer.offset[i] - whole.origin[i]);
+    assert_ne!(expected, original_layer.offset, "the view has panned away from the copied position");
+    chord(&mut native, &[CONTROL, SHIFT], 0x76);
+    until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), "whole layers paste to the shown position");
+    assert_eq!(active_occurrence(&document(&w)).offset, expected);
+    assert!(state(&w).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement));
+    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    until(|| document(&w).scene().order().len() == layers, "centred Paste undoes in one step");
+
+    let extent = document(&w).composition().size.map(|v| v + 64);
+    let source = layer_core::color::source::rgba8_source(extent, |_, _| [224, 64, 16, 255]);
+    let mut oversized = Vec::new();
+    layer_color::photo::write_png(&mut oversized, &source).unwrap();
+    external_copy(&oversized);
+    until(|| !clipboard_formats(&w).iter().any(|m| m == CLIP_MIME), "an oversized external image is offered");
+    chord(&mut native, &[CONTROL], 0x76);
+    until(|| state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Placement), "oversized external Paste shows handles");
+    let pasted = document(&w);
+    let object = pasted.object_layer_children(pasted.working.occurrence.unwrap()).unwrap()[0];
+    assert_eq!(pasted.scene().object(object).unwrap().image.extent, extent);
+    assert_eq!(pasted.object_document_affine(object).unwrap().0[..4], [1., 0., 0., 1.], "external Paste keeps full pixel size beyond the canvas");
+    w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
+    until(|| document(&w).scene().order().len() == layers && idle(&w), "oversized placement cancels completely");
 }
 
 #[test]
@@ -254,6 +322,7 @@ fn native_clipboard_copy_latency_24mp() {
     paint_at_mut(&mut project, 0).base = Some(layer_core::PaintBase::new((std::sync::Arc::new(builder.finish().unwrap())).into()));
     let app = native_test_app("art.capycanvas.ClipboardLatency");
     let w = Workspace::with_project(&app, Some((project, None)));
+    apply_fixture_theme(&w);
     w.window.present();
     w.window.maximize();
     until(|| w.gpu.borrow().as_ref().is_some_and(|g| g.session.require_document_idle().is_ok()), "the 24 MP drawing");
@@ -289,4 +358,8 @@ fn native_clipboard_copy_latency_24mp() {
     native_pen_path(&w, &[[100., 100.], [5900., 150.], [5850., 3900.], [150., 3850.], [100., 100.]]);
     let composed = timed(&mut native, "24 MP photo, lasso selection");
     assert_eq!(composed.policy, PaintBasePolicy::WorkingPixels);
+    w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+    let layers = timed(&mut native, "24 MP photo, whole layer");
+    assert!(layers.layers.is_some());
+    assert_eq!(layers.source.extent, [width, height]);
 }

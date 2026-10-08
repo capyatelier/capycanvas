@@ -653,16 +653,16 @@ commands-help-reveal-all = Perbesar kanvas untuk menampilkan piksel semua lapisa
 
 commands-help-move-leave-copy = Saat Pindahkan menyeret piksel terpilih, tempatkan salinan dan pertahankan aslinya di tempat. Menahan Alt saat mulai menyeret melakukan kebalikannya.
 
-commands-help-copy = Salin piksel milik lapisan aktif di dalam seleksi, sebelum opasitas, mask, dan efeknya. Tanpa seleksi, salin seluruh lapisan di dalam kanvas. Pada lapisan gambar, salin gambar yang dipilih.
+commands-help-copy = Salin piksel atau gambar yang dipilih. Tanpa seleksi piksel atau gambar, salin lapisan dan folder yang dipilih beserta propertinya.
 
-commands-help-cut = Salin piksel terpilih pada lapisan aktif, lalu hapus dari lapisan. Pada lapisan gambar, salin gambar yang dipilih, lalu hapus.
+commands-help-cut = Salin piksel, gambar, atau seluruh lapisan yang dipilih, lalu hapus setelah berhasil ditulis ke papan klip.
 
 commands-help-copy-merged = Salin gambar terlihat dalam seleksi, sebagaimana hasil ekspor.
 commands-help-copy-pixels = Salin piksel lapisan aktif di dalam seleksi, sebelum opasitas, mask, dan efeknya. Pada lapisan gambar, gambarnya disalin sebagai piksel.
 
-commands-help-paste-image = Tambahkan isi papan klip. Piksel yang disalin di { common-app-name } menjadi lapisan cat di posisi salinannya jika terlihat, dan gambar yang disalin tetap menjadi gambar. Gambar dari aplikasi lain terbuka dengan pegangan penempatan.
+commands-help-paste-image = Tambahkan isi papan klip sebagai lapisan atau gambar. Gambar dari aplikasi lain dibuka dengan gagang penempatan pada ukuran aslinya.
 
-commands-help-paste-in-place = Tambahkan isi papan klip di posisi asal salinan, tanpa pegangan penempatan. Gambar dari aplikasi lain ditempatkan sebagai gambar di tengah dengan ukuran penuh.
+commands-help-paste-in-place = Tempel di posisi saat disalin. Gambar dari aplikasi lain ditempatkan di titik asal kanvas, dengan ukuran aslinya.
 
 commands-help-paste-into = Tambahkan isi papan klip sebagai gambar di lapisan gambar baru yang masknya hanya menampilkan seleksi. Pindahkan gambar untuk mengubah bagian yang terlihat.
 
@@ -1195,3 +1195,11 @@ commands-help-enclose-fill = Gambar lingkaran untuk mengisi area transparan tert
 
 command-paste-as-new-image = Tempel sebagai Gambar Baru
 commands-help-paste-as-new-image = Buka isi papan klip sebagai gambar baru dengan ukuran aslinya.
+
+command-paste-at-view = Tempel di posisi terlihat
+
+command-paste-at-cursor = Tempel di kursor
+
+commands-help-paste-at-view = Tempel isi papan klip di tengah kanvas yang terlihat, dengan ukuran aslinya.
+
+commands-help-paste-at-cursor = Tempel isi papan klip berpusat pada penunjuk, dengan ukuran aslinya.

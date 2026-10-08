@@ -2895,6 +2895,38 @@ class AndroidInteractionTest {
             command("undo")
             waitFor("one undo step restores the selection", 5_000) { layerStates().size == count && hasSelection() }
 
+            command("deselect")
+            val sourceLayer = editingLayer()
+            action(obj("type" to "set_layer_opacity", "id" to sourceLayer, "opacity" to .37))
+            val beforeLayerCopy = clipboardNonce()
+            command("copy")
+            waitFor("Copy without a selection publishes the whole layer", 30_000) {
+                clipboardNonce().let { it != null && it != beforeLayerCopy } && documentIdle()
+            }
+            command("paste_image")
+            waitFor("Paste adds an editable copied layer", 30_000) { layerStates().size == count + 1 && documentIdle() }
+            val copiedLayer = editingLayer()
+            assertNotEquals(sourceLayer, copiedLayer)
+            assertEquals("Copy preserves layer opacity", .37, layerStates().first { it.getLong("id") == copiedLayer }.getDouble("opacity"), 1e-6)
+            val beforeLayerCut = clipboardNonce()
+            command("cut")
+            waitFor("Cut without a selection publishes and removes the layer", 30_000) {
+                clipboardNonce().let { it != null && it != beforeLayerCut } && documentIdle() &&
+                    layerStates().size == count && layerStates().none { it.getLong("id") == copiedLayer }
+            }
+            assertTrue("Cut leaves the source layer", layerStates().any { it.getLong("id") == sourceLayer })
+            command("paste_image")
+            waitFor("Paste restores the cut layer", 30_000) { layerStates().size == count + 1 && documentIdle() }
+            assertEquals(.37, layerStates().first { it.getLong("id") == editingLayer() }.getDouble("opacity"), 1e-6)
+            command("undo")
+            waitFor("one undo removes the pasted cut layer", 5_000) { layerStates().size == count }
+            command("undo")
+            waitFor("one undo restores the cut layer identity", 5_000) { layerStates().any { it.getLong("id") == copiedLayer } }
+            command("undo"); command("undo")
+            waitFor("Undo restores the source layer and opacity", 5_000) {
+                layerStates().size == count && layerStates().first { it.getLong("id") == sourceLayer }.getDouble("opacity") == 1.0
+            }
+
             val external = File(AppStorage.of(instrumentation.targetContext).clipboard, "external.png")
             external.parentFile!!.mkdirs()
             android.graphics.Bitmap.createBitmap(64, 48, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.RED) }
@@ -2937,12 +2969,66 @@ class AndroidInteractionTest {
                     assertEquals(android.graphics.Color.RED, image.getPixel(32, 24))
                 } finally { image.recycle() }
             }
+            fun imageObjects() = kotlinx.coroutines.runBlocking { host.withNative { JSONArray(Native.imageObjects(it)).objects() } }
+            fun objectIds() = imageObjects().map { it.getString("id") }.toSet()
+            fun addedImageBounds(previous: Set<String>): List<Double> {
+                val image = imageObjects().single { it.getString("id") !in previous }
+                val affine = image.getJSONArray("affine")
+                listOf(1.0, 0.0, 0.0, 1.0).forEachIndexed { index, expected -> assertEquals(expected, affine.getDouble(index), 1e-9) }
+                val extent = image.getJSONArray("extent")
+                val x = affine.getDouble(4); val y = affine.getDouble(5)
+                return listOf(x, y, x + extent.getInt(0), y + extent.getInt(1))
+            }
+            command("convert_to_object")
+            waitFor("the red layer becomes an editable image", 30_000) { layerStates().first { it.getLong("id") == editingLayer() }.getInt("object_count") > 0 && documentIdle() }
+            command("move"); command("select_all")
+            val beforeObjectCopy = clipboardNonce()
+            command("copy")
+            waitFor("the editable image reaches the clipboard", 30_000) { clipboardNonce().let { it != null && it != beforeObjectCopy } && documentIdle() }
+            command("fit_canvas")
+            val beforeViewPaste = objectIds()
+            command("paste_at_view")
+            waitFor("Paste at View completes", 30_000) { documentIdle() && layerStates().sumOf { it.getInt("object_count") } == beforeViewPaste.size + 1 }
+            val viewBounds = addedImageBounds(beforeViewPaste)
+            listOf(0.0, 0.0, 64.0, 48.0).forEachIndexed { index, expected -> assertEquals("Paste at View centres the clip", expected, viewBounds[index], 1.0) }
+            val cursor = documentPoint(48.0, 31.0)
+            val surfaceLocation = IntArray(2)
+            onMain { surface.getLocationInWindow(surfaceLocation) }
+            val now = SystemClock.uptimeMillis()
+            val hover = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_ENTER, 1,
+                arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE }),
+                arrayOf(MotionEvent.PointerCoords().apply { x = cursor.x - surfaceLocation[0]; y = cursor.y - surfaceLocation[1] }), 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+            try { onMain {
+                assertTrue(surface.dispatchGenericMotionEvent(hover))
+                hover.action = MotionEvent.ACTION_HOVER_MOVE; assertTrue(surface.dispatchGenericMotionEvent(hover))
+            } } finally { hover.recycle() }
+            settle()
+            val beforeCursorPaste = objectIds()
+            command("paste_at_cursor")
+            waitFor("Paste at Cursor completes", 30_000) { documentIdle() && layerStates().sumOf { it.getInt("object_count") } == beforeCursorPaste.size + 1 }
+            val cursorBounds = addedImageBounds(beforeCursorPaste)
+            listOf(16.0, 7.0, 80.0, 55.0).forEachIndexed { index, expected -> assertEquals("Paste at Cursor uses the hovered document point", expected, cursorBounds[index], 1.0) }
+            val oversized = File(AppStorage.of(instrumentation.targetContext).clipboard, "oversized.png")
+            android.graphics.Bitmap.createBitmap(128, 96, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.GREEN) }
+                .let { bitmap -> try { oversized.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() } }
+            val oversizedUri = androidx.core.content.FileProvider.getUriForFile(instrumentation.targetContext, "${instrumentation.targetContext.packageName}.clipboard", oversized)
+            val existingImages = imageObjects().map { it.getString("id") }.toSet()
+            onMain { clipboardManager().setPrimaryClip(android.content.ClipData.newUri(instrumentation.targetContext.contentResolver, "Oversized image", oversizedUri)) }
+            command("paste_image")
+            waitFor("an oversized external image opens placement at full size", 30_000) { barKind() == "placement" && layerStates().sumOf { it.getInt("object_count") } == existingImages.size + 1 }
+            val added = imageObjects().single { it.getString("id") !in existingImages }
+            assertEquals(128, added.getJSONArray("extent").getInt(0)); assertEquals(96, added.getJSONArray("extent").getInt(1))
+            assertEquals(1.0, added.getJSONArray("affine").getDouble(0), 1e-9); assertEquals(1.0, added.getJSONArray("affine").getDouble(3), 1e-9)
+            command("cancel_transform")
+            waitFor("Cancel removes only the oversized placement", 10_000) { layerStates().sumOf { it.getInt("object_count") } == existingImages.size && documentIdle() }
+            assertEquals(existingImages, imageObjects().map { it.getString("id") }.toSet())
+            oversized.delete()
             external.delete()
         } finally {
             popupInput = false
             tool = MotionEvent.TOOL_TYPE_FINGER
         }
-        println("PASS clipboard: Copy ▾ with mouse, finger and stylus, another app reading the URI, Paste in Place, Cut, Paste Into, mixed external items, external/internal New Image and immediate Copy")
+        println("PASS clipboard: mouse/finger/stylus menus, URI pixels, Paste Into, whole-layer Copy/Cut/Undo, external/internal New Image, Paste at View/Cursor and full-size external placement")
     }
 
     @Test fun canvasBarSelectionMenusAcrossDevices() {

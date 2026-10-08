@@ -135,7 +135,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
     shortcutSearch.addEventListener("input", () => send({ type: "search_shortcuts", query: shortcutSearch.value }));
     shortcutSearch.addEventListener("keydown", e => {
       if (composingKey(e)) return;
-      const editing = e.ctrlKey && !e.altKey && !e.metaKey && ["a", "c", "v", "x", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+      const editing = (e.ctrlKey || e.metaKey) && !e.altKey && !(e.ctrlKey && e.metaKey) && ["a", "c", "v", "x", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key.length === 1 ? e.key.toLowerCase() : e.key);
       const named = /^F\d+$/.test(e.key) || e.key.startsWith("Audio") || e.key.startsWith("Media");
       if (editing || !(e.ctrlKey || e.altKey || e.metaKey || named) || ["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
       e.preventDefault(); e.stopPropagation();

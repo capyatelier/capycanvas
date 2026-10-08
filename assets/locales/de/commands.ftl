@@ -332,12 +332,12 @@ commands-help-flip-image-horizontal = Das gesamte Bild mit Auswahl und Hilfslini
 commands-help-trim = Die Leinwand auf die sichtbaren Pixel verkleinern und transparente Ränder entfernen. Pixel außerhalb bleiben verborgen auf ihren Ebenen.
 commands-help-reveal-all = Die Leinwand vergrößern, um alle Ebenenpixel anzuzeigen, einschließlich ausgeblendeter Ebenen und Pixel außerhalb der Leinwand.
 commands-help-move-leave-copy = Beim Verschieben ausgewählter Pixel eine Kopie platzieren und das Original behalten. Wenn Alt beim Beginn des Ziehens gedrückt ist, gilt das Gegenteil.
-commands-help-copy = Die eigenen Pixel der aktiven Ebene in der Auswahl kopieren, vor Deckkraft, Maske und Effekten. Ohne Auswahl die ganze Ebene innerhalb der Leinwand kopieren. Auf einer Bildebene die ausgewählten Bilder kopieren.
-commands-help-cut = Die ausgewählten Pixel der aktiven Ebene kopieren und dann von der Ebene löschen. Auf einer Bildebene die ausgewählten Bilder kopieren und dann entfernen.
+commands-help-copy = Kopiert ausgewählte Pixel oder ausgewählte Bilder. Ohne Pixel- oder Bildauswahl werden die ausgewählten Ebenen und Ordner mit ihren Eigenschaften kopiert.
+commands-help-cut = Kopiert ausgewählte Pixel, Bilder oder ganze Ebenen und entfernt sie nach erfolgreichem Schreiben in die Zwischenablage.
 commands-help-copy-merged = Das sichtbare Bild innerhalb der Auswahl so kopieren, wie es beim Export erscheint.
 commands-help-copy-pixels = Die Pixel der aktiven Ebene in der Auswahl kopieren, vor Deckkraft, Maske und Effekten. Auf einer Bildebene werden ihre Bilder als Pixel kopiert.
-commands-help-paste-image = Die Zwischenablage hinzufügen. In { common-app-name } kopierte Pixel werden zu einer Malebene an ihrer kopierten Position, wenn diese sichtbar ist, und kopierte Bilder bleiben Bilder. Ein Bild aus einer anderen App öffnet sich mit Platzierungsgriffen.
-commands-help-paste-in-place = Die Zwischenablage an ihrer ursprünglichen Position hinzufügen, ohne Platzierungsgriffe. Ein Bild aus einer anderen App wird als Bild in voller Größe mittig platziert.
+commands-help-paste-image = Fügt die Zwischenablage als Ebenen oder Bilder ein. Ein Bild aus einer anderen App wird in Originalgröße mit Platzierungsgriffen geöffnet.
+commands-help-paste-in-place = Fügt an der kopierten Position ein. Bilder aus anderen Apps werden in Originalgröße am Ursprung der Leinwand platziert.
 commands-help-paste-into = Die Zwischenablage als Bild in einer neuen Bildebene hinzufügen, deren Maske nur die Auswahl zeigt. Das Bild verschieben, um zu ändern, was zu sehen ist.
 commands-help-new-dodge-burn-layer = Eine Ebene im Modus Weiches Licht mit neutralem Grau über der aktiven Ebene hinzufügen. Darauf mit Weiß aufhellen und mit Schwarz abdunkeln.
 commands-help-frequency-separation = Die aktive Ebene in einer neuen Gruppe in Niedrig, ihre mit einem Radius weichgezeichneten Farben und Tonwerte, und Hoch, ihre feine Textur, aufteilen. Die Ebene bleibt ausgeblendet darunter.
@@ -615,3 +615,11 @@ commands-help-enclose-fill = Zeichne eine Umrandung, um geschlossene transparent
 
 command-paste-as-new-image = Als neues Bild einfügen
 commands-help-paste-as-new-image = Die Zwischenablage als neue Zeichnung in Originalgröße öffnen.
+
+command-paste-at-view = An angezeigter Position einfügen
+
+command-paste-at-cursor = Am Zeiger einfügen
+
+commands-help-paste-at-view = Fügt die Zwischenablage in Originalgröße in der Mitte der sichtbaren Leinwand ein.
+
+commands-help-paste-at-cursor = Fügt die Zwischenablage in Originalgröße um den Zeiger zentriert ein.

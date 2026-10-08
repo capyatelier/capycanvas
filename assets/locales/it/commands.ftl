@@ -332,12 +332,12 @@ commands-help-flip-image-horizontal = Rifletti l'intera immagine, con selezione 
 commands-help-trim = Riduci la tela ai pixel visibili, rimuovendo i bordi trasparenti. I pixel esterni rimangono sui livelli, nascosti.
 commands-help-reveal-all = Espandi la tela per mostrare i pixel di tutti i livelli, inclusi i livelli nascosti e i pixel fuori dalla tela.
 commands-help-move-leave-copy = Quando Sposta trascina pixel selezionati, inserisci una copia e conserva l'originale nella stessa posizione. Tenere premuto Alt all'inizio del trascinamento fa l'opposto.
-commands-help-copy = Copia i pixel propri del livello attivo nella selezione, prima di opacità, maschera ed effetti. Senza selezione, copia l’intero livello nella tela. Su un livello di immagini, copia le immagini selezionate.
-commands-help-cut = Copia i pixel selezionati del livello attivo, poi cancellali dal livello. Su un livello di immagini, copia le immagini selezionate, poi rimuovile.
+commands-help-copy = Copia i pixel o le immagini selezionati. Senza una selezione di pixel o immagini, copia i livelli e le cartelle selezionati con le loro proprietà.
+commands-help-cut = Copia i pixel, le immagini o i livelli interi selezionati e li rimuove dopo averli scritti negli appunti.
 commands-help-copy-merged = Copia l'immagine visibile dentro la selezione, come apparirebbe esportata.
 commands-help-copy-pixels = Copia i pixel del livello attivo nella selezione, prima di opacità, maschera ed effetti. Su un livello di immagini, le immagini vengono copiate come pixel.
-commands-help-paste-image = Aggiungi gli appunti. I pixel copiati in { common-app-name } diventano un livello di pittura nella posizione di copia quando è visibile, e le immagini copiate restano immagini. Un’immagine da un’altra app si apre con le maniglie di posizionamento.
-commands-help-paste-in-place = Aggiungi gli appunti dove sono stati copiati, senza maniglie di posizionamento. Un’immagine da un’altra app viene posizionata come immagine, centrata a dimensione piena.
+commands-help-paste-image = Aggiunge gli appunti come livelli o immagini. Un’immagine da un’altra app si apre con le maniglie di posizionamento alle dimensioni originali.
+commands-help-paste-in-place = Incolla nella posizione copiata. Le immagini di altre app vengono posizionate all’origine della tela, alle dimensioni originali.
 commands-help-paste-into = Aggiungi gli appunti come immagine in un nuovo livello di immagini la cui maschera mostra solo la selezione. Sposta l’immagine per cambiare ciò che si vede.
 commands-help-new-dodge-burn-layer = Aggiungi un livello Luce soffusa grigio neutro sopra il livello attivo. Dipingi in bianco per schiarire e in nero per scurire.
 commands-help-frequency-separation = Dividi il livello attivo in Bassa, con colori e toni sfocati secondo un raggio, e Alta, con la trama fine, in un nuovo gruppo. Il livello rimane sotto, nascosto.
@@ -614,3 +614,11 @@ commands-help-enclose-fill = Disegna un contorno per riempire le aree trasparent
 
 command-paste-as-new-image = Incolla come nuova immagine
 commands-help-paste-as-new-image = Apri il contenuto degli appunti come un nuovo disegno nelle dimensioni originali.
+
+command-paste-at-view = Incolla nella posizione visibile
+
+command-paste-at-cursor = Incolla al cursore
+
+commands-help-paste-at-view = Incolla gli appunti al centro della tela visibile, alle dimensioni originali.
+
+commands-help-paste-at-cursor = Incolla gli appunti centrati sul puntatore, alle dimensioni originali.

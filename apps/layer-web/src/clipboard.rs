@@ -114,7 +114,7 @@ async fn copy(
                 .ok_or_else(|| js("Missing clipboard source"))?
         }
     };
-    Ok(WebClip { clip: capture.finish(nonce, source, png) }.into())
+    Ok(WebClip { clip: capture.finish(nonce, source, png).map_err(js)? }.into())
 }
 
 #[wasm_bindgen]

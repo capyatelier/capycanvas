@@ -26,14 +26,39 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   const transportFailure=reason=>({document_host_error:{type:"transport",reason}});
   const active=new Set(),handles=new Map();
   let closing=false,changing=false,batching=false;
-  let pastedFiles=null;
+  let nativeKey=null,nativePending=null,keyboardPaste=false;
+  const nativeDeliveries=new Map();
   const editing=target=>!!target?.closest?.('input,select,textarea,[contenteditable]:not([contenteditable=false]),dialog[open]');
+  function finishNativePaste(files=[]){
+    const pending=nativePending;nativePending=null;
+    if(pending){clearTimeout(pending.timer);pending.resolve(files);}
+  }
+  const cancelNativePaste=()=>finishNativePaste();
+  function nativeDelivery(id){
+    if(nativeDeliveries.has(id))return nativeDeliveries.get(id);
+    const promise=new Promise(resolve=>{nativePending={id,resolve,timer:setTimeout(cancelNativePaste,1000)};});
+    nativeDeliveries.set(id,promise);return promise;
+  }
+  function allowNativePaste(){
+    if(!nativeKey)return false;
+    const request=app.state().requests.find(request=>!nativeKey.has(request.id)&&request.kind.type==='document'&&request.kind.request.type==='paste');
+    if(!request)return false;
+    nativeDelivery(request.id);return true;
+  }
+  window.addEventListener('blur',cancelNativePaste);
+  window.addEventListener('pagehide',cancelNativePaste);
   document.addEventListener('paste',event=>{
-    if(event.defaultPrevented||editing(event.target)||active.size||changing||closing||batching)return;
+    if(event.defaultPrevented||editing(event.target)){finishNativePaste();return;}
     const files=[...event.clipboardData?.files??[]];
-    if(!files.length||!app.state().commands.find(command=>command.id==='paste_image')?.enabled)return;
-    event.preventDefault();pastedFiles=files;
-    try {dispatch({type:'invoke',command:'paste_image'});} finally {pastedFiles=null;}
+    if(nativePending){
+      const current=app.state().requests.some(request=>request.id===nativePending.id);
+      event.preventDefault();finishNativePaste(current?files:[]);return;
+    }
+    if(keyboardPaste||active.size||changing||closing||batching||!files.length)return;
+    const before=new Set(app.state().requests.map(request=>request.id));
+    const change=app.native_paste_input();
+    const request=app.state().requests.find(request=>!before.has(request.id)&&request.kind.type==='document'&&request.kind.request.type==='paste');
+    if(request){nativeDeliveries.set(request.id,Promise.resolve(files));event.preventDefault();applyChange(change);}
   });
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
     openClipboard,interpret:()=>chooseSourceProfile({app,dialog,element,button})});
@@ -285,8 +310,14 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
       } else if(r.type==="copy") {
         await copyClip(id);
       } else if(r.type==="paste") {
-        const files=pastedFiles;
-        if(files){await images.run(id,()=>files);return;}
+        if(nativeKey&&!nativeKey.has(id))nativeDelivery(id);
+        const files=nativeDeliveries.has(id)?await nativeDeliveries.get(id):null;
+        nativeDeliveries.delete(id);
+        if(files){
+          if(!app.state().requests.some(request=>request.id===id))return;
+          if(!files.length){applyChange(app.finish_document(id,false));return;}
+          await images.run(id,()=>files);return;
+        }
         const clipboard=await ownedClipboard();
         if(clipboard.own&&r.mode==="new_image")await openClipboard(id);
         else if(clipboard.own){applyChange(app.paste_clip(id));wake();}
@@ -530,13 +561,22 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     handles:id=>{const state=app.session_stamp_for(BigInt(id)).state;return [...new Set([state.location?.uri,state.last_export?.location.uri])].flatMap(uri=>{const handle=handles.get(uri);return typeof FileSystemFileHandle!=='undefined'&&handle instanceof FileSystemFileHandle?[{uri,handle}]:[];});},order:order=>applyChange(app.restore_session_order(order)),
     canOffer:()=>app.gpu_ready()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
-  return {title:tabs.root,key(event){
-    if(!navigator.clipboard?.read&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey&&event.key.toLowerCase()==='v'&&!editing(event.target)
-      &&app.state().commands.find(command=>command.id==='paste_image')?.enabled)return true;
+  return {title:tabs.root,key(event,send){
+    if((event.ctrlKey||event.metaKey)&&!event.altKey&&event.key.toLowerCase()==='v'){
+      keyboardPaste=true;setTimeout(()=>{keyboardPaste=false;},0);
+      if(!navigator.clipboard?.read){
+        nativeKey=!event.repeat&&!event.defaultPrevented&&!editing(event.target)?new Set(app.state().requests.map(request=>request.id)):null;
+        try {send();} finally {nativeKey=null;}
+        return true;
+      }
+    }
     return tabs.key(event);
-  },select,close,openFiles,busy:()=>changing||batching||closing||active.size>0,showSelector:tabs.showSelector,
+  },allowNativePaste,select,close,openFiles,busy:()=>changing||batching||closing||active.size>0,showSelector:tabs.showSelector,
     mountProof:proof.mount,localize(){for(const form of openDialogs)form.localize?.();proof.sync();tabs.refresh(true);},handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
     proof.sync();tabs.refresh();
+    const requests=new Set(app.state().requests.map(request=>request.id));
+    if(nativePending&&!requests.has(nativePending.id))finishNativePaste();
+    for(const id of nativeDeliveries.keys())if(!requests.has(id))nativeDeliveries.delete(id);
     const published=state();
     if(closing||changing||!published.document_file.close_ready)return;
     closing=true;

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readPackage,packageObject,packageObjects,packageOccurrences} from './package-fixture.test.mjs';
 
 const bar='.canvas-action-bar';
 const visible=`(()=>{const b=document.querySelector('${bar}');return !!b&&!b.hidden&&!b.classList.contains('suppressed')})()`;
@@ -133,7 +134,7 @@ export async function checkClipboard({call,evaluate,settle}) {
   await invoke('cancel_transform');await wait(`layerApp.state().layers.length===${count}`);await idle();
   await key('v',{shift:true});
   await wait(`layerApp.state().layers.length===${count+1}`);await idle();
-  assert.notEqual((await state()).canvas_bar?.context.kind,'placement','Paste in Place centres another app\'s image without handles');
+  assert.notEqual((await state()).canvas_bar?.context.kind,'placement','Paste to Shown Position centres another app\'s image without handles');
   await invoke('undo');await wait(`layerApp.state().layers.length===${count}`);
   const drawings=()=>evaluate('layerApp.app.document_tabs(0).tabs.map(tab=>String(tab.id))');
   let previous=await drawings(),selected=await evaluate('String(layerApp.app.document_tabs(0).selected)');
@@ -149,5 +150,45 @@ export async function checkClipboard({call,evaluate,settle}) {
   await wait(`layerApp.app.document_tabs(0).tabs.length===${previous.length+1}&&String(layerApp.app.document_tabs(0).selected)!==${JSON.stringify(selected)}&&!layerApp.documents.busy()`);await idle();
   await wait('layerApp.state().tabs[0].width===64&&layerApp.state().tabs[0].height===48');
   assert.equal((await state()).document_file.modified,true,'internal clipboard new image needs its own save');
-  console.log('Keyboard copy, paste, Copy Merged, Paste Into, text focus and another app\'s image');
+  const active=() => state().then(s=>s.layers.find(l=>l.editing));
+  const original=await active(),wholeCount=await layers();
+  await evaluate(`layerApp.dispatch({type:'set_layer_opacity',id:${original.id}n,opacity:.37})`);await settle();
+  assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),false);
+  const wholeBefore=await nonce();await key('c');await copied(wholeBefore);
+  await key('v');await wait(`layerApp.state().layers.length===${wholeCount+1}`);await idle();
+  const pasted=await active();
+  assert.deepEqual([pasted.label,pasted.opacity,pasted.blend],[original.label,Math.fround(.37),original.blend],'whole-layer Paste retains authored layer properties');
+  const cutBefore=await nonce();await key('x');await copied(cutBefore);
+  await wait(`layerApp.state().layers.length===${wholeCount}`);await idle();
+  assert.equal((await state()).layers.some(l=>l.id===pasted.id),false,'whole-layer Cut removes the copied layer');
+  await invoke('undo');await wait(`layerApp.state().layers.length===${wholeCount+1}`);
+  const authoredRow=({paint_revision,...row})=>row;
+  assert.deepEqual(authoredRow((await state()).layers.find(l=>l.id===pasted.id)),authoredRow(pasted),'Undo restores the cut layer');
+  await invoke('undo');await wait(`layerApp.state().layers.length===${wholeCount}`);
+
+  await evaluate(`window.clipboardGeometry={save:window.showSaveFilePicker};window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){return{async write(b){clipboardGeometry.saved=new Uint8Array(b instanceof Blob?await b.arrayBuffer():b)},async close(){},async abort(){}}}})`);
+  const save=async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'clipboardGeometry.saved');};
+  try {
+    await invoke('fit_canvas');
+    const p=await middle('#canvas');
+    await call('Input.dispatchMouseEvent',{type:'mouseWheel',...p,deltaX:80,deltaY:40});await settle();
+    const expected=await evaluate(`(()=>{const c=layerApp.app.camera(),[x,y,w,h]=c.work_area;return [(x+w/2-c.translation[0])/c.zoom-32,(y+h/2-c.translation[1])/c.zoom-24].map(Math.round)})()`);
+    assert.notDeepEqual(expected,[0,0],'the view has panned away from the copied position');
+    await key('v',{shift:true});await wait(`layerApp.state().layers.length===${wholeCount+1}`);await idle();
+    assert.notEqual((await state()).canvas_bar?.context.kind,'placement');
+    const centered=packageOccurrences(await save()).filter(o=>o.data.content.paint);
+    assert.deepEqual((centered[0].data.offset??[0,0]).map(Number),expected,'Ctrl+Shift+V centres retained layers on the panned view');
+    await invoke('undo');await wait(`layerApp.state().layers.length===${wholeCount}`);
+
+    await evaluate(`(async()=>{const c=new OffscreenCanvas(128,96),x=c.getContext('2d');x.fillStyle='#e04010';x.fillRect(0,0,128,96);await navigator.clipboard.write([new ClipboardItem({'image/png':await c.convertToBlob()})]);})()`);
+    await key('v');await wait(`layerApp.state().canvas_bar?.context.kind==='placement'`);
+    await invoke('apply_transform');await idle();
+    const manifest=await save(),image=packageObjects(manifest,'capy.image-object/1')[0];
+    assert.deepEqual(packageObject(manifest,image.data.image).data.extent,[128,96]);
+    assert.deepEqual((image.data.affine??[1,0,0,1,0,0]).slice(0,4),[1,0,0,1],'an oversized external image retains full pixel size');
+    await invoke('undo');await wait(`layerApp.state().layers.length===${wholeCount}`);
+  } finally {
+    await evaluate('window.showSaveFilePicker=clipboardGeometry.save;delete window.clipboardGeometry');
+  }
+  console.log('Keyboard copy, paste, Copy Merged, Paste Into, text focus, new images, whole-layer Cut/Undo, shown position and full-size external paste');
 }

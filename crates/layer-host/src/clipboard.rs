@@ -43,7 +43,7 @@ impl ClipTask {
         let color = capture.color();
         if let Some(original) = capture.original.clone().filter(|_| !color.depth.is_float()) {
             let png = layer_color::source_png(&original, color, limit, || control.is_cancelled())?;
-            return Ok(capture.finish(nonce, original, png));
+            return capture.finish(nonce, original, png);
         }
         let mut renderer = self
             .gpu
@@ -58,7 +58,7 @@ impl ClipTask {
             (None, Some(source)) => Arc::new(source),
             (None, None) => return Err("The copy has no pixels".into()),
         };
-        Ok(capture.finish(nonce, source, png))
+        capture.finish(nonce, source, png)
     }
 }
 
@@ -182,6 +182,43 @@ mod tests {
         let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         crate::test_support::composition_mut(&mut document).color = color;
         host(document)
+    }
+
+    #[test]
+    fn whole_group_clip_keeps_off_canvas_pixels_and_editable_layers_in_new_images() {
+        use layer_core::{Edit, Occurrence, OccurrenceContent, RecordChange, Stack};
+        let mut owner = photo_host(None);
+        let doc = owner.session.engine().document();
+        let paint = doc.working.occurrence.unwrap();
+        let stack = RecordChange::insert(&doc.artwork.stacks, Stack { entries: vec![paint] });
+        let group = RecordChange::insert(&doc.artwork.occurrences, Occurrence::new(OccurrenceContent::Stack(stack.handle), "Copied folder"));
+        let group_id = group.handle;
+        let mut root = doc.artwork.stacks.get(doc.composition().result).unwrap().clone();
+        root.entries.retain(|h| *h != paint); root.entries.insert(0, group_id);
+        let mut pixels = doc.scene().occurrence(paint).unwrap().clone(); pixels.offset = [80, -4];
+        let mut working = doc.working.clone(); working.occurrence = Some(group_id); working.target = None;
+        working.layer_selection = [group_id].into(); working.layer_anchor = Some(group_id);
+        let edit = Edit::Batch(vec![Edit::Stack(stack), Edit::Occurrence(group),
+            Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, paint, Some(pixels)).unwrap()),
+            Edit::Stack(RecordChange::replace(&doc.artwork.stacks, doc.composition().result, Some(root)).unwrap()), Edit::Working(working)]);
+        let mut document = doc.clone(); document.apply(edit).unwrap();
+        drop(owner); owner = host(document); owner.session.frame(0, 0).unwrap();
+        let clip = copy(&mut owner, CommandId::Copy);
+        assert!(clip.layers.is_some());
+        assert!(clip.origin[0] <= 80 && clip.origin[1] <= -4);
+        assert!(clip.origin[0] + i64::from(clip.source.extent[0]) >= 144);
+        let png = layer_color::photo::read_photo(std::io::Cursor::new(clip.png.to_vec()), Default::default()).unwrap();
+        let [x, y] = [90 - clip.origin[0], 4 - clip.origin[1]].map(|v| v as usize);
+        let png_rows = rows(&png);
+        assert!(png_rows[y][x * 4..x * 4 + 4].iter().zip([40u8, 40, 200, 255]).all(|(a, b)| a.abs_diff(b) <= 1));
+        let opened = clip.document(owner.session.localization()).unwrap();
+        let folder = opened.working.occurrence.unwrap();
+        assert_eq!(opened.scene().occurrence(folder).unwrap().name.as_ref(), "Copied folder");
+        let children = opened.scene().children(Some(folder)); assert_eq!(children.len(), 1);
+        assert_eq!(opened.layer_offset(children[0]), [80 - clip.origin[0], -4 - clip.origin[1]]);
+        assert!(Arc::ptr_eq(opened.scene().paint_source(children[0]).unwrap().base.as_ref().unwrap().image.storage(),
+            owner.session.engine().document().scene().paint_source(paint).unwrap().base.as_ref().unwrap().image.storage()));
+        drop(owner); layer_render_wgpu::finish_shader_compiler_shutdown();
     }
 
     #[test]

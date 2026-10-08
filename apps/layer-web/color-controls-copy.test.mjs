@@ -209,13 +209,39 @@ test('external images replace stale private copies and ignore unrelated clipboar
   assert.equal(prepared,1);assert.equal(received.length,1);assert.equal(await received[0].text(),'fresh');assert.equal(h.completed.at(-1).success,true);
 });
 
-test('native paste events import files without clipboard read permission and preserve text focus',async t=>{
+test('native keyboard paste delivers only requests authorized by shared shortcuts',async t=>{
   const h=documentsHarness(t);let received,task,prevented=0;
   h.app.capture_image_import=()=>({free(){}});h.app.capture_control=()=>({cancel(){},cancelled:()=>false,free(){}});
   h.app.prepare_images=async(request,files)=>{received=files;return {};};h.app.adopt_images=()=>h.app.finish_document(101,true);
-  h.onDispatch(action=>{assert.equal(action.command,'paste_image');const request={id:101,kind:{type:'document',request:{type:'paste',mode:'paste'}}};h.requests.push(request);task=h.docs.handle(request);});
   const files=[new File(['pixels'],'screenshot.png',{type:'image/png'})],event={target:{closest:()=>null},clipboardData:{files},preventDefault(){prevented++;}};
-  assert.equal(h.docs.key({target:event.target,ctrlKey:true,key:'v'}),true);
-  h.listeners.get('paste')(event);await task;assert.equal(prevented,1);assert.deepEqual(received,files);
-  h.listeners.get('paste')({...event,target:{closest:()=>({})}});assert.equal(prevented,1);
+  let allowed=false;
+  assert.equal(h.docs.key({target:event.target,ctrlKey:true,key:'v'},()=>{
+    const request={id:101,kind:{type:'document',request:{type:'paste',mode:'at_view'}}};h.requests.push(request);
+    allowed=h.docs.allowNativePaste();
+  }),true);
+  assert.equal(allowed,true);
+  h.listeners.get('paste')(event);
+  task=h.docs.handle(h.requests[0]);await task;
+  assert.equal(prevented,1);assert.deepEqual(received,files);
+  received=null;
+  h.docs.key({target:event.target,ctrlKey:true,key:'v'},()=>assert.equal(h.docs.allowNativePaste(),false));
+  h.listeners.get('paste')(event);assert.equal(received,null);assert.equal(prevented,1,'an unbound or reassigned chord cannot paste');
+  h.listeners.get('paste')({...event,target:{closest:()=>({})}});assert.equal(prevented,1,'text owns native paste');
+});
+
+test('native paste without delivery cancels its request and retires busy state',async t=>{
+  const h=documentsHarness(t);let task;
+  h.docs.key({target:{closest:()=>null},metaKey:true,key:'v'},()=>{
+    const request={id:102,kind:{type:'document',request:{type:'paste',mode:'paste'}}};h.requests.push(request);task=h.docs.handle(request);
+    assert.equal(h.docs.allowNativePaste(),true);
+  });
+  await task;assert.equal(h.completed.at(-1).success,false);assert.equal(h.docs.busy(),false);
+});
+
+test('browser-menu paste uses shared context authorization',async t=>{
+  const h=documentsHarness(t);let calls=0,prevented=0;
+  h.app.native_paste_input=()=>{calls++;return {regions:0};};
+  const event={target:{closest:()=>null},clipboardData:{files:[new File(['pixels'],'screenshot.png',{type:'image/png'})]},preventDefault(){prevented++;}};
+  h.listeners.get('paste')(event);
+  assert.equal(calls,1);assert.equal(prevented,0);assert.equal(h.requests.length,0);
 });

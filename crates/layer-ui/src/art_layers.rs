@@ -622,7 +622,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         center: Option<Point>,
         destination: Option<ImageLayerDestination>,
     ) -> Result<(), String> {
-        self.place_image_objects(sources, center, destination, true)
+        self.place_image_objects(sources, center, destination, true, true)
     }
     pub(super) fn import_sources(
         &mut self,

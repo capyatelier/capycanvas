@@ -389,9 +389,9 @@ workspace-tool-description-convert-to-object = Ubah lapisan cat menjadi gambar y
 
 workspace-tool-description-repair-source-profile = Perbaiki profil sumber gambar asli yang disimpan dengan mempertahankan pengeditan yang diterapkan
 
-workspace-tool-description-copy = Salin piksel atau gambar yang dipilih ke papan klip
+workspace-tool-description-copy = { commands-help-copy }
 
-workspace-tool-description-cut = Salin piksel atau gambar yang dipilih ke papan klip, lalu hapus
+workspace-tool-description-cut = { commands-help-cut }
 
 workspace-tool-description-copy-merged = Salin gambar terlihat di dalam seleksi ke papan klip
 workspace-tool-description-copy-pixels = Salin piksel lapisan aktif ke papan klip, termasuk gambar pada lapisan gambar

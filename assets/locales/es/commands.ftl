@@ -332,12 +332,12 @@ commands-help-flip-image-horizontal = Reflejar la imagen completa, con su selecc
 commands-help-trim = Reducir el lienzo a los píxeles visibles, eliminando los bordes transparentes. Los píxeles exteriores se conservan ocultos en sus capas.
 commands-help-reveal-all = Ampliar el lienzo para mostrar los píxeles de todas las capas, incluidas las ocultas y los píxeles fuera del lienzo.
 commands-help-move-leave-copy = Cuando Mover arrastra píxeles seleccionados, coloca una copia y conserva el original en su sitio. Mantener Alt al iniciar el arrastre hace lo contrario.
-commands-help-copy = Copiar los píxeles propios de la capa activa dentro de la selección, antes de su opacidad, máscara y efectos. Sin selección, copiar toda la capa dentro del lienzo. En una capa de imágenes, copiar las imágenes seleccionadas.
-commands-help-cut = Copiar los píxeles seleccionados de la capa activa y después borrarlos de la capa. En una capa de imágenes, copiar las imágenes seleccionadas y después quitarlas.
+commands-help-copy = Copia los píxeles o las imágenes seleccionados. Sin una selección de píxeles o imágenes, copia las capas y carpetas seleccionadas con sus propiedades.
+commands-help-cut = Copia los píxeles, imágenes o capas enteras seleccionados y los elimina cuando se guardan correctamente en el portapapeles.
 commands-help-copy-merged = Copiar la imagen visible dentro de la selección, como se vería al exportar.
 commands-help-copy-pixels = Copiar los píxeles de la capa activa dentro de la selección, antes de su opacidad, máscara y efectos. En una capa de imágenes, sus imágenes se copian como píxeles.
-commands-help-paste-image = Añadir el portapapeles. Los píxeles copiados en { common-app-name } se convierten en una capa de pintura en su posición copiada cuando está a la vista, y las imágenes copiadas siguen siendo imágenes. Una imagen de otra app se abre con controles de colocación.
-commands-help-paste-in-place = Añadir el portapapeles donde se copió, sin controles de colocación. Una imagen de otra app se coloca como imagen, centrada a tamaño completo.
+commands-help-paste-image = Añade el portapapeles como capas o imágenes. Una imagen de otra aplicación se abre con controles de colocación a su tamaño original.
+commands-help-paste-in-place = Pega en la posición copiada. Las imágenes de otras aplicaciones se colocan en el origen del lienzo, a su tamaño original.
 commands-help-paste-into = Añadir el portapapeles como imagen en una capa de imágenes nueva cuya máscara muestra solo la selección. Mueve la imagen para cambiar lo que se ve.
 commands-help-new-dodge-burn-layer = Añadir una capa de Luz suave de gris neutro sobre la capa activa. Pinta en ella con blanco para aclarar y negro para oscurecer.
 commands-help-frequency-separation = Dividir la capa activa en Baja, sus colores y tonos desenfocados con un radio, y Alta, su textura fina, en un grupo nuevo. La capa se conserva debajo, oculta.
@@ -615,3 +615,11 @@ commands-help-enclose-fill = Dibuja un contorno para rellenar las regiones trans
 
 command-paste-as-new-image = Pegar como imagen nueva
 commands-help-paste-as-new-image = Abrir el portapapeles como un dibujo nuevo a su tamaño original.
+
+command-paste-at-view = Pegar en la posición visible
+
+command-paste-at-cursor = Pegar en el cursor
+
+commands-help-paste-at-view = Pega el portapapeles en el centro del lienzo visible, a su tamaño original.
+
+commands-help-paste-at-cursor = Pega el portapapeles centrado en el puntero, a su tamaño original.

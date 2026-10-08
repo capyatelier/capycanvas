@@ -433,7 +433,7 @@ fn copying_images_publishes_a_structured_clip_and_cut_removes_them_only_after_su
     assert_eq!(view.object_layer(layer).unwrap().children, vec![front, back]);
     let objects = capture.objects.clone().unwrap();
     assert_eq!(objects.objects.iter().map(|o| o.affine).collect::<Vec<_>>(), vec![Affine64([0., 2., -2., 0., -50.5, 30.25]), translate(100., 100.)]);
-    let clip = capture.finish("nonce".into(), rgba8_source([451, 201], |_, _| [0; 4]), vec![1, 2, 3]);
+    let clip = capture.finish("nonce".into(), rgba8_source([451, 201], |_, _| [0; 4]), vec![1, 2, 3]).unwrap();
     s.complete_document_request(id, Ok(true)).unwrap();
     assert_eq!(s.engine.document().object_layer_children(layer).unwrap(), &[front, back]);
     s.paste_clip(&clip, PasteMode::InPlace).unwrap();
@@ -466,7 +466,7 @@ fn pasting_a_clip_from_another_drawing_remaps_images_into_the_destination_layer_
     source.select_objects(layer, [front].into()).unwrap();
     invoke(&mut source, CommandId::Copy);
     let id = pending_copy(&source);
-    let clip = source.capture_clipboard(id).unwrap().finish("nonce".into(), rgba8_source([100, 100], |_, _| [0; 4]), vec![]);
+    let clip = source.capture_clipboard(id).unwrap().finish("nonce".into(), rgba8_source([100, 100], |_, _| [0; 4]), vec![]).unwrap();
     let mut s = session();
     let edit = s.engine.document().group_layers_edit(&[s.engine.document().scene().order()[0]], layer_core::LayerBlend::Normal, "Group").unwrap();
     s.engine.apply_edit(edit).unwrap();
@@ -511,7 +511,7 @@ fn paste_into_centres_pixel_external_and_image_clips_on_the_selection() {
     s.select_objects(layer, [front, back].into()).unwrap();
     invoke(&mut s, CommandId::Copy);
     let id = pending_copy(&s);
-    let images = s.capture_clipboard(id).unwrap().finish("images".into(), rgba8_source([160, 100], |_, _| [0; 4]), vec![]);
+    let images = s.capture_clipboard(id).unwrap().finish("images".into(), rgba8_source([160, 100], |_, _| [0; 4]), vec![]).unwrap();
     s.complete_document_request(id, Ok(true)).unwrap();
     let pixels = PixelClip { objects: None, origin: [10, 10], ..images.clone() };
     let paste_into = |s: &mut UiSession<Recorder>, paste: &dyn Fn(&mut UiSession<Recorder>) -> Result<(), String>| {
@@ -885,7 +885,7 @@ fn object_snapping_excludes_the_moving_layer_and_its_groups() {
 fn image_help_describes_pasting_and_copying_images() {
     let l = Localizer::shared(UiLanguage::English);
     assert!(l.text(MessageId::COMMANDS_HELP_PASTE_INTO).contains("image layer"));
-    assert!(l.text(MessageId::COMMANDS_HELP_PASTE_IN_PLACE).contains("as an image"));
+    assert!(l.text(MessageId::COMMANDS_HELP_PASTE_IN_PLACE).contains("original size"));
     assert!(l.text(MessageId::COMMANDS_HELP_COPY).contains("selected images"));
     assert!(l.text(MessageId::COMMANDS_HELP_CUT).contains("selected images"));
     assert!(l.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_IMPORT_IMAGE).contains("move, scale and rotate"));

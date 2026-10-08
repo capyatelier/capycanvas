@@ -329,12 +329,12 @@ commands-help-flip-image-horizontal = 선택 영역과 안내선을 포함해 �
 commands-help-trim = 투명한 여백을 제거해 캔버스를 보이는 픽셀에 맞춰 줄입니다. 캔버스 밖의 픽셀은 레이어에 숨겨진 채 남습니다.
 commands-help-reveal-all = 숨긴 레이어와 캔버스 밖의 픽셀을 포함해 모든 레이어의 픽셀이 보이도록 캔버스를 늘립니다.
 commands-help-move-leave-copy = 이동 도구로 선택한 픽셀을 끌면 복사본을 배치하고 원본은 그대로 둡니다. 끌기 시작할 때 Alt를 누르면 반대로 동작합니다.
-commands-help-copy = 선택 영역 안의 활성 레이어 자체 픽셀을 불투명도, 마스크, 효과 적용 전 상태로 복사합니다. 선택 영역이 없으면 캔버스 안의 레이어 전체를 복사합니다. 이미지 레이어에서는 선택한 이미지를 복사합니다.
-commands-help-cut = 활성 레이어에서 선택한 픽셀을 복사한 다음 레이어에서 지웁니다. 이미지 레이어에서는 선택한 이미지를 복사한 다음 제거합니다.
+commands-help-copy = 선택한 픽셀이나 이미지를 복사합니다. 픽셀이나 이미지 선택이 없으면 선택한 레이어와 폴더를 속성과 함께 복사합니다.
+commands-help-cut = 선택한 픽셀, 이미지 또는 전체 레이어를 복사한 다음 클립보드에 성공적으로 기록되면 제거합니다.
 commands-help-copy-merged = 내보내기 결과처럼 선택 영역 안의 보이는 이미지를 복사합니다.
 commands-help-copy-pixels = 선택 영역 안의 활성 레이어 픽셀을 불투명도, 마스크, 효과 적용 전 상태로 복사합니다. 이미지 레이어에서는 이미지를 픽셀로 복사합니다.
-commands-help-paste-image = 클립보드 내용을 추가합니다. { common-app-name }에서 복사한 픽셀은 복사한 위치가 보이면 그 위치의 페인트 레이어가 되고, 복사한 이미지는 이미지로 유지됩니다. 다른 앱의 이미지는 배치 핸들과 함께 열립니다.
-commands-help-paste-in-place = 클립보드 내용을 복사한 위치에 배치 핸들 없이 추가합니다. 다른 앱의 이미지는 원래 크기로 가운데에 이미지로 배치됩니다.
+commands-help-paste-image = 클립보드 내용을 레이어나 이미지로 추가합니다. 다른 앱의 이미지는 원래 크기로 배치 핸들과 함께 열립니다.
+commands-help-paste-in-place = 복사한 위치에 붙여넣습니다. 다른 앱의 이미지는 원래 크기로 캔버스 원점에 배치됩니다.
 commands-help-paste-into = 클립보드 내용을 선택 영역만 보이는 마스크가 있는 새 이미지 레이어의 이미지로 추가합니다. 이미지를 옮기면 보이는 부분이 바뀝니다.
 commands-help-new-dodge-burn-layer = 활성 레이어 위에 중성 회색의 소프트 라이트 레이어를 추가합니다. 흰색으로 그리면 밝아지고 검정으로 그리면 어두워집니다.
 commands-help-frequency-separation = 활성 레이어를 새 그룹 안의 Low(저주파) 레이어와 High(고주파) 레이어로 분리합니다. Low에는 지정한 반경으로 흐린 색상과 톤을, High에는 미세한 질감을 담습니다. 원래 레이어는 아래에 숨긴 채 유지합니다.
@@ -611,3 +611,11 @@ commands-help-enclose-fill = 선을 둘러 그려 안쪽의 닫힌 투명 영역
 
 command-paste-as-new-image = 새 이미지로 붙여넣기
 commands-help-paste-as-new-image = 클립보드 내용을 원래 크기의 새 그림으로 엽니다.
+
+command-paste-at-view = 표시 위치에 붙여넣기
+
+command-paste-at-cursor = 커서 위치에 붙여넣기
+
+commands-help-paste-at-view = 클립보드 내용을 원래 크기로 보이는 캔버스의 중앙에 붙여넣습니다.
+
+commands-help-paste-at-cursor = 클립보드 내용을 원래 크기로 포인터를 중심으로 붙여넣습니다.

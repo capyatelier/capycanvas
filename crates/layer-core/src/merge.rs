@@ -340,7 +340,7 @@ impl Document {
     }
     /// The whole pages that hold what `scene` draws, extended over the canvas
     /// when that still fits so the result can be painted across it.
-    pub(crate) fn bake_window(&self, scene: SceneView<'_>) -> Result<(Point, [u32; 2]), MergeRefusal> {
+    pub fn bake_window(&self, scene: SceneView<'_>) -> Result<(Point, [u32; 2]), MergeRefusal> {
         let support = output_support(scene, Reach::Domain)?;
         let window = |support: SupportBounds| {
             let [min, max] = support.grid()?;

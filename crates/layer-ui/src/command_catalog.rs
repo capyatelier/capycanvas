@@ -430,6 +430,8 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
             CopyPixels => l.text(MessageId::COMMANDS_HELP_COPY_PIXELS).to_string(),
             PasteImage => l.text(MessageId::COMMANDS_HELP_PASTE_IMAGE).to_string(),
             PasteAsNewImage => l.text(MessageId::COMMANDS_HELP_PASTE_AS_NEW_IMAGE).to_string(),
+            PasteAtView => l.text(MessageId::COMMANDS_HELP_PASTE_AT_VIEW).to_string(),
+            PasteAtCursor => l.text(MessageId::COMMANDS_HELP_PASTE_AT_CURSOR).to_string(),
             PasteInPlace => l.text(MessageId::COMMANDS_HELP_PASTE_IN_PLACE).to_string(),
             PasteInto => l.text(MessageId::COMMANDS_HELP_PASTE_INTO).to_string(),
             NewDodgeBurnLayer => l.text(MessageId::COMMANDS_HELP_NEW_DODGE_BURN_LAYER).to_string(),
@@ -1000,6 +1002,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::PasteImage
             | C::PasteAsNewImage
             | C::PasteInPlace
+            | C::PasteAtView
+            | C::PasteAtCursor
             | C::PasteInto
             | C::Copy
             | C::Cut
@@ -1231,10 +1235,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.refine_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET))
             }
             C::TransformSelectionOutline => self.outline_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
-            C::Copy | C::Cut | C::CopyMerged | C::CopyPixels | C::PasteInto if self.state.document_file.busy => {
+            C::Copy | C::Cut | C::CopyMerged | C::CopyPixels | C::PasteImage | C::PasteAsNewImage | C::PasteInPlace | C::PasteAtView | C::PasteAtCursor | C::PasteInto if self.state.document_file.busy => {
                 l.text(MessageId::COMMANDS_WAIT_FOR_THE_CURRENT_FILE_OPERATION)
             }
             C::Copy | C::Cut | C::CopyMerged | C::CopyPixels => self.copy_refusal(command).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
+            C::PasteImage | C::PasteInPlace | C::PasteAtView | C::PasteAtCursor => self.paste_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::PasteInto => self.paste_into_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::MaskSelection if self.engine.document().working.selection.is_none() => l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST),
             C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),

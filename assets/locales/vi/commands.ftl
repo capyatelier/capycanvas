@@ -329,12 +329,12 @@ commands-help-flip-image-horizontal = Lật toàn ảnh cùng vùng chọn và �
 commands-help-trim = Thu khung vẽ theo pixel hiển thị, bỏ biên trong suốt. Pixel bên ngoài vẫn ẩn trên lớp.
 commands-help-reveal-all = Mở rộng khung vẽ để hiện pixel của mọi lớp, kể cả lớp ẩn và pixel ngoài khung vẽ.
 commands-help-move-leave-copy = Khi Di chuyển kéo pixel đã chọn, đặt bản sao và giữ bản gốc đúng vị trí. Giữ Alt lúc bắt đầu kéo sẽ làm ngược lại.
-commands-help-copy = Sao chép điểm ảnh của chính lớp đang dùng trong vùng chọn, trước độ mờ đục, mặt nạ và hiệu ứng. Không có vùng chọn thì sao chép cả lớp trong khung vẽ. Trên lớp hình ảnh, sao chép các hình ảnh đã chọn.
-commands-help-cut = Sao chép các điểm ảnh đã chọn của lớp đang dùng rồi xóa chúng khỏi lớp. Trên lớp hình ảnh, sao chép các hình ảnh đã chọn rồi gỡ chúng.
+commands-help-copy = Sao chép các điểm ảnh hoặc hình ảnh đã chọn. Khi không có lựa chọn điểm ảnh hoặc hình ảnh, sao chép các lớp và thư mục đã chọn cùng thuộc tính của chúng.
+commands-help-cut = Sao chép các điểm ảnh, hình ảnh hoặc toàn bộ lớp đã chọn, rồi xóa chúng sau khi ghi thành công vào bảng nhớ tạm.
 commands-help-copy-merged = Sao chép ảnh hiển thị trong vùng chọn như khi xuất ảnh.
 commands-help-copy-pixels = Sao chép điểm ảnh của lớp đang dùng trong vùng chọn, trước độ mờ đục, mặt nạ và hiệu ứng. Trên lớp hình ảnh, hình ảnh được sao chép thành điểm ảnh.
-commands-help-paste-image = Thêm nội dung bảng nhớ tạm. Điểm ảnh sao chép trong { common-app-name } trở thành lớp vẽ tại vị trí sao chép khi vị trí đó đang hiển thị, còn hình ảnh đã sao chép vẫn là hình ảnh. Hình ảnh từ ứng dụng khác mở kèm tay nắm đặt.
-commands-help-paste-in-place = Thêm nội dung bảng nhớ tạm tại vị trí sao chép, không có tay nắm đặt. Hình ảnh từ ứng dụng khác được đặt làm hình ảnh ở giữa với kích thước đầy đủ.
+commands-help-paste-image = Thêm nội dung bảng nhớ tạm dưới dạng lớp hoặc hình ảnh. Ảnh từ ứng dụng khác mở ở kích thước gốc với các tay nắm đặt ảnh.
+commands-help-paste-in-place = Dán vào vị trí đã sao chép. Ảnh từ ứng dụng khác được đặt tại gốc tọa độ của vải vẽ, ở kích thước gốc.
 commands-help-paste-into = Thêm nội dung bảng nhớ tạm thành hình ảnh trong lớp hình ảnh mới có mặt nạ chỉ hiện vùng chọn. Di chuyển hình ảnh để đổi phần được hiện.
 commands-help-new-dodge-burn-layer = Thêm lớp Ánh sáng mềm màu xám trung tính trên lớp hiện tại. Vẽ màu trắng để làm sáng và màu đen để làm tối.
 commands-help-frequency-separation = Tách lớp hiện tại thành Thấp, chứa màu và sắc độ được làm mờ theo bán kính, và Cao, chứa kết cấu tinh, trong nhóm mới. Lớp gốc vẫn ở bên dưới và được ẩn.
@@ -613,3 +613,11 @@ commands-help-enclose-fill = Vẽ một đường bao để tô các vùng trong
 
 command-paste-as-new-image = Dán thành ảnh mới
 commands-help-paste-as-new-image = Mở nội dung bảng nhớ tạm thành bản vẽ mới với kích thước gốc.
+
+command-paste-at-view = Dán vào vị trí đang hiển thị
+
+command-paste-at-cursor = Dán tại con trỏ
+
+commands-help-paste-at-view = Dán nội dung bảng nhớ tạm vào giữa vùng vải vẽ đang hiển thị, ở kích thước gốc.
+
+commands-help-paste-at-cursor = Dán nội dung bảng nhớ tạm với tâm tại con trỏ, ở kích thước gốc.

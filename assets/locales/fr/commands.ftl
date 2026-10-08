@@ -332,12 +332,12 @@ commands-help-flip-image-horizontal = Retourner l’image entière avec sa séle
 commands-help-trim = Réduire la toile aux pixels visibles en retirant les bords transparents. Les pixels extérieurs restent masqués sur leurs calques.
 commands-help-reveal-all = Agrandir la toile pour afficher les pixels de tous les calques, y compris les calques masqués et les pixels hors de la toile.
 commands-help-move-leave-copy = Lorsque Déplacer fait glisser des pixels sélectionnés, placer une copie et conserver l’original. Maintenir Alt au début du glissement inverse ce comportement.
-commands-help-copy = Copier les pixels propres au calque actif dans la sélection, avant son opacité, son masque et ses effets. Sans sélection, copier tout le calque dans la toile. Sur un calque d’images, copier les images sélectionnées.
-commands-help-cut = Copier les pixels sélectionnés du calque actif, puis les effacer du calque. Sur un calque d’images, copier les images sélectionnées, puis les retirer.
+commands-help-copy = Copie les pixels ou les images sélectionnés. Sans sélection de pixels ou d’images, copie les calques et dossiers sélectionnés avec leurs propriétés.
+commands-help-cut = Copie les pixels, images ou calques entiers sélectionnés, puis les supprime une fois l’écriture dans le presse-papiers réussie.
 commands-help-copy-merged = Copier l’image visible dans la sélection, telle qu’elle apparaîtrait à l’exportation.
 commands-help-copy-pixels = Copier les pixels du calque actif dans la sélection, avant son opacité, son masque et ses effets. Sur un calque d’images, ses images sont copiées en pixels.
-commands-help-paste-image = Ajouter le presse-papiers. Les pixels copiés dans { common-app-name } deviennent un calque de peinture à leur position de copie quand elle est visible, et les images copiées restent des images. Une image d’une autre app s’ouvre avec des poignées de placement.
-commands-help-paste-in-place = Ajouter le presse-papiers à sa position de copie, sans poignées de placement. Une image d’une autre app est placée comme image, centrée en taille réelle.
+commands-help-paste-image = Ajoute le presse-papiers sous forme de calques ou d’images. Une image d’une autre application s’ouvre avec des poignées de placement à sa taille d’origine.
+commands-help-paste-in-place = Colle à la position de la copie. Les images d’autres applications sont placées à l’origine du canevas, à leur taille d’origine.
 commands-help-paste-into = Ajouter le presse-papiers comme image dans un nouveau calque d’images dont le masque ne montre que la sélection. Déplacez l’image pour changer ce qui est visible.
 commands-help-new-dodge-burn-layer = Ajouter un calque en Lumière tamisée, gris neutre, au-dessus du calque actif. Peindre dessus en blanc pour éclaircir et en noir pour assombrir.
 commands-help-frequency-separation = Séparer le calque actif en Basses fréquences, ses couleurs et tons floutés selon un rayon, et Hautes fréquences, sa texture fine, dans un nouveau groupe. Le calque reste masqué en dessous.
@@ -615,3 +615,11 @@ commands-help-enclose-fill = Tracez un contour pour remplir les zones transparen
 
 command-paste-as-new-image = Coller comme nouvelle image
 commands-help-paste-as-new-image = Ouvrir le presse-papiers dans un nouveau dessin à sa taille d’origine.
+
+command-paste-at-view = Coller à la position affichée
+
+command-paste-at-cursor = Coller au curseur
+
+commands-help-paste-at-view = Colle le presse-papiers au centre du canevas visible, à sa taille d’origine.
+
+commands-help-paste-at-cursor = Colle le presse-papiers centré sur le pointeur, à sa taille d’origine.

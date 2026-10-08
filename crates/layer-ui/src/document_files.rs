@@ -204,6 +204,8 @@ impl DocumentRequest {
             Self::Place => MessageId::DOCUMENTS_PLACE,
             Self::Paste { mode: PasteMode::Paste } => MessageId::COMMAND_PASTE_IMAGE,
             Self::Paste { mode: PasteMode::InPlace } => MessageId::COMMAND_PASTE_IN_PLACE,
+            Self::Paste { mode: PasteMode::AtView } => MessageId::COMMAND_PASTE_AT_VIEW,
+            Self::Paste { mode: PasteMode::AtCursor } => MessageId::COMMAND_PASTE_AT_CURSOR,
             Self::Paste { mode: PasteMode::NewImage } => MessageId::COMMAND_PASTE_AS_NEW_IMAGE,
             Self::Paste { mode: PasteMode::Into } => MessageId::COMMAND_PASTE_INTO,
             Self::Copy { cut: true, .. } => MessageId::COMMAND_CUT,
@@ -326,13 +328,14 @@ pub(super) struct DocumentFiles {
     close_after: bool,
     pending_copy: Option<DocumentRequestCopy>,
     pub(super) cut: Option<clipboard::PendingCut>,
+    pub(super) paste_center: Option<[f64; 2]>,
     host_error_copy: Option<DocumentHostErrorCopy>,
     pub(super) last_export: Option<ExportRepeat>,
     pending_export: Option<(u64, u64, ExportRepeat)>,
 }
 impl DocumentFiles {
     pub(super) fn session_state(&self,file:&DocumentFileState,camera:super::session_recovery::SessionCamera)->super::session_recovery::SessionDocumentState {
-        let Self {startup:_,saved_checkpoint,unpublished,destination,last_export,pending_export:_,check_destination:_,pending_modified_change:_,replace_in_place:_,replace_after:_,pending:_,close_after:_,pending_copy:_,cut:_,host_error_copy:_}=self;
+        let Self {startup:_,saved_checkpoint,unpublished,destination,last_export,pending_export:_,check_destination:_,pending_modified_change:_,replace_in_place:_,replace_after:_,pending:_,close_after:_,pending_copy:_,cut:_,paste_center:_,host_error_copy:_}=self;
         let DocumentFileState {epoch:_,revision:_,location,export_uri:_,unsaved_name,modified:_,recovered,busy:_,close_ready:_,untitled:_}=file;
         super::session_recovery::SessionDocumentState {camera,location:location.clone(),unsaved_name:unsaved_name.clone(),saved_checkpoint:*saved_checkpoint,
             unpublished:*unpublished,recovered:*recovered,destination:destination.clone(),last_export:last_export.as_ref().map(super::session_recovery::detach_export)}

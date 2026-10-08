@@ -2,36 +2,73 @@
 
 [Workspace and UI](README.md) · [Open and import](open-and-import.md) · [Canvas action bar](canvas-action-bar.md)
 
-Copy, Cut and Copy Merged put pixels, or selected images, on the clipboard;
-Paste, Paste in Place and Paste Into add them as a new layer. Every host offers
-them.
+Copy and Cut use the current pixel or image selection. Without either, they
+copy the selected layers or folders, including their properties. Copy Merged
+publishes the visible composite. Every host uses the shared commands below;
+Apple uses Command in place of Ctrl.
 
 | Command | Default | Result |
 | --- | --- | --- |
-| **Copy** | Ctrl+C | The active layer's own pixels, before its opacity, mask, blend mode and clipping, times the selection's coverage. Without a selection, the whole layer within the canvas. When image objects are targeted, the selected images, which paste as images. |
-| **Copy Pixels** | none | The active layer's own pixels even where Copy would take images. |
-| **Cut** | Ctrl+X | Copy, then Clear Selected on the same layer. It needs a selection and follows Clear Selected's rules. Selected images are removed once they are on the clipboard. |
-| **Copy Merged** | Ctrl+Shift+C | The visible image, as an export would show it (visible paper included), times the coverage. |
-| **Paste** | Ctrl+V | A copy from Capy Canvas lands where it was copied when that position is in view, otherwise centred in the view, with no handles. An image from another app opens the placement handles. |
-| **Paste as New Image** | Ctrl+Alt+N (Ctrl+Shift+V in GIMP, Ctrl+Shift+N in Krita) | Open a new drawing at the clipboard bounds, with a transparent background and no placement step. Internal copies retain their depth, colour, blending and image objects. External batches keep every image at full size, centred on a canvas large enough for all of them. |
-| **Paste in Place** | Ctrl+Shift+V (Ctrl+Alt+V in the GIMP keymap) | Always at the copied position, with no handles. An image from another app is centred in the view at full size. |
-| **Paste Into** | none (Ctrl+Alt+Shift+V in the Photoshop keymap) | A new image layer with a mask from the selection, which the mask consumes. The pasted pixels or images are centred on the selection's bounds, on whole pixels. It needs a selection. |
+| **Copy** | Ctrl+C | Selected image objects, or the active layer's own pixels through the pixel selection. Without either selection, the selected layers and folders, including masks, effects and positions. |
+| **Copy Pixels** | none | The active layer's own pixels before opacity, mask, blend and clipping, even where Copy would take images or whole layers. |
+| **Cut** | Ctrl+X | Copy first, then remove the copied images, selected paint pixels or whole layers after the system write succeeds. |
+| **Copy Merged** | Ctrl+Shift+C | The visible image, including visible paper, multiplied by the pixel selection's coverage. |
+| **Paste** | Ctrl+V | Retained content keeps its copied position, even off screen. The Photoshop preset centres it in the document. External images open placement handles at full pixel size, centred in the view (document centre in Photoshop). |
+| **Paste to Shown Position** | Ctrl+Shift+V | Centre retained or external content in the visible canvas at full size, without placement handles. |
+| **Paste in Place** | none; Photoshop Ctrl+Shift+V; GIMP Ctrl+Alt+V | Retained content keeps the copied position. External images start at the canvas origin, at full size, without handles. |
+| **Paste at Cursor** | Ctrl+Alt+V; unbound in Photoshop and GIMP presets | Centre at the canvas pointer, or the view centre when no pointer is available. |
+| **Paste as New Image** | Ctrl+Alt+N; GIMP Ctrl+Shift+V; Krita Ctrl+Shift+N | Open an unsaved drawing at the clipboard bounds with transparent paper. Retained layers, depth, colour, blending and image objects survive. External batches keep all images at full size on a canvas large enough for all of them. |
+| **Paste Into** | Ctrl+Alt+Shift+V | Centre content on the pixel selection, on whole pixels, in a new image layer with that selection as its mask. Insert above the active layer or inside the active group. Consume the selection. |
 
-- **One edit:** pasting into a drawing is one undo step; undoing Paste Into restores the selection. Pixel copies add a paint layer; image objects can join the active image layer. Paste as New Image opens an unsaved tab and leaves the source drawing unchanged.
-- **Starting from the clipboard:** ordinary Paste uses the clipboard size on the untouched startup canvas. After editing, or in a drawing deliberately created, opened or restored, Paste adds to that drawing.
-- **The copied pixel rectangle** is the selection's bounds on the canvas. Hidden
-  pixels past the canvas are not copied. Selected image objects retain their full
-  bounds, including parts outside the canvas.
-- **Refusals:** Copy is unavailable on the paper, groups, effect and Selection
-  Layers, in Quick Mask and while editing a mask, and when the selection misses
-  the canvas; Cut also refuses locked and alpha-locked layers. Each gives its reason.
-  Cutting or clearing pixels of an image layer offers Add Mask (or Edit Mask), New
-  Paint Layer and Rasterize Layer instead.
-- **Text fields keep their keys:** Ctrl+C, Ctrl+X and Ctrl+V in a focused text
-  field copy and paste text, not pixels.
-- **Edit menu and bar:** Edit lists Cut, Copy, Copy Pixels, Copy Merged, Paste,
-  Paste as New Image, Paste in Place and Paste Into. The selection bar's Copy ▾ holds Copy, Copy Merged
-  and Cut; with a selection tool, Copy already takes pixels.
+Capy and Clip Studio Paint presets follow CSP's Ctrl+Shift+V placement command
+and Ctrl+Shift+N for New Layer. New Window has no default chord. Paste Into uses
+Photoshop's chord; Paste at Cursor uses Krita's chord. Paste as New Image keeps
+Ctrl+Alt+N to leave New Layer intact.
+User shortcut overrides remain in effect.
+
+- **One edit:** each paste or cut is one undo step. Undoing Paste Into restores
+  the selection. Pixel copies add a paint layer; selected image objects can join
+  an editable image layer. Whole-layer copies add independent authored records
+  and share immutable pixel resources. Only clipping/effect relationships whose
+  targets are also copied are retained; other attachments are detached.
+- **Starting from the clipboard:** ordinary Paste creates a clipboard-sized
+  drawing on the untouched startup canvas. After editing, or in a drawing
+  deliberately created, opened or restored, it adds to that drawing.
+- **Bounds:** pixel selections copy their bounds on the canvas. Whole-layer and
+  selected-image copies retain off-canvas content. Whole-layer PNG renditions
+  include the composition frame and the copied layers' full rendering bounds.
+- **Position:** the view centre or cursor is captured when Paste is requested,
+  before clipboard delivery or decoding can move the view or pointer.
+- **Refusals:** Copy Pixels and pixel-selection Copy require a paint or image
+  layer. Whole-layer Cut refuses locked layers and dependencies that cannot be
+  detached. Pixel Cut also refuses alpha lock. Copy/Cut without an active or
+  selected layer are disabled; Copy Merged remains independent of layer focus.
+  A locked destination group disables paste into that drawing, while Paste as
+  New Image remains available. File operations and unfinished canvas gestures
+  block clipboard commands consistently for pixels and objects.
+- **Text fields keep their keys:** Ctrl+C, Ctrl+X and Ctrl+V edit native text.
+  Shortcut recording captures the chord; settings and modal contexts protect
+  the artwork. Browser image paste follows the shared bindings and gates, even
+  without an asynchronous clipboard reader. Missing native delivery cancels
+  the request instead of leaving the drawing busy.
+- **Edit menu and bar:** the clipboard commands stay in the existing Edit menu.
+  The selection bar's Copy ▾ holds Copy, Copy Merged and Cut.
+
+## Current limits
+
+Mask, Quick Mask and saved-selection editing do not yet accept clipboard
+coverage. Copy/Cut and paste into the current drawing are disabled in those
+contexts; Paste as New Image remains available. This prevents mask-focused
+Paste from silently adding artwork. Cutting selected pixels from an image layer
+still offers Add Mask (or Edit Mask), New Paint Layer and Rasterize Layer.
+
+A pixel selection copies only the active paint/image layer. Multi-layer pixel
+selections and selected regions of groups are not yet a structured clipboard.
+Whole layers preserve their structure when the destination colour space and
+depth match. A different colour space/depth or Paste Into uses the rendered
+image with its explicit profile. Native data from other applications needs a
+supported raster or image-file representation; text, SVG and foreign layer
+formats are not imported as artwork.
 
 ## The clip
 
@@ -43,8 +80,9 @@ coverage multiplies the rows, and one pass writes two outputs:
 - an sRGB 8-bit PNG, which other apps read. High dynamic range drawings map it
   through their SDR rendition.
 
-Copying an untouched photo whole (no selection, or Select All) keeps the photo's
-original samples instead. Copies of more than 2 MP show the import-style
+Copy Pixels without a selection, or pixel Copy with Select All, keeps an
+untouched photo's original samples. Whole-layer copies retain those samples in
+the authored layer graph and render a separate public PNG. Copies of more than 2 MP show the import-style
 progress with Cancel.
 
 The clip (`PixelClip`) belongs to the window, in `DocumentSessions`, so any of
@@ -57,7 +95,7 @@ from another app.
   holds document pixels; otherwise it keeps the clip as an original image with its
   explicit profile, converted like an opened photo.
 - **Cut** captures, then erases once the host reports the copy written. If the
-  drawing changed meanwhile, the pixels stay and a notice says so. A failed system write or cancellation cannot acknowledge Cut.
+  drawing changed meanwhile, the source stays and a notice says so. A failed system write or cancellation cannot acknowledge Cut.
 
 ## Hosts
 
@@ -84,7 +122,9 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
 ## Tests
 
 - Shared: `crates/layer-ui/src/clipboard_tests.rs`, `crates/layer-color/src/clip.rs`
-  and the GPU round trips in `crates/layer-host/src/clipboard.rs`.
+  the layer-import and undo tests in `crates/layer-core/src/authored/occurrence_edits.rs`,
+  and the GPU round trips in `crates/layer-host/src/clipboard.rs`, including
+  off-canvas group pixels and retained editable layers in new drawings.
 - GTK: `native_clipboard_copy_paste_round_trips` in
   `apps/layer-linux/src/clipboard_tests.rs` (keyboard, Copy ▾ with mouse and
   touch, another app reading and writing through `wl-paste` and `wl-copy`,

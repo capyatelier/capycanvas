@@ -329,12 +329,12 @@ commands-help-flip-image-horizontal = 镜像翻转整张图像及其选区和辅
 commands-help-trim = 将画布缩小到可见像素，移除透明边缘。外部像素仍隐藏在图层上。
 commands-help-reveal-all = 扩大画布以显示所有图层的像素，包括隐藏图层和画布外的像素。
 commands-help-move-leave-copy = 使用移动工具拖动所选像素时，放置副本并保留原件。开始拖动时按住 Alt 可反转此行为。
-commands-help-copy = 复制选区内活动图层自身的像素，不含其不透明度、蒙版和效果。没有选区时，复制画布内的整个图层。在图像图层上，复制所选图像。
-commands-help-cut = 复制活动图层中选中的像素，然后从图层中擦除。在图像图层上，复制所选图像，然后将其移除。
+commands-help-copy = 复制选中的像素或图像。未选中像素或图像时，复制选中的图层和文件夹及其属性。
+commands-help-cut = 复制选中的像素、图像或整个图层，成功写入剪贴板后再将其移除。
 commands-help-copy-merged = 复制选区内可见的图像，与导出的效果相同。
 commands-help-copy-pixels = 复制选区内活动图层的像素，不含其不透明度、蒙版和效果。在图像图层上，其图像会作为像素复制。
-commands-help-paste-image = 添加剪贴板内容。在 { common-app-name } 中复制的像素会在复制位置可见时成为该位置的绘画图层，复制的图像仍是图像。来自其他应用的图像会带着放置手柄打开。
-commands-help-paste-in-place = 将剪贴板内容添加到复制时的位置，不显示放置手柄。来自其他应用的图像会作为图像以原始大小居中放置。
+commands-help-paste-image = 将剪贴板内容添加为图层或图像。其他应用的图像以原始大小打开，并显示放置手柄。
+commands-help-paste-in-place = 粘贴到复制时的位置。其他应用的图像以原始大小放置在画布原点。
 commands-help-paste-into = 将剪贴板内容作为图像添加到新的图像图层中，其蒙版仅显示选区。移动图像即可改变显示的部分。
 commands-help-new-dodge-burn-layer = 在当前图层上方添加一个中性灰色的柔光图层。用白色在其上绘画可提亮，用黑色可压暗。
 commands-help-frequency-separation = 在新图层组中将当前图层分为低频和高频：低频是按指定半径模糊的颜色与明暗，高频是细微纹理。原图层留在下方并隐藏。
@@ -611,3 +611,11 @@ commands-help-enclose-fill = 画一个圈，填充圈内封闭的透明区域。
 
 command-paste-as-new-image = 粘贴为新图像
 commands-help-paste-as-new-image = 以原始尺寸将剪贴板内容打开为新画作。
+
+command-paste-at-view = 粘贴到显示位置
+
+command-paste-at-cursor = 粘贴到光标位置
+
+commands-help-paste-at-view = 以原始大小将剪贴板内容粘贴到可见画布的中心。
+
+commands-help-paste-at-cursor = 以原始大小将剪贴板内容粘贴到指针所在位置并居中。

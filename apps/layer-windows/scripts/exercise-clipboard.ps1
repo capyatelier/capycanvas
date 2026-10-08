@@ -28,6 +28,7 @@ function Start-Review([string]$Name){
  Write-Output "Owned clipboard review $($review.Id): $run"
  $native=@{window=$null}
  Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Review did not start' 90
+ if((Model).state.theme -ne $Theme){throw 'The clipboard review did not apply the requested theme'}
  $script:drawingWindow=$native.window.Handle;$script:root=$native.window.Root
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
@@ -83,6 +84,10 @@ function Settled{Wait-Until {(Requests) -eq 0 -and !(Model).state.document_file.
 function Tool([string]$Command){
  Invoke-Id (Tool-Tile $Command)
 }
+function Paste-In-Place{
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
+ (Control 'Paste in Place' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
 function Menu-Item([string]$Name){
  $condition=[System.Windows.Automation.AndCondition]::new(
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),
@@ -111,7 +116,7 @@ try {
  Wait-Until {(Layers) -eq $count+1} 'Ctrl+V did not paste the window copy'
  if((Model).state.layer_tools.tool -eq 'transform'){throw 'Pasting the window copy opened placement handles'}
  Invoke 'Undo' -Name;Wait-Until {(Layers) -eq $count} 'One Undo did not remove the pasted copy'
- Chord @(0x11,0x10) 0x56;Settled
+ Paste-In-Place;Settled
  Wait-Until {(Layers) -eq $count+1} 'Paste in Place did not paste the window copy'
  Invoke 'Undo' -Name;Wait-Until {(Layers) -eq $count} 'One Undo did not remove Paste in Place'
  $checks.own_paste_and_paste_in_place='passed'
@@ -138,7 +143,7 @@ try {
  $bitmap=[Drawing.Bitmap]::new(40,30);try{$g=[Drawing.Graphics]::FromImage($bitmap);$g.Clear([Drawing.Color]::FromArgb(255,30,160,90));$g.Dispose();$bitmap.Save($foreign,[Drawing.Imaging.ImageFormat]::Png)}finally{$bitmap.Dispose()}
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null
  New-Image {& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke-Id 'paste_as_new_image'} '40x30' 'external-paste-as-new-image'
- Chord @(0x11,0x10) 0x56;Settled
+ Paste-In-Place;Settled
  try{Wait-Until {(Layers) -eq $count+1} 'Paste in Place did not paste the image from another application'}catch{throw "$_ formats=$((Formats) -join ',') notice=$((Model).state.notice|ConvertTo-Json -Compress -Depth 4) requests=$(Requests)"}
  if((Model).state.layer_tools.editing_layer.object_count -ne 1){throw 'The image from another application did not become an image layer'}
  Chord @() 0x4f

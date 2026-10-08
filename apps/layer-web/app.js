@@ -1652,7 +1652,7 @@ function keyInput(e, pressed, divider = null) {
     divider,
   });
   if (reply.handled) {
-    e.preventDefault();
+    if(!documents?.allowNativePaste())e.preventDefault();
     e.stopPropagation();
   }
 }
@@ -1660,7 +1660,7 @@ window.addEventListener("keydown", e => {
   if (!composingKey(e) && e.key === "Escape" && workspaceGesture) { endWorkspaceGesture(null, true); e.preventDefault(); e.stopPropagation(); }
 }, {capture:true});
 window.addEventListener("keydown", (e) => {
-  if(!composingKey(e) && documents?.key(e))return;
+  if(!composingKey(e) && documents?.key(e,()=>keyInput(e,true)))return;
   keyInput(e, true);
 });
 window.addEventListener("keyup", (e) => keyInput(e, false));

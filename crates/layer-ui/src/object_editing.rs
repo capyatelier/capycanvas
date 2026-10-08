@@ -180,7 +180,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|(distance, _)| *distance <= reach).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, handle)| handle)
             .or_else(|| self.selected_objects().iter().any(|h| self.engine.document().object_contains(*h, point)).then_some(ObjectHandle::Move))
     }
-    fn pointer64(&self, surface: [f32; 2]) -> [f64; 2] {
+    pub(super) fn pointer64(&self, surface: [f32; 2]) -> [f64; 2] {
         self.state.camera.surface_to_document64(surface.map(f64::from))
     }
     pub(super) fn object_touch_target(&self, position: [f32; 2]) -> bool {
@@ -462,8 +462,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SelectAll => idle && doc.object_layer_children(layer).is_some_and(|c| !c.is_empty()),
             CommandId::Deselect => idle && selected,
             CommandId::ClearSelected | CommandId::CopySelectionToLayer => idle && selected && editable && !self.objects.placing(),
-            CommandId::Copy => idle && selected && !self.objects.placing(),
-            CommandId::Cut => idle && selected && editable && !self.objects.placing(),
             CommandId::CutSelectionToLayer | CommandId::InvertSelection | CommandId::TransformBicubic | CommandId::TransformLanczos
             | CommandId::TransformDistort | CommandId::TransformWarp | CommandId::TransformPerspective => false,
             CommandId::TransformAgain => idle && selected && editable && self.last_transform().is_some(),
@@ -520,7 +518,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if matches!(id, CommandId::ClearSelected | CommandId::Deselect) && self.selected_objects().is_empty() { return Some(Ok(())); }
         if !self.object_command_enabled(id).unwrap_or(false) {
             return matches!(id, CommandId::SelectAll | CommandId::Deselect | CommandId::ClearSelected | CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer
-                | CommandId::Copy | CommandId::Cut | CommandId::TransformAgain | CommandId::TransformFlipHorizontal | CommandId::TransformFlipVertical
+                | CommandId::TransformAgain | CommandId::TransformFlipHorizontal | CommandId::TransformFlipVertical
                 | CommandId::TransformRotateLeft | CommandId::TransformRotateRight | CommandId::PlacementOriginalSize | CommandId::TransformNearest
                 | CommandId::TransformBilinear | CommandId::TransformBicubic | CommandId::TransformLanczos | CommandId::InvertSelection).then(|| Err(self.object_disabled_reason(id).map_or_else(|| self.localization().text(MessageId::OBJECTS_SELECT_IMAGES_FIRST).to_string(), |r| r.to_string())));
         }
@@ -712,11 +710,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut candidate = self.engine.document().clone();
         let mut edits = Vec::new();
         let mut operations = Vec::new();
-        let target = if masked { ObjectDestination::New { index: 0, parent: None } } else { self.object_destination(destination)? };
+        let target = if masked {
+            let (index, parent) = self.image_layer_destination(destination)?;
+            ObjectDestination::New { index, parent }
+        } else { self.object_destination(destination)? };
         let (layer, at) = match target {
             ObjectDestination::Existing(layer) => (layer, 0),
             ObjectDestination::New { index, parent } => {
-                let (index, parent) = if masked { self.image_layer_destination(None)? } else { (index, parent) };
                 let (layer, edit) = candidate.create_object_layer_edit(self.localization().text(MessageId::OBJECTS_LAYER_NAME).as_ref(), parent, index).map_err(error)?;
                 candidate.apply(edit.clone()).map_err(error)?;
                 edits.push(edit);
@@ -765,7 +765,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.pointer64(camera.work_area_center())
     }
     pub(super) fn place_image_objects(&mut self, sources: Vec<(String, layer_core::color::source::SourceImage)>, centre: Option<Point>,
-        destination: Option<ImageLayerDestination>, interactive: bool) -> Result<(), String> {
+        destination: Option<ImageLayerDestination>, interactive: bool, fit: bool) -> Result<(), String> {
         self.require_document_idle()?;
         if self.operation.placing() || self.objects.placing() { return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string()); }
         if !self.engine.backend().supports_tiled_sources() { return Err("This renderer does not support tiled photo layers".into()); }
@@ -777,7 +777,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let name = layer_core::bounded_name(&name);
             if name.is_empty() { return Err("Use an image name with 1 to 128 characters".to_string()); }
             let mut object = layer_core::ImageObject::new(layer_core::Image::new(std::sync::Arc::new(source)), name);
-            object.affine = self.fitted_affine(object.image.extent, centre, interactive);
+            object.affine = self.fitted_affine(object.image.extent, centre, fit);
             Ok(object)
         }).collect::<Result<Vec<_>, String>>()?;
         let (edit, handles, _) = self.insert_objects_edit(objects, destination, false)?;

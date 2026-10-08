@@ -332,12 +332,12 @@ commands-help-flip-image-horizontal = Espelhar toda a imagem, com sua seleção 
 commands-help-trim = Contrair a tela até os pixels visíveis, removendo bordas transparentes. Pixels fora dela permanecem ocultos em suas camadas.
 commands-help-reveal-all = Expandir a tela para mostrar os pixels de todas as camadas, incluindo camadas ocultas e pixels fora da tela.
 commands-help-move-leave-copy = Quando Mover arrasta pixels selecionados, colocar uma cópia e manter o original no lugar. Manter Alt pressionado ao iniciar o arrasto faz o contrário.
-commands-help-copy = Copiar os pixels próprios da camada ativa dentro da seleção, antes da opacidade, máscara e efeitos. Sem seleção, copiar a camada inteira dentro da tela. Em uma camada de imagens, copiar as imagens selecionadas.
-commands-help-cut = Copiar os pixels selecionados da camada ativa e depois apagá-los da camada. Em uma camada de imagens, copiar as imagens selecionadas e depois removê-las.
+commands-help-copy = Copia os pixels ou as imagens selecionados. Sem uma seleção de pixels ou imagens, copia as camadas e pastas selecionadas com suas propriedades.
+commands-help-cut = Copia os pixels, imagens ou camadas inteiras selecionados e os remove após gravá-los na área de transferência.
 commands-help-copy-merged = Copiar a imagem visível dentro da seleção, como uma exportação a mostraria.
 commands-help-copy-pixels = Copiar os pixels da camada ativa dentro da seleção, antes da opacidade, máscara e efeitos. Em uma camada de imagens, as imagens são copiadas como pixels.
-commands-help-paste-image = Adicionar o conteúdo da área de transferência. Pixels copiados no { common-app-name } viram uma camada de pintura na posição copiada quando ela está visível, e imagens copiadas continuam imagens. Uma imagem de outro app abre com alças de posicionamento.
-commands-help-paste-in-place = Adicionar o conteúdo da área de transferência onde foi copiado, sem alças de posicionamento. Uma imagem de outro app é posicionada como imagem, centralizada em tamanho real.
+commands-help-paste-image = Adiciona a área de transferência como camadas ou imagens. Uma imagem de outro aplicativo abre com alças de posicionamento no tamanho original.
+commands-help-paste-in-place = Cola na posição copiada. Imagens de outros aplicativos são colocadas na origem da tela, no tamanho original.
 commands-help-paste-into = Adicionar o conteúdo da área de transferência como imagem em uma nova camada de imagens cuja máscara mostra somente a seleção. Mova a imagem para mudar o que aparece.
 commands-help-new-dodge-burn-layer = Adicionar uma camada Luz suave de cinza neutro acima da camada ativa. Pinte nela com branco para clarear e com preto para escurecer.
 commands-help-frequency-separation = Dividir a camada ativa em Baixa, suas cores e tons desfocados por um raio, e Alta, sua textura fina, em um novo grupo. A camada permanece abaixo, oculta.
@@ -616,3 +616,11 @@ commands-help-enclose-fill = Desenhe um contorno para preencher as regiões tran
 
 command-paste-as-new-image = Colar como nova imagem
 commands-help-paste-as-new-image = Abra o conteúdo da área de transferência como um novo desenho no tamanho original.
+
+command-paste-at-view = Colar na posição visível
+
+command-paste-at-cursor = Colar no cursor
+
+commands-help-paste-at-view = Cola a área de transferência no centro da tela visível, no tamanho original.
+
+commands-help-paste-at-cursor = Cola a área de transferência centralizada no ponteiro, no tamanho original.

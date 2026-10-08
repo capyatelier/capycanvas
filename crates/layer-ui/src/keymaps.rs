@@ -65,7 +65,7 @@ pub(crate) fn preset(id: &str) -> Option<&'static ParsedPreset> {
 pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     KeymapPreset {
         id: "capy",
-        revision: 1,
+        revision: 2,
         title: crate::APP_NAME,
         app: "CapyCanvas",
         source: "Capy Canvas defaults",
@@ -76,7 +76,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "photoshop",
-        revision: 10,
+        revision: 11,
         title: "Photoshop Style",
         app: "Photoshop",
         source: "Adobe Photoshop default keyboard shortcuts, US layout, modern undo; checked 2026-09-25",
@@ -102,6 +102,8 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.FeatherSelection", &["shift+f6"]),
             ("command.ImageSize", &["primary+alt+i"]),
             ("command.PasteInto", &["primary+alt+shift+v"]),
+            ("command.PasteInPlace", &["primary+shift+v"]),
+            ("command.PasteAtCursor", &[]),
             ("command.MergeVisible", &["primary+shift+e"]),
             ("command.StampVisible", &["primary+alt+shift+e"]),
             ("command.Clone", &["s"]),
@@ -123,7 +125,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "krita",
-        revision: 3,
+        revision: 4,
         title: "Krita Style",
         app: "Krita",
         source: "Krita 5.3 manual default shortcuts, US layout; checked 2026-09-25",
@@ -134,6 +136,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
         ],
         keys: &[
             ("command.PasteAsNewImage", &["primary+shift+n"]),
+            ("command.PasteAtCursor", &["primary+alt+v"]),
             ("command.NewWindow", &[]),
             ("command.Redo", &["primary+shift+z"]),
             ("command.SoftProof", &["primary+y"]),
@@ -165,7 +168,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "clip-studio",
-        revision: 2,
+        revision: 3,
         title: "Clip Studio Paint Style",
         app: "Clip Studio Paint",
         source: "Clip Studio Paint manual shortcut lists, Studio Mode defaults; checked 2026-09-25",

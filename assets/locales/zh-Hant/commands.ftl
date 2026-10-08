@@ -329,12 +329,12 @@ commands-help-flip-image-horizontal = 鏡像翻轉整張影像及其選取範圍
 commands-help-trim = 將畫布縮小至可見像素，移除透明邊緣。外部像素仍隱藏在圖層上。
 commands-help-reveal-all = 擴大畫布以顯示所有圖層的像素，包括隱藏圖層與畫布外的像素。
 commands-help-move-leave-copy = 使用移動工具拖曳所選像素時，放置副本並保留原件。開始拖曳時按住 Alt 可反轉此行為。
-commands-help-copy = 複製選取範圍內作用中圖層本身的像素，不含其不透明度、遮罩和效果。沒有選取範圍時，複製畫布內的整個圖層。在影像圖層上，複製所選影像。
-commands-help-cut = 複製作用中圖層中選取的像素，然後從圖層中擦除。在影像圖層上，複製所選影像，然後將其移除。
+commands-help-copy = 複製選取的像素或影像。未選取像素或影像時，複製選取的圖層和資料夾及其屬性。
+commands-help-cut = 複製選取的像素、影像或整個圖層，成功寫入剪貼簿後再將其移除。
 commands-help-copy-merged = 複製選取範圍內可見的影像，與匯出的效果相同。
 commands-help-copy-pixels = 複製選取範圍內作用中圖層的像素，不含其不透明度、遮罩和效果。在影像圖層上，其影像會以像素形式複製。
-commands-help-paste-image = 新增剪貼簿內容。在 { common-app-name } 中複製的像素會在複製位置可見時成為該位置的繪畫圖層，複製的影像仍是影像。來自其他 App 的影像會帶著置入控點開啟。
-commands-help-paste-in-place = 將剪貼簿內容新增至複製時的位置，不顯示置入控點。來自其他 App 的影像會以原始大小置中置入為影像。
+commands-help-paste-image = 將剪貼簿內容新增為圖層或影像。其他應用程式的影像以原始大小開啟，並顯示放置控制點。
+commands-help-paste-in-place = 貼上至複製時的位置。其他應用程式的影像以原始大小放置在畫布原點。
 commands-help-paste-into = 將剪貼簿內容作為影像新增到新的影像圖層中，其遮罩僅顯示選取範圍。移動影像即可改變顯示的部分。
 commands-help-new-dodge-burn-layer = 在目前圖層上方新增一個中性灰色的柔光圖層。以白色在其上繪畫可提亮，以黑色可壓暗。
 commands-help-frequency-separation = 在新圖層群組中將目前圖層分為低頻與高頻：低頻是依指定半徑模糊的色彩與明暗，高頻是細微紋理。原圖層留在下方並隱藏。
@@ -611,3 +611,11 @@ commands-help-enclose-fill = 畫一個圈，填滿圈內封閉的透明區域。
 
 command-paste-as-new-image = 貼上為新影像
 commands-help-paste-as-new-image = 以原始尺寸將剪貼簿內容開啟為新畫作。
+
+command-paste-at-view = 貼上至顯示位置
+
+command-paste-at-cursor = 貼上至游標位置
+
+commands-help-paste-at-view = 以原始大小將剪貼簿內容貼上至可見畫布的中心。
+
+commands-help-paste-at-cursor = 以原始大小將剪貼簿內容貼上至指標所在位置並置中。

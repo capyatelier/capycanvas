@@ -993,6 +993,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
     }
 
+    fn shortcut_input_blocked(&self, editing: bool, command: bool) -> bool {
+        editing || (self.state.customization.header_editing && !command)
+            || self.state.settings_open || self.state.customization.blocks_shortcuts()
+            || self.interaction.facts.popup_open || self.state.preferences.capture.is_some()
+            || self.state.command_search.is_some()
+    }
+
+    pub fn native_paste_input(&mut self) -> Result<UiChange, String> {
+        if self.shortcut_input_blocked(false, true) || !self.command_flags(CommandId::PasteImage).0 {
+            return Ok(UiChange { revision: self.state.revision, ..Default::default() });
+        }
+        self.dispatch(UiAction::Invoke { command: CommandId::PasteImage })
+    }
+
     /// Small event/reply boundary shared by native and Wasm hosts. Pen samples
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
@@ -1409,11 +1423,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         })?;
                         reply.handled = true;
                     }
-                    let blocked = editing
-                        || (self.state.customization.header_editing && !modifiers.command)
-                        || self.state.settings_open
-                        || self.state.customization.blocks_shortcuts()
-                        || self.interaction.facts.popup_open;
+                    let blocked = self.shortcut_input_blocked(editing, modifiers.command);
                     // Explicit application chords can open search from a
                     // numeric/text editor. Plain typing still belongs to it.
                     if editing && modifiers.command && self.command_flags(CommandId::SearchCommands).0
@@ -2388,8 +2398,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::RasterizeLayer | CommandId::ConvertToObject => self.conversion_refusal(id).is_none(),
             CommandId::ExportAgain => self.files.last_export.is_some() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::PasteAsNewImage | CommandId::PasteInPlace | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
+            CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteAsNewImage | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
+            }
+            CommandId::PasteImage | CommandId::PasteInPlace | CommandId::PasteAtView | CommandId::PasteAtCursor => {
+                self.require_document_idle().is_ok() && !self.state.document_file.busy && self.paste_refusal().is_none()
             }
             CommandId::PasteInto => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy && self.paste_into_refusal().is_none()
@@ -4616,10 +4629,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request_document(DocumentRequest::Place)?;
                 Ok((DOCUMENT | HOST, false))
             }
-            CommandId::PasteImage | CommandId::PasteAsNewImage | CommandId::PasteInPlace | CommandId::PasteInto => {
+            CommandId::PasteImage | CommandId::PasteAsNewImage | CommandId::PasteInPlace | CommandId::PasteAtView | CommandId::PasteAtCursor | CommandId::PasteInto => {
                 self.request_paste(match command {
                     CommandId::PasteAsNewImage => PasteMode::NewImage,
                     CommandId::PasteInPlace => PasteMode::InPlace,
+                    CommandId::PasteAtView => PasteMode::AtView,
+                    CommandId::PasteAtCursor => PasteMode::AtCursor,
                     CommandId::PasteInto => PasteMode::Into,
                     _ => PasteMode::Paste,
                 })?;

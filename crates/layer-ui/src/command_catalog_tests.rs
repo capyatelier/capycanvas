@@ -642,14 +642,14 @@ fn static_refusal_providers_retain_cached_reasons_before_published_comparison() 
         assert!(std::sync::Arc::ptr_eq(&direct, published.disabled_reason.as_ref().unwrap()), "{command:?}");
     }
     s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
-    shared(s.copy_refusal(CommandId::Copy), s.copy_refusal(CommandId::Copy));
+    shared(s.copy_refusal(CommandId::CopyPixels), s.copy_refusal(CommandId::CopyPixels));
     shared(s.separation_refusal(), s.separation_refusal());
     shared(art_layers::apply_mask_refusal(LayerKind::Group, s.localization()),
         art_layers::apply_mask_refusal(LayerKind::Group, s.localization()));
     invoke(&mut s, CommandId::QuickMask);
     shared(s.canvas_geometry_refusal(), s.canvas_geometry_refusal());
     shared(s.dodge_burn_refusal(), s.dodge_burn_refusal());
-    shared(s.copy_refusal(CommandId::Copy), s.copy_refusal(CommandId::Copy));
+    shared(s.copy_refusal(CommandId::CopyPixels), s.copy_refusal(CommandId::CopyPixels));
     shared(s.clear_refusal(), s.clear_refusal());
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);

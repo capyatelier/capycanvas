@@ -581,14 +581,16 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Settings" => key(",", true, false),
         "command.KeyboardShortcuts" => key("?", true, true),
         "command.NewDocument" => key("n", true, false),
-        "command.NewWindow" => key("n", true, true),
+        "command.AddLayer" => key("n", true, true),
         "command.OpenDocument" => key("o", true, false),
         "command.ImportImage" => key("o", true, true),
         "command.Copy" => key("c", true, false),
         "command.Cut" => key("x", true, false),
         "command.CopyMerged" => key("c", true, true),
         "command.PasteImage" => key("v", true, false),
-        "command.PasteInPlace" => key("v", true, true),
+        "command.PasteAtView" => key("v", true, true),
+        "command.PasteAtCursor" => KeyChord { key: "v".into(), command: true, shift: false, alt: true },
+        "command.PasteInto" => KeyChord { key: "v".into(), command: true, shift: true, alt: true },
         "command.PasteAsNewImage" => KeyChord { key: "n".into(), command: true, shift: false, alt: true },
         "command.SaveDocument" => key("s", true, false),
         "command.SaveDocumentAs" => key("s", true, true),
@@ -618,7 +620,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
     use CommandId as C;
     match command {
         C::Undo | C::Redo | C::UndoWorkspace | C::RedoWorkspace | C::Copy | C::Cut | C::CopyMerged | C::CopyPixels | C::PasteImage
-        | C::PasteAsNewImage | C::PasteInPlace | C::PasteInto | C::ClearLayer | C::FillSelection
+        | C::PasteAsNewImage | C::PasteInPlace | C::PasteAtView | C::PasteAtCursor | C::PasteInto | C::ClearLayer | C::FillSelection
         | C::ClearSelected | C::ClearOutside | C::CanvasSize | C::CropCanvasToSelection | C::ImageSize
         | C::RotateImageLeft | C::RotateImageRight | C::RotateImage180 | C::FlipImageHorizontal
         | C::FlipImageVertical | C::Trim | C::RevealAll => ShortcutSection::Edit,

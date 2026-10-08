@@ -926,6 +926,10 @@ impl WebApp {
         self.request_language();
         serialize(&change)
     }
+    pub fn native_paste_input(&mut self) -> Result<JsValue, JsValue> {
+        let change = self.session.native_paste_input().map_err(js)?;
+        serialize(&change)
+    }
     pub fn input(&mut self, input: JsValue) -> Result<JsValue, JsValue> {
         let input = serde_wasm_bindgen::from_value(input).map_err(js)?;
         if !self.gpu_ready() && matches!(input, layer_ui::UiInput::Pointer { .. }) {
