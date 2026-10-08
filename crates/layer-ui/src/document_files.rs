@@ -435,11 +435,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             })
         }).flatten();
+        let unpublished = location.is_none() && (document.revision != 0 || photo_name.is_some());
         let mut session = Self::new_localized(renderer, document, viewport, platform, localization)?;
         session.state.document_file.location = location;
+        session.files.unpublished = unpublished;
         if let Some(name) = photo_name {
             session.state.document_file.unsaved_name = Some(name);
-            session.files.unpublished = true; // Imported content needs its own master save.
         }
         session.refresh_document();
         Ok(session)

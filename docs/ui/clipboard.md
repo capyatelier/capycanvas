@@ -34,6 +34,8 @@ User shortcut overrides remain in effect.
 - **Starting from the clipboard:** ordinary Paste creates a clipboard-sized
   drawing on the untouched startup canvas. After editing, or in a drawing
   deliberately created, opened or restored, it adds to that drawing.
+  Copied authored layers need their own save even when they contain no original
+  photo; closing the new drawing asks to save it.
 - **Bounds:** pixel selections copy their bounds on the canvas. Whole-layer and
   selected-image copies retain off-canvas content. Whole-layer PNG renditions
   include the composition frame and the copied layers' full rendering bounds.

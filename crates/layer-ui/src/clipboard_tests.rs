@@ -362,6 +362,18 @@ mod clipboard_checks {
         let opened = copied.document(s.localization()).unwrap();
         assert_eq!(opened.composition().size, [400, 300]);
         assert_eq!(opened.scene().order().len(), 3, "copied layers and transparent paper");
+        assert!(opened.artwork.paint.iter().all(|(_, _, paint)| paint.base.is_none()));
+        for platform in Platform::ALL {
+            let mut pasted = UiSession::from_project(Recorder::default(), opened.clone(), None, [800, 600], platform).unwrap();
+            assert!(pasted.state.document_file.modified, "copied authored layers need their own save on {platform:?}");
+            assert!(!pasted.engine.can_undo());
+            pasted.request_document_close().unwrap();
+            let (id, request) = pending(&pasted);
+            assert!(matches!(request, DocumentRequest::ConfirmClose { .. }));
+            pasted.respond_document_close(id, CloseDecision::Cancel).unwrap();
+            pasted.initialize_document_location(Some(DocumentLocation { uri: "private:copied-layers".into(), name: "Copied.capy".into() })).unwrap();
+            assert!(!pasted.state.document_file.modified);
+        }
     }
 
     #[test]
