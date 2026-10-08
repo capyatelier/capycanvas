@@ -24,24 +24,24 @@ import UniformTypeIdentifiers
         let bytes = CGColorSpace(name: CGColorSpace.displayP3)!.copyICCData()! as Data
         try bytes.write(to: profileURL)
         let invalid = root.appendingPathComponent("Broken.icc"); try Data("Invalid profile".utf8).write(to: invalid)
-        let profile: JSON = try await withCheckedThrowingContinuation { done in
-            NativeProjectTask.io.async {
-                do {
-                    do { _ = try ColorPreferencesStore(locations: nil).importProfile(invalid); throw HostFailure(message: "Invalid ICC accepted") }
-                    catch { if error.localizedDescription == "Invalid ICC accepted" { throw error } }
-                    let profile = try ColorPreferencesStore(locations: nil).importProfile(profileURL)
-                    try require(profile["channels"].string == "Rgb", "ICC channels")
-                    try require(Data(profile["profile"]["Icc"].array.map { UInt8($0.uint) }) == bytes, "Exact imported profile bytes")
-                    done.resume(returning: profile)
-                } catch { done.resume(throwing: error) }
-            }
-        }
         for platform: UInt32 in [0,1] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root.appendingPathComponent("state-\(platform)")), managedWorkspaces: false)
             let native = store.native!
             let surface = attachSurface(store, CGSize(width: 128, height: 128))
             defer { native.detach(); withExtendedLifetime(surface) {} }
             try await CapyTest.wait("Metal startup", failure: { store.failure }, step: { await frame(native) }) { store.snapshot["shaders_ready"].bool }
+            let profile: JSON = try await withCheckedThrowingContinuation { done in
+                NativeProjectTask.io.async {
+                    do {
+                        do { _ = try ColorPreferencesStore(locations: nil).importProfile(invalid); throw HostFailure(message: "Invalid ICC accepted") }
+                        catch { if error.localizedDescription == "Invalid ICC accepted" { throw error } }
+                        let profile = try ColorPreferencesStore(locations: nil).importProfile(profileURL)
+                        try require(profile["channels"].string == "Rgb", "ICC channels")
+                        try require(Data(profile["profile"]["Icc"].array.map { UInt8($0.uint) }) == bytes, "Exact imported profile bytes")
+                        done.resume(returning: profile)
+                    } catch { done.resume(throwing: error) }
+                }
+            }
             let saved=root.appendingPathComponent("Edited-\(platform).capy")
             store.projectFiles = ProjectFiles(store:store,dialogs:.init(open:{_,done in done([imageURL])},save:{_,_,done in done(saved)},create:{_,done in
                 done(JSON(["extent":[64,48],"color":["space":"Srgb","depth":"U8"],"background":"White"]))

@@ -188,7 +188,10 @@ actions through the native bridge in both themes and platform policies.
 opens the fixed built-in, ICC and Nearest image-object packages through Apple
 project workers. It checks shared image ownership, F64 placement, exact visibility
 history, save/reopen, renderer replacement and private recovery with pending Redo.
-Object authoring remains unavailable while the shared editor cutover is pending.
+Image layers expose expandable image rows, selection, visibility, ordering and
+image menus through the shared object actions. Place Image and external paste
+keep images in an image layer; Convert to Image Layer and Rasterize Layer use
+the shared background conversion jobs.
 The photo-owner fixture compares reopened layer rows and swipe targets by stack
 position because runtime handles are allocated afresh when reading a package.
 The ignored 61 MP regression needs a
@@ -306,6 +309,13 @@ type takes the remaining space, including when the panel needs a scrollbar.
 `testLiveColorTab` and its Dark variant check the initial paint, retained Color
 tab icon updates and the transparency circle. Run these on both native targets;
 simulator compilation does not establish Metal canvas behavior.
+
+`testImageObjects` and `testImageObjectsDark` exercise Convert to Image Layer,
+the expanded image rows, duplication, ordering, visibility, collapse and expand,
+and the painting refusal's Rasterize Layer action. Undo and Redo check both the
+rows and exact displayed pixels. The commands use native toolbar buttons and
+row menus. `tests/image-import-owner.swift` covers placement, external paste,
+batch import, cancellation and file-worker handoffs under both Apple policies.
 
 - `editorTestApplication()` gives each journey's application a new
   `CAPY_STORAGE_DIR` name, kept across its relaunches, so journeys never touch

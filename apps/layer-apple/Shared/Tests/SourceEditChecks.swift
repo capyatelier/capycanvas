@@ -15,7 +15,7 @@ extension XCTestCase {
         var actions:[[String:Any]]=[
             ["type":"set_theme","theme":"light"],
             ["type":"customize","action":["type":"insert_tools","panel":"commands","before":NSNull()]]]
-        for command in ["repair_source_profile","rasterize_source"] {
+        for command in ["open_document","repair_source_profile","rasterize_source","select_all","fill_selection","deselect"] {
             actions.append(["type":"customize","action":["type":"picker_select","control":["kind":"command","command":command],"selected":true]])
         }
         actions.append(["type":"customize","action":["type":"confirm_tools"]])
@@ -37,15 +37,15 @@ extension XCTestCase {
             app.typeKey("g",modifierFlags:[.command,.shift]);app.typeText(url.path+"\n");workspaceActivate(open)
             XCTAssertTrue(open.waitForNonExistence(timeout:15))
         }
-        workspaceActivate(app.buttons["layer-Import image as layer"]);chooseFile(photo)
-        let place=app.buttons["canvas-bar-action-apply_transform"]
-        XCTAssertTrue(place.waitForExistence(timeout:20));workspaceActivate(place);XCTAssertTrue(place.waitForNonExistence(timeout:10))
-        expectation(for:NSPredicate(format:"count == 3"),evaluatedWith:rows);waitForExpectations(timeout:30)
-        let original=editorPixels(in:app)
         func command(_ label:String) {
             let button=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@ AND label == %@","toolbar-tile-commands-",label)).firstMatch
             XCTAssertTrue(button.waitForExistence(timeout:10));XCTAssertTrue(button.isEnabled);workspaceActivate(button)
         }
+        command("Open…");chooseFile(photo)
+        let drawingName=photo.deletingPathExtension().lastPathComponent
+        expectation(for:NSPredicate(format:"label CONTAINS %@ OR value CONTAINS %@",drawingName,drawingName),evaluatedWith:title)
+        waitForExpectations(timeout:30)
+        let initialCount=rows.count,original=editorPixels(in:app)
         let preview=app.buttons["document-color-preview"],apply=app.buttons["document-color-apply"]
         func compare() {
             workspaceActivate(preview)
@@ -78,20 +78,19 @@ extension XCTestCase {
         expectation(for:NSPredicate { _,_ in self.editorPixels(in:app)==original },evaluatedWith:app);waitForExpectations(timeout:20)
         editorHistory("Redo",in:app)
         expectation(for:NSPredicate { _,_ in self.editorPixels(in:app)==repaired },evaluatedWith:app);waitForExpectations(timeout:20)
-        editorMenu(in:app,menu:"Select",id:"select_all",label:"Select all pixels")
-        editorMenu(in:app,menu:"Edit",id:"fill_selection",label:"Fill selection")
-        editorMenu(in:app,menu:"Select",id:"deselect",label:"Deselect pixels")
+        command("Select all pixels");command("Fill selection");command("Deselect pixels")
         command("Repair Source Profile…");workspaceActivate(app.popUpButtons["photo-profile-space"])
         workspaceActivate(app.menuItems["ProPhoto RGB"].firstMatch);compare()
         XCTAssertEqual(apply.label,"Add Corrected Source");attachEditor(in:app,name:"source-repair-preserves-painted-layer")
         workspaceActivate(apply);XCTAssertTrue(preview.waitForNonExistence(timeout:30))
-        expectation(for:NSPredicate(format:"count == 4"),evaluatedWith:rows);waitForExpectations(timeout:15)
+        expectation(for:NSPredicate(format:"count == %d",initialCount+1),evaluatedWith:rows);waitForExpectations(timeout:15)
         command("Rasterize Source…");compare();attachEditor(in:app,name:"source-rasterize-comparison")
         XCTAssertEqual(apply.label,"Rasterize");workspaceActivate(apply);XCTAssertTrue(preview.waitForNonExistence(timeout:30))
         let rasterize=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@ AND label == %@","toolbar-tile-commands-","Rasterize Source…")).firstMatch
         XCTAssertFalse(rasterize.isEnabled);editorHistory("Undo",in:app)
         expectation(for:NSPredicate(format:"enabled == YES"),evaluatedWith:rasterize);waitForExpectations(timeout:20)
-        editorHistory("Redo",in:app);XCTAssertFalse(rasterize.isEnabled)
+        editorHistory("Redo",in:app)
+        expectation(for:NSPredicate(format:"enabled == NO"),evaluatedWith:rasterize);waitForExpectations(timeout:20)
         XCTAssertEqual(try Data(contentsOf:photo),originalBytes);XCTAssertEqual(try Data(contentsOf:profile),profileBytes)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         #endif

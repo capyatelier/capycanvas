@@ -99,6 +99,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testImageSize() { checkImageSize(in: editorCaptureApplication()) }
     @MainActor func testFrequencySeparation() { checkFrequencySeparation(in: editorCaptureApplication()) }
     @MainActor func testPixelClipboard() { checkPixelClipboard(in: editorCaptureApplication()) }
+    @MainActor func testImageObjects() throws { try checkImageObjects(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testImageObjectsDark() throws { try checkImageObjects(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testLiveInterfaceLanguage() { checkLiveInterfaceLanguage(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testLiveInterfaceLanguageDark() { checkLiveInterfaceLanguage(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testCanvasActionBar() { checkCanvasActionBar(in: ignoringSavedWindows(editorCaptureApplication())) }

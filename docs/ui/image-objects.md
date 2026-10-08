@@ -99,5 +99,6 @@ actions and image clips. Host journeys are GTK's
 `native_image_object_clipboard_and_paste_into`,
 `native_image_layer_conversions_merges_and_alpha_selection` and
 `native_image_and_pixel_targets_and_crop_keep_images`, Web's `--image-rows`,
-Android's `AndroidInteractionTest#imageRowsTouchPickingMenusAndRefusalActions`, and the
+Android's `AndroidInteractionTest#imageRowsTouchPickingMenusAndRefusalActions`,
+Apple's `EditorLaunchTests/testImageObjects` and `testImageObjectsDark`, and the
 Windows `exercise-image-rows.ps1` fixture.
