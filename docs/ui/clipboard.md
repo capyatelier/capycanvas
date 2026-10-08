@@ -93,7 +93,9 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
   `native_clipboard_copy_latency_24mp`.
 - Web: `node apps/layer-web/test.mjs --headless --clipboard` with pen, touch and mouse, including internal and external new-image tabs. `color-controls-copy.test.mjs` checks denied or unavailable writes, late cancellation, stale ownership, mixed clipboard items and native paste events.
 - Android: `AndroidInteractionTest#clipboardCopyPasteAcrossDevices` (another app
-  reads the URI) and `AndroidRasterTest#clipboardCopyLatency24mp`.
+  reads the URI, mixed external items and external/internal new-image tabs with
+  immediate Copy; run with `-e theme light` and `-e theme dark`) and
+  `AndroidRasterTest#clipboardCopyLatency24mp`.
 - macOS and iPadOS: `EditorLaunchTests/testPixelClipboard` (keyboard on macOS,
   where the test reads the PNG back from the pasteboard; the in-app Edit menu on
   iPadOS).

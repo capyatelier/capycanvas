@@ -2848,6 +2848,11 @@ class AndroidInteractionTest {
     }
 
     @Test fun clipboardCopyPasteAcrossDevices() {
+        InstrumentationRegistry.getArguments().getString("theme")?.let { theme ->
+            require(theme in listOf("light", "dark"))
+            action(obj("type" to "set_theme", "theme" to theme))
+            assertEquals(theme, state().getString("theme"))
+        }
         val keep = layerStates().map { it.getLong("id") }.toSet()
         popupInput = true
         try {
@@ -2895,7 +2900,9 @@ class AndroidInteractionTest {
             android.graphics.Bitmap.createBitmap(64, 48, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.RED) }
                 .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, external.outputStream())
             val uri = androidx.core.content.FileProvider.getUriForFile(instrumentation.targetContext, "${instrumentation.targetContext.packageName}.clipboard", external)
-            onMain { clipboardManager().setPrimaryClip(android.content.ClipData.newUri(instrumentation.targetContext.contentResolver, "Another app", uri)) }
+            onMain { clipboardManager().setPrimaryClip(android.content.ClipData.newUri(instrumentation.targetContext.contentResolver, "Another app", uri).apply {
+                addItem(android.content.ClipData.Item("Accompanying text"))
+            }) }
             command("paste_image")
             waitFor("another app's image opens the placement handles", 30_000) { layerStates().size == count + 1 && barKind() == "placement" }
             command("cancel_transform")
@@ -2903,12 +2910,39 @@ class AndroidInteractionTest {
             command("paste_in_place")
             waitFor("Paste in Place centres another app's image without handles", 30_000) { layerStates().size == count + 1 && documentIdle() }
             assertNotEquals("placement", barKind())
+            fun newImage() {
+                val drawings = host.drawingTabs.rows.map { it.getLong("id") }
+                command("paste_as_new_image")
+                waitFor("Paste as New Image prepares and selects a new drawing", 60_000) {
+                    host.drawingTabs.rows.size == drawings.size + 1 && host.drawingTabs.selected !in drawings &&
+                        !host.drawingTabs.switching && !host.documents.images.working && documentIdle()
+                }
+                assertTrue("The source drawings remain open", host.drawingTabs.rows.map { it.getLong("id") }.containsAll(drawings))
+                val extent = state().array("tabs").objects().first { it.getBoolean("active") }
+                assertEquals(64, extent.getInt("width")); assertEquals(48, extent.getInt("height"))
+                assertTrue("The pasted drawing needs its own save", state().getJSONObject("document_file").getBoolean("modified"))
+                assertTrue(state().getJSONObject("document_file").isNull("location"))
+                assertNotEquals("placement", barKind())
+            }
+            repeat(2) {
+                newImage()
+                val previous = clipboardNonce()
+                command("copy")
+                waitFor("A new drawing can immediately copy back to another app", 30_000) {
+                    clipboardNonce().let { it != null && it != previous } && documentIdle()
+                }
+                val image = clipboardImage()
+                try {
+                    assertEquals(64, image.width); assertEquals(48, image.height)
+                    assertEquals(android.graphics.Color.RED, image.getPixel(32, 24))
+                } finally { image.recycle() }
+            }
             external.delete()
         } finally {
             popupInput = false
             tool = MotionEvent.TOOL_TYPE_FINGER
         }
-        println("PASS clipboard: Copy ▾ with mouse, finger and stylus, another app reading the URI, Paste in Place, Cut, Paste Into and another app's image")
+        println("PASS clipboard: Copy ▾ with mouse, finger and stylus, another app reading the URI, Paste in Place, Cut, Paste Into, mixed external items, external/internal New Image and immediate Copy")
     }
 
     @Test fun canvasBarSelectionMenusAcrossDevices() {
