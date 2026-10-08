@@ -30,7 +30,7 @@ GPU and platform crates that a given machine may not be able to run.
 | Scripts under `tools/` | `python3 -m unittest discover -s tools/<dir> -p 'test_*.py'`, or `node --test` on the script's `.test.mjs`. |
 | Docs only | Check every link, path, command and test name you wrote or whose target you changed. |
 
-Android APK distribution changes run `python3 -m unittest discover -s tools/build -p 'test_android_apk.py'`.
+Android distribution changes run `python3 -m unittest discover -s tools/build -p 'test_android_*.py'`.
 The release downloader verifies the actual APK's runtime dependencies, standalone
 installation, device coverage and signing identity. Follow the
 [APK release checks](releasing.md#android-apk) on devices with and without Google

@@ -52,8 +52,8 @@ the same scripts developers run and the Rust version pinned in the workflow:
 Run it from the Actions tab to build unsigned packages as workflow artifacts.
 Pushing a `v*` tag checks that the tag names the workspace version and is on
 `main` and runs `cargo deny`, then signs with the protected `release`
-environment, uploads the iPad build to TestFlight and the Android bundle to
-Play's internal track, and creates a draft GitHub Release holding the release
+environment, uploads the iPad build to TestFlight, verifies the Android download
+and rolls out its bundle to Play's internal track, and creates a draft GitHub Release holding the release
 notes, every download, `SHA256SUMS` and build provenance attestations.
 
 ### Android APK
@@ -77,6 +77,34 @@ Signature Scheme v3.2 signatures use ML-DSA; Java 17 cannot verify them. The
 download step selects the runner's Java 25 through `JAVA_HOME_25_X64`. For local
 verification, point `JAVA_HOME` at Java 25 and prepend `$JAVA_HOME/bin` to `PATH`.
 
+The Android job saves the `android-bundle` artifact before uploading to Play,
+which consumes the version number. It saves the verified APK separately as
+`android-apk` before internal rollout. If a later step fails, recover these
+artifacts from that workflow run instead of rebuilding or uploading the same
+version. `android_publish.py upload` checks Play's version and SHA-256 against
+the saved AAB and reuses an identical existing upload. Both upload and promotion
+refuse to cancel changes already in review. Retry APK download with
+`android_apk.py download`; retry internal
+rollout with the promotion workflow below. A code change still needs a new
+version.
+
+After testing the final internal build, run **Promote Android testing release**
+from its release tag with `track=alpha`. This promotes the existing bundle to
+the `alpha` closed track used by `capycanvas-beta@googlegroups.com`, preserving
+release notes, and submits the edit for review. For example:
+
+```bash
+gh workflow run android-promote.yml --ref v1.0.11 -f track=alpha
+```
+
+The workflow also accepts `track=internal` to retry internal rollout without
+uploading again. It uses the protected `release` environment, refuses to replace
+a newer testing build and fails if Google already has changes in review. It
+does not silently cancel a review or fall back to a draft. An API commit does
+not establish review approval or tester availability: check Play Console and
+install through Play with an enrolled tester account. Keep tester lists and
+group membership configured in Play Console.
+
 If Play supplies only unprotected splits, turn off Automatic protection for the
 release in Play Console before uploading its bundle. A per-release opt-out does
 not disable protection for later releases. The workflow fails rather than
@@ -86,7 +114,7 @@ publishing a protected or incomplete APK. See Google's
 Run the packaging regression checks without credentials or a device:
 
 ```bash
-python3 -m unittest discover -s tools/build -p 'test_android_apk.py'
+python3 -m unittest discover -s tools/build -p 'test_android_*.py'
 python3 tools/build/android_apk.py verify 1.0.9 path/to/capycanvas-1.0.9-android.apk
 ```
 
@@ -184,7 +212,6 @@ and require a maintainer's approval.
 | `APPLE_DEVELOPMENT_P12`, `APPLE_DEVELOPMENT_PASSWORD` | Secrets | Base64 PKCS12 Apple Development certificate with its private key, and its password, reused for iPad archives |
 | `APPLE_DEVELOPER_ID_P12`, `APPLE_DEVELOPER_ID_PASSWORD` | Secrets | Base64 Developer ID Application certificate and its password; Xcode cannot cloud-sign Developer ID builds with an API key |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` | Variables | The Google Cloud workload identity provider that trusts the `release` environment, and the service account it acts as; Play Console grants that account release access |
-| `PLAY_RELEASE_STATUS` | Variable | Optional status of the internal-track release; `draft` until the app is published, then `completed` |
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` | Variables | The Microsoft Entra app the Windows job signs in as through OIDC; it holds the Artifact Signing Certificate Profile Signer role and trusts the `release` environment |
 | `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, `ARTIFACT_SIGNING_PROFILE` | Variables | The Azure Artifact Signing account's regional endpoint, its name and the Public Trust certificate profile |
 | `FLATPAK_GPG_PRIVATE_KEY`, `FLATPAK_GPG_PASSPHRASE` | Secrets | ASCII-armored GPG private key, without base64 encoding, and its passphrase for signing Flatpak commits and the repository summary |
@@ -213,7 +240,8 @@ executables and the setup program; the Store signs the MSIX.
    [checks](testing.md) and user journeys on every host, installation, updating
    from the previous release with existing drawings, and the
    [performance targets](../PERFORMANCE_TARGETS.md) on reference hardware.
-3. Roll out the internal-track release in Play Console and promote it, upload the
+3. Confirm the internal-track installation, run the Android promotion workflow
+   with `track=alpha`, upload the
    MSIX to Partner Center, and submit the TestFlight build for review.
 4. Publish the draft. With immutable releases enabled, its assets and tag can no
    longer change. Wait for the Flatpak publishing workflow and verify that the

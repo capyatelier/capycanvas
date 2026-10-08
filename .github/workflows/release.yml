@@ -126,6 +126,12 @@ jobs:
       - run: |
           mkdir dist
           mv apps/layer-android/app/build/outputs/bundle/release/app-release.aab "dist/capycanvas-${{ needs.version.outputs.version }}-android.aab"
+      - name: Preserve the bundle before Play consumes its version
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-bundle
+          path: dist/*.aab
+          if-no-files-found: error
       - if: env.SIGNED == 'true'
         id: google
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -134,14 +140,13 @@ jobs:
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/androidpublisher
-      - if: env.SIGNED == 'true'
-        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
-        with:
-          serviceAccountJson: ${{ steps.google.outputs.credentials_file_path }}
-          packageName: art.capycanvas.editor
-          releaseFiles: dist/*.aab
-          tracks: internal
-          status: ${{ vars.PLAY_RELEASE_STATUS || 'draft' }}
+      - name: Upload the preserved bundle as an internal draft
+        if: env.SIGNED == 'true'
+        env:
+          TOKEN: ${{ steps.google.outputs.access_token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: python3 tools/build/android_publish.py upload "$VERSION" "dist/capycanvas-$VERSION-android.aab"
       - if: env.SIGNED == 'true'
         env:
           TOKEN: ${{ steps.google.outputs.access_token }}
@@ -150,11 +155,18 @@ jobs:
           export JAVA_HOME="${JAVA_HOME_25_X64:?}"
           export PATH="$JAVA_HOME/bin:$PATH"
           python3 tools/build/android_apk.py download "$VERSION" "dist/capycanvas-$VERSION-android.apk"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - if: env.SIGNED == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: android
-          path: dist/*
+          name: android-apk
+          path: dist/*.apk
           if-no-files-found: error
+      - name: Roll out the verified build to internal testers
+        if: env.SIGNED == 'true'
+        env:
+          TOKEN: ${{ steps.google.outputs.access_token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: python3 tools/build/android_publish.py promote "$VERSION" internal
 
   windows:
     needs: version
