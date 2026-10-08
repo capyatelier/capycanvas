@@ -2,6 +2,25 @@
 
 [Developer guide](README.md)
 
+## Access and public documentation
+
+This is the publishing guide for maintainers and agents. Read the workflows
+before a release and check live store status; previous release reports do not
+establish the next release's state. Use an authorized GitHub session with access
+to Actions and the protected `release` environment, plus the relevant store
+accounts. CI uses the credentials named below. Ask the maintainer for missing
+access through a private channel; do not ask them to paste credentials into an
+issue or commit.
+
+Keep workflow names, commands, public download URLs, credential variable names
+and public verification keys here. Keep credential values, account identifiers,
+tester identities, internal invitation links, local credential paths and signing
+backups out of the repository, issues and release notes. Review staged changes
+before committing. Ignored `artifacts/` and `*.local.md` can hold local test
+evidence and handoff notes, but are not secure storage for credentials; sanitize
+their contents before sharing them. A new agent obtains current private access
+and tester details from the maintainer, not from repository history.
+
 ## Versions
 
 The `[workspace.package]` table in the root `Cargo.toml` holds the one application
@@ -90,8 +109,8 @@ version.
 
 After testing the final internal build, run **Promote Android testing release**
 from its release tag with `track=alpha`. This promotes the existing bundle to
-the `alpha` closed track used by `capycanvas-beta@googlegroups.com`, preserving
-release notes, and submits the edit for review. For example:
+the `alpha` closed track, preserving release notes, and submits the edit for
+review. For example:
 
 ```bash
 gh workflow run android-promote.yml --ref v1.0.11 -f track=alpha
@@ -111,6 +130,23 @@ testing remains available. Finish the app setup in Play Console, select the
 tested bundle for the closed release, save it, and send the changes for review
 from Publishing overview. Reuse the uploaded bundle; this does not need a new
 build or version. A saved draft alone is not a review submission.
+
+Confirm the exact version code and track in Play Console's Publishing overview.
+With authorized Publisher API access, `GET
+/androidpublisher/v3/applications/{packageName}/tracks/alpha/releases` reports
+`releaseLifecycleState`: `RELEASE_LIFECYCLE_STATE_DRAFT` is not submitted,
+`RELEASE_LIFECYCLE_STATE_IN_REVIEW` confirms submission, and
+`RELEASE_LIFECYCLE_STATE_PUBLISHED` confirms rollout. The edit's `completed`
+status alone does not prove any of these review states. Do not resubmit or
+cancel an existing review just to check its status.
+
+For an internal installation check, obtain the invitation from Internal
+testing → Testers in Play Console. The general closed-testing opt-in URL is
+not a substitute. Use the same enrolled Google account in the browser and Play
+Store, allow enrollment to propagate, then confirm the installed version and
+Play installer on a [reserved device](devices.md). A successful sideload does
+not verify the Play installation journey. Keep the invitation and tester account
+out of public test reports.
 
 If Play supplies only unprotected splits, turn off Automatic protection for the
 release in Play Console before uploading its bundle. A per-release opt-out does
@@ -239,6 +275,13 @@ Windows job passes Azure Artifact Signing's `signtool` plugin to the packagers'
 `-SignArguments` ([Windows](windows.md#portable-zip)), signing the app
 executables and the setup program; the Store signs the MSIX.
 
+Keep encrypted backups of the private signing material and its passwords in
+maintainer-controlled storage outside the checkout. The secret names above
+describe what must be backed up, not where those backups live. Reuse working
+signing identities; do not generate or revoke certificates to troubleshoot an
+unrelated publishing error. Ignore rules help prevent accidental staging but
+do not make a credential safe to publish.
+
 ## Publishing a release
 
 1. Bump the version on `main` and push a tag for that commit:
@@ -247,6 +290,11 @@ executables and the setup program; the Store signs the MSIX.
    [checks](testing.md) and user journeys on every host, installation, updating
    from the previous release with existing drawings, and the
    [performance targets](../PERFORMANCE_TARGETS.md) on reference hardware.
+   If the release crosses an intentional pre-release format change, follow the
+   compatibility policy in [AGENTS.md](../../AGENTS.md). Warn testers before
+   updating to export flattened PNGs and retain original drawing files; include
+   the limitation in release and beta notes. Report incompatible old-file
+   editing or recovery separately from current-format save/reopen results.
 3. Confirm the internal-track installation, run the Android promotion workflow
    with `track=alpha`, upload the
    MSIX to Partner Center, and submit the TestFlight build for review.
@@ -255,5 +303,54 @@ executables and the setup program; the Store signs the MSIX.
    published reference installs from the Pages repository and that Flatpak
    accepts its signatures. Check updates from the preceding Flatpak release
    when one exists.
-5. If a check fails, delete the draft, fix `main` and release the next patch
-   version. Never move a tag or reuse a version.
+5. Update the website and editor as described below, then verify the live
+   download links, release notes and editor source revision.
+
+If an application check requires a code fix, discard the unpublished draft,
+fix `main` and release the next patch version. Never move a tag or reuse a
+version. A delivery or store-setup failure can be retried with the preserved,
+unchanged build; follow the Android recovery steps above. Record each channel's
+actual state and any failed or unavailable checks in local release evidence.
+
+### Store submission is separate from upload
+
+For iPad, wait for App Store Connect processing, select the exact version/build
+in TestFlight, complete test information and export-compliance questions, and
+add it to the intended external group. Follow Apple's
+[external-testing steps](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers/)
+to submit for beta review or start testing when eligible. Verify the beta review
+state and tester availability separately. An uploaded build or membership in an
+internal group does not confirm external distribution. TestFlight beta review
+and production App Store submission are separate actions.
+
+For Windows, CI produces the MSIX but does not submit it to Microsoft Store.
+Upload it through an authorized Partner Center session and verify submission
+status there. Azure signing access alone does not establish Partner Center
+access. If access is unavailable, report Store submission as incomplete; the
+published signed installer is a separate delivery channel.
+
+### Website and online editor
+
+The marketing site reads published GitHub Releases when it builds. After the
+release is public, dispatch its workflow:
+
+```bash
+gh workflow run deploy.yml --repo capyatelier/capycanvas-web
+```
+
+The editor is deployed separately from a tested source tag. Replace the example
+tag with the release being published:
+
+```bash
+gh workflow run deploy.yml --repo capyatelier/capycanvas-release -f ref=v1.0.11
+```
+
+Wait for the site's build, browser checks and Pages deployment, and for both
+the editor's `deploy.yml` and triggered `pages.yml`. Verify the public
+[downloads](https://capycanvas.art/download/) and
+[release notes](https://capycanvas.art/download/past-versions/), including any
+compatibility warning. Verify [the editor](https://editor.capycanvas.art/)
+against the deployed repository's `release/source.json`. Pages caches can
+temporarily serve an older deployment after Actions succeeds; check the live
+content before reporting the update complete. A release asset alone does not
+update either site.
