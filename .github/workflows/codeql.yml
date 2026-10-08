@@ -55,7 +55,7 @@ jobs:
           rustup component add rust-docs
           rustup target add aarch64-linux-android
           cargo install --locked cargo-about --version 0.9.2 --features cli
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0" "ndk;29.0.14206865"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865"
       - name: Set up Apple build dependencies
         if: matrix.language == 'swift'
         run: rustup target add aarch64-apple-ios-sim
