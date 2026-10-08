@@ -60,6 +60,8 @@ pub(crate) mod selection_tools;
 pub use selection_tools::{SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 #[path = "painted_selections.rs"]
 mod painted_selections;
+#[path = "deferred_edits.rs"]
+mod deferred_edits;
 pub use painted_selections::SelectionBrushOptions;
 #[path = "selection_masks.rs"]
 mod selection_masks;
@@ -249,6 +251,7 @@ pub struct UiSession<R: CanvasRenderer> {
     selection_tools: selection_tools::SelectionTools,
     tonal_tools: tonal_selection::TonalTools,
     painted_selections: painted_selections::PaintedSelections,
+    deferred_edits: std::collections::VecDeque<deferred_edits::DeferredEdit>,
     selection_masks: selection_masks::SelectionMasks,
     canvas_size: Option<canvas_size::CanvasSizeDraft>,
     image_size: Option<image_size::ImageSizeDraft>,
@@ -436,6 +439,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             selection_tools: Default::default(),
             tonal_tools: Default::default(),
             painted_selections: Default::default(),
+            deferred_edits: Default::default(),
             selection_masks: Default::default(),
             canvas_size: None,
             image_size: None,
@@ -2499,8 +2503,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::CloneFlipHorizontal
             | CommandId::CloneFlipVertical
             | CommandId::CloneResetOffset => self.clone_command_enabled(id),
-            CommandId::Undo => idle && (self.operation.placing() || self.objects.placing() || self.cropping() || self.engine.can_undo()),
-            CommandId::Redo => idle && !self.cropping() && !self.objects.placing() && self.engine.can_redo(),
+            CommandId::Undo => self.canvas_contact_idle() && (self.operation.placing() || self.objects.placing() || self.cropping() || self.engine.can_undo() || self.history_pending()),
+            CommandId::Redo => self.canvas_contact_idle() && !self.cropping() && !self.objects.placing() && (self.engine.can_redo() || self.undo_deferred()),
             CommandId::SelectAll => self.require_document_idle().is_ok(),
             CommandId::Deselect | CommandId::InvertSelection => {
                 self.require_document_idle().is_ok() && self.has_selection()
@@ -2677,6 +2681,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
         self.engine.backend_mut().shader_input();
+        if self.defer_document_action(&action) {
+            return Ok(self.changed(regions::COMMANDS, true));
+        }
         self.end_holds_for_tool_choice(&action);
         if let UiAction::CommandSearch { action } = action {
             return self.command_search_action(action);
@@ -2692,9 +2699,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if let UiAction::Notice { id, accept, action } = action {
             return self.notice_action(id, accept, action);
-        }
-        if self.defer_selection_action(&action) {
-            return Ok(self.changed(0, true));
         }
         if self.operation.placing() && matches!(&action,
             UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. }
@@ -3983,7 +3987,15 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
-    pub fn pen(&mut self, mut event: PenEvent) -> Result<(), PenEvent> {
+    pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+        if !self.deferred_edits.is_empty() {
+            self.defer_pen(event);
+            return Ok(());
+        }
+        self.pen_ready(event)
+    }
+
+    fn pen_ready(&mut self, mut event: PenEvent) -> Result<(), PenEvent> {
         self.eraser_end(&mut event);
         if event.phase == PenPhase::Down
             && let Some(spring) = &mut self.interaction.spring
@@ -4414,6 +4426,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.selection_masks.refine.as_ref().is_some_and(|d| d.unsettled())
             || self.frequency_separation.as_ref().is_some_and(|d| d.unpublished())
             || self.painted_selections.busy()
+            || !self.deferred_edits.is_empty()
             || self.content_bounds.busy()
             || self.conversion_busy()
             || self.notices.publishing()
@@ -4460,6 +4473,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.advance_refine(now_ns)?;
         changed |= self.advance_frequency_separation(now_ns);
         changed |= self.poll_region_tool()?;
+        changed |= self.poll_deferred_edits();
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
         }
@@ -5570,8 +5584,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.pen_contact || (!self.engine.backend().has_pending_submission() && (self.input_pending || self.engine.has_active_stroke()))
     }
     fn canvas_idle(&self) -> bool {
+        !self.paint_contact_busy() && self.canvas_contact_idle()
+    }
+    fn canvas_contact_idle(&self) -> bool {
         !self.painted_selections.has_contact()
-            && !self.paint_contact_busy()
+            && !self.deferred_contact().unwrap_or(self.pen_contact)
             && self.effect_gesture.is_none()
             && self.object_motion.is_none()
             && self.layer_interaction.gradient_before.is_none()

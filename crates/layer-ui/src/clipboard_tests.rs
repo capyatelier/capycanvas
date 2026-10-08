@@ -71,6 +71,262 @@ mod clipboard_checks {
         s.engine.document().working.target.unwrap()
     }
 
+    fn undo_while_raster_backing_is_pending(mask: bool) {
+        let mut s = clip_session();
+        if mask { focused_mask(&mut s); }
+        select(&mut s, Some(rectangle([10., 20., 30., 40.])));
+        let before = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        if mask {
+            let copied = clip([20, 20], [10, 20], before.composition().color);
+            s.paste_clip(&copied, PasteMode::Paste).unwrap();
+        } else {
+            layer(&mut s, LayerAction::FillSelection);
+        }
+        s.frame(2, 2).unwrap();
+        let edited = s.engine.checkpoint();
+        assert_ne!(edited, checkpoint);
+        s.renderer_mut().settling = true;
+        assert!(s.canvas_idle());
+        assert!(key(&mut s, "z", true, true, false).handled);
+        key(&mut s, "z", false, true, false);
+        assert_eq!(s.engine.checkpoint(), edited, "history waits for the pending raster backing");
+        s.renderer_mut().settling = false;
+        s.frame(3, 3).unwrap();
+        assert_eq!(s.engine.checkpoint(), checkpoint, "the accepted Undo runs after raster backing is ready");
+        assert_live_artwork_eq(s.engine.document(), &before);
+        s.frame(4, 4).unwrap();
+        assert_eq!(s.engine.checkpoint(), checkpoint, "the shortcut runs once");
+    }
+
+    #[test]
+    fn mask_paste_undo_waits_for_raster_backing() {
+        undo_while_raster_backing_is_pending(true);
+    }
+
+    #[test]
+    fn paint_undo_waits_for_raster_backing() {
+        undo_while_raster_backing_is_pending(false);
+    }
+
+    fn shortcut(s: &mut UiSession<Recorder>, name: &str) {
+        assert!(key(s, name, true, true, false).handled);
+        key(s, name, false, true, false);
+    }
+
+    fn has_document_request(s: &UiSession<Recorder>) -> bool {
+        s.state.requests.iter().any(|request| matches!(request.kind, HostRequestKind::Document { .. }))
+    }
+
+    #[test]
+    fn queued_undo_undo_redo_preserves_history_order() {
+        let mut s = clip_session();
+        select(&mut s, Some(rectangle([10., 20., 30., 40.])));
+        layer(&mut s, LayerAction::FillSelection);
+        s.frame(2, 2).unwrap();
+        let first = s.engine.document().clone();
+        let first_checkpoint = s.engine.checkpoint();
+        layer(&mut s, LayerAction::FillSelection);
+        s.frame(3, 3).unwrap();
+        let second_checkpoint = s.engine.checkpoint();
+        assert_ne!(first_checkpoint, second_checkpoint);
+        assert!(!s.engine.can_redo());
+        s.renderer_mut().settling = true;
+        for name in ["z", "z", "y"] { shortcut(&mut s, name); }
+        assert_eq!(s.engine.checkpoint(), second_checkpoint);
+        s.renderer_mut().settling = false;
+        for tick in 4..8 { s.frame(tick, tick).unwrap(); }
+        assert_eq!(s.engine.checkpoint(), first_checkpoint);
+        assert_live_artwork_eq(s.engine.document(), &first);
+        shortcut(&mut s, "y");
+        s.frame(8, 8).unwrap();
+        assert_eq!(s.engine.checkpoint(), second_checkpoint, "the remaining Redo is the second fill");
+    }
+
+    #[test]
+    fn queued_paste_request_waits_for_the_preceding_undo() {
+        let mut s = clip_session();
+        let original = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        invoke(&mut s, CommandId::AddLayer);
+        s.frame(2, 2).unwrap();
+        let edited = s.engine.checkpoint();
+        s.renderer_mut().settling = true;
+        shortcut(&mut s, "z");
+        shortcut(&mut s, "v");
+        assert!(!has_document_request(&s), "Paste must not capture the pre-Undo document");
+        assert_eq!(s.engine.checkpoint(), edited);
+        s.renderer_mut().settling = false;
+        for tick in 3..7 { s.frame(tick, tick).unwrap(); }
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_live_artwork_eq(s.engine.document(), &original);
+        assert!(matches!(pending(&s).1, DocumentRequest::Paste { mode: PasteMode::Paste }));
+        assert_eq!(s.state.requests.iter().filter(|request| matches!(request.kind, HostRequestKind::Document { .. })).count(), 1);
+    }
+
+    #[test]
+    fn queued_clipboard_actions_do_not_cross_renderer_or_document_activation() {
+        for replace_renderer in [false, true] {
+            let mut s = clip_session();
+            invoke(&mut s, CommandId::AddLayer);
+            s.frame(2, 2).unwrap();
+            let edited = s.engine.document().clone();
+            let checkpoint = s.engine.checkpoint();
+            s.renderer_mut().settling = true;
+            shortcut(&mut s, "z");
+            shortcut(&mut s, "v");
+            assert!(!has_document_request(&s));
+            if replace_renderer {
+                s.replace_renderer(Recorder { tiled_sources: true, ..Default::default() }).unwrap();
+            } else {
+                s.inherit_window_state(&clip_session()).unwrap();
+                s.renderer_mut().settling = false;
+            }
+            for tick in 3..7 { s.frame(tick, tick).unwrap(); }
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert_live_artwork_eq(s.engine.document(), &edited);
+            assert!(!has_document_request(&s), "retired clipboard work cannot request Paste for a new owner");
+        }
+    }
+
+    fn pen_contact_after_queued_undo(undo_during_contact: bool) {
+        let mut s = clip_session();
+        let original = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        let target = original.working.target;
+        invoke(&mut s, CommandId::AddLayer);
+        let removed = s.engine.document().working.occurrence.unwrap();
+        s.frame(2, 2).unwrap();
+        s.renderer_mut().settling = true;
+        shortcut(&mut s, "z");
+        pen_at(&mut s, 10, PenPhase::Down, [100., 100.]);
+        if undo_during_contact { shortcut(&mut s, "z"); }
+        pen_at(&mut s, 11, PenPhase::Up, [110., 100.]);
+        s.renderer_mut().settling = false;
+        for tick in 3..9 { s.frame(tick, tick).unwrap(); }
+        assert!(s.engine.document().scene().occurrence(removed).is_none());
+        assert_eq!(s.engine.document().working.target, target);
+        assert_eq!(s.engine.metrics().committed_strokes, 1);
+        shortcut(&mut s, "z");
+        s.frame(9, 9).unwrap();
+        assert_eq!(s.engine.checkpoint(), checkpoint, "Undoing the new stroke returns to the original layer");
+        assert_live_artwork_eq(s.engine.document(), &original);
+    }
+
+    #[test]
+    fn queued_pen_contact_starts_after_the_preceding_undo() {
+        pen_contact_after_queued_undo(false);
+    }
+
+    #[test]
+    fn undo_during_a_delayed_pen_contact_does_not_split_or_stall_it() {
+        pen_contact_after_queued_undo(true);
+    }
+
+    #[test]
+    fn closing_drawing_discards_deferred_commands_and_contacts() {
+        let mut s = clip_session();
+        invoke(&mut s, CommandId::AddLayer);
+        s.frame(2, 2).unwrap();
+        let checkpoint = s.engine.checkpoint();
+        s.renderer_mut().settling = true;
+        shortcut(&mut s, "z");
+        pen_at(&mut s, 10, PenPhase::Down, [100., 100.]);
+        pen_at(&mut s, 11, PenPhase::Up, [110., 100.]);
+        s.request_session_close().unwrap();
+        s.renderer_mut().settling = false;
+        for tick in 3..7 { s.frame(tick, tick).unwrap(); }
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.metrics().committed_strokes, 0);
+        assert!(!s.wants_continuous_frames());
+    }
+
+    #[test]
+    fn undo_after_pen_lift_waits_for_the_first_stroke_frame() {
+        let mut s = clip_session();
+        let original = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        pen_at(&mut s, 10, PenPhase::Down, [100., 100.]);
+        pen_at(&mut s, 11, PenPhase::Up, [110., 100.]);
+        shortcut(&mut s, "z");
+        for tick in 2..8 { s.frame(tick, tick).unwrap(); }
+        assert_eq!(s.engine.metrics().committed_strokes, 1);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_live_artwork_eq(s.engine.document(), &original);
+    }
+
+    fn contact_sizes_across_brush_change(deferred: bool, during_contact: bool) -> Vec<Vec<[f32; 2]>> {
+        let mut s = clip_session();
+        s.dispatch(UiAction::SetBrushSize { value: 19. }).unwrap();
+        if deferred {
+            invoke(&mut s, CommandId::AddLayer);
+            s.frame(2, 2).unwrap();
+            s.renderer_mut().settling = true;
+            shortcut(&mut s, "z");
+        }
+        pen_at(&mut s, 10, PenPhase::Down, [100., 100.]);
+        if during_contact { s.dispatch(UiAction::SetBrushSize { value: 43. }).unwrap(); }
+        pen_at(&mut s, 11, PenPhase::Up, [110., 100.]);
+        if !during_contact { s.dispatch(UiAction::SetBrushSize { value: 43. }).unwrap(); }
+        pen_at(&mut s, 20, PenPhase::Down, [150., 100.]);
+        pen_at(&mut s, 21, PenPhase::Up, [160., 100.]);
+        s.renderer_mut().settling = false;
+        let mut contacts = Vec::new();
+        for tick in 3..13 {
+            let before = s.engine.metrics().committed_strokes;
+            let dabs = s.renderer_mut().recorded_dabs.len();
+            s.frame(tick, tick).unwrap();
+            if s.engine.metrics().committed_strokes != before {
+                contacts.push(s.renderer_mut().recorded_dabs[dabs..].iter().map(|dab| dab.radii).collect());
+            }
+        }
+        assert_eq!(contacts.len(), 2, "both contacts commit without stalling");
+        assert_eq!(s.engine.configured_brush().diameter, 43.);
+        assert_eq!(s.state.brush.diameter, 43.);
+        contacts
+    }
+
+    #[test]
+    fn queued_contact_keeps_the_brush_size_from_down_when_size_changes_during_contact() {
+        let immediate = contact_sizes_across_brush_change(false, true);
+        assert_ne!(immediate[0][0], immediate[1][0]);
+        assert_eq!(contact_sizes_across_brush_change(true, true), immediate);
+    }
+
+    #[test]
+    fn queued_contact_brush_size_changes_after_up_apply_to_the_next_contact() {
+        let immediate = contact_sizes_across_brush_change(false, false);
+        assert_ne!(immediate[0][0], immediate[1][0]);
+        assert_eq!(contact_sizes_across_brush_change(true, false), immediate);
+    }
+
+    #[test]
+    fn queued_contact_keeps_its_capture_coordinates_after_many_navigation_changes() {
+        let draw = |deferred| {
+            let mut s = clip_session();
+            if deferred {
+                invoke(&mut s, CommandId::AddLayer);
+                s.frame(2, 2).unwrap();
+            }
+            s.renderer_mut().settling = true;
+            if deferred { shortcut(&mut s, "z"); }
+            pen_at(&mut s, 10, PenPhase::Down, [100., 100.]);
+            pen_at(&mut s, 11, PenPhase::Up, [110., 100.]);
+            let captured_camera = s.state.camera.clone();
+            for _ in 0..128 { s.gesture([200., 200.], [201., 200.], 1., 0.).unwrap(); }
+            let navigated_camera = s.state.camera.clone();
+            assert_ne!(captured_camera, navigated_camera, "navigation stays responsive while the contact waits");
+            s.renderer_mut().settling = false;
+            for tick in 3..9 { s.frame(tick, tick).unwrap(); }
+            assert_eq!(s.engine.metrics().committed_strokes, 1);
+            assert_eq!(s.state.camera, navigated_camera, "replaying an old contact preserves the current view");
+            s.renderer_mut().recorded_dabs.iter().map(|dab| dab.center).collect::<Vec<_>>()
+        };
+        let immediate = draw(false);
+        assert!(!immediate.is_empty());
+        assert_eq!(draw(true), immediate);
+    }
+
     fn mixed_region_selection(s: &mut UiSession<Recorder>) -> [OccurrenceHandle; 3] {
         let paint = s.engine.document().working.occurrence.unwrap();
         let images = ["First photo", "Second photo"].map(|name| {

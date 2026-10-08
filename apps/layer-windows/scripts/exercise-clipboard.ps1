@@ -237,7 +237,7 @@ try {
  Mask-Changed {Chord @(0x11) 0x56}
  if((Layers) -ne $count -or !(Model).state.layer_tools.editing_layer.mask_selected -or @((Model).state.layers|Where-Object id -eq $maskLayer)[0].paint_revision -ne $paintRevision){throw 'External image Paste escaped the focused mask'}
  Changed {Chord @(0x11) 0x5a}
- Chord @(0x11) 0x44
+ Changed {Chord @(0x11) 0x5a};Wait-Until {!((Model).state.layer_tools.has_selection)} 'Undo did not clear the temporary mask selection'
  Changed {Chord @(0x11) 0x5a};Wait-Until {!(Model).state.layer_tools.editing_layer.has_mask} 'Undo did not remove the temporary clipboard mask'
  $checks.focused_mask_copy_cut_and_external_paste='passed'
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null

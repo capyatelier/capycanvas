@@ -47,6 +47,14 @@ owns the active tools, camera, workspace, command availability, preferences and
 file-operation state. A frontend sends typed actions and renders the resulting
 views. It keeps native widget objects, focus and accessibility outside the session.
 
+History availability is independent of GPU completion. `UiSession` keeps edits
+that arrive during raster capture in one ordered queue with subsequent pen
+samples. Frames drain that queue after earlier edits finish, validating each
+action against the resulting document. Delayed contacts keep their captured view
+and brush settings. Camera navigation stays available;
+document activation and renderer replacement retire queued input. Hosts forward
+Undo and Redo without waiting for raster capture themselves.
+
 Android, Apple and Windows use `NativeHost`, in `layer-host`, to share session and
 renderer integration. GTK and web integrate `UiSession` directly. The host layer
 is not another document model and does not own native surfaces or widgets.

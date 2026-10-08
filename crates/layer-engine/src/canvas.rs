@@ -376,11 +376,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.pending_frame.is_none() && !self.backend.has_pending_submission() && self.editor.can_undo()
+        self.editor.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.pending_frame.is_none() && !self.backend.has_pending_submission() && self.editor.can_redo()
+        self.editor.can_redo()
+    }
+
+    pub fn raster_backing_pending(&self) -> bool {
+        self.pending_frame.is_some() || self.backend.has_pending_submission()
     }
 
     pub fn has_active_stroke(&self) -> bool {
@@ -4628,7 +4632,9 @@ mod tests {
         assert_eq!(engine.metrics().frames, frames);
         assert!(engine.has_pending_document_edits());
         assert!(active_paint(engine.document()).raster.try_data().is_none());
-        assert!(!engine.can_undo());
+        assert!(engine.can_undo());
+        assert!(engine.raster_backing_pending());
+        assert!(engine.undo().is_err());
         input.push(event(3, PenPhase::Down, 32.)).unwrap();
         input.push(event(4, PenPhase::Up, 48.)).unwrap();
         engine.render_frame().unwrap();

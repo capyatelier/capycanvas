@@ -119,15 +119,13 @@ struct RegionJob {
 pub(super) struct PaintedSelections {
     next_id: u64,
     gestures: VecDeque<Gesture>,
-    deferred: VecDeque<UiAction>,
 }
 impl PaintedSelections {
     pub fn renderer_replaced(&mut self) {
         self.gestures.clear();
-        self.deferred.clear();
     }
     pub fn busy(&self) -> bool {
-        !self.gestures.is_empty() || !self.deferred.is_empty()
+        !self.gestures.is_empty()
     }
     pub fn has_contact(&self) -> bool {
         self.gestures.back().is_some_and(|g| !g.ended)
@@ -295,33 +293,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         true
     }
-    pub(super) fn defer_selection_action(&mut self, action: &UiAction) -> bool {
-        // Layout measurement and chrome remain live. Commands/target changes
-        // serialize after completed contacts without waiting on the UI thread.
-        if !matches!(
-            action,
-            UiAction::Invoke { .. }
-                | UiAction::Selection { .. }
-                | UiAction::SelectBrush { .. }
-                | UiAction::SelectBrushSet { .. }
-                | UiAction::SelectToolGroup { .. }
-                | UiAction::CycleTool { .. }
-                | UiAction::Layer { .. }
-                | UiAction::SelectLayer { .. }
-                | UiAction::SetLayerVisibility { .. }
-                | UiAction::SetLayerOpacity { .. }
-        ) {
-            return false;
-        }
-        self.cancel_selection_contact();
-        let history_waits = self.region_tools.publishing_edit()
-            && matches!(action, UiAction::Invoke { command: CommandId::Undo | CommandId::Redo });
-        if self.painted_selections.gestures.is_empty() && !history_waits {
-            return false;
-        }
-        self.painted_selections.deferred.push_back(action.clone());
-        true
-    }
     pub(super) fn selection_brush_pen(&mut self, event: PenEvent) -> Result<(), String> {
         if event.flags.contains(SampleFlags::PREDICTED)
             || event.flags.contains(SampleFlags::CORRECTION)
@@ -334,9 +305,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if event.phase == PenPhase::Down {
             self.cancel_selection_contact();
-            if !self.painted_selections.deferred.is_empty() {
-                return Ok(());
-            }
             if self.painted_selections.gestures.len() >= 32 {
                 return Err("Selection capture is still catching up".into());
             }
@@ -545,14 +513,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             {
                 gesture.capturing = update.finish;
                 gesture.update = None;
-            }
-        }
-        if self.painted_selections.gestures.is_empty() && !self.region_tools.publishing_edit() {
-            while let Some(action) = self.painted_selections.deferred.pop_front() {
-                changed |= self.dispatch(action)?.regions;
-                if !self.painted_selections.gestures.is_empty() || self.region_tools.publishing_edit() {
-                    break;
-                }
             }
         }
         Ok(changed)

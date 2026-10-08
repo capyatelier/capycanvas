@@ -48,14 +48,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// parking. Failed renderers remain navigable/saveable/closeable.
     pub(super) fn document_park_interaction_idle(&self)->bool {
         self.require_workspace_idle().is_ok() && !self.workspace_transition && !self.state.customization.header_editing
-            && self.state.requests.is_empty() && !self.state.document_file.busy
+            && self.deferred_edits.is_empty() && self.state.requests.is_empty() && !self.state.document_file.busy
     }
     pub fn can_park_document(&self) -> bool {
         (self.rendering_suspended || (self.require_workspace_idle().is_ok()
             && (if self.state.document_file.close_ready { self.require_document_snapshot_idle() } else { self.require_document_idle() }).is_ok()
             && self.engine.can_park()))
             && !self.workspace_transition && !self.state.customization.header_editing
-            && self.state.requests.is_empty() && !self.state.document_file.busy
+            && self.deferred_edits.is_empty() && self.state.requests.is_empty() && !self.state.document_file.busy
     }
 
     pub(super) fn discard_render_requests(&mut self) {
@@ -67,6 +67,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cancel_tonal();
         self.region_tools.renderer_replaced();
         self.painted_selections.renderer_replaced();
+        self.deferred_edits.clear();
         self.reset_filter_previews();
     }
 
