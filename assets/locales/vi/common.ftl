@@ -1,3 +1,4 @@
+common-app-name = Capy Canvas
 common-error = Đã xảy ra lỗi.
 common-cancel = Hủy
 common-apply = Áp dụng
@@ -426,7 +427,7 @@ native-shortcuts-keymap = Sơ đồ phím
 
 native-shortcuts-no-differences = Không có khác biệt
 
-native-shortcuts-defaults-help = Sơ đồ phím này dùng mặc định của CapyCanvas.
+native-shortcuts-defaults-help = Sơ đồ phím này dùng mặc định của { common-app-name }.
 
 native-shortcuts-added = Đã thêm
 
@@ -498,7 +499,7 @@ native-inspection-sample = Hiệu ứng động · ảnh chụp tại { $seconds
 
 native-inspection-changed = Bản vẽ đã thay đổi · { $status }
 
-common-application-start-failed = Không thể khởi động Capy Canvas.
+common-application-start-failed = Không thể khởi động { common-app-name }.
     Tải lại trang này. Nếu bạn mở bản đóng gói, hãy tải bản mới xuống rồi mở lại.
 native-inspection-range = Từ { $start } đến { $end } EV · 0 EV = màu trắng tham chiếu 203 cd/m²
 native-inspection-pixels = { $sampled } pixel được lấy mẫu · bỏ qua { $transparent } pixel trong suốt
@@ -544,7 +545,7 @@ common-screen-title = Màn hình này
 common-screen-headline-sdr = Đang hiện phiên bản SDR
 common-screen-sdr-preview = Đây là phiên bản SDR bạn sẽ xuất. Chọn Tắt trong bảng Mô phỏng màu để xem HDR.
 common-screen-hdr-headroom = Màn hình này có thể hiển thị vùng sáng đến { $times }× ({ $ev } EV).
-common-screen-hdr-unknown-peak = Capy Canvas không xác định được độ sáng tối đa của màn hình này, nên các vùng sáng nhất có thể trông tối hơn thực tế.
+common-screen-hdr-unknown-peak = { common-app-name } không xác định được độ sáng tối đa của màn hình này, nên các vùng sáng nhất có thể trông tối hơn thực tế.
 common-screen-headline-hdr = Đang hiện HDR
 common-screen-white-at-peak = Với độ sáng màn hình hiện tại, nội dung thông thường đã dùng hết độ sáng của màn hình này, không còn phần sáng hơn cho vùng sáng HDR. Giảm độ sáng màn hình để thấy các vùng đó.
 common-screen-no-hdr = Màn hình này không thể hiển thị HDR.
@@ -552,8 +553,8 @@ common-screen-hdr-off = HDR đang tắt trên màn hình này. Bật HDR trong c
 common-screen-wide-color-off = Hệ điều hành đang giới hạn ứng dụng ở màu sRGB trên màn hình này, dù màn hình có thể hiển thị nhiều màu hơn. Tắt chế độ màu bão hòa hoặc rực rỡ trong cài đặt màn hình của hệ điều hành để hiển thị các màu đó.
 common-screen-srgb-wide-monitor = Hệ điều hành đang coi màn hình này là màn hình sRGB tiêu chuẩn, dù màn hình có thể hiển thị nhiều màu hơn. Bật HDR cho màn hình này trong cài đặt màn hình của hệ điều hành để hiển thị các màu đó.
 common-screen-unmanaged = Hệ điều hành chỉ hiển thị màu sRGB trên màn hình này.
-common-screen-proof-hdr = Khi HDR bật, Capy Canvas không xác định được cách màn hình này hiển thị màu. Tắt HDR cho màn hình này trong cài đặt màn hình của hệ điều hành.
-common-screen-proof-unknown = Capy Canvas không xác định được màn hình này có thể hiển thị những màu nào.
+common-screen-proof-hdr = Khi HDR bật, { common-app-name } không xác định được cách màn hình này hiển thị màu. Tắt HDR cho màn hình này trong cài đặt màn hình của hệ điều hành.
+common-screen-proof-unknown = { common-app-name } không xác định được màn hình này có thể hiển thị những màu nào.
 common-screen-proof-white = Với độ sáng màn hình hiện tại, các sắc độ sáng nhất trông giống nhau. Giảm độ sáng màn hình để phân biệt chúng.
 native-highlight-clipped-colors = Đánh dấu các màu này
 native-screen-details = Chi tiết màn hình

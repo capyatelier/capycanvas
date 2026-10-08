@@ -4,6 +4,20 @@
   <metadata_license>MIT</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
   <name>Capy Canvas</name>
+  <name xml:lang="ja">カピカン</name>
+  <name xml:lang="zh_CN">水豚画布</name>
+  <name xml:lang="zh_TW">水豚畫布</name>
+  <name xml:lang="ko">카피 캔버스</name>
+  <name xml:lang="es">Capy Canvas</name>
+  <name xml:lang="pt_BR">Capy Canvas</name>
+  <name xml:lang="id">Capy Canvas</name>
+  <name xml:lang="fr">Capy Canvas</name>
+  <name xml:lang="de">Capy Canvas</name>
+  <name xml:lang="ru">Капи Канвас</name>
+  <name xml:lang="th">คาปิ แคนวาส</name>
+  <name xml:lang="vi">Capy Canvas</name>
+  <name xml:lang="tr">Capy Canvas</name>
+  <name xml:lang="it">Capy Canvas</name>
   <summary>Draw and paint with a GPU-accelerated canvas</summary>
   <developer id="art.capycanvas">
     <name>Capy Atelier</name>

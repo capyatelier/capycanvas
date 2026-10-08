@@ -26,7 +26,7 @@ android {
     ndkVersion = "29.0.14206865"
     defaultConfig {
         applicationId = capyApplicationId.getOrElse("art.capycanvas")
-        manifestPlaceholders["capyAppLabel"] = providers.gradleProperty("capyAppLabel").getOrElse("Capy Canvas")
+        manifestPlaceholders["capyAppLabel"] = providers.gradleProperty("capyAppLabel").getOrElse("@string/capy_app_name")
         minSdk = 29
         targetSdk = 37
         versionCode = capyVersion[0] * 1_000_000 + capyVersion[1] * 1_000 + capyVersion[2]
@@ -100,6 +100,18 @@ androidComponents.onVariants { variant ->
     }
     variant.sources.jniLibs?.addGeneratedSourceDirectory(rustBuild) { it.jniDirectory }
 }
+
+val generateAppNames by tasks.registering(Exec::class) {
+    val script = rootDir.resolve("../../tools/build/app_names.py")
+    val output = layout.buildDirectory.dir("generated/capy/appNames").get().asFile
+    inputs.file(script)
+    inputs.file(rootDir.resolve("../../crates/layer-ui/src/localization_languages.rs"))
+    inputs.files(fileTree(rootDir.resolve("../../assets/locales")) { include("*/common.ftl") })
+    outputs.dir(output)
+    commandLine("python3", script, "android", output)
+}
+android.sourceSets["main"].res.srcDir(layout.buildDirectory.dir("generated/capy/appNames").get().asFile)
+tasks.named("preBuild") { dependsOn(generateAppNames) }
 
 // Adapt the existing brand path to Android's maskable launcher format. No second
 // artwork source or checked-in raster exports.

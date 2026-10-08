@@ -236,7 +236,7 @@ settings-brush-for-tool = Kuas untuk alat { $tool }.
 
 settings-unknown-shortcut-action = Tindakan pintasan tidak dikenal
 
-settings-capycanvas-default = Bawaan CapyCanvas
+settings-capycanvas-default = Bawaan { common-app-name }
 
 settings-already-a-modifier-key = Sudah menjadi tombol pengubah
 
@@ -300,11 +300,11 @@ settings-native-prediction-unavailable = Prediksi goresan native tidak tersedia 
 
 settings-native-prediction-disable = Nonaktifkan prediksi goresan native untuk mengubah pengaturan ini.
 
-settings-keymap-invalid = Ini bukan pemetaan tombol CapyCanvas
+settings-keymap-invalid = Ini bukan pemetaan tombol { common-app-name }
 
-settings-keymap-invalid-detail = Ini bukan pemetaan tombol CapyCanvas: { $detail }
+settings-keymap-invalid-detail = Ini bukan pemetaan tombol { common-app-name }: { $detail }
 
-settings-keymap-newer-version = Pemetaan tombol ini dibuat oleh versi CapyCanvas yang lebih baru
+settings-keymap-newer-version = Pemetaan tombol ini dibuat oleh versi { common-app-name } yang lebih baru
 
 settings-keymap-unavailable-name = Pemetaan tombol “{ $name }”
 
@@ -324,7 +324,7 @@ settings-shortcut-default = Bawaan: { $keys }
 
 settings-modifier-hold-help = Tahan { $label } untuk menggunakan tindakan hingga dilepas.
 
-settings-keymap-title-capy = CapyCanvas
+settings-keymap-title-capy = { common-app-name }
 
 settings-keymap-title-photoshop = Gaya Photoshop
 

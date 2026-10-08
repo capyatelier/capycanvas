@@ -1,5 +1,5 @@
 use std::{collections::{BTreeMap, BTreeSet}, env, fs, path::PathBuf};
-use fluent_syntax::{ast::{Entry, Resource}, parser, serializer};
+use fluent_syntax::{ast::{Entry, PatternElement, Resource}, parser, serializer};
 #[path = "src/localization_inventory.rs"]
 mod localization_inventory;
 #[path = "src/localization_languages.rs"]
@@ -15,6 +15,7 @@ fn main() {
         .map(|path| path.file_stem().unwrap().to_str().unwrap().to_owned()).collect();
     domains.sort();
     let mut english_sources = Vec::new();
+    let mut app_names = BTreeMap::new();
     let mut chunks = BTreeMap::new();
     let mut keys = BTreeSet::new();
     let mut constants = BTreeSet::new();
@@ -24,6 +25,14 @@ fn main() {
             println!("cargo:rerun-if-changed={}", path.display());
             let source = fs::read_to_string(&path).expect("Catalog must exist");
             let resource = parser::parse(source.as_str()).unwrap_or_else(|(_, errors)| panic!("{}: {errors:?}", path.display()));
+            if domain == "common" {
+                let pattern = resource.body.iter().find_map(|entry| match entry {
+                    Entry::Message(message) if message.id.name == "common-app-name" => message.value.as_ref(),
+                    _ => None,
+                }).expect("Application name must exist");
+                let [PatternElement::TextElement { value }] = pattern.elements.as_slice() else { panic!("Application name must be literal text") };
+                app_names.insert(language, value.to_string());
+            }
             let mut groups = Vec::new();
             let mut group = String::new();
             let mut entries = 0;
@@ -67,6 +76,8 @@ fn main() {
     for (variant, tag, _, _) in localization_languages::LANGUAGES { generated.push_str(&format!("Self::{variant} => {tag:?},\n")); }
     generated.push_str("}}\npub const fn native_name(self) -> &'static str { match self {\n");
     for (variant, _, name, _) in localization_languages::LANGUAGES { generated.push_str(&format!("Self::{variant} => {name:?},\n")); }
+    generated.push_str("}}\npub const fn app_name(self) -> &'static str { match self {\n");
+    for (variant, tag, _, _) in localization_languages::LANGUAGES { generated.push_str(&format!("Self::{variant} => {:?},\n", app_names[tag])); }
     generated.push_str("}}\nconst fn script(self) -> &'static str { match self {\n");
     for (variant, _, _, script) in localization_languages::LANGUAGES { generated.push_str(&format!("Self::{variant} => {script:?},\n")); }
     generated.push_str("}}\nconst fn index(self) -> usize { match self {\n");

@@ -164,8 +164,8 @@ fn keymap_files_round_trip_with_a_preview() {
     assert!(!s.state.settings.keys(&CommandId::Redo.shortcut_id()).contains(&chord("volumedown", false, false, false)), "imported keys take their chords");
     assert_eq!(s.state.settings.gesture_binding("pen.button.primary"), "hold.eyedropper");
     for (text, error) in [
-        ("{", "This isn't a CapyCanvas keymap"),
-        (r#"{"format":"other","version":1}"#, "This isn't a CapyCanvas keymap"),
+        ("{", "This isn't a Capy Canvas keymap"),
+        (r#"{"format":"other","version":1}"#, "This isn't a Capy Canvas keymap"),
         (r#"{"format":"capycanvas-keymap","version":9}"#, "newer version"),
     ] {
         preference(&mut s, PreferenceAction::ImportKeymap { text: text.into() });
@@ -200,7 +200,7 @@ fn shortcut_editor_explains_scope_source_and_overlaps() {
     let editor = s.preferences().unwrap().shortcut_editor.unwrap();
     assert_eq!(editor.id, "command.Eyedropper", "a held action opens the action it holds");
     assert_eq!(editor.description, "Pick a color from the canvas");
-    assert_eq!(editor.source, "CapyCanvas default");
+    assert_eq!(editor.source, "Capy Canvas default");
     preference(&mut s, PreferenceAction::SelectKeymap { id: "photoshop".into() });
     preference(&mut s, PreferenceAction::EditShortcut { id: "command.Move".into() });
     assert_eq!(s.preferences().unwrap().shortcut_editor.unwrap().source, "Photoshop Style");

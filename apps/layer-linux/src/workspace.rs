@@ -1105,7 +1105,7 @@ impl Workspace {
         });
         let window = adw::ApplicationWindow::builder()
             .application(app)
-            .title(APP_NAME)
+            .title(localization.language().app_name())
             .default_width(1200)
             .default_height(900)
             .build();
@@ -2804,7 +2804,7 @@ impl Workspace {
                     ""
                 };
                 self.window
-                    .set_title(Some(&format!("{modified}{} — {APP_NAME}", tab.title)));
+                    .set_title(Some(&format!("{modified}{} — {}", tab.title, self.localization().language().app_name())));
             }
         }
         if regions & regions::COMMANDS != 0 {

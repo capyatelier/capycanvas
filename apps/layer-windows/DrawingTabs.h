@@ -31,7 +31,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     double gap(){return num(headerSize(),L"gap",2);}
     double corner(){return tile()*.5*CornerFit;}
     hstring plainTitle(){
-        auto all=array(data->state,L"tabs");if(!all.Size())return L"Capy Canvas";auto tab=all.GetObjectAt(0);
+        auto all=array(data->state,L"tabs");if(!all.Size())return str(data->catalog,L"app_name");auto tab=all.GetObjectAt(0);
         auto request=O({{L"type",S(L"drawing_title")},{L"title",S(str(tab,L"title"))},{L"width",N(num(tab,L"width"))},{L"height",N(num(tab,L"height"))}});
         auto requestSource=request.Stringify()+L"/"+to_hstring(data->localizationGeneration);if(requestSource!=plainSource){plainSource=requestSource;plainCaption=data->caption(request);}return plainCaption;
     }

@@ -1,3 +1,4 @@
+common-app-name = Capy Canvas
 common-error = Terjadi kesalahan.
 
 common-cancel = Batal
@@ -481,7 +482,7 @@ native-shortcuts-keymap = Pemetaan tombol
 
 native-shortcuts-no-differences = Tidak ada perbedaan
 
-native-shortcuts-defaults-help = Pemetaan tombol ini menggunakan bawaan CapyCanvas.
+native-shortcuts-defaults-help = Pemetaan tombol ini menggunakan bawaan { common-app-name }.
 
 native-shortcuts-added = Ditambahkan
 
@@ -553,7 +554,7 @@ native-inspection-sample = Efek animasi · rekaman pada { $seconds } s
 
 native-inspection-changed = Gambar berubah · { $status }
 
-common-application-start-failed = Tidak dapat memulai Capy Canvas.
+common-application-start-failed = Tidak dapat memulai { common-app-name }.
     Muat ulang halaman ini. Jika Anda membuka salinan paket, unduh salinan baru dan buka kembali.
 
 native-inspection-range = { $start } hingga { $end } EV · 0 EV = putih acuan 203 cd/m²
@@ -628,7 +629,7 @@ common-screen-title = Layar ini
 common-screen-headline-sdr = Menampilkan versi SDR
 common-screen-sdr-preview = Ini versi SDR yang akan Anda ekspor. Pilih Nonaktif di panel Simulasi Cetak untuk melihat HDR.
 common-screen-hdr-headroom = Layar ini dapat menampilkan sorotan hingga { $times }× ({ $ev } EV).
-common-screen-hdr-unknown-peak = Capy Canvas tidak dapat mengetahui kecerahan maksimum layar ini, sehingga sorotan paling terang mungkin tampak lebih redup daripada sebenarnya.
+common-screen-hdr-unknown-peak = { common-app-name } tidak dapat mengetahui kecerahan maksimum layar ini, sehingga sorotan paling terang mungkin tampak lebih redup daripada sebenarnya.
 common-screen-headline-hdr = Menampilkan HDR
 common-screen-white-at-peak = Pada kecerahan layar saat ini, konten biasa sudah memakai seluruh kecerahan layar ini, sehingga tidak ada kecerahan tambahan untuk sorotan HDR. Turunkan kecerahan layar untuk melihatnya.
 common-screen-no-hdr = Layar ini tidak dapat menampilkan HDR.
@@ -636,8 +637,8 @@ common-screen-hdr-off = HDR tidak aktif untuk layar ini. Aktifkan dalam pengatur
 common-screen-wide-color-off = Sistem operasi Anda membatasi aplikasi pada warna sRGB di layar ini, walaupun layar dapat menampilkan lebih banyak warna. Nonaktifkan mode warna jenuh atau hidup dalam pengaturan tampilan sistem operasi Anda untuk menampilkannya.
 common-screen-srgb-wide-monitor = Sistem operasi Anda menganggap monitor ini sebagai layar sRGB standar, walaupun monitor dapat menampilkan lebih banyak warna. Aktifkan HDR untuk monitor ini dalam pengaturan tampilan sistem operasi Anda untuk menampilkannya.
 common-screen-unmanaged = Sistem operasi Anda hanya menampilkan warna sRGB di layar ini.
-common-screen-proof-hdr = Saat HDR aktif, Capy Canvas tidak dapat mengetahui bagaimana layar ini menampilkan warna. Nonaktifkan HDR untuk layar ini dalam pengaturan tampilan sistem operasi Anda.
-common-screen-proof-unknown = Capy Canvas tidak dapat mengetahui warna mana yang dapat ditampilkan layar ini.
+common-screen-proof-hdr = Saat HDR aktif, { common-app-name } tidak dapat mengetahui bagaimana layar ini menampilkan warna. Nonaktifkan HDR untuk layar ini dalam pengaturan tampilan sistem operasi Anda.
+common-screen-proof-unknown = { common-app-name } tidak dapat mengetahui warna mana yang dapat ditampilkan layar ini.
 common-screen-proof-white = Pada kecerahan layar saat ini, rona paling terang tampak sama. Turunkan kecerahan layar untuk membedakannya.
 native-highlight-clipped-colors = Soroti warna ini
 native-screen-details = Detail layar

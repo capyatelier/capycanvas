@@ -293,13 +293,18 @@ function queueLanguage() {
     if (app.language_pending()) queueLanguage();
   }, 4);
 }
+function publishAppName(tag = bootstrap?.active_tag ?? 'en') {
+  document.title = catalog.app_name;
+  document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute('content', catalog.app_name);
+  document.querySelector('link[rel="manifest"]')?.setAttribute('href', tag === 'en' ? './manifest.webmanifest' : `./manifest.${tag}.webmanifest`);
+}
 function publishLanguage(patch) {
   if (!patch.localization) return false;
   refreshCopy(app);
   refreshStartup();
   refreshMessage();
   document.documentElement.lang = patch.localization.tag;
-  document.title = catalog.app_name;
+  publishAppName(patch.localization.tag);
   for (const [id, key] of [["workspace","drawing_workspace"],["canvas","drawing_canvas"],["gpu-notice","canvas_availability"],["header-start","application_menus"],["header-end","workspace_controls"],["canvas-status","canvas_status"]]) $(id)?.setAttribute("aria-label", bootstrap[key]);
   canvas.setAttribute("aria-description", bootstrap.drawing_canvas_help);
   $("size-number")?.relabel(catalog.native_copy.color.brush_size);
@@ -1801,7 +1806,7 @@ try {
   catalog = liveCopy(app, "catalog");
   performance.mark("capy.startup.model");
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
-  document.title = catalog.app_name;
+  publishAppName();
   refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
   commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, nativeCopy:catalog.native_copy, canvas, layoutChanged:() => glass?.queue()});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));

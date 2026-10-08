@@ -189,13 +189,16 @@ export function packageWeb() {
     writeFileSync(join(site, "licenses.html"), page("Capy Canvas licenses",
       '<p><a href="./">Back to drawing</a> · <a href="dependency-licenses.html">Rust dependency notices</a> · <a href="rust-toolchain-notices.html">Rust toolchain notices</a></p>' +
       notices.map((path) => `<h2>${path}</h2><pre>${escape(read(join(root, path)))}</pre>`).join("\n")));
-    writeFileSync(join(site, "manifest.webmanifest"), JSON.stringify({
-      id: "./", name: "Capy Canvas", short_name: "Capy Canvas",
+    const appNames = JSON.parse(execFileSync('python3', [join(root, 'tools/build/app_names.py'), 'json'], {encoding:'utf8'}));
+    const manifest = {
+      id: "./",
       description: "A GPU-powered drawing workspace.", start_url: "./", scope: "./",
       file_handlers: [{action: "./", accept: {"application/octet-stream": [".capy"], "image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"], "image/tiff": [".tif", ".tiff"], "image/avif": [".avif"], "image/x-exr": [".exr"]}}],
       display: "standalone", background_color: "#333333", theme_color: "#333333",
       icons: [192, 512].map((size) => ({ src: asset(`icon-${size}.png`), sizes: `${size}x${size}`, type: "image/png", purpose: "any" })),
-    }, null, 2) + "\n");
+    };
+    for (const [lang, name] of Object.entries(appNames)) writeFileSync(join(site, lang === 'en' ? 'manifest.webmanifest' : `manifest.${lang}.webmanifest`),
+      JSON.stringify({...manifest, lang, name, short_name:name}, null, 2) + '\n');
     // Discover the whole UI module graph from the HTML, instead of waiting for
     // successive import fetches through the service worker on each navigation.
     const preloads = Object.keys(names).filter(path => path.endsWith(".js") &&

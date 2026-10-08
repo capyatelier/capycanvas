@@ -1277,6 +1277,133 @@
 			"path" = "Shared/PrivacyInfo.xcprivacy";
 			"sourceTree" = "<group>";
 		};
+		"F5A439F500F908E427941970" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "en";
+			"path" = "Generated/AppNames/en.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"24558A791588588BA1C5C0F9" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "ja";
+			"path" = "Generated/AppNames/ja.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"39E125A229D6FAFA7224B327" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "zh-Hans";
+			"path" = "Generated/AppNames/zh-Hans.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"589F49F6EED6B646DA508CBA" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "zh-Hant";
+			"path" = "Generated/AppNames/zh-Hant.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"AFF5B881285651A6989333AC" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "ko";
+			"path" = "Generated/AppNames/ko.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"867F5BB1AE2B768B6D2BFC25" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "es";
+			"path" = "Generated/AppNames/es.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"030A87043A74D5CCE2426542" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "pt-BR";
+			"path" = "Generated/AppNames/pt-BR.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"F032AA78AF353B92CECBF847" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "id";
+			"path" = "Generated/AppNames/id.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"653E3ECC9B0E787C672C86E4" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "fr";
+			"path" = "Generated/AppNames/fr.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"E4CC72A9DEBD07AB434D8D95" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "de";
+			"path" = "Generated/AppNames/de.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"69F84508C86DAA4AAF45D285" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "ru";
+			"path" = "Generated/AppNames/ru.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"ABB5B7AB1788547EF0CB9E98" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "th";
+			"path" = "Generated/AppNames/th.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"C9889A86C57FF62C8F845D8E" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "vi";
+			"path" = "Generated/AppNames/vi.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"67FFE4E545B4BEBEA69FC0A4" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "tr";
+			"path" = "Generated/AppNames/tr.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"F442593CDC29D01FD4D4675E" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.plist.strings";
+			"name" = "it";
+			"path" = "Generated/AppNames/it.lproj/InfoPlist.strings";
+			"sourceTree" = "<group>";
+		};
+		"89832BF4CA493217BDB4BD8B" = {
+			"isa" = "PBXVariantGroup";
+			"name" = "InfoPlist.strings";
+			"sourceTree" = "<group>";
+			"children" = (
+				"F5A439F500F908E427941970",
+				"24558A791588588BA1C5C0F9",
+				"39E125A229D6FAFA7224B327",
+				"589F49F6EED6B646DA508CBA",
+				"AFF5B881285651A6989333AC",
+				"867F5BB1AE2B768B6D2BFC25",
+				"030A87043A74D5CCE2426542",
+				"F032AA78AF353B92CECBF847",
+				"653E3ECC9B0E787C672C86E4",
+				"E4CC72A9DEBD07AB434D8D95",
+				"69F84508C86DAA4AAF45D285",
+				"ABB5B7AB1788547EF0CB9E98",
+				"C9889A86C57FF62C8F845D8E",
+				"67FFE4E545B4BEBEA69FC0A4",
+				"F442593CDC29D01FD4D4675E",
+			);
+		};
 		"7274CC092D14B33D3B863BE4" = {
 			"isa" = "PBXFileReference";
 			"explicitFileType" = "wrapper.application";
@@ -1835,6 +1962,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "E48FE4ABFC68C8E9A0F71404";
 		};
+		"0EF377EEEE8F3AD4054EF073" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "89832BF4CA493217BDB4BD8B";
+		};
 		"22D0AF704E25CB2BA94F3D2F" = {
 			"isa" = "PBXShellScriptBuildPhase";
 			"buildActionMask" = "2147483647";
@@ -2014,6 +2145,7 @@
 				"E419FFD16A5C419DBEC65B97",
 				"62EFFDE19D42A5ADCE4A29E8",
 				"984D367851C148431E2D9F42",
+				"0EF377EEEE8F3AD4054EF073",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
 		};
@@ -3088,6 +3220,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "E48FE4ABFC68C8E9A0F71404";
 		};
+		"10E681CDA55FE72D1CA4FEF7" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "89832BF4CA493217BDB4BD8B";
+		};
 		"B3251EEB2E73BB977F9A0CEB" = {
 			"isa" = "PBXShellScriptBuildPhase";
 			"buildActionMask" = "2147483647";
@@ -3269,6 +3405,7 @@
 				"95DEBB7584B28DACAD448AC8",
 				"9C5DAB521961785962A358E7",
 				"BBDA8119C88E77672817943A",
+				"10E681CDA55FE72D1CA4FEF7",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
 		};
@@ -3997,6 +4134,7 @@
 				"A6D47918270966E6019BC1D8",
 				"915157684DB88C8E3DCE8F38",
 				"E48FE4ABFC68C8E9A0F71404",
+				"89832BF4CA493217BDB4BD8B",
 				"0A3E27B8CA818264D75C8D81",
 			);
 			"sourceTree" = "<group>";
@@ -4044,8 +4182,22 @@
 			"compatibilityVersion" = "Xcode 14.0";
 			"developmentRegion" = "en";
 			"knownRegions" = (
-				"en",
 				"Base",
+				"en",
+				"ja",
+				"zh-Hans",
+				"zh-Hant",
+				"ko",
+				"es",
+				"pt-BR",
+				"id",
+				"fr",
+				"de",
+				"ru",
+				"th",
+				"vi",
+				"tr",
+				"it",
 			);
 			"mainGroup" = "0D6E4079E36703EBD37C0072";
 			"productRefGroup" = "0A3E27B8CA818264D75C8D81";

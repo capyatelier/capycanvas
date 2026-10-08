@@ -1,3 +1,4 @@
+common-app-name = Capy Canvas
 common-error = Algo deu errado.
 common-cancel = Cancelar
 common-apply = Aplicar
@@ -426,7 +427,7 @@ native-shortcuts-keymap = Mapa de atalhos
 
 native-shortcuts-no-differences = Sem diferenças
 
-native-shortcuts-defaults-help = Este mapa de atalhos usa os padrões do CapyCanvas.
+native-shortcuts-defaults-help = Este mapa de atalhos usa os padrões do { common-app-name }.
 
 native-shortcuts-added = Adicionado
 
@@ -498,7 +499,7 @@ native-inspection-sample = Efeitos animados · captura em { $seconds } s
 
 native-inspection-changed = O desenho mudou · { $status }
 
-common-application-start-failed = Não foi possível iniciar o Capy Canvas.
+common-application-start-failed = Não foi possível iniciar o { common-app-name }.
     Recarregue esta página. Se você abriu uma cópia empacotada, baixe uma nova cópia e abra-a novamente.
 native-inspection-range = De { $start } a { $end } EV · 0 EV = branco de referência de 203 cd/m²
 native-inspection-pixels = { $sampled ->
@@ -556,7 +557,7 @@ common-screen-title = Esta tela
 common-screen-headline-sdr = Mostrando a versão SDR
 common-screen-sdr-preview = Esta é a versão SDR que será exportada. Selecione Desligado no painel de prova para ver HDR.
 common-screen-hdr-headroom = Esta tela pode mostrar realces de até { $times }× ({ $ev } EV).
-common-screen-hdr-unknown-peak = O Capy Canvas não consegue determinar o brilho máximo desta tela, então os realces mais intensos podem parecer mais fracos do que são.
+common-screen-hdr-unknown-peak = O { common-app-name } não consegue determinar o brilho máximo desta tela, então os realces mais intensos podem parecer mais fracos do que são.
 common-screen-headline-hdr = Mostrando HDR
 common-screen-white-at-peak = Com o brilho atual da tela, o conteúdo normal já usa todo o brilho disponível, sem deixar espaço para realces HDR mais intensos. Reduza o brilho da tela para vê-los.
 common-screen-no-hdr = Esta tela não pode mostrar HDR.
@@ -564,8 +565,8 @@ common-screen-hdr-off = O HDR está desligado nesta tela. Ative-o nas configura�
 common-screen-wide-color-off = O sistema operacional limita os aplicativos às cores sRGB nesta tela, embora ela possa mostrar mais. Desative as cores saturadas ou vívidas nas configurações de tela do sistema operacional para mostrá-las.
 common-screen-srgb-wide-monitor = O sistema operacional trata este monitor como uma tela sRGB padrão, embora ele possa mostrar mais cores. Ative o HDR para este monitor nas configurações de tela do sistema operacional para mostrá-las.
 common-screen-unmanaged = O sistema operacional mostra apenas cores sRGB nesta tela.
-common-screen-proof-hdr = Com o HDR ligado, o Capy Canvas não consegue determinar como esta tela mostra as cores. Desligue o HDR desta tela nas configurações de tela do sistema operacional.
-common-screen-proof-unknown = O Capy Canvas não consegue determinar quais cores esta tela pode mostrar.
+common-screen-proof-hdr = Com o HDR ligado, o { common-app-name } não consegue determinar como esta tela mostra as cores. Desligue o HDR desta tela nas configurações de tela do sistema operacional.
+common-screen-proof-unknown = O { common-app-name } não consegue determinar quais cores esta tela pode mostrar.
 common-screen-proof-white = Com o brilho atual da tela, os tons mais claros parecem iguais. Reduza o brilho da tela para distingui-los.
 native-highlight-clipped-colors = Destacar estas cores
 native-screen-details = Detalhes da tela

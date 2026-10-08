@@ -661,6 +661,8 @@ export async function checkLiveLanguage({call,evaluate,settle}) {
     await evaluate('window.languageOwner={app:layerApp.app,canvas:layerApp.canvas,settings:document.querySelector("#settings"),language:document.querySelector("#setting-language"),time:performance.timeOrigin};');
     for(const [index,tag] of [...tags.map((tag,i)=>[i+1,tag]),[tags.indexOf('en')+1,'en']]) {
       await choice(index,tag);
+      const appName=(await readFile(`assets/locales/${tag}/common.ftl`,'utf8')).match(/^common-app-name = (.+)$/m)[1];
+      assert.equal(await evaluate('document.title'),appName);
       assert.equal(await evaluate('languageOwner.app===layerApp.app&&languageOwner.canvas===layerApp.canvas&&languageOwner.settings===document.querySelector("#settings")&&languageOwner.language===document.querySelector("#setting-language")&&languageOwner.time===performance.timeOrigin'),true);
       assert.equal(await evaluate('document.querySelector("#settings-title").textContent===layerApp.app.preferences().pages.find(p=>p.id==="appearance").title'),true);
       const tabs=await evaluate('layerApp.app.document_tabs(0).tabs.map(t=>({id:String(t.id),title:t.title}))');

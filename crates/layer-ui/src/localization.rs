@@ -70,6 +70,7 @@ pub fn launch_localization(saved: &str, preferred_tags: &[&str]) -> Arc<Localize
 #[derive(Clone, Debug, Serialize)]
 pub struct BootstrapView {
     pub active_tag: &'static str,
+    pub app_name: &'static str,
     pub common: crate::CommonCopy,
     pub recovery: crate::RecoveryCopy,
     pub shipped_tags: Vec<&'static str>,
@@ -105,6 +106,7 @@ pub struct BootstrapView {
 pub fn bootstrap_view(l: &Localizer) -> BootstrapView {
     BootstrapView {
         active_tag: l.language().tag(),
+        app_name: l.language().app_name(),
         common: crate::CommonCopy::new(l),
         recovery: crate::RecoveryCopy::new(l),
         shipped_tags: SHIPPED_LANGUAGES.iter().map(|language| language.tag()).collect(),
@@ -457,6 +459,26 @@ mod tests {
         assert!(Localizer::prepared(UiLanguage::English).is_some());
         while !preparation.step(32) {}
         assert_eq!(preparation.finish().unwrap().language(), UiLanguage::Japanese);
+    }
+
+    #[test]
+    fn localized_application_names_reach_catalog_bootstrap_and_copy() {
+        use UiLanguage::*;
+        for language in UiLanguage::ALL {
+            let expected = match language {
+                Japanese => "カピカン", SimplifiedChinese => "水豚画布", TraditionalChinese => "水豚畫布",
+                Korean => "카피 캔버스", Russian => "Капи Канвас", Thai => "คาปิ แคนวาส", _ => "Capy Canvas",
+            };
+            let l = Localizer::shared(language);
+            assert_eq!(language.app_name(), expected);
+            assert_eq!(crate::ui_catalog_localized(&l).app_name, expected);
+            assert_eq!(bootstrap_view(&l).app_name, expected);
+            assert_eq!(&*l.text(MessageId::COMMON_APP_NAME), expected);
+            for id in [MessageId::COMMAND_ABOUT, MessageId::DOCUMENTS_CAPY, MessageId::COMMON_APPLICATION_START_FAILED,
+                MessageId::SETTINGS_KEYMAP_INVALID, MessageId::WORKSPACE_TOOL_DESCRIPTION_WEBSITE] {
+                assert!(l.text(id).contains(expected), "{}: {}", language.tag(), id.key());
+            }
+        }
     }
 
     #[test]

@@ -29,6 +29,37 @@ The build script derives the enum, serialization, cache indexes and embedded
 catalogs from that registry, and discovers domains from `assets/locales/en`.
 This selection is a product prioritization estimate, not measured audience data.
 
+## Application names
+
+`common-app-name` defines one literal display name per language. Shared messages
+reference it. The Rust build derives `UiLanguage::app_name()` from those same
+values for catalogs, bootstrap views and window titles. Application identifiers,
+domains and file-format identities use their canonical names.
+
+| Language | Display name |
+| --- | --- |
+| Japanese | カピカン |
+| Simplified Chinese | 水豚画布 |
+| Traditional Chinese | 水豚畫布 |
+| Korean | 카피 캔버스 |
+| Russian | Капи Канвас |
+| Thai | คาปิ แคนวาส |
+| English and the other Latin-script languages | Capy Canvas |
+
+Chinese uses the animal's name. Japanese uses the approved short name; the other
+languages retain the full brand. Do not create additional abbreviations.
+
+`tools/build/app_names.py` derives Android launcher strings, Apple
+`InfoPlist.strings`, Linux desktop/AppStream names and packaged web manifest
+names from the catalogs. Android and Apple builds generate their resources;
+regenerate tracked Linux names with
+`python3 tools/build/app_names.py linux apps/layer-linux` after changing a name.
+Windows MSIX packaging indexes the same names with MakePRI for localized package
+and launcher labels.
+Launcher labels follow the operating system's language; app text follows the
+active application language. The web selects its install manifest when that
+language is published.
+
 ## Adding UI text
 
 1. Add or update a complete English message in the feature's existing domain.

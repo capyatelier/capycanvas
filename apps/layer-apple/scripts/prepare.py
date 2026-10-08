@@ -2,12 +2,16 @@
 """Generate Apple resources from the shared sources; never edit Generated."""
 import json
 import shutil
+import sys
 from pathlib import Path
 from icon_assets import icon_layers
 
 APP = Path(__file__).resolve().parents[1]
 ROOT = APP.parents[1]
+sys.path.insert(0, str(ROOT / 'tools/build'))
+from app_names import write_names
 GENERATED = APP / "Generated"
+write_names('apple', GENERATED / 'AppNames')
 CATALOG = GENERATED / "SharedAssets.xcassets"
 CATALOG.mkdir(parents=True, exist_ok=True)
 

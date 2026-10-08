@@ -3,9 +3,13 @@
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 
 APP = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(APP.parents[1] / 'tools/build'))
+from app_names import app_names
+names = app_names()
 PROJECT = APP / "CapyCanvas.xcodeproj"
 APP_ID = "art.capycanvas.CapyCanvas"
 VERSION = [int(part) for part in re.search(r'^version = "(\d+)\.(\d+)\.(\d+)"$',
@@ -50,6 +54,9 @@ for path in sources:
 for name, kind in [("Generated/SharedAssets.xcassets", "folder.assetcatalog"), ("Generated/licenses", "folder"),
         ("Shared/PrivacyInfo.xcprivacy", "text.xml")]:
     refs[name] = obj(name, "PBXFileReference", lastKnownFileType=kind, path=name, sourceTree="<group>")
+refs['InfoPlist.strings'] = obj('InfoPlist.strings', 'PBXVariantGroup', name='InfoPlist.strings', sourceTree='<group>',
+    children=[obj(f'InfoPlist.strings/{tag}', 'PBXFileReference', lastKnownFileType='text.plist.strings',
+        name=tag, path=f'Generated/AppNames/{tag}.lproj/InfoPlist.strings', sourceTree='<group>') for tag in names])
 
 targets, products = [], []
 for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")]:
@@ -145,6 +152,6 @@ main_group = obj("main", "PBXGroup", children=list(refs.values()) + [product_gro
 root = obj("project", "PBXProject", attributes={"LastUpgradeCheck": "2660", "BuildIndependentTargetsInParallel": "YES"},
     buildConfigurationList=configs("project", {"MARKETING_VERSION": ".".join(map(str, VERSION)),
         "CURRENT_PROJECT_VERSION": VERSION[0] * 1_000_000 + VERSION[1] * 1_000 + VERSION[2]}), compatibilityVersion="Xcode 14.0", developmentRegion="en",
-    knownRegions=["en", "Base"], mainGroup=main_group, productRefGroup=product_group, projectDirPath="", projectRoot="", targets=targets)
+    knownRegions=["Base", *names], mainGroup=main_group, productRefGroup=product_group, projectDirPath="", projectRoot="", targets=targets)
 PROJECT.mkdir(exist_ok=True)
 (PROJECT / "project.pbxproj").write_text("// !$*UTF8*$!\n" + plist({"archiveVersion": 1, "classes": {}, "objectVersion": 56, "objects": objects, "rootObject": root}) + "\n")

@@ -201,7 +201,7 @@ pub use workspace::{
 pub const HEADER_HEIGHT: f32 = 48.0;
 pub const WORKSPACE_SPACING: f32 = 6.0;
 pub const STATUS_HEIGHT: f32 = 28.0;
-pub const APP_NAME: &str = "Capy Canvas";
+pub const APP_NAME: &str = UiLanguage::English.app_name();
 /// Shared UI typography in points, including panels, menus and status text.
 pub const UI_TEXT_PT: u8 = 11;
 
@@ -371,7 +371,7 @@ pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
         command_search_style: COMMAND_SEARCH_STYLE,
         canvas_bar_reappear_ms: CANVAS_BAR_REAPPEAR_MS,
         zen_icon_size: ZEN_ICON_SIZE,
-        app_name: APP_NAME,
+        app_name: localization.language().app_name(),
         text_size_pt: UI_TEXT_PT,
         panel_expansion_ms: PANEL_EXPANSION_MS,
         panels: Panel::ALL

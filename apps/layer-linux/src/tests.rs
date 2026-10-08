@@ -13599,6 +13599,7 @@ fn native_live_language_switching() {
             until(|| w.localization().language() == language, "language choice visible");
             eprintln!("GTK language choice {} {theme:?}: publication observed {:?}", language.tag(), requested.elapsed());
             assert_eq!(ui_session(&w).localization().language(), language);
+            assert!(w.window.title().unwrap().ends_with(language.app_name()));
             assert_eq!(w.size_number.imp().editor_title.borrow().as_str(), w.localization().text(MessageId::WORKSPACE_CONTROL_BRUSH_SIZE).as_ref());
             assert_eq!(w.opacity.imp().editor_title.borrow().as_str(), w.localization().text(MessageId::TOOL_SETTING_OPACITY).as_ref());
             assert_eq!(w.view_info.field.imp().editor_title.borrow().as_str(), w.localization().text(MessageId::MENU_ZOOM).as_ref());
@@ -13984,6 +13985,8 @@ fn live_language_documents(theme: Theme) {
                 value: PreferenceValue::Choice(1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32),
             } });
             until(|| w.localization().language() == language && existing.localization().language() == language, "existing windows adopt language");
+            assert!(w.window.title().unwrap().ends_with(language.app_name()));
+            assert!(existing.window.title().unwrap().ends_with(language.app_name()));
             assert_eq!(ui_session(&existing).engine() as *const _ as usize, existing_engine);
             let literal = format!("{} {theme:?} İı Tiếng Việt Tiếng Việt ไทย 日本語 🎨 {{draft}}", language.tag());
             let occurrence = ui_session(&w).engine().document().working.occurrence.unwrap();

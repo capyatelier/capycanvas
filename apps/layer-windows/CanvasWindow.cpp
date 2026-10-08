@@ -350,6 +350,7 @@ void CanvasWindow::Start() {
 bool CanvasWindow::StartPrepared(CapyLaunch* prepared) {
     if(host||closing)return false;
     bootstrap=Windows::Data::Json::JsonObject::Parse(to_hstring(capy_launch_view(prepared)));
+    window.Title(CapyUi::str(bootstrap,L"app_name"));
     localization=std::shared_ptr<CapyLocalization>(capy_launch_localization(prepared),capy_localization_free);
     if(!localization)throw hresult_error(E_ABORT);
     root.Language(CapyUi::str(bootstrap,L"active_tag"));
@@ -1375,7 +1376,7 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     window.AppWindow().TitleBar().ButtonForegroundColor(foreground);
     foreground.A=128;window.AppWindow().TitleBar().ButtonInactiveForegroundColor(foreground);
     auto tabs=array(state,L"tabs");
-    if(tabs.Size())window.Title((flag(object(state,L"document_file"),L"modified")?hstring(L"• "):hstring())+str(tabs.GetObjectAt(0),L"title")+L" · Capy Canvas");
+    if(tabs.Size())window.Title((flag(object(state,L"document_file"),L"modified")?hstring(L"• "):hstring())+str(tabs.GetObjectAt(0),L"title")+L" · "+str(bootstrap,L"app_name"));
     header->Apply(model);ApplyDialogs();
     // Workspace theme replacement must not take focus from retained Preferences.
     if(retheme&&focus)dispatcher.TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,

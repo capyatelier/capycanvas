@@ -48,7 +48,7 @@ documents-rasterize = Rasterisasi
 
 documents-png = Gambar PNG
 
-documents-capy = Gambar Capy Canvas
+documents-capy = Gambar { common-app-name }
 
 documents-standard-preset = Gambar standar
 
@@ -232,7 +232,7 @@ documents-delivery-images = Gambar
 
 documents-delivery-drawing-or-photo = Gambar atau foto
 
-documents-delivery-drawing-type = Gambar Capy Canvas
+documents-delivery-drawing-type = Gambar { common-app-name }
 
 documents-delivery-download-file = Unduh berkas
 

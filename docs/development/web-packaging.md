@@ -13,7 +13,7 @@ package checks and publishes it.
 
 ## Build
 
-Use Rust with the Wasm target, Node.js 22 or newer, Bash, and these tools:
+Use Rust with the Wasm target, Node.js 22 or newer, Python 3, Bash, and these tools:
 
 ```bash
 rustup target add wasm32-unknown-unknown

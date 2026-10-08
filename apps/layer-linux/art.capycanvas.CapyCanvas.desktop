@@ -1,6 +1,20 @@
 [Desktop Entry]
 Type=Application
 Name=Capy Canvas
+Name[ja]=カピカン
+Name[zh_CN]=水豚画布
+Name[zh_TW]=水豚畫布
+Name[ko]=카피 캔버스
+Name[es]=Capy Canvas
+Name[pt_BR]=Capy Canvas
+Name[id]=Capy Canvas
+Name[fr]=Capy Canvas
+Name[de]=Capy Canvas
+Name[ru]=Капи Канвас
+Name[th]=คาปิ แคนวาส
+Name[vi]=Capy Canvas
+Name[tr]=Capy Canvas
+Name[it]=Capy Canvas
 Comment=Draw and paint with a GPU-accelerated canvas
 Exec=capycanvas %F
 Icon=art.capycanvas.CapyCanvas

@@ -357,7 +357,7 @@ impl Documents {
         root.set_hhomogeneous(false);
         root.set_vhomogeneous(false);
         root.set_hexpand(true);
-        let title = gtk::Label::new(Some(layer_ui::APP_NAME));
+        let title = gtk::Label::new(Some(localization.language().app_name()));
         title.set_widget_name("single-document-title");
         title.add_css_class("document-title");
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);

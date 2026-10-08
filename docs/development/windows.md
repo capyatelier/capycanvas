@@ -298,7 +298,11 @@ The app runs as a `packagedClassicApp` at `mediumIL` with `runFullTrust` and
 keeps its files in the package's [app data](#where-files-live); the converter
 refuses a portable build without the release identity. The manifest declares the
 languages in the shared shipping inventory (`SHIPPED_LANGUAGES`), and
-`test-msix.ps1` checks that they match. Output
+`test-msix.ps1` checks that they and the indexed names match the shared catalogs.
+Package and launcher display names use a
+MakePRI index generated from `common-app-name` in the shared catalogs, following
+[Microsoft's manifest localization workflow](https://learn.microsoft.com/en-us/windows/uwp/app-resources/using-mrt-for-converted-desktop-apps-and-games).
+Output
 stays under ignored `artifacts/windows/msix`. The package version is the
 workspace version with a fourth part of 0, and the Store requires a nonzero major
 part; `-AllowDirty` works as for the ZIP.

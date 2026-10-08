@@ -1,3 +1,4 @@
+common-app-name = 카피 캔버스
 common-error = 문제가 발생했습니다.
 common-cancel = 취소
 common-apply = 적용
@@ -281,7 +282,7 @@ native-palettes-menu-remove-color = 색 제거
 native-palettes-recently-used = 최근 사용
 native-shortcuts-keymap = 키맵
 native-shortcuts-no-differences = 차이점 없음
-native-shortcuts-defaults-help = 이 키맵은 CapyCanvas 기본값을 사용합니다.
+native-shortcuts-defaults-help = 이 키맵은 { common-app-name } 기본값을 사용합니다.
 native-shortcuts-added = 추가됨
 native-shortcuts-changed = 변경됨
 native-shortcuts-removed = 제거됨
@@ -326,7 +327,7 @@ native-inspection-channel = SDR 미만: { $below } · SDR 초과: { $above } · 
 native-inspection-graph = { $channel } 히스토그램
 native-inspection-clipped = 클리핑된 채널: { $count }
 
-common-application-start-failed = Capy Canvas를 시작할 수 없습니다.
+common-application-start-failed = { common-app-name }를 시작할 수 없습니다.
     이 페이지를 새로고침하세요. 패키지 사본을 열었다면 새 사본을 다운로드하여 다시 여세요.
 
 native-dialog-attention = 복구 저장소를 확인해야 합니다
@@ -368,7 +369,7 @@ common-screen-title = 이 화면
 common-screen-headline-sdr = SDR 버전 표시 중
 common-screen-sdr-preview = 내보낼 SDR 버전입니다. HDR을 보려면 화면 교정 패널에서 끄기를 선택하세요.
 common-screen-hdr-headroom = 이 화면은 최대 { $times }×({ $ev } EV)의 밝은 영역을 표시할 수 있습니다.
-common-screen-hdr-unknown-peak = Capy Canvas가 이 화면의 최대 밝기를 확인할 수 없어 가장 밝은 영역이 실제보다 어둡게 보일 수 있습니다.
+common-screen-hdr-unknown-peak = { common-app-name }가 이 화면의 최대 밝기를 확인할 수 없어 가장 밝은 영역이 실제보다 어둡게 보일 수 있습니다.
 common-screen-headline-hdr = HDR 표시 중
 common-screen-white-at-peak = 현재 화면 밝기에서는 일반 콘텐츠가 이 화면의 밝기를 모두 사용하므로 HDR의 밝은 영역을 더 밝게 표시할 수 없습니다. 해당 영역을 보려면 화면 밝기를 낮추세요.
 common-screen-no-hdr = 이 화면은 HDR을 표시할 수 없습니다.
@@ -376,8 +377,8 @@ common-screen-hdr-off = 이 화면의 HDR이 꺼져 있습니다. HDR의 밝은 
 common-screen-wide-color-off = 이 화면은 더 많은 색상을 표시할 수 있지만 운영 체제가 앱의 색상을 sRGB로 제한하고 있습니다. 더 많은 색상을 표시하려면 운영 체제의 디스플레이 설정에서 채도가 높은 색상 또는 선명한 색상 모드를 끄세요.
 common-screen-srgb-wide-monitor = 이 모니터는 더 많은 색상을 표시할 수 있지만 운영 체제가 표준 sRGB 화면으로 취급하고 있습니다. 더 많은 색상을 표시하려면 운영 체제의 디스플레이 설정에서 이 모니터의 HDR을 켜세요.
 common-screen-unmanaged = 운영 체제가 이 화면에 sRGB 색상만 표시합니다.
-common-screen-proof-hdr = HDR이 켜져 있으면 Capy Canvas가 이 화면의 색상 표시 방식을 확인할 수 없습니다. 운영 체제의 디스플레이 설정에서 이 화면의 HDR을 끄세요.
-common-screen-proof-unknown = Capy Canvas가 이 화면에서 표시할 수 있는 색상을 확인할 수 없습니다.
+common-screen-proof-hdr = HDR이 켜져 있으면 { common-app-name }가 이 화면의 색상 표시 방식을 확인할 수 없습니다. 운영 체제의 디스플레이 설정에서 이 화면의 HDR을 끄세요.
+common-screen-proof-unknown = { common-app-name }가 이 화면에서 표시할 수 있는 색상을 확인할 수 없습니다.
 common-screen-proof-white = 현재 화면 밝기에서는 가장 밝은 색조들이 같아 보입니다. 구별하려면 화면 밝기를 낮추세요.
 native-highlight-clipped-colors = 이 색상 강조 표시
 native-screen-details = 화면 세부 정보

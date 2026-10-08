@@ -1,3 +1,4 @@
+common-app-name = Капи Канвас
 common-error = Что-то пошло не так.
 common-cancel = Отмена
 common-apply = Применить
@@ -426,7 +427,7 @@ native-shortcuts-keymap = Раскладка сочетаний
 
 native-shortcuts-no-differences = Нет различий
 
-native-shortcuts-defaults-help = Эта раскладка использует стандартные сочетания CapyCanvas.
+native-shortcuts-defaults-help = Эта раскладка использует стандартные сочетания { common-app-name }.
 
 native-shortcuts-added = Добавлено
 
@@ -498,7 +499,7 @@ native-inspection-sample = Анимированные эффекты · сним
 
 native-inspection-changed = Рисунок изменён · { $status }
 
-common-application-start-failed = Не удалось запустить Capy Canvas.
+common-application-start-failed = Не удалось запустить { common-app-name }.
     Перезагрузите страницу. Если вы открыли готовую сборку, скачайте новую копию и откройте её снова.
 native-inspection-range = От { $start } до { $end } EV · 0 EV = 203 cd/m² эталонного белого
 native-inspection-pixels = Проверено пикселей: { $sampled } · исключено прозрачных: { $transparent }
@@ -544,7 +545,7 @@ common-screen-title = Этот экран
 common-screen-headline-sdr = Отображается версия SDR
 common-screen-sdr-preview = Это версия SDR, которую вы экспортируете. Выберите «Выкл.» в панели «Цветопроба», чтобы увидеть HDR.
 common-screen-hdr-headroom = Этот экран может показывать светлые участки с яркостью до { $times }× ({ $ev } EV).
-common-screen-hdr-unknown-peak = Capy Canvas не может определить максимальную яркость этого экрана, поэтому самые светлые участки могут выглядеть тусклее, чем они есть.
+common-screen-hdr-unknown-peak = { common-app-name } не может определить максимальную яркость этого экрана, поэтому самые светлые участки могут выглядеть тусклее, чем они есть.
 common-screen-headline-hdr = Отображается HDR
 common-screen-white-at-peak = При текущей яркости экрана обычное изображение уже использует всю его яркость, и для более ярких светлых участков HDR ничего не остаётся. Уменьшите яркость экрана, чтобы увидеть их.
 common-screen-no-hdr = Этот экран не может показывать HDR.
@@ -552,8 +553,8 @@ common-screen-hdr-off = HDR для этого экрана отключён. В�
 common-screen-wide-color-off = Ваша операционная система ограничивает приложения цветами sRGB на этом экране, хотя он может показывать больше цветов. Отключите режим насыщенных или ярких цветов в настройках экрана вашей операционной системы, чтобы увидеть их.
 common-screen-srgb-wide-monitor = Ваша операционная система считает этот монитор стандартным экраном sRGB, хотя он может показывать больше цветов. Включите HDR для этого монитора в настройках экрана вашей операционной системы, чтобы увидеть их.
 common-screen-unmanaged = Ваша операционная система показывает на этом экране только цвета sRGB.
-common-screen-proof-hdr = При включённом HDR Capy Canvas не может определить, как этот экран показывает цвета. Отключите HDR для этого экрана в настройках экрана вашей операционной системы.
-common-screen-proof-unknown = Capy Canvas не может определить, какие цвета может показывать этот экран.
+common-screen-proof-hdr = При включённом HDR { common-app-name } не может определить, как этот экран показывает цвета. Отключите HDR для этого экрана в настройках экрана вашей операционной системы.
+common-screen-proof-unknown = { common-app-name } не может определить, какие цвета может показывать этот экран.
 common-screen-proof-white = При текущей яркости экрана самые светлые тона выглядят одинаково. Уменьшите яркость экрана, чтобы различить их.
 native-highlight-clipped-colors = Подсветить эти цвета
 native-screen-details = Сведения об экране

@@ -1,3 +1,4 @@
+common-app-name = 水豚画布
 common-error = 发生了错误。
 common-cancel = 取消
 common-apply = 应用
@@ -281,7 +282,7 @@ native-palettes-menu-remove-color = 移除颜色
 native-palettes-recently-used = 最近使用
 native-shortcuts-keymap = 键位映射
 native-shortcuts-no-differences = 没有差异
-native-shortcuts-defaults-help = 此键位映射使用 CapyCanvas 默认设置。
+native-shortcuts-defaults-help = 此键位映射使用 { common-app-name } 默认设置。
 native-shortcuts-added = 已添加
 native-shortcuts-changed = 已更改
 native-shortcuts-removed = 已移除
@@ -326,7 +327,7 @@ native-inspection-channel = 低于 SDR：{ $below } · 高于 SDR：{ $above } �
 native-inspection-graph = { $channel } 直方图
 native-inspection-clipped = 截断的通道：{ $count }
 
-common-application-start-failed = 无法启动 Capy Canvas。
+common-application-start-failed = 无法启动 { common-app-name }。
     请重新加载此页面。如果打开的是打包版本，请重新下载一份并打开。
 
 native-dialog-attention = 恢复存储需要处理
@@ -368,7 +369,7 @@ common-screen-title = 此屏幕
 common-screen-headline-sdr = 正在显示 SDR 版本
 common-screen-sdr-preview = 这是将要导出的 SDR 版本。要查看 HDR，请在校样面板中选择“关闭”。
 common-screen-hdr-headroom = 此屏幕可显示最高 { $times }×（{ $ev } EV）的高光。
-common-screen-hdr-unknown-peak = Capy Canvas 无法确定此屏幕的最大亮度，因此最亮的高光看起来可能比实际更暗。
+common-screen-hdr-unknown-peak = { common-app-name } 无法确定此屏幕的最大亮度，因此最亮的高光看起来可能比实际更暗。
 common-screen-headline-hdr = 正在显示 HDR
 common-screen-white-at-peak = 在当前屏幕亮度下，普通内容已经用尽此屏幕的亮度，无法为 HDR 高光提供更高的亮度。降低屏幕亮度以查看这些高光。
 common-screen-no-hdr = 此屏幕无法显示 HDR。
@@ -376,8 +377,8 @@ common-screen-hdr-off = 此屏幕的 HDR 已关闭。要查看 HDR 高光，请�
 common-screen-wide-color-off = 此屏幕可以显示更多颜色，但操作系统将应用的颜色限制为 sRGB。请在操作系统的显示设置中关闭饱和或鲜艳颜色模式，以显示这些颜色。
 common-screen-srgb-wide-monitor = 此显示器可以显示更多颜色，但操作系统将其视为标准 sRGB 屏幕。请在操作系统的显示设置中为此显示器开启 HDR，以显示这些颜色。
 common-screen-unmanaged = 操作系统在此屏幕上仅显示 sRGB 颜色。
-common-screen-proof-hdr = 开启 HDR 时，Capy Canvas 无法确定此屏幕如何显示颜色。请在操作系统的显示设置中为此屏幕关闭 HDR。
-common-screen-proof-unknown = Capy Canvas 无法确定此屏幕可以显示哪些颜色。
+common-screen-proof-hdr = 开启 HDR 时，{ common-app-name } 无法确定此屏幕如何显示颜色。请在操作系统的显示设置中为此屏幕关闭 HDR。
+common-screen-proof-unknown = { common-app-name } 无法确定此屏幕可以显示哪些颜色。
 common-screen-proof-white = 在当前屏幕亮度下，最亮的色调看起来相同。降低屏幕亮度以区分它们。
 native-highlight-clipped-colors = 高亮显示这些颜色
 native-screen-details = 屏幕详情

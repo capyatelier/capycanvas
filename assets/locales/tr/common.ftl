@@ -1,3 +1,4 @@
+common-app-name = Capy Canvas
 common-error = Bir sorun oluştu.
 common-cancel = İptal
 common-apply = Uygula
@@ -426,7 +427,7 @@ native-shortcuts-keymap = Tuş eşlemesi
 
 native-shortcuts-no-differences = Fark yok
 
-native-shortcuts-defaults-help = Bu tuş eşlemesi CapyCanvas varsayılanlarını kullanır.
+native-shortcuts-defaults-help = Bu tuş eşlemesi { common-app-name } varsayılanlarını kullanır.
 
 native-shortcuts-added = Eklenen
 
@@ -498,7 +499,7 @@ native-inspection-sample = Hareketli efektler · { $seconds } s anındaki görü
 
 native-inspection-changed = Çizim değişti · { $status }
 
-common-application-start-failed = Capy Canvas başlatılamadı.
+common-application-start-failed = { common-app-name } başlatılamadı.
     Bu sayfayı yeniden yükleyin. Paketlenmiş bir kopya açtıysanız yeni bir kopya indirip yeniden açın.
 native-inspection-range = { $start } ile { $end } EV arası · 0 EV = 203 cd/m² referans beyaz
 native-inspection-pixels = { $sampled } örneklenen piksel · { $transparent } saydam piksel hariç
@@ -544,7 +545,7 @@ common-screen-title = Bu ekran
 common-screen-headline-sdr = SDR sürümü gösteriliyor
 common-screen-sdr-preview = Dışa aktaracağınız SDR sürümü budur. HDR'yi görmek için Renk provası panelinde Kapalı'yı seçin.
 common-screen-hdr-headroom = Bu ekran, parlak alanları en fazla { $times }× ({ $ev } EV) düzeyinde gösterebilir.
-common-screen-hdr-unknown-peak = Capy Canvas bu ekranın en yüksek parlaklığını belirleyemediği için en parlak alanlar gerçekte olduklarından daha loş görünebilir.
+common-screen-hdr-unknown-peak = { common-app-name } bu ekranın en yüksek parlaklığını belirleyemediği için en parlak alanlar gerçekte olduklarından daha loş görünebilir.
 common-screen-headline-hdr = HDR gösteriliyor
 common-screen-white-at-peak = Geçerli ekran parlaklığında normal içerik zaten ekranın tüm parlaklığını kullanıyor; HDR'deki parlak alanlar için daha yüksek parlaklık kalmıyor. Bunları görmek için ekran parlaklığını azaltın.
 common-screen-no-hdr = Bu ekran HDR gösteremiyor.
@@ -552,8 +553,8 @@ common-screen-hdr-off = Bu ekran için HDR kapalı. HDR'deki parlak alanları g�
 common-screen-wide-color-off = Ekran daha fazlasını gösterebilse de işletim sisteminiz uygulamaları bu ekranda sRGB renkleriyle sınırlıyor. Diğer renkleri göstermek için işletim sisteminizin ekran ayarlarında doygun veya canlı renkleri kapatın.
 common-screen-srgb-wide-monitor = Monitör daha fazla renk gösterebilse de işletim sisteminiz bu monitörü standart bir sRGB ekran olarak kullanıyor. Diğer renkleri göstermek için işletim sisteminizin ekran ayarlarında bu monitör için HDR'yi açın.
 common-screen-unmanaged = İşletim sisteminiz bu ekranda yalnızca sRGB renklerini gösteriyor.
-common-screen-proof-hdr = HDR açıkken Capy Canvas bu ekranın renkleri nasıl gösterdiğini belirleyemiyor. İşletim sisteminizin ekran ayarlarında bu ekran için HDR'yi kapatın.
-common-screen-proof-unknown = Capy Canvas bu ekranın hangi renkleri gösterebildiğini belirleyemiyor.
+common-screen-proof-hdr = HDR açıkken { common-app-name } bu ekranın renkleri nasıl gösterdiğini belirleyemiyor. İşletim sisteminizin ekran ayarlarında bu ekran için HDR'yi kapatın.
+common-screen-proof-unknown = { common-app-name } bu ekranın hangi renkleri gösterebildiğini belirleyemiyor.
 common-screen-proof-white = Geçerli ekran parlaklığında en açık tonlar aynı görünüyor. Bunları ayırt etmek için ekran parlaklığını azaltın.
 native-highlight-clipped-colors = Bu renkleri vurgula
 native-screen-details = Ekran ayrıntıları

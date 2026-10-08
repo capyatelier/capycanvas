@@ -1,3 +1,4 @@
+common-app-name = カピカン
 common-error = 問題が発生しました。
 common-cancel = キャンセル
 common-apply = 適用
@@ -281,7 +282,7 @@ native-palettes-menu-remove-color = 色を削除
 native-palettes-recently-used = 最近使用
 native-shortcuts-keymap = キー設定
 native-shortcuts-no-differences = 違いはありません
-native-shortcuts-defaults-help = このキー設定はCapyCanvasの既定値を使っています。
+native-shortcuts-defaults-help = このキー設定は{ common-app-name }の既定値を使っています。
 native-shortcuts-added = 追加済み
 native-shortcuts-changed = 変更済み
 native-shortcuts-removed = 削除済み
@@ -326,7 +327,7 @@ native-inspection-channel = SDR未満: { $below } · SDR超過: { $above } · �
 native-inspection-graph = { $channel }のヒストグラム
 native-inspection-clipped = クリップされたチャンネル: { $count }
 
-common-application-start-failed = Capy Canvasを起動できませんでした。
+common-application-start-failed = { common-app-name }を起動できませんでした。
     このページを再読み込みしてください。パッケージ版を開いた場合は、新しいコピーをダウンロードして開き直してください。
 
 native-dialog-attention = 復旧用ストレージを確認してください
@@ -368,7 +369,7 @@ common-screen-title = この画面
 common-screen-headline-sdr = SDR版を表示中
 common-screen-sdr-preview = 書き出されるSDR版を表示しています。HDRを見るには、プルーフパネルで「オフ」を選択してください。
 common-screen-hdr-headroom = この画面は最大 { $times }×（{ $ev } EV）のハイライトを表示できます。
-common-screen-hdr-unknown-peak = Capy Canvasはこの画面の最大輝度を確認できないため、最も明るいハイライトが実際より暗く見える場合があります。
+common-screen-hdr-unknown-peak = { common-app-name }はこの画面の最大輝度を確認できないため、最も明るいハイライトが実際より暗く見える場合があります。
 common-screen-headline-hdr = HDRを表示中
 common-screen-white-at-peak = 現在の画面の明るさでは、通常のコンテンツがこの画面の明るさを使い切っており、HDRのハイライトをさらに明るく表示できません。ハイライトを見るには画面の明るさを下げてください。
 common-screen-no-hdr = この画面はHDRを表示できません。
@@ -376,8 +377,8 @@ common-screen-hdr-off = この画面のHDRがオフになっています。HDR�
 common-screen-wide-color-off = この画面はより多くの色を表示できますが、OSがアプリの色をsRGBに制限しています。より多くの色を表示するには、OSのディスプレイ設定で鮮やかな色や高彩度の色のモードをオフにしてください。
 common-screen-srgb-wide-monitor = このモニターはより多くの色を表示できますが、OSが標準のsRGB画面として扱っています。より多くの色を表示するには、OSのディスプレイ設定でこのモニターのHDRをオンにしてください。
 common-screen-unmanaged = OSはこの画面にsRGBの色だけを表示します。
-common-screen-proof-hdr = HDRがオンのとき、Capy Canvasはこの画面がどのように色を表示するか確認できません。OSのディスプレイ設定でこの画面のHDRをオフにしてください。
-common-screen-proof-unknown = Capy Canvasはこの画面で表示できる色を確認できません。
+common-screen-proof-hdr = HDRがオンのとき、{ common-app-name }はこの画面がどのように色を表示するか確認できません。OSのディスプレイ設定でこの画面のHDRをオフにしてください。
+common-screen-proof-unknown = { common-app-name }はこの画面で表示できる色を確認できません。
 common-screen-proof-white = 現在の画面の明るさでは、最も明るい階調が同じに見えます。違いを見分けるには画面の明るさを下げてください。
 native-highlight-clipped-colors = これらの色を強調表示
 native-screen-details = 画面の詳細

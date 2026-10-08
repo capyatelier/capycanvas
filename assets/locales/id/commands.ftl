@@ -281,7 +281,7 @@ command-warp-grid-five = Kisi lengkung 5 × 5
 
 command-keyboard-shortcuts = Pintasan Papan Ketik
 
-command-about = Tentang Capy Canvas
+command-about = Tentang { common-app-name }
 
 command-website = Situs web
 
@@ -660,7 +660,7 @@ commands-help-cut = Salin piksel terpilih pada lapisan aktif, lalu hapus dari la
 commands-help-copy-merged = Salin gambar terlihat dalam seleksi, sebagaimana hasil ekspor.
 commands-help-copy-pixels = Salin piksel lapisan aktif di dalam seleksi, sebelum opasitas, mask, dan efeknya. Pada lapisan gambar, gambarnya disalin sebagai piksel.
 
-commands-help-paste-image = Tambahkan isi papan klip. Piksel yang disalin di Capy Canvas menjadi lapisan cat di posisi salinannya jika terlihat, dan gambar yang disalin tetap menjadi gambar. Gambar dari aplikasi lain terbuka dengan pegangan penempatan.
+commands-help-paste-image = Tambahkan isi papan klip. Piksel yang disalin di { common-app-name } menjadi lapisan cat di posisi salinannya jika terlihat, dan gambar yang disalin tetap menjadi gambar. Gambar dari aplikasi lain terbuka dengan pegangan penempatan.
 
 commands-help-paste-in-place = Tambahkan isi papan klip di posisi asal salinan, tanpa pegangan penempatan. Gambar dari aplikasi lain ditempatkan sebagai gambar di tengah dengan ukuran penuh.
 

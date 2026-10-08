@@ -1,3 +1,4 @@
+common-app-name = Capy Canvas
 common-error = Something went wrong.
 common-cancel = Cancel
 common-apply = Apply
@@ -426,7 +427,7 @@ native-shortcuts-keymap = Keymap
 
 native-shortcuts-no-differences = No differences
 
-native-shortcuts-defaults-help = This keymap uses the CapyCanvas defaults.
+native-shortcuts-defaults-help = This keymap uses the { common-app-name } defaults.
 
 native-shortcuts-added = Added
 
@@ -498,7 +499,7 @@ native-inspection-sample = Animated effects · snapshot at { $seconds } s
 
 native-inspection-changed = Drawing changed · { $status }
 
-common-application-start-failed = Could not start Capy Canvas.
+common-application-start-failed = Could not start { common-app-name }.
     Reload this page. If you opened a packaged copy, download a fresh copy and open it again.
 native-inspection-range = { $start } to { $end } EV · 0 EV = 203 cd/m² reference white
 native-inspection-pixels = { $sampled ->
@@ -550,7 +551,7 @@ common-screen-title = This screen
 common-screen-headline-sdr = Showing the SDR version
 common-screen-sdr-preview = This is the SDR version you’ll export. Select Off in the Proof panel to see HDR.
 common-screen-hdr-headroom = This screen can show highlights up to { $times }× ({ $ev } EV).
-common-screen-hdr-unknown-peak = Capy Canvas can’t tell how bright this screen can get, so the brightest highlights may look dimmer than they are.
+common-screen-hdr-unknown-peak = { common-app-name } can’t tell how bright this screen can get, so the brightest highlights may look dimmer than they are.
 common-screen-headline-hdr = Showing HDR
 common-screen-white-at-peak = At your current screen brightness, regular content already uses all of this screen’s brightness, leaving nothing brighter for HDR highlights. Lower the screen brightness to see them.
 common-screen-no-hdr = This screen can’t show HDR.
@@ -558,8 +559,8 @@ common-screen-hdr-off = HDR is off for this screen. Turn it on in your operating
 common-screen-wide-color-off = Your operating system is limiting apps to sRGB colors on this screen, although the screen can show more. Turn off saturated or vivid colors in your operating system’s display settings to show them.
 common-screen-srgb-wide-monitor = Your operating system is treating this monitor as a standard sRGB screen, although the monitor can show more colors. Turn on HDR for this monitor in your operating system’s display settings to show them.
 common-screen-unmanaged = Your operating system shows only sRGB colors on this screen.
-common-screen-proof-hdr = With HDR on, Capy Canvas can’t tell how this screen shows colors. Turn off HDR for this screen in your operating system’s display settings.
-common-screen-proof-unknown = Capy Canvas can’t tell which colors this screen can show.
+common-screen-proof-hdr = With HDR on, { common-app-name } can’t tell how this screen shows colors. Turn off HDR for this screen in your operating system’s display settings.
+common-screen-proof-unknown = { common-app-name } can’t tell which colors this screen can show.
 common-screen-proof-white = At your current screen brightness, the lightest tones look the same. Lower the screen brightness to tell them apart.
 native-highlight-clipped-colors = Highlight these colors
 native-screen-details = Screen details

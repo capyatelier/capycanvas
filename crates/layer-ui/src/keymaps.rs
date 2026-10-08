@@ -66,9 +66,9 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     KeymapPreset {
         id: "capy",
         revision: 1,
-        title: "CapyCanvas",
+        title: crate::APP_NAME,
         app: "CapyCanvas",
-        source: "CapyCanvas defaults",
+        source: "Capy Canvas defaults",
         links: &[],
         keys: &[],
         gestures: &[],

@@ -8,15 +8,17 @@ param(
 $ErrorActionPreference='Stop'
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 . (Join-Path $PSScriptRoot 'PortablePackage.ps1')
-$packager=Get-PackagingSource $repo @('apps/layer-windows/scripts/package-msix.ps1','apps/layer-windows/scripts/PortablePackage.ps1','apps/layer-windows/scripts/normalize-msix.ps1','apps/layer-windows/scripts/package-logos.ps1','apps/layer-web/icons/layer-zen-looking-up-symbolic.svg','crates/layer-ui/src/localization.rs','crates/layer-ui/src/localization_languages.rs') -AllowDirty:$AllowDirty
-$resources=(Get-ShippedLanguages $repo|ForEach-Object {'<Resource Language="'+[Security.SecurityElement]::Escape($_)+'" />'}) -join ''
-$displayName='Capy Canvas'
+$languages=@(Get-ShippedLanguages $repo)
+$generators=@('apps/layer-windows/scripts/package-msix.ps1','apps/layer-windows/scripts/PortablePackage.ps1','apps/layer-windows/scripts/normalize-msix.ps1','apps/layer-windows/scripts/package-logos.ps1','apps/layer-web/icons/layer-zen-looking-up-symbolic.svg','crates/layer-ui/src/localization.rs','crates/layer-ui/src/localization_languages.rs')+@($languages|ForEach-Object {"assets/locales/$_/common.ftl"})
+$packager=Get-PackagingSource $repo $generators -AllowDirty:$AllowDirty
+$resources=($languages|ForEach-Object {'<Resource Language="'+[Security.SecurityElement]::Escape($_)+'" />'}) -join ''
+$displaySuffix=''
 if($Publisher.Contains('OID.2.25.311729368913984317654407730594956997722')){throw 'Use -UnsignedTestIdentity to request the isolated test publisher.'}
 if($UnsignedTestIdentity){
     if($IdentityName.Length+5 -gt 50){throw 'The final MSIX identity name cannot exceed 50 characters.'}
     $IdentityName+='.Test'
     $Publisher+=', OID.2.25.311729368913984317654407730594956997722=1'
-    $displayName+=' (MSIX Test)'
+    $displaySuffix=' (MSIX Test)'
 }
 $portable=Read-PortablePackage $PortableResultFile
 $manifest=$portable.manifest
@@ -24,12 +26,13 @@ if($manifest.version -notmatch '^[1-9][0-9]*\.[0-9]{1,3}\.[0-9]{1,3}$'){throw 'M
 $Version=$manifest.version+'.0'
 $sdk=Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) ('Windows Kits/10/bin/'+$manifest.windows_sdk+'/x64')
 $makeappx=Join-Path $sdk 'makeappx.exe'
-if(!(Test-Path -LiteralPath $makeappx)){throw 'Install the Windows SDK version recorded by the portable build.'}
+$makepri=Join-Path $sdk 'makepri.exe'
+if(!(Test-Path -LiteralPath $makeappx) -or !(Test-Path -LiteralPath $makepri)){throw 'Install the Windows SDK version recorded by the portable build.'}
 $run=Join-Path $repo ('artifacts/windows/msix/'+[Guid]::NewGuid().ToString('N'))
 $payload=Join-Path $run 'CapyCanvas'
 $escape={param([string]$value)[Security.SecurityElement]::Escape($value)}
 $identity=& $escape $IdentityName;$publisherXml=& $escape $Publisher
-$displayXml=& $escape $displayName
+$displayXml='ms-resource:Resources/AppName'
 $xml=@"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -59,6 +62,25 @@ Write-PackagedPayload $portable.source $payload $manifest $packaging {
     & (Join-Path $PSScriptRoot 'package-logos.ps1') -Destination (Join-Path $payload 'PackageAssets')
     [IO.File]::WriteAllText((Join-Path $payload 'AppxManifest.xml'),$xml.Replace("`r`n",$lf)+$lf,$utf8)
     [IO.File]::WriteAllText((Join-Path $payload 'README.txt'),$readme,$utf8)
+    $namesRoot=Join-Path $run 'AppNames'
+    foreach($tag in $languages){
+        $source=[IO.File]::ReadAllText((Join-Path $repo "assets/locales/$tag/common.ftl"))
+        $name=[regex]::Match($source,'(?m)^common-app-name = ([^{}\r\n]+)$')
+        if(!$name.Success){throw "$($tag): application name must be literal text."}
+        $directory=Join-Path $namesRoot "Strings/$tag"
+        [IO.Directory]::CreateDirectory($directory)|Out-Null
+        $value=& $escape ($name.Groups[1].Value+$displaySuffix)
+        [IO.File]::WriteAllText((Join-Path $directory 'Resources.resw'),"<?xml version=`"1.0`" encoding=`"utf-8`"?><root><data name=`"AppName`"><value>$value</value></data></root>"+$lf,$utf8)
+    }
+    $config=Join-Path $run 'pri-config.xml'
+    & $makepri createconfig /cf $config /dq en /pv 10.0 /o *> (Join-Path $run 'pri-config.log')
+    if($LASTEXITCODE -ne 0){throw "MakePRI configuration failed; inspect $run"}
+    [xml]$priConfig=[IO.File]::ReadAllText($config)
+    $packagingNode=$priConfig.SelectSingleNode('/resources/packaging')
+    if($packagingNode){$packagingNode.ParentNode.RemoveChild($packagingNode)|Out-Null}
+    $priConfig.Save($config)
+    & $makepri new /pr $namesRoot /cf $config /mn (Join-Path $payload 'AppxManifest.xml') /of (Join-Path $payload 'resources.pri') /o *> (Join-Path $run 'pri-build.log')
+    if($LASTEXITCODE -ne 0){throw "MakePRI indexing failed; inspect $run"}
 }
 $label='capycanvas-'+$manifest.version+'-windows-x64'+$(if($UnsignedTestIdentity){'-test'}else{''})
 if($manifest.development){$label+='-development'}

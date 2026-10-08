@@ -77,7 +77,7 @@ workspace-toolbar-in = Bilah alat dalam { $name }. Perubahan disimpan bersama ru
 workspace-unavailable = Tidak tersedia: { $error }
 
 workspace-included-description = { $description }
-        Disertakan bersama CapyCanvas.
+        Disertakan bersama { common-app-name }.
 
 workspace-delete-confirm = Hapus “{ $name }”? Ini permanen.
 
@@ -159,7 +159,7 @@ workspace-current-workspace = Ruang kerja saat ini
 
 workspace-open-in-another-window = Buka di jendela lain
 
-workspace-included-with-capycanvas = Disertakan bersama CapyCanvas
+workspace-included-with-capycanvas = Disertakan bersama { common-app-name }
 
 workspace-recover-confirm = Pulihkan perubahan terpilih ke salinan terpisah dengan nama unik. Item yang ada tetap seperti semula.
 
@@ -734,7 +734,7 @@ workspace-tool-description-keyboard-shortcuts = Sesuaikan pintasan aplikasi
 
 workspace-tool-description-about = Informasi dan tautan aplikasi
 
-workspace-tool-description-website = Kunjungi situs web Capy Canvas
+workspace-tool-description-website = Kunjungi situs web { common-app-name }
 
 workspace-tool-description-source-code = Lihat kode sumber di GitHub
 
@@ -944,7 +944,7 @@ workspace-color-picker-button = { $tool } · Tekan dua kali untuk opsi
 
 workspace-color-picker-button-shortcut = { $tool } ({ $shortcut }) · Tekan dua kali untuk opsi
 
-workspace-refusal-a-newer-version-of-capy-canvas-updated-workspace-storage = Versi Capy Canvas yang lebih baru memperbarui penyimpanan ruang kerja. Muat ulang atau perbarui Capy Canvas untuk melanjutkan.
+workspace-refusal-a-newer-version-of-capy-canvas-updated-workspace-storage = Versi { common-app-name } yang lebih baru memperbarui penyimpanan ruang kerja. Muat ulang atau perbarui { common-app-name } untuk melanjutkan.
 
 workspace-refusal-a-referenced-workspace-resource-is-missing = Sumber daya ruang kerja yang dirujuk tidak ada.
 
@@ -1086,7 +1086,7 @@ workspace-refusal-workspace-preferences-changed-in-another-window = Preferensi r
 
 workspace-refusal-workspace-save-is-already-in-progress = Penyimpanan ruang kerja sedang berlangsung.
 
-workspace-refusal-workspace-storage-was-written-by-an-earlier-version-of-capy-canvas = Penyimpanan ruang kerja ditulis oleh versi Capy Canvas yang lebih lama.
+workspace-refusal-workspace-storage-was-written-by-an-earlier-version-of-capy-canvas = Penyimpanan ruang kerja ditulis oleh versi { common-app-name } yang lebih lama.
 
 workspace-refusal-customization-choose-a-built-in-panel = Pilih panel bawaan
 

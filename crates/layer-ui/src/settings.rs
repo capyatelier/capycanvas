@@ -1186,7 +1186,7 @@ impl Settings {
             ],
             Vec::new(),
             vec![PreferenceGroup {
-                title: APP_NAME.into(),
+                title: localizer.text(MessageId::COMMON_APP_NAME).to_string(),
                 rows: vec![
                     row(
                         Version,

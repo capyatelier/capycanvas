@@ -89,7 +89,7 @@ fn stylesheet_provider() -> gtk::CssProvider {
 pub fn run() -> gtk::glib::ExitCode {
     // SAFETY: first operation, before GTK initialization or worker creation.
     unsafe { display_color::enable_gtk_color_management() };
-    glib::set_application_name(layer_ui::APP_NAME);
+    glib::set_application_name(launch_localization().language().app_name());
     let (app, active) = application(storage::APP_ID);
     let result = app.run();
     let windows = std::mem::take(&mut *active.borrow_mut());

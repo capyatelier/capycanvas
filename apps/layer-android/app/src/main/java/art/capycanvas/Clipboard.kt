@@ -66,7 +66,7 @@ internal class ClipboardController(private val host: CanvasHost, private val app
                     finished
                 }
                 val uri = FileProvider.getUriForFile(application, "${application.packageName}.clipboard", file)
-                val data = ClipData.newUri(application.contentResolver, "Capy Canvas", uri)
+                val data = ClipData.newUri(application.contentResolver, host.catalog.getString("app_name"), uri)
                 data.description.extras = PersistableBundle().apply { putString(NONCE, nonce) }
                 clipboard.setPrimaryClip(data)
                 prune(nonce)

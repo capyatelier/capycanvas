@@ -1,3 +1,4 @@
+common-app-name = Capy Canvas
 common-error = Ein Fehler ist aufgetreten.
 common-cancel = Abbrechen
 common-apply = Anwenden
@@ -426,7 +427,7 @@ native-shortcuts-keymap = Tastenkürzelbelegung
 
 native-shortcuts-no-differences = Keine Unterschiede
 
-native-shortcuts-defaults-help = Diese Tastenkürzelbelegung verwendet die CapyCanvas-Standardwerte.
+native-shortcuts-defaults-help = Diese Tastenkürzelbelegung verwendet die { common-app-name }-Standardwerte.
 
 native-shortcuts-added = Hinzugefügt
 
@@ -498,7 +499,7 @@ native-inspection-sample = Animierte Effekte · Momentaufnahme bei { $seconds } 
 
 native-inspection-changed = Zeichnung geändert · { $status }
 
-common-application-start-failed = Capy Canvas konnte nicht gestartet werden.
+common-application-start-failed = { common-app-name } konnte nicht gestartet werden.
     Diese Seite neu laden. Falls eine heruntergeladene Version geöffnet wurde, eine neue Kopie herunterladen und erneut öffnen.
 native-inspection-range = { $start } bis { $end } EV · 0 EV = 203 cd/m² Referenzweiß
 native-inspection-pixels =
@@ -551,7 +552,7 @@ common-screen-title = Dieser Bildschirm
 common-screen-headline-sdr = Die SDR-Version wird angezeigt
 common-screen-sdr-preview = Dies ist die SDR-Version, die exportiert wird. Im Softproof-Bereich „Aus“ wählen, um HDR anzuzeigen.
 common-screen-hdr-headroom = Dieser Bildschirm kann Lichter mit einer Helligkeit von bis zu { $times }× ({ $ev } EV) anzeigen.
-common-screen-hdr-unknown-peak = Capy Canvas kann die maximale Helligkeit dieses Bildschirms nicht ermitteln. Die hellsten Lichter können deshalb dunkler erscheinen, als sie sind.
+common-screen-hdr-unknown-peak = { common-app-name } kann die maximale Helligkeit dieses Bildschirms nicht ermitteln. Die hellsten Lichter können deshalb dunkler erscheinen, als sie sind.
 common-screen-headline-hdr = HDR wird angezeigt
 common-screen-white-at-peak = Bei der aktuellen Bildschirmhelligkeit nutzen normale Inhalte bereits die gesamte Helligkeit dieses Bildschirms. Für hellere HDR-Lichter bleibt kein Spielraum. Die Bildschirmhelligkeit verringern, um sie zu sehen.
 common-screen-no-hdr = Dieser Bildschirm kann kein HDR anzeigen.
@@ -559,8 +560,8 @@ common-screen-hdr-off = HDR ist für diesen Bildschirm ausgeschaltet. In den Anz
 common-screen-wide-color-off = Das Betriebssystem beschränkt Apps auf diesem Bildschirm auf sRGB-Farben, obwohl der Bildschirm mehr Farben anzeigen kann. Gesättigte oder lebhafte Farben in den Anzeigeeinstellungen des Betriebssystems ausschalten, um den größeren Farbumfang zu nutzen.
 common-screen-srgb-wide-monitor = Das Betriebssystem behandelt diesen Monitor als gewöhnlichen sRGB-Bildschirm, obwohl er mehr Farben anzeigen kann. HDR für diesen Monitor in den Anzeigeeinstellungen des Betriebssystems einschalten, um diese Farben anzuzeigen.
 common-screen-unmanaged = Das Betriebssystem zeigt auf diesem Bildschirm nur sRGB-Farben an.
-common-screen-proof-hdr = Bei eingeschaltetem HDR kann Capy Canvas nicht ermitteln, wie dieser Bildschirm Farben darstellt. HDR für diesen Bildschirm in den Anzeigeeinstellungen des Betriebssystems ausschalten.
-common-screen-proof-unknown = Capy Canvas kann nicht ermitteln, welche Farben dieser Bildschirm anzeigen kann.
+common-screen-proof-hdr = Bei eingeschaltetem HDR kann { common-app-name } nicht ermitteln, wie dieser Bildschirm Farben darstellt. HDR für diesen Bildschirm in den Anzeigeeinstellungen des Betriebssystems ausschalten.
+common-screen-proof-unknown = { common-app-name } kann nicht ermitteln, welche Farben dieser Bildschirm anzeigen kann.
 common-screen-proof-white = Bei der aktuellen Bildschirmhelligkeit sehen die hellsten Töne gleich aus. Die Bildschirmhelligkeit verringern, um sie zu unterscheiden.
 native-highlight-clipped-colors = Diese Farben hervorheben
 native-screen-details = Bildschirmdetails

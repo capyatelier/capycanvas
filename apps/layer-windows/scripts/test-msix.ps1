@@ -46,7 +46,22 @@ $application=$appx.Package.Applications.Application
 $uap10='http://schemas.microsoft.com/appx/manifest/uap/windows10/10'
 if($application.Executable -ne 'CapyCanvas.exe' -or $application.GetAttribute('RuntimeBehavior',$uap10) -ne 'packagedClassicApp' -or $application.GetAttribute('TrustLevel',$uap10) -ne 'mediumIL'){throw 'Unexpected MSIX activation contract.'}
 . (Join-Path $PSScriptRoot 'PortablePackage.ps1')
-if((@($appx.Package.Resources.Resource|ForEach-Object Language) -join ',') -cne ((Get-ShippedLanguages $repo) -join ',')){throw 'MSIX languages differ from the shared shipping inventory.'}
+$languages=@(Get-ShippedLanguages $repo)
+if((@($appx.Package.Resources.Resource|ForEach-Object Language) -join ',') -cne ($languages -join ',')){throw 'MSIX languages differ from the shared shipping inventory.'}
+if($appx.Package.Properties.DisplayName -cne 'ms-resource:Resources/AppName' -or $application.VisualElements.DisplayName -cne 'ms-resource:Resources/AppName'){throw 'MSIX display names do not reference the localized resource.'}
+$dump=Join-Path $run 'pri-dump.xml'
+& (Join-Path $sdk 'makepri.exe') dump /if (Join-Path $unpacked 'resources.pri') /of $dump /dt detailed /o *> (Join-Path $run 'pri-dump.log')
+if($LASTEXITCODE -ne 0){throw 'MSIX application name resource could not be read.'}
+[xml]$pri=[IO.File]::ReadAllText($dump)
+$resource=$pri.SelectSingleNode('/PriInfo/ResourceMap/ResourceMapSubtree[@name="Resources"]/NamedResource[@name="AppName"]')
+if(!$resource -or $resource.GetAttribute('uri') -cne "ms-resource://$($identity.Name)/Resources/AppName" -or @($resource.Candidate).Count -ne $languages.Count){throw 'MSIX application name resource has the wrong identity or languages.'}
+foreach($tag in $languages){
+    $candidates=@($resource.Candidate|Where-Object {$_.SelectSingleNode('QualifierSet/Qualifier[@name="Language"]').GetAttribute('value') -ceq $tag})
+    $source=[IO.File]::ReadAllText((Join-Path $repo "assets/locales/$tag/common.ftl"))
+    $name=[regex]::Match($source,'(?m)^common-app-name = ([^{}\r\n]+)$')
+    $expected=$name.Groups[1].Value+$(if($result.unsigned_test_identity){' (MSIX Test)'}else{''})
+    if(!$name.Success -or $candidates.Count -ne 1 -or $candidates[0].SelectSingleNode('Value').InnerText -cne $expected){throw "$($tag): MSIX application name differs from the shared catalog."}
+}
 $fileType=$application.Extensions.Extension.FileTypeAssociation.SupportedFileTypes.FileType
 if($fileType.InnerText -ne '.capy' -or $fileType.ContentType -ne 'application/vnd.capycanvas'){throw 'MSIX does not associate the Capy drawing identity.'}
 $oid='OID.2.25.311729368913984317654407730594956997722=1'

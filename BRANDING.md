@@ -11,6 +11,10 @@ trademark registration.
 Protected names: **Capy Canvas**, **CapyCanvas**, **Capy Atelier**, and
 **CapyAtelier**, including their lowercase spellings.
 
+Localized Capy Canvas display names are **カピカン**, **水豚画布**, **水豚畫布**,
+**카피 캔버스**, **Капи Канвас**, and **คาปิ แคนวาส**. These names identify the same
+official application and are covered by this branding policy.
+
 The artwork subject to the separate license below is:
 
 - `apps/layer-web/icons/layer-zen-looking-up-symbolic.svg`: the default capybara mark.
