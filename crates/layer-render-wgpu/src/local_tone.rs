@@ -60,7 +60,7 @@ impl GpuToneGuide {
             return Err("Invalid GPU illumination guide geometry".into());
         }
         let samples = bytes[16..]
-            .chunks_exact(16)
+            .as_chunks::<16>().0.iter()
             .map(|p| {
                 std::array::from_fn(|i| f32::from_ne_bytes(p[i * 4..i * 4 + 4].try_into().unwrap()))
             })

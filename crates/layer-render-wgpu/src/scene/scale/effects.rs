@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn native_alpha_capture(scene: layer_core::SceneView<'_>, handles: &[OccurrenceHandle], level: u32) -> bool {
-    handles.iter().any(|handle| native_pointwise_alpha(&scene.effect(*handle).unwrap().program))
+    handles.iter().any(|handle| native_pointwise_alpha(scene.effect(*handle).unwrap().program))
         && (level > 0 || handles.iter().all(|handle| !scene.effect(*handle).unwrap().program.fusion_boundary()))
 }
 

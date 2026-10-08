@@ -380,7 +380,7 @@ impl FilterPreviews {
             );
             let (texture, view) = self.source.as_ref().unwrap();
             match self.source_scene.capture_filter_source(r, request, texture, region, &mut encoder) {
-                Err(GpuRasterError::DeferredObjectWork) => return Ok(self.retry_after(r, encoder)),
+                Err(GpuRasterError::DeferredObjectWork) => { self.retry_after(r, encoder); return Ok(()); }
                 result => result?,
             }
             let mut data = Vec::with_capacity(64);
@@ -547,7 +547,7 @@ impl FilterPreviews {
             ));
             let (texture, view) = self.source.as_ref().unwrap();
             match self.source_scene.capture_filter_source(r, request, texture, source_bounds, &mut encoder) {
-                Err(GpuRasterError::DeferredObjectWork) => return Ok(self.retry_after(r, encoder)),
+                Err(GpuRasterError::DeferredObjectWork) => { self.retry_after(r, encoder); return Ok(()); }
                 result => result?,
             }
             view.clone()

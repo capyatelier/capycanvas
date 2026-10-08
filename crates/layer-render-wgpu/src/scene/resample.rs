@@ -113,23 +113,23 @@ impl Resample {
         let rows = [x, y, w, kx, ky, kw, local([a, c, u]), local([b, d, v]), [extent[0] as f32, extent[1] as f32, 0.]];
         let floats = rows.into_iter().flat_map(|row| row.into_iter().chain([0.]));
         let mut values = [0u8; UNIFORM_BYTES as usize];
-        for (dst, value) in values[..144].chunks_exact_mut(4).zip(floats) {
+        for (dst, value) in values[..144].as_chunks_mut::<4>().0.iter_mut().zip(floats) {
             dst.copy_from_slice(&value.to_le_bytes());
         }
-        for (dst, value) in values[144..160].chunks_exact_mut(4).zip(texels) {
+        for (dst, value) in values[144..160].as_chunks_mut::<4>().0.iter_mut().zip(texels) {
             dst.copy_from_slice(&value.to_le_bytes());
         }
         let options = display
             .backdrop
             .into_iter()
             .chain([display.opacity, max_lod as f32, if identity { 2. } else { f32::from(keep_source) }, outside]);
-        for (dst, value) in values[160..192].chunks_exact_mut(4).zip(options) {
+        for (dst, value) in values[160..192].as_chunks_mut::<4>().0.iter_mut().zip(options) {
             dst.copy_from_slice(&value.to_le_bytes());
         }
         let sizes = [[source.bounds.width(), source.bounds.height()].map(|n| n as f32 / (1 << source.level) as f32),
             [target.bounds.width(), target.bounds.height()].map(|n| n as f32 / display.side as f32)];
-        for (row, size) in values[192..].chunks_exact_mut(16).zip(sizes) {
-            for (dst, value) in row.chunks_exact_mut(4).zip(size.into_iter().chain([0.; 2])) {
+        for (row, size) in values[192..].as_chunks_mut::<16>().0.iter_mut().zip(sizes) {
+            for (dst, value) in row.as_chunks_mut::<4>().0.iter_mut().zip(size.into_iter().chain([0.; 2])) {
                 dst.copy_from_slice(&value.to_le_bytes());
             }
         }

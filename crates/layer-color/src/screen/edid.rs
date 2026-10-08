@@ -43,12 +43,12 @@ pub fn parse(bytes: &[u8]) -> Result<Edid, String> {
         pq_signal: false,
         max_luminance: None,
     };
-    for descriptor in base[54..126].chunks_exact(18) {
+    for descriptor in base[54..126].as_chunks::<18>().0 {
         if descriptor[..3] == [0, 0, 0] && descriptor[3] == PRODUCT_NAME {
             edid.name = text(&descriptor[5..]);
         }
     }
-    for block in bytes[128..].chunks_exact(128).filter(|b| b[0] == CTA_EXTENSION && checksum(b)) {
+    for block in bytes[128..].as_chunks::<128>().0.iter().filter(|&b| b[0] == CTA_EXTENSION && checksum(b)) {
         cta_blocks(block, &mut edid);
     }
     Ok(edid)

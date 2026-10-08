@@ -83,7 +83,7 @@ impl ColorState {
         let mut pixels=vec![[0.;4];side as usize*side as usize];
         if !self.render_field_linear(side,&mut pixels){return false;}
         let mapper=recipe.mapper(self.rgb_space,RgbSpace::Srgb);
-        for (out,p) in bytes.chunks_exact_mut(4).zip(pixels){let rgb=mapper.map_rgb([p[0],p[1],p[2]]);for c in 0..3{out[c]=(RgbSpace::Srgb.encode(rgb[c] as f64).clamp(0.,1.)*255.).round() as u8;}out[3]=255;}
+        for (out,p) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(pixels){let rgb=mapper.map_rgb([p[0],p[1],p[2]]);for c in 0..3{out[c]=(RgbSpace::Srgb.encode(rgb[c] as f64).clamp(0.,1.)*255.).round() as u8;}out[3]=255;}
         true
     }
     /// Called at document/workspace boundaries; changing mode never alters paint.

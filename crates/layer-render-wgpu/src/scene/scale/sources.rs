@@ -222,10 +222,8 @@ impl Sources {
             damage.regions.extend(r.stroke_finish_pages(batch).map(page_rect));
             if batch.kind == DabBatchKind::Preview { source.preview.regions.extend(regions); }
         }
-        if r.preview_layer_id == Some(id) {
-            if source.preview.is_empty() {
-                source.preview = Damage::from_tiles(r.preview_damage, r.preview_contact_tiles.as_ref());
-            }
+        if r.preview_layer_id == Some(id) && source.preview.is_empty() {
+            source.preview = Damage::from_tiles(r.preview_damage, r.preview_contact_tiles.as_ref());
         }
         for &(target, region) in &r.transform_damage {
             if target == id { damage.regions.push(region); }

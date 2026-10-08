@@ -85,6 +85,7 @@ impl Pipelines {
             Ok(())
         }
     }
+    #[expect(clippy::too_many_arguments, reason = "Analysis dispatch keeps independent input buffers, output, texture and workgroups explicit")]
     pub(crate) fn encode(
         &self,
         device: &PipelineDevice,

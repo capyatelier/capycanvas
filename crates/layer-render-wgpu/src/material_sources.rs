@@ -65,7 +65,7 @@ fn descriptor_bytes(mode: u32, pages: &[[u32; 2]]) -> [u8; 160] {
         words[4 + i * 4..6 + i * 4].copy_from_slice(page);
     }
     let mut bytes = [0u8; 160];
-    for (destination, word) in bytes.chunks_exact_mut(4).zip(words) {
+    for (destination, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
         destination.copy_from_slice(&word.to_le_bytes());
     }
     bytes

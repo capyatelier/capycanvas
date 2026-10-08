@@ -197,7 +197,7 @@ pub(super) fn read_exr(
                     };
                 }
                 hdr::validate_pixel(SampleDepth::F32, p).map_err(str::to_string)?;
-                for (out, v) in row[x * count * 4..][..count * 4].chunks_exact_mut(4).zip(p) {
+                for (out, v) in row[x * count * 4..][..count * 4].as_chunks_mut::<4>().0.iter_mut().zip(p) {
                     out.copy_from_slice(&v.to_le_bytes());
                 }
             }

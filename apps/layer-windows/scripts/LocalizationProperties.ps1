@@ -313,3 +313,139 @@ function Tool-Surfaces{
  }
  Search-Command 'Pen' 'pen'
 }
+
+function Notice-Surface{
+ Use-Window $second
+ if(!(Model).preferences){Menu-Command 'edit' 'settings'}
+ Invoke-Id 'preference-page-appearance'
+ $japanese=1+[Array]::IndexOf($shippedTags,'ja')
+ if($japanese -lt 1){throw 'The registered Japanese locale is missing'}
+ Language-Choice $japanese|Out-Null;Language-Choice 1|Out-Null
+ Use-Window $first
+ $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+ Menu-Command 'file' 'open_document'
+ Choose-Path (Join-Path $repo 'apps/layer-web/fixtures/shared-image-f64-builtin.capy')
+ Wait-Until {@((Model).state.layers|Where-Object object_count -gt 0).Count -eq 1 -and (Model).brush_ready} 'The notice image fixture did not prepare' 90
+ $layer=@((Model).state.layers|Where-Object object_count -gt 0)[0].id
+ Invoke-Id "layer-$layer-name"
+ Focus-Canvas;Key 66
+ Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected} 'The brush did not activate for the image refusal'
+ $caseIndex=0;$wide=@{height=$null;copy=$null}
+ foreach($locked in @($false,$true,$false)){
+  $caseIndex++;$caseName=('{0:D2}-{1}' -f $caseIndex,$(if($locked){'narrow-locked'}else{'wide-unlocked'}))
+  Use-Window $second;Language-Choice 1|Out-Null
+  Wait-Until {(Model $first).windows_active_tag -eq 'en'} 'The image window did not return to English'
+  Use-Window $first
+  if($locked){
+   $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+   Wait-Until {$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Normal} 'The notice window did not restore before resize'
+   Resize-Window $first 1400 950
+  }else{
+   $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+   Wait-Until {$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized} 'The wide notice window did not maximize'
+  }
+  Focus-Canvas
+  $null=Control 'drawing-canvas' -Arranged
+  $geometry=@{bounds=$null;camera=$null;work=$null;view=$null}
+  Wait-Until {
+   $view=Model;$canvas=Find 'drawing-canvas' -Visible
+   if(!$view -or !$canvas -or !$view.state.camera -or !$view.layout.work_area){return $false}
+   $bounds=$canvas.Current.BoundingRectangle;$camera=$view.state.camera;$layout=$view.layout;$work=$layout.work_area
+   if($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0 -or $work.width -le 0 -or $work.height -le 0){return $false}
+   $density=[CapyRowPointer]::GetDpiForWindow([IntPtr]$first.hwnd)/96.
+   $size=@($bounds.Width,$bounds.Height);$area=@($work.x,$work.y,$work.width,$work.height)
+   foreach($axis in 0,1){if([Math]::Abs($camera.viewport[$axis]-$size[$axis]) -gt 1 -or [Math]::Abs($layout.viewport[$axis]*$density-$size[$axis]) -gt 1){return $false}}
+   foreach($axis in 0,1,2,3){if([Math]::Abs($camera.work_area[$axis]-$area[$axis]*$density) -gt 1){return $false}}
+   $geometry.bounds=$bounds;$geometry.camera=$camera;$geometry.work=$work;$geometry.view=$view;$true
+  } 'The notice camera and work area did not match the current native canvas' 15
+  if($locked -and $geometry.work.width -gt 320){throw "The notice work area is not narrow: $($geometry.work.width) DIPs"}
+  $bounds=$geometry.bounds;$camera=$geometry.camera
+  $header=Control 'title-bar';$physical=@{}
+  foreach($part in (@{window=$root.Current.BoundingRectangle;canvas=$bounds;header=$header.Current.BoundingRectangle}).GetEnumerator()){
+   $box=$part.Value;$physical[$part.Key]=@{x=$box.X;y=$box.Y;width=$box.Width;height=$box.Height}
+  }
+  $dpi=[CapyRowPointer]::GetDpiForWindow([IntPtr]$first.hwnd);$view=$geometry.view
+  @{case=$caseName;theme=$Theme;utc=[DateTime]::UtcNow.ToString('o');process_id=$review.Id;window_id=$first.id;hwnd=$first.hwnd;dpi=$dpi;density=$dpi/96.;physical_bounds=$physical;
+   layout=@{viewport=$view.layout.viewport;work_area=$view.layout.work_area;status=$view.layout.status};camera=$camera;
+   header=@{presentation=($header.Current.ItemStatus|ConvertFrom-Json);model=$view.header.model;presentation_height=$view.header_presentation_height;titlebar_insets=$view.titlebar_insets};
+   pre_contact_layer_locked=$view.state.layer_tools.editing_layer.locked;expected_locked_after_publication=$locked}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run ("notice-geometry-$caseName.json"))
+  $at=@([int]($bounds.X+$camera.work_area[0]+$camera.work_area[2]*.5),[int]($bounds.Y+$camera.work_area[1]+$camera.work_area[3]*.5))
+  $notice=@{before=$null;updated=$null;bounds=$null;stable=0;height=$null}
+  [CapyRowPointer]::Down('pen',$at[0],$at[1]);[CapyRowPointer]::Up()
+  Wait-Until {
+   $view=Model
+   if(@($view.state.notice.actions).Count -ne 3 -or !(Find 'canvas-notice-action-add_mask' -Visible)){return $false}
+   $notice.before=$view.state.notice;$true
+  } 'The image refusal did not publish three visible actions'
+  $before=$notice.before;$clock=[Diagnostics.Stopwatch]::StartNew();$timing=@{case=$caseName;published_utc=[DateTime]::UtcNow.ToString('o')}
+  $identities=@{};foreach($offer in $before.actions){$identities[$offer.id]=(Control ('canvas-notice-action-'+$offer.id)).GetRuntimeId() -join ':'}
+  if($locked){(Control 'layer-lock').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();Wait-Until {(Model).state.layer_tools.editing_layer.locked} 'The image layer did not lock'}
+  Use-Window $second
+  while($clock.Elapsed.TotalMilliseconds -lt 1500){Start-Sleep -Milliseconds 25}
+  Language-Choice $japanese|Out-Null
+  Wait-Until {
+   $view=Model $first
+   if($view.windows_active_tag -ne 'ja' -or !$view.state.notice -or $view.state.notice.id -ne $before.id -or $view.state.notice.text -eq $before.text){return $false}
+   $notice.updated=$view.state.notice;$true
+  } 'Language publication did not retain and relabel the shared notice' 3
+  Use-Window $first
+  $updated=$notice.updated
+  if((@($updated.actions.id) -join ',') -ne 'add_mask,new_paint_layer,rasterize_layer'){throw 'The image notice action order changed'}
+  foreach($offer in $updated.actions){
+   $enabled=!$locked -or $offer.id -eq 'new_paint_layer'
+   if($offer.enabled -ne $enabled -or (!$enabled -and !$offer.reason)){throw 'The image notice did not publish the expected locked action availability and reasons'}
+  }
+  Wait-Until {
+   $frame=Find 'canvas-notice' -Visible;$text=if($frame){Find 'canvas-notice-text' -Within $frame -Visible}
+   if(!$frame -or !$text -or $text.Current.Name -ne $updated.text -or $frame.Current.Name -ne $updated.text){return $false}
+   $bounds=$frame.Current.BoundingRectangle
+   $textBounds=$text.Current.BoundingRectangle;$actionBounds=@()
+   if(!$bounds.Contains($textBounds)){return $false}
+   foreach($offer in $updated.actions){
+    $control=Find ('canvas-notice-action-'+$offer.id) -Within $frame -Visible
+    if(!$control){return $false}
+    $controlBounds=$control.Current.BoundingRectangle
+    if(!$bounds.Contains($controlBounds)){return $false}
+    if($locked){if($controlBounds.Top+1 -lt $textBounds.Bottom){return $false}}
+    elseif($controlBounds.Left+1 -lt $textBounds.Right){return $false}
+    $actionBounds+=@{id=$offer.id;bounds=$controlBounds}
+    if(($control.GetRuntimeId() -join ':') -ne $identities[$offer.id]){throw 'Relabeling replaced a retained notice action'}
+    if($control.Current.Name -ne $offer.label -or $control.Current.IsEnabled -ne $offer.enabled -or $control.Current.HelpText -ne [string]$offer.reason){return $false}
+    $caption=Find $offer.label -Name -Within $control -Type ([System.Windows.Automation.ControlType]::Text) -Visible
+    if(!$caption){return $false}
+    $captionBounds=$caption.Current.BoundingRectangle
+    if($caption.Current.Name -ne $offer.label -or $captionBounds.IsEmpty -or $captionBounds.Width -le 0 -or $captionBounds.Height -le 0 -or !$controlBounds.Contains($captionBounds) -or !$bounds.Contains($captionBounds)){return $false}
+   }
+   if($notice.bounds -eq $bounds){$notice.stable++}else{$notice.bounds=$bounds;$notice.stable=0}
+   $notice.layout=@{frame=$bounds;text=$textBounds;actions=$actionBounds}
+   $notice.height=$bounds.Height;$notice.stable -ge 1
+  } 'The retained visible native notice did not adopt its shared text and actions before expiry' 2
+  $timing.native_verified_ms=$clock.Elapsed.TotalMilliseconds
+  if(!$locked){
+   $density=[CapyRowPointer]::GetDpiForWindow([IntPtr]$first.hwnd)/96.
+   $copy=$updated|Select-Object text,actions|ConvertTo-Json -Depth 6 -Compress
+   if($null -eq $wide.height){$wide.height=$notice.height/$density;$wide.copy=$copy}
+   elseif($copy -ne $wide.copy -or [Math]::Abs($notice.height/$density-$wide.height) -gt 1){throw "The matching wide notice did not return to its original height: expected $($wide.height) DIPs, actual $($notice.height/$density) DIPs"}
+  }
+  $appName=Catalog-Text 'ja' 'common-app-name' 'common'
+  if(!$root.Current.Name.EndsWith(' · '+$appName)){throw 'The retained window title did not use the current app name'}
+  $bitmap=$null;$graphics=$null;$dpi=[CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))
+  try{
+   $owner=[uint32]0;[CapyRowPointer]::GetWindowThreadProcessId([IntPtr]$first.hwnd,[ref]$owner)|Out-Null
+   if($owner -ne $review.Id -or $root.Current.ProcessId -ne $review.Id -or [CapyRowPointer]::GetForegroundWindow() -ne [IntPtr]$first.hwnd){throw 'The notice capture lost its owned foreground window'}
+   $timing.capture_guard_start_ms=$clock.Elapsed.TotalMilliseconds;$frame=Find 'canvas-notice' -Visible;$windowBounds=$root.Current.BoundingRectangle
+   $timing.capture_guard_ms=$clock.Elapsed.TotalMilliseconds;$timing.frame_found=[bool]$frame;$timing.window_bounds=$windowBounds.ToString();$timing.frame_bounds=$(if($frame){$frame.Current.BoundingRectangle.ToString()}else{$null})
+   if(!$frame -or !$windowBounds.Contains($frame.Current.BoundingRectangle)){throw 'The notice is not fully visible in its owned capture window'}
+   $bitmap=[Drawing.Bitmap]::new([int]$windowBounds.Width,[int]$windowBounds.Height);$graphics=[Drawing.Graphics]::FromImage($bitmap)
+   $graphics.CopyFromScreen([int]$windowBounds.X,[int]$windowBounds.Y,0,0,$bitmap.Size)
+   $timing.capture_copy_completed_ms=$clock.Elapsed.TotalMilliseconds
+   if(!(Find 'canvas-notice' -Visible)){throw 'The notice expired before its composed capture completed'}
+   Wait-Until {$view=Model;$view -and !$view.state.notice} 'Relabeling restarted the original notice deadline' 4
+   if($clock.Elapsed.TotalSeconds -gt 4.8){throw "Relabeling extended the notice deadline to $($clock.Elapsed.TotalSeconds) seconds"}
+   $bitmap.Save((Join-Path $run ("notice-localized-$caseName.png")),[Drawing.Imaging.ImageFormat]::Png)
+   $updated|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ("notice-localized-$caseName.json"))
+   $notice.layout|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run ("notice-layout-$caseName.json"))
+  }finally{if($graphics){$graphics.Dispose()};if($bitmap){$bitmap.Dispose()};[CapyWindowApi]::SetThreadDpiAwarenessContext($dpi)|Out-Null;$timing.final_ms=$clock.Elapsed.TotalMilliseconds;$timing|ConvertTo-Json|Set-Content (Join-Path $run ("notice-timing-$caseName.json"))}
+  if($locked){(Control 'layer-lock').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle();Wait-Until {!(Model).state.layer_tools.editing_layer.locked} 'The image layer did not unlock'}
+ }
+}

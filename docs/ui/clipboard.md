@@ -100,5 +100,7 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
   where the test reads the PNG back from the pasteboard; the in-app Edit menu on
   iPadOS).
 - Windows: `apps/layer-windows/scripts/exercise-clipboard.ps1` (keyboard Copy,
-  Paste, Paste in Place and Cut, Copy Merged from the selection bar, an image
-  written by another process and a focused text field).
+  Paste, Paste in Place and Cut, Copy Merged from the selection bar, standard
+  Bitmap delivery, external images and file batches, internal pixel and image-object
+  copies opened as new drawings, startup Paste, source-tab preservation, Unicode
+  saves and a focused text field). Run with `-Theme dark` and `-Theme light`.

@@ -1588,6 +1588,83 @@ PresentMon was unavailable without capture privileges and was skipped. These
 runs exclude physical digitizer and panel response and use neither the reference
 photo nor the reference tablet. They do not qualify a tier rate or latency target.
 
+### Windows image port comparison, 2026-10-08
+
+On the same Surface Laptop 5, D3D12 driver and display configuration,
+`9f9342d9` is compared with `8f7a9c77` plus the Windows image and notice port.
+AC remained online with the Balanced plan. No build or other owned GPU workload
+ran during these measurements. Existing user Chrome processes remained open:
+endpoint samples showed zero CPU/GPU activity, but they accumulated 0.766 CPU
+seconds during the focused Airbrush comparison and an extension renderer started.
+Thermal status was unavailable. These are diagnostic comparisons, not reference
+hardware or tier-target qualification.
+
+The brush workload and counting rules are the same as above. An ABBA sequence
+has six repetitions per preset and build. Every repetition passed exact Undo/Redo.
+
+| Workload | Baseline median (range), /s | Candidate median (range), /s | Median run completion p99, before -> after (ms) |
+| --- | ---: | ---: | ---: |
+| G-Pen | 89.73 (85.61-93.99) | 89.30 (86.56-96.00) | 20.53 -> 19.91 |
+| Eraser | 89.22 (79.76-96.67) | 89.61 (87.43-96.11) | 17.11 -> 17.98 |
+| Airbrush | 93.06 (89.61-97.02) | 88.95 (84.16-93.78) | 16.37 -> 17.85 |
+
+The mixed-preset Airbrush median falls 4.42%. A separate Airbrush-only ABBA
+comparison, using the same executable path with verified source/copy hashes,
+also falls: 94.65 (86.86-98.91) -> 89.19 (85.44-98.19) completed generations/s,
+a 5.77% reduction. Median run completion p99 is 16.46 -> 17.82 ms; all twelve
+repetitions pass exact Undo/Redo. The slowdown remains unresolved. These results
+do not separate upstream changes after `9f9342d9` from the Windows port.
+
+A separate comparison isolates the local patch at the same `8f7a9c77` revision.
+A clean Release build uses unchanged source and ordinary Release settings. The
+same executable path and workload run in patched/clean/clean/patched order,
+with six repetitions per build; all twelve pass exact Undo/Redo.
+
+| Same-revision Airbrush | Clean main | Patched main |
+| --- | ---: | ---: |
+| Completed generations/s, median (range) | 90.75 (81.96-101.96) | 92.28 (86.64-99.17) |
+| Median run completion p99, ms (range) | 17.36 (14.80-19.52) | 16.56 (15.27-19.31) |
+
+This sequence does not reproduce an added slowdown from the local patch. It does
+not establish statistical equivalence or explain the earlier revision-to-revision
+gap. AC/Balanced and all eleven user Chrome PIDs remain unchanged; Chrome uses
+0.766 CPU seconds over this window, with zero sampled GPU activity at its ends.
+Intermittent activity remains unexcluded. Clean executable SHA-256 prefix is
+`3DFE498906F5`; its source manifest and build proof are in
+`artifacts/windows/port-20261007/performance/clean8f-release/`, and this comparison
+is in `airbrush-bccb/` below the raw evidence directory named below.
+
+Pen captures use the same plain 8192 x 6336 project and 18 px G-Pen, with an
+enabled brush and three seconds of settling, without priming or waiting for the
+full optional shader catalogue. Order is ABBABAAB, four fresh profiles per build.
+All eight runs consume 2401/2401 samples with zero unmatched inputs. Nominal
+240 Hz pacing achieves about 212-216 Hz. Values below are medians and ranges of
+the four per-run percentiles in milliseconds.
+
+| Metric | Baseline p95 | Candidate p95 | Baseline p99 | Candidate p99 |
+| --- | ---: | ---: | ---: | ---: |
+| Injection to frame return | 5.88 (5.77-5.91) | 5.62 (5.48-6.61) | 72.27 (57.59-98.23) | 58.79 (54.24-62.34) |
+| Injection to presentation observation bound | 10.90 (10.81-11.07) | 11.06 (11.03-11.39) | 80.05 (69.53-106.94) | 67.21 (62.41-72.15) |
+| Host frame span | 3.73 (3.68-3.79) | 3.74 (3.66-3.88) | 4.86 (4.75-5.04) | 4.69 (4.59-4.85) |
+
+Two setup attempts failed before injection when rebuilt brush controls were
+queried before becoming available. Five accepted captures use the original
+lookup; the final three use the existing control-readiness wait and reacquire
+the size control to verify its committed value. Input packets, pacing, settling
+and reporting are unchanged. Both cohorts and failures remain in the evidence.
+Immediate presentation provides an observation upper bound; exact display
+latency is unavailable. PresentMon lacked capture privileges. These runs exclude
+physical digitizer and panel response.
+
+The initial measurements for this image port had two task-owned hidden review
+apps still running; their isolation claim is unsupported. Those processes were identified
+from their original launch logs and stopped before this comparison. Full hashes,
+raw CSVs, activity records, percentile ranges and setup provenance are in
+`artifacts/windows/port-20261007/performance/candidate/quiet-comparison-20261008T135944Z/`.
+Native candidate executable SHA-256 prefix is `6CB0E28F0FEA`, DLL `04468C30D911`,
+and brush executable `3F5189244C13`. The preserved pen project is
+`FF686BDF3CB3`.
+
 ## Retained-material G-Pen comparison
 
 This earlier comparison is measured on 2026-10-02 at `eb9b8bab1` with the retained-material changes:

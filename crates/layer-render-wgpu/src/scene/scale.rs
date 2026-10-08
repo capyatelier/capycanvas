@@ -182,6 +182,7 @@ struct RootComposition {
     target: wgpu::TextureView,
     composition: Composition,
 }
+#[expect(clippy::large_enum_variant, reason = "Display commands retain uniform records inline without per-job boxing")]
 enum DisplayJob {
     Compose(Composition),
     Resample { values: [u8; resample::UNIFORM_BYTES as usize], views: [wgpu::TextureView; 2], size: [u32; 2] },
@@ -241,7 +242,7 @@ impl Commands {
         values: [u32; 20],
     ) -> Result<u32, GpuRasterError> {
         let mut bytes = [0; 80];
-        for (dst, value) in bytes.chunks_exact_mut(4).zip(values) {
+        for (dst, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(values) {
             dst.copy_from_slice(&value.to_le_bytes());
         }
         self.write(r, encoder, &bytes)
@@ -304,7 +305,7 @@ impl Commands {
         let mut records = vec![0; jobs.len() * self.stride as usize];
         for (record, job) in records.chunks_exact_mut(self.stride as usize).zip(&jobs) {
             match job {
-                DisplayJob::Compose(job) => for (dst, value) in record.chunks_exact_mut(4).zip(job.values) { dst.copy_from_slice(&value.to_le_bytes()); },
+                DisplayJob::Compose(job) => for (dst, value) in record.as_chunks_mut::<4>().0.iter_mut().zip(job.values) { dst.copy_from_slice(&value.to_le_bytes()); },
                 DisplayJob::Resample { values, .. } => record[..values.len()].copy_from_slice(values),
             }
         }
@@ -402,7 +403,7 @@ pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Req
     let native = input.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) || !fits || records > r.device.limits().max_buffer_size.min(u64::from(u32::MAX))
         || allocation_for(r, plan, packet, None, bounded(packet.scene), None).into_iter().sum::<u64>() > CACHE_BYTES
         || packet.scene.order().iter().any(|handle| packet.scene.visible(*handle)
-            && packet.scene.effect(*handle).is_some_and(|e| (e.program.resolution == layer_core::EffectResolution::Native && !native_pointwise_alpha(&e.program))
+            && packet.scene.effect(*handle).is_some_and(|e| (e.program.resolution == layer_core::EffectResolution::Native && !native_pointwise_alpha(e.program))
                 || (e.program.image_boundary() && level == 0)));
     #[cfg(test)]
     let native = native || r.test.exact_display;
@@ -1236,6 +1237,7 @@ impl Cache {
     }
 }
 
+#[expect(clippy::large_enum_variant, reason = "Per-frame presentation retains GPU views and geometry inline without boxing")]
 enum Presentation {
     Placed(Placement),
     Mapped(scene::resample::Mapped),

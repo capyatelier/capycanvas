@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[switch]$NoticeOnly)
 $ErrorActionPreference='Stop'
 if($Theme -eq 'light-large'){$Theme='light';$LargeText=$true}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -212,7 +212,7 @@ try{
  $actualTextScale=Text-Scale
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
  [IO.File]::WriteAllText((Settings-File),(@{language='System';theme=$Theme}|ConvertTo-Json -Depth 4))
- $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
+ $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle;Write-Output "Owned localization review $($review.Id): $run"
  Wait-Until {@(Windows).Count -eq 1} 'First window did not register' 45
  $first=@(Windows)[0];Ready $first;Use-Window $first
@@ -221,6 +221,12 @@ try{
  Menu-Command 'file' 'new_window'
  Wait-Until {@(Windows).Count -eq 2} 'Second window did not register' 45
  $second=@(Windows|Where-Object id -ne $first.id)[0];Ready $second
+ if($NoticeOnly){
+  [CapyRowPointer]::Initialize([uint32]$review.Id)
+  Notice-Surface
+  [pscustomobject]@{theme=$Theme;retained_notice_copy_actions_and_deadline='passed';evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+  $completed=$true;return
+ }
  Use-Window $first;Focus-Canvas
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),78)
  Wait-Until {@(Windows).Count -eq 3} 'Text-draft window did not register' 45
@@ -436,6 +442,7 @@ try{
   Capture-Window $textWindow ($choice.tag+'-drawing')
   $journeys+=[pscustomobject]@{tag=$choice.tag;search='localized and English alias passed';drawing_undo_redo='passed';unicode_save_reopen_export='passed';export_sha256=$after}
  }
+ Notice-Surface
  Use-Window $second;Language-Choice 0|Out-Null;Language-Choice $lastIndex|Out-Null
  Invoke 'CloseButton';Wait-Until {$view=Model;$view -and !$view.preferences} 'Preferences did not close' 10
  Focus-Canvas;[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),78)

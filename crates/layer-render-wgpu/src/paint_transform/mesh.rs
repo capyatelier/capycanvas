@@ -624,7 +624,7 @@ impl Positions {
         let size = [texture.width() as f32, texture.height() as f32];
         let mut window = [0u8; WINDOW_BYTES as usize];
         for (dst, value) in window
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>().0.iter_mut()
             .zip([origin[0], origin[1], size[0], size[1], a, c, e, source_scale, b, d, f, 0.])
         {
             dst.copy_from_slice(&value.to_le_bytes());

@@ -86,9 +86,11 @@ fn tile_range(extent: u32) -> u32 {
     extent.div_ceil(TILE_SIZE)
 }
 
+type TileReader<'a> = dyn FnMut([u32; 2]) -> Result<Option<Vec<u8>>, String> + 'a;
+
 struct Decoded<'a> {
     tiles: Vec<([u32; 2], Arc<Vec<u8>>)>,
-    read: Box<dyn FnMut([u32; 2]) -> Result<Option<Vec<u8>>, String> + 'a>,
+    read: Box<TileReader<'a>>,
 }
 impl Decoded<'_> {
     fn get(&mut self, coordinate: [u32; 2]) -> Result<Option<Arc<Vec<u8>>>, String> {

@@ -282,7 +282,7 @@ fn stable_bytes(profile: &Profile) -> Result<Vec<u8>, String> {
     // profile's creation_date_time. ICC permits an unspecified (zero) ID.
     let mut bytes = profile.encode().map_err(error)?;
     for (field, value) in bytes[24..36]
-        .chunks_exact_mut(2)
+        .as_chunks_mut::<2>().0.iter_mut()
         .zip([2026u16, 1, 1, 0, 0, 0])
     {
         field.copy_from_slice(&value.to_be_bytes());

@@ -51,10 +51,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         let mut gradient=match &target {
             GradientDestination::Tool {epoch}=> {
                 if *epoch!=self.state.document_file.epoch || !matches!(self.layer_interaction.tool,LayerCanvasTool::Gradient {..}) {return Ok(());}
-                match edit {
-                    GradientEdit::Reset=> {self.layer_interaction.gradient.definition=None;return Ok(());},
-                    _=>(),
-                }
+                if edit == GradientEdit::Reset {self.layer_interaction.gradient.definition=None;return Ok(());}
                 self.tool_gradient()
             },
             GradientDestination::Effect {layer,key,epoch}=> {

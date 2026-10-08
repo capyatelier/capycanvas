@@ -115,7 +115,7 @@ impl<'a> SourceRows<'a> {
     /// The next whole rows, top to bottom.
     pub fn push(&mut self, pixels: &mut [[f32; 4]]) -> Result<(), String> {
         let width = self.clip.extent[0] as usize;
-        if pixels.len() % width != 0 || self.y as usize + pixels.len() / width > self.clip.extent[1] as usize {
+        if !pixels.len().is_multiple_of(width) || self.y as usize + pixels.len() / width > self.clip.extent[1] as usize {
             return Err("Rows outside the converted rectangle".into());
         }
         let row_bytes = self.target.pixel_bytes() * width;

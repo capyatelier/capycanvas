@@ -66,11 +66,12 @@ try{
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned image object review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'The object review did not start' 90
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $native=@{window=$null}
+    Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'The object review did not start' 90
+    $root=$native.window.Root;$drawingWindow=$native.window.Handle
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     foreach($name in 'shared-image-f64-builtin','shared-image-f64-icc','shared-image-f64-nearest'){
         $source=Join-Path $repo ('apps/layer-web/fixtures/'+$name+'.capy')
@@ -108,7 +109,7 @@ try{
         if((Model).state.host_error){throw "The object journey reported $((Model).state.host_error)"}
         Write-Output "PASS: $name open, D3D12 pixels, visibility history, F64/shared identity, save/reopen"
     }
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [pscustomobject]@{theme=$Theme;built_in_profile='passed';icc_profile='passed';nearest_f64='passed';visible_history='passed';shared_image_identity='passed';save_reopen='passed';evidence=$run}|ConvertTo-Json
 }catch{

@@ -97,7 +97,15 @@ context. Controls that outlive a language change, such as the canvas bar, bind
 their names with `copyName`; localized tab titles update retained panel headers.
 A button made from localized copy relabels its text and accessible name
 but keeps an icon or panel given as its content, because copy callbacks also run
-when the window prunes them.
+when the window prunes them. Visible canvas notices update their text, ordered
+action labels, availability and reasons without replacing retained action buttons
+or restarting the notice deadline. Native action buttons wrap within the notice.
+The notice measures both a side-by-side layout and actions below the message,
+then uses the shorter layout, keeping the side-by-side layout when heights match.
+This keeps narrow notices readable and contained even where the Web notice's
+long buttons overflow. Run `exercise-localization.ps1 -NoticeOnly` in each theme
+for the focused image-notice journey, including a narrow canvas and returning to
+the original width.
 
 Empty localization metadata preserves the current context; a pending envelope
 stays queued until a full snapshot carries it. Properties, tool controls, filter
@@ -146,10 +154,19 @@ Image layers list their images as child rows after the layer row while the share
 state marks them expanded. Child rows carry the shared object IDs, previews from the
 object thumbnail target, visibility, selection, the shared image menu and grip
 reordering within their layer; they have no mask, lock or swipe controls. Their menu
-uses the layer-menu query with the image ID, answered by the shared `object_menu` query. `exercise-image-rows.ps1` pastes two
-images and checks rows, previews, additive selection, the menu, visibility, reordering,
-collapsing, the painting refusal's actions and Rasterize Layer with mouse and touch
-in the dark theme and with mouse in the light theme.
+uses the layer-menu query with the image ID, answered by shared `object_menu`.
+`exercise-image-rows.ps1` checks rows, previews, selection, visibility, collapsing,
+reordering and cancellation. It authors images with Move, Scale–Rotate and Rotate
+Right, then exercises Duplicate Images, structured Copy/Cut/Paste, the painting
+refusal actions, Rasterize Layer and Convert to Image Layer. Composed pixel
+comparisons check edits and one-step Undo/Redo. Saved packages verify immutable
+image sources, selected affines and ordered layer members through editing,
+clipboard operations and Unicode save/reopen. Run each `-Device mouse|pen|touch`
+variant with `-Theme dark` and `-Theme light`.
+Conversion checks allow at most one 8-bit display level per channel at every
+fixed artwork sample, matching the [shared renderer tests](../../crates/layer-render-wgpu/tests/object_layer_consumers.rs).
+Undo and Redo require exact pixels for each recorded image, raster and
+converted state; conversion deltas and sample geometry are saved with the run.
 
 ### Where files live
 
@@ -360,6 +377,22 @@ The test script adds its build folder to the child process DLL search path so
 D3D12 uses the same pinned DXC as the app. Before direct Cargo GPU tests, prepend
 that folder to `$env:PATH`, for example
 `$env:PATH=(Resolve-Path artifacts/windows/Release).Path+';'+$env:PATH`.
+
+`exercise-clipboard.ps1 -Executable <path> -Theme dark` checks clipboard formats,
+Copy/Cut history, Paste as New Image from pixels, image objects and external file
+batches, startup Paste and ordinary Paste into a saved drawing. New-image checks
+save the result and return to an unchanged source tab. Repeat with `-Theme light`.
+
+`exercise-idle-brush.ps1 -Executable <path> -Theme dark` checks painting as soon
+as the selected brush is ready, later Wet Round, Smudge, Liquify and G-Pen
+contacts with pixel and Undo/Redo checks, and closing after first readiness.
+It records whether shader compilation is still pending at close; inspect that
+observation before claiming coverage of closing during compilation. Run it on
+an activated, owned private desktop with `CAPY_PRIVATE_DESKTOP` set
+to that desktop's name; it verifies both the thread and active input desktop
+before launching the app or sending input. Repeat with `-Theme light`. Its
+180-second catalogue wait checks eventual functionality; it does not replace
+startup deadline tests or performance measurements.
 
 Open header menus follow shared command state while document operations finish.
 Their native items retain focus and identity; unchanged menu models skip updates.
@@ -601,6 +634,10 @@ mask captures, and never loosen comparison tolerances to make a comparison pass.
 ## Diagnose a running app
 
 Launch an owned review as in [matched editor captures](#matched-editor-captures).
+After a native file picker, pass the drawing HWND from `windows-<pid>.json` to
+helpers that accept `-WindowHandle`. `Process.MainWindowHandle` can select an
+input-service window in the same process. Retain the verified drawing HWND for
+foreground input and closing.
 Then:
 
 - `./apps/layer-windows/scripts/inspect-window.ps1 -ProcessId $review.Id` saves a

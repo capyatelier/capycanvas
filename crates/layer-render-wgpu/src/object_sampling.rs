@@ -284,7 +284,7 @@ impl ObjectSampler {
                 data[base+52..base+56].copy_from_slice(&u32::from(object.nearest).to_le_bytes());
             }
             uploads.write_at(encoder,&self.preview_uniform,0,&data)?;
-            let target=if (passes-1-pass)%2==0 {&job.output} else {job.scratch.as_ref().ok_or(GpuRasterError::InvalidExtent)?};
+            let target=if (passes-1-pass).is_multiple_of(2) {&job.output} else {job.scratch.as_ref().ok_or(GpuRasterError::InvalidExtent)?};
             let sources:Vec<_>=(0..PREVIEW_SOURCES).map(|slot|slots.get(slot).map_or(empty,|source|&job.sources[*source])).collect();
             let binding=crate::bindings::group(device,"image-object collection preview",&self.preview_layout,std::iter::once(self.preview_uniform.as_entire_binding())
                 .chain(std::iter::once(wgpu::BindingResource::TextureView(back.as_ref().unwrap_or(empty))))

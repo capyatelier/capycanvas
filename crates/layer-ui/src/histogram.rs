@@ -40,15 +40,15 @@ pub struct HistogramView {
 
 fn serialize_captured_source<S: serde::Serializer>(source: &Option<ArtworkSource>, serializer: S) -> Result<S::Ok, S::Error> {
     #[derive(Serialize)]
-    enum Source<'a> { Visible, Reference, Source(&'a layer_core::authored::SourceTarget), Objects(u64), EffectInput(u64), EffectChannels(u64), EffectBaseline(u64) }
+    enum CapturedSource<'a> { Visible, Reference, Source(&'a layer_core::authored::SourceTarget), Objects(u64), EffectInput(u64), EffectChannels(u64), EffectBaseline(u64) }
     source.as_ref().map(|source| match source {
-        ArtworkSource::Visible => Source::Visible,
-        ArtworkSource::Reference => Source::Reference,
-        ArtworkSource::Source(target) => Source::Source(target),
-        ArtworkSource::Objects(handle) => Source::Objects(occurrence_token(*handle)),
-        ArtworkSource::EffectInput(handle) => Source::EffectInput(occurrence_token(*handle)),
-        ArtworkSource::EffectChannels(handle) => Source::EffectChannels(occurrence_token(*handle)),
-        ArtworkSource::EffectBaseline(baseline) => Source::EffectBaseline(occurrence_token(baseline.occurrence)),
+        ArtworkSource::Visible => CapturedSource::Visible,
+        ArtworkSource::Reference => CapturedSource::Reference,
+        ArtworkSource::Source(target) => CapturedSource::Source(target),
+        ArtworkSource::Objects(handle) => CapturedSource::Objects(occurrence_token(*handle)),
+        ArtworkSource::EffectInput(handle) => CapturedSource::EffectInput(occurrence_token(*handle)),
+        ArtworkSource::EffectChannels(handle) => CapturedSource::EffectChannels(occurrence_token(*handle)),
+        ArtworkSource::EffectBaseline(baseline) => CapturedSource::EffectBaseline(occurrence_token(baseline.occurrence)),
     }).serialize(serializer)
 }
 

@@ -56,7 +56,7 @@ impl SnapshotGpu {
             }
             let bytes=crate::local_tone::read_buffer_async(&self.device,&self.queue,&summary).await?;
             control.check().map_err(|e|e.to_string())?;
-            let words:Vec<_>=bytes.chunks_exact(4).map(|b|u32::from_le_bytes(b.try_into().unwrap())).collect();
+            let words:Vec<_>=bytes.as_chunks::<4>().0.iter().map(|b|u32::from_le_bytes(*b)).collect();
             if words[7]!=0 {return Err("The artwork contains colors Auto cannot represent".into());}
             if words[6]==0 {return Err("There are no usable pixels for Auto".into());}
             if phase==0 {

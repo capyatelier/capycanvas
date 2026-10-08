@@ -510,7 +510,7 @@ impl RawRegions {
                     0,
                 ];
                 for (word, value) in uniforms[batch * stride as usize + i * 64..][..64]
-                    .chunks_exact_mut(4)
+                    .as_chunks_mut::<4>().0.iter_mut()
                     .zip(data)
                 {
                     word.copy_from_slice(&value.to_ne_bytes());

@@ -124,8 +124,8 @@ pub(super) fn read(
         let mut rgba = raster_io::allocate(width as usize * height as usize * 4)?;
         let [x, y, w, h] = info.first_rect.ok_or("WebP animation contains no frame")?;
         for (i, (rgb, to)) in pixels
-            .chunks_exact(3)
-            .zip(rgba.chunks_exact_mut(4))
+            .as_chunks::<3>().0.iter()
+            .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
             .enumerate()
         {
             to[..3].copy_from_slice(rgb);

@@ -349,6 +349,22 @@ are your task, and remove an entry when you fix it.
   `accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen`
   repairs 70 pages where the fixture expects fewer than 64. Keep these assertions
   when checking renderer changes.
+- Intel Iris Xe D3D12 renderer failures reproduced on unmodified `8f7a9c77`:
+  `repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set`
+  does not produce the expected resident output;
+  `saved_artwork_render_contracts` reports
+  `domain_warp/F32` maximum drift 0.000232696533203125 against 0.0002.
+  `native_publication_pipelines_follow_canvas_and_gate_brush` and
+  `idle_filter_preview_requests_refresh_completed_startup_work` exceed their
+  30-second catalogue deadlines with canvas and brush readiness already true.
+  Keep the existing deadlines and pixel bounds.
+- On the same unmodified `8f7a9c77` Iris Xe D3D12 build, five `layer-host`
+  cases exceed the existing 60-second startup wait:
+  `a_contact_begun_as_a_transform_opens_is_replayed_whole_once_it_is_prepared`,
+  `a_stroke_once_painting_is_reported_ready_paints_while_background_shaders_compile`,
+  `canvas_bar_queries_answer_for_the_current_bar`,
+  `thumbnail_work_left_for_canvas_frames_wakes_the_host`, and
+  `warp_opens_over_a_large_filled_selection`.
 - GTK `native_selection_pen_input`, `native_toolbar_components_narrow_input`,
   `native_workspace_motion_input`, and `native_workspace_switcher_input`
   (intermittent). `native_workspace_resize_input` presents below its rate
@@ -401,10 +417,9 @@ are your task, and remove an entry when you fix it.
   comparison limits and report the differences.
 - Windows `exercise-multiwindow.ps1`: "Pin preferences did not refresh in the
   inactive window".
-- Windows `exercise-clipboard.ps1`: "Ctrl+X did not write the clipboard", and
-  `exercise-persistence.ps1`: "Missing control: Brush size slider" (the slider is
-  named "Brush size"). `documents:RecoverGpu` on a VM: "GPU reconstruction did not
-  start".
+- Windows `exercise-persistence.ps1`: "Missing control: Brush size slider"
+  (the slider is named "Brush size"). `documents:RecoverGpu` on a VM: "GPU
+  reconstruction did not start".
 - Windows `exercise-selection.ps1` exits with an access violation in roughly a third
   of runs, on untouched upstream as well, after it closes the Select drawer and
   switches workspaces. The fault is in WinUI's `ScrollView::OnHideIndicatorsTimerTick`

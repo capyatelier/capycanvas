@@ -42,7 +42,7 @@ pub(super) fn read(
             .global_palette()
             .and_then(|p| p.get(index * 3..index * 3 + 3))
     {
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel[..3].copy_from_slice(rgb);
             pixel[3] = 255;
         }

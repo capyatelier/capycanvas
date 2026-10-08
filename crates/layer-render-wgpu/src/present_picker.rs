@@ -74,7 +74,7 @@ impl Picker {
             && let Some(data) = self.data
         {
             let mut bytes = [0u8; 64];
-            for (chunk, value) in bytes.chunks_exact_mut(4).zip(data) {
+            for (chunk, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(data) {
                 chunk.copy_from_slice(&value.to_ne_bytes());
             }
             uploads.write(

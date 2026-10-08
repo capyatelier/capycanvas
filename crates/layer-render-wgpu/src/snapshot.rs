@@ -777,7 +777,7 @@ impl SnapshotRenderer {
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
         let mut pixels = Vec::with_capacity(width as usize * height as usize);
         for row in bytes.chunks_exact(stride as usize) {
-            for pixel in row[..width as usize * 16].chunks_exact(16) {
+            for pixel in row[..width as usize * 16].as_chunks::<16>().0.iter() {
                 pixels.push(std::array::from_fn(|c| {
                     f32::from_le_bytes(pixel[c * 4..c * 4 + 4].try_into().unwrap())
                 }));
@@ -847,8 +847,8 @@ impl SnapshotRenderer {
             .slice(..)
             .get_mapped_range()
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
-            .chunks_exact(4)
-            .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>().0.iter()
+            .map(|b| u32::from_ne_bytes(*b))
             .collect();
         readback.unmap();
         self.check_cancelled()?;

@@ -3,6 +3,8 @@ use layer_core::authored::{Affine64, ImageInterpolation, ImageObjectHandle, Port
 use layer_core::color::source::SourceImage;
 use std::sync::Weak;
 
+type CollectionPreview = (Vec<wgpu::TextureView>, Vec<crate::object_sampling::PreviewSource>);
+
 #[derive(Clone)]
 pub(super) struct SourceIdentity(Weak<SourceImage>);
 impl PartialEq for SourceIdentity { fn eq(&self, other: &Self) -> bool { self.0.ptr_eq(&other.0) } }
@@ -213,8 +215,7 @@ impl Scene {
         let level = if nearest { 0 } else { crate::object_image_mips::MovingImages::level(inverse) };
         r.moving_images.lookup(id, source, level).filter(|mip| !nearest || mip.level == 0)
     }
-    pub(super) fn collection_preview(r: &WgpuRasterizer, job: &CollectionJob)
-        -> Result<Option<(Vec<wgpu::TextureView>, Vec<crate::object_sampling::PreviewSource>)>, GpuRasterError> {
+    pub(super) fn collection_preview(r: &WgpuRasterizer, job: &CollectionJob) -> Result<Option<CollectionPreview>, GpuRasterError> {
         let mut identities: Vec<(PortableId, SourceIdentity, u32)> = Vec::new();
         let mut sources = Vec::new();
         let mut objects = Vec::with_capacity(job.keys.len());
@@ -325,7 +326,7 @@ fn decode_inner(r: &mut WgpuRasterizer, encoder: &mut crate::submission::Command
             size: 144, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let binding = uniform_binding(&r.device, &r.scene_pipelines.uniforms, &records);
         let mut data = [0; 144];
-        if let Some(values) = pending.data { for (destination, value) in data.chunks_exact_mut(4).zip(values) { destination.copy_from_slice(&value.to_ne_bytes()); } }
+        if let Some(values) = pending.data { for (destination, value) in data.as_chunks_mut::<4>().0.iter_mut().zip(values) { destination.copy_from_slice(&value.to_ne_bytes()); } }
         r.uploads.write_at(encoder, &records, 0, &data)?;
         let bytes = r.source_tiles.get_mut().encode(&r.device, &mut r.uploads, &r.scene_pipelines.source, encoder, &pending, &binding, 0)?;
         let in_flight = r.source_tiles.borrow().charge_upload(encoder, bytes);

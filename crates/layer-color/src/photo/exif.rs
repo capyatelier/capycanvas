@@ -123,7 +123,7 @@ impl<R: Read + Seek> Walker<'_, R> {
         let table = self.bytes(offset + 2, count * 12)?;
         let mut entries = Vec::new();
         let mut pointers = [None; 2];
-        for raw in table.chunks_exact(12) {
+        for raw in table.as_chunks::<12>().0 {
             let (tag, kind, count) = (self.u16(&raw[..2]), self.u16(&raw[2..4]), self.u32(&raw[4..8]));
             if matches!(tag, EXIF_IFD | GPS_IFD) {
                 if matches!(kind, LONG | 13) && count == 1 {

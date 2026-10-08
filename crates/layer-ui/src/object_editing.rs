@@ -9,6 +9,8 @@ use layer_render::CursorSegment;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+type InsertedObjects = (Edit, Vec<ImageObjectHandle>, Vec<(SourceTarget, layer_core::RasterOperation)>);
+
 const UNIT_HANDLES: [[f64; 2]; 8] = [[0., 0.], [0.5, 0.], [1., 0.], [1., 0.5], [1., 1.], [0.5, 1.], [0., 1.], [0., 0.5]];
 
 pub fn object_token(handle: ImageObjectHandle) -> u64 { handle.wire_id() }
@@ -704,8 +706,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             destination => self.image_layer_destination(destination).map(|(index, parent)| ObjectDestination::New { index, parent }),
         }
     }
-    pub(super) fn insert_objects_edit(&self, objects: Vec<layer_core::ImageObject>, destination: Option<ImageLayerDestination>, masked: bool)
-        -> Result<(Edit, Vec<ImageObjectHandle>, Vec<(SourceTarget, layer_core::RasterOperation)>), String> {
+    pub(super) fn insert_objects_edit(&self, objects: Vec<layer_core::ImageObject>, destination: Option<ImageLayerDestination>, masked: bool) -> Result<InsertedObjects, String> {
         if objects.is_empty() { return Err("Copy an image to paste".into()); }
         for object in &objects { object.validate()?; }
         let mut candidate = self.engine.document().clone();

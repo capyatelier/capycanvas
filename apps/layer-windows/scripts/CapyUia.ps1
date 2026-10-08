@@ -34,6 +34,22 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$scri
     }while($watch.Elapsed.TotalSeconds -lt $Seconds*$(if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}))
     throw $Message
 }
+function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle){
+    $windows=if($WindowHandle){@([System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle))}
+        else{[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$Process.Id))}
+    $canvas=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas')
+    $found=@(foreach($window in $windows){
+        $handle=[IntPtr]$window.Current.NativeWindowHandle;$owner=[uint32]0
+        [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
+        if($handle -ne [IntPtr]::Zero -and $owner -eq $Process.Id -and $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$canvas)){
+            [pscustomobject]@{Root=$window;Handle=$handle}
+        }
+    })
+    if($found.Count -gt 1){throw 'The owned process has multiple drawing windows; specify a window handle'}
+    if($WindowHandle -and $found.Count -ne 1){throw 'The specified window is not an owned drawing window'}
+    if($found.Count){$found[0]}
+}
 function Wait-StablePixels([scriptblock]$Sample){
     $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $Sample;$stable=0
     do{
@@ -144,7 +160,10 @@ function Model{
 }
 function Capture([string]$Name,[switch]$WithModel,[switch]$Composed){
     if($script:CapyCaptureDelay){Start-Sleep -Milliseconds $script:CapyCaptureDelay}
-    & (Join-Path $script:CapyScripts 'inspect-window.ps1') -ProcessId $review.Id -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed:$Composed *> (Join-Path $run ($Name+'.json'))
+    $handle=[IntPtr]$root.Current.NativeWindowHandle;$owner=[uint32]0
+    [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
+    if($owner -ne $review.Id){throw 'The capture window no longer belongs to the owned process'}
+    & (Join-Path $script:CapyScripts 'inspect-window.ps1') -ProcessId $review.Id -WindowHandle $handle.ToInt64() -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed:$Composed *> (Join-Path $run ($Name+'.json'))
     if($WithModel){(Model)|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run ($Name+'-model.json'))}
 }
 function Enter-CapyEnvironment([string[]]$Names=@()){

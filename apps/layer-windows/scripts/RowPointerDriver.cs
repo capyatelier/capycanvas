@@ -41,6 +41,26 @@ public static class CapyRowPointer {
   if(!GetCursorInfo(ref info))throw new Win32Exception(Marshal.GetLastWin32Error());
   return (info.flags&1)!=0;
  }
+ [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+ [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
+ [DllImport("user32.dll")] static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
+ [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformation(IntPtr handle,int index,System.Text.StringBuilder name,uint length,out uint needed);
+ static string DesktopName(IntPtr desktop) {
+  var name=new System.Text.StringBuilder(256);uint needed;
+  return desktop!=IntPtr.Zero&&GetUserObjectInformation(desktop,2,name,512,out needed)?name.ToString():null;
+ }
+ public static void VerifyPrivateDesktop(string expected) {
+  if(string.IsNullOrWhiteSpace(expected)||string.Equals(expected,"Default",StringComparison.OrdinalIgnoreCase))throw new ArgumentException("A private test desktop name is required.");
+  IntPtr input=OpenInputDesktop(0,false,1);
+  try{if(input==IntPtr.Zero||DesktopName(GetThreadDesktop(GetCurrentThreadId()))!=expected||DesktopName(input)!=expected)throw new InvalidOperationException("The current thread and input desktop must match the owned private test desktop.");}
+  finally{if(input!=IntPtr.Zero)CloseDesktop(input);}
+ }
+ static string InjectionFailure(Point point,uint flags,int retry) {
+  long failedAt=System.Diagnostics.Stopwatch.GetTimestamp();uint thread=GetCurrentThreadId();IntPtr input=OpenInputDesktop(0,false,1);
+  try{return $"kind={kind}, id=0, flags=0x{flags:X}, point=({point.x},{point.y}), last=({last.x},{last.y}), device=0x{pen.ToInt64():X}, active={active}, hover={hovering}, retry={retry}, ms_since_accepted_at_error={(failedAt-lastInjection)*1000.0/System.Diagnostics.Stopwatch.Frequency:R}, thread={thread}, thread_desktop={DesktopName(GetThreadDesktop(thread))??"unavailable"}, input_desktop={DesktopName(input)??"unavailable"}";}
+  finally{if(input!=IntPtr.Zero)CloseDesktop(input);}
+ }
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
@@ -49,12 +69,12 @@ public static class CapyRowPointer {
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
  static long lastInjection;public static double MaxGapMilliseconds {get;private set;}
- static uint owner,kind,penButtons;static bool active,hovering,eraserEnd;static Point last;static IntPtr pen;
+ static uint owner,kind,penButtons,mouseRelease;static bool active,hovering,eraserEnd;static Point last;static IntPtr pen;
  static readonly object gate=new object();static Timer pulse;static Exception failure;
  public static bool Active {get{lock(gate)return active;}}
  public static void Initialize(uint process) {
   if(active||pulse!=null||pen!=IntPtr.Zero)throw new InvalidOperationException("Dispose the previous pointer review first.");
-  failure=null;kind=0;penButtons=0;hovering=false;eraserEnd=false;owner=process;
+  failure=null;kind=0;penButtons=0;mouseRelease=0;hovering=false;eraserEnd=false;owner=process;
   if(Marshal.SizeOf(typeof(TouchInfo))!=144||Marshal.SizeOf(typeof(PenInfo))!=120||Marshal.SizeOf(typeof(TypeInfo))!=152)
    throw new Exception("Pointer structures require the x64 ABI.");
   if(!InitializeTouchInjection(1,3))throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -97,7 +117,7 @@ public static class CapyRowPointer {
     if(active)MaxGapMilliseconds=Math.Max(MaxGapMilliseconds,(now-lastInjection)*1000.0/System.Diagnostics.Stopwatch.Frequency);
     lastInjection=now;return;
    }
-   int error=Marshal.GetLastWin32Error();if(error!=21)throw new Win32Exception(error);Thread.Sleep(1);
+   int error=Marshal.GetLastWin32Error();if(error!=21)throw new Win32Exception(error,new Win32Exception(error).Message+" "+InjectionFailure(point,flags,retry));Thread.Sleep(1);
   }
   throw new Exception("Windows did not accept the pointer frame.");
  }
@@ -137,13 +157,16 @@ public static class CapyRowPointer {
    penButtons=0;Guard(last);if(hovering)EndHover();else Send(last,0x20000);
   }
  }
- public static void Down(string device,int x,int y) {
+ public static void Down(string device,int x,int y) {Down(device,x,y,"left");}
+ public static void Down(string device,int x,int y,string button) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");
    EndHover();kind=device=="touch"?2u:device=="pen"?3u:device=="mouse"?4u:0;
    if(kind==0)throw new ArgumentException("Unknown pointer device.");
+   uint press=button=="left"?2u:button=="right"?8u:button=="middle"?32u:0;
+   if(press==0||(kind!=4&&press!=2))throw new ArgumentException("Choose left, right or middle for mouse contacts only.");
    var point=new Point{x=x,y=y};Guard(point);MaxGapMilliseconds=0;
-   if(kind==4){MouseMove(point);MouseButton(2);}else Send(point,0x10006);
+   if(kind==4){MouseMove(point);MouseButton(press);mouseRelease=press<<1;}else Send(point,0x10006);
    last=point;active=true;if(kind!=4)pulse.Change(25,25);
   }
  }
@@ -157,7 +180,7 @@ public static class CapyRowPointer {
  public static void Up(bool stayInRange=false) {
   lock(gate){
    Check();if(!active)return;Guard(last);Thread.Sleep(2);
-   if(kind==4)MouseButton(4);else Send(last,kind==3&&stayInRange?0x40002u:0x40000u);
+   if(kind==4)MouseButton(mouseRelease);else Send(last,kind==3&&stayInRange?0x40002u:0x40000u);
    active=false;hovering=kind==3&&stayInRange;
    pulse.Change(hovering?25:Timeout.Infinite,hovering?25:Timeout.Infinite);
   }
@@ -178,7 +201,7 @@ public static class CapyRowPointer {
    if(!active){EndHover();return;}
    // End only our existing contact, including after a foreground change.
    Thread.Sleep(2);
-   if(kind==4)MouseButton(4);
+   if(kind==4)MouseButton(mouseRelease);
    else if(kind==3){
     // Device removal exercises native capture loss. A canceled synthetic pen UP
     // can be projected as a regular release by WinUI.
@@ -188,30 +211,29 @@ public static class CapyRowPointer {
    active=false;pulse.Change(Timeout.Infinite,Timeout.Infinite);
   }
  }
- public static void RightDrag(int x0,int y0,int x1,int y1){ButtonDrag(8,16,x0,y0,x1,y1);}
- public static void MiddleDrag(int x0,int y0,int x1,int y1){ButtonDrag(32,64,x0,y0,x1,y1);}
- static void ButtonDrag(uint down,uint up,int x0,int y0,int x1,int y1) {
+ public static void RightDrag(int x0,int y0,int x1,int y1){ButtonDrag("right",x0,y0,x1,y1);}
+ public static void MiddleDrag(int x0,int y0,int x1,int y1){ButtonDrag("middle",x0,y0,x1,y1);}
+ static void ButtonDrag(string button,int x0,int y0,int x1,int y1) {
   lock(gate){
-   Check();if(active)throw new Exception("A review contact is already active.");
-   var start=new Point{x=x0,y=y0};Guard(start);MouseMove(start);last=start;
-   MouseButton(down);
+   Down("mouse",x0,y0,button);
    try{
-    for(int i=1;i<=12;i++){var point=new Point{x=x0+(x1-x0)*i/12,y=y0+(y1-y0)*i/12};Guard(point);MouseMove(point);last=point;Thread.Sleep(10);}
-   }finally{MouseButton(up);}
+    for(int i=1;i<=12;i++){Move(x0+(x1-x0)*i/12,y0+(y1-y0)*i/12);Thread.Sleep(10);}
+    Up();
+   }finally{Cancel();}
   }
  }
- public static void Wheel(int x,int y,int delta) {
+ public static void Wheel(int x,int y,int delta) {Wheel(x,y,delta,false);}
+ public static void Wheel(int x,int y,int delta,bool horizontal) {
   lock(gate){
-   Check();if(active)throw new Exception("A review contact is already active.");
+   Check();if(active&&kind!=4)throw new Exception("Wheel input cannot interrupt a pen or touch contact.");
    var point=new Point{x=x,y=y};Guard(point);MouseMove(point);last=point;
-   if(SendInput(1,new[]{new Input{mouse=new Mouse{data=unchecked((uint)delta),flags=0x0800}}},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
+   if(SendInput(1,new[]{new Input{mouse=new Mouse{data=unchecked((uint)delta),flags=horizontal?0x1000u:0x0800u}}},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
   }
  }
  public static void RightClick(int x,int y) {
   lock(gate){
-   Check();if(active)throw new Exception("A review contact is already active.");
-   var point=new Point{x=x,y=y};Guard(point);MouseMove(point);last=point;
-   MouseButton(8);try{Thread.Sleep(35);}finally{MouseButton(16);}
+   Down("mouse",x,y,"right");
+   try{Thread.Sleep(35);Up();}finally{Cancel();}
   }
  }
  // Native text input can move the app when the touch keyboard opens. Permit

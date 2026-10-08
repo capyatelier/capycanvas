@@ -61,8 +61,8 @@ fn members(bytes: &[u8]) -> Result<Vec<Member<'_>>, String> {
             let field = extra.get(4..4 + len).ok_or_else(corrupt)?;
             if id == 1 {
                 let mut values = field
-                    .chunks_exact(8)
-                    .map(|c| u64::from_le_bytes(c.try_into().unwrap()));
+                    .as_chunks::<8>().0.iter()
+                    .map(|c| u64::from_le_bytes(*c));
                 for size in sizes.iter_mut().filter(|s| **s == 0xFFFF_FFFF) {
                     *size = values.next().ok_or_else(corrupt)?;
                 }

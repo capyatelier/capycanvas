@@ -262,7 +262,7 @@ impl<'a> Container<'a> {
                     if !r.left().is_multiple_of(4) {
                         return Err("Invalid AVIF brands".into());
                     }
-                    let brands = || [major].into_iter().chain(r.data.chunks_exact(4));
+                    let brands = || [major].into_iter().chain(r.data.as_chunks::<4>().0.iter().map(|brand| brand.as_slice()));
                     me.heif = !brands().any(|v| matches!(v, b"avif" | b"avis"));
                     if me.heif
                         && !brands().any(|v| {

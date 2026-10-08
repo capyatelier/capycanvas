@@ -785,7 +785,7 @@ impl Scene {
                     || (!*over && (paint_data[8] == 13. || paint_data[8]==19.)))
             {
                 sources = paint.clone();
-                source_target=*ownership;
+                source_target = *ownership;
                 data[16..20].copy_from_slice(&[
                     paint_data[9],
                     if paint_data[8] == 1. || paint_data[8]==19. {
@@ -1214,7 +1214,7 @@ impl Scene {
             true,
             Convert::layers(packet),
         );
-        if mask.is_none() {if let Some(Job::Draw {source_target,..})=self.jobs.last_mut() {*source_target=Some(target);}}
+        if mask.is_none() && let Some(Job::Draw {source_target,..})=self.jobs.last_mut() {*source_target=Some(target);}
         Ok(true)
     }
     /// Run a pending paint operation over `damage`, the batch's pages. Masks

@@ -116,7 +116,7 @@ impl Expression {
                 Expression::Opacity { input, .. } => visit(input, scene, native, domains),
                 Expression::Combine { front, back, .. } => { visit(front, scene, native, domains); visit(back, scene, native, domains); }
                 Expression::Effect { input, chain, masks, .. } => {
-                    let native = native || chain.iter().any(|(h, ..)| native_pointwise_alpha(&scene.effect(*h).unwrap().program));
+                    let native = native || chain.iter().any(|(h, ..)| native_pointwise_alpha(scene.effect(*h).unwrap().program));
                     visit(input, scene, native, domains);
                     for mask in masks.iter().flatten() { visit(mask, scene, native, domains); }
                 }
@@ -359,7 +359,7 @@ impl Evaluator<'_> {
         let evaluation=self.cache.graph.branches.get(node).filter(|branch| self.region == DocRect::from(region)
             && branch.image.as_ref().unwrap().plan.doc_bounds == DocRect::from(branch.image.as_ref().unwrap().plan.bounds)
             && matches!(node.as_ref(),Expression::Effect {chain,..}
-            if self.cache.plan.level>0 && chain.iter().any(|(h,..)|native_pointwise_alpha(&self.packet.scene.effect(*h).unwrap().program))))
+            if self.cache.plan.level>0 && chain.iter().any(|(h,..)|native_pointwise_alpha(self.packet.scene.effect(*h).unwrap().program))))
             .map_or(self.region,|branch|page_coordinates(region).filter(|c|!branch.initialized.contains(c))
                 .fold(region,|bounds,c|bounds.union(page_rect(c).intersect(branch.image.as_ref().unwrap().plan.bounds))).into());
         let result = self.with_region(evaluation,|compositor|Ok(match node.as_ref() {

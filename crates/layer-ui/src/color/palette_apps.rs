@@ -78,7 +78,7 @@ pub(super) fn read_cls(bytes: &[u8]) -> Result<(String, Vec<Imported>), String> 
             let length = usize::from(entry.u16()?);
             let units: Vec<u16> = entry
                 .take(length)?
-                .chunks_exact(2)
+                .as_chunks::<2>().0.iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             String::from_utf16_lossy(&units)

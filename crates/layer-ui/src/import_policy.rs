@@ -74,6 +74,7 @@ pub struct ImportedDocument {
     pub source: ImportSource,
     native: Option<NativeOrigin>,
 }
+#[expect(clippy::large_enum_variant, reason = "Import completion moves its owned document without boxing the result")]
 pub enum ImportOutcome {
     Editable(ImportedDocument),
     Package(layer_core::package::codec::OpenOutcome),

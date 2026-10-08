@@ -29,7 +29,7 @@ for($attempt=1;;$attempt++){
         Start-Sleep -Milliseconds 200
     }
 }
-[pscustomobject]@{title=$p.MainWindowTitle;responding=$p.Responding;elements=@($names)} | ConvertTo-Json -Depth 4
+[pscustomobject]@{title=$root.Current.Name;responding=$p.Responding;elements=@($names)} | ConvertTo-Json -Depth 4
 [CapyWindowCapture]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 $rect=New-Object CapyWindowCapture+Rect
 if($ClientOnly){[CapyWindowCapture]::GetClientRect($handle,[ref]$rect)|Out-Null}else{[CapyWindowCapture]::GetWindowRect($handle,[ref]$rect)|Out-Null}

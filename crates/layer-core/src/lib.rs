@@ -2018,7 +2018,7 @@ impl<'a> RootInventory<'a> {
             if !programs.insert(Arc::as_ptr(program) as usize) {continue;}
             if bundled_effect_catalog().get(&program.id).is_some_and(|builtin|*program==&builtin.program()) {continue;}
             for shader in std::iter::once(&program.wgsl).chain(program.lookups.iter().map(|lookup|&lookup.wgsl)) {
-                for source in shader.sources()? {resources.code(&source)?;}
+                for source in shader.sources()? {resources.code(source)?;}
             }
         }
         let mut selections=BTreeMap::new();

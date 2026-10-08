@@ -952,8 +952,8 @@ impl ViewportPresenter {
             cx, cy, crop.map_or(0., |c| c.dim.clamp(0., 1.)), f32::from(crop.is_some()),
         ]);
         data[40..60].copy_from_slice(&renderer.display_placement());
-        for (value, bytes) in data[64..].iter_mut().zip(renderer.display_resample().chunks_exact(4)) {
-            *value = f32::from_le_bytes(bytes.try_into().unwrap());
+        for (value, bytes) in data[64..].iter_mut().zip(renderer.display_resample().as_chunks::<4>().0.iter()) {
+            *value = f32::from_le_bytes(*bytes);
         }
         data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
         data[61] = renderer.navigator.scale();

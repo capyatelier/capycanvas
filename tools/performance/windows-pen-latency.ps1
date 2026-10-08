@@ -23,10 +23,9 @@ try{
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $OutputDirectory 'stderr.log')
 }finally{Exit-CapyEnvironment}
 $review.Id|Set-Content (Join-Path $OutputDirectory 'process-id.txt')
-$deadline=[DateTime]::UtcNow.AddSeconds(60)
-do{Start-Sleep -Milliseconds 150;$review.Refresh();if($review.HasExited){throw 'Benchmark app exited'}}while(!$review.MainWindowHandle -and [DateTime]::UtcNow -lt $deadline)
+Wait-Until {$script:drawing=Owned-DrawingWindow $review;$null -ne $drawing} 'The owned drawing window did not open' 60
 [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+$window=$drawing.Handle;$root=$drawing.Root
 Wait-Until {$script:probe=Trace-File 'presentation-probe';$null -ne $probe} 'Renderer did not become ready' 90
 Open-Project $Project
 $projectTitle=[IO.Path]::GetFileName($Project)+' · Capy Canvas'
@@ -35,13 +34,12 @@ Wait-Until {
  $root.Current.Name -eq $projectTitle -and $canvas -and $canvas.Current.IsEnabled -and $field -and $field.Current.IsEnabled -and !(Find 'canvas-status' -Visible)
 } 'The requested drawing did not become ready for pen input' 90
 Invoke-Id 'tool-subtool-0'
-$brushName=(Find 'tool-subtool-0').Current.Name
+$brushName=(Control 'tool-subtool-0').Current.Name
 if($brushName -notmatch 'G[- ]?Pen'){throw "Expected G-Pen, got $brushName"}
-$size=Find 'tool-setting-size';$size.SetFocus();$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$Diameter)
-(Find 'tool-setting-opacity').SetFocus();Fit-Canvas
-Wait-Until {$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq "$Diameter.0 px"} 'Brush size was not committed'
-[CapyWindowApi]::ShowWindow($review.MainWindowHandle,5)|Out-Null
-[CapyWindowApi]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+$size=Control 'tool-setting-size';$size.SetFocus();$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$Diameter)
+(Control 'tool-setting-opacity').SetFocus();Fit-Canvas
+Wait-Until {$committedSize=Find 'tool-setting-size';$committedSize -and $committedSize.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq "$Diameter.0 px"} 'Brush size was not committed'
+[CapyWindowApi]::SetForegroundWindow($window)|Out-Null
 Start-Sleep -Seconds 3
 $canvas=Control 'drawing-canvas' -Arranged
 Wait-Until {$canvas.Current.IsEnabled -and !(Find 'canvas-status' -Visible)} 'The canvas stopped being ready before the stroke'
@@ -62,7 +60,9 @@ $pm.WaitForExit(30000)|Out-Null
 if(!$pm.HasExited){throw 'PresentMon did not finish'}
 }else{Start-Sleep -Seconds 2}
 $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|ForEach-Object {$_.Current.Name}|Where-Object {$_ -match 'Invalid|normalized|chronological|failed|overflow|panic|unavailable|Nonfinite'}|Set-Content (Join-Path $OutputDirectory 'errors.txt')
-[CapyWindowApi]::PostMessage($review.MainWindowHandle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null
+$windowOwner=[uint32]0;[CapyWindowApi]::GetWindowThreadProcessId($window,[ref]$windowOwner)|Out-Null
+if($windowOwner -ne $review.Id){throw 'The measured window no longer belongs to the owned process'}
+if(![CapyWindowApi]::PostMessage($window,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'The measured window did not accept Close'}
 $review.WaitForExit(90000)|Out-Null
 if(!$review.HasExited){throw 'Benchmark app did not finish'}
 $prefix='latency-'+$review.Id+'-'+$meta.window_id

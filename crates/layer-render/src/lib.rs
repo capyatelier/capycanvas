@@ -21,6 +21,7 @@ pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
 #[derive(Clone, Debug)]
+#[expect(clippy::large_enum_variant, reason = "Snapshot handoffs move captured plans without per-request boxing")]
 pub enum SnapshotRequest {
     LevelsStatistics(layer_core::ArtworkQuery),
     ArtworkStatistics(layer_core::ArtworkStatisticsRequest),

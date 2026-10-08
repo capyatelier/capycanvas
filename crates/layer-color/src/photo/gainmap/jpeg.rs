@@ -246,9 +246,9 @@ pub(in crate::photo) fn read(
     for y in 0..extent[1] {
         check_cancel(cancel)?;
         pair.row(y, &mut hdr, &mut sdr)?;
-        for (pixel, bytes) in hdr.iter().zip(row.chunks_exact_mut(8)) {
+        for (pixel, bytes) in hdr.iter().zip(row.as_chunks_mut::<8>().0.iter_mut()) {
             let bits = layer_core::color::hdr::encode_pixel(*pixel).map_err(str::to_string)?;
-            for (v, dst) in bits.into_iter().zip(bytes.chunks_exact_mut(2)) {
+            for (v, dst) in bits.into_iter().zip(bytes.as_chunks_mut::<2>().0.iter_mut()) {
                 dst.copy_from_slice(&v.to_le_bytes());
             }
         }

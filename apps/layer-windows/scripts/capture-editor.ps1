@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][int]$ProcessId,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [int]$Width=960,[int]$Height=660
+    [int]$Width=960,[int]$Height=660,[long]$WindowHandle=0
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -27,15 +27,9 @@ $review=Get-Process -Id $ProcessId
 $null=$review.Handle
 if($review.ProcessName -ne 'CapyCanvas'){throw 'Expected the controlled native editor'}
 $directory=Split-Path -Parent $review.Path
-$startup=[Diagnostics.Stopwatch]::StartNew()
-do{
-    $review.Refresh();if($review.HasExited){throw 'The native editor exited before creating its window'}
-    $handle=$review.MainWindowHandle
-    if($handle -ne [IntPtr]::Zero){break}
-    Start-Sleep -Milliseconds 100
-}while($startup.Elapsed.TotalSeconds -lt 45)
-if($handle -eq [IntPtr]::Zero){throw 'The native editor did not create a window'}
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+$owned=@{drawing=$null}
+Wait-Until {$owned.drawing=Owned-DrawingWindow $review $WindowHandle;$null -ne $owned.drawing} 'The native editor did not create its owned drawing window' 45
+$handle=$owned.drawing.Handle;$root=$owned.drawing.Root
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($OutputDirectory)|Out-Null
 function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root,[switch]$Id) {
@@ -45,22 +39,21 @@ function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Butto
             [System.Windows.Automation.PropertyCondition]::new($property,$Name),
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type)))
 }
-function Invoke([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root,[switch]$Id) {
+function Invoke([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button,$Scope=$root,[switch]$Id,[switch]$PassThru) {
     Wait-Until {Find $Name $Type $Scope -Id:$Id} "Missing native control: $Name"
-    (Find $Name $Type $Scope -Id:$Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    $control=Find $Name $Type $Scope -Id:$Id
+    $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    if($PassThru){$control}
 }
 function View-Command([string]$Id) {
-    # A camera acknowledgement can precede the previous flyout closing.
-    Wait-Until {
-        $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0
-    } 'Previous application menu did not close'
     Wait-Until {
         try {$null=& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View' -Inspect;return $true}catch{return $false}
     } 'View menu entry did not become available'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
-    Invoke $Id ([System.Windows.Automation.ControlType]::MenuItem) -Id
+    $command=Invoke $Id ([System.Windows.Automation.ControlType]::MenuItem) -Id -PassThru
+    Wait-Until {
+        try{$command.Current.IsOffscreen}catch [System.Windows.Automation.ElementNotAvailableException]{$true}
+    } 'Application menu command did not close'
 }
 function Set-Theme([string]$Theme) {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'

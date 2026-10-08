@@ -2364,7 +2364,7 @@ impl WgpuRasterizer {
     ) {
         for page in &self.preview_pages {
             if page.primary.preview.get().is_some() && page.primary.view==*view {page.primary.preview.set(None);}
-            if let Some(secondary)=&page.secondary {if secondary.preview.get().is_some() && secondary.view==*view {secondary.preview.set(None);}}
+            if let Some(secondary)=&page.secondary && secondary.preview.get().is_some() && secondary.view==*view {secondary.preview.set(None);}
         }
         let _pass = encoder.color_pass(
             label,

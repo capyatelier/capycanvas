@@ -30,7 +30,7 @@ impl Builder {
         let extent=guide_extent(document)?;let count=u64::from(extent[0])*u64::from(extent[1]);
         let largest=(count*32).max(count*16+32).max(65536);
         let limits=device.limits();
-        if largest>u64::from(limits.max_storage_buffer_binding_size) || largest>limits.max_buffer_size {return Err("Dehaze guide exceeds GPU buffer limit".into());}
+        if largest>limits.max_storage_buffer_binding_size || largest>limits.max_buffer_size {return Err("Dehaze guide exceeds GPU buffer limit".into());}
         let matrix:Vec<u8>=space.linear_transform(RgbSpace::Srgb).into_iter().flat_map(|row|row.into_iter().map(|v|v as f32).chain([0.])).flat_map(f32::to_ne_bytes).collect();
         let transform=device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("Dehaze working primaries"),contents:&matrix,usage:wgpu::BufferUsages::STORAGE});
         Ok(Self {device:device.clone(),pipelines:pipelines(device).clone(),document,extent,

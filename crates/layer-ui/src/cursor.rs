@@ -109,18 +109,16 @@ impl Cursor {
             ];
         }
         let [cx, cy] = view.center;
-        if mode.has_tool() {
-            if let Some(marker) = layer_render::tool_cursor_marker(icon) {
-                let [x, y] = layer_render::TOOL_CURSOR_HOTSPOTS[marker as usize - 7];
-                let from = [cx - x - 2., cy - y - 2.];
-                view.segments.push(CursorSegment {
-                    from,
-                    to: from.map(|v| v + 20.),
-                    distance: 0.,
-                    marker,
-                    scale: 1.,
-                });
-            }
+        if mode.has_tool() && let Some(marker) = layer_render::tool_cursor_marker(icon) {
+            let [x, y] = layer_render::TOOL_CURSOR_HOTSPOTS[marker as usize - 7];
+            let from = [cx - x - 2., cy - y - 2.];
+            view.segments.push(CursorSegment {
+                from,
+                to: from.map(|v| v + 20.),
+                distance: 0.,
+                marker,
+                scale: 1.,
+            });
         }
         match mode {
             CursorMode::Cross | CursorMode::BrushSizeCross => {

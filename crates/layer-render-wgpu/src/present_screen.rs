@@ -167,7 +167,7 @@ impl ScreenCounter {
                     .readback
                     .slice(..)
                     .get_mapped_range()
-                    .map(|bytes| bytes.chunks_exact(4).any(|word| word != [0; 4]))
+                    .map(|bytes| bytes.as_chunks::<4>().0.iter().any(|word| *word != [0; 4]))
                     .map_err(|e| GpuRasterError::Color(e.to_string()));
                 self.readback.unmap();
                 self.state.store(IDLE, Ordering::Release);

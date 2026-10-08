@@ -18,6 +18,7 @@ pub struct RecoveryState {
     checkpoint:Option<RecoveryDocument>,document:Option<RecoveryDocument>,owned:bool,closed:bool,
     next_token:u64,pending:Option<RecoveryWork>,retire:bool,
 }
+#[expect(clippy::large_enum_variant, reason = "Frequent recovery observations move snapshots into state without boxing")]
 pub enum RecoveryEvent {
     Observe {document:RecoveryDocument,owned:bool},Ownership {owned:bool},Retire,
     Complete {token:u64,success:bool},Close,Resume,

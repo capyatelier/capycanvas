@@ -35,12 +35,13 @@ public static class CapyWindowExercise {
 $p=Get-Process -Id $ProcessId
 # Retain a queryable process handle before the HWND and process disappear.
 $null=$p.Handle
-$handle=if($WindowHandle){[IntPtr]$WindowHandle}else{$p.MainWindowHandle}
-if($WindowHandle -and $Action -ne 'Resize'){throw 'An explicit window is supported only for resize.'}
+if($WindowHandle -and $Action -notin @('Resize','Close')){throw 'An explicit window is supported only for resize or close.'}
+$drawing=Owned-DrawingWindow $p $WindowHandle
+if(!$drawing){throw 'The app has no owned drawing window.'}
+$handle=$drawing.Handle
 $windowOwner=[uint32]0
 [CapyWindowExercise]::GetWindowThreadProcessId($handle,[ref]$windowOwner)|Out-Null
-if($windowOwner -ne $ProcessId){throw 'The resize window does not belong to the owned process.'}
-if(!$handle){throw 'The app has no main window.'}
+if($windowOwner -ne $ProcessId){throw 'The drawing window does not belong to the owned process.'}
 [CapyWindowExercise]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 $rect=New-Object CapyWindowExercise+Rect
 [CapyWindowExercise]::GetWindowRect($handle,[ref]$rect)|Out-Null
@@ -59,7 +60,7 @@ if($Action -eq 'Close') {
         }
         $dirty=$snapshot.model.state.document_file.modified
     }
-    $p.CloseMainWindow()|Out-Null
+    if(![CapyWindowApi]::PostMessage($handle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'The owned drawing window did not accept Close.'}
     if($DiscardUnsaved){
         $watch=[Diagnostics.Stopwatch]::StartNew();$lastEpoch=$null;$lastDecision=$null
         $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)

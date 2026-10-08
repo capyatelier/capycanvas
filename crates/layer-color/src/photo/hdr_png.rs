@@ -70,7 +70,7 @@ pub(super) fn read<R: BufRead + Seek>(
             };
             let bits = hdr::encode_pixel([rgb[0] as f32, rgb[1] as f32, rgb[2] as f32, alpha])
                 .map_err(str::to_string)?;
-            for (b, v) in o.chunks_exact_mut(2).zip(bits) {
+            for (b, v) in o.as_chunks_mut::<2>().0.iter_mut().zip(bits) {
                 b.copy_from_slice(&v.to_le_bytes());
             }
         }
@@ -177,9 +177,9 @@ pub fn write_hdr_png_rows(
         let mut row = vec![0u8; extent[0] as usize * 8];
         for y in 0..extent[1] {
             read(y, &mut pixels)?;
-            for (p, o) in pixels.iter().zip(row.chunks_exact_mut(8)) {
+            for (p, o) in pixels.iter().zip(row.as_chunks_mut::<8>().0.iter_mut()) {
                 let codes = output_codes(p, to_srgb, to_2020, map_out_of_range, &mut statistics)?;
-                for (out, code) in o.chunks_exact_mut(2).zip(codes) { out.copy_from_slice(&code.to_be_bytes()); }
+                for (out, code) in o.as_chunks_mut::<2>().0.iter_mut().zip(codes) { out.copy_from_slice(&code.to_be_bytes()); }
             }
             stream.write_all(&row).map_err(err)?;
         }

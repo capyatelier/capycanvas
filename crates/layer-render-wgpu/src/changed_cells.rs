@@ -24,7 +24,7 @@ pub(super) struct ChangedCells {
 impl ChangedCells {
     pub fn new(device:&PipelineDevice)->Self {
         let disabled=device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:Some("disabled changed cells"),contents:&[1u32,0,0,0,1].map(u32::to_le_bytes).as_flattened(),
+            label:Some("disabled changed cells"),contents:[1u32,0,0,0,1].map(u32::to_le_bytes).as_flattened(),
             usage:wgpu::BufferUsages::STORAGE,
         });
         Self {disabled,pages:BTreeMap::new(),forced:BTreeSet::new(),retired:Vec::new(),side:1,admission:None}

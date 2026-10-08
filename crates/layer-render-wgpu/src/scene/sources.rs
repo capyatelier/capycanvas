@@ -556,9 +556,9 @@ fn upload_working_pixels(uploads: &mut crate::Uploads, encoder: &mut crate::subm
     if pixels.len() != (PAGE_SIZE * PAGE_SIZE) as usize { return Err(GpuRasterError::InvalidExtent); }
         uploads.write_texture(encoder, texture, PAGE_SIZE * 16, |mapped| {
             let mut row = [0u8; PAGE_SIZE as usize * 16];
-            for (y, pixels) in pixels.chunks_exact(PAGE_SIZE as usize).enumerate() {
-                for (bytes, pixel) in row.chunks_exact_mut(16).zip(pixels) {
-                    for (channel, bytes) in bytes.chunks_exact_mut(4).enumerate() {
+            for (y, pixels) in pixels.as_chunks::<{ PAGE_SIZE as usize }>().0.iter().enumerate() {
+                for (bytes, pixel) in row.as_chunks_mut::<16>().0.iter_mut().zip(pixels) {
+                    for (channel, bytes) in bytes.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                         let value = if channel == 3 {
                             pixel[3]
                         } else {
@@ -601,43 +601,43 @@ pub(super) fn validate_raster(blob: &TileBlob, space: RgbSpace) -> Result<(), Gp
 pub(crate) fn expand_source_row(input: &[u8], output: &mut [u8], channels: SourceChannels, depth: SampleDepth) {
     match (depth, channels) {
         (SampleDepth::U8, SourceChannels::Rgb) => {
-            for (p, o) in input.chunks_exact(3).zip(output.chunks_exact_mut(4)) {
+            for (p, o) in input.as_chunks::<3>().0.iter().zip(output.as_chunks_mut::<4>().0.iter_mut()) {
                 o.copy_from_slice(&[p[0], p[1], p[2], 255]);
             }
         }
         (SampleDepth::U8, SourceChannels::Gray) => {
-            for (p, o) in input.iter().zip(output.chunks_exact_mut(4)) {
+            for (p, o) in input.iter().zip(output.as_chunks_mut::<4>().0.iter_mut()) {
                 o.copy_from_slice(&[*p, *p, *p, 255]);
             }
         }
         (SampleDepth::U8, SourceChannels::GrayAlpha) => {
-            for (p, o) in input.chunks_exact(2).zip(output.chunks_exact_mut(4)) {
+            for (p, o) in input.as_chunks::<2>().0.iter().zip(output.as_chunks_mut::<4>().0.iter_mut()) {
                 o.copy_from_slice(&[p[0], p[0], p[0], p[1]]);
             }
         }
         (SampleDepth::U16, SourceChannels::Rgb) => {
-            for (p, o) in input.chunks_exact(6).zip(output.chunks_exact_mut(8)) {
+            for (p, o) in input.as_chunks::<6>().0.iter().zip(output.as_chunks_mut::<8>().0.iter_mut()) {
                 o.copy_from_slice(&[p[0], p[1], p[2], p[3], p[4], p[5], 255, 255]);
             }
         }
         (SampleDepth::U16, SourceChannels::Gray) => {
-            for (p, o) in input.chunks_exact(2).zip(output.chunks_exact_mut(8)) {
+            for (p, o) in input.as_chunks::<2>().0.iter().zip(output.as_chunks_mut::<8>().0.iter_mut()) {
                 o.copy_from_slice(&[p[0], p[1], p[0], p[1], p[0], p[1], 255, 255]);
             }
         }
         (SampleDepth::U16, SourceChannels::GrayAlpha) => {
-            for (p, o) in input.chunks_exact(4).zip(output.chunks_exact_mut(8)) {
+            for (p, o) in input.as_chunks::<4>().0.iter().zip(output.as_chunks_mut::<8>().0.iter_mut()) {
                 o.copy_from_slice(&[p[0], p[1], p[0], p[1], p[0], p[1], p[2], p[3]]);
             }
         }
         (SampleDepth::F32, SourceChannels::Rgb) => {
-            for (p, o) in input.chunks_exact(12).zip(output.chunks_exact_mut(16)) {
+            for (p, o) in input.as_chunks::<12>().0.iter().zip(output.as_chunks_mut::<16>().0.iter_mut()) {
                 o[..12].copy_from_slice(p);
                 o[12..].copy_from_slice(&1f32.to_le_bytes());
             }
         }
         (SampleDepth::F16, SourceChannels::Rgb) => {
-            for (p,o) in input.chunks_exact(6).zip(output.chunks_exact_mut(8)) { o[..6].copy_from_slice(p); o[6..].copy_from_slice(&0x3c00u16.to_le_bytes()); }
+            for (p,o) in input.as_chunks::<6>().0.iter().zip(output.as_chunks_mut::<8>().0.iter_mut()) { o[..6].copy_from_slice(p); o[6..].copy_from_slice(&0x3c00u16.to_le_bytes()); }
         }
         (SampleDepth::F16 | SampleDepth::F32, SourceChannels::GrayAlpha) => {
             let step = depth.bytes();

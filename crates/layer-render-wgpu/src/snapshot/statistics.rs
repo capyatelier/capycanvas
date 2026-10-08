@@ -110,7 +110,7 @@ impl SnapshotGpu {
         }
         let bytes = crate::local_tone::read_buffer_async(&self.device, &self.queue, &summary).await?;
         control.check().map_err(|e| e.to_string())?;
-        let words: Vec<_> = bytes[..WORDS as usize*4].chunks_exact(4).map(|b| u64::from(u32::from_le_bytes(b.try_into().unwrap()))).collect();
+        let words: Vec<_> = bytes[..WORDS as usize*4].as_chunks::<4>().0.iter().map(|b| u64::from(u32::from_le_bytes(*b))).collect();
         if words[1042] != 0 { return Err("The artwork contains invalid color values".into()); }
         for (i, channel) in histogram.channels.iter_mut().enumerate() {
             channel.bins.copy_from_slice(&words[i*256..(i+1)*256]);
@@ -118,8 +118,8 @@ impl SnapshotGpu {
         }
         histogram.pixels = words[1040];histogram.transparent = words[1041];
         if request.waveform {
-            histogram.waveform=Some(Waveform {counts:bytes[WORDS as usize*4..].chunks_exact(4)
-                .map(|b|u32::from_le_bytes(b.try_into().unwrap())).collect()});
+            histogram.waveform=Some(Waveform {counts:bytes[WORDS as usize*4..].as_chunks::<4>().0.iter()
+                .map(|b|u32::from_le_bytes(*b)).collect()});
         }
         Ok(histogram)
     }

@@ -280,6 +280,8 @@ impl From<DocumentError> for CanvasGeometryError {
     }
 }
 
+type GeometryCandidate = (Document, Vec<(SourceTarget, RasterOperation)>, Vec<RemapSpec>);
+
 /// A layer's rebase in whole tiles and its local extent after the edit.
 /// `trim` keeps only the tiles inside that extent.
 struct LayerChange {
@@ -662,11 +664,8 @@ impl Document {
         Ok(changes)
     }
     fn crop_candidate(
-        &self,
-        geometry: &CanvasGeometry,
-        limits: GeometryLimits,
-        targets: Option<&[SourceTarget]>,
-    ) -> Result<(Document, Vec<(SourceTarget, RasterOperation)>, Vec<RemapSpec>), CanvasGeometryError> {
+        &self, geometry: &CanvasGeometry, limits: GeometryLimits, targets: Option<&[SourceTarget]>,
+    ) -> Result<GeometryCandidate, CanvasGeometryError> {
         let mut candidate = self.shifted_roots(geometry.rect.origin)?;
         let changes = self.canvas_changes(&candidate, geometry, limits, targets)?;
         let mut remaps = Vec::new();
@@ -723,10 +722,8 @@ impl Document {
         Ok((candidate, operations, remaps))
     }
     fn resampled_candidate(
-        &self,
-        geometry: &CanvasGeometry,
-        limits: GeometryLimits,
-    ) -> Result<(Document, Vec<(SourceTarget, RasterOperation)>, Vec<RemapSpec>), CanvasGeometryError> {
+        &self, geometry: &CanvasGeometry, limits: GeometryLimits,
+    ) -> Result<GeometryCandidate, CanvasGeometryError> {
         let mut candidate = self.shifted_roots(geometry.rect.origin)?;
         let scene = self.scene();
         let to_canvas = geometry.to_canvas();

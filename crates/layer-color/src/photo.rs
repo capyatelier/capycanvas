@@ -260,7 +260,7 @@ fn output_row_bytes(
 }
 
 fn swap_u16(bytes: &mut [u8]) {
-    for code in bytes.chunks_exact_mut(2) {
+    for code in bytes.as_chunks_mut::<2>().0 {
         code.swap(0, 1);
     }
 }

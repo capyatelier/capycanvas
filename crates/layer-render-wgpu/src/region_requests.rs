@@ -111,7 +111,7 @@ impl RegionRequests {
             mapped_at_creation: false,
         });
         let mut header = [0u8; 32];
-        for (dst, value) in header.chunks_exact_mut(4).zip([0, 0, w, h, 0, 2, 0, 0]) {
+        for (dst, value) in header.as_chunks_mut::<4>().0.iter_mut().zip([0, 0, w, h, 0, 2, 0, 0]) {
             dst.copy_from_slice(&value.to_ne_bytes());
         }
         r.uploads.write(encoder, &output, &header)?;

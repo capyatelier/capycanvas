@@ -452,13 +452,15 @@ This uses the app's pinned DXC compiler instead of falling back to system FXC.
 **Pen latency (Windows).** Against a Release build, run
 `tools/performance/windows-pen-latency.ps1 -Executable <exe> -Project <.capy>
 -OutputDirectory <dir>`, then `node tools/performance/windows-pen-report.mjs <dir>`.
-It waits for the requested drawing and enabled canvas, then checks the stroke
-against the arranged canvas bounds. It paces a pen circle at up to 240 Hz and
-records actual injection timestamps;
-a delayed sample never triggers a catch-up burst. The report matches inputs to
-DXGI frame statistics, so it reports software input-to-display time, not
-input-to-photon. Per-window traces use `latency-<pid>-<window>` names. PresentMon
-needs administrator rights.
+It retains the owned drawing window and waits for the requested document,
+enabled canvas and current brush controls before committing the brush size.
+After three seconds of settling, it checks the arranged canvas bounds and paces
+a pen circle at up to 240 Hz, recording actual injection timestamps; a delayed
+sample never triggers a catch-up burst. The report matches inputs to DXGI frame
+statistics. Immediate presentation has no applicable refresh timestamp, so only
+a presentation observation upper bound is available in that mode. These software
+timings exclude physical digitizer and panel response. Per-window traces use
+`latency-<pid>-<window>` names. PresentMon needs administrator rights.
 
 **Desktop GPUs.**
 
