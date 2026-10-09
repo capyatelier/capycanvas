@@ -210,7 +210,7 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
             assert_eq!(selected_slot_variant(&s, anchor), ToolVariant::BrushPreset { id });
         }
     }
-    for control in [ToolbarControl::Brush { id: Tool::Pen.default_preset() }, ToolbarControl::Command { command: CommandId::Hand }, ToolbarControl::Command { command: CommandId::Eyedropper }] {
+    for control in [ToolbarControl::Brush { id: Tool::Pen.default_preset() }, ToolbarControl::Command { command: CommandId::Eyedropper }] {
         assert!(!control.has_variants());
         let (mut s, panel, ids) = group_fixture(Platform::Gtk, &[control]);
         let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
@@ -220,6 +220,17 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
         assert!(!s.header_view().items.iter().find(|item| item.id == id).unwrap().has_variants);
         assert!(s.context_menu(ContextTarget::ToolVariants { anchor }).is_err());
         assert!(s.context_menu(ContextTarget::ToolVariants { anchor: header }).is_err());
+    }
+    for command in [CommandId::Hand, CommandId::Zoom, CommandId::RotateView] {
+        let control = ToolbarControl::Command { command };
+        assert!(control.has_variants());
+        let (s, panel, ids) = group_fixture(Platform::Gtk, &[control]);
+        let menu = slot_menu(&s, DrawerAnchor::Tile { panel, tile: ids[0] });
+        let commands: Vec<_> = menu.iter().filter_map(|item| match item.action {
+            Some(UiAction::ChooseToolVariant { variant: ToolVariant::Command { command }, .. }) => Some(command),
+            _ => None,
+        }).collect();
+        assert_eq!(commands, [CommandId::Hand, CommandId::Zoom, CommandId::RotateView]);
     }
 }
 

@@ -624,3 +624,16 @@ command-paste-at-cursor = Colar no cursor
 commands-help-paste-at-view = Cola a área de transferência no centro da tela visível, no tamanho original.
 
 commands-help-paste-at-cursor = Cola a área de transferência centralizada no ponteiro, no tamanho original.
+
+command-zoom = Zoom
+command-rotate-view = Girar visualização
+command-fit-width = Ajustar à largura
+command-fill-view = Preencher visualização
+command-zoom-selection = Zoom na seleção
+command-reset-rotation = Redefinir rotação
+command-reset-view = Redefinir visualização
+command-previous-view = Visualização anterior
+command-save-view = Salvar visualização
+command-restore-view = Restaurar visualização salva
+command-next-drawing = Próximo desenho
+command-previous-drawing = Desenho anterior

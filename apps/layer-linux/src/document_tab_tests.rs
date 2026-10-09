@@ -613,6 +613,33 @@ fn native_document_tab_input() {
         "Ctrl+Tab selection",
     );
     new_photo::ready(&w);
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (modifier, key, target) in [(0xffe3, 0xff56, 3), (0xffe3, 0xff55, 2),
+            (0xffe9, 0xff56, 3), (0xffe9, 0xff55, 2)] {
+            w.dispatch(UiAction::Invoke { command: CommandId::Hand });
+            w.area.grab_focus();
+            input.perform(serde_json::json!([{ "key": modifier, "down": true }, { "key": key, "down": true },
+                { "key": key, "down": false }, { "key": modifier, "down": false }]));
+            until(|| w.documents.selected() == target && !w.documents.changing.get(), "modified Page key cycles drawings with Hand selected");
+            new_photo::ready(&w);
+        }
+    }
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts });
+    w.dispatch(UiAction::Preferences { action: layer_ui::PreferenceAction::BeginShortcut { id: "command.NextDrawing".into() } });
+    pump(250);
+    input.key(0xffc5);
+    w.dispatch(UiAction::Preferences { action: layer_ui::PreferenceAction::ConfirmShortcut { replace: true } });
+    w.dispatch(UiAction::CloseSettings);
+    pump(150);
+    w.dispatch(UiAction::Invoke { command: CommandId::Hand });
+    w.area.grab_focus();
+    input.key(0xffc5);
+    until(|| w.documents.selected() == 3 && !w.documents.changing.get(), "custom F8 binding cycles drawings through the native host");
+    new_photo::ready(&w);
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts });
+    w.dispatch(UiAction::Preferences { action: layer_ui::PreferenceAction::ResetShortcut { id: "command.NextDrawing".into() } });
+    w.dispatch(UiAction::CloseSettings);
     let last = point(3, 0.3);
     input.perform(serde_json::json!([{"touch":"down","point":last},{"touch":"up"}]));
     until(

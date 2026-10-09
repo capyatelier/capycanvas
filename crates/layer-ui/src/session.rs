@@ -28,6 +28,8 @@ pub use histogram::{HistogramAction, HistogramView};
 pub(crate) mod calibration;
 #[path="targeted_curve.rs"]
 mod targeted_curve;
+#[path = "navigation.rs"]
+mod navigation;
 #[path = "held_actions.rs"]
 mod held_actions;
 use held_actions::{ERASER_END, merge_change};
@@ -238,6 +240,7 @@ pub struct UiSession<R: CanvasRenderer> {
     input_held: bool,
     rendering_suspended: bool,
     touch: TouchGesture,
+    navigation: navigation::Navigation,
     navigator_drag: Option<[f32; 2]>,
     effect_gesture: Option<effects::EffectGesture>,
     object_motion: Option<object_motion::ObjectMotion>,
@@ -426,6 +429,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             input_held: false,
             rendering_suspended: false,
             touch: TouchGesture::default(),
+            navigation: Default::default(),
             navigator_drag: None,
             effect_gesture: None,
             object_motion: None,
@@ -928,8 +932,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             self.state.settings.cursor
         };
-        if self.interaction.pan_key.is_some()
-            || self.layer_interaction.tool == LayerCanvasTool::Hand
+        if self.interaction.navigation.is_some()
+            || self.layer_interaction.tool.navigation().is_some()
             || self.interaction.pointer.is_some_and(|p| !p.paint)
             || self.interaction.facts.popup_open
             || self.state.settings_open
@@ -1325,11 +1329,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.interaction.pressed.push(name.clone());
                 } else if !pressed {
                     self.interaction.pressed.retain(|k| *k != name);
+                    reply.change = merge_change(reply.change, self.release_navigation(&name)?);
                     reply.change = merge_change(reply.change, self.release_spring(&name));
                     let (change, changed) = self.sync_modifier_keys(hold_allowed)?;
                     reply.change = merge_change(reply.change, change);
                     reply.handled |= changed;
                 }
+                if hold_allowed && self.navigation_key(&key, pressed, &mut reply)? { return Ok(reply); }
                 if self.object_nudge(&key, pressed, hold_allowed && self.state.preferences.capture.is_none(), modifiers)?
                     || self.transform_nudge(&key, pressed, hold_allowed && self.state.preferences.capture.is_none(), modifiers)? {
                     self.refresh_commands();
@@ -1499,11 +1505,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     spring.used = true;
                 }
+                if kind == PointerKind::Touch && phase == ContactPhase::Down
+                    && let Some(pointer) = self.interaction.pointer.filter(|p| p.kind == PointerKind::Touch && p.id != id && p.navigation.is_some())
+                {
+                    self.interaction.pointer = None;
+                    self.touch(pointer.id, PenPhase::Down, pointer.position);
+                }
+                let navigation_contact = kind == PointerKind::Touch
+                    && phase == ContactPhase::Down && self.interaction.pointer.is_none() && !self.touch.is_active()
+                    && matches!(self.navigation_mode(), Some(NavigationMode::Zoom | NavigationMode::ZoomOut | NavigationMode::Rotate));
                 let transform_contact = kind == PointerKind::Touch
                     && (self.interaction.pointer.is_some_and(|contact| contact.id == id && contact.kind == kind)
                         || (phase == ContactPhase::Down && self.interaction.pointer.is_none()
                             && !self.touch.is_active() && self.object_touch_hit(position)));
-                if kind == PointerKind::Touch && !transform_contact {
+                if kind == PointerKind::Touch && !transform_contact && !navigation_contact {
                     if self.interaction.pointer.is_none() && !self.state.settings_open {
                         reply.change = self.touch(id, pen_phase(phase), position);
                         reply.handled = true;
@@ -1513,30 +1528,30 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if phase == ContactPhase::Down
                         && self.interaction.pointer.is_none()
                         && !self.state.settings_open
-                        && (paint || self.canvas_idle())
+                        && (paint || self.navigation_idle())
                         && button != PointerButton::Other
                     {
                         self.touch.clear();
+                        let navigation = (!paint).then(|| self.begin_navigation(button, position));
                         self.interaction.pointer = Some(PointerContact {
                             id,
                             kind,
                             paint,
                             position,
+                            navigation,
                         });
                         if button == PointerButton::Primary && self.clone_source_contact(kind, position) {
                             self.begin_clone_source_contact(id, kind, position);
                         }
                     }
-                    if let Some(contact) = self.interaction.pointer.filter(|p| p.id == id && p.kind == kind) {
+                    if let Some(mut contact) = self.interaction.pointer.filter(|p| p.id == id && p.kind == kind) {
                         reply.handled = true;
                         reply.paint = contact.paint;
                         if let Some(change) = self.clone_source_input(id, phase, position) {
                             reply.change = change;
-                        } else if !contact.paint
-                            && matches!(phase, ContactPhase::Move | ContactPhase::Up)
-                            && position != contact.position
-                        {
-                            reply.change = self.gesture(contact.position, position, 1.0, 0.0)?;
+                        } else if let Some(mut navigation) = contact.navigation {
+                            reply.change = self.navigate_pointer(&mut navigation, contact.position, phase, position)?;
+                            contact.navigation = Some(navigation);
                         }
                         self.interaction.pointer =
                             if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
@@ -1568,7 +1583,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || self.engine.has_active_stroke();
                 self.interaction.keys.clear();
                 self.interaction.modifiers = Modifiers::default();
-                self.interaction.pan_key = None;
+                self.interaction.navigation = None;
+                self.interaction.navigation_tap = false;
                 self.interaction.holds.clear();
                 self.interaction.pressed.clear();
                 self.interaction.modifier_holds.clear();
@@ -1616,8 +1632,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         reply.chrome_hidden = self.interaction.hidden;
         reply.keep_zen_button = self.interaction.hidden && self.state.settings.zen_show_capy;
-        reply.pan_cursor = self.interaction.pan_key.is_some()
-            || self.layer_interaction.tool == LayerCanvasTool::Hand;
+        reply.navigation_cursor = self.navigation_mode();
+        reply.pan_cursor = reply.navigation_cursor == Some(NavigationMode::Pan);
         Ok(reply)
     }
 
@@ -2574,22 +2590,23 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::DeleteLayer => idle && self.can_delete_layer_rows(self.selected_layers()),
             CommandId::RaiseLayer | CommandId::LowerLayer => idle && self.layer_step_edit(id == CommandId::RaiseLayer).is_ok(),
             CommandId::EncloseFill => idle && !matches!(document.working.target, Some(SourceTarget::Coverage(_))),
-            CommandId::FitCanvas
-            | CommandId::ActualPixels
-            | CommandId::LassoFill
-            | CommandId::Hand
+            CommandId::LassoFill
+            | CommandId::Hand | CommandId::Zoom | CommandId::RotateView
             | CommandId::Eyedropper
             | CommandId::Gradient
             | CommandId::Figure
             | CommandId::Ruler
             | CommandId::AutoSelect
-            | CommandId::Fill
-            | CommandId::RotateLeft
-            | CommandId::RotateRight
-            | CommandId::FlipHorizontal
-            | CommandId::FlipVertical => idle,
-            CommandId::ZoomIn => idle && self.state.camera.zoom < MAX_ZOOM,
-            CommandId::ZoomOut => idle && self.state.camera.zoom > MIN_ZOOM,
+            | CommandId::Fill => idle,
+            CommandId::FitCanvas | CommandId::FitWidth | CommandId::FillView | CommandId::ActualPixels
+            | CommandId::RotateLeft | CommandId::RotateRight | CommandId::ResetRotation | CommandId::ResetView
+            | CommandId::FlipHorizontal | CommandId::FlipVertical | CommandId::SaveView => self.navigation_idle(),
+            CommandId::ZoomSelection => self.navigation_idle() && document.working.selection.as_ref()
+                .is_some_and(|selection| selection.inverted || !selection.bounds().is_empty()),
+            CommandId::PreviousView => self.navigation_idle() && self.navigation.previous.is_some(),
+            CommandId::RestoreView => self.navigation_idle() && self.navigation.saved.is_some(),
+            CommandId::ZoomIn => self.navigation_idle() && self.state.camera.zoom < MAX_ZOOM,
+            CommandId::ZoomOut => self.navigation_idle() && self.state.camera.zoom > MIN_ZOOM,
             CommandId::ColorMixOklab | CommandId::ColorMixLinear | CommandId::ColorMixClassic => {
                 tool_settings::mixes_color(self.engine.configured_brush())
             }
@@ -2637,6 +2654,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
                     | (CommandId::ScaleRotate, LayerCanvasTool::Transform)
                     | (CommandId::Hand, LayerCanvasTool::Hand)
+                    | (CommandId::Zoom, LayerCanvasTool::Zoom)
+                    | (CommandId::RotateView, LayerCanvasTool::RotateView)
                     | (CommandId::Gradient, LayerCanvasTool::Gradient { .. })
                     | (CommandId::Figure, LayerCanvasTool::Figure { .. })
                     | (CommandId::Ruler, LayerCanvasTool::Ruler { .. })
@@ -2918,10 +2937,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.navigator_drag = None;
                     (0, false)
                 } else {
-                    self.require_idle()?;
+                    self.require_navigation_idle()?;
                     if !position.into_iter().all(f32::is_finite) {
                         return Err("Invalid Navigator position".into());
                     }
+                    if phase == ContactPhase::Down { self.remember_view(); }
                     let doc = self.engine.document();
                     let camera = &mut self.state.camera;
                     let geometry =
@@ -2952,28 +2972,30 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             UiAction::SetZoom { zoom } => {
-                self.require_idle()?;
+                self.require_navigation_idle()?;
+                self.remember_view();
                 self.initial_fit = false;
                 self.state.camera.zoom_to(zoom)?;
                 self.sync_camera();
                 (CAMERA, true)
             }
             UiAction::SetRotation { rotation } => {
-                self.require_idle()?;
+                self.require_navigation_idle()?;
+                self.remember_view();
                 self.state.camera.rotate_to(rotation)?;
                 self.initial_fit = false;
                 self.sync_camera();
                 (CAMERA, true)
             }
             UiAction::SetZoomLocked { locked } => {
-                self.require_idle()?;
+                self.require_navigation_idle()?;
                 self.state.camera.zoom_locked = locked;
                 self.state.camera.revision += 1;
                 self.sync_camera();
                 (CAMERA, false)
             }
             UiAction::SetRotationLocked { locked } => {
-                self.require_idle()?;
+                self.require_navigation_idle()?;
                 self.state.camera.rotation_locked = locked;
                 self.state.camera.revision += 1;
                 self.sync_camera();
@@ -3219,6 +3241,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (changed, false)
             }
             UiAction::ChooseToolVariant { anchor, variant } => return self.choose_tool_variant(anchor,variant),
+            UiAction::DoubleClickTool { control } => {
+                let control = self.state.resolve_group(control).map_or(control, |(_, _, _, resolved)| resolved);
+                let Some(command) = control.double_click_command() else { return Ok(UiChange::default()); };
+                let mut change = self.dispatch(control.action().unwrap())?;
+                self.state.customization.drawer = None;
+                change = merge_change(change, self.dispatch(UiAction::Invoke { command })?);
+                change.regions |= CUSTOMIZATION;
+                return Ok(change);
+            }
             UiAction::ActivateTile { panel, tile } => {
                 let control = self
                     .state
@@ -4044,7 +4075,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(());
         }
         if self.selection_masks.target().is_some() && !self.tonal_active()
-            && !matches!(self.layer_interaction.tool, LayerCanvasTool::Hand | LayerCanvasTool::Region { fill: true, .. } | LayerCanvasTool::Gradient { .. }) {
+            && !matches!(self.layer_interaction.tool, LayerCanvasTool::Hand | LayerCanvasTool::Zoom | LayerCanvasTool::RotateView | LayerCanvasTool::Region { fill: true, .. } | LayerCanvasTool::Gradient { .. }) {
             if event.phase == PenPhase::Down { self.notify("Choose a dry brush, eraser, fill, gradient, or Hand for selection mask editing"); }
             return Ok(());
         }
@@ -4053,7 +4084,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.region_pen(event);
             return Ok(());
         }
-        if self.layer_interaction.tool == LayerCanvasTool::Hand {
+        if self.layer_interaction.tool.navigation().is_some() {
             // Hand input is routed through UiInput::Pointer's pan gesture.
             return Ok(());
         }
@@ -4097,13 +4128,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn touch(&mut self, id: u64, phase: PenPhase, position: [f32; 2]) -> UiChange {
-        if self.painted_selections.has_contact()
-            || self.paint_contact_busy()
-            || !self.layer_interaction.path.is_empty()
-        {
+        if !self.navigation_idle() {
             self.touch.clear();
             return self.changed(0, false);
         }
+        if !self.touch.is_active() && phase == PenPhase::Down { self.remember_view(); }
         if self.touch.update(
             &mut self.state.camera,
             id,
@@ -4133,12 +4162,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.interaction.pointer.is_some_and(|p| p.paint || p.kind != PointerKind::Mouse)
             || self.retouch.drag.is_some() || self.touch.is_active() || self.input_held
-            || self.require_idle().is_err() || delta == [0.; 2]
+            || !self.navigation_idle() || delta == [0.; 2]
         {
             return Ok(self.changed(0, false));
         }
         if zoom {
             if delta[1] == 0. || self.state.camera.zoom_locked { return Ok(self.changed(0, false)); }
+            self.remember_view();
             let current = self.state.camera.zoom;
             let scale = (-delta[1] * 0.0015 * self.state.settings.zoom_speed)
                 .clamp((camera::MIN_ZOOM / current).ln(), (camera::MAX_ZOOM / current).ln()).exp();
@@ -4155,6 +4185,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             delta
         };
         let delta = delta.map(|v| v * self.state.settings.pan_speed);
+        self.remember_view();
         self.gesture(
             anchor,
             [anchor[0] - delta[0] * dpi, anchor[1] - delta[1] * dpi],
@@ -4170,7 +4201,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         scale: f32,
         rotation: f32,
     ) -> Result<UiChange, String> {
-        if self.require_idle().is_err() {
+        if !self.navigation_idle() {
             return Ok(self.changed(0, false));
         }
         self.state.camera.gesture(from, to, scale, rotation)?;
@@ -5010,8 +5041,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 else { self.start_picker()?; }
                 Ok((BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW, true))
             }
-            CommandId::Hand => {
-                self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Hand })?;
+            CommandId::Hand | CommandId::Zoom | CommandId::RotateView => {
+                let tool = match command { CommandId::Zoom => LayerCanvasTool::Zoom, CommandId::RotateView => LayerCanvasTool::RotateView, _ => LayerCanvasTool::Hand };
+                self.layer_action(LayerAction::Tool { tool })?;
                 Ok((BRUSH | DOCUMENT, false))
             }
             CommandId::Lasso | CommandId::Move => {
@@ -5116,47 +5148,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_edit(self.layer_step_edit(command == CommandId::RaiseLayer).map_err(error)?)?;
                 Ok((0, true))
             }
-            CommandId::FitCanvas => {
-                self.initial_fit = false;
-                let doc = self.engine.document();
-                self.state.camera.fit([doc.composition().size[0], doc.composition().size[1]]);
-                self.sync_camera();
-                Ok((CAMERA, true))
-            }
-            CommandId::ActualPixels => {
-                self.initial_fit = false;
-                self.state.camera.zoom_to(1.0)?;
-                self.sync_camera();
-                Ok((CAMERA, true))
-            }
-            CommandId::ZoomIn
-            | CommandId::ZoomOut
-            | CommandId::RotateLeft
-            | CommandId::RotateRight
-            | CommandId::FlipHorizontal
-            | CommandId::FlipVertical => {
-                self.initial_fit = false;
-                let camera = &mut self.state.camera;
-                match command {
-                    CommandId::FlipHorizontal | CommandId::FlipVertical => {
-                        camera.flip(command == CommandId::FlipHorizontal)
-                    }
-                    _ => {
-                        let center = camera.work_area_center();
-                        let scale = match command {
-                            CommandId::ZoomIn => 2.0_f32.sqrt(),
-                            CommandId::ZoomOut => 0.5_f32.sqrt(),
-                            _ => 1.0,
-                        };
-                        let rotation = match command {
-                            CommandId::RotateLeft => -std::f32::consts::FRAC_PI_2,
-                            CommandId::RotateRight => std::f32::consts::FRAC_PI_2,
-                            _ => 0.0,
-                        };
-                        camera.transform(center, center, scale, rotation)?;
-                    }
-                }
-                self.sync_camera();
+            CommandId::FitCanvas | CommandId::FitWidth | CommandId::FillView | CommandId::ZoomSelection
+            | CommandId::ActualPixels | CommandId::ZoomIn | CommandId::ZoomOut
+            | CommandId::RotateLeft | CommandId::RotateRight | CommandId::ResetRotation | CommandId::ResetView
+            | CommandId::FlipHorizontal | CommandId::FlipVertical | CommandId::PreviousView
+            | CommandId::SaveView | CommandId::RestoreView => {
+                self.navigate_command(command)?;
                 Ok((CAMERA, true))
             }
             CommandId::Settings | CommandId::KeyboardShortcuts | CommandId::About => {
@@ -5174,6 +5171,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     SETTINGS | CUSTOMIZATION | if canceled { LAYOUT } else { 0 },
                     false,
                 ))
+            }
+            CommandId::NextDrawing | CommandId::PreviousDrawing => {
+                self.request(HostRequestKind::AdjacentDrawing { forward: command == CommandId::NextDrawing })?;
+                Ok((0, false))
             }
             CommandId::NewWindow => {
                 self.request(HostRequestKind::NewWindow)?;
@@ -5565,8 +5566,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// `position` paints, rather than navigating or moving a canvas object.
     pub fn pointer_contact_paints(&self, kind: PointerKind, button: PointerButton, position: [f32; 2]) -> bool {
         button == PointerButton::Primary
-            && self.interaction.pan_key.is_none()
-            && self.layer_interaction.tool != LayerCanvasTool::Hand
+            && self.interaction.navigation.is_none()
+            && self.layer_interaction.tool.navigation().is_none()
             && !self.clone_source_contact(kind, position)
     }
 
@@ -5586,7 +5587,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn canvas_idle(&self) -> bool {
         !self.paint_contact_busy() && self.canvas_contact_idle()
     }
-    fn canvas_contact_idle(&self) -> bool {
+    fn canvas_contact_idle(&self) -> bool { self.contact_idle(false) }
+    fn navigation_idle(&self) -> bool { !self.paint_contact_busy() && self.contact_idle(true) }
+    fn contact_idle(&self, navigation: bool) -> bool {
         !self.painted_selections.has_contact()
             && !self.deferred_contact().unwrap_or(self.pen_contact)
             && self.effect_gesture.is_none()
@@ -5594,8 +5597,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             && self.layer_interaction.gradient_before.is_none()
             && self.selection_masks.quick_property_gesture.is_none()
             && self.sdr_gesture.is_none()
-            && self.layer_interaction.path.is_empty()
+            && (self.layer_interaction.path.is_empty() || (navigation
+                && self.layer_interaction.tool.selection_tool() == Some(SelectionTool::Polygon)
+                && !self.selection_tools.contact))
             && !self.objects.dragging()
+    }
+    fn require_navigation_idle(&self) -> Result<(), String> {
+        self.navigation_idle().then_some(()).ok_or_else(|| "Finish the canvas interaction first".into())
     }
     fn require_idle(&self) -> Result<(), String> {
         self.canvas_idle().then_some(()).ok_or_else(|| "Finish the canvas interaction first".into())
@@ -6387,6 +6395,7 @@ mod tests {
     include!("session_source_tests.rs");
     include!("layer_relationship_tests.rs");
     include!("selection_tests.rs");
+    include!("navigation_tests.rs");
     include!("enclose_fill_tests.rs");
     include!("selection_pixel_tests.rs");
     include!("merge_tests.rs");
@@ -15580,7 +15589,9 @@ mod tests {
             serde_json::json!([
                 ["soft_proof_setup", "soft_proof", "gamut_warning", "sdr_rendition", "preview_sdr"],
                 ["zoom_in", "zoom_out", "fit_canvas", "actual_pixels"],
-                ["rotate_left", "rotate_right"],
+                ["fit_width", "fill_view", "zoom_selection"],
+                ["rotate_left", "rotate_right", "reset_rotation"],
+                ["reset_view", "previous_view"],
                 ["flip_horizontal", "flip_vertical"],
                 ["show_rulers", "snap_rulers"],
                 ["show_canvas_action_bar", "zen_mode", "fullscreen"],

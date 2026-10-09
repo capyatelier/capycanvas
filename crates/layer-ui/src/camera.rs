@@ -43,12 +43,18 @@ impl Camera {
     }
 
     pub fn fit(&mut self, document: [u32; 2]) {
+        self.fit_bounds([0., 0., document[0] as f32, document[1] as f32], false, false);
+    }
+
+    pub(crate) fn fit_bounds(&mut self, bounds: [f32; 4], width_only: bool, fill: bool) {
         let [_, _, width, height] = self.work_area;
-        self.zoom = ((width * 0.9 / document[0].max(1) as f32)
-            .min(height * 0.9 / document[1].max(1) as f32))
-        .clamp(MIN_ZOOM, MAX_ZOOM);
-        self.rotation = 0.0;
-        self.center_on([document[0] as f32 * 0.5, document[1] as f32 * 0.5]);
+        let (sin, cos) = self.rotation.sin_cos();
+        let [w, h] = [bounds[2].max(1.), bounds[3].max(1.)];
+        let x = width / (cos.abs() * w + sin.abs() * h);
+        let y = height / (sin.abs() * w + cos.abs() * h);
+        self.zoom = (if width_only { x * 0.9 } else if fill { x.max(y) } else { x.min(y) * 0.9 })
+            .clamp(MIN_ZOOM, MAX_ZOOM);
+        self.center_on([bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5]);
     }
 
     pub fn resize(&mut self, viewport: [u32; 2]) {

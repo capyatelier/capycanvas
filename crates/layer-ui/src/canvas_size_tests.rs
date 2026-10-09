@@ -22,6 +22,9 @@ fn canvas_size_session() -> UiSession<Recorder> {
 
 #[test]
 fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() {
+    let same_screen = |a: [f32; 2], b: [f32; 2]| {
+        assert!(a.into_iter().zip(b).all(|(a, b)| (a - b).abs() < 0.0001), "{a:?} != {b:?}");
+    };
     let mut s = canvas_size_session();
     let paint = s.engine.document().working.occurrence.unwrap();
     invoke(&mut s, CommandId::CanvasSize);
@@ -45,7 +48,7 @@ fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() 
     let doc = s.engine.document();
     assert_eq!(doc.composition().size, [1200, 1100]);
     assert_eq!(doc.scene().occurrence(paint).unwrap().offset, [0, 0], "a top-left anchor keeps the origin");
-    assert_eq!(on_screen(&s, [10., 20.]), screen);
+    same_screen(on_screen(&s, [10., 20.]), screen);
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().composition().size, [1000, 1000]);
     assert!(!s.engine.can_undo(), "one undo step");
@@ -59,12 +62,12 @@ fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() 
     let doc = s.engine.document();
     assert_eq!(doc.scene().occurrence(paint).unwrap().offset, [300 - 512, 150 - 256], "rebased by whole tiles");
     assert!(doc.extents_cover_canvas());
-    assert_eq!(on_screen(&s, [310., 170.]), screen, "the image stays where it was");
+    same_screen(on_screen(&s, [310., 170.]), screen);
     assert_eq!(s.engine.view().document_to_surface, s.state.camera.document_to_surface());
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(on_screen(&s, [10., 20.]), screen, "undo keeps the image still too");
+    same_screen(on_screen(&s, [10., 20.]), screen);
     invoke(&mut s, CommandId::Redo);
-    assert_eq!(on_screen(&s, [310., 170.]), screen);
+    same_screen(on_screen(&s, [310., 170.]), screen);
 }
 
 #[test]

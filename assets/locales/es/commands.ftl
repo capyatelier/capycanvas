@@ -623,3 +623,16 @@ command-paste-at-cursor = Pegar en el cursor
 commands-help-paste-at-view = Pega el portapapeles en el centro del lienzo visible, a su tamaño original.
 
 commands-help-paste-at-cursor = Pega el portapapeles centrado en el puntero, a su tamaño original.
+
+command-zoom = Zoom
+command-rotate-view = Girar vista
+command-fit-width = Ajustar al ancho
+command-fill-view = Llenar vista
+command-zoom-selection = Zoom a la selección
+command-reset-rotation = Restablecer giro
+command-reset-view = Restablecer vista
+command-previous-view = Vista anterior
+command-save-view = Guardar vista
+command-restore-view = Restaurar vista guardada
+command-next-drawing = Dibujo siguiente
+command-previous-drawing = Dibujo anterior

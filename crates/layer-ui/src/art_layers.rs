@@ -68,6 +68,8 @@ pub enum LayerCanvasTool {
     LassoFill,
     EncloseFill { source: RegionSource },
     Hand,
+    Zoom,
+    RotateView,
     PickVisible,
     PickLayer,
     Region {
@@ -92,6 +94,14 @@ pub enum RegionSource {
     Reference,
 }
 impl LayerCanvasTool {
+    pub fn navigation(self) -> Option<crate::NavigationMode> {
+        match self {
+            Self::Hand => Some(crate::NavigationMode::Pan),
+            Self::Zoom => Some(crate::NavigationMode::Zoom),
+            Self::RotateView => Some(crate::NavigationMode::Rotate),
+            _ => None,
+        }
+    }
     pub fn region(self) -> Option<(bool, RegionSource, bool)> {
         match self {
             Self::Region { fill, source } => Some((fill, source, true)),
@@ -1860,6 +1870,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn append_layer_overlay(&self, segments: &mut Vec<layer_render::CursorSegment>) {
+        self.append_navigation_overlay(segments);
         self.append_ruler_overlay(segments);
         self.append_transform_overlay(segments);
         self.append_object_overlay(segments);

@@ -621,3 +621,16 @@ command-paste-at-cursor = Dán tại con trỏ
 commands-help-paste-at-view = Dán nội dung bảng nhớ tạm vào giữa vùng vải vẽ đang hiển thị, ở kích thước gốc.
 
 commands-help-paste-at-cursor = Dán nội dung bảng nhớ tạm với tâm tại con trỏ, ở kích thước gốc.
+
+command-zoom = Thu phóng
+command-rotate-view = Xoay chế độ xem
+command-fit-width = Vừa chiều rộng
+command-fill-view = Lấp đầy chế độ xem
+command-zoom-selection = Thu phóng vùng chọn
+command-reset-rotation = Đặt lại góc xoay
+command-reset-view = Đặt lại chế độ xem
+command-previous-view = Chế độ xem trước
+command-save-view = Lưu chế độ xem
+command-restore-view = Khôi phục chế độ xem đã lưu
+command-next-drawing = Bản vẽ tiếp theo
+command-previous-drawing = Bản vẽ trước

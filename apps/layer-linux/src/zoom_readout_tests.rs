@@ -118,7 +118,7 @@ fn native_zoom_readout_menu_and_field() {
     until(|| readout_text(&w) == "200% · 0°", "the readout follows the camera");
     assert!(w.area.has_focus(), "the canvas keeps keyboard focus after a menu choice");
 
-    w.dispatch(UiAction::Invoke { command: CommandId::RotateRight });
+    w.dispatch(UiAction::SetRotation { rotation: std::f32::consts::FRAC_PI_2 });
     w.dispatch(UiAction::SetZoom { zoom: 0.37 });
     pump(100);
     open(&w, &mut input);

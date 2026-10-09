@@ -623,3 +623,16 @@ command-paste-at-cursor = Coller au curseur
 commands-help-paste-at-view = Colle le presse-papiers au centre du canevas visible, à sa taille d’origine.
 
 commands-help-paste-at-cursor = Colle le presse-papiers centré sur le pointeur, à sa taille d’origine.
+
+command-zoom = Zoom
+command-rotate-view = Pivoter la vue
+command-fit-width = Ajuster à la largeur
+command-fill-view = Remplir la vue
+command-zoom-selection = Zoom sur la sélection
+command-reset-rotation = Réinitialiser la rotation
+command-reset-view = Réinitialiser la vue
+command-previous-view = Vue précédente
+command-save-view = Enregistrer la vue
+command-restore-view = Restaurer la vue enregistrée
+command-next-drawing = Dessin suivant
+command-previous-drawing = Dessin précédent

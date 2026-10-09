@@ -56,6 +56,179 @@ fn native_scroll_wheel_input() {
     }
     input.finish();
 }
+#[test]
+#[ignore = "private Wayland display, hardware GPU and native pointer/keyboard input"]
+fn native_navigation_controls() {
+    let app = native_test_app("art.capycanvas.NavigationControls");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let mut input = RemoteInput::new().settle_ms(120);
+    input.ready();
+    let mut workspace = state(&w).workspace;
+    workspace.layout.insert_tools(Panel::Toolbar, None, &[ToolbarControl::Command { command: CommandId::Hand }]).unwrap();
+    let navigation_tile = workspace.layout.panel(Panel::Toolbar).unwrap().tiles().last().unwrap().id;
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    pump(150);
+    let double_tool = |input: &mut RemoteInput| {
+        let button = named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{navigation_tile}"));
+        let point = screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]);
+        input.perform(serde_json::json!([{ "point": point }, { "down": true }, { "down": false },
+            { "down": true }, { "down": false }]));
+    };
+    let revisions = || state(&w).layers.iter().map(|row| (row.id, row.paint_revision)).collect::<Vec<_>>();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
+        w.dispatch(UiAction::Invoke { command: CommandId::Pen });
+        pump(200);
+        w.area.grab_focus();
+        let point = screen_point(w.area.upcast_ref(), &w.window, [0.5, 0.5]);
+        let origin = screen_point(w.area.upcast_ref(), &w.window, [0., 0.]);
+        let anchor = [0, 1].map(|axis| (point[axis] - origin[axis]) * w.area.scale_factor() as f32);
+        let unchanged = revisions();
+        let undo = ui_session(&w).command(CommandId::Undo).enabled;
+        input.key('z' as u32);
+        assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Zoom, "Z selects Zoom");
+        let before = state(&w).camera;
+        input.click(point);
+        assert!(state(&w).camera.zoom > before.zoom, "Zoom click increases magnification");
+        let first = state(&w).camera.zoom;
+        input.click(point);
+        assert!(state(&w).camera.zoom > first, "rapid Zoom canvas clicks keep increasing magnification");
+        let clicked = state(&w).camera.zoom;
+        input.perform(serde_json::json!([{ "point": point }, { "down": true },
+            { "point": [point[0] + 80., point[1] + 64.] }, { "down": false }]));
+        assert_ne!(state(&w).camera.zoom, clicked, "Zoom drag changes magnification");
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
+        w.dispatch(UiAction::Invoke { command: CommandId::Pen });
+        pump(100);
+        let painting_tool = state(&w).layer_tools.tool;
+        let before = state(&w).camera;
+        input.perform(serde_json::json!([{ "point": point }, { "key": 0xffe3, "down": true },
+            { "key": 32, "down": true }, { "down": true }, { "point": [point[0] + 48., point[1]] }]));
+        let zoomed = state(&w).camera;
+        assert!(zoomed.zoom > before.zoom, "Ctrl+Space drag right zooms in");
+        let mapped = before.input_transform().map(layer_core::Point { x: anchor[0], y: anchor[1] });
+        let after = zoomed.input_transform().map(layer_core::Point { x: anchor[0], y: anchor[1] });
+        assert!((mapped.x - after.x).abs() < 0.01 && (mapped.y - after.y).abs() < 0.01, "drag zoom retains its anchor");
+        input.perform(serde_json::json!([{ "key": 32, "down": false }, { "key": 0xffe3, "down": false },
+            { "point": [point[0] + 80., point[1]] }]));
+        assert!(state(&w).camera.zoom > zoomed.zoom, "key release keeps the captured zoom gesture");
+        input.perform(serde_json::json!([{ "down": false }]));
+        assert_eq!(state(&w).layer_tools.tool, painting_tool, "temporary zoom restores painting");
+        let before = state(&w).camera.zoom;
+        input.perform(serde_json::json!([{ "point": point }, { "key": 0xffe9, "down": true },
+            { "key": 32, "down": true }, { "down": true }, { "down": false },
+            { "key": 32, "down": false }, { "key": 0xffe9, "down": false }]));
+        assert!(state(&w).camera.zoom < before, "Alt+Space click zooms out");
+        let start = [point[0] + 80., point[1]];
+        input.perform(serde_json::json!([{ "point": start }, { "key": 0xffe1, "down": true },
+            { "key": 32, "down": true }, { "down": true }, { "point": [start[0], start[1] + 64.] }]));
+        let rotated = state(&w).camera.rotation;
+        assert!(rotated.abs() > 0.01, "Shift+Space rotates the view");
+        input.perform(serde_json::json!([{ "key": 32, "down": false }, { "key": 0xffe1, "down": false },
+            { "point": [point[0], point[1] + 80.] }, { "down": false }]));
+        assert!((state(&w).camera.rotation - rotated).abs() > 0.01, "key release keeps the captured rotation");
+        assert_eq!(state(&w).layer_tools.tool, painting_tool);
+        input.key('r' as u32);
+        assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::RotateView, "R selects Rotate View");
+        let rotation = state(&w).camera.rotation;
+        input.key('-' as u32);
+        assert_ne!(state(&w).camera.rotation, rotation, "minus rotates left");
+        input.key('5' as u32);
+        assert!(state(&w).camera.rotation.abs() < 1e-6, "5 resets rotation");
+        for key in [';' as u32, '=' as u32, '+' as u32, 0xffab] {
+            let zoom = state(&w).camera.zoom;
+            input.perform(serde_json::json!([{ "key": 0xffe3, "down": true }, { "key": key, "down": true },
+                { "key": key, "down": false }, { "key": 0xffe3, "down": false }]));
+            assert!(state(&w).camera.zoom > zoom, "Ctrl zoom shortcut applies for keysym {key}");
+        }
+        w.dispatch(UiAction::SetRotation { rotation: 0.4 });
+        w.dispatch(UiAction::Invoke { command: CommandId::FlipHorizontal });
+        w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+        assert!((state(&w).camera.rotation - 0.4).abs() < 1e-6, "Fit preserves rotation");
+        assert!(state(&w).camera.flipped[0], "Fit preserves reflection");
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetRotation });
+        assert!(state(&w).camera.rotation.abs() < 1e-6);
+        assert!(state(&w).camera.flipped[0], "Reset Rotation preserves reflection");
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
+        assert_eq!(state(&w).camera.flipped, [false; 2]);
+        assert!(state(&w).camera.rotation.abs() < 1e-6);
+        w.dispatch(UiAction::Invoke { command: CommandId::Zoom });
+        w.dispatch(UiAction::SetZoom { zoom: 0.37 });
+        pump(150);
+        double_tool(&mut input);
+        assert_eq!(state(&w).camera.zoom, 1., "double-clicking the Zoom button selects Actual Pixels");
+        assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Zoom);
+        w.dispatch(UiAction::Invoke { command: CommandId::RotateView });
+        w.dispatch(UiAction::SetRotation { rotation: 0.4 });
+        pump(150);
+        double_tool(&mut input);
+        assert!(state(&w).camera.rotation.abs() < 1e-6, "double-clicking Rotate View resets rotation");
+        assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::RotateView);
+        w.dispatch(UiAction::Invoke { command: CommandId::Hand });
+        w.dispatch(UiAction::SetZoom { zoom: 2. });
+        pump(150);
+        double_tool(&mut input);
+        assert!(state(&w).camera.zoom < 1., "double-clicking Hand fits the canvas");
+        assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Hand);
+        assert!(state(&w).customization.drawer.is_none(), "double-click closes the tool drawer");
+        assert_eq!(revisions(), unchanged, "navigation never changes paint");
+        assert_eq!(ui_session(&w).command(CommandId::Undo).enabled, undo, "navigation preserves artwork history");
+        let directory = artifact_dir("../../artifacts/navigation-controls/gtk");
+        capture_reference(&w, &format!("{directory}/navigation-{theme:?}.png"), 1.);
+        w.dispatch(UiAction::Invoke { command: CommandId::Pen });
+        pump(100);
+        input.perform(serde_json::json!([{ "point": point }, { "down": true },
+            { "point": [point[0] + 32., point[1] + 12.] }, { "down": false }]));
+        until(|| revisions() != unchanged, "painting works after navigation");
+        assert!(ui_session(&w).command(CommandId::Undo).enabled);
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        pump(200);
+    }
+    input.finish();
+    w.window.destroy();
+}
+
+#[test]
+#[ignore = "private Wayland display, hardware GPU and native pointer/keyboard input"]
+fn native_navigation_zoom_out_keys() {
+    let app = native_test_app("art.capycanvas.NavigationZoomOut");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let mut input = RemoteInput::new();
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Invoke { command: CommandId::Pen });
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
+        pump(100);
+        w.area.grab_focus();
+        let point = screen_point(w.area.upcast_ref(), &w.window, [0.5, 0.5]);
+        let before = state(&w).camera.zoom;
+        let revisions: Vec<_> = state(&w).layers.iter().map(|l| l.paint_revision).collect();
+        input.perform(serde_json::json!([{ "point": point }, { "key": 0xffe3, "down": true },
+            { "key": 0xffe9, "down": true }, { "key": 32, "down": true }, { "down": true },
+            { "down": false }, { "key": 32, "down": false }, { "key": 0xffe9, "down": false },
+            { "key": 0xffe3, "down": false }]));
+        assert!(state(&w).camera.zoom < before, "Ctrl+Alt+Space zooms out through the native compositor");
+        assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Paint);
+        input.key('z' as u32);
+        let before = state(&w).camera.zoom;
+        input.perform(serde_json::json!([{ "key": 0xffe9, "down": true }, { "down": true },
+            { "down": false }, { "key": 0xffe9, "down": false }]));
+        assert!(state(&w).camera.zoom < before, "Alt+click reverses the selected Zoom tool");
+        assert_eq!(state(&w).layers.iter().map(|l| l.paint_revision).collect::<Vec<_>>(), revisions);
+        assert!(!ui_session(&w).command(CommandId::Undo).enabled);
+    }
+    input.finish();
+    w.window.destroy();
+}
+
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use std::sync::Arc;
 use layer_core::authored::{PortableId, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, EffectApplication, Stack};

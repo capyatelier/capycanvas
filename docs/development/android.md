@@ -596,11 +596,14 @@ APK calls, so test-APK benchmarks use the unminified build.
 - **Canvas navigation and drawing.** `AndroidViewportBenchmarkTest` runs with
   `-e viewportBenchmark true`. `-e width 4248 -e height 2832` selects the low-tier
   canvas; `-e canvasSize` supplies both dimensions when they are omitted.
-  `-e photo /data/local/tmp/FILE.jpg` places that photo before drawing and navigation.
+  `-e photo /data/local/tmp/FILE.jpg` places that photo before drawing and navigation;
+  `-e openQueryPhoto true` opens its original dimensions directly for photos
+  wider than the new-document limit of 8192 px.
   `-e passThrough true` adds a Pass Through group with a Black & White adjustment
-  above a Solid Color fill. Warmup waits for shader readiness and the timed interval ends
-  with the gesture, before draining frames. Navigation warms a matching gesture
-  and restores the camera before measurement. `-e motion pan|pinch` measures navigation;
+  above a Solid Color fill. Warmup waits for the active brush and canvas, primes
+  painting and a matching navigation gesture, then restores the camera.
+  The timed interval ends with the gesture, before draining frames.
+  `-e motion pan|pinch|rotate` measures navigation;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
   `intervalMs`, `durationMs`, `repeats`, `blending` and `label`.
   `contactMs` with `pauseMs` runs repeated short contacts as a checkpoint/history

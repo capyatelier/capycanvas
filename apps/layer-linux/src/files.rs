@@ -172,6 +172,10 @@ impl Workspace {
                         }
                         kind => {
                             let result = match kind {
+                                HostRequestKind::AdjacentDrawing { forward } => {
+                                    glib::idle_add_local_once(glib::clone!(#[weak] w, move || w.documents.adjacent(&w, forward)));
+                                    Ok(())
+                                }
                                 HostRequestKind::Drawings => { w.documents.show_selector(&w); Ok(()) }
                                 HostRequestKind::SdrRendition => crate::hdr::open(&w),
                                 HostRequestKind::SoftProofSetup => proof::run(&w),

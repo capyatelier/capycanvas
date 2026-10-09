@@ -76,10 +76,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.filter_previews.renderer_replaced();
     }
 
-    /// Normal resource retirement is allowed only after input submission and
-    /// immutable backing publication. Unlike failure suspension, this never
-    /// blurs a contact or discards unsubmitted input. The host can now stop/drop
-    /// its renderer, and later use `replace_renderer` on this same session.
+    /// Retire an idle drawing after input submission and backing publication.
+    /// Its renderer can later be replaced on this same session.
     pub fn park_document(&mut self) -> Result<layer_core::raster_storage::RetainedTiles, String> {
         if !self.can_park_document() {
             return Err("Finish the current operation before switching drawings".into());
@@ -90,6 +88,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err("Wait for drawing capture before switching drawings".into());
         }
+        self.input(UiInput::Blur)?;
         self.return_to_artwork()?;
         self.release_idle_document_buffers();
         self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
@@ -251,6 +250,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | CommandId::Fullscreen
                 | CommandId::NewWindow
                 | CommandId::Drawings
+                | CommandId::NextDrawing
+                | CommandId::PreviousDrawing
                 | CommandId::About
                 | CommandId::Website
                 | CommandId::SourceCode

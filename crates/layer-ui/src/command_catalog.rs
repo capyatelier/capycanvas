@@ -360,7 +360,7 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
             FitCanvas => l.text(MessageId::COMMANDS_HELP_FIT_CANVAS).to_string(),
             ActualPixels => l.text(MessageId::COMMANDS_HELP_ACTUAL_PIXELS).to_string(),
             FlipHorizontal | FlipVertical => l.text(MessageId::COMMANDS_HELP_FLIP_HORIZONTAL).to_string(),
-            RotateLeft | RotateRight => l.text(MessageId::COMMANDS_HELP_ROTATE_LEFT).to_string(),
+            RotateLeft | RotateRight => String::new(),
             UndoWorkspace => l.text(MessageId::COMMANDS_HELP_UNDO_WORKSPACE).to_string(),
             RedoWorkspace => l.text(MessageId::COMMANDS_HELP_REDO_WORKSPACE).to_string(),
             ZenMode => l.text(MessageId::COMMANDS_HELP_ZEN_MODE).to_string(),
@@ -499,7 +499,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Tool::Clone | Tool::Heal | Tool::SpotHeal => ToolCategory::Retouching,
                 _ => ToolCategory::Drawing,
             },
-            T::Hand => ToolCategory::Navigation,
+            T::Hand | T::Zoom | T::RotateView => ToolCategory::Navigation,
             T::PickVisible | T::PickLayer => ToolCategory::ColorSampling,
             T::Move | T::Transform | T::Crop => ToolCategory::MoveTransform,
             T::Figure { .. } | T::Ruler { .. } => ToolCategory::ShapesRulers,
@@ -1385,7 +1385,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         // Popup keyboard grabs may own the opener's release. A new native
         // focus owner must not inherit the canvas's pressed-key repeat set.
         self.interaction.keys.clear();
-        self.interaction.pan_key = None;
+        self.interaction.navigation = None;
         self.state.command_search = Some(CommandSearchView::default());
         self.search_commands(String::new());
         Ok(())

@@ -39,7 +39,7 @@ class AndroidViewportBenchmarkTest {
         val languageSwitches = args.getString("languageSwitches")?.split(',').orEmpty()
         val motion = args.getString("motion", "stroke")!!
         val blending = args.getString("blending")
-        check(motion in listOf("stroke", "hover", "pan", "pinch"))
+        check(motion in listOf("stroke", "hover", "pan", "pinch", "rotate"))
         val cursor = args.getString("cursor")
         val retainedMotion = motion in listOf("stroke", "hover")
         val passThrough = args.getString("passThrough", "false") == "true"
@@ -57,9 +57,9 @@ class AndroidViewportBenchmarkTest {
             fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
             fun waitFor(condition: () -> Boolean) {
                 val start = SystemClock.uptimeMillis()
-                while (!condition()) { assertNull(host.failure); check(SystemClock.uptimeMillis() - start < 120_000) { "G-pen did not settle: ${host.actionError}" }; SystemClock.sleep(20) }
+                while (!condition()) { assertNull(host.failure); check(SystemClock.uptimeMillis() - start < 120_000) { "G-pen did not settle: ${host.actionError}; readiness=${host.snapshot?.let { listOf(it.optBoolean("gpu_ready"), it.optBoolean("canvas_ready"), it.optBoolean("brush_ready"), it.optBoolean("shaders_ready")) }}" }; SystemClock.sleep(20) }
             }
-            waitFor { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
+            waitFor { host.snapshot?.optBoolean("brush_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             val openQueryPhoto = args.getString("openQueryPhoto", "false") == "true"
             if (openQueryPhoto) {
                 host.openQueryPhoto(File(args.getString("photo", "/data/local/tmp/capy-brush-photo.jpg")!!))
@@ -178,10 +178,12 @@ class AndroidViewportBenchmarkTest {
                 fun send(action: Int, count: Int, t: Double) {
                     val phase = t / 2 * 2 * PI
                     val (x, y, spread) = if (motion == "pan") Triple(cx + radius * .8 * sin(phase), cy + radius * .5 * sin(2 * phase), 150.0)
-                        else Triple(cx, cy, 150 * exp(.4 * sin(phase)))
+                        else Triple(cx, cy, if (motion == "pinch") 150 * exp(.4 * sin(phase)) else 150.0)
+                    val angle = if (motion == "rotate") .4 * sin(phase) else 0.0
                     for (i in 0..1) {
-                        coords[i].x = (x + (if (i == 0) -spread else spread)).toFloat() + host.surfaceOrigin.x
-                        coords[i].y = y.toFloat() + host.surfaceOrigin.y
+                        val direction = if (i == 0) -1 else 1
+                        coords[i].x = (x + direction * spread * cos(angle)).toFloat() + host.surfaceOrigin.x
+                        coords[i].y = (y + direction * spread * sin(angle)).toFloat() + host.surfaceOrigin.y
                     }
                     val event = android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, count, properties, coords,
                         0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
@@ -204,6 +206,13 @@ class AndroidViewportBenchmarkTest {
                 send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl pointer), 2, end)
                 send(android.view.MotionEvent.ACTION_UP, 1, end)
             }
+            fun restoreNavigationCamera() {
+                scenario.onActivity {
+                    if (motion == "rotate") host.invoke("reset_rotation")
+                    host.invoke("fit_canvas")
+                    repeat(zoomSteps) { host.invoke("zoom_in") }
+                }
+            }
             stroke(0, 1500)
             waitFor { !native { Native.renderingPending(it) } }
             host.drain(obj("type" to "invoke", "command" to "undo"))
@@ -211,11 +220,13 @@ class AndroidViewportBenchmarkTest {
             if (motion == "hover") stroke(0, 1500, true)
             if (!retainedMotion) {
                 gesture(1500)
-                scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
+                restoreNavigationCamera()
                 SystemClock.sleep(800)
             }
-            waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
+            waitFor { host.snapshot?.optBoolean("brush_ready") == true }
+            val readiness = host.snapshot!!
             val info = obj("radii" to JSONArray(listOf(radiusX, radiusY)), "navigator" to navigator, "label" to label, "photo" to (args.getString("photo") ?: "generated"), "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
+                "startup" to obj("gpu_ready" to readiness.optBoolean("gpu_ready"), "canvas_ready" to readiness.optBoolean("canvas_ready"), "brush_ready" to readiness.optBoolean("brush_ready"), "shaders_ready" to readiness.optBoolean("shaders_ready")),
                 "display" to native { JSONObject(Native.displayStatus(it)) })
             info.put("thermal_status",activity.getSystemService(android.os.PowerManager::class.java).currentThermalStatus)
             File(output, "$label-info.json").writeText(info.toString(2))
@@ -316,7 +327,7 @@ class AndroidViewportBenchmarkTest {
                 File(output, "$label-$run.json").writeText(data.toString())
                 println("VIEWPORT $label run=$run frames=${data.getJSONArray("frames").length()} renderer=${data.getJSONObject("renderer").getJSONArray("rows")}")
                 if (!retainedMotion) {
-                    scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
+                    restoreNavigationCamera()
                     SystemClock.sleep(1500)
                 }
             }

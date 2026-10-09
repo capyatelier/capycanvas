@@ -264,7 +264,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn zoom_menu(&self) -> ZoomMenu {
-        let idle = self.require_idle().is_ok();
+        let idle = self.navigation_idle();
         let command = |id: CommandId| {
             let state = self.command(id);
             ContextMenuItem { enabled: state.enabled, ..ContextMenuItem::command(state.label.to_string(), UiAction::Invoke { command: id }) }
@@ -288,9 +288,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ZOOM_LEVELS.map(level).into(),
                 vec![lock(MessageId::MENU_LOCK_ZOOM, self.state.camera.zoom_locked,
                     UiAction::SetZoomLocked { locked: !self.state.camera.zoom_locked })],
-                vec![ContextMenuItem { enabled: idle,
-                    ..ContextMenuItem::command(self.localization().text(MessageId::MENU_RESET_ROTATION).to_string(),
-                        UiAction::SetRotation { rotation: 0.0 }) },
+                vec![command(CommandId::ResetRotation),
                     lock(MessageId::MENU_LOCK_ROTATION, self.state.camera.rotation_locked,
                         UiAction::SetRotationLocked { locked: !self.state.camera.rotation_locked })],
             ],

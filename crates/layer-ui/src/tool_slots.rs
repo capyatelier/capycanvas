@@ -27,6 +27,7 @@ pub(crate) enum ToolControlGroup {
     Drawing,
     Sculpt,
     Selection,
+    Navigation,
 }
 impl ToolbarControl {
     pub(crate) fn tool_group(self) -> Option<ToolControlGroup> {
@@ -37,6 +38,7 @@ impl ToolbarControl {
                 CommandId::DrawingBrush => G::Drawing,
                 CommandId::Sculpt => G::Sculpt,
                 CommandId::Select => G::Selection,
+                CommandId::Hand | CommandId::Zoom | CommandId::RotateView => G::Navigation,
                 CommandId::Figure => G::Slot(ToolSlotId::Figure),
                 CommandId::Ruler => G::Slot(ToolSlotId::Ruler),
                 CommandId::Gradient => G::Slot(ToolSlotId::Gradient),
@@ -54,6 +56,7 @@ impl ToolControlGroup {
     fn variants(self) -> Vec<ToolVariant> {
         match self {
             Self::Slot(slot) => slot.variants().to_vec(),
+            Self::Navigation => [CommandId::Hand, CommandId::Zoom, CommandId::RotateView].into_iter().map(command).collect(),
             Self::Selection => SelectionTool::ALL.into_iter().map(|t| command(t.command())).collect(),
             Self::Brush(tool) => {
                 let groups: Vec<_> = ToolGroup::ALL.into_iter().filter(|g| g.tool() == tool).collect();
@@ -71,6 +74,7 @@ impl ToolControlGroup {
     fn contains(self, variant: ToolVariant) -> bool {
         match self {
             Self::Slot(slot) => slot.variants().contains(&variant),
+            Self::Navigation => matches!(variant, ToolVariant::Command { command: CommandId::Hand | CommandId::Zoom | CommandId::RotateView }),
             Self::Selection => matches!(variant, ToolVariant::Command { command } if SelectionTool::ALL.iter().any(|t| t.command() == command)),
             Self::Brush(tool) => match variant {
                 ToolVariant::BrushGroup { group } => group.tool() == tool && ToolGroup::ALL.iter().filter(|g| g.tool() == tool).count() > 1,
@@ -84,6 +88,7 @@ impl ToolControlGroup {
     fn active(self, state: &UiState) -> bool {
         match self {
             Self::Slot(slot) => ToolVariant::active(state).is_some_and(|v| slot.variants().contains(&v)),
+            Self::Navigation => state.layer_tools.tool.navigation().is_some(),
             Self::Selection => state.layer_tools.tool.selection_tool().is_some(),
             Self::Brush(tool) => state.layer_tools.tool == LayerCanvasTool::Paint && state.brush.tool == tool,
             Self::Drawing => state.layer_tools.tool == LayerCanvasTool::Paint && tools::is_drawing(state.brush.tool),
@@ -300,6 +305,8 @@ impl ToolVariant {
                     LayerCanvasTool::EncloseFill { .. } => CommandId::EncloseFill,
                     LayerCanvasTool::Crop => CommandId::Crop,
                     LayerCanvasTool::Hand => CommandId::Hand,
+                    LayerCanvasTool::Zoom => CommandId::Zoom,
+                    LayerCanvasTool::RotateView => CommandId::RotateView,
                     _ => return None,
                 }
             }),
@@ -400,8 +407,18 @@ impl UiState {
         (choice, enabled, tooltip, variant.control())
     }
     pub(crate) fn resolve_group(&self, control: ToolbarControl) -> Option<(ToolChoice, bool, String, ToolbarControl)> {
-        let ToolControlGroup::Slot(slot) = control.tool_group()? else { return None; };
-        let (mut choice, enabled, tooltip, resolved) = self.resolve_slot(slot);
+        let (mut choice, enabled, tooltip, resolved) = match control.tool_group()? {
+            ToolControlGroup::Slot(slot) => self.resolve_slot(slot),
+            ToolControlGroup::Navigation => {
+                let variant = ToolVariant::active(self).filter(|v| ToolControlGroup::Navigation.contains(*v))
+                    .unwrap_or(command(CommandId::Hand));
+                let mut choice = tool_choice_localized(variant.control(), &self.localization);
+                choice.selected = variant.is_active(self);
+                let command = self.commands.iter().find(|c| c.id == variant.command())?;
+                (choice, command.enabled, command.tooltip.clone(), variant.control())
+            }
+            _ => return None,
+        };
         choice.control = control;
         Some((choice, enabled, tooltip, resolved))
     }
@@ -474,7 +491,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 view.groups = choices;
             },
-            ToolControlGroup::Selection => { view.groups.clear(); view.subtools = choices; },
+            ToolControlGroup::Selection | ToolControlGroup::Navigation => { view.groups.clear(); view.subtools = choices; },
             ToolControlGroup::Brush(tool) => {
                 if ToolGroup::ALL.iter().filter(|g| g.tool() == tool).count() > 1 { view.groups = choices; }
                 else { view.subtools = choices; }
@@ -553,6 +570,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn group_variant(&self, group: ToolControlGroup) -> ToolVariant {
         let id = match group {
             ToolControlGroup::Slot(slot) => return self.state.slot_variant(slot),
+            ToolControlGroup::Navigation => return ToolVariant::active(&self.state).filter(|v| group.contains(*v)).unwrap_or(command(CommandId::Hand)),
             ToolControlGroup::Selection => return command(self.selection_tools.options.tool.command()),
             ToolControlGroup::Brush(tool) => self.tools.command_preset_in(tool.command(), &self.state.brush, self.layer_interaction.tool).unwrap(),
             ToolControlGroup::Drawing => self.tools.command_preset_in(CommandId::DrawingBrush, &self.state.brush, self.layer_interaction.tool).unwrap(),

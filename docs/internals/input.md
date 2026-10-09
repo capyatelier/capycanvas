@@ -32,6 +32,8 @@ cancellation rather than silently losing a stroke boundary.
 navigation or a native control. Tool selection, pressure response and navigation
 rules remain shared. Native widgets retain their own focus, text editing and
 accessibility behavior.
+The shared [navigation contract](../ui/shared-ui.md#drawing-and-navigation) also
+keeps zoom/rotate/pan contacts owned until release, independently of held keys.
 
 Pen side buttons arrive as `pen_button` input, never as pen samples, and do
 nothing until the artist binds them ([pen buttons](../ui/settings.md#touch-gestures-and-pen-buttons)).

@@ -623,3 +623,16 @@ command-paste-at-cursor = Am Zeiger einfügen
 commands-help-paste-at-view = Fügt die Zwischenablage in Originalgröße in der Mitte der sichtbaren Leinwand ein.
 
 commands-help-paste-at-cursor = Fügt die Zwischenablage in Originalgröße um den Zeiger zentriert ein.
+
+command-zoom = Zoom
+command-rotate-view = Ansicht drehen
+command-fit-width = An Breite anpassen
+command-fill-view = Ansicht ausfüllen
+command-zoom-selection = Auf Auswahl zoomen
+command-reset-rotation = Drehung zurücksetzen
+command-reset-view = Ansicht zurücksetzen
+command-previous-view = Vorherige Ansicht
+command-save-view = Ansicht speichern
+command-restore-view = Gespeicherte Ansicht wiederherstellen
+command-next-drawing = Nächste Zeichnung
+command-previous-drawing = Vorherige Zeichnung

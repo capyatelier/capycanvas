@@ -232,7 +232,7 @@ pub(super) fn constrained_corners(
 pub(super) struct SelectionTools {
     pub options: SelectionOptions,
     hover: Option<Point>,
-    contact: bool,
+    pub(super) contact: bool,
     pub gesture_mode: Option<SelectionMode>,
     pub start_modifiers: Modifiers,
 }

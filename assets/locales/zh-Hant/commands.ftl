@@ -619,3 +619,16 @@ command-paste-at-cursor = 貼上至游標位置
 commands-help-paste-at-view = 以原始大小將剪貼簿內容貼上至可見畫布的中心。
 
 commands-help-paste-at-cursor = 以原始大小將剪貼簿內容貼上至指標所在位置並置中。
+
+command-zoom = 縮放
+command-rotate-view = 旋轉檢視
+command-fit-width = 符合寬度
+command-fill-view = 填滿檢視
+command-zoom-selection = 縮放至選取範圍
+command-reset-rotation = 重設旋轉
+command-reset-view = 重設檢視
+command-previous-view = 上一個檢視
+command-save-view = 儲存檢視
+command-restore-view = 還原儲存的檢視
+command-next-drawing = 下一幅畫
+command-previous-drawing = 上一幅畫

@@ -620,3 +620,16 @@ command-paste-at-cursor = İmleçte yapıştır
 commands-help-paste-at-view = Panoyu görünür tuvalin ortasına özgün boyutunda yapıştırır.
 
 commands-help-paste-at-cursor = Panoyu işaretçinin etrafında ortalayarak özgün boyutunda yapıştırır.
+
+command-zoom = Yakınlaştırma
+command-rotate-view = Görünümü döndür
+command-fit-width = Genişliğe sığdır
+command-fill-view = Görünümü doldur
+command-zoom-selection = Seçime yakınlaştır
+command-reset-rotation = Döndürmeyi sıfırla
+command-reset-view = Görünümü sıfırla
+command-previous-view = Önceki görünüm
+command-save-view = Görünümü kaydet
+command-restore-view = Kaydedilen görünümü geri yükle
+command-next-drawing = Sonraki çizim
+command-previous-drawing = Önceki çizim

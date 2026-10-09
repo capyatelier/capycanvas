@@ -84,6 +84,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn dispatch_spring(&mut self, key: String, action: UiAction, repeat: bool) -> Result<UiChange, String> {
+        if let UiAction::Invoke { command } = action
+            && let Some(mode) = navigation::command_mode(command)
+        {
+            if !repeat {
+                self.interaction.navigation = Some((key, mode));
+                self.interaction.navigation_tap = true;
+            }
+            return Ok(UiChange::default());
+        }
         let restore = (!repeat).then(|| self.spring_restore(&action)).flatten();
         let started = restore.is_some();
         if let Some(restore) = restore {
@@ -155,8 +164,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut change = UiChange::default();
         for (token, target) in std::mem::take(&mut self.interaction.modifier_holds) {
             if !desired.contains(&(token.clone(), target)) {
-                if self.interaction.pan_key.as_deref() == Some(&token) {
-                    self.interaction.pan_key = None;
+                if self.interaction.navigation.as_ref().map(|(token, _)| token.as_str()) == Some(&token) {
+                    self.interaction.navigation = None;
                 }
                 self.release_hold(&token);
             }
@@ -165,14 +174,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         for (token, target) in &desired {
             if self.interaction.holds.iter().any(|(t, _)| t == token)
                 || self.interaction.momentary.iter().any(|(t, _)| t == token)
-                || self.interaction.pan_key.as_deref() == Some(token)
+                || self.interaction.navigation.as_ref().map(|(token, _)| token.as_str()) == Some(token)
             {
                 continue;
             }
             let Some(hold) = crate::shortcuts::hold_id(target) else { continue };
             let Some((definition, _)) = definitions.iter().find(|(d, _)| d.id == hold) else { continue };
             match &definition.action {
-                ShortcutAction::Pan => self.interaction.pan_key = Some(token.clone()),
+                ShortcutAction::Navigate { mode } => { self.interaction.navigation = Some((token.clone(), *mode)); self.interaction.navigation_tap = false; },
                 ShortcutAction::Hold { action } => self.press_hold(token.clone(), (**action).clone()),
                 ShortcutAction::Momentary { action } => {
                     change = merge_change(change, self.press_momentary(token.clone(), (**action).clone())?);
@@ -247,11 +256,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn binding_enabled(&self, action: &ShortcutAction) -> bool {
         match action {
             ShortcutAction::Action { action } => match &**action {
-                UiAction::Invoke { command } => self.command_flags(*command).0,
+                UiAction::Invoke { command } => if navigation::command_mode(*command).is_some() { self.navigation_idle() } else { self.command_flags(*command).0 },
                 UiAction::StepToolSetting { id, .. } => self.state.tool_settings.iter().any(|c| c.id == *id),
                 _ => true,
             },
-            ShortcutAction::Pan | ShortcutAction::Hold { .. } | ShortcutAction::Momentary { .. } => true,
+            ShortcutAction::Navigate { .. } | ShortcutAction::Hold { .. } | ShortcutAction::Momentary { .. } => true,
         }
     }
 

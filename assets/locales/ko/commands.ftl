@@ -619,3 +619,16 @@ command-paste-at-cursor = 커서 위치에 붙여넣기
 commands-help-paste-at-view = 클립보드 내용을 원래 크기로 보이는 캔버스의 중앙에 붙여넣습니다.
 
 commands-help-paste-at-cursor = 클립보드 내용을 원래 크기로 포인터를 중심으로 붙여넣습니다.
+
+command-zoom = 확대/축소
+command-rotate-view = 보기 회전
+command-fit-width = 너비에 맞추기
+command-fill-view = 화면 채우기
+command-zoom-selection = 선택 영역 확대
+command-reset-rotation = 회전 초기화
+command-reset-view = 보기 초기화
+command-previous-view = 이전 보기
+command-save-view = 보기 저장
+command-restore-view = 저장한 보기 복원
+command-next-drawing = 다음 그림
+command-previous-drawing = 이전 그림

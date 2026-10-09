@@ -38,7 +38,7 @@ fn alt_samples_color_while_held_and_restores_the_brush() {
 }
 
 #[test]
-fn space_and_alt_compose_in_every_press_and_release_order() {
+fn space_and_alt_choose_zoom_out_in_every_press_and_release_order() {
     for press_space_first in [true, false] {
         for release_space_first in [true, false] {
             let mut s = session(Platform::Gtk);
@@ -50,8 +50,8 @@ fn space_and_alt_compose_in_every_press_and_release_order() {
                 held_key(&mut s, "Alt_L", true, Modifiers::default());
                 assert!(held_key(&mut s, " ", true, alt()).handled);
             }
-            assert_eq!(s.interaction.pan_key.as_deref(), Some(" "));
-            assert!(sampling(&s));
+            assert_eq!(s.interaction.navigation.as_ref().map(|(_, mode)| *mode), Some(NavigationMode::ZoomOut));
+            assert!(!sampling(&s));
             if release_space_first {
                 assert!(!held_key(&mut s, " ", false, alt()).pan_cursor);
                 assert!(sampling(&s));
@@ -61,7 +61,7 @@ fn space_and_alt_compose_in_every_press_and_release_order() {
                 assert!(painting_with(&s, preset));
                 held_key(&mut s, " ", false, Modifiers::default());
             }
-            assert!(s.interaction.pan_key.is_none());
+            assert!(s.interaction.navigation.is_none());
             assert!(painting_with(&s, preset), "{press_space_first} {release_space_first}");
         }
     }

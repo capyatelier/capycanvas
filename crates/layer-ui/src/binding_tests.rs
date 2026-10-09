@@ -18,11 +18,15 @@ fn every_tool_brush_and_mode_can_be_held_by_a_button_or_modifier_key() {
     assert!(!view.shortcuts.iter().any(|r| r.id.starts_with("hold.") || r.id == "canvas.pan"));
     assert_eq!(view.shortcuts.iter().find(|r| r.id == "command.Hand").unwrap().shortcut, "H");
     assert_eq!(view.shortcut_page.categories[0].id, "Modifier keys");
-    assert_eq!(view.shortcut_page.categories[0].count, 2);
+    assert_eq!(view.shortcut_page.categories[0].count, 6);
     let modifiers: Vec<_> = view.shortcut_page.modifiers.iter().map(|m| (m.label.as_str(), m.action.as_str(), m.detail.as_str())).collect();
     assert_eq!(modifiers, [
         ("Space", "Pan", ""),
+        ("Ctrl+Space", "Zoom", ""),
+        ("Shift+Space", "Rotate view", ""),
         ("Alt", "Depends on the tool", "Set source · Sample color"),
+        ("Alt+Space", "Zoom out", ""),
+        ("Ctrl+Alt+Space", "Zoom out", ""),
     ]);
 }
 
@@ -140,6 +144,7 @@ fn combinations_win_over_the_keys_they_contain() {
     let mut s = session(Platform::Gtk);
     let ctrl_space = KeyChord { key: " ".into(), command: true, shift: false, alt: false };
     let mut table = s.state.settings.hold_keys(Platform::Gtk);
+    table.retain(|hold| hold.key != ctrl_space);
     table.push(crate::shortcuts::HoldKey {
         key: ctrl_space,
         actions: crate::shortcut_page::CONTEXTS.into_iter().map(|c| (c, "command.Pencil".to_string())).collect(),
@@ -149,15 +154,15 @@ fn combinations_win_over_the_keys_they_contain() {
     let preset = s.state.brush.preset;
     let ctrl = Modifiers { command: true, ..Modifiers::default() };
     held_key(&mut s, " ", true, Modifiers::default());
-    assert_eq!(s.interaction.pan_key.as_deref(), Some(" "));
+    assert_eq!(s.interaction.navigation.as_ref().map(|(token, _)| token.as_str()), Some(" "));
     held_key(&mut s, "Control_L", true, Modifiers::default());
-    assert!(s.interaction.pan_key.is_none(), "Ctrl+Space replaces Space");
+    assert!(s.interaction.navigation.is_none(), "Ctrl+Space replaces Space");
     assert_eq!(Some(s.state.brush.tool), CommandId::Pencil.paint_tool());
     held_key(&mut s, "Control_L", false, ctrl);
-    assert_eq!(s.interaction.pan_key.as_deref(), Some(" "), "letting go of Ctrl goes back to panning");
+    assert_eq!(s.interaction.navigation.as_ref().map(|(token, _)| token.as_str()), Some(" "), "letting go of Ctrl goes back to panning");
     assert!(painting_with(&s, preset));
     held_key(&mut s, " ", false, Modifiers::default());
-    assert!(s.interaction.pan_key.is_none());
+    assert!(s.interaction.navigation.is_none());
     held_key(&mut s, "Control_L", true, Modifiers::default());
     held_key(&mut s, "z", true, ctrl);
     held_key(&mut s, "z", false, ctrl);
@@ -175,7 +180,7 @@ fn modifier_keys_and_shortcuts_never_share_a_key() {
     assert_eq!(s.preferences().unwrap().capture.unwrap().conflict.as_deref(), Some("the modifier key Space"));
     preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
     held_key(&mut s, " ", false, Modifiers::default());
-    assert!(!s.state.settings.hold_keys(Platform::Gtk).iter().any(|h| h.key.key == " "), "reassigning takes the key");
+    assert!(!s.state.settings.hold_keys(Platform::Gtk).iter().any(|h| h.key == KeyChord::new(" ", Modifiers::default())), "reassigning takes the key");
     assert!(s.state.settings.keys(&CommandId::Undo.shortcut_id()).contains(&KeyChord::new(" ", Modifiers::default())));
 }
 

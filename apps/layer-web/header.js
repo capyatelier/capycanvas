@@ -135,6 +135,11 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     const kind=entry.item.kind;
     if(['capy','settings','fullscreen','tool'].includes(kind)) {
       const b=button('',pickerButtonAction(()=>r.spec?.resolved_control??entry.item.control,{kind:'header',id:entry.id},dispatch,()=>activate(entry)),'header-tool'); r.button=b;
+      b.addEventListener('dblclick',event=>{
+        if(!r.spec?.double_click)return;
+        event.preventDefault();event.stopPropagation();
+        dispatch({type:'double_click_tool',control:r.spec.resolved_control});
+      });
       if(kind==='capy')b.id='zen-button';
       if(kind==='fullscreen')b.id='fullscreen';
       const command={capy:'zen_mode',settings:'settings',fullscreen:'fullscreen'}[kind];

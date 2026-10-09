@@ -349,11 +349,13 @@ selection is navigation: it consumes no undo step and preserves redo history.
 Document mutations and camera gestures are rejected while pen input is pending
 or a stroke is active, keeping command ordering explicit.
 
+### Drawing and navigation
+
 `input(UiInput)` handles normalized keys, canvas contacts, chrome events and
 focus loss. Its small `InputReply` reports changed regions, whether an event
 is handled, whether to enqueue paint, cursor/visibility state and popup/cancel
 requests. Rust owns modifier interpretation, repeat suppression for toggles,
-editing/modal/popup guards, momentary-pan ownership, competing pointer exclusion,
+editing/modal/popup guards, temporary navigation ownership, competing pointer exclusion,
 and cancellation. Modified keys never silently become unmodified shortcuts.
 Releasing the bound pan key or changing input focus clears the held-key state;
 releasing it during a pan does not change that contact into paint.
@@ -380,13 +382,55 @@ until release or cancellation. Painting, direct touch gestures, source-disc
 drags and queued paint input keep the camera fixed. Ctrl takes precedence over
 Shift, and wheel zoom respects the view's zoom lock. Web captures wheel input
 over the canvas before browser zoom; wheel input over panels stays with them.
-Space + left-drag temporarily pans without pen records. Releasing Space during
-the drag does not turn its remaining motion into paint. Middle/right drag also
-pans; touch retains two-finger rotation. The momentary pan binding defaults to
-Space and is editable in Preferences alongside semantic command bindings.
+Hand, Zoom and Rotate View share the Hand tool's flyout. Tap H, Z or R to
+select one; hold the key while using it to return to the previous tool on release.
+Temporary navigation does not switch the painting tool or commit an unfinished
+polygon selection. Space pans, Ctrl+Space zooms, Alt+Space or Ctrl+Alt+Space zooms
+out, and Shift+Space rotates. Middle/right drag also pans. Once captured, a
+contact retains its navigation mode through key release until up or cancellation.
+Space with arrow keys pans in keyboard-sized steps; Page Up/Down while panning
+moves almost one visible page. Ordinary arrow keys retain their editing behavior.
 
-Zoom stays between 2% and 1600%. **View ▸ Actual Pixels** (Ctrl+1 or
-Ctrl+Alt+0; Ctrl+1 in the Photoshop and Affinity keymaps, 1 in GIMP's) shows
+Zoom clicks step on release, with Alt reversing the direction. Horizontal drag
+zooms smoothly around the press location: right enlarges, left reduces. A small
+movement threshold separates clicks from drags. Shift-drag with Zoom draws a
+rectangle and fits that area on release. Rotate View turns around the work-area
+centre. Double-click the Hand tool button to fit, Zoom for actual pixels, or
+Rotate View to reset rotation. These operations change the view, never the artwork or its Undo history.
+
+Fit preserves rotation and mirrors and measures the rotated canvas bounds.
+Reset rotation keeps the centre and mirrors; Reset view clears rotation and
+mirrors and fits the drawing. View also offers Fit width, Fill view, Zoom to
+selection and Previous view. Previous view swaps with the last saved camera
+position. Save view and Restore saved view are searchable, bindable commands for
+one position per open drawing; they do not add toolbar controls or enter artwork.
+
+The Capy navigation defaults use [Clip Studio conventions](https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Menu_Shortcuts.htm) first,
+[Photoshop alternatives](https://helpx.adobe.com/photoshop/desktop/get-started/learn-the-basics/zoom-images.html) next and
+[Krita](https://docs.krita.org/en/user_manual/getting_started/navigation.html) where neither defines a binding. Rotation buttons
+step 5°; the Krita preset steps 15° and supplies 1/2/3 for actual pixels/fit/fit
+width and 4/5/6 for rotate left/reset/right. Ctrl+; zooms in, with Ctrl+=, Ctrl++
+and keypad Ctrl++ as alternatives. Linux window managers can own Alt+Space; Ctrl+Alt+Space and Alt-click
+remain alternatives. OS-owned shortcuts cannot be captured by the app.
+
+GTK forwards native touchpad pinch scale, rotation and translation into the
+shared camera. Web handles Ctrl-wheel pinch and browser gesture events where
+available. Android keeps multi-contact touchpad input as touch so it shares
+finger pan/pinch/rotation; synthesized wheel input retains normal wheel behavior.
+Selecting Zoom or Rotate View also allows one-finger navigation; adding a second
+finger rebases to the shared two-finger gesture. Hosts expose navigation cursor
+identities from `InputReply.navigation_cursor`.
+
+Next drawing and Previous drawing use shared commands and custom bindings, with
+Ctrl+Tab/Ctrl+Shift+Tab and Ctrl+Page Down/Up on native clients. Alt+Page Down/Up
+works on Web, where browser tab switching keeps the Ctrl chords. The host handles
+the resulting `AdjacentDrawing` request through its existing tab activation path.
+Parking an idle drawing releases held keys and temporary tools, so returning to
+it cannot retain a shortcut as a repeated press. Drawing-switch commands remain
+available when its renderer is unavailable.
+
+Zoom stays between 2% and 1600%. **View ▸ Actual Pixels** (Ctrl+Alt+0 or
+Ctrl+1; Ctrl+1 in the Photoshop and Affinity keymaps, 1 in GIMP's) shows
 one image pixel per device pixel, zooming about the work-area centre. When the
 view rotation is a quarter turn, `Camera::zoom_to` also rounds the translation
 to whole device pixels, so the bilinear presenter samples pixel centres and the

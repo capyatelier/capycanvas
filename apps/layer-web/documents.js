@@ -259,6 +259,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     if(active.has(request.id))return;active.add(request.id);
     let candidate;
     try {
+      if(request.kind.type==='adjacent_drawing'){dispatch({type:'complete_request',id:request.id});active.delete(request.id);await select(app.adjacent_document(request.kind.forward));return;}
       if(request.kind.type==='drawings'){dispatch({type:'complete_request',id:request.id});tabs.showSelector();return;}
       if(["soft_proof_setup","sdr_rendition"].includes(request.kind.type)){await proof.run(request.id,request.kind.type==="sdr_rendition");if(app.state().requests.some(r=>r.id===request.id))dispatch({type:"complete_request",id:request.id});return;}
       if(request.kind.type!=="document")throw new Error(`Unsupported host request: ${request.kind.type}`);

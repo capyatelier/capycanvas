@@ -608,6 +608,7 @@ pub struct HeaderView {
 }
 #[derive(Serialize)]
 pub struct HeaderItemView {
+    pub double_click: bool,
     pub has_variants: bool,
     pub resolved_control: Option<ToolbarControl>,
     pub id: u32,
@@ -666,6 +667,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                     _=>(self.header_item_label(entry.item),enabled,selected,icon,None,false),
                 };
                 HeaderItemView {
+                    double_click: resolved_control.and_then(ToolbarControl::double_click_command).is_some(),
                     has_variants,resolved_control,
                     id: entry.id,
                     label,

@@ -43,13 +43,20 @@ are under `artifacts/format/m3-uninstrumented-34/` and
 `4a2cf6aa0` diagnostics remain in their own artifacts and do not override these
 current-source results.
 
+The 2026-10-08 navigation rows use three 5 s gestures on the 24 MP photo,
+actual SurfaceFlinger presentations, and thermal status 0. The brush/canvas
+and matching gesture were warmed; optional full-catalog `shaders_ready` was
+false. Source: `067f5cbb7` plus the uncommitted navigation candidate
+(`navigation.rs` SHA-256 `2c0e9c5a7eee70c3e881ba9810a286cbe5a49ca1059d23a18a3892c8d1354d79`);
+optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7682d462`.
+
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
 | Tool cursor hover, with and without brush size | 90 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
-| Pan: Hand tool, one or two fingers | 90 | Renderer 60.1 completed canvas updates/s; completion gap p99 18.8–19.3 ms, 24 MP photo | Spatial composition comparison below; 90 Hz not met |
-| Pinch zoom | 90 | Every 60 Hz vsync, 4096 px document; GPU p50 7.8 ms Linear, 8.5 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
+| Pan: Hand tool, one or two fingers | 90 | **Misses 90:** two-finger pan 58.90–59.05 presented fps, p99 16.79–16.80 ms, 24 MP photo, thermal 0; panel reports 60 Hz | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/mid/` |
+| Pinch zoom | 90 | **Misses 90:** 57.50–58.07 presented fps, p99 33.50 ms, 24 MP photo, thermal 0; panel reports 60 Hz | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/mid/` |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 90 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
-| Two-finger rotate | 90 | | |
+| Two-finger rotate | 90 | **Misses 90:** 58.94–58.96 presented fps, p99 16.78–16.79 ms, 24 MP photo, thermal 0; panel reports 60 Hz | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/mid/` |
 | Footer zoom and rotation sliders | 90 | Unmeasured on the reference tablet | |
 | Navigator drag | 90 | | |
 | Brush-cursor hover | 90 | | |

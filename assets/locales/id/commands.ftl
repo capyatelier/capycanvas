@@ -1203,3 +1203,16 @@ command-paste-at-cursor = Tempel di kursor
 commands-help-paste-at-view = Tempel isi papan klip di tengah kanvas yang terlihat, dengan ukuran aslinya.
 
 commands-help-paste-at-cursor = Tempel isi papan klip berpusat pada penunjuk, dengan ukuran aslinya.
+
+command-zoom = Perbesar/perkecil
+command-rotate-view = Putar tampilan
+command-fit-width = Sesuaikan lebar
+command-fill-view = Penuhi tampilan
+command-zoom-selection = Perbesar ke seleksi
+command-reset-rotation = Atur ulang rotasi
+command-reset-view = Atur ulang tampilan
+command-previous-view = Tampilan sebelumnya
+command-save-view = Simpan tampilan
+command-restore-view = Pulihkan tampilan tersimpan
+command-next-drawing = Gambar berikutnya
+command-previous-drawing = Gambar sebelumnya

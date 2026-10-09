@@ -57,6 +57,12 @@ pub struct KeyChord {
 impl KeyChord {
     pub fn new(key: &str, modifiers: Modifiers) -> Self {
         let key = key.to_lowercase();
+        let key = match key.as_str() {
+            "kp_add" | "keypadadd" | "add" => "+".to_string(),
+            "kp_subtract" | "keypadsubtract" | "subtract" => "-".to_string(),
+            "iso_left_tab" => "tab".to_string(),
+            key => key.to_string(),
+        };
         let key = Self::device_key(&key).map_or(key, str::to_owned);
         match Self::modifier_name(&key) {
             Some(name) => Self {
@@ -210,7 +216,7 @@ impl KeyChord {
             && (matches!(self.key.as_str(), "f5" | "f11" | "f12")
                 || self.command
                     && !self.alt
-                    && matches!(self.key.as_str(), "w" | "t" | "n" | "r" | "l" | "q" | "p")))
+                    && matches!(self.key.as_str(), "w" | "t" | "n" | "r" | "l" | "q" | "p" | "tab" | "pageup" | "pagedown")))
     }
     pub fn label(&self, platform: Platform) -> String { self.localized_label(platform, &Localizer::shared(UiLanguage::English)) }
     pub fn localized_label(&self, platform: Platform, l: &Localizer) -> String { self.localized_label_parts(platform, l).join("+") }
@@ -264,7 +270,7 @@ pub enum ShortcutAction {
         action: Box<UiAction>,
     },
     /// A momentary input mode: release its recorded key to leave it.
-    Pan,
+    Navigate { mode: crate::NavigationMode },
     /// Use a tool or brush until release, then return to the previous one.
     Hold {
         action: Box<UiAction>,
@@ -276,7 +282,7 @@ pub enum ShortcutAction {
 }
 impl ShortcutAction {
     pub fn held(&self) -> bool {
-        matches!(self, Self::Pan | Self::Hold { .. } | Self::Momentary { .. })
+        matches!(self, Self::Navigate { .. } | Self::Hold { .. } | Self::Momentary { .. })
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -374,6 +380,9 @@ pub fn hold_id(target: &str) -> Option<String> {
         "command.Eraser" => Some("hold.eraser".into()),
         "command.Move" => Some("hold.move".into()),
         "command.Hand" => Some("canvas.pan".into()),
+        "command.Zoom" => Some("canvas.zoom".into()),
+        "command.ZoomOut" => Some("canvas.zoom_out".into()),
+        "command.RotateView" => Some("canvas.rotate".into()),
         _ => holdable(target).then(|| format!("hold.{target}")),
     }
 }
@@ -384,6 +393,9 @@ pub fn hold_target(id: &str) -> Option<String> {
         "hold.eraser" => Some("command.Eraser".into()),
         "hold.move" => Some("command.Move".into()),
         "canvas.pan" => Some("command.Hand".into()),
+        "canvas.zoom" => Some("command.Zoom".into()),
+        "canvas.zoom_out" => Some("command.ZoomOut".into()),
+        "canvas.rotate" => Some("command.RotateView".into()),
         _ => id.strip_prefix("hold.").filter(|target| holdable(target)).map(String::from),
     }
 }
@@ -499,6 +511,8 @@ pub(crate) fn tool_command(action: &UiAction) -> Option<CommandId> {
         LayerCanvasTool::Figure { .. } => CommandId::Figure,
         LayerCanvasTool::Ruler { .. } => CommandId::Ruler,
         LayerCanvasTool::Hand => CommandId::Hand,
+        LayerCanvasTool::Zoom => CommandId::Zoom,
+        LayerCanvasTool::RotateView => CommandId::RotateView,
         tool if tool.picks_color() => CommandId::Eyedropper,
         LayerCanvasTool::Select => CommandId::Lasso,
         LayerCanvasTool::LassoFill => CommandId::LassoFill,
@@ -543,6 +557,14 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.ApplyTransform" => key("enter", false, false),
         "command.CancelTransform" => key("escape", false, false),
         "command.Hand" => key("h", false, false),
+        "command.Zoom" => key("z", false, false),
+        "command.RotateView" => key("r", false, false),
+        "command.ResetRotation" => key("5", false, false),
+        "command.ResetView" => return vec![key("@", true, false), key("@", true, true)],
+        "command.RotateLeft" => key("-", false, false),
+        "command.RotateRight" => return vec![key("^", false, false), key("^", false, true)],
+        "command.NextDrawing" => return vec![key("tab", true, false), key("pagedown", true, false), KeyChord { key: "pagedown".into(), command: false, shift: false, alt: true }],
+        "command.PreviousDrawing" => return vec![key("tab", true, true), key("pageup", true, false), KeyChord { key: "pageup".into(), command: false, shift: false, alt: true }],
         "command.Eyedropper" => key("i", false, false),
         "command.Gradient" => key("g", false, false),
         "command.Figure" => key("u", false, false),
@@ -551,9 +573,9 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Fill" => key("f", false, false),
         "command.FitCanvas" => key("0", true, false),
         "command.ActualPixels" => {
-            return vec![key("1", true, false), KeyChord { key: "0".into(), command: true, shift: false, alt: true }];
+            return vec![KeyChord { key: "0".into(), command: true, shift: false, alt: true }, key("1", true, false)];
         }
-        "command.ZoomIn" => key("=", true, false),
+        "command.ZoomIn" => return vec![key(";", true, false), key("=", true, false), key("+", true, true), key("+", true, false)],
         "command.ZoomOut" => key("-", true, false),
         "command.ZenMode" => key("tab", false, false),
         // Browser-owned F11 is already excluded by KeyChord::available(Web).
@@ -597,6 +619,9 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.ExportDocument" => key("e", true, true),
         "command.CloseDocument" => key("w", true, false),
         "canvas.pan" => key(" ", false, false),
+        "canvas.zoom" => key(" ", true, false),
+        "canvas.rotate" => key(" ", false, true),
+        "canvas.zoom_out" => return vec![KeyChord { key: " ".into(), command: false, shift: false, alt: true }, KeyChord { key: " ".into(), command: true, shift: false, alt: true }],
         "hold.eyedropper" | "hold.command.CloneSourceArm" => key("alt", false, false),
         "tool_setting.size.decrease" => key("[", false, false),
         "tool_setting.size.increase" => key("]", false, false),
@@ -651,13 +676,13 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::UseReferenceBelow | C::CopySelectionToLayer | C::CutSelectionToLayer | C::DiscardPaintEdits | C::InvertLayerMask
         | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask | C::EditLayerContent | C::MergeDown | C::MergeGroup
         | C::MergeVisible | C::FlattenImage | C::StampVisible | C::NewDodgeBurnLayer | C::FrequencySeparation => ShortcutSection::Layer,
-        C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
+        C::FitWidth | C::FillView | C::ZoomSelection | C::ResetRotation | C::ResetView | C::PreviousView | C::SaveView | C::RestoreView | C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
         | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
         | C::ToggleTheme => ShortcutSection::View,
         C::SdrRendition | C::PreviewSdr | C::SoftProofSetup | C::SoftProof | C::GamutWarning | C::Histogram
         | C::AssignProfile | C::ConvertColorSpace | C::ChangeBitDepth | C::BlendPerceptual | C::BlendLinear => ShortcutSection::Color,
         C::NewDocument | C::OpenDocument | C::SaveDocument | C::SaveDocumentAs | C::ExportDocument | C::ExportAgain | C::CloseDocument
-        | C::ImportImage | C::DocumentProperties | C::NewWindow | C::Drawings => ShortcutSection::File,
+        | C::ImportImage | C::DocumentProperties | C::NewWindow | C::NextDrawing | C::PreviousDrawing | C::Drawings => ShortcutSection::File,
         C::About | C::Website | C::SourceCode => ShortcutSection::Help,
         _ => ShortcutSection::Window,
     }
@@ -786,7 +811,16 @@ fn held(target: &ShortcutDefinition, section: &ShortcutSection) -> Option<(Short
         return None;
     };
     let (label, action, scope) = match id.as_str() {
-        "canvas.pan" => (ShortcutLabel::Held(Box::new(ShortcutLabel::Message(MessageId::SHORTCUT_PAN))), ShortcutAction::Pan, BindingScope::Canvas),
+        "canvas.pan" => (ShortcutLabel::Held(Box::new(ShortcutLabel::Message(MessageId::SHORTCUT_PAN))), ShortcutAction::Navigate { mode: crate::NavigationMode::Pan }, BindingScope::Canvas),
+        "canvas.zoom" | "canvas.zoom_out" | "canvas.rotate" => (
+            ShortcutLabel::Held(Box::new(target.label.clone())),
+            ShortcutAction::Navigate { mode: match id.as_str() {
+                "canvas.zoom" => crate::NavigationMode::Zoom,
+                "canvas.zoom_out" => crate::NavigationMode::ZoomOut,
+                _ => crate::NavigationMode::Rotate,
+            } },
+            BindingScope::Canvas,
+        ),
         "hold.eyedropper" => (
             ShortcutLabel::Held(Box::new(ShortcutLabel::Message(MessageId::SHORTCUT_SAMPLE_COLOR))),
             ShortcutAction::Hold { action: action.clone() },
@@ -1008,7 +1042,7 @@ impl Settings {
             conflicts.push(ShortcutDefinition {
                 id: format!("{MODIFIER_PREFIX}{}", chord.label(platform)),
                 label: ShortcutLabel::Modifier(chord.clone(), platform),
-                action: ShortcutAction::Pan,
+                action: ShortcutAction::Navigate { mode: crate::NavigationMode::Pan },
                 repeat: false,
                 scope: BindingScope::Canvas,
                 target: None,

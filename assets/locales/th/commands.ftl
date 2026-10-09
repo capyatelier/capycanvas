@@ -619,3 +619,16 @@ command-paste-at-cursor = วางที่เคอร์เซอร์
 commands-help-paste-at-view = วางคลิปบอร์ดตรงกลางผืนผ้าใบส่วนที่มองเห็นด้วยขนาดต้นฉบับ
 
 commands-help-paste-at-cursor = วางคลิปบอร์ดโดยให้จุดกึ่งกลางอยู่ที่ตัวชี้ด้วยขนาดต้นฉบับ
+
+command-zoom = ซูม
+command-rotate-view = หมุนมุมมอง
+command-fit-width = พอดีความกว้าง
+command-fill-view = เต็มมุมมอง
+command-zoom-selection = ซูมไปยังส่วนที่เลือก
+command-reset-rotation = รีเซ็ตการหมุน
+command-reset-view = รีเซ็ตมุมมอง
+command-previous-view = มุมมองก่อนหน้า
+command-save-view = บันทึกมุมมอง
+command-restore-view = คืนค่ามุมมองที่บันทึกไว้
+command-next-drawing = ภาพวาดถัดไป
+command-previous-drawing = ภาพวาดก่อนหน้า

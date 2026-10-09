@@ -186,7 +186,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         let Self {engine,state,files:_,screen_headroom:_,histogram_captions:_,histogram:_,effect_analyses:_,
             tonal_histogram:_,auto_levels:_,targeted_curve:_,localization_generation:_,renderer_generation:_,preferences_revision:_,
             panel_copy:_,customization_copy:_,command_search:_,last_toolbar_context:_,canvas_bar:_,notices:_,
-            pen:_,input_pending:_,host_requests_changed:_,pen_contact:_,input_held:_,rendering_suspended:_,touch:_,navigator_drag:_,
+            pen:_,input_pending:_,host_requests_changed:_,pen_contact:_,input_held:_,rendering_suspended:_,touch:_,navigation:_,navigator_drag:_,
             effect_gesture:_,object_motion:_,property_editor:_,sdr_gesture:_,last_proof_mode:_,proof_setup_pending:_,filter_previews:_,
             eyedropper:_,region_tools:_,selection_tools:_,tonal_tools:_,painted_selections:_,deferred_edits:_,selection_masks:_,
             canvas_size:_,image_size:_,frequency_separation:_,content_bounds:_,conversion:_,rulers:_,retouch:_,operation:_,objects:_,

@@ -115,7 +115,8 @@ fill and gradient tools, sets the source with the Clone Stamp and Healing Brush,
 and does nothing with selection tools, which keep their own Alt behavior, or
 with the Spot Healing Brush, which has no source to set. With a tool filter, the
 shortcuts page shows each modifier key's action for that kind of tool. Space
-pans. Any key or button can be a modifier key, alone or
+pans, Ctrl+Space zooms, Alt+Space or Ctrl+Alt+Space zooms out, and Shift+Space
+rotates ([canvas navigation](shared-ui.md#drawing-and-navigation)). Any key or button can be a modifier key, alone or
 with Shift, Ctrl or Alt, including letters, F13–F24, gamepad and tablet pad
 buttons. Escape stays free to cancel recording. A key is either a shortcut or a
 modifier key, never both; recording one against the other offers Reassign, and
@@ -152,7 +153,6 @@ reproduces only bindings verified against them, mapped to actions with the same
 meaning in CapyCanvas. Everything else is listed
 as a difference, for example:
 
-- Photoshop's R Rotate View tool
 - Krita's E erase-mode toggle
 - Procreate's QuickMenu
 

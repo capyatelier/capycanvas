@@ -1090,6 +1090,7 @@ impl WebApp {
         }
         Ok((records.len() / 11) as u32)
     }
+    pub fn begin_view_gesture(&mut self) { self.session.begin_view_gesture(); }
     pub fn gesture(
         &mut self,
         from_x: f32,

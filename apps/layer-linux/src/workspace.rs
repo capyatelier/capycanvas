@@ -2004,7 +2004,13 @@ impl Workspace {
     fn present_interaction(&self, reply: InputReply) {
         self.set_chrome_hidden(reply.chrome_hidden);
         self.zen_capy.set_visible(reply.keep_zen_button);
-        let cursor = Some(if reply.pan_cursor { "grab" } else { "none" });
+        let cursor = Some(match reply.navigation_cursor {
+            Some(layer_ui::NavigationMode::Pan) => "grab",
+            Some(layer_ui::NavigationMode::Zoom) => "zoom-in",
+            Some(layer_ui::NavigationMode::ZoomOut) => "zoom-out",
+            Some(layer_ui::NavigationMode::Rotate) => "crosshair",
+            None => "none",
+        });
         if self.area.cursor().and_then(|c| c.name()).as_deref() != cursor {
             self.area.set_cursor_from_name(cursor);
         }

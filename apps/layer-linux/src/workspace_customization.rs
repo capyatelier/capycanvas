@@ -47,6 +47,18 @@ pub(super) fn tool_group_marker(button: &gtk::Button) {
     button.update_property(&[gtk::accessible::Property::HasPopup(true)]);
 }
 
+pub(super) fn tool_double_click(button: &gtk::Button, control: ToolbarControl) -> Rc<Cell<bool>> {
+    let double = Rc::new(Cell::new(false));
+    if control.double_click_command().is_some() {
+        let click = gtk::GestureClick::new();
+        click.set_button(1);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        click.connect_pressed(glib::clone!(#[strong] double, move |_, count, _, _| double.set(count == 2)));
+        button.add_controller(click);
+    }
+    double
+}
+
 pub(super) fn tile_button(
     w: &Rc<Workspace>,
     config: &PanelConfig,
@@ -93,6 +105,8 @@ pub(super) fn tile_button(
     if matches!(tile.control, ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) {
         crate::color_picker::bind_button(w, &button, layer_ui::DrawerAnchor::Tile { panel, tile: id }, tile.control);
     } else {
+        let double = tool_double_click(&button, tile.control);
+        let control = tile.control;
         button.connect_clicked(glib::clone!(
             #[weak]
             w,
@@ -102,7 +116,8 @@ pub(super) fn tile_button(
                         .anchor
                         .set([b.x() + b.width() * 0.5, b.y() + b.height()]);
                 }
-                w.dispatch(UiAction::ActivateTile { panel, tile: id });
+                w.dispatch(if double.replace(false) { UiAction::DoubleClickTool { control } }
+                    else { UiAction::ActivateTile { panel, tile: id } });
             }
         ));
     }

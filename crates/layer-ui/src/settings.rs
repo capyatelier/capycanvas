@@ -812,6 +812,7 @@ pub struct HostRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostRequestKind {
+    AdjacentDrawing { forward: bool },
     Drawings,
     SdrRendition,
     SoftProofSetup,
@@ -2643,9 +2644,15 @@ mod copy_tests {
             for (definition, group) in crate::shortcuts::definitions(platform) {
                 check(&definition.label.resolve(&Localizer::shared(UiLanguage::English)));
                 check(&group.localized_label(&Localizer::shared(UiLanguage::English)));
+                let mut capture_settings = settings.clone();
+                let mut keys = capture_settings.keys(&definition.id);
+                if keys.len() == crate::shortcuts::MAX_SHORTCUTS {
+                    keys.pop();
+                    capture_settings.shortcuts.insert(definition.id.clone(), keys);
+                }
                 let mut state = PreferencesState::default();
                 state.edit(
-                    &mut settings.clone(),
+                    &mut capture_settings,
                     PreferenceAction::BeginShortcut { id: definition.id },
                     platform,
                  &Localizer::shared(UiLanguage::English));
@@ -2653,7 +2660,7 @@ mod copy_tests {
                 state.capture.as_mut().unwrap().conflict = Some(definition.label.resolve(&Localizer::shared(UiLanguage::English)));
                 check(
                     &state
-                        .view(&settings, platform, true, None, &Localizer::shared(UiLanguage::English))
+                        .view(&capture_settings, platform, true, None, &Localizer::shared(UiLanguage::English))
                         .capture
                         .unwrap()
                         .notice,
@@ -2661,7 +2668,7 @@ mod copy_tests {
                 state.error = Some("Choose another key for this shortcut.".into());
                 assert_eq!(
                     state
-                        .view(&settings, platform, true, None, &Localizer::shared(UiLanguage::English))
+                        .view(&capture_settings, platform, true, None, &Localizer::shared(UiLanguage::English))
                         .capture
                         .unwrap()
                         .notice,

@@ -112,7 +112,13 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         // Compose controls are virtual siblings above this full-window native
         // view. Let their owner resolve the icon instead of hiding it underneath.
         if (chromeHitTest(event.getX(pointerIndex), event.getY(pointerIndex))) return null
-        return super.onResolvePointerIcon(event, pointerIndex)
+        val cursor = host.snapshot?.optString("navigation_cursor")
+        return PointerIcon.getSystemIcon(context, when(cursor) {
+            "pan" -> PointerIcon.TYPE_GRAB
+            "zoom", "zoom_out" -> PointerIcon.TYPE_ZOOM_IN.takeIf { cursor == "zoom" } ?: PointerIcon.TYPE_ZOOM_OUT
+            "rotate" -> PointerIcon.TYPE_CROSSHAIR
+            else -> PointerIcon.TYPE_NULL
+        })
     }
     override fun surfaceCreated(holder: SurfaceHolder) = Unit
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -234,7 +240,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
             MotionEvent.TOOL_TYPE_STYLUS -> 0
             MotionEvent.TOOL_TYPE_MOUSE -> 1
             MotionEvent.TOOL_TYPE_ERASER -> 2
-            MotionEvent.TOOL_TYPE_FINGER -> if (indirect) 1 else 3
+            MotionEvent.TOOL_TYPE_FINGER -> if (indirect && !event.isFromSource(InputDevice.SOURCE_TOUCHPAD)) 1 else 3
             else -> if (indirect) 1 else 0
         }
         val button = if (event.buttonState and (MotionEvent.BUTTON_TERTIARY or MotionEvent.BUTTON_SECONDARY) != 0 && tool == 1) 1 else 0

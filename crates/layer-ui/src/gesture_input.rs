@@ -74,8 +74,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn pen_button(&mut self, button: PenButton, pressed: bool, reply: &mut InputReply) -> Result<(), String> {
         let trigger = button.trigger();
         if !pressed {
-            if self.interaction.pan_key.as_deref() == Some(trigger) {
-                self.interaction.pan_key = None;
+            if self.interaction.navigation.as_ref().map(|(token, _)| token.as_str()) == Some(trigger) {
+                self.interaction.navigation = None;
                 reply.handled = true;
             }
             reply.handled |= self.release_hold(trigger);
@@ -95,7 +95,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         reply.handled = true;
         match definition.action {
-            ShortcutAction::Pan => self.interaction.pan_key = Some(trigger.into()),
+            ShortcutAction::Navigate { mode } => self.interaction.navigation = Some((trigger.into(), mode)),
             ShortcutAction::Hold { action } => self.press_hold(trigger.into(), *action),
             ShortcutAction::Momentary { action } => {
                 let change = self.press_momentary(trigger.into(), *action)?;

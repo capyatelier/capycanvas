@@ -619,3 +619,16 @@ command-paste-at-cursor = 粘贴到光标位置
 commands-help-paste-at-view = 以原始大小将剪贴板内容粘贴到可见画布的中心。
 
 commands-help-paste-at-cursor = 以原始大小将剪贴板内容粘贴到指针所在位置并居中。
+
+command-zoom = 缩放
+command-rotate-view = 旋转视图
+command-fit-width = 适合宽度
+command-fill-view = 填满视图
+command-zoom-selection = 缩放到选区
+command-reset-rotation = 重置旋转
+command-reset-view = 重置视图
+command-previous-view = 上一个视图
+command-save-view = 保存视图
+command-restore-view = 恢复保存的视图
+command-next-drawing = 下一幅画
+command-previous-drawing = 上一幅画

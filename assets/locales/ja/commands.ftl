@@ -619,3 +619,16 @@ command-paste-at-cursor = カーソル位置に貼り付け
 commands-help-paste-at-view = クリップボードの内容を元のサイズで、表示中のキャンバスの中央に貼り付けます。
 
 commands-help-paste-at-cursor = クリップボードの内容を元のサイズで、ポインターを中心に貼り付けます。
+
+command-zoom = ズーム
+command-rotate-view = 表示を回転
+command-fit-width = 幅に合わせる
+command-fill-view = 画面いっぱいに表示
+command-zoom-selection = 選択範囲にズーム
+command-reset-rotation = 回転をリセット
+command-reset-view = 表示をリセット
+command-previous-view = 前の表示
+command-save-view = 表示を保存
+command-restore-view = 保存した表示を復元
+command-next-drawing = 次の作品
+command-previous-drawing = 前の作品

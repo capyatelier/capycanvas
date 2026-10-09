@@ -685,12 +685,17 @@ impl Header {
                 if let HeaderItem::Tool { control: control @ (ToolbarControl::ColorPicker | ToolbarControl::Command { command: CommandId::Eyedropper }) } = entry.item {
                     crate::color_picker::bind_button(w, &b, layer_ui::DrawerAnchor::Header { id }, control);
                 } else {
+                    let double = if let HeaderItem::Tool { control } = entry.item {
+                        Some((control, customization::tool_double_click(&b, control)))
+                    } else { None };
                     b.connect_clicked(glib::clone!(
                         #[weak]
                         w,
                         move |_| {
                             if !w.header.editing.get() {
-                                w.dispatch(if let Some(command) = command {
+                                w.dispatch(if let Some((control, click)) = &double && click.replace(false) {
+                                    UiAction::DoubleClickTool { control: *control }
+                                } else if let Some(command) = command {
                                     UiAction::Invoke { command }
                                 } else {
                                     UiAction::ActivateHeaderItem { id }

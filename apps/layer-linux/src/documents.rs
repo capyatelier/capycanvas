@@ -698,6 +698,10 @@ impl Documents {
         popup.connect_closed(|p| p.unparent());
         popup.popup();
     }
+    pub fn adjacent(&self, w: &Rc<Workspace>, forward: bool) {
+        let id = self.model.borrow().adjacent(forward);
+        if let Some(id) = id { self.select(w, id, false); }
+    }
     pub fn key(&self, w: &Rc<Workspace>, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
         if key == gdk::Key::Escape && self.drag.borrow().is_some() {
             self.cancel_drag();
@@ -710,13 +714,6 @@ impl Documents {
         }
         let shift = modifiers.contains(gdk::ModifierType::SHIFT_MASK);
         match key {
-            gdk::Key::Tab | gdk::Key::ISO_Left_Tab | gdk::Key::Page_Down | gdk::Key::Page_Up => {
-                let forward = !shift && key != gdk::Key::Page_Up && key != gdk::Key::ISO_Left_Tab;
-                let id = self.model.borrow().adjacent(forward);
-                if let Some(id) = id {
-                    self.select(w, id, false);
-                }
-            }
             gdk::Key::a | gdk::Key::A if shift => self.show_selector(w),
             gdk::Key::w | gdk::Key::W if shift => w.window.close(),
             _ => return false,

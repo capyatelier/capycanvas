@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.*
@@ -313,7 +314,9 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 kind == "space" -> if (editing) Text("·", color = colors.secondary)
                 else -> HeaderButton(label, spec.optBoolean("selected") && kind != "capy", !editing && spec.optBoolean("enabled"), open,
                     Modifier.fillMaxSize().testTag(if (kind == "menu_labels") "header-menu-labels-compact" else "header-control-$id"),
-                    inBar = inBar, onClick = {
+                    inBar = inBar,
+                    onDoubleClick = if (spec.optBoolean("double_click")) ({ host.dispatch(obj("type" to "double_click_tool", "control" to spec.getJSONObject("resolved_control"))) }) else null,
+                    onClick = {
                         when (kind) {
                             "menu", "menu_labels" -> { menuLabel = null; host.primaryMenu { menu = it } }
                             "workspaces" -> { menuLabel = "workspaces"; menu = workspaceSwitcherMenu(host.workspaceManager) }
@@ -342,13 +345,13 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
 @Composable internal fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
     modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, shape: Shape = drawerButtonShape(if (open) "bottom" else null),
-    inBar: Boolean = false, onClick: () -> Unit, content: @Composable () -> Unit) {
+    inBar: Boolean = false, onDoubleClick: (() -> Unit)? = null, onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
-    val click = Modifier.hoverable(interaction).clickable(interactionSource = interaction, indication = rememberChromeFocusIndication(),
-        enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
+    val click = Modifier.hoverable(interaction).combinedClickable(interactionSource = interaction, indication = rememberChromeFocusIndication(),
+        enabled = enabled, role = Role.Button, onClickLabel = label, onDoubleClick = onDoubleClick, onClick = onClick)
     HoverTip(label, modifier) {
     Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
         .then(if (surface && !inBar) Modifier.glass(shape, colors.headerSurface) else Modifier).background(when {

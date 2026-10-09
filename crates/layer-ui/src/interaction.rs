@@ -215,6 +215,25 @@ pub struct InputReply {
     /// Whether to show the standalone top-left Capy while chrome is hidden.
     pub keep_zen_button: bool,
     pub pan_cursor: bool,
+    pub navigation_cursor: Option<NavigationMode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationMode {
+    #[default]
+    Pan,
+    Zoom,
+    ZoomOut,
+    Rotate,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct NavigationContact {
+    pub mode: NavigationMode,
+    pub origin: [f32; 2],
+    pub dragged: bool,
+    pub rectangle: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -223,6 +242,7 @@ pub(crate) struct PointerContact {
     pub kind: PointerKind,
     pub paint: bool,
     pub position: [f32; 2],
+    pub navigation: Option<NavigationContact>,
 }
 
 /// What a momentary binding replaced, restored on release.
@@ -245,7 +265,8 @@ pub(crate) struct Spring {
 pub(crate) struct Interaction {
     pub modifiers: Modifiers,
     pub hidden: bool,
-    pub pan_key: Option<String>,
+    pub navigation: Option<(String, NavigationMode)>,
+    pub navigation_tap: bool,
     pub keyboard_chrome: bool,
     pub keep_chrome_until_contact: bool,
     /// Fixed top-left guard after explicitly entering Zen. Not a preference.

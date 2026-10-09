@@ -1287,7 +1287,7 @@ function input(event) {
     const capy = $("zen-capy");
     if (capy && capy.hidden !== !reply.keep_zen_button)
       capy.hidden = !reply.keep_zen_button;
-    const cursor = reply.pan_cursor ? "grab" : "";
+    const cursor = ({pan:"grab", zoom:"zoom-in", zoom_out:"zoom-out", rotate:"crosshair"})[reply.navigation_cursor] ?? "";
     if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
     if (reply.dismiss_popups) {
       for (const popup of document.querySelectorAll(
@@ -1607,11 +1607,29 @@ function pointerInput(e, stage, point = position(e)) {
   });
 }
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+let trackpadGesture = null;
+canvas.addEventListener("gesturestart", e => {
+  e.preventDefault();
+  trackpadGesture = {point: position(e), scale: e.scale, rotation: e.rotation};
+  app.begin_view_gesture();
+}, {passive: false});
+canvas.addEventListener("gesturechange", e => {
+  if (!trackpadGesture) return;
+  e.preventDefault();
+  const point = position(e), previous = trackpadGesture;
+  if (e.scale > 0 && Number.isFinite(e.rotation)) {
+    applyChange(app.gesture(...previous.point, ...point, e.scale / previous.scale, (e.rotation - previous.rotation) * Math.PI / 180));
+    trackpadGesture = {point, scale: e.scale, rotation: e.rotation};
+  }
+}, {passive: false});
+canvas.addEventListener("gestureend", e => { e.preventDefault(); trackpadGesture = null; }, {passive: false});
+window.addEventListener("blur", () => { trackpadGesture = null; });
 window.addEventListener(
   "wheel",
   (e) => {
     if (document.elementFromPoint(e.clientX, e.clientY) !== canvas) return;
     e.preventDefault();
+    if (trackpadGesture) return;
     const point = position(e),
       unit =
         e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.clientHeight : 1;

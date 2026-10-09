@@ -165,6 +165,27 @@ class AndroidDrawingTabsUiTest {
     @After fun cleanup() {
         if (::scenario.isInitialized) scenario.close()
     }
+    @Test fun handToolPreservesDrawingCycleKeys() {
+        val first = tabs().getLong("selected")
+        val second = create()
+        ui { host.invoke("hand"); activity.window.decorView.requestFocus() }
+        waitFor("Hand selected") { ui { host.snapshot?.objectOrNull("state")?.objectOrNull("layer_tools")?.optString("tool") == "hand" } }
+        fun cycle(code: Int, modifiers: Int, expected: Long) {
+            val now = SystemClock.uptimeMillis()
+            for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+                instrumentation.sendKeySync(KeyEvent(now, SystemClock.uptimeMillis(), action, code, 0,
+                    modifiers, -1, 0, 0, InputDevice.SOURCE_KEYBOARD))
+            }
+            waitFor("Hand drawing cycle to $expected") { tabs().getLong("selected") == expected }
+            ready()
+        }
+        val control = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        val alt = KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON
+        cycle(KeyEvent.KEYCODE_PAGE_UP, control, first)
+        cycle(KeyEvent.KEYCODE_PAGE_DOWN, control, second)
+        cycle(KeyEvent.KEYCODE_PAGE_UP, alt, first)
+        cycle(KeyEvent.KEYCODE_PAGE_DOWN, alt, second)
+    }
     @Test fun closeButtonsAndFileMenuUseRealFrameTiming() {
         val first = tabs().getLong("selected"); val second = create()
         closeTab(second); closed(second, 1)

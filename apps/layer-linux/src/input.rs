@@ -181,6 +181,7 @@ pub struct Input {
     touches: RefCell<HashMap<gdk::EventSequence, u64>>,
     touch_points: RefCell<HashMap<u64, [f32; 2]>>,
     next_touch: Cell<u64>,
+    touchpad: Cell<Option<([f32; 2], f32)>>,
     clock: Cell<Option<(u32, u64)>>,
     tablets: tablet::TabletDevices,
     picker_hold: Rc<crate::color_picker::Hold>,
@@ -328,6 +329,30 @@ pub fn install(workspace: &Rc<Workspace>) {
         #[upgrade_or]
         glib::Propagation::Proceed,
         move |_, event| {
+            if event.event_type() == gdk::EventType::TouchpadPinch
+                && let Some(pinch) = event.downcast_ref::<gdk::TouchpadEvent>()
+            {
+                let dpi = workspace.area.scale_factor() as f32;
+                match pinch.gesture_phase() {
+                    gdk::TouchpadGesturePhase::Begin => {
+                        let point = event.position().and_then(|(x, y)| widget_point(&workspace.area, x, y));
+                        input.touchpad.set(point.map(|p| ([p.x() * dpi, p.y() * dpi], 1.)));
+                        if let Some(g) = workspace.gpu.borrow_mut().as_mut() { g.session.begin_view_gesture(); }
+                    }
+                    gdk::TouchpadGesturePhase::Update => if let Some((from, previous)) = input.touchpad.get() {
+                        let (dx, dy) = pinch.deltas();
+                        let to = [from[0] + dx as f32 * dpi, from[1] + dy as f32 * dpi];
+                        let scale = pinch.pinch_scale() as f32;
+                        if scale.is_finite() && scale > 0. {
+                            let result = workspace.gpu.borrow_mut().as_mut().map(|g| g.session.gesture(from, to, scale / previous, pinch.pinch_angle_delta() as f32));
+                            input.touchpad.set(Some((to, scale)));
+                            if let Some(result) = result { workspace.changed(result); }
+                        }
+                    },
+                    _ => input.touchpad.set(None),
+                }
+                return glib::Propagation::Stop;
+            }
             let phase = match event.event_type() {
                 gdk::EventType::TouchBegin => PenPhase::Down,
                 gdk::EventType::TouchUpdate => PenPhase::Move,

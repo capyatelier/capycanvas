@@ -61,6 +61,13 @@ completed with at least 2.2 GiB system memory available. Allocator and PSS sampl
 make this a memory diagnostic, not frame-rate qualification. Records are under
 `artifacts/latency-investigation/{current-geometry-4,fixed-geometry-memory-2}`.
 
+The 2026-10-08 navigation rows use three 5 s gestures on the 12 MP photo,
+actual SurfaceFlinger presentations, and thermal status 0. The brush/canvas
+and matching gesture were warmed; optional full-catalog `shaders_ready` was
+false. Source: `067f5cbb7` plus the uncommitted navigation candidate
+(`navigation.rs` SHA-256 `2c0e9c5a7eee70c3e881ba9810a286cbe5a49ca1059d23a18a3892c8d1354d79`);
+optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7682d462`.
+
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
 | Tool cursor hover, with and without brush size | 60 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
@@ -69,12 +76,12 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Pan during private session checkpoints | 60 | Unqualified: renderer 60.00–60.12 submissions/s, interval p99 18.70–18.92 ms; screen presentation and thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px during private session checkpoints | 60 | Unqualified: 77.6–79.0 fresh completed updates/s, completion gap p99 23.36–24.07 ms; thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px, repeated short contacts during checkpoints | 60 | Diagnostic only: 11.02–14.27 MiB process writes per 50 contacts; observed head age max 3.52–4.37 s. Paused motion has no qualified frame rate | [Session checkpoints](#session-checkpoints) |
-| Pan: Hand tool, one or two fingers | 60 | Photo, two fingers, Navigator open: screen 59.31 presents/s, p99 ≤16.70 ms; renderer 59.71 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
-| Pinch zoom | 60 | Photo, Navigator open: screen 59.43 presents/s, p99 ≤16.86 ms; renderer 59.83 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
+| Pan: Hand tool, one or two fingers | 60 | **Meets for two fingers:** 59.20–59.26 presented fps, p99 16.68–16.87 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/tcl/` |
+| Pinch zoom | 60 | **Misses:** 52.76–53.39 presented fps, p99 33.34–49.94 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/tcl/` |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 60 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
 | Pan: Hand tool, one or two fingers, M3 BUILD20 | 60 | **Unqualified on current M3.** 59.078–59.729 completed updates/s; completion gap p99 18.821–19.033 ms; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison); older actual presents below |
 | Pinch zoom, earlier retained-Navigator revision | 60 | Photo, Navigator open: screen 59.40 presents/s, p99 ≤16.83 ms; viewport 59.90 fresh completed updates/s | Retained-Navigator navigation below |
-| Two-finger rotate | 60 | | |
+| Two-finger rotate | 60 | **Meets:** 58.97–59.37 presented fps, p99 16.68–16.84 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/tcl/` |
 | Footer zoom and rotation sliders | 60 | Unmeasured on the reference tablet | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |

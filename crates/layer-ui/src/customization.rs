@@ -456,6 +456,14 @@ pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
 }
 
 impl ToolbarControl {
+    pub fn double_click_command(self) -> Option<CommandId> {
+        match self {
+            Self::Command { command: CommandId::Hand } => Some(CommandId::FitCanvas),
+            Self::Command { command: CommandId::Zoom } => Some(CommandId::ActualPixels),
+            Self::Command { command: CommandId::RotateView } => Some(CommandId::ResetRotation),
+            _ => None,
+        }
+    }
     pub fn icon(self) -> &'static str {
         match self {
             Self::ToolSlot {slot} => slot.variants()[0].icon(),
@@ -1074,6 +1082,9 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
             (
             label.to_string(),
             match command {
+                CommandId::Zoom | CommandId::RotateView | CommandId::FitWidth | CommandId::FillView
+                | CommandId::ZoomSelection | CommandId::ResetRotation | CommandId::ResetView | CommandId::PreviousView
+                | CommandId::SaveView | CommandId::RestoreView | CommandId::NextDrawing | CommandId::PreviousDrawing => label.to_string(),
                 CommandId::SearchCommands => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SEARCH_COMMANDS).to_string(),
                 CommandId::DrawingBrush => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_DRAWING_BRUSH).to_string(),
                 CommandId::Sculpt => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SCULPT).to_string(),
@@ -1467,6 +1478,7 @@ pub struct PanelControlView {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct TileView {
+    pub double_click: bool,
     pub has_variants: bool,
     pub resolved_control: ToolbarControl,
     pub id: u32,
@@ -1579,6 +1591,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
                 (choice,enabled,tooltip,tile.control)
             };
             Ok(TileView {
+                double_click: resolved_control.double_click_command().is_some(),
                 has_variants: tile.control.has_variants(),
                 resolved_control,
                 id: tile.id,

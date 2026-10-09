@@ -176,7 +176,6 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
   root.addEventListener('drop',e=>{if(editing())return;e.preventDefault();e.stopPropagation();const files=[...e.dataTransfer.files];if(files.length)invoke(()=>openFiles(files));});
   return {root,refresh,showSelector,cancel:cancelDrag,key(e){
     if(editing()||e.target.closest('input,textarea,select,[contenteditable=true]')||document.querySelector('dialog[open]'))return false;
-    if(e.altKey&&!e.ctrlKey&&['PageUp','PageDown'].includes(e.key)){e.preventDefault();invoke(()=>select(app.adjacent_document(e.key==='PageDown')));return true;}
     if(e.ctrlKey&&e.altKey&&e.code==='KeyD'){e.preventDefault();showSelector();return true;}
     if(e.ctrlKey&&e.altKey&&e.code==='KeyW'){e.preventDefault();invoke(()=>close(id(model.selected)));return true;}
     if(root.contains(e.target)&&e.ctrlKey&&e.code==='KeyZ'){e.preventDefault();invoke(()=>{applyChange(app.document_order_history(e.shiftKey));refresh(true);});return true;}

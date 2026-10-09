@@ -32,6 +32,7 @@ struct SnapshotKey {
     chrome_hidden: bool,
     keep_zen_button: bool,
     pan_cursor: bool,
+    navigation_cursor: Option<layer_ui::NavigationMode>,
     gpu_ready: bool,
     startup: layer_render_wgpu::StartupProgress,
     error: Option<String>,
@@ -64,6 +65,7 @@ pub struct NativeHost {
     pub chrome_hidden: bool,
     keep_zen_button: bool,
     pan_cursor: bool,
+    navigation_cursor: Option<layer_ui::NavigationMode>,
     pub error: Option<String>,
     pub sequence: u64,
     pub startup: layer_render_wgpu::StartupProgress,
@@ -169,6 +171,7 @@ impl NativeHost {
             chrome_hidden: false,
             keep_zen_button: false,
             pan_cursor: false,
+            navigation_cursor: None,
             error: None,
             sequence: 0,
             proof: Default::default(),
@@ -367,7 +370,7 @@ impl NativeHost {
     pub fn input(&mut self, input: UiInput) -> Result<layer_ui::InputReply, String> {
         if self.document_close_prepared {
             return Ok(layer_ui::InputReply {change:layer_ui::UiChange {revision:self.session.state().revision,..Default::default()},
-                handled:true,chrome_hidden:self.chrome_hidden,keep_zen_button:self.keep_zen_button,pan_cursor:self.pan_cursor,..Default::default()});
+                handled:true,chrome_hidden:self.chrome_hidden,keep_zen_button:self.keep_zen_button,pan_cursor:self.pan_cursor,navigation_cursor:self.navigation_cursor,..Default::default()});
         }
         if matches!(input, UiInput::Blur) {
             self.header_drag = None;
@@ -377,6 +380,7 @@ impl NativeHost {
         self.chrome_hidden = reply.chrome_hidden;
         self.keep_zen_button = reply.keep_zen_button;
         self.pan_cursor = reply.pan_cursor;
+        self.navigation_cursor = reply.navigation_cursor;
         self.apply_change(previous, reply.change);
         if reply.cancel_paint {
             self.cancel_pen()?;
@@ -1612,10 +1616,12 @@ mod tests {
                     .as_bool()
                     .unwrap()
             );
-            host.dispatch(UiAction::Invoke {
-                command: CommandId::ZoomIn,
-            })
-            .unwrap();
+            host.dispatch(UiAction::Invoke { command: CommandId::ZoomOut }).unwrap();
+            let first_navigation = host.take_value().unwrap();
+            assert!(first_navigation["state"]["camera"].is_object());
+            assert!(first_navigation.get("application_menus").is_some());
+            assert!(host.session.command(CommandId::PreviousView).enabled);
+            host.dispatch(UiAction::Invoke { command: CommandId::ZoomIn }).unwrap();
             let camera = host.take_value().unwrap();
             assert!(camera.get("camera").is_some());
             assert!(

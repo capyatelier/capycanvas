@@ -289,6 +289,11 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
         dispatch({ type: "activate_tile", panel, tile: tile.id });
       };
       const node = button("", pickerButtonAction(() => root.tileView.resolved_control ?? tile.control,{kind:'tile',panel,tile:tile.id},dispatch,activate));
+      node.addEventListener('dblclick', event => {
+        if (!root.tileView.double_click) return;
+        event.preventDefault(); event.stopPropagation();
+        dispatch({type:'double_click_tool',control:root.tileView.resolved_control});
+      });
       if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
       node.append(icon(tile.icon,true));
       if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));

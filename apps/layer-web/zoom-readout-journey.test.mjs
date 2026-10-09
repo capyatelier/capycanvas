@@ -75,8 +75,85 @@ export async function checkWheelNavigation({call,evaluate,settle}) {
   await wheel(20,0,0,panel);
   assert.deepEqual(await camera(),beforePanel,'panel scrolling does not navigate the canvas');
   assert.deepEqual(await browser(),initialBrowser);
+  await checkCanvasNavigation({call,evaluate,settle});
   await send({type:'set_theme',theme:originalTheme});
   console.log('PASS: canvas wheel, held middle/right button, modifiers, anchoring, release, view lock, paint exclusion and browser zoom ownership');
+}
+
+async function checkCanvasNavigation({call,evaluate,settle}) {
+  const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/navigation-controls/web';await mkdir(directory,{recursive:true});
+  const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
+  const invoke=command=>send({type:'invoke',command});
+  const camera=()=>evaluate('(()=>{const c=layerApp.state().camera;return{zoom:c.zoom,rotation:c.rotation,t:Array.from(c.translation),flipped:Array.from(c.flipped)}})()');
+  const artwork=()=>evaluate('({paint:layerApp.state().layers.map(l=>[String(l.id),String(l.paint_revision)]),undo:layerApp.state().commands.find(c=>c.id==="undo").enabled})');
+  const tool=()=>evaluate('layerApp.state().layer_tools.tool');
+  const key=async(key,code,vk,down,modifiers=0)=>{await call('Input.dispatchKeyEvent',{type:down?'rawKeyDown':'keyUp',key,code,windowsVirtualKeyCode:vk,nativeVirtualKeyCode:vk,modifiers});await settle();};
+  const press=async(name,code,vk,modifiers=0)=>{await key(name,code,vk,true,modifiers);await key(name,code,vk,false,modifiers);};
+  const doubleTool=async()=>{
+    const p=await evaluate('(()=>{const r=document.querySelector(".tile-button button[data-command=hand]").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');
+    for(const clickCount of [1,2])for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount});
+    await settle();
+  };
+  await evaluate(`window.navigationEvents=[];for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture'])document.addEventListener(type,e=>navigationEvents.push({type,id:e.pointerId,buttons:e.buttons,button:e.button,target:e.target.id||e.target.className,x:e.clientX,y:e.clientY}),true)`);
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});await invoke('reset_view');await invoke('pen');
+    await evaluate('layerApp.canvas.focus()');
+    const point=await evaluate('(()=>{const [x,y,w,h]=layerApp.state().camera.work_area,r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(x+w/2)*r.width/layerApp.canvas.width,y:r.y+(y+h/2)*r.height/layerApp.canvas.height}})()');
+    const mouse=async(type,p=point,modifiers=0)=>{await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,modifiers});await settle();};
+    const kept=await artwork();
+    await press('z','KeyZ',90);assert.equal(await tool(),'zoom','Z selects Zoom');
+    let before=await camera();await mouse('mousePressed');await mouse('mouseReleased');
+    assert.ok((await camera()).zoom>before.zoom,'Zoom click increases magnification');
+    const first=(await camera()).zoom;await mouse('mousePressed');await mouse('mouseReleased');
+    assert.ok((await camera()).zoom>first,'rapid Zoom canvas clicks keep increasing magnification');
+    before=await camera();await mouse('mousePressed');await mouse('mouseMoved',{x:point.x+80,y:point.y+64});await mouse('mouseReleased',{x:point.x+80,y:point.y+64});
+    assert.notEqual((await camera()).zoom,before.zoom,`Zoom drag changes magnification: ${JSON.stringify(await evaluate('navigationEvents.slice(-12)'))}`);
+    await invoke('reset_view');await invoke('pen');
+    const painting=await tool();before=await camera();
+    await key('Control','ControlLeft',17,true,2);await key(' ','Space',32,true,2);
+    await mouse('mousePressed',point,2);await mouse('mouseMoved',{x:point.x+48,y:point.y},2);
+    const zoomed=await camera();assert.ok(zoomed.zoom>before.zoom,'Ctrl+Space drag right zooms in');
+    const physical=await evaluate(`(()=>{const r=layerApp.canvas.getBoundingClientRect();return[(${point.x}-r.x)*layerApp.canvas.width/r.width,(${point.y}-r.y)*layerApp.canvas.height/r.height]})()`);
+    for(let axis=0;axis<2;axis++)assert.ok(Math.abs((physical[axis]-before.t[axis])/before.zoom-(physical[axis]-zoomed.t[axis])/zoomed.zoom)<.01,'drag zoom retains its anchor');
+    await key(' ','Space',32,false,2);await key('Control','ControlLeft',17,false);
+    await mouse('mouseMoved',{x:point.x+80,y:point.y});assert.ok((await camera()).zoom>zoomed.zoom,'key release keeps captured zoom');
+    await mouse('mouseReleased',{x:point.x+80,y:point.y});assert.equal(await tool(),painting,'temporary zoom restores painting');
+    before=await camera();await key('Alt','AltLeft',18,true,1);await key(' ','Space',32,true,1);
+    await mouse('mousePressed',point,1);await mouse('mouseReleased',point,1);
+    await key(' ','Space',32,false,1);await key('Alt','AltLeft',18,false);
+    assert.ok((await camera()).zoom<before.zoom,'Alt+Space click zooms out');
+    const start={x:point.x+80,y:point.y};
+    await key('Shift','ShiftLeft',16,true,8);await key(' ','Space',32,true,8);
+    await mouse('mousePressed',start,8);await mouse('mouseMoved',{x:start.x,y:start.y+64},8);
+    const rotated=await camera();assert.ok(Math.abs(rotated.rotation)>.01,'Shift+Space rotates');
+    await key(' ','Space',32,false,8);await key('Shift','ShiftLeft',16,false);
+    await mouse('mouseMoved',{x:point.x,y:point.y+80});await mouse('mouseReleased',{x:point.x,y:point.y+80});
+    assert.ok(Math.abs((await camera()).rotation-rotated.rotation)>.01,'key release keeps captured rotation');
+    assert.equal(await tool(),painting);
+    await press('r','KeyR',82);assert.equal(await tool(),'rotate_view','R selects Rotate View');
+    const rotation=(await camera()).rotation;await press('-','Minus',189);assert.notEqual((await camera()).rotation,rotation,'minus rotates left');
+    await press('5','Digit5',53);assert.equal((await camera()).rotation,0,'5 resets rotation');
+    for(const [name,code,vk,modifiers] of [[';','Semicolon',186,2],['=','Equal',187,2],['+','Equal',187,10],['+','NumpadAdd',107,2]]) {
+      before=await camera();await press(name,code,vk,modifiers);assert.ok((await camera()).zoom>before.zoom,`${code} zoom shortcut applies`);
+    }
+    await send({type:'set_rotation',rotation:.4});await invoke('flip_horizontal');await invoke('fit_canvas');
+    let fitted=await camera();assert.ok(Math.abs(fitted.rotation-.4)<.00001,'Fit preserves rotation');assert.equal(fitted.flipped[0],true,'Fit preserves reflection');
+    await invoke('reset_rotation');fitted=await camera();assert.equal(fitted.rotation,0);assert.equal(fitted.flipped[0],true,'Reset Rotation preserves reflection');
+    await invoke('reset_view');fitted=await camera();assert.equal(fitted.rotation,0);assert.deepEqual(fitted.flipped,[false,false]);
+    await invoke('zoom');await send({type:'set_zoom',zoom:.37});await doubleTool();
+    assert.equal((await camera()).zoom,1,'double-clicking the Zoom button selects Actual Pixels');assert.equal(await tool(),'zoom');
+    await invoke('rotate_view');await send({type:'set_rotation',rotation:.4});await doubleTool();
+    assert.equal((await camera()).rotation,0,'double-clicking Rotate View resets rotation');assert.equal(await tool(),'rotate_view');
+    await invoke('hand');await send({type:'set_zoom',zoom:2});await doubleTool();
+    assert.ok((await camera()).zoom<1,'double-clicking Hand fits');assert.equal(await tool(),'hand');
+    assert.equal(await evaluate('layerApp.state().customization.drawer==null'),true,'double-click closes the tool drawer');
+    assert.deepEqual(await artwork(),kept,'navigation preserves paint and Undo');
+    const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/navigation-${theme}.png`,Buffer.from(shot.data,'base64'));
+    await invoke('pen');await mouse('mousePressed');await mouse('mouseMoved',{x:point.x+32,y:point.y+12});await mouse('mouseReleased',{x:point.x+32,y:point.y+12});
+    await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+10000;function check(){const paint=layerApp.state().layers.map(l=>[String(l.id),String(l.paint_revision)]);if(JSON.stringify(paint)!==${JSON.stringify(JSON.stringify(kept.paint))})resolve(true);else if(performance.now()>end)reject(Error('painting after navigation'));else setTimeout(check,30);}check();})`);
+    assert.equal((await artwork()).undo,true,'painting resumes after navigation');await invoke('undo');
+  }
+  console.log('PASS: Zoom tool, temporary zoom/rotation, mid-contact key release, shortcuts, view reset and paint preservation in both themes');
 }
 
 export async function checkZoomReadout({call,evaluate,settle,device=false}) {
@@ -178,12 +255,12 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
     }
     if(theme)await send({type:'set_theme',theme});
 
-    await invoke('rotate_right');await send({type:'set_zoom',zoom:.37});
+    await send({type:'set_rotation',rotation:Math.PI/2});await send({type:'set_zoom',zoom:.37});
     await openWith('mouse');await choose('Actual Pixels','mouse');
     await wait(`layerApp.state().camera.zoom===1&&!${opened}`);
     await whole('Actual Pixels at a quarter turn');
     assert.equal(await text(),'100% · 90°');
-    await invoke('rotate_left');
+    await send({type:'set_rotation',rotation:0});
 
     await focusCanvas();
     await openWith('pen');
@@ -305,23 +382,25 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
     for(let i=1;i<=12;i++)await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:c.x+i*12,y:c.y+i*5,button:'left',buttons:1,pointerType:'pen',force:.7});
     await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:c.x+144,y:c.y+60,button:'left',buttons:0,clickCount:1,pointerType:'pen'});
     await wait("layerApp.state().commands.find(c=>c.id==='undo').enabled");
+    const painted=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/paint-before-export.png`,Buffer.from(painted.data,'base64'));
     const webp=await exportAs('Webp'),png=await exportAs('Png');
     const decoded=await evaluate(`(async()=>{
       const bytes=${files}.get(${JSON.stringify(webp)}),ascii=a=>String.fromCharCode(...a);
-      const decode=async(data,type)=>{const bitmap=await createImageBitmap(new Blob([data],{type}));const c=new OffscreenCanvas(bitmap.width,bitmap.height),x=c.getContext('2d');x.drawImage(bitmap,0,0);return{width:bitmap.width,height:bitmap.height,pixels:x.getImageData(0,0,bitmap.width,bitmap.height).data};};
+      const decode=async(data,type)=>{const bitmap=await createImageBitmap(new Blob([data],{type}));const c=new OffscreenCanvas(bitmap.width,bitmap.height),x=c.getContext('2d',{willReadFrequently:true});x.drawImage(bitmap,0,0);return{width:bitmap.width,height:bitmap.height,pixels:x.getImageData(0,0,bitmap.width,bitmap.height).data};};
       const a=await decode(bytes,'image/webp'),b=await decode(${files}.get(${JSON.stringify(png)}),'image/png');
       let diff=0,ink=0;for(let i=0;i<a.pixels.length;i++){diff=Math.max(diff,Math.abs(a.pixels[i]-b.pixels[i]));}
       for(let i=0;i<a.pixels.length;i+=4)if([0,1,2,3].some(j=>Math.abs(a.pixels[i+j]-a.pixels[j])>32))ink++;
       return{riff:ascii(bytes.slice(0,4)),webp:ascii(bytes.slice(8,12)),lossless:ascii(bytes).includes('VP8L'),icc:ascii(bytes).includes('ICCP'),
         size:[a.width,a.height],png:[b.width,b.height],document:[layerApp.state().tabs[0].width,layerApp.state().tabs[0].height],diff,ink};
     })()`);
+    await writeFile(`${directory}/export.webp`,Buffer.from(await evaluate(`Array.from(${files}.get(${JSON.stringify(webp)}))`)));
+    await writeFile(`${directory}/export.png`,Buffer.from(await evaluate(`Array.from(${files}.get(${JSON.stringify(png)}))`)));
     assert.equal(webp.split('.').at(-1),'webp');
     assert.deepEqual([decoded.riff,decoded.webp,decoded.lossless,decoded.icc],['RIFF','WEBP',true,true],'a lossless WebP with its profile');
     assert.deepEqual(decoded.size,decoded.document,'the WebP decodes at the document size');
     assert.deepEqual(decoded.png,decoded.document);
     assert.ok(decoded.ink>20,`the stroke is in the export: ${decoded.ink}`);
     assert.ok(decoded.diff<=1,`the WebP matches the 8-bit PNG export: ${decoded.diff}`);
-    await writeFile(`${directory}/export.webp`,Buffer.from(await evaluate(`Array.from(${files}.get(${JSON.stringify(webp)}))`)));
 
     const poster=await evaluate(`(async()=>{const base=(await layerApp.app.export_presets({type:'get',index:0})).recipe;
       const recipe=layerApp.app.export_draft({...base,size:{Fit:{bounds:[20000,20000],enlarge:true}}},{type:'format',value:'Webp'}).recipe;

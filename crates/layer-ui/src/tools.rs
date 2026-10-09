@@ -410,6 +410,8 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
     if canvas_tool != LayerCanvasTool::Paint {
         let (label, icon) = match canvas_tool {
             LayerCanvasTool::Hand => (MessageId::TOOL_MODE_HAND, "hand"),
+            LayerCanvasTool::Zoom => (MessageId::COMMAND_ZOOM, "search"),
+            LayerCanvasTool::RotateView => (MessageId::COMMAND_ROTATE_VIEW, "rotate-right"),
             LayerCanvasTool::Crop => (MessageId::TOOL_MODE_CROP, "crop"),
             _ => return ToolSetView::default(),
         };

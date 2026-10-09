@@ -63,6 +63,7 @@ import kotlin.math.roundToInt
                         else -> Color.Transparent
                     })
                     .combinedClickable(enabled = tile.getBoolean("enabled"),
+                        onDoubleClick = if (tile.optBoolean("double_click")) ({ host.dispatch(obj("type" to "double_click_tool", "control" to tile.getJSONObject("resolved_control"))) }) else null,
                         onLongClick = { dock.holdContext(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
                         onClick = activate),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {

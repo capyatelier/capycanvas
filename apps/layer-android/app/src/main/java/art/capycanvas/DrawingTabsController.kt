@@ -196,15 +196,14 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         catch(e:CancellationException){throw e}
         catch(e:Exception){host.reportActionError(e.message ?: "Could not reorder drawings")}
     }
+    fun adjacent(forward:Boolean) {
+        if(!blocked) host.viewModelScope.launch {
+            val id=query(obj("op" to "adjacent","forward" to forward)).toLongOrNull()
+            if(id!=null)select(id)
+        }
+    }
     fun key(event:KeyEvent):Boolean {
         if(event.action!=KeyEvent.ACTION_DOWN) return false
-        if(event.isAltPressed && event.keyCode in listOf(KeyEvent.KEYCODE_PAGE_UP,KeyEvent.KEYCODE_PAGE_DOWN)) {
-            if(!blocked) host.viewModelScope.launch {
-                val id=query(obj("op" to "adjacent","forward" to (event.keyCode==KeyEvent.KEYCODE_PAGE_DOWN))).toLongOrNull()
-                if(id!=null)select(id)
-            }
-            return true
-        }
         if(event.isCtrlPressed&&event.isAltPressed) when(event.keyCode) {
             KeyEvent.KEYCODE_D->{selector=true;return true}
             KeyEvent.KEYCODE_W->{closeSelected();return true}

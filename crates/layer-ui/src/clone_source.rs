@@ -89,7 +89,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// it is a pen or mouse. A finger never sets the source.
     pub(super) fn clone_source_contact(&self, kind: PointerKind, position: [f32; 2]) -> bool {
         self.cloning()
-            && self.interaction.pan_key.is_none()
+            && self.interaction.navigation.is_none()
             && (self.clone_disc_hit(position) || (self.retouch.armed && kind != PointerKind::Touch))
     }
 

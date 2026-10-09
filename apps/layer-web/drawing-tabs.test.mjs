@@ -243,6 +243,27 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   await evaluate('layerApp.app.document_order_history(false);layerApp.documents.refresh()');
   assert.deepEqual((await tabs()).tabs.map(t=>t.id),[first,second,third]);
   assert.equal((await tabs()).selected,third,'Order history does not switch drawings');
+  const press=async(key,code,vk,modifiers=0)=>{
+    for(const type of ['rawKeyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code,windowsVirtualKeyCode:vk,nativeVirtualKeyCode:vk,modifiers});
+    await settle();
+  };
+  for(const theme of ['light','dark']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);
+    for(const [key,code,vk,target] of [['PageUp','PageUp',33,second],['PageDown','PageDown',34,third]]) {
+      await invoke('hand');await settle();await evaluate('layerApp.canvas.focus()');
+      await press(key,code,vk,1);
+      await wait(`Number(layerApp.app.document_tabs(0).selected)===${target}`);await ready();
+    }
+  }
+  await invoke('keyboard_shortcuts');await settle();
+  await evaluate("layerApp.dispatch({type:'preferences',action:{type:'begin_shortcut',id:'command.NextDrawing'}})");await settle();
+  await press('F8','F8',119);
+  await evaluate("layerApp.dispatch({type:'preferences',action:{type:'confirm_shortcut',replace:true}});layerApp.dispatch({type:'close_settings'})");await settle();
+  await select(second);await invoke('hand');await settle();await evaluate('layerApp.canvas.focus()');
+  await press('F8','F8',119);
+  await wait(`Number(layerApp.app.document_tabs(0).selected)===${third}`);await ready();
+  await invoke('keyboard_shortcuts');await settle();
+  await evaluate("layerApp.dispatch({type:'preferences',action:{type:'reset_shortcut',id:'command.NextDrawing'}});layerApp.dispatch({type:'close_settings'})");await settle();
   const compact=await evaluate('document.querySelector(".drawing-tabs").hidden');
   if(compact){await evaluate('layerApp.documents.showSelector()');await settle();}
   for(const device of ['mouse','pen','touch']){

@@ -481,6 +481,11 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     }
     LaunchedEffect(file.optLong("epoch"), file.optBoolean("close_ready"), host.drawingTabs.switching, controller.working) { if (file.optBoolean("close_ready") && !host.drawingTabs.switching && !controller.working && !DocumentController.nativeFileJobsForTest) host.drawingTabs.acceptClose() }
     DrawingSelector(host)
+    val adjacentRequest=state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type")=="adjacent_drawing" }
+    LaunchedEffect(adjacentRequest?.getInt("id")) { if(adjacentRequest!=null) {
+        host.dispatch(obj("type" to "complete_request","id" to adjacentRequest.getInt("id")))
+        host.drawingTabs.adjacent(adjacentRequest.getJSONObject("kind").getBoolean("forward"))
+    } }
     val drawingsRequest=state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type")=="drawings" }
     LaunchedEffect(drawingsRequest?.getInt("id")) { if(drawingsRequest!=null) { host.drawingTabs.selector=true; host.dispatch(obj("type" to "complete_request","id" to drawingsRequest.getInt("id"))) } }
     // Registered before workspace/popup handlers, which get first refusal.

@@ -65,7 +65,7 @@ pub(crate) fn preset(id: &str) -> Option<&'static ParsedPreset> {
 pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     KeymapPreset {
         id: "capy",
-        revision: 2,
+        revision: 3,
         title: crate::APP_NAME,
         app: "CapyCanvas",
         source: "Capy Canvas defaults",
@@ -76,12 +76,15 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "photoshop",
-        revision: 11,
+        revision: 12,
         title: "Photoshop Style",
         app: "Photoshop",
         source: "Adobe Photoshop default keyboard shortcuts, US layout, modern undo; checked 2026-09-25",
         links: &["https://helpx.adobe.com/content/dam/help/en/photoshop/using/default-keyboard-shortcuts/photoshop-keyboard-shortcuts.pdf"],
         keys: &[
+            ("command.ZoomIn", &["primary+=", "primary+shift++", "primary++"]),
+            ("command.RotateLeft", &[]),
+            ("command.RotateRight", &[]),
             ("command.Redo", &["primary+shift+z"]),
             ("command.SoftProof", &["primary+y"]),
             ("command.Move", &["v"]),
@@ -115,7 +118,6 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
         ],
         gestures: &[],
         differences: &[
-            ("R", "Photoshop's Rotate View tool has no Capy tool. Rotate with two fingers or the view rotation commands."),
             ("F", "Photoshop cycles three screen modes. Capy has one full-screen mode on F11."),
             ("D", "Photoshop resets black and white. Capy's D resets mask colors only."),
             ("Hold ~", "Photoshop erases with the current brush. Bind Erase while held to use Capy's eraser instead."),
@@ -125,7 +127,7 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
     },
     KeymapPreset {
         id: "krita",
-        revision: 4,
+        revision: 5,
         title: "Krita Style",
         app: "Krita",
         source: "Krita 5.3 manual default shortcuts, US layout; checked 2026-09-25",
@@ -146,6 +148,12 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
             ("command.Lasso", &[]),
             ("command.RotateLeft", &["4"]),
             ("command.RotateRight", &["6"]),
+            ("command.ResetRotation", &["5"]),
+            ("command.ActualPixels", &["1"]),
+            ("command.FitCanvas", &["2"]),
+            ("command.FitWidth", &["3"]),
+            ("command.ZoomIn", &["+", "shift++", "primary+=", "primary++", "primary+shift++"]),
+            ("command.ZoomOut", &["-", "primary+-"]),
             ("command.Fullscreen", &["primary+shift+f"]),
             ("command.Deselect", &["primary+shift+a"]),
             ("command.AddLayer", &["insert"]),
@@ -158,17 +166,14 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
         gestures: &[],
         differences: &[
             ("E", "Krita toggles the brush's erase mode. Capy's E selects the eraser; press B to return."),
-            ("Hold Shift+Space", "Krita rotates the view while held. Capy rotates with two fingers or 4 and 6."),
-            ("5", "Capy has no view rotation reset command."),
             ("Hold Shift and drag", "Capy has no on-canvas brush resize drag."),
             ("/", "Capy has no command to swap to the previous brush preset."),
-            ("+ and -", "Capy zooms with Ctrl+= and Ctrl+-."),
             ("Ctrl+J", "With a selection, Capy copies only the selected pixels to the new layer, as Ctrl+Alt+J does in Krita. Without one it duplicates the layer."),
         ],
     },
     KeymapPreset {
         id: "clip-studio",
-        revision: 3,
+        revision: 4,
         title: "Clip Studio Paint Style",
         app: "Clip Studio Paint",
         source: "Clip Studio Paint manual shortcut lists, Studio Mode defaults; checked 2026-09-25",
@@ -194,7 +199,6 @@ pub const KEYMAP_PRESETS: &[KeymapPreset] = &[
         gestures: &[],
         differences: &[
             ("G", "Clip Studio cycles fill and gradient tools. This keymap selects Fill."),
-            ("R", "Clip Studio's Rotate tool has no Capy tool. Rotate with two fingers or the view rotation commands."),
             ("C", "Capy has no transparent-color toggle."),
             ("Hold Ctrl+Alt and drag", "Capy has no on-canvas brush resize drag."),
             ("[ and ]", "Clip Studio steps through preset sizes. Capy steps by the size setting's increment."),

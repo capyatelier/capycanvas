@@ -409,8 +409,8 @@ completion, including warm-up, pen-up, undo and deferred captures.
 
 **Navigation (Android).**
 
-- `AndroidViewportBenchmarkTest` measures presented pan and pinch rates
-  (`-e viewportBenchmark true -e motion pan|pinch`).
+- `AndroidViewportBenchmarkTest` measures pan, pinch and two-finger rotation
+  (`-e viewportBenchmark true -e motion pan|pinch|rotate`).
 - The brush runner's `-e mode pinch` does the same on the photo.
 
 See [Android development](../development/android.md#benchmarks).

@@ -626,3 +626,16 @@ command-paste-at-cursor = Вставить у курсора
 commands-help-paste-at-view = Вставляет содержимое буфера обмена в центр видимой области холста в исходном размере.
 
 commands-help-paste-at-cursor = Вставляет содержимое буфера обмена с центром у указателя в исходном размере.
+
+command-zoom = Масштаб
+command-rotate-view = Повернуть вид
+command-fit-width = По ширине
+command-fill-view = Заполнить вид
+command-zoom-selection = Масштаб по выделению
+command-reset-rotation = Сбросить поворот
+command-reset-view = Сбросить вид
+command-previous-view = Предыдущий вид
+command-save-view = Сохранить вид
+command-restore-view = Восстановить сохранённый вид
+command-next-drawing = Следующий рисунок
+command-previous-drawing = Предыдущий рисунок

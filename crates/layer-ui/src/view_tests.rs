@@ -5,17 +5,15 @@ fn device_pixels(s: &UiSession<Recorder>) -> bool {
 #[test]
 fn actual_pixels_zooms_to_one_on_whole_device_pixels() {
     let mut s = session(Platform::Gtk);
-    for turn in [None, Some(CommandId::RotateRight), Some(CommandId::RotateRight), Some(CommandId::RotateLeft)] {
-        if let Some(turn) = turn {
-            invoke(&mut s, turn);
-        }
+    for quarter in 0..4 {
+        s.dispatch(UiAction::SetRotation { rotation: quarter as f32 * std::f32::consts::FRAC_PI_2 }).unwrap();
         s.dispatch(UiAction::SetZoom { zoom: 0.371 }).unwrap();
         s.state.camera.translation = s.state.camera.translation.map(|v| v + 0.43);
         let revision = s.state.camera.revision;
         let change = invoke(&mut s, CommandId::ActualPixels);
         assert_ne!(change.regions & regions::CAMERA, 0);
         assert_eq!(s.state.camera.zoom, 1.0);
-        assert!(device_pixels(&s), "{turn:?}: {:?}", s.state.camera.translation);
+        assert!(device_pixels(&s), "{quarter}: {:?}", s.state.camera.translation);
         assert!(s.state.camera.revision > revision);
         assert_eq!(s.engine.view().document_to_surface, s.state.camera.document_to_surface());
     }
@@ -75,13 +73,13 @@ fn zoom_menu_groups_zoom_and_rotation_controls() {
     assert_eq!(menu.rotation_section, 3);
     assert_eq!(zoom_lock[0].action, Some(UiAction::SetZoomLocked { locked: true }));
     assert_eq!(zoom_lock[0].selected, Some(false));
-    assert_eq!(rotation[0].action, Some(UiAction::SetRotation { rotation: 0.0 }));
+    assert_eq!(rotation[0].action, Some(UiAction::Invoke { command: CommandId::ResetRotation }));
     assert_eq!(rotation[1].action, Some(UiAction::SetRotationLocked { locked: true }));
     assert_eq!(rotation[1].selected, Some(false));
     assert_eq!(menu.buttons.iter().map(|c| c.id).collect::<Vec<_>>(), NAVIGATOR_COMMANDS);
     assert_eq!(invoked, [CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels]);
     assert_eq!(commands[3].label, "Actual Pixels");
-    assert_eq!(commands[3].hint, "Ctrl+1 / Ctrl+Alt+0");
+    assert_eq!(commands[3].hint, "Ctrl+Alt+0 / Ctrl+1");
     assert_eq!(levels.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["25%", "50%", "100%", "200%", "400%"]);
     for item in levels {
         assert!(item.enabled && item.selected.is_none());
@@ -195,12 +193,13 @@ fn actual_pixels_chords_follow_each_keymap_and_reach_browsers() {
         assert!(key.available(Platform::Web), "{key:?}");
     }
     let mut settings = Settings::default();
-    assert_eq!(settings.keys(&id), [primary_one.clone(), primary_alt_zero.clone()]);
+    assert_eq!(settings.keys(&id), [primary_alt_zero.clone(), primary_one.clone()]);
     assert_eq!(
         settings.shortcut_match(&primary_one, Platform::Web, Some(ToolCategory::Drawing)).map(|d| d.id),
         Some(id.clone())
     );
     for (preset, keys) in [
+        ("clip-studio", vec![primary_alt_zero.clone(), primary_one.clone()]),
         ("photoshop", vec![primary_one.clone()]),
         ("affinity", vec![primary_one.clone()]),
         ("gimp", vec![one.clone()]),

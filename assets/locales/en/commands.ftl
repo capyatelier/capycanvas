@@ -623,3 +623,16 @@ command-paste-at-cursor = Paste at Cursor
 commands-help-paste-at-view = Paste the clipboard at the centre of the visible canvas, at its original size.
 
 commands-help-paste-at-cursor = Paste the clipboard centred on the pointer, at its original size.
+
+command-zoom = Zoom
+command-rotate-view = Rotate view
+command-fit-width = Fit width
+command-fill-view = Fill view
+command-zoom-selection = Zoom to selection
+command-reset-rotation = Reset rotation
+command-reset-view = Reset view
+command-previous-view = Previous view
+command-save-view = Save view
+command-restore-view = Restore saved view
+command-next-drawing = Next drawing
+command-previous-drawing = Previous drawing

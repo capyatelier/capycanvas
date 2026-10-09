@@ -622,3 +622,16 @@ command-paste-at-cursor = Incolla al cursore
 commands-help-paste-at-view = Incolla gli appunti al centro della tela visibile, alle dimensioni originali.
 
 commands-help-paste-at-cursor = Incolla gli appunti centrati sul puntatore, alle dimensioni originali.
+
+command-zoom = Zoom
+command-rotate-view = Ruota vista
+command-fit-width = Adatta alla larghezza
+command-fill-view = Riempi vista
+command-zoom-selection = Zoom sulla selezione
+command-reset-rotation = Reimposta rotazione
+command-reset-view = Reimposta vista
+command-previous-view = Vista precedente
+command-save-view = Salva vista
+command-restore-view = Ripristina vista salvata
+command-next-drawing = Disegno successivo
+command-previous-drawing = Disegno precedente

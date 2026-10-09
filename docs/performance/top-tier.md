@@ -34,13 +34,23 @@ are under `artifacts/format/m3-uninstrumented-34/` and
 `4a2cf6aa0` diagnostics remain in their own artifacts and do not override these
 current-source results.
 
+The 2026-10-08 navigation rows use three 5 s gestures on the 61 MP photo,
+actual SurfaceFlinger presentations, and thermal status 0. The benchmark
+opened the 8-bit sRGB JPEG directly, whereas low/mid tiers place their photos
+in new documents; its native tab reports 9504 × 6336 with one empty paint
+layer above it. The display is `Rgba8UnormSrgb` in `Srgb`. The brush/canvas and matching gesture were warmed;
+optional full-catalog `shaders_ready` was false. Source: `067f5cbb7` plus the
+uncommitted navigation candidate (`navigation.rs` SHA-256
+`2c0e9c5a7eee70c3e881ba9810a286cbe5a49ca1059d23a18a3892c8d1354d79`);
+optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7682d462`.
+
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
 | Tool cursor hover, with and without brush size | 120 | Renderer 119.3–119.6 submissions/s; submission interval p99 15.0–15.6 ms. Presentation unqualified. | [Tool cursors](#tool-cursors) |
-| Pan: Hand tool, one or two fingers | 120 | Met on a small document: 118.8 fps, interval p50/p99 8.3/12.0 ms (1024 px document; not yet at 61 MP) | [Android development](../development/android.md#benchmarks), 2026-09-27 |
-| Pinch zoom | 120 | **Met.** 119.3 fps on the 61 MP photo; 117.7 fps, p99 15.6 ms on a 1024 px document | 2026-09-22; `2c3cb244`, 2026-09-27 |
+| Pan: Hand tool, one or two fingers | 120 | **Misses on 61 MP:** two-finger pan 33.93–35.12 presented fps, p99 41.67 ms, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/top/` |
+| Pinch zoom | 120 | **Misses on 61 MP:** 33.13–35.66 presented fps, p99 41.67–50.00 ms, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/top/` |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 120 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
-| Two-finger rotate | 120 | | |
+| Two-finger rotate | 120 | **Misses on 61 MP:** 33.32–34.13 presented fps, p99 41.67 ms, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/top/` |
 | Painting with Filters previews pending (61 MP) | 120 | One frame-gap outlier; repeat passes. Completed-update rate unqualified. Curves thumbnail opening 6.782 → 0.943–1.015 s | [Filters previews](#filters-previews), 2026-10-06 |
 | Footer zoom and rotation sliders | 120 | Unmeasured on the reference tablet | |
 | Navigator drag | 120 | | |

@@ -2139,6 +2139,143 @@ class AndroidInteractionTest {
         }
         return result
     }
+    @Test fun navigationControlsPreservePaintAndRestoreTool() {
+        fun camera() = state().getJSONObject("camera")
+        fun zoom() = camera().getDouble("zoom")
+        fun rotation() = camera().getDouble("rotation")
+        fun undo() = state().array("commands").objects().first { it.getString("id") == "undo" }.getBoolean("enabled")
+        fun revisions() = layerStates().map { it.getLong("id") to it.getLong("paint_revision") }
+        fun key(code: Int, down: Boolean, meta: Int = 0) {
+            val now = SystemClock.uptimeMillis()
+            instrumentation.sendKeySync(KeyEvent(now, now, if (down) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP,
+                code, 0, meta, -1, 0, 0, InputDevice.SOURCE_KEYBOARD))
+            settle()
+        }
+        val control = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        val alt = KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON
+        val shift = KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON
+        tool = MotionEvent.TOOL_TYPE_MOUSE
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            command("reset_view"); command("pen")
+            onMain { surface.requestFocus() }
+            val work = camera().getJSONArray("work_area")
+            val center = Offset(work.getDouble(0).toFloat() + work.getDouble(2).toFloat() / 2,
+                work.getDouble(1).toFloat() + work.getDouble(3).toFloat() / 2)
+            val kept = revisions(); val history = undo()
+            pressKey(KeyEvent.KEYCODE_Z)
+            waitFor("Z selects Zoom") { canvasTool() == "zoom" }
+            val initial = zoom(); tap(center)
+            waitFor("Zoom click increases magnification") { zoom() > initial }
+            val first = zoom(); tap(center)
+            waitFor("rapid Zoom canvas clicks keep increasing magnification") { zoom() > first }
+            val clicked = zoom(); drag(center, center + Offset(80 * density, 64 * density))
+            waitFor("Zoom drag changes magnification") { zoom() != clicked }
+            command("reset_view"); command("pen")
+            val painting = canvasTool(); val before = camera()
+            key(KeyEvent.KEYCODE_CTRL_LEFT, true, control); key(KeyEvent.KEYCODE_SPACE, true, control)
+            event(MotionEvent.ACTION_DOWN, center)
+            event(MotionEvent.ACTION_MOVE, center + Offset(48 * density, 0f))
+            waitFor("Ctrl+Space drag right zooms in") { zoom() > before.getDouble("zoom") }
+            val zoomed = camera(); val anchored = listOf(center.x, center.y)
+            for (axis in 0..1) assertEquals("zoom retains its anchor",
+                (anchored[axis] - before.getJSONArray("translation").getDouble(axis)) / before.getDouble("zoom"),
+                (anchored[axis] - zoomed.getJSONArray("translation").getDouble(axis)) / zoomed.getDouble("zoom"), .05)
+            key(KeyEvent.KEYCODE_SPACE, false, control); key(KeyEvent.KEYCODE_CTRL_LEFT, false)
+            event(MotionEvent.ACTION_MOVE, center + Offset(80 * density, 0f))
+            waitFor("key release keeps captured zoom") { zoom() > zoomed.getDouble("zoom") }
+            event(MotionEvent.ACTION_UP)
+            waitFor("temporary zoom restores painting") { canvasTool() == painting }
+            val enlarged = zoom()
+            key(KeyEvent.KEYCODE_ALT_LEFT, true, alt); key(KeyEvent.KEYCODE_SPACE, true, alt)
+            tap(center)
+            key(KeyEvent.KEYCODE_SPACE, false, alt); key(KeyEvent.KEYCODE_ALT_LEFT, false)
+            waitFor("Alt+Space click zooms out") { zoom() < enlarged }
+            val start = center + Offset(80 * density, 0f)
+            key(KeyEvent.KEYCODE_SHIFT_LEFT, true, shift); key(KeyEvent.KEYCODE_SPACE, true, shift)
+            event(MotionEvent.ACTION_DOWN, start)
+            event(MotionEvent.ACTION_MOVE, start + Offset(0f, 64 * density))
+            waitFor("Shift+Space rotates the view") { kotlin.math.abs(rotation()) > .01 }
+            val turned = rotation()
+            key(KeyEvent.KEYCODE_SPACE, false, shift); key(KeyEvent.KEYCODE_SHIFT_LEFT, false)
+            event(MotionEvent.ACTION_MOVE, center + Offset(0f, 80 * density))
+            event(MotionEvent.ACTION_UP)
+            waitFor("key release keeps captured rotation") { kotlin.math.abs(rotation() - turned) > .01 }
+            assertEquals(painting, canvasTool())
+            pressKey(KeyEvent.KEYCODE_R)
+            waitFor("R selects Rotate View") { canvasTool() == "rotate_view" }
+            val selected = rotation(); pressKey(KeyEvent.KEYCODE_MINUS)
+            waitFor("minus rotates left") { rotation() != selected }
+            pressKey(KeyEvent.KEYCODE_5)
+            waitFor("5 resets rotation") { kotlin.math.abs(rotation()) < .00001 }
+            for ((code, meta) in listOf(KeyEvent.KEYCODE_SEMICOLON to control, KeyEvent.KEYCODE_EQUALS to control,
+                KeyEvent.KEYCODE_EQUALS to (control or shift), KeyEvent.KEYCODE_NUMPAD_ADD to control)) {
+                val beforeKey = zoom(); pressKey(code, meta)
+                waitFor("$code/$meta zoom shortcut applies") { zoom() > beforeKey }
+            }
+            action(obj("type" to "set_rotation", "rotation" to .4))
+            command("flip_horizontal"); command("fit_canvas")
+            assertEquals("Fit preserves rotation", .4, rotation(), .00001)
+            assertTrue("Fit preserves reflection", camera().getJSONArray("flipped").getBoolean(0))
+            command("reset_rotation")
+            assertEquals(0.0, rotation(), .00001)
+            assertTrue("Reset Rotation preserves reflection", camera().getJSONArray("flipped").getBoolean(0))
+            command("reset_view")
+            assertEquals(0.0, rotation(), .00001)
+            assertEquals("[false,false]", camera().getJSONArray("flipped").toString())
+            assertEquals("navigation never changes paint", kept, revisions())
+            assertEquals("navigation preserves artwork history", history, undo())
+            captureCanvasBar("navigation-$theme", "navigation-controls")
+            command("pen"); drag(center, center + Offset(32 * density, 12 * density))
+            waitFor("painting works after navigation") { revisions() != kept }
+            assertTrue(undo())
+            command("undo")
+            println("PASS navigation controls theme=$theme")
+        }
+    }
+
+    @Test fun navigationToolButtonsDoubleClickWithoutResettingCanvasClicks() {
+        val ids = (0..2).map { fixture.getJSONObject("layout").getInt("next_tile_id") + it }
+        fixture.getJSONObject("layout").apply { put("next_tile_id", ids.last() + 1) }
+        fixture.getJSONObject("layout").array("panels").objects()
+            .first { it.getString("id") == "toolbar" }.getJSONObject("content")
+            .put("tiles", JSONArray(ids.mapIndexed { index, id ->
+                obj("id" to id, "control" to obj("kind" to "command", "command" to listOf("hand", "zoom", "rotate_view")[index]))
+            }))
+        restore()
+        tool = MotionEvent.TOOL_TYPE_MOUSE
+        fun camera() = state().getJSONObject("camera")
+        fun zoom() = camera().getDouble("zoom")
+        fun rotation() = camera().getDouble("rotation")
+        fun button(index: Int) = bounds("tile-toolbar-${ids[index]}").center
+        val work = camera().getJSONArray("work_area")
+        val center = Offset(work.getDouble(0).toFloat() + work.getDouble(2).toFloat() / 2,
+            work.getDouble(1).toFloat() + work.getDouble(3).toFloat() / 2)
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            command("fit_canvas")
+            val fitted = zoom()
+            command("zoom_in")
+            command("hand")
+            doubleTap(button(0))
+            waitFor("Hand double click fits the canvas") { kotlin.math.abs(zoom() - fitted) < .00001 }
+            assertEquals("hand", canvasTool())
+            action(obj("type" to "set_zoom", "zoom" to .5))
+            command("zoom")
+            doubleTap(button(1))
+            waitFor("Zoom double click shows actual pixels") { kotlin.math.abs(zoom() - 1.0) < .00001 }
+            assertEquals("zoom", canvasTool())
+            val beforeClicks = zoom()
+            doubleTap(center)
+            waitFor("rapid Zoom canvas clicks keep zooming") { zoom() > beforeClicks * 1.5 }
+            action(obj("type" to "set_rotation", "rotation" to .4))
+            command("rotate_view")
+            doubleTap(button(2))
+            waitFor("Rotate View double click resets rotation") { kotlin.math.abs(rotation()) < .00001 }
+            assertEquals("rotate_view", canvasTool())
+        }
+    }
+
     @Test fun zoomReadoutMenuAndFieldAcrossDevices() {
         fun choose(text: String) {
             revealInMenu(hasLabel(text), "zoom-menu")
@@ -2237,14 +2374,14 @@ class AndroidInteractionTest {
                 waitFor("$name the readout follows the camera", 3_000) { readout("200% · 0°") }
                 canvasFocus("$name choosing 200%")
 
-                invoke("rotate_right"); action(obj("type" to "set_zoom", "zoom" to .37))
+                action(obj("type" to "set_rotation", "rotation" to Math.PI / 2)); action(obj("type" to "set_zoom", "zoom" to .37))
                 open(name)
                 choose("Actual Pixels")
                 waitFor("$name Actual Pixels applies", 5_000) { zoom() == 1.0 && !zoomMenuShown() }
                 assertTrue("$name a quarter-turned 1:1 view lands on whole device pixels", whole())
                 waitFor("$name the readout shows the turned 1:1 view", 3_000) { readout("100% · 90°") }
                 canvasFocus("$name Actual Pixels")
-                invoke("rotate_left")
+                action(obj("type" to "set_rotation", "rotation" to 0))
 
                 open(name)
                 tap(bounds("number-value-Zoom").center)
