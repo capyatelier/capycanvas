@@ -16,6 +16,7 @@ jobs:
       - run: python3 -m unittest discover -s tools/build -p 'test_android_*.py'
       - run: rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown && rustup default "$RUST_VERSION"
       - run: cargo test --locked -p layer-core -p layer-engine -p layer-ui -p layer-workspace -p layer-color -p layer-render
+      - run: cargo test --locked -p layer-render-wgpu --lib dry_material::tests::pipeline_overrides_are_used_by_the_entry_point
       - run: cargo check --locked -p layer-web --target wasm32-unknown-unknown
       - run: python3 apps/layer-apple/scripts/project.py && git diff --exit-code
       - run: python3 -m unittest discover -s tools/git -p 'test_*.py'

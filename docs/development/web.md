@@ -191,6 +191,16 @@ selects offscreen Vulkan; other hosts keep their native GPU backend. Without
 prints browser diagnostics, `LAYER_TEST_THEME=light` or `dark` selects the initial
 theme, and journeys that save captures write them to `LAYER_TEST_ARTIFACTS`.
 
+On macOS, enable Safari's Develop > Allow Remote Automation once, start
+`safaridriver -p 4444`, and run `node apps/layer-web/safari-test.mjs` against the
+local build. `SAFARIDRIVER_URL` selects an already running driver and
+`LAYER_WEB_URL` selects the app. The test creates and closes its own isolated
+automation session. It reuses the contact-brush journey with trusted mouse input,
+checking startup, visible GPU strokes, Undo/Redo and uncaptured GPU errors in
+both themes. The default brush IDs are `1,2,3,5`; `LAYER_BRUSH_PRESETS` overrides
+them. This catches Safari compiler and upload failures that native Metal and
+Chrome tests can miss. It does not verify pen pressure or qualify performance.
+
 On Linux, the same journeys also run headed inside a private Mutter compositor,
 which builds the Wasm module first and serves it on port 4179:
 

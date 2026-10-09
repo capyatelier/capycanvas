@@ -153,8 +153,14 @@ struct Uploads {
 impl Uploads {
     fn new(device: &wgpu::Device, chunk_size: u64) -> Self {
         Self {
-            belt: wgpu::util::StagingBelt::new(device.clone(), chunk_size),
+            belt: wgpu::util::StagingBelt::new(device.clone(),
+                if cfg!(target_arch = "wasm32") { 0 } else { chunk_size }),
         }
+    }
+    fn allocate(&mut self, size: wgpu::BufferSize, alignment: u64) -> wgpu::BufferSlice<'_> {
+        #[cfg(target_arch = "wasm32")]
+        self.belt.finish();
+        self.belt.allocate(size, wgpu::BufferSize::new(alignment).unwrap())
     }
     fn write(
         &mut self,
@@ -185,10 +191,7 @@ impl Uploads {
         let size = wgpu::BufferSize::new(size).ok_or(GpuRasterError::SizeOverflow)?;
         // StagingBelt::write_buffer unwraps mapping failures. Allocate the
         // same reusable slice and let device-loss errors reach the host.
-        let slice = self.belt.allocate(
-            size,
-            wgpu::BufferSize::new(wgpu::COPY_BUFFER_ALIGNMENT).unwrap(),
-        );
+        let slice = self.allocate(size, wgpu::COPY_BUFFER_ALIGNMENT);
         {
             let mut mapped = slice.get_mapped_range_mut()
                 .map_err(|error| GpuRasterError::MapFailed(format!("upload buffer staging: {error}")))?;
@@ -214,8 +217,7 @@ impl Uploads {
     ) -> Result<(), GpuRasterError> {
         let size = wgpu::BufferSize::new(u64::from(bytes_per_row) * u64::from(texture.height()))
             .ok_or(GpuRasterError::SizeOverflow)?;
-        let slice = self.belt.allocate(size,
-            wgpu::BufferSize::new(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)).unwrap());
+        let slice = self.allocate(size, u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT));
         {
             let mut mapped = slice.get_mapped_range_mut()
                 .map_err(|error| GpuRasterError::MapFailed(format!("upload texture staging: {error}")))?;

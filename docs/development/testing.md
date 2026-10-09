@@ -10,6 +10,15 @@ another. CI runs only the window-free shared suites, the Wasm check, the Apple
 project check and the license check ([releasing](releasing.md#continuous-integration)),
 so run the checks for every area your change touches.
 
+The renderer's `dry_material::tests::pipeline_overrides_are_used_by_the_entry_point`
+also runs in CI without a GPU. It validates each generated dry-material shader
+and checks pipeline constants against the overrides used by its entry point,
+including called helpers. Supply only constants used by that entry point: Safari
+versions can reject unused overrides even when the module declares them.
+This catches the dry-brush recipe mismatch; browser compiler failures still need
+checks in the actual browser. Native Metal and Chrome use different shader
+compilers from Safari.
+
 ## Checks by change type
 
 Run the rows that match your change, then walk the affected user journeys on each

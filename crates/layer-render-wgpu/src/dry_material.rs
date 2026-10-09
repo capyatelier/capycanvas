@@ -30,17 +30,17 @@ pub(super) fn shader(device: &PipelineDevice, target: Target) -> Deferred<wgpu::
     Deferred::new(move || {
         device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("layer destination brush shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source(&device, target, include_str!("material_brush.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(shader_source(device.working_space(), target, include_str!("material_brush.wgsl"))),
         })
     })
 }
 
-pub(super) fn shader_source(device: &PipelineDevice, target: Target, material: &str) -> Cow<'static, str> {
+pub(super) fn shader_source(space: layer_core::color::RgbSpace, target: Target, material: &str) -> Cow<'static, str> {
     let tracking = if matches!(target,Target::Tracked|Target::DisplayTracked) {
         concat!(include_str!("changed_cells.wgsl"), "\n@group(0) @binding(3) var<storage,read_write> changed_cells:ChangedCells;")
     } else { "fn mark_changed_cell(pixel:vec2<u32>) {}" };
     compose_wgsl(&[
-        &working_color::shader(device), include_str!("blend_modes.wgsl"), &shader_destination(target), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), include_str!("retouch_sample.wgsl"), material,
+        &working_color::source(space), include_str!("blend_modes.wgsl"), &shader_destination(target), include_str!("brush_types.wgsl"), include_str!("brush_textures.wgsl"), include_str!("retouch_sample.wgsl"), material,
         include_str!("brush_footprint.wgsl"),
         tracking, include_str!("analytic_coverage.wgsl"), include_str!("brush_coverage.wgsl"),
         include_str!("contact.wgsl"), include_str!("bristle.wgsl"), include_str!("selection_clip.wgsl"),
@@ -95,6 +95,18 @@ pub(super) fn prepare_film(style: &layer_render::DabStyle, dabs: &mut [DabGpu]) 
 /// coverage output.
 const OPERATIONS: [MaterialOperation; 3] = [MaterialOperation::Deposit, MaterialOperation::Coverage, MaterialOperation::Clone];
 type Kernels = [Deferred<wgpu::ComputePipeline>; 2 * OPERATIONS.len()];
+
+fn kernel_constants(target: Target, operation: MaterialOperation, flags: u32) -> [(&'static str, f64); 3] {
+    [
+        ("MATERIAL_OPERATION", operation as u32 as f64),
+        ("CONTACT_FLAGS", f64::from(flags)),
+        if matches!(target, Target::Display | Target::DisplayTracked) {
+            ("MATERIAL_PREVIEW_CONTRIBUTION", f64::from(flags != u32::MAX && flags & 1024 != 0))
+        } else {
+            ("MATERIAL_IN_PLACE", f64::from(matches!(target, Target::InPlace | Target::Tracked)))
+        },
+    ]
+}
 
 pub(super) struct Pipelines {
     in_place: bool,
@@ -178,12 +190,7 @@ impl Pipelines {
                             module: &shader,
                             entry_point: Some(entry),
                             compilation_options: wgpu::PipelineCompilationOptions {
-                                constants: &[
-                                    ("MATERIAL_OPERATION", OPERATIONS[index / 2] as u32 as f64),
-                                    ("CONTACT_FLAGS", f64::from(flags)),
-                                    ("MATERIAL_IN_PLACE", f64::from(in_place)),
-                                    ("MATERIAL_PREVIEW_CONTRIBUTION",f64::from(matches!(target,Target::Display|Target::DisplayTracked) && flags!=u32::MAX && flags&1024!=0)),
-                                ],
+                                constants: &kernel_constants(target, OPERATIONS[index / 2], flags),
                                 ..Default::default()
                             },
                             cache: None,
@@ -383,4 +390,34 @@ pub(super) fn display_preview_eligible(style: &layer_render::DabStyle) -> bool {
     style.execution == BrushExecution::Dry && dry_material_compute_eligible(style) && !style.rendering.edge_after_stroke
         && !style.alpha_locked && style.selection.is_none() && style.grain.is_none()
         && matches!(style.tip, BrushTip::AnalyticEllipse) && contact_flags(style.contact) <= 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipeline_overrides_are_used_by_the_entry_point() {
+        for target in [Target::Exact, Target::InPlace, Target::Tracked, Target::Display, Target::DisplayTracked] {
+            let source = shader_source(Default::default(), target, include_str!("material_brush.wgsl"));
+            let module = naga::front::wgsl::parse_str(&source).unwrap();
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&module).unwrap();
+            let entries: &[&str] = if matches!(target, Target::Display | Target::DisplayTracked) {
+                &["compute_display_color"]
+            } else { &["compute_color", "compute_coverage"] };
+            for &entry in entries {
+                let mut used = module.clone();
+                used.entry_points.retain(|e| e.name == entry);
+                assert_eq!(used.entry_points.len(), 1);
+                naga::compact::compact(&mut used, naga::compact::KeepUnused::No);
+                for operation in OPERATIONS {
+                    for (name, _) in kernel_constants(target, operation, u32::MAX) {
+                        assert!(used.overrides.iter().any(|(_, value)| value.name.as_deref() == Some(name)),
+                            "{target:?}/{entry} supplies unused override {name}");
+                    }
+                }
+            }
+        }
+    }
 }

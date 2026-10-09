@@ -279,6 +279,14 @@ does not change artwork or exports. Floating surfaces, window edges, surrounding
 diagnostic overlays retain their existing values. Source gradient dithering
 remains in document coordinates so saved pixels do not depend on the camera.
 
+Browser staging allocates one reusable chunk per upload and closes the preceding
+chunk before another allocation. New chunks fit the upload rather than reserving
+the native belt's minimum chunk size. This avoids Safari's rejection of a second
+copy from a still-mapped buffer ([wgpu #10460](https://github.com/gfx-rs/wgpu/issues/10460)).
+Copies stay at their point of use, preserving uniform and texture reuse within a
+submission. Native builds continue to suballocate mapped chunks. The Safari
+[contact-brush test](../development/web.md#tests) checks actual rendered pixels.
+
 Viewport presentation and staging uploads return mapping failures to their host.
 A device removed during buffer allocation must not unwind the render owner; the
 host can reconstruct its GPU while retaining the shared document session. Uploads

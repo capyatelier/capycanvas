@@ -497,7 +497,7 @@ fn native_alpha_reuse_untracked_materials_have_no_writable_cell_binding() {
         (Target::DisplayTracked,"tracked display",r.pipelines.dry_display_tracked.as_ref().unwrap()),
         (Target::Tracked, "tracked", r.pipelines.dry_tracked.as_ref().unwrap()),
     ] {
-        let source = crate::dry_material::shader_source(&r.device, target, include_str!("../../material_brush.wgsl"));
+        let source = crate::dry_material::shader_source(r.device.working_space(), target, include_str!("../../material_brush.wgsl"));
         let module = naga::front::wgsl::parse_str(&source).unwrap();
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&module).unwrap();
         let writable: Vec<_> = module.global_variables.iter().filter_map(|(_, variable)| {
@@ -765,7 +765,7 @@ fn fused_prediction_one_pixel_compares_signed_zero_and_tiny_alpha_bits() {
         let components=new.map(|v|format!("bitcast<f32>({}u)",v.to_bits())).join(",");
         let material=format!("{}\n@compute @workgroup_size(1) fn comparison_test() {{store_display_color(vec2<u32>(0u),vec4<f32>({components}));}}",include_str!("../../material_brush.wgsl"));
         let shader=r.device.create_shader_module(wgpu::ShaderModuleDescriptor {label:Some("actual tracked display compare helper"),
-            source:wgpu::ShaderSource::Wgsl(crate::dry_material::shader_source(&r.device,crate::dry_material::Target::DisplayTracked,&material))});
+            source:wgpu::ShaderSource::Wgsl(crate::dry_material::shader_source(r.device.working_space(),crate::dry_material::Target::DisplayTracked,&material))});
         let pipeline=r.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {label:Some("tracked one-pixel bit compare"),layout:None,module:&shader,entry_point:Some("comparison_test"),compilation_options:Default::default(),cache:None});
         let binding=r.device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("tracked one-pixel actual output"),layout:&pipeline.get_bind_group_layout(0),entries:&[
             wgpu::BindGroupEntry {binding:0,resource:wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:&r.style_buffer,offset:0,size:NonZeroU64::new(mem::size_of::<StyleGpu>() as u64)})},
