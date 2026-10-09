@@ -144,6 +144,7 @@ impl ToolGroup {
 const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
     (DefaultBrushPreset::GPen, MessageId::BRUSH_PRESET_GPEN, ToolGroup::Pen),
     (DefaultBrushPreset::RoughGPen, MessageId::BRUSH_PRESET_ROUGH_GPEN, ToolGroup::Pen),
+    (DefaultBrushPreset::BlottyInk, MessageId::BRUSH_PRESET_BLOTTY_INK, ToolGroup::Pen),
     (
         DefaultBrushPreset::CalligraphyPen,
         MessageId::BRUSH_PRESET_CALLIGRAPHY_PEN,
@@ -160,7 +161,6 @@ const PRESETS: &[(DefaultBrushPreset, MessageId, ToolGroup)] = &[
         ToolGroup::Pen,
     ),
     (DefaultBrushPreset::WetInk, MessageId::BRUSH_PRESET_WET_INK, ToolGroup::Pen),
-    (DefaultBrushPreset::BlottyInk, MessageId::BRUSH_PRESET_BLOTTY_INK, ToolGroup::Pen),
     (
         DefaultBrushPreset::BrushedInk,
         MessageId::BRUSH_PRESET_BRUSHED_INK,

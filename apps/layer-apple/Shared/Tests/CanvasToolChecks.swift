@@ -158,7 +158,7 @@ extension XCTestCase {
         app.launch(); capturePaintEditor(in: app)
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
         let families: [(String, String, [String])] = [
-            ("Pen", "Pen", ["G-Pen", "Rough G-Pen", "Calligraphy Pen", "Antique Pen", "Realistic Pen", "Wet Ink", "Blotty Ink", "Realistic Brushed Ink"]),
+            ("Pen", "Pen", ["G-Pen", "Rough G-Pen", "Blotty Ink", "Calligraphy Pen", "Antique Pen", "Realistic Pen", "Wet Ink", "Realistic Brushed Ink"]),
             ("Pen", "Marker", ["Marker"]),
             ("Pencil", "Pencil", ["Pencil", "Pointy Pencil", "Shading Pencil"]),
             ("Pencil", "Pastel", ["Chalk", "Pastel Block", "Charcoal"]),

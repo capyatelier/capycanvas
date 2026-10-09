@@ -67,11 +67,11 @@ GTK and Web ship PNG previews produced by the actual engine.
 | Charcoal | Pastel | Coarser tooth, broad contact, dark dense buildup |
 | G-Pen | Pen | Solid continuous line, fine pressure-controlled lift |
 | Rough G-Pen | Pen | Continuous solid core with fine irregular edges |
+| Blotty Ink | Pen | Larger irregular lobes joined into a continuous deposit |
 | Calligraphy Pen | Pen | Angled flat nib; stroke width changes with drawing direction |
 | Antique Pen | Pen | Uneven nib edge and mildly declining ink supply |
 | Realistic Pen | Pen | Fine nib with restrained edge texture and pooling |
 | Wet Ink | Pen | Broad dark deposit with a subtle continuous edge |
-| Blotty Ink | Pen | Larger irregular lobes joined into a continuous deposit |
 | Realistic Brushed Ink | Pen | Loaded center, coherent strand gaps, pressure-dependent separation |
 
 Existing size, opacity, color and stabilization controls remain the UI surface.

@@ -79,6 +79,10 @@ fn tool_group_commands_publish_medium_choices_and_remember_dynamic_icons() {
             for &group in groups {
                 let variant = ToolVariant::BrushGroup { group };
                 s.dispatch(slot_choice(&s, tile, variant)).unwrap();
+                if group == ToolGroup::Pen {
+                    let ids: Vec<_> = s.state().tool_set.subtools[1..3].iter().map(|item| item.preview).collect();
+                    assert_eq!(ids, [Some(DefaultBrushPreset::RoughGPen as u32), Some(DefaultBrushPreset::BlottyInk as u32)]);
+                }
                 let remembered = s.state().brush.preset;
                 assert_eq!(tools::group(remembered), group);
                 for active in [true, false] {
