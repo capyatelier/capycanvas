@@ -245,6 +245,9 @@ carries its publication generation, so a late completion cannot finish a later
 retry of the same drawing. Clear the marker only after the live owner adopts it.
 A crash quarantines all unfinished attempts;
 explicit retry clears that drawing's blocked state. Failures keep the stored data.
+Browser retries recheck renderer readiness after closing the recovery dialog.
+The previous attempt's diagnostic stays visible in that dialog; a stopped GPU's
+own notice remains reachable while recovery waits for renderer replacement.
 Startup adoption verifies the original blank session stamp. If the user has already
 opened or edited a drawing, restored drawings append without replacing that work.
 Inactive drawings are parked and admission checks apply before publication.

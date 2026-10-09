@@ -16,7 +16,7 @@ struct RecoveryPresentation: ViewModifier {
             #endif
             .overlay(alignment: .bottom) {
                 GeometryReader { geometry in
-                    VStack(spacing: 8) {
+                    let notices = VStack(spacing: 8) {
                         if store.failure != nil || !store.snapshot["error"].isNull {
                             EditorNotice(message: store.canvasDiagnostic,
                                 title: store.bootstrap[store.snapshot["gpu_ready"].bool ? "action_failed" : "canvas_init_failed"].string,
@@ -39,6 +39,10 @@ struct RecoveryPresentation: ViewModifier {
                                 Button(recovery.copy["later"].string) { recovery.later() }.accessibilityIdentifier("recovery-later")
                             }
                         }
+                    }
+                    ViewThatFits(in: .vertical) {
+                        notices.fixedSize(horizontal: false, vertical: true)
+                        EditorScrollView { notices }
                     }.padding(12).frame(maxWidth: .infinity, maxHeight: geometry.size.height, alignment: .bottom)
                 }
             }
@@ -59,8 +63,8 @@ struct EditorNotice<Actions: View>: View {
                 .accessibilityIdentifier(detailIdentifier)
             ViewThatFits(in: .vertical) {
                 detail.fixedSize(horizontal: false, vertical: true)
-                ScrollView { detail }.frame(maxHeight: 180)
-            }
+                ScrollView { detail }
+            }.frame(maxHeight: 180)
             HStack(spacing: 12) {
                 if working { ProgressView().controlSize(.small) }
                 actions()

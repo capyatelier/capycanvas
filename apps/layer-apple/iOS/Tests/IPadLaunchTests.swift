@@ -1,6 +1,71 @@
 import XCTest
 
 extension EditorLaunchTests {
+    @MainActor func testOwnerWorkloadShaderFirstUse() throws { try checkOwnerWorkloadShaderFirstUse(theme: "light") }
+    @MainActor func testOwnerWorkloadShaderFirstUseDark() throws { try checkOwnerWorkloadShaderFirstUse(theme: "dark") }
+
+    @MainActor private func checkOwnerWorkloadShaderFirstUse(theme: String) throws {
+        let app = editorCaptureApplication()
+        app.launchEnvironment["CAPY_WORKLOAD"] = "ink"
+        app.launchEnvironment["CAPY_WORKLOAD_SECONDS"] = "120"
+        app.launchEnvironment["CAPY_GPU_RECOVERY_TEST"] = "1"
+        app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        let launched = Date()
+        app.launch(); waitForStartupCanvas(app)
+        let status = app.staticTexts["renderer-test-status"]
+        let point = CGPoint(x: 0.5, y: 0.55)
+        func pixels() -> Data { editorPixels(in: app, at: point, size: 512) }
+        func select(_ tool: String, _ group: String, _ preset: String) {
+            for (prefix, label) in [("toolbar-tile-toolbar-", tool), ("tool-group-", group), ("brush-", preset)] {
+                let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", prefix, label)).firstMatch
+                XCTAssertTrue(button.waitForExistence(timeout: 10))
+                if !button.isSelected {
+                    let scroll = app.scrollViews.containing(.button, identifier: button.identifier).firstMatch
+                    if scroll.exists { revealEditorControl(button, in: scroll) }
+                    workspaceActivate(button)
+                }
+                expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: button)
+                waitForExpectations(timeout: 10)
+            }
+            expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Renderer ready", "Renderer ready"), evaluatedWith: status)
+            waitForExpectations(timeout: 30)
+        }
+        func rendered(_ preset: String) {
+            XCTAssertLessThan(Date().timeIntervalSince(launched), 120, "The native owner producer must still be running")
+            let before = pixels()
+            let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in pixels() != before }, object: app)
+            let rendered = XCTWaiter.wait(for: [changed], timeout: 15) == .completed
+            attachEditor(in: app, name: "owner-workload-first-use-\(preset)-\(theme)")
+            XCTAssertTrue(rendered, "\(preset) must render while existing native-owner samples are delivered")
+            XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        }
+        for (tool, group, preset) in [("Pen", "Pen", "G-Pen"), ("Paint Brush", "Paint", "Dry Scumble"),
+            ("Paint Brush", "Watercolor", "Watercolor Wash"), ("Blend", "Blend", "Natural Blender"),
+            ("Liquify", "Liquify", "Liquify Push")] {
+            select(tool, group, preset); rendered(preset)
+        }
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in Date().timeIntervalSince(launched) >= 165 }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 170), .completed)
+        let ready = app.staticTexts["recovery-status"]
+        expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
+        waitForExpectations(timeout: 30)
+        let painted = pixels()
+        XCTAssertTrue(stride(from: 0, to: painted.count, by: 4).contains {
+            Int(painted[$0 + 2]) > Int(painted[$0]) + 20 && painted[$0 + 3] > 0
+        }, "The paper crop must contain authored blue pigment")
+        editorHistory("Undo", in: app)
+        let undone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in pixels() != painted }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [undone], timeout: 15), .completed)
+        editorHistory("Redo", in: app)
+        let redone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in pixels() == painted }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [redone], timeout: 15), .completed)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "owner-workload-first-use-history-\(theme)")
+        let provenance = XCTAttachment(string: "Existing synthetic native-owner samples; ordinary UIKit tool selections; noncanonical functional workload; no physical Pencil sensor or tier timing claim")
+        provenance.name = "owner-workload-provenance"; provenance.lifetime = .keepAlways; add(provenance)
+    }
+
     @MainActor func testNativeDrawingLifecycleStress() throws { try checkNativeDrawingLifecycleStress(theme: "light") }
     @MainActor func testNativeDrawingLifecycleStressDark() throws { try checkNativeDrawingLifecycleStress(theme: "dark") }
 

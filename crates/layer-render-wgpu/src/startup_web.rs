@@ -35,7 +35,6 @@ impl Compiler {
         let queue = self.queue.borrow();
         queue.admission.delay(queue.jobs.iter().map(|job| job.priority))
     }
-    pub fn optional_allowed(&self) -> bool { self.queue.borrow().admission.allows(WARM_BRUSH) }
     pub fn new(device: &PipelineDevice) -> Result<Self, GpuRasterError> {
         Ok(Self {
             queue: Rc::default(),

@@ -155,8 +155,8 @@ async function evaluate(expression) {
   return cdp.evaluate(expression);
 }
 const reload = async () => { await call("Page.reload", {ignoreCache:true}); await new Promise(r=>setTimeout(r,1000)); };
-async function canvasPixels() {
-  const clip = await evaluate(
+async function canvasPixels(clip) {
+  clip ??= await evaluate(
     "(() => { const r = layerApp.canvas.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1}; })()",
   );
   const shot = await call("Page.captureScreenshot", { format: "png", clip });
@@ -194,7 +194,7 @@ try {
     'window.__statusBattery=Object.assign(new EventTarget(),{level:.72,charging:true});Object.defineProperty(navigator,"getBattery",{configurable:true,value:async()=>window.__statusBattery});'});
   if (process.argv.includes("--title-bar-overflow")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
     `window.__overflowEvents=[];for(const type of ['pointerdown','pointerup','click'])window.addEventListener(type,e=>{const value={type,id:e.pointerId,pointer:e.pointerType,target:e.target.tagName,source:e.target.closest('details')?.id};__overflowEvents.push(value);setTimeout(()=>{value.prevented=e.defaultPrevented},0);},true)`});
-  if(process.argv.some(flag=>['--pipeline-readiness','--drawing-tabs-recovery'].includes(flag)))await call('Page.addScriptToEvaluateOnNewDocument',{source:'Error.stackTraceLimit=100'});
+  if(process.argv.some(flag=>['--pipeline-readiness','--drawing-tabs-recovery','--staged-startup'].includes(flag)))await call('Page.addScriptToEvaluateOnNewDocument',{source:'Error.stackTraceLimit=100'});
   await call("Page.navigate", {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
   });

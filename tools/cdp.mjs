@@ -112,6 +112,7 @@ export async function launchChrome(args, {executable = process.env.CHROME || 'go
       await cdp.call('Browser.close', {}, null).catch(() => chrome.kill());
       await exited;
     }
+    for (const stream of chrome.stdio) stream?.destroy();
     if (await realpath(profile).catch(() => null) === profile)
       await rm(profile, {recursive: true, force: true, maxRetries: 8, retryDelay: 250});
   };

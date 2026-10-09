@@ -18,6 +18,11 @@ canvas is 6000 × 4000.
 
 ## Operations
 
+Required-only shader startup and first-use tool preparation are unmeasured on
+this reference device. Earlier idle-catalog measurements describe their named
+builds, not the current startup policy. See [startup preparation](responsiveness.md#demand-driven-startup)
+for the Apple diagnostic and its limits.
+
 The latest G-Pen comparisons use clean `192601dac` and the authored-model
 candidate built on that revision (BUILD29/32). The cutover landed as `b3f6f8e51`;
 the intervening footer/preview UI changes do not change the measured renderer.
@@ -52,6 +57,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
+| Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
 | Tool cursor hover, with and without brush size | 90 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
 | Pan: Hand tool, one or two fingers | 90 | **Misses 90:** two-finger pan 58.90–59.05 presented fps, p99 16.79–16.80 ms, 24 MP photo, thermal 0; panel reports 60 Hz | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/mid/` |
 | Pinch zoom | 90 | **Misses 90:** 57.50–58.07 presented fps, p99 33.50 ms, 24 MP photo, thermal 0; panel reports 60 Hz | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/mid/` |

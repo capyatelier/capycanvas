@@ -124,11 +124,12 @@ export function createDocumentRecovery({app,call,message,restore,settled=()=>{},
           const entries=[...saved.drawings].sort((a,b)=>Number(String(b.id)===String(saved.active))-Number(String(a.id)===String(saved.active)));
           const sourceOrder=[...saved.drawings],restored=new Map();
           for(const drawing of entries) {
-            while(!canOffer())await new Promise(resolve=>setTimeout(resolve,50));
             if(!await lease(drawing.key,true))continue;
+            let detail;
             for(;;) {
+            while(!canOffer())await new Promise(resolve=>setTimeout(resolve,50));
             if(saved.blocked.some(id=>String(id)===String(drawing.id))) {
-              const decision=await failed();
+              const decision=await failed(detail);
               if(decision==='later')break;
               if(decision==='discard') {
                 const removed=update(saved,{type:'remove',id:drawing.id});
@@ -136,6 +137,7 @@ export function createDocumentRecovery({app,call,message,restore,settled=()=>{},
               }
               const retried=update(saved,{type:'retry_restore',id:drawing.id});
               await storage('publish-manifest',{key:origin,manifest:retried});saved=retried;
+              continue;
             }
             let success=false,attempt;
             try {
@@ -158,7 +160,7 @@ export function createDocumentRecovery({app,call,message,restore,settled=()=>{},
               const previous=owners.get(owner.id);if(previous&&previous.key!==owner.key)release(previous.key);
               owners.set(owner.id,owner);pending.set(owner.id,{key:origin,id:drawing.id,attempt});
               saved=await move(owner);restored.set(String(drawing.id),restoredId);success=true;
-            } catch(error) {if(pending.size)throw error;fail(error);}
+            } catch(error) {if(pending.size)throw error;detail=String(error);fail(error);}
             finally {
               if(!pending.size&&saved.restoring.some(attempt=>String(attempt.id)===String(drawing.id))){const completed=update(saved,{type:'finish_restore',attempt,success});await storage('publish-manifest',{key:origin,manifest:completed});saved=completed;}
             }

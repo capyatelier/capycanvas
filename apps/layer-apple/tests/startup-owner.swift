@@ -124,6 +124,43 @@ private final class StartupErrors: @unchecked Sendable {
         note("PASS: explicit workspace transport failure completes close, flush and approved teardown callbacks")
     }
 
+    @MainActor static func canvasView(_ view: NSView) -> MacCanvasView? {
+        (view as? MacCanvasView) ?? view.subviews.lazy.compactMap { canvasView($0) }.first
+    }
+
+    @MainActor static func noticeScroll(_ view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView, element(scroll, "recovery-retry") != nil { return scroll }
+        return view.subviews.lazy.compactMap { noticeScroll($0) }.first
+    }
+
+    @MainActor static func visibleNoticeBounds(in host: NSView) -> CGRect {
+        let content = host.window!.convertToScreen(host.convert(host.bounds, to: nil))
+        guard let scroll = noticeScroll(host) else { return content }
+        return content.intersection(host.window!.convertToScreen(scroll.contentView.convert(scroll.contentView.bounds, to: nil)))
+    }
+
+    @MainActor static func reveal(_ action: NSObject, in host: NSView) async throws {
+        let content = visibleNoticeBounds(in: host)
+        for _ in 0..<24 {
+            let rect = bounds(action)
+            if content.contains(rect), rect.width > 0, rect.height > 0 { return }
+            guard let scroll = noticeScroll(host) else { throw HostFailure(message: "Offscreen notice action has no native scroll container: \(rect)") }
+            let before = scroll.contentView.bounds.origin
+            for phase in [CGScrollPhase.began, .changed, .ended] {
+                let delta: Int32 = phase == .ended ? 0 : rect.minY < content.minY ? -80 : 80
+                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else {
+                    throw HostFailure(message: "Missing native notice scroll event")
+                }
+                cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+                let wheel = NSEvent(cgEvent: cg)!
+                scroll.scrollWheel(with: wheel)
+                try await drain(0.05)
+            }
+            note("Notice native scroll: document=\(String(describing: scroll.documentView?.bounds.size)), clip=\(scroll.contentView.bounds.size), offset=\(before)->\(scroll.contentView.bounds.origin)")
+        }
+        throw HostFailure(message: "Native scrolling did not reveal notice action: \(bounds(action)), content=\(content)")
+    }
+
     @MainActor static func viewChecks() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("capy-startup-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -164,9 +201,9 @@ private final class StartupErrors: @unchecked Sendable {
             store.projectFiles = ProjectFiles(store: store, dialogs: .init(open: { _, done in done([]) },
                 save: { _, _, done in done(nil) }, paste: { done in done(.success([PhotoItem { _ in }])) }))
             let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 1000, height: 750),
-                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: EditorView(store: store) { MacMetalCanvas(store: store) })
+            let host = NSHostingView(rootView: EditorView(store: store) { MacMetalCanvas(store: store) }.frame(minWidth: 700, minHeight: 500))
             window.contentView = host
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             defer { window.contentView = nil; window.close() }
@@ -182,18 +219,45 @@ private final class StartupErrors: @unchecked Sendable {
             try await store.apply(["type": "invoke", "command": "paste_image"])
             let cancelLabel = store.bootstrap["common"]["cancel"].string
             try await wait("Pending provider Cancel") { store.projectFiles.busy && button(host, label: cancelLabel) != nil }
-            try capture(host, "simultaneous-startup-warnings-\(theme)")
-            let actions = [element(host, "recovery-retry")!, button(host, label: workspaceRetry)!, button(host, label: cancelLabel)!]
-            for (index, action) in actions.enumerated() {
-                let rect = bounds(action)
-                try require(rect.width > 0 && rect.height > 0 && window.frame.contains(rect), "Every notice action must remain inside the native window")
-                try require(actions.prefix(index).allSatisfy { !bounds($0).intersects(rect) }, "Simultaneous notice actions must not overlap")
+            let longCause = String(repeating: "Owned fixture diagnostic: stage, adapter, validation failure detail.\n", count: 80)
+            let dismissLabel = store.bootstrap["ok"].string
+            store.failure = longCause
+            try await wait("Long diagnostic alongside warnings") { element(host, "canvas-error-detail") != nil && button(host, label: dismissLabel) != nil }
+            try require(store.canvasDiagnostic.components(separatedBy: "\n\nCapy Canvas").first == longCause,
+                "The long native diagnostic must retain its exact cause")
+            for size in [CGSize(width: 1000, height: 750), CGSize(width: 700, height: 500)] {
+                window.setContentSize(size)
+                try await drain(0.1)
+                host.layoutSubtreeIfNeeded()
+                try capture(host, "simultaneous-long-startup-warnings-\(theme)-\(Int(size.width))x\(Int(size.height))")
+                try require(abs(host.bounds.width - size.width) < 1 && abs(host.bounds.height - size.height) < 1,
+                    "The native editor must actually reach the requested supported size: requested=\(size), actual=\(host.bounds.size)")
+                try require(canvasView(host)?.bounds.size == host.bounds.size,
+                    "The native canvas must match its offered host at \(size): canvas=\(String(describing: canvasView(host)?.bounds.size)), host=\(host.bounds.size)")
+                let actions = [element(host, "recovery-retry")!, button(host, label: workspaceRetry)!, button(host, label: cancelLabel)!, button(host, label: dismissLabel)!]
+                for (index, action) in actions.enumerated() {
+                    let rect = bounds(action)
+                    try require(rect.width > 0 && rect.height > 0, "Every notice action must have native bounds")
+                    try require(actions.prefix(index).allSatisfy { !bounds($0).intersects(rect) }, "Simultaneous notice actions must not overlap")
+                    try require(enabled(action), "Every simultaneous notice action must remain enabled")
+                }
+                for action in actions {
+                    try await reveal(action, in: host)
+                    let content = visibleNoticeBounds(in: host)
+                    try require(content.contains(bounds(action)), "Native scrolling must reveal every notice action inside the supported editor content")
+                    note("Visible notice action at \(size): \(bounds(action))")
+                }
             }
-            try require(enabled(actions[2]) && press(actions[2]), "Recovery warnings must leave native document Cancel usable")
+            try await reveal(button(host, label: dismissLabel)!, in: host)
+            try require(press(button(host, label: dismissLabel)!), "A long action diagnostic must leave native OK usable")
+            try await wait("Long action diagnostic dismissed") { store.failure == nil && element(host, "canvas-error-detail") == nil }
+            try await reveal(button(host, label: cancelLabel)!, in: host)
+            try require(press(button(host, label: cancelLabel)!), "Recovery warnings must leave native document Cancel usable")
             try await wait("Provider cancellation completed") { !store.projectFiles.busy && store.state["requests"].array.isEmpty }
             note("PASS \(theme): workspace, document Cancel and recovery actions remain visible, separate and usable")
             let workspaceID = store.workspaces!.view["id"].string
             let workspaceOwner = store.workspaces!.view["owner"].string
+            try await reveal(button(host, label: workspaceRetry)!, in: host)
             try require(press(button(host, label: workspaceRetry)!), "Native workspace Retry rejected input")
             try await wait("Retried existing workspace") { store.workspaces!.ready && !store.workspaces!.busy && store.workspaces!.error == nil }
             try require(store.workspaces!.view["id"].string == workspaceID && store.workspaces!.view["owner"].string == workspaceOwner,
@@ -201,12 +265,14 @@ private final class StartupErrors: @unchecked Sendable {
             let original = store.recovery.restoreError
             let retry = element(host, "recovery-retry")!
             try require(enabled(retry), "Native recovery Retry must be enabled")
+            try await reveal(retry, in: host)
             try require(press(retry) && store.recovery.restoring,
                 "Native recovery Retry must start one restoration")
             try await wait("Retry completed", seconds: 60) { !store.recovery.restoring }
             try require(store.recovery.visibleError != nil && store.recovery.restoreError == original,
                 "An unsuccessful retry must preserve the concrete warning")
             try await wait("Recovery Later control") { element(host, "recovery-later") != nil }
+            try await reveal(element(host, "recovery-later")!, in: host)
             try require(press(element(host, "recovery-later")!), "Native Later control rejected input")
             try await wait("Warning dismissed") { store.recovery.visibleError == nil && element(host, "recovery-later") == nil }
             try require(store.recovery.restoreError == original && !store.recovery.restoring,
@@ -263,6 +329,20 @@ private final class StartupErrors: @unchecked Sendable {
             let persisted = metadata["current"]["objects"].array.filter { objects[Int($0.uint)]["record"]["type"].string == "capy.occurrence/3" }.count
             try require(persisted == newest, "Successful flush must persist the newest layer state: saved=\(persisted), expected=\(newest)")
             note("PASS \(theme): cleanup-warning flush waits for an edit accepted after capture and persists its newest layer state")
+            try await wait("Presented owner canvas") { store.canvasSubmitted }
+            let countBeforeHiddenEdit = store.state["layers"].array.count
+            window.miniaturize(nil)
+            try await wait("Actual owner window minimized") { window.isMiniaturized && !window.occlusionState.contains(.visible) }
+            try await store.apply(["type": "invoke", "command": "add_layer"])
+            store.native!.redraw(); store.wake?()
+            try await drain(0.1)
+            try require(window.isMiniaturized && store.canvasSubmitted && store.state["layers"].array.count == countBeforeHiddenEdit + 1,
+                "Queued hidden owner work must retain its canvas and accept the layer edit without reopening the window")
+            window.deminiaturize(nil); window.makeKeyAndOrderFront(nil)
+            try await wait("Owner window visible after wake") { window.occlusionState.contains(.visible) && store.canvasSubmitted }
+            try require(store.state["layers"].array.count == countBeforeHiddenEdit + 1,
+                "Visible resume must retain the queued hidden owner edit")
+            note("PASS \(theme): actual minimized owner accepts queued edit/redraw/wake, retains canvas state and resumes visibly")
         }
     }
 

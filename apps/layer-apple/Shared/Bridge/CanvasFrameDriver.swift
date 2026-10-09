@@ -10,6 +10,7 @@ import QuartzCore
     private var pending = false
     private var active = false
     private var paused = true
+    var canPresent: () -> Bool = { true }
     var setPaused: (Bool) -> Void = { _ in }
     var submittedViewport: () -> Void = {}
 
@@ -28,7 +29,8 @@ import QuartzCore
             if self.store?.canvasSubmitted == true { self.store?.canvasSubmitted = false }
         }
     }
-    private func pause(_ value: Bool) {
+    private func pause(_ requested: Bool) {
+        let value = requested || !canPresent()
         if paused != value {
             store?.native?.observeActivity(active: !value)
             paused = value
@@ -37,6 +39,7 @@ import QuartzCore
     }
     func wake() { generation &+= 1; if active { pause(false) } }
     func tick(target: TimeInterval) {
+        guard canPresent() else { pause(true); return }
         guard let native = store?.native else { return }
         let now = UInt64(CACurrentMediaTime() * 1_000_000_000)
         let targetTime = UInt64(max(0, target) * 1_000_000_000)

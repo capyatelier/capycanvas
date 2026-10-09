@@ -50,7 +50,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.rendering_suspended || self.workspace_read_only || self.workspace_transition
             || (self.deferred_contact().unwrap_or(self.pen_contact) && !configures_brush)
             || self.state.document_file.close_ready
-            || matches!(action, UiAction::Invoke { command } if NAVIGATOR_COMMANDS.contains(command) || matches!(command, CommandId::FitCanvas | CommandId::ActualPixels))
+            || matches!(action, UiAction::Invoke { command } if Self::command_without_document(*command) || NAVIGATOR_COMMANDS.contains(command) || matches!(command, CommandId::FitCanvas | CommandId::ActualPixels))
             || !(configures_brush || held_actions::selects_tool(action) || matches!(action, UiAction::Invoke { .. } | UiAction::Selection { .. }
                 | UiAction::Layer { .. } | UiAction::SelectLayer { .. }
                 | UiAction::SetLayerVisibility { .. } | UiAction::SetLayerOpacity { .. }

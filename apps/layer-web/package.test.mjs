@@ -7,7 +7,8 @@ import { runInNewContext } from "node:vm";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, fingerprintAssets, writeWorker } from "./package.mjs";
-import { gpuEnvironment, gpuProblem } from "./gpu.js";
+import { gpuEnvironment, gpuProblem, showGpuNotice } from "./gpu.js";
+import { FakeElement } from "./fake-dom.mjs";
 
 test("filter icons declare theme paint without GTK's symbolic CSS", () => {
   for (const name of ["exposure", "vibrance", "black_white", "gradient_map", "posterize"]) {
@@ -28,6 +29,52 @@ test("GPU help distinguishes missing support, insecure access and no adapter", (
   assert.match(gpuProblem({ secure: true, api: true, stage: "device" })[1], /found a GPU but could not start/);
   for (const stage of ["renderer", undefined])
     assert.match(gpuProblem({ secure: true, api: true, stage })[1], /canvas renderer/);
+});
+
+test("GPU failure notice retains the cause, unhides itself and offers restart", async t => {
+  for (const name of ["navigator", "isSecureContext"]) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, name);
+    t.after(() => original ? Object.defineProperty(globalThis, name, original) : delete globalThis[name]);
+  }
+  const copied = [];
+  Object.defineProperty(globalThis, "isSecureContext", { configurable: true, value: true });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    gpu: {}, userAgent: "X11; Linux x86_64 Chrome/150", platform: "Linux", maxTouchPoints: 0,
+    clipboard: { writeText: async value => copied.push(value) },
+  }});
+  const element = (tagName, className = "", textContent = "") => Object.assign(new FakeElement(), {
+    tagName, className, textContent, children: [], attributes: new Map(), listeners: {}, hidden: false,
+    append(...nodes) { FakeElement.prototype.append.call(this, ...nodes.map(node => typeof node === "string" ? element("#text", "", node) : node)); },
+  });
+  const button = (label, callback) => {
+    const node = element("button", "", label);
+    node.addEventListener("click", callback);
+    return node;
+  };
+  const nodes = node => [node, ...node.children.filter(child => typeof child === "object").flatMap(nodes)];
+  const text = node => [node.textContent, ...node.children.map(child => typeof child === "string" ? child : text(child))].join(" ");
+  const container = element("section");
+  let retries = 0;
+  for (const error of [{ stage: "device", message: "capy-test: device refused" },
+    new Error("capy-test: native compiler failure"), "capy-test: escaped rejection"]) {
+    container.hidden = true;
+    showGpuNotice({ container, error, element, button,
+      restart: () => retries++, restartLabel: "Restart canvas" });
+    assert.equal(container.hidden, false);
+    assert.ok(text(container).includes(error.message ?? String(error)));
+    const retry = nodes(container).filter(node => node.tagName === "button" && node.textContent === "Restart canvas");
+    assert.equal(retry.length, 1);
+    retry[0].dispatchEvent({ type: "click" });
+    const copies = nodes(container).filter(node => node.tagName === "button" && node.getAttribute("aria-label")?.startsWith("Copy "));
+    assert.equal(copies.length, 4);
+    for (const copy of copies) {
+      copy.dispatchEvent({ type: "click" });
+      await Promise.resolve();
+      assert.equal(copy.textContent, "Copied");
+    }
+  }
+  assert.equal(retries, 3);
+  assert.equal(copied.length, 12);
 });
 
 test("GPU help identifies platforms without using browser identity to decide support", () => {

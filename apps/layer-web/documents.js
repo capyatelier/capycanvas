@@ -16,7 +16,7 @@ export const exportFormats={
 import {createImageImport} from './image-import.js';
 // Browser file transport; document checkpoints, stale-edit guards and unsaved
 // decisions stay in UiSession. File handles never enter a project or localStorage.
-export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged,refreshInputContext}) {
+export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas,contentChanged,refreshInputContext}) {
   const common=bootstrap.common,exportCopy=liveCopy(app,"export_copy");
   const formatLabels=()=>({Exr:exportCopy.format_exr,PngHdr:exportCopy.format_pq,PngHdrMapped:exportCopy.format_pq_clipped,
     JpegHdr:exportCopy.format_jpeg_hdr,JpegHdrMapped:exportCopy.format_jpeg_hdr,AvifHdr:exportCopy.format_avif_hdr,AvifHdrMapped:exportCopy.format_avif_hdr,
@@ -556,9 +556,9 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     } finally {candidate?.free();}
   }
   const recovery=createDocumentRecovery({app,call:rasterWorker,message,restore:restoreSession,settled:trim,
-    reserve:ids=>app.reserve_session_ids(ids.map(BigInt)),failed:()=>dialog(()=>bootstrap.recovery.attention,(form,finish)=>{form.append(element('p','',()=>bootstrap.recovery.explanation));const footer=element('footer');footer.append(button(()=>bootstrap.recovery.later,()=>finish('later')),button(()=>bootstrap.recovery.discard,()=>finish('discard')),button(()=>bootstrap.recovery.retry,()=>finish('retry'),'suggested-action'));form.append(footer);}),
+    reserve:ids=>app.reserve_session_ids(ids.map(BigInt)),failed:detail=>dialog(()=>bootstrap.recovery.attention,(form,finish)=>{form.append(element('p','',()=>bootstrap.recovery.explanation));if(detail)form.append(element('p','diagnostic-detail',detail));const footer=element('footer');footer.append(button(()=>bootstrap.recovery.later,()=>finish('later')),button(()=>bootstrap.recovery.discard,()=>finish('discard')),button(()=>bootstrap.recovery.retry,()=>finish('retry'),'suggested-action'));form.append(footer);}),
     handles:id=>{const state=app.session_stamp_for(BigInt(id)).state;return [...new Set([state.location?.uri,state.last_export?.location.uri])].flatMap(uri=>{const handle=handles.get(uri);return typeof FileSystemFileHandle!=='undefined'&&handle instanceof FileSystemFileHandle?[{uri,handle}]:[];});},order:order=>applyChange(app.restore_session_order(order)),
-    canOffer:()=>app.gpu_ready()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
+    canOffer:()=>canvasReady()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
   return {title:tabs.root,key(event,send){
     if(!event.altKey&&((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='v'

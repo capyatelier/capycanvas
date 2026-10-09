@@ -3,9 +3,21 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 // API exceptions escaping the actual Wasm initialization future (not a mock app).
 export async function checkGpuCompatibility({ call, evaluate, settle, url, errors }) {
-  const waitFor = condition => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve();else if(performance.now()-start>20000)reject(new Error('Startup stuck: '+document.body.dataset.gpu));else setTimeout(check,50)}check()})`);
+  const waitFor = async condition => {
+    const deadline=Date.now()+20000;
+    while(Date.now()<deadline) {
+      try { if(await evaluate(`Boolean(${condition})`))return; }
+      catch(error) { if(!/navigated|context.*destroyed|Cannot find context/i.test(String(error)))throw error; }
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    throw Error('Startup stuck: '+condition);
+  };
+  const activate = async () => {
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,x:1,y:1,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+  };
   for (const mode of ["pipeline-throw", "escaped-rejection"]) {
     assert.deepEqual(errors, []);
+    await activate();
     await call("Page.navigate", { url: "about:blank" });
     const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
       window.layoutChecks=0;
@@ -34,6 +46,8 @@ export async function checkGpuCompatibility({ call, evaluate, settle, url, error
     assert.equal(await evaluate("layerApp.app.gpu_ready()"), false);
     assert.equal(await evaluate("document.querySelector('.gpu-help h1').textContent"), "Could not initialize canvas");
     assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), false);
+    assert.ok((await evaluate("document.querySelector('#gpu-notice').innerText")).includes(
+      mode === "pipeline-throw" ? "capy-test: pipeline exception" : "capy-test: escaped rejection"));
     await evaluate("layerApp.dispatch({type:'open_settings',page:'appearance'})");
     assert.ok(await evaluate("document.querySelector('#settings').open"), "Settings remain usable after startup failure");
     await evaluate("layerApp.dispatch({type:'close_settings'})");
@@ -41,6 +55,7 @@ export async function checkGpuCompatibility({ call, evaluate, settle, url, error
     for (const error of errors.splice(0)) assert.match(error, /capy-test:/, "Only injected failures are expected");
     await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
     const previous = await evaluate("performance.timeOrigin");
+    await activate();
     await call("Page.reload");
     for (;;) try { await waitFor(`performance.timeOrigin !== ${previous} && !!window.layerApp && document.body?.dataset.gpu === 'ready'`); break; }
       catch (error) { if (!/navigated|context|Cannot find/i.test(String(error))) throw error; }
@@ -48,12 +63,30 @@ export async function checkGpuCompatibility({ call, evaluate, settle, url, error
     assert.deepEqual(errors, [], "Reload without injection recovers cleanly");
     console.log(`GPU compatibility: ${mode} passed`);
   }
+  await evaluate(`(()=>{
+    const app=layerApp.app;
+    window.gpuStopFault={failure:app.gpu_failure,suspend:app.suspend_gpu};
+    app.gpu_failure=()=>"capy-test: primary shader failure";
+    app.suspend_gpu=()=>{throw Error("capy-test: secondary suspension failure")};
+  })()`);
+  try {
+    await waitFor("document.body.dataset.gpu === 'unavailable'");
+    assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), false);
+    assert.match(await evaluate("document.querySelector('#gpu-notice').innerText"), /capy-test: primary shader failure/);
+    assert.ok(await evaluate("[...document.querySelectorAll('#gpu-notice button')].some(button=>button.textContent==='Restart canvas'&&!button.disabled)"));
+  } finally {
+    await evaluate("Object.assign(layerApp.app,{gpu_failure:gpuStopFault.failure,suspend_gpu:gpuStopFault.suspend})");
+    for(const error of errors.splice(0))assert.match(error,/capy-test:/);
+    await activate();
+    await call('Page.reload');
+    await waitFor("!!window.layerApp && document.body.dataset.gpu === 'ready'");
+  }
 }
 
 // Failure injection happens at the browser API boundary, not in app code.
 // Every case executes the real packaged JS/Wasm and the actual native UI model.
 export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, url, errors }) {
-  const waitFor = (condition) => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>20000)reject(new Error('GPU test timed out: '+document.body.dataset.gpu));else setTimeout(check,50)}check()})`);
+  const waitFor = (condition) => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>20000)reject(new Error('GPU test timed out: '+JSON.stringify({gpu:document.body.dataset.gpu,dialogs:[...document.querySelectorAll('dialog[open]')].map(dialog=>dialog.textContent),busy:window.layerApp?.documents.busy(),park:window.layerApp?.app.document_park_ready(),camera:window.layerApp?.state().camera,commands:window.layerApp?.state().commands.filter(command=>['undo','brush','deselect'].includes(command.id))},(_,value)=>typeof value==='bigint'?String(value):value)));else setTimeout(check,50)}check()})`);
   const action = async (value) => { await evaluate(`layerApp.dispatch(${JSON.stringify(value)})`); await settle(); };
   const checkPanelStyle = async () => {
     assert.ok(await evaluate("(()=>{const help=getComputedStyle(document.querySelector('.gpu-help')),node=document.querySelector('#workspace').appendChild(document.createElement('section')),probe=document.body.appendChild(document.createElement('i'));node.className='dock-group';probe.style.background='var(--panel)';const panel=getComputedStyle(node),result=help.backgroundColor===getComputedStyle(probe).backgroundColor&&['color','borderRadius','boxShadow'].every(key=>help[key]===panel[key]);node.remove();probe.remove();return result})()"), "GPU help shares the opaque panel background, text, corners and shadow");
@@ -83,12 +116,14 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     "firefox-linux": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
     "firefox-no-adapter": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
   };
+  await evaluate('layerApp.documents.autosave()');
   for (const mode of ["missing-api", "insecure", "no-adapter", "device-failure", "renderer-failure", "pending", ...Object.keys(browsers)]) {
     assert.deepEqual(errors, [], "The preceding recovery has no unexpected browser errors");
+    const durableLayerCount = await evaluate('layerApp.state().layers.length');
     const browserList = ["unsupported-browser", "safari", "firefox", "firefox-linux", "firefox-no-adapter"].includes(mode);
     const missingApi = ["missing-api", "ios", "ios-chrome", "ipad-desktop"].includes(mode) || (browserList && mode !== "firefox-no-adapter");
     const chromeSteps = !browserList && !["insecure", "android", "ios", "ios-chrome", "ipad-desktop"].includes(mode);
-    const linuxSteps = chromeSteps && (!browsers[mode] || mode === "edge-linux");
+    const linuxSteps = chromeSteps && (browsers[mode] ? mode === "edge-linux" : process.platform === "linux");
     const noAdapter = ["no-adapter", "non-linux", "chrome-mac", "chromeos", "edge", "edge-linux", "android", "firefox-no-adapter"].includes(mode);
     await call("Page.navigate", { url: "about:blank" });
     const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
@@ -97,6 +132,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       const secure = isSecureContext;
       window.restoreGpu = () => { Object.defineProperty(window, 'isSecureContext', { configurable:true, value:secure }); Object.defineProperty(navigator, 'gpu', { configurable:true, value:originalGpu }); originalGpu.requestAdapter = requestAdapter; };
       window.adapterRequests = 0;
+      window.deviceFault = true;
       if (${JSON.stringify(!!browsers[mode])}) {
         Object.defineProperty(navigator,'userAgent',{ configurable:true, value:${JSON.stringify(browsers[mode] || "")} });
         Object.defineProperty(navigator,'userAgentData',{ configurable:true, value:undefined });
@@ -110,7 +146,13 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         if (${noAdapter}) return null;
         if (${JSON.stringify(mode)} === 'pending') await new Promise(resolve => { window.releaseAdapter = resolve; });
         const adapter = await requestAdapter(...args);
-        if (${JSON.stringify(mode)} === 'device-failure') adapter.requestDevice = async () => { throw new Error('test: device refused'); };
+        if (${JSON.stringify(mode)} === 'device-failure') {
+          const requestDevice = adapter.requestDevice.bind(adapter);
+          adapter.requestDevice = async (...args) => {
+            if(window.deviceFault) throw new Error('test: device refused'+' capy-test: long device diagnostic'.repeat(400));
+            return requestDevice(...args);
+          };
+        }
         if (${JSON.stringify(mode)} === 'renderer-failure') {
           const requestDevice=adapter.requestDevice.bind(adapter);
           adapter.requestDevice=async (...args)=>{
@@ -157,12 +199,14 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       await settle();
     }
     if (mode !== "pending") {
-      assert.equal(await evaluate("document.querySelectorAll('.gpu-help details, .gpu-help pre, .gpu-retry').length"), 0);
-      assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help button')].every(n=>n.closest('.gpu-address'))"), "Only address Copy buttons remain");
+      assert.equal(await evaluate("document.querySelectorAll('.gpu-help details').length"), 0);
+      assert.equal(await evaluate("document.querySelectorAll('.gpu-help .gpu-retry').length"), 1);
+      assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help button')].every(n=>n.closest('.gpu-address')||n.classList.contains('gpu-retry'))"), "Copy controls and one canvas restart remain reachable");
       const visibleText = await evaluate("document.querySelector('.gpu-help').innerText");
       assert.equal(await evaluate("document.querySelector('.gpu-help h1').textContent"), "Could not initialize canvas");
       assert.match(visibleText, /Capy Canvas is a GPU-accelerated drawing app/);
-      assert.ok(visibleText.split(/\s+/).length < 150, "Instructions stay concise");
+      const instructions = await evaluate("[...document.querySelector('.gpu-help').children].filter(node=>!node.matches('.diagnostic-detail')).map(node=>node.innerText).join(' ')");
+      assert.ok(instructions.split(/\s+/).length < 150, "Instructions stay concise independently of driver diagnostics");
       assert.doesNotMatch(visibleText, /Instructions for other platforms|Vulkan:\s*Enabled/);
       const reason = await evaluate("document.querySelector('.gpu-cause').textContent");
       assert.match(reason, mode === "insecure" ? /secure connection/
@@ -221,7 +265,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       assert.equal(await evaluate("document.querySelectorAll('.gpu-browsers').length"), browserList ? 1 : 0);
       if (browserList) {
         assert.equal(reason, missingApi ? "WebGPU is not available in this browser." : "Your browser could not find a GPU adapter.");
-        assert.equal(await evaluate("document.querySelector('.gpu-cause').nextElementSibling.textContent"), "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU. At the moment, the only supported browsers are:");
+        assert.equal(await evaluate("[...document.querySelectorAll('.gpu-help > p')].find(node=>node.textContent.startsWith('Capy Canvas is a GPU-accelerated')).textContent"), "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU. At the moment, the only supported browsers are:");
         assert.deepEqual(await evaluate("[...document.querySelectorAll('.gpu-browsers li')].map(n=>[n.querySelector('strong').textContent,n.textContent])"), [
           ["iPadOS", "iPadOS: Safari (iPadOS 26+)"],
           ["Android", "Android: Chrome (Android 12+)"],
@@ -230,7 +274,8 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
           ["Linux (Wayland)", "Linux (Wayland): Chrome, Edge"],
         ]);
         assert.ok(await evaluate("[...document.querySelectorAll('.gpu-browsers strong')].every(n=>Number(getComputedStyle(n).fontWeight)>=600)"), "OS names are bold");
-        assert.equal(await evaluate("document.querySelectorAll('.gpu-help h2, .gpu-help button').length"), 0);
+        assert.equal(await evaluate("document.querySelectorAll('.gpu-help h2').length"), 0);
+        assert.equal(await evaluate("document.querySelectorAll('.gpu-help button').length"), 1);
         assert.doesNotMatch(visibleText, /This browser can’t draw here|Try an updated browser|Update your browser, or try opening/);
       }
       await capture(mode + "-dark");
@@ -267,6 +312,34 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         await switchTo(startWorkspace);
       }
       assert.equal(await evaluate("window.adapterRequests"), missingApi || mode === "insecure" ? 0 : noAdapter ? 2 : 1);
+      if (mode === "device-failure") {
+        const origin = await evaluate("performance.timeOrigin");
+        assert.match(await evaluate("document.querySelector('#gpu-notice').innerText"), /test: device refused/);
+        await call("Emulation.setDeviceMetricsOverride", {width:900,height:600,deviceScaleFactor:1,mobile:false});
+        const clickRestart = async () => {
+          const point = await evaluate("(()=>{const button=document.querySelector('.gpu-retry'),r=button.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return{x,y,visible:r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,hit:document.elementFromPoint(x,y)?.closest('.gpu-retry')===button};})()");
+          assert.equal(point.visible,true,'Long diagnostic keeps Restart in the viewport');
+          assert.equal(point.hit,true,'Restart receives native pointer input');
+          for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+        };
+        for(const [index,theme] of ['light','dark'].entries()) {
+          await action({type:'set_theme',theme});
+          assert.ok(await evaluate("(()=>{const node=document.querySelector('.diagnostic-detail');return node.scrollHeight>node.clientHeight&&node.getBoundingClientRect().height<=Math.min(innerHeight*.3,180)+1&&getComputedStyle(node).userSelect==='text';})()"),'Long cause remains selectable in a bounded scrolling region');
+          await clickRestart();
+          await waitFor(`document.body.dataset.gpu === 'unavailable' && adapterRequests === ${index+2}`);
+          assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), false);
+          assert.match(await evaluate("document.querySelector('#gpu-notice').innerText"), /test: device refused/);
+        }
+        await evaluate("window.deviceFault = false");
+        await clickRestart();
+        await waitFor("document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()");
+        await evaluate('layerApp.documents.startRecovery()');
+        await evaluate('layerApp.documents.autosave()');
+        assert.equal(await evaluate("performance.timeOrigin"), origin);
+        assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), true);
+        assert.doesNotMatch(await evaluate("document.querySelector('#gpu-notice').textContent"), /test: device refused/);
+        await call("Emulation.setDeviceMetricsOverride", {width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+      }
       await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
       const previous = await evaluate("performance.timeOrigin");
       await call("Page.reload");
@@ -287,20 +360,26 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     for (const error of errors.splice(0)) assert.match(error, /^GPU canvas unavailable:|^Blocked attempt to show a 'beforeunload' confirmation panel/,
       "Only the injected initialization failures and the unsaved added layer's reload prompt are expected");
     await waitFor("document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()");
+    await evaluate(`Promise.race([layerApp.documents.startRecovery(),new Promise((_,reject)=>{const start=performance.now();function check(){const dialogs=[...document.querySelectorAll('dialog[open]')].map(dialog=>dialog.textContent);if(dialogs.length||performance.now()-start>20000)return reject(Error('Recovery did not settle: '+JSON.stringify({dialogs,gpu:document.body.dataset.gpu,busy:layerApp.documents.busy(),park:layerApp.app.document_park_ready(),status:document.querySelector('#status').textContent})));setTimeout(check,50);}check();})])`);
+    await waitFor('!layerApp.documents.busy() && layerApp.app.document_park_ready()');
     if (mode === "pending") assert.equal(await evaluate("layerApp.state().brush.diameter"), 37);
-    assert.equal(await evaluate("layerApp.state().layers.length"), layerCount + (mode === "pending" ? 1 : 0));
+    assert.equal(await evaluate("layerApp.state().layers.length"), ["pending","device-failure"].includes(mode) ? layerCount+1 : durableLayerCount);
     assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), true);
     await action({ type: "set_theme", theme: "light" });
     await action({ type: "invoke", command: "brush" });
     await action({ type: "invoke", command: "fit_canvas" });
     const before = await canvasPixels();
-    await call("Input.dispatchMouseEvent", { type: "mousePressed", x: 650, y: 450, button: "left", buttons: 1, clickCount: 1 });
-    await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 850, y: 450, button: "left", buttons: 1 });
-    await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: 850, y: 450, button: "left", buttons: 0, clickCount: 1 });
+    const point = await evaluate("(()=>{const c=layerApp.state().camera,r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]};})()");
+    await call("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x-50, y: point.y, button: "left", buttons: 1, clickCount: 1 });
+    await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x+50, y: point.y, button: "left", buttons: 1 });
+    await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x+50, y: point.y, button: "left", buttons: 0, clickCount: 1 });
     await settle();
     await waitFor("layerApp.state().commands.find(c=>c.id==='undo').enabled");
     const after = await canvasPixels();
     assert.ok(after.white < before.white - 50, `GPU drawing works after attachment/reload: ${JSON.stringify({ before, after })}`);
+    await action({type:'invoke',command:'undo'});
+    await waitFor("layerApp.state().commands.find(command=>command.id==='redo').enabled");
+    await evaluate('layerApp.documents.autosave()');
     console.log(`GPU startup: ${mode}, usable UI, no invisible painting and ${mode === "pending" ? "preserved session" : "reload recovery"} passed`);
   }
 }

@@ -167,6 +167,53 @@ extension XCTestCase {
         attachEditor(in: app, name: "pen-brush-order-" + theme)
     }
 
+    #if os(macOS)
+    @MainActor func checkDemandShaderFirstUse(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.9,0.25,0.2,1]},{"type":"color","action":{"op":"swap"}},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app)
+        let viewport = workspaceViewport(in: app)
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        workspaceActivate(app.buttons["color-swap"])
+        editorTool("Line", in: app); editorChoice("Rectangle", group: true, in: app); editorChoice("Fill", in: app)
+        viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.38, dy: 0.43)).click(forDuration: 0.05,
+            thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.67)))
+        editorDocumentTitle(in: app).hover()
+        expectation(for: NSPredicate { _, _ in
+            let samples = self.editorPixelSamples(in: app, at: [CGPoint(x: 0.48, y: 0.55), CGPoint(x: 0.58, y: 0.55)], size: 8)
+            return Int(samples[0][0]) > Int(samples[0][2]) + 80 && Int(samples[1][2]) > Int(samples[1][0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 30)
+        let sample = CGPoint(x: 0.5, y: 0.5)
+        func pixels() -> Data { editorPixels(in: app, at: sample, size: 128) }
+        func expect(_ expected: Data) {
+            expectation(for: NSPredicate { _, _ in pixels() == expected }, evaluatedWith: app)
+            waitForExpectations(timeout: 30)
+        }
+        let baseline = pixels()
+        for (tool, group, preset) in [("Pen", "Pen", "G-Pen"), ("Paint Brush", "Paint", "Dry Scumble"),
+            ("Paint Brush", "Watercolor", "Watercolor Wash"), ("Blend", "Blend", "Natural Blender"),
+            ("Liquify", "Liquify", "Liquify Push")] {
+            selectPaintPreset(tool, group: group, preset: preset, in: app)
+            for replay in 0...1 {
+                expect(baseline)
+                viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.48, dy: 0.55)).click(forDuration: 0.05,
+                    thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.55)))
+                editorDocumentTitle(in: app).hover()
+                expectation(for: NSPredicate { _, _ in pixels() != baseline }, evaluatedWith: app)
+                waitForExpectations(timeout: 30)
+                let painted = pixels()
+                attachEditor(in: app, name: "demand-first-use-\(preset)-\(replay)-\(theme)")
+                for (command, expected) in [("Undo", baseline), ("Redo", painted), ("Undo", baseline)] {
+                    editorHistory(command, in: app); expect(expected)
+                }
+                XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+            }
+        }
+    }
+    #endif
+
     @MainActor func checkPaintingBrushes(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)

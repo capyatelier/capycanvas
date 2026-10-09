@@ -284,8 +284,12 @@ light/dark warning journeys press Retry and Later with a damaged private copy.
 Editing gates cover the canvas and editor controls; recovery notices remain
 interactive. Dismissing a notice retains its diagnostic and saved bytes.
 Renderer, workspace, document progress and recovery notices share one bounded
-stack, so an error cannot cover another operation's Cancel or Retry button.
-The fixture checks simultaneous action bounds and cancellation in both themes.
+stack with native scrolling when the notices exceed the window height. Each
+diagnostic scrolls within its own height limit, leaving room for its actions.
+The native canvas defines the editor size; workspace chrome overlays it so
+retained panel geometry cannot enlarge the viewport beyond its window.
+The fixture checks action bounds, scrolling and cancellation in both themes,
+including a 700 × 500 editor with several simultaneous warnings.
 An unreadable settings file reports its original error while shared defaults
 remain usable; that read warning does not prevent a successful drawing flush.
 Workspace transport failures settle pending lifecycle callbacks independently
@@ -366,6 +370,11 @@ rows and exact displayed pixels. The commands use native toolbar buttons and
 row menus. `tests/image-import-owner.swift` covers placement, external paste,
 batch import, cancellation and file-worker handoffs under both Apple policies.
 
+Layer-row icon buttons share a 24-point width, including the mask link between
+thumbnails. Keep the hit target independent of its smaller glyph. Mask-transform
+journeys use the inline link control and check independent and linked transforms,
+cancellation and exact Undo/Redo pixels in both themes.
+
 - `editorTestApplication()` gives each journey's application a new
   `CAPY_STORAGE_DIR` name, kept across its relaunches, so journeys never touch
   the installation's data. Do not create an `XCUIApplication` for the editor
@@ -426,3 +435,9 @@ their action targets. Run its regression checks with
 - Measure performance in Release builds as described in
   [Apple performance](../../apps/layer-apple/PERFORMANCE.md). Keep builds and UI
   automation idle while timing.
+
+The Mac frame scheduler reads window visibility on the main actor before
+admitting presentation. Hidden-window wakes remain paused; visibility changes
+redraw and resume the retained renderer. Metal acquisition must not query AppKit
+from the render queue. Check minimize/restore with retained pixels and history,
+and inspect Main Thread Checker output when changing this boundary.

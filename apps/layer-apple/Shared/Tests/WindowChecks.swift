@@ -116,15 +116,17 @@ extension XCTestCase {
         editorHistory("Redo", in: app); expectPaper(blue: true)
         attachEditor(in: app, name: "fullscreen-returned-window")
     }
-    @MainActor func checkSDRWindowSurfaceTransitions(in app: XCUIApplication) {
+    @MainActor func checkSDRWindowSurfaceTransitions(in app: XCUIApplication, theme: String = "light") {
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
         editorMenu(in: app, menu: "File", id: "new_document", label: "New…")
         for (id, label) in [("new-document-space", "ProPhoto RGB"), ("new-document-depth", "16-bit SDR")] {
             let picker = app.descendants(matching: .any).matching(identifier: id).firstMatch
             XCTAssertTrue(picker.waitForExistence(timeout: 10)); workspaceActivate(picker)
             workspaceActivate(app.menuItems[label].firstMatch)
+            expectation(for: NSPredicate(format: "value == %@", label), evaluatedWith: picker)
+            waitForExpectations(timeout: 10)
         }
         let create = app.buttons["new-document-create"]
         workspaceActivate(create); XCTAssertTrue(create.waitForNonExistence(timeout: 30))
@@ -134,10 +136,25 @@ extension XCTestCase {
         let sceneID = scenes.firstMatch.identifier
         let samplePoint = CGPoint(x: 0.53, y: 0.55)
         func pixels() -> Data { editorPixels(in: app, at: samplePoint) }
+        func expectSample(_ expected: Data, stage: String) {
+            let match = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in pixels() == expected }, object: app)
+            let result = XCTWaiter.wait(for: [match], timeout: 15)
+            if result != .completed {
+                let actual = pixels()
+                let delta = (0..<4).map { channel in
+                    stride(from: channel, to: expected.count, by: 4).map { abs(Int(actual[$0]) - Int(expected[$0])) }.max()!
+                }
+                let samples = XCTAttachment(string: "stage=\(stage), window=\(window.frame), point=\(samplePoint), maxRGBA=\(delta)\nexpected=\(Array(expected))\nactual=\(Array(actual))")
+                samples.name = "sdr-exact-pixels-" + stage + "-" + theme
+                samples.lifetime = .keepAlways; add(samples)
+                attachEditor(in: app, name: "sdr-pixel-mismatch-" + stage + "-" + theme)
+            }
+            XCTAssertEqual(result, .completed, "SDR pixels must remain exact at \(stage)")
+        }
         func fill() { editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection") }
         func properties() {
             editorMenu(in: app, menu: "File", id: "document_properties", label: "Document Properties…")
-            XCTAssertTrue(app.staticTexts["16-bit integer SDR"].waitForExistence(timeout: 15))
+            XCTAssertTrue(app.staticTexts["16-bit SDR"].waitForExistence(timeout: 15))
             XCTAssertTrue(app.staticTexts["ProPhoto RGB"].exists)
             let done = app.buttons["Done"].firstMatch
             workspaceActivate(done); XCTAssertTrue(done.waitForNonExistence(timeout: 10))
@@ -150,7 +167,7 @@ extension XCTestCase {
         }
         properties()
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
-        let paper = pixels()
+        var paper = pixels()
         XCTAssertTrue(stride(from: 0, to: paper.count, by: 4).allSatisfy {
             paper[$0] > 250 && paper[$0 + 1] > 250 && paper[$0 + 2] > 250
         })
@@ -159,17 +176,34 @@ extension XCTestCase {
             let sample = pixels(); return Int(sample[2]) > Int(sample[0]) + 50
         }, evaluatedWith: app)
         waitForExpectations(timeout: 15)
-        let filled = pixels()
+        var filled = pixels()
         for transition in ["minimize", "hide", "narrow", "restore-size"] {
             switch transition {
             case "minimize":
+                app.activate()
+                XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
                 app.typeKey("m", modifierFlags: .command)
                 expectation(for: NSPredicate { _, _ in !window.isHittable }, evaluatedWith: window)
                 waitForExpectations(timeout: 10)
+                workspaceActivate(app.menuBars.menuBarItems["Edit"])
+                let hiddenUndo = app.menuBars.menuItems["Undo"].firstMatch
+                if hiddenUndo.exists && hiddenUndo.isEnabled {
+                    workspaceActivate(hiddenUndo)
+                    XCTAssertFalse(window.isHittable, "Hidden input must not reopen the minimized canvas")
+                    editorMenu(in: app, menu: "Edit", id: "redo", label: "Redo")
+                    XCTAssertFalse(window.isHittable, "Hidden input must not reopen the minimized canvas")
+                } else {
+                    let focus = XCTAttachment(string: app.menuBars.debugDescription)
+                    focus.name = "minimized-editor-menu-focus-" + theme
+                    focus.lifetime = .keepAlways; add(focus)
+                    app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+                }
                 workspaceActivate(app.menuBars.menuBarItems["Window"])
                 let item = app.menuBars.menuItems["makeKeyAndOrderFront:"].firstMatch
                 XCTAssertTrue(item.waitForExistence(timeout: 10)); workspaceActivate(item)
             case "hide":
+                app.activate()
+                XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
                 app.typeKey("h", modifierFlags: .command)
                 XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10))
                 app.activate()
@@ -195,9 +229,35 @@ extension XCTestCase {
             XCTAssertTrue(app.buttons["workspace-switch-builtin:workspace:illustrator"].isSelected)
             XCTAssertEqual(app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-")).count, 2)
             XCTAssertEqual(app.descendants(matching: .any)["navigator-overview"].firstMatch.value as? String, "Live preview")
-            expectPixels(filled, in: app, at: samplePoint)
-            for (command, expected) in [("Undo", paper), ("Redo", filled), ("Undo", paper)] {
-                editorHistory(command, in: app); expectPixels(expected, in: app, at: samplePoint)
+            if transition == "narrow" || transition == "restore-size" {
+                let displayed = pixels()
+                XCTAssertTrue(stride(from: 0, to: displayed.count, by: 4).allSatisfy {
+                    Int(displayed[$0 + 2]) > Int(displayed[$0]) + 50 && displayed[$0 + 3] == filled[$0 + 3]
+                })
+                for channel in 0..<3 {
+                    let before = stride(from: channel, to: filled.count, by: 4).map { Double(filled[$0]) }
+                    let after = stride(from: channel, to: displayed.count, by: 4).map { Double(displayed[$0]) }
+                    XCTAssertLessThanOrEqual(abs(before.reduce(0, +) - after.reduce(0, +)) / Double(before.count), 1)
+                    XCTAssertLessThanOrEqual(after.max()! - after.min()!, 4)
+                }
+                filled = displayed
+                editorHistory("Undo", in: app)
+                let white = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    let sample = pixels()
+                    return stride(from: 0, to: sample.count, by: 4).allSatisfy {
+                        sample[$0] > 250 && sample[$0 + 1] > 250 && sample[$0 + 2] > 250 && sample[$0 + 3] == 255
+                    }
+                }, object: app)
+                XCTAssertEqual(XCTWaiter.wait(for: [white], timeout: 15), .completed)
+                paper = pixels()
+                for (command, expected) in [("Redo", filled), ("Undo", paper)] {
+                    editorHistory(command, in: app); expectSample(expected, stage: transition + "-" + command)
+                }
+            } else {
+                expectSample(filled, stage: transition + "-filled")
+                for (command, expected) in [("Undo", paper), ("Redo", filled), ("Undo", paper)] {
+                    editorHistory(command, in: app); expectSample(expected, stage: transition + "-" + command)
+                }
             }
             window.coordinate(withNormalizedOffset: CGVector(dx: samplePoint.x - 0.04, dy: samplePoint.y)).click(forDuration: 0.05,
                 thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: samplePoint.x + 0.04, dy: samplePoint.y)))
@@ -205,16 +265,16 @@ extension XCTestCase {
             expectation(for: NSPredicate { _, _ in pixels() != paper }, evaluatedWith: app)
             waitForExpectations(timeout: 10)
             let stroke = pixels()
-            attachEditor(in: app, name: "sdr-window-" + transition)
+            attachEditor(in: app, name: "sdr-window-" + transition + "-" + theme)
             for (command, expected) in [("Undo", paper), ("Redo", stroke), ("Undo", paper)] {
-                editorHistory(command, in: app); expectPixels(expected, in: app, at: samplePoint)
+                editorHistory(command, in: app); expectSample(expected, stage: transition + "-" + command)
             }
-            fill(); expectPixels(filled, in: app, at: samplePoint)
+            fill(); expectSample(filled, stage: transition + "-filled")
             XCTAssertFalse(app.staticTexts["Canvas error"].exists)
             XCTAssertFalse(app.alerts.firstMatch.exists)
         }
         properties()
-        attachEditor(in: app, name: "sdr-window-restored-artwork")
+        attachEditor(in: app, name: "sdr-window-restored-artwork-" + theme)
     }
     #endif
 

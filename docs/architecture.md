@@ -128,15 +128,15 @@ the layer list or tool settings. These are not pixel rectangles: they tell hosts
 which controls need refreshing.
 
 Shader startup is staged. The host can show controls and constant bottom fills
-while the renderer prepares the current document and brush, then the remaining
-catalog. A prepared drawing uses its renderer's readiness for its first
+while the renderer prepares the current document and selected brush. Other tools
+prepare on first use and reuse their compiled recipes. A prepared drawing uses its renderer's readiness for its first
 presentation, including after recovery or a tab change; the startup background
 must not replace its rendered artwork. Painting
 waits for the required resources; showing the first frame is not the same as being
 ready for a stroke. Native compilation workers and incremental web preparation
 implement the same dependency ordering.
-Requested thumbnail readback prepares before idle catalog warmup, after the
-document and current brush dependencies.
+Requested thumbnail readback prepares after the document and current brush
+dependencies; unused tools do not enter the startup queue.
 
 WebGPU pipeline preparation is asynchronous and shared per recipe and device.
 New and resumed canvases await only their presentation and constant-fill dependencies;

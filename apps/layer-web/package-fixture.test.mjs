@@ -164,3 +164,17 @@ export const rasterIdentity = manifest => manifest.objects.filter(source => ['ca
   tiles: (source.data.tiles ?? []).map(tile => ({...tile, resource: resourceIdentity(manifest, tile.resource)})),
   ...(source.data.material ? {material: source.data.material} : {}),
 }));
+
+export function restartStoreUrl(evaluate) {
+  return evaluate(`(async()=>{
+    const script=document.querySelector('script[type="module"]').src;
+    if(!new URL(script).pathname.includes('/assets/'))return new URL('./restart-store.js',location.href).href;
+    const source=await(await fetch(new URL('./sw.js',location.href))).text();
+    const declaration=source.split('\\n').find(line=>line.startsWith('const FILES = '));
+    if(!declaration)throw Error('Missing package asset index');
+    const files=JSON.parse(declaration.slice('const FILES = '.length).replace(/;$/,''));
+    const entry=files.find(file=>file.path.startsWith('assets/restart-store.')&&file.path.endsWith('.js'));
+    if(!entry)throw Error('Missing packaged restart store');
+    return new URL(entry.path,location.href).href;
+  })()`);
+}

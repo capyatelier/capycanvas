@@ -14,7 +14,8 @@ export function createGpuDiagnostics() {
     capture(error,read) {
       let context;
       try{context=read();}catch(failure){context={diagnostic_error:gpuErrorText(failure)};}
-      last={time:new Date().toISOString(),error:gpuErrorText(error),context,events:events.slice()};
+      const panic=events.findLast(event=>event.kind==='panic'&&!event.worker);
+      last={time:new Date().toISOString(),error:panic?.message??gpuErrorText(error),context,events:events.slice()};
       return last;
     },
     text(report=last) {return JSON.stringify(report,(_,value)=>typeof value==='bigint'?value.toString():value,2);},

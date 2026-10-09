@@ -129,6 +129,7 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 .gpu-help h1 { font-size: var(--ui-text-size); line-height: 1.25; margin: 0 0 8px; }
 .gpu-help h2 { font-size: var(--ui-text-size); margin: 16px 0 8px; }
 .gpu-help p { margin: 8px 0; }
+.diagnostic-detail { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; max-height: min(30vh, 180px); overflow: auto; }
 .gpu-help .gpu-cause { margin: 0 0 20px; font-size: var(--ui-text-size); }
 .gpu-steps { padding-left: 24px; margin: 8px 0 20px; }
 .gpu-steps li { padding-left: 4px; margin: 6px 0; }

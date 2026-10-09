@@ -13,44 +13,44 @@ Recipes for one dry target share its two coverage-layout pipeline layouts.
 ## Order
 
 Startup prepares paper/presentation, the actual document, then the selected
-brush and physical eraser. Only after that brush is ready does it queue idle
-preparation of the built-in brushes for the document's blend space. Common dry
-brushes lead, followed by Smudge, Wet Round, Liquify and retouching, then
-transform and warp shaders, and finally the remaining specialty brushes. Shared
-pipeline recipes deduplicate the work. Visible previews and requested document
-dependencies take priority over brush warmup. Region tools and unused filter
-programs retain recipes.
-Custom brush settings still request any variants that have not been prepared.
+brush and physical eraser. Native document dependencies include the display
+hierarchy's reduction kernels. Transform, warp, region tools and other brushes
+prepare on first use. Unused filter programs retain recipes. Shared pipeline
+recipes deduplicate work and prepared handles survive tool changes; a first
+selection can wait for compilation, while later selections reuse those handles.
+Startup cannot fail because of shaders needed only by an unused brush.
 Native paint requires tile decoding before document readiness, including drawings
 without imported images: restoration and Undo consume that same decoder.
 
-The existing native compiler thread and browser task runner share
-`shader_admission.rs`: visible optional previews wait for 200 ms without input;
-speculative brush and transform preparation waits for one second. Both require
-an idle session. Required compilation renews the quiet interval on completion,
-giving the newly ready tool time to receive input before another speculative
-job starts. Optional completions do not renew it. Short pauses between strokes
-do not restart the catalogue.
-Strokes, held gestures, queued input, pending document edits and
-settings hold that gate closed. Native workers sleep on their existing
-condition variable; browsers use a host timer. Window input observers forward
-activity without changing gesture routing or drag conventions. Required
-canvas/brush dependencies and explicit package validation retain priority and
-can progress while input is arriving. An in-flight driver call cannot be
-interrupted; this is admission between jobs, not preemption.
-Speculative jobs also wait while the canvas engine requests continuous frames,
-including visible animation and unfinished refinement. Visible previews keep
-their separate eligibility, so animation does not block requested preview
-shaders or create a dependency on completing the speculative queue.
-The browser admits one optional pipeline per task; required pipeline batches
-remain bounded to four. Optional mask publication also respects the input gate
-and uploads at most one mask per poll. Selecting a brush promotes its shaders
-and masks ahead of the remaining queue. Readiness of the current brush does not
-wait for full background completion.
+The native compiler thread and browser task runner share `shader_admission.rs`.
+Required canvas/brush dependencies and explicit package validation retain
+priority and progress while input arrives. Visible optional previews wait for
+200 ms without input; pipeline-cache finalization waits for one second and no
+continuous canvas work. Required compilation renews the quiet interval on
+completion. Strokes, held gestures, queued input, pending edits and settings
+keep optional work parked. Native workers sleep on their existing condition
+variable; browsers use a host timer. An in-flight driver call cannot be
+interrupted; admission happens between jobs.
 
-Retouch shader handles belong to the renderer and survive tool changes. Its
-source pixels and healing buffers are still released when unused; warming these
-shaders does not allocate retouch source pages.
+The browser admits one optional pipeline per task; required pipeline batches
+remain bounded to four. Requested brush masks publish when their generation jobs
+finish. Brush readiness includes their upload. Startup completion describes
+current dependencies and cache finalization, not the entire tool catalog.
+Retouch shader handles survive tool changes; unused source pixels and healing
+buffers are still released.
+
+Application controls such as Settings remain usable while required shaders and
+raster work prepare. Shared command classification keeps these controls outside
+the ordered drawing-edit queue; file commands still wait for preceding edits.
+
+The initial backdrop frame includes only constant fills. Raster reconciliation
+and pending bake dependencies follow that scene scope, so excluded paint stays
+in its immutable backing until the full document and its decoder are ready.
+
+Raster backing admits frames by pending captures and their byte budget. The
+native worker creates its staging spares before processing queued captures;
+spare preparation does not make an empty queue full or block a source-backed
+drawing's first frame.
 
 Readiness continues after initial startup. Shared `UiSession` wakes the host
 when a UI-only brush change needs preparation. Native readiness snapshots use

@@ -18,8 +18,8 @@ struct EditorView<Canvas: View>: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         ZStack(alignment: .topLeading) {
+            canvas().ignoresSafeArea().modifier(PhotoDropTarget(store: store)).overlay(alignment: .topLeading) {
             ZStack(alignment: .topLeading) {
-            canvas().ignoresSafeArea().modifier(PhotoDropTarget(store: store))
             if !store.canvasSubmitted {
                 palette["bg"].ignoresSafeArea().allowsHitTesting(false)
             }
@@ -61,6 +61,7 @@ struct EditorView<Canvas: View>: View {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(12).placed(store.snapshot["layout"]["work_area"])
+            }
             }.modifier(RecoveryInteraction(recovery: store.recovery))
                 .modifier(OptionalWorkspaceInteraction(store: store))
             #if DEBUG

@@ -71,6 +71,32 @@ import Foundation
         await drainMainQueue()
         assert(paused && store.canvasSubmitted && submissions == 2)
         assert(store.cameraRevision == 4)
-        print("Shared frame-driver checks passed: admission, wake, detach and replacement")
+        var visible = false
+        frames.canPresent = { visible }
+        frames.wake(); frames.tick(target: 6)
+        assert(paused && store.native!.completions.isEmpty, "Hidden wake and stale ticks must not submit frames")
+        assert(store.canvasSubmitted && store.cameraRevision == 4 && submissions == 2,
+            "Visibility changes must retain the submitted canvas and camera")
+
+        visible = true; frames.wake(); frames.tick(target: 7)
+        assert(!paused && store.native!.completions.count == 1, "Visible wake must resume frame admission")
+        store.native!.complete(revision: 5)
+        await drainMainQueue()
+        assert(paused && store.canvasSubmitted && store.cameraRevision == 5 && submissions == 2)
+
+        frames.wake(); frames.tick(target: 8)
+        visible = false; frames.wake(); frames.tick(target: 9)
+        assert(paused && store.native!.completions.count == 1, "Hiding must reject ticks while a frame is pending")
+        store.native!.complete(again: true, revision: 6)
+        await drainMainQueue()
+        assert(paused && store.canvasSubmitted && store.cameraRevision == 6 && submissions == 2,
+            "A pending completion cannot wake a hidden window or reset its canvas")
+
+        visible = true; frames.wake(); frames.tick(target: 10)
+        assert(!paused && store.native!.completions.count == 1)
+        store.native!.complete(revision: 7)
+        await drainMainQueue()
+        assert(paused && store.cameraRevision == 7 && store.canvasSubmitted && submissions == 2)
+        print("Shared frame-driver checks passed: admission, wake, detach, replacement and visibility")
     }
 }

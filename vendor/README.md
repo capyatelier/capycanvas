@@ -143,6 +143,14 @@ the `supports32BitFloatFiltering` qualification for older iPad GPU families.
 Devices without that capability still report it unavailable. No texture
 precision, publication, rendering or presentation algorithm is changed.
 
+`wgpu-metal-main-thread.patch` prevents Metal surface acquisition on a render
+worker from querying an AppKit view or window. The hosting-window helper only
+runs on the main thread; the Mac client admits presentation using its existing
+main-thread frame scheduler and window visibility notifications. Renderer work
+and recovery remain on their serial owner. A delegate-counting unit test checks
+that the worker does not send `window` to the layer delegate; native visibility
+journeys check suspension and resumed pixels separately.
+
 `wgpu-metal-srgb.patch` records the separate existing Metal surface fix: explicit
 sRGB configuration tags the CAMetalLayer with the sRGB color space, rather than
 nil (which disables color matching). The Apple application currently requests

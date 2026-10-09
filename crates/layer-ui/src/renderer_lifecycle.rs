@@ -250,25 +250,24 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
     }
 
-    pub(super) fn command_without_renderer(command: CommandId) -> bool {
+    pub(super) fn command_without_document(command: CommandId) -> bool {
         matches!(
             command,
-            CommandId::CancelTransform
-                | CommandId::SaveDocument
-                | CommandId::SaveDocumentAs
-                | CommandId::CloseDocument
-                | CommandId::Settings
+            CommandId::Settings
                 | CommandId::KeyboardShortcuts
                 | CommandId::ToggleTheme
                 | CommandId::Fullscreen
                 | CommandId::NewWindow
-                | CommandId::Drawings
-                | CommandId::NextDrawing
-                | CommandId::PreviousDrawing
                 | CommandId::About
                 | CommandId::Website
                 | CommandId::SourceCode
         )
+    }
+
+    pub(super) fn command_without_renderer(command: CommandId) -> bool {
+        Self::command_without_document(command) || matches!(command,
+            CommandId::CancelTransform | CommandId::SaveDocument | CommandId::SaveDocumentAs
+                | CommandId::CloseDocument | CommandId::Drawings | CommandId::NextDrawing | CommandId::PreviousDrawing)
     }
 
     pub(super) fn action_without_renderer(action: &UiAction) -> bool {

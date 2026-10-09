@@ -112,7 +112,6 @@ struct CaptureWorker {
     thread: Option<std::thread::JoinHandle<()>>,
     staging: Arc<AtomicU64>,
     error: Arc<std::sync::Mutex<Option<String>>>,
-    prepared: Arc<std::sync::atomic::AtomicBool>,
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl CaptureWorker {
@@ -124,8 +123,6 @@ impl CaptureWorker {
         let bytes = staging.clone();
         let error = Arc::new(std::sync::Mutex::new(None));
         let failure = error.clone();
-        let prepared = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let preparation = prepared.clone();
         let thread = std::thread::Builder::new()
             .name("capy-raster-backing".into())
             .spawn(move || {
@@ -147,7 +144,6 @@ impl CaptureWorker {
                     *failure.lock().unwrap() =
                         Some("Could not prepare raster staging buffers".into());
                 }
-                preparation.store(true, Ordering::Release);
                 while let Ok(captures) = receiver.recv() {
                     let size = captures.storage_bytes();
                     // Dropped tickets publish failures even if a driver callback or
@@ -174,7 +170,6 @@ impl CaptureWorker {
             pending,
             staging,
             error,
-            prepared,
             thread: Some(thread),
         })
     }
@@ -184,8 +179,7 @@ impl CaptureWorker {
         // and one active 16 MiB transfer, live pending storage is <= 1.25 GiB.
         // The mapped-only path retains its 512 MiB ceiling. Spare pool memory
         // is accounted separately; these limits allocate nothing eagerly.
-        self.prepared.load(Ordering::Acquire)
-            && self.pending.load(Ordering::Acquire) < 16
+        self.pending.load(Ordering::Acquire) < 16
             && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK - STATUS_BYTES
     }
     fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {

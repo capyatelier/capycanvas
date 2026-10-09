@@ -1318,6 +1318,83 @@ pub(crate) fn surface_pipeline(
 mod tests {
     use super::*;
     #[test]
+    fn backdrop_scope_defers_native_paint_restore_until_the_full_document_is_prepared() {
+        use crate::layer_tests::placement::{paint, target, reveal_all};
+        use layer_engine::{CanvasEngine, ViewTransform, input_queue};
+        use std::time::{Duration, Instant};
+        let extent = [96; 2];
+        let document = layer_core::Document::new(layer_core::PortableId::random(), extent[0], extent[1],
+            layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let reference = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let mut engine = CanvasEngine::new(reference, document, input_queue(8).1,
+            crate::test_support::view(extent), ViewTransform::IDENTITY).unwrap();
+        engine.append_raster_operation(target(engine.document()), layer_core::RasterOperation {
+            placement: layer_core::Affine::IDENTITY, coverage: reveal_all(extent, [0, 0]),
+            kind: layer_core::RasterOperationKind::Fill { color: [0., 0., 1., 1.], alpha_locked: false },
+        }).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            engine.render_frame().unwrap();
+            if !engine.has_pending_document_edits() && !engine.backend().has_pending_work() { break; }
+            assert!(Instant::now() < deadline, "native fill must finish");
+            std::thread::yield_now();
+        }
+        assert!(!paint(engine.document()).raster.wait_data().unwrap().tiles.is_empty());
+        let expected = engine.backend_mut().readback_srgb_rgba8().unwrap();
+        for pending_bake in [false, true] {
+            let mut document = engine.document().clone();
+            let batch = if pending_bake {
+                let owner = crate::layer_tests::placement::occurrence_id(&document);
+                let operation = layer_core::RasterOperation {
+                    placement: layer_core::Affine::IDENTITY, coverage: reveal_all(extent, [0, 0]),
+                    kind: layer_core::RasterOperationKind::Bake { scene: document.snapshot(),
+                        scope: layer_core::SceneScope::Members([owner].into()), offset: layer_core::Point::default() },
+                };
+                let damage = operation.bounds(extent);
+                document.apply(document.delete_layers_edit(&[owner]).unwrap()).unwrap();
+                let (_, target) = crate::layer_tests::placement::append_paint(&mut document, "Retained copy", layer_core::PaintSource {
+                    color_mode: Default::default(), domain: extent, raster: layer_core::raster::RasterRevision::pending(), base: None,
+                    operations: std::sync::Arc::new(vec![operation]),
+                });
+                let root = document.composition().result;
+                document.artwork.stacks.get_mut(root).unwrap().entries.rotate_right(1);
+                assert_eq!(crate::source_access::pending_bakes(document.scene()).count(), 1);
+                Some(layer_render::DabBatch { kind: layer_render::DabBatchKind::RasterOperation(0), dab_count: 0,
+                    ..crate::test_support::dab_batch(target, crate::tests::test_style(layer_core::BrushExecution::Dry), damage) })
+            } else { None };
+            let mut renderer = crate::test_support::staged_renderer(engine.backend(), document.composition().color);
+            let mut presenter = ViewportPresenter::for_renderer(&renderer, wgpu::TextureFormat::Rgba8UnormSrgb);
+            pollster::block_on(presenter.prepare(&renderer)).unwrap();
+            assert!(!renderer.scene_pipelines.source.pipeline.ready());
+            let backdrop = layer_core::SceneScope::Members(document.scene().constant_backdrop().into());
+            assert_eq!(crate::source_access::pending_bakes(document.scene().with_scope(&backdrop)).count(), 0);
+            let packet = crate::test_support::packet(document.scene(), extent);
+            renderer.submit(layer_render::FramePacket { scene: document.scene().with_scope(&backdrop), reset_layers: true, ..packet }).unwrap();
+            let restored = (renderer.scene_pipelines.source.pipeline.ready(), renderer.metrics.native_restore_submissions,
+                renderer.paint_layers.iter().map(|layer| layer.pages.len()).sum::<usize>());
+            let (texture, surface) = crate::create_target(renderer.device(), extent, wgpu::TextureFormat::Rgba8UnormSrgb, "restored backdrop");
+            presenter.present(&renderer, &surface, packet.view, [0., 0., 0., 1.]).unwrap();
+            assert!(crate::layer_tests::page_bytes(&renderer, &texture).chunks_exact(4).all(|pixel| pixel == [255; 4]));
+            assert_eq!(restored, (false, 0, 0), "backdrop-only frame must leave excluded native paint undecoded");
+            renderer.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), false).unwrap();
+            crate::test_support::wait_startup(&mut renderer, Instant::now() + Duration::from_secs(30),
+                |progress| progress.canvas_ready, format_args!("native restoration dependencies"));
+            let packet = layer_render::FramePacket { dab_batches: batch.as_slice(), ..packet };
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !renderer.raster_dependencies_ready(packet) {
+                assert!(Instant::now() < deadline, "demanded bake dependencies must finish");
+                std::thread::yield_now();
+            }
+            renderer.submit(packet).unwrap();
+            if let Some(batch) = &batch {
+                assert!(!document.target_raster(batch.target).unwrap().wait_data().unwrap().tiles.is_empty());
+            }
+            assert_eq!(renderer.readback_srgb_rgba8().unwrap(), expected, "the full document restores exact native paint");
+            presenter.present(&renderer, &surface, packet.view, [0., 0., 0., 1.]).unwrap();
+            assert!(crate::layer_tests::page_bytes(&renderer, &texture).chunks_exact(4).all(|pixel| pixel == [0, 0, 255, 255]));
+        }
+    }
+    #[test]
     fn deferred_objects_replace_empty_backdrop_and_survive_native_readback() {
         use layer_core::{authored::OccurrenceContent, package::{ImmutableBacking, codec::{open, OpenOutcome}}};
         use std::{sync::{Arc, atomic::AtomicBool}, time::{Duration, Instant}};

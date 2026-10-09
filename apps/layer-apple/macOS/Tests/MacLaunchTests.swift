@@ -46,8 +46,18 @@ extension EditorLaunchTests {
     @MainActor func testSDRWindowSurfaceTransitions() {
         checkSDRWindowSurfaceTransitions(in: editorCaptureApplication())
     }
+    @MainActor func testSDRWindowSurfaceTransitionsDark() {
+        checkSDRWindowSurfaceTransitions(in: editorCaptureApplication(), theme: "dark")
+    }
 
     @MainActor func testNativeRegionRefinement() throws { try checkNativeRegionRefinement(in: editorCaptureApplication()) }
+
+    @MainActor func testDemandShaderFirstUse() {
+        checkDemandShaderFirstUse(in: editorCaptureApplication(), theme: "light")
+    }
+    @MainActor func testDemandShaderFirstUseDark() {
+        checkDemandShaderFirstUse(in: editorCaptureApplication(), theme: "dark")
+    }
 
     @MainActor func testMetalLaunchCaptureAndMouseStroke() throws {
         let app = editorTestApplication()

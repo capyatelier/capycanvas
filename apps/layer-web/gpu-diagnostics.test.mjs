@@ -27,6 +27,17 @@ test('diagnostics stay bounded and reporting survives an unavailable Wasm instan
   assert.equal(gpuErrorText('plain error'),'plain error');
 });
 
+test('a main-instance panic remains the visible cause after a Wasm trap and failed recovery',()=>{
+  const diagnostics=createGpuDiagnostics();
+  diagnostics.record({role:'runtime',kind:'panic',worker:'checkpoint',message:'Worker stopped'});
+  assert.equal(diagnostics.capture('Canvas failed',()=>({})).error,'Canvas failed');
+  diagnostics.record({role:'runtime',kind:'panic',message:'Pipeline used before preparation'});
+  const report=diagnostics.capture(new WebAssembly.RuntimeError('unreachable'),()=>{throw Error('Wasm borrow unavailable');});
+  suspendGpuForReport(report,()=>{throw Error('Wasm borrow unavailable');});
+  assert.equal(report.error,'Pipeline used before preparation');
+  assert.equal(report.recovery_error,'Wasm borrow unavailable');
+});
+
 test('failure details copy exactly the visible report and remain available without clipboard permission',async()=>{
   const element=(tag,className='',text='')=>({tag,className,text,children:[],append(...children){this.children.push(...children);}});
   const button=(label,click)=>({label,click});

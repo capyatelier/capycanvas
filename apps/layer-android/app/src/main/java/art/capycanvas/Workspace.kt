@@ -15,6 +15,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -300,7 +302,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             Surface(Modifier.align(Alignment.Center).widthIn(max = 440.dp).padding(24.dp), shape = RoundedCornerShape(16.dp), shadowElevation = 8.dp) {
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(host.bootstrap!!.getString("canvas_init_failed"), style = MaterialTheme.typography.titleLarge)
-                    Text(message)
+                    SelectionContainer { Text(message, Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState())) }
                     TextButton({ host.restartCanvas() }) { Text(host.bootstrap!!.getString("restart_canvas")) }
                 }
             }

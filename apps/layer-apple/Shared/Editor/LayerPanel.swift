@@ -289,11 +289,10 @@ private struct LayerButton: View {
     var selected = false
     var height: CGFloat = 24
     var size: CGFloat = 16
-    var width: CGFloat = 24
     let action: () -> Void
     var body: some View {
         IconTile(icon: icon, label: label, selected: selected, enabled: enabled, size: size, action: action)
-            .frame(width: width, height: height).accessibilityIdentifier("layer-" + label)
+            .frame(width: 24, height: height).accessibilityIdentifier("layer-" + label)
     }
 }
 
@@ -325,7 +324,7 @@ private struct LayerRow: View {
                     }.frame(width: 30, height: 30).accessibilityIdentifier("selection-load-\(id)")
                 }
                 if layer["has_mask"].bool {
-                    LayerButton(icon: layer["mask_linked"].bool ? "link" : "unlink", label: layer["mask_linked"].bool ? store.catalog["native_copy"]["layers"]["unlink_mask"].string : store.catalog["native_copy"]["layers"]["link_mask_to_layer"].string, size: 10, width: 10) {
+                    LayerButton(icon: layer["mask_linked"].bool ? "link" : "unlink", label: layer["mask_linked"].bool ? store.catalog["native_copy"]["layers"]["unlink_mask"].string : store.catalog["native_copy"]["layers"]["link_mask_to_layer"].string, size: 10) {
                         perform { store.layer(["op": "link_mask", "id": id, "value": !layer["mask_linked"].bool]) }
                     }.foregroundStyle(palette["text"]).disabled(layer["locked"].bool)
                     thumbnail(mask: true)

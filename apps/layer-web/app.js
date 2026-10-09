@@ -1859,7 +1859,7 @@ try {
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs});
   glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
-  documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"})});
+  documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,canvasReady:()=>gpuReady,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged,refreshInputContext:()=>chromeInput({kind:"refresh"})});
   documents.mountProof(panels.get("proof"));
   header = createHeader({app,state:()=>state,paintPair:()=>paintPairView,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
   const capy = iconButton("zen_mode");
@@ -1932,13 +1932,14 @@ function stopGpu(error) {
   if(startupNotice)startupNotice.hidden=true;
   const notice=$("gpu-notice");notice.hidden=false;
   notice.replaceChildren(element("p","",report.recovery_error?bootstrap.canvas_recovery_failed:bootstrap.canvas_stopped),
-    element('p','',gpuErrorText(error)),button(bootstrap.restart_canvas,()=>restartGpu()),
+    element('p','diagnostic-detail',report.error),button(bootstrap.restart_canvas,()=>restartGpu()),
     gpuReportDetails({report,diagnostics:gpuDiagnostics,copy:bootstrap,element,button,clipboard:navigator.clipboard}));
   document.body.dataset.gpu="unavailable";
+  return !report.recovery_error;
 }
 setInterval(()=>{if(gpuReady){const error=app.gpu_failure();if(error)stopGpu(error);}},1000);
 async function restartGpu() {
-  if(gpuReady)stopGpu(bootstrap.restarting_canvas);
+  if(!stopGpu(bootstrap.restarting_canvas))return;
   compilerFailed=false;firstCanvasRendered=false;
   for(const key of Object.keys(startupTimes))startupTimes[key]=null;
   await startGpu();
@@ -1997,7 +1998,7 @@ async function startGpu() {
     wake();
   } catch (error) {
     document.body.dataset.gpu = "unavailable";
-    showGpuNotice({ container: notice, error, element, button });
+    showGpuNotice({ container: notice, error, element, button, restart: restartGpu, restartLabel: bootstrap.restart_canvas });
     console.warn("GPU canvas unavailable:", error?.message ?? error);
   } finally {
     gpuStarting = false;

@@ -156,6 +156,12 @@ extension XCTestCase {
             expectation(for: NSPredicate { _, _ in initialWindow.frame.minX >= 0 && initialWindow.frame.minY >= 0 }, evaluatedWith: initialWindow)
             waitForExpectations(timeout: 10)
         }
+        if initialWindow.frame.width < 1198 {
+            let edge = initialWindow.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).withOffset(CGVector(dx: -1, dy: 0))
+            edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(CGVector(dx: 1200 - initialWindow.frame.width, dy: 0)))
+            expectation(for: NSPredicate { _, _ in initialWindow.frame.width >= 1198 }, evaluatedWith: initialWindow)
+            waitForExpectations(timeout: 10)
+        }
         #endif
         let paint = app.buttons["workspace-switch-builtin:workspace:illustrator"]
         XCTAssertTrue(paint.waitForExistence(timeout: 30))

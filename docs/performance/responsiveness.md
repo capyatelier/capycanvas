@@ -20,7 +20,45 @@ otherwise.
 | Cold launch with an empty shader cache → ready | 10 s | **Not met.** Android median 35.29 s to selected-brush readiness ([idle preparation](#idle-brush-preparation), 2026-10-08) | Huion: 3.50 s to all shaders; workspace 2.34 s ([shader readiness](../internals/shared-shader-readiness.md), 2026-09-25) | |
 | Open the tier photo → first frame | 3 / 4 / 6 s | | | |
 
+## Demand-driven startup
+
+Startup prepares the document, selected brush and physical eraser. Other brushes,
+transform and warp prepare on first use and retain their shader handles. The
+reference-tier startup and first-use rows remain unqualified for this policy.
+An Apple preparation probe uses fresh renderer recipes without an application
+pipeline cache, on an M2 Pro with existing OS driver caches. It measures shader
+readiness, not presented motion or physical input latency. Retouch source capture
+is outside this probe; its preparation time is not a complete Clone-stroke delay.
+
+On 2026-10-09, six Release trials on a 128 × 128 drawing compared the previous
+catalog policy at `a3302f77e` with `c435a39fa` plus demand-only preparation.
+The first three select tools immediately; the next three wait for startup
+completion. Current immediate-start medians are 16.37 ms to canvas readiness and
+72.91 ms to G-Pen readiness. Both measurements start after renderer construction,
+before requesting the document and selected brush.
+
+| Preparation after initial G-Pen | Current immediate selection, median | Current selection after idle, median | Previous selection after catalog completion, median |
+| --- | ---: | ---: | ---: |
+| Watercolor Wash | 19.01 ms | 42.17 ms | 0.007 ms |
+| Clone shaders | 16.36 ms | 22.65 ms | 0.004 ms |
+| Liquify Push | 5.04 ms | 6.30 ms | 0.002 ms |
+| Ordinary transform | 7.55 ms | 10.07 ms | 0.006 ms |
+| Warp mesh | 3.78 ms | 3.79 ms | <0.001 ms |
+
+Every repeated selection was immediately ready; the largest current reuse cost
+was 0.010 ms. Current idle completion takes 1004.75 ms median, including the
+existing one-second gate before pipeline-cache finalization. It no longer means
+the whole catalog is prepared. The previous run's first trial had much larger
+driver compilation costs, and the OS caches were not reset between runs. These
+results show the first-use tradeoff, not a controlled startup speedup. The Safari
+override fix also changed between revisions. Raw rows, source hashes and probe
+limits are retained in `artifacts/apple-issue10-oct9/provenance/startup-first-use-*`.
+
 ## Idle brush preparation
+
+These measurements describe the previous speculative catalog policy. Current
+startup prepares requested dependencies only; the measurements below do not
+qualify its first-use latency.
 
 Measured on the low-tier TCL TAB 11 Gen 2 on 2026-10-07–08 with optimized Android
 and `web-release` builds. Native startup uses a fresh private workspace;
@@ -36,7 +74,7 @@ other sessions. Browser reload measurements therefore do not establish
 shader-cold startup.
 
 Initial selected-brush readiness and complete idle preparation are separate
-milestones. The latter includes all built-in brush families in the new build;
+milestones. The latter includes all built-in brush families in the measured build;
 painting starts at the former. The native initial-cache save remains early,
 so a short first session still saves required startup shaders. Later warmed
 variants are not added to that saved cache by this change.

@@ -5,7 +5,7 @@ use std::time::Duration;
 use web_time::Instant;
 
 const QUIET: Duration = Duration::from_millis(200);
-const WARM_QUIET: Duration = Duration::from_secs(1);
+const BACKGROUND_QUIET: Duration = Duration::from_secs(1);
 
 pub(super) struct Admission {
     pub idle: bool,
@@ -23,12 +23,12 @@ impl Admission {
         if priority < super::OTHER { self.input(); }
     }
     fn remaining(&self, priority: u8) -> Duration {
-        let quiet = if priority == super::OTHER { QUIET } else { WARM_QUIET };
+        let quiet = if priority == super::OTHER { QUIET } else { BACKGROUND_QUIET };
         self.last_activity.map_or(Duration::ZERO, |activity| (activity + quiet).saturating_duration_since(Instant::now()))
     }
     pub fn delay(&self, priorities: impl Iterator<Item = u8>) -> Duration {
         priorities.filter(|&p| p >= super::OTHER).map(|p| self.remaining(p)).min()
-            .unwrap_or_else(|| self.remaining(super::WARM_BRUSH))
+            .unwrap_or_else(|| self.remaining(super::BACKGROUND))
     }
     pub fn allows(&self, priority: u8) -> bool {
         priority < super::OTHER || (self.idle && (priority == super::OTHER || self.speculative_idle)
@@ -56,23 +56,23 @@ mod tests {
     }
 
     #[test]
-    fn short_pauses_admit_visible_previews_but_keep_catalogue_work_parked() {
-        use super::super::{BRUSH, OTHER, WARM_BRUSH};
+    fn short_pauses_admit_visible_previews_but_keep_background_work_parked() {
+        use super::super::{BRUSH, OTHER, BACKGROUND};
         let mut admission = Admission::default();
         admission.last_activity = Some(Instant::now() - Duration::from_millis(500));
         assert!(admission.allows(BRUSH) && admission.allows(OTHER));
-        assert!(!admission.allows(WARM_BRUSH));
-        assert_eq!(admission.delay([OTHER, WARM_BRUSH].into_iter()), Duration::ZERO);
-        assert!(!admission.delay([WARM_BRUSH].into_iter()).is_zero());
+        assert!(!admission.allows(BACKGROUND));
+        assert_eq!(admission.delay([OTHER, BACKGROUND].into_iter()), Duration::ZERO);
+        assert!(!admission.delay([BACKGROUND].into_iter()).is_zero());
         assert!(!admission.delay(std::iter::empty()).is_zero());
-        admission.last_activity = Some(Instant::now() - WARM_QUIET);
-        assert!(admission.allows(WARM_BRUSH));
+        admission.last_activity = Some(Instant::now() - BACKGROUND_QUIET);
+        assert!(admission.allows(BACKGROUND));
         admission.speculative_idle = false;
         assert!(admission.allows(OTHER));
-        assert!(!admission.allows(WARM_BRUSH));
+        assert!(!admission.allows(BACKGROUND));
         assert!(admission.allows(BRUSH));
         admission.idle = false;
-        assert!(!admission.allows(WARM_BRUSH));
+        assert!(!admission.allows(BACKGROUND));
         assert!(admission.allows(BRUSH));
     }
 }

@@ -46,6 +46,11 @@ unexpected diagnostics stay literal. Color, profile, proof and export controls
 relabel retained scalar copy without revalidating dirty input, reading profile
 storage, decoding ICC data or restarting image jobs.
 
+Canvas startup failures retain the original native exception beneath the shared
+title. Diagnostic text is selectable and scrolls within a bounded height, leaving
+Restart canvas reachable. Action failures keep their cause in the existing
+dismissible notice.
+
 File and conversion jobs use `inspection::on_worker` for named threads with an
 8 MiB stack; call it from an IO worker. Task cancellation owns a separate
 `CaptureControl` and never borrows a running job.

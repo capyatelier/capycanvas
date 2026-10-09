@@ -1,10 +1,11 @@
-import {readPackage,authoredIdentity,packageResourceIdentity} from './package-fixture.test.mjs';
+import {readPackage,authoredIdentity,packageResourceIdentity,restartStoreUrl} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
 import {tracePipelineCalls} from './pipeline-trace.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 export async function checkDrawingTabRecovery({cdp,call,evaluate,settle}) {
   const trace=await tracePipelineCalls(cdp);
+  const storeUrl=await restartStoreUrl(evaluate);
   try {
   const wait=async condition=>{
     const deadline=Date.now()+250000;
@@ -95,21 +96,21 @@ export async function checkDrawingTabRecovery({cdp,call,evaluate,settle}) {
   await evaluate(`window.sessionCaptureOriginal=layerApp.app.capture_tab_session.bind(layerApp.app);layerApp.app.capture_tab_session=id=>String(id)===String(${pending})?{write:async()=>{throw Error('Injected first checkpoint failure')},free(){}}:sessionCaptureOriginal(id);`);
   try {
     assert.equal(await evaluate('layerApp.documents.autosave().then(()=>false,()=>true)'),true,'First checkpoint failure is reported');
-    assert.equal(await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const key of await store.windows()){const manifest=await store.manifest(key),drawing=manifest.drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing)return !(await store.read(drawing.key));}return false;})()`),true,'First checkpoint failure retains authoritative membership for retry');
+    assert.equal(await evaluate(`(async()=>{const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();for(const key of await store.windows()){const manifest=await store.manifest(key),drawing=manifest.drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing)return !(await store.read(drawing.key));}return false;})()`),true,'First checkpoint failure retains authoritative membership for retry');
     assert.equal(await leaveWarning(),true,'Pending unsaved state prevents quiet browser exit');
   } finally {await evaluate('layerApp.app.capture_tab_session=sessionCaptureOriginal');}
   await evaluate('layerApp.documents.autosave()');
-  const beforeLostAck=await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const key of await store.windows()){const drawing=(await store.manifest(key)).drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing){window.lostAckKey=drawing.key;return (await store.read(drawing.key)).current.generation;}}})()`);
+  const beforeLostAck=await evaluate(`(async()=>{const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();for(const key of await store.windows()){const drawing=(await store.manifest(key)).drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing){window.lostAckKey=drawing.key;return (await store.read(drawing.key)).current.generation;}}})()`);
   await evaluate(`layerApp.app.capture_tab_session=id=>{const capture=sessionCaptureOriginal(id);if(String(id)===String(${pending})){const write=capture.write.bind(capture);capture.write=async(...args)=>{await write(...args);throw Error('Injected lost checkpoint acknowledgement');};}return capture;};layerApp.dispatch({type:'set_zoom',zoom:.31});`);
   try {assert.equal(await evaluate('layerApp.documents.autosave().then(()=>false,()=>true)'),true,'A lost acknowledgement leaves the checkpoint pending');}
   finally {await evaluate('layerApp.app.capture_tab_session=sessionCaptureOriginal');}
   await evaluate('layerApp.documents.autosave()');
-  assert.deepEqual(await evaluate(`(async()=>{const record=await (await import('./restart-store.js')).createRestartStore().read(lostAckKey);return [record.current.generation,record.previous.generation];})()`),[beforeLostAck+2,beforeLostAck],'A committed but unacknowledged checkpoint retries with a newer generation and retains the acknowledged base');
+  assert.deepEqual(await evaluate(`(async()=>{const record=await (await import(${JSON.stringify(storeUrl)})).createRestartStore().read(lostAckKey);return [record.current.generation,record.previous.generation];})()`),[beforeLostAck+2,beforeLostAck],'A committed but unacknowledged checkpoint retries with a newer generation and retains the acknowledged base');
   await evaluate("window.sessionCloseOriginal=layerApp.app.prepare_document_close.bind(layerApp.app);layerApp.app.prepare_document_close=()=>{throw Error('Injected close preflight failure')};");
   try {
     await evaluate(`layerApp.documents.close(BigInt(${pending}))`);await ready();
     assert.equal((await tabs()).tabs.length,2,'Failed close preflight retains the live drawing');
-    assert.equal(await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const key of await store.windows()){const manifest=await store.manifest(key),drawing=manifest.drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing)return !!(await store.read(drawing.key));}return false;})()`),true,'Failed close preflight retains durable membership and its drawing');
+    assert.equal(await evaluate(`(async()=>{const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();for(const key of await store.windows()){const manifest=await store.manifest(key),drawing=manifest.drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing)return !!(await store.read(drawing.key));}return false;})()`),true,'Failed close preflight retains durable membership and its drawing');
   } finally {await evaluate('layerApp.app.prepare_document_close=sessionCloseOriginal');}
   await evaluate(`layerApp.documents.close(BigInt(${pending}))`);await wait('layerApp.app.document_tabs(0).tabs.length===1');await ready();
   await invoke('add_layer');await ready();await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');await ready();
@@ -148,11 +149,11 @@ export async function checkDrawingTabRecovery({cdp,call,evaluate,settle}) {
         await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Choose File…').click()");await wait('!layerApp.state().document_file.busy');await ready();
         original.export=await evaluate(`(async()=>{const name=layerApp.app.session_stamp_for(layerApp.app.document_tabs(0).selected).state.last_export.location.name,directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-test-session-originals'),file=await(await directory.getFileHandle(name)).getFile();return{name,modified:file.lastModified};})()`);
         await evaluate('layerApp.documents.autosave()');
-        const beforeInvalid=await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const window of await store.windows()){const drawing=(await store.manifest(window)).drawings.find(drawing=>String(drawing.id)===String(${id}));if(drawing){globalThis.invalidExportKey=drawing.key;const record=await store.read(drawing.key);return [record.current.generation,record.previous?.generation??null];}}})()`);
+        const beforeInvalid=await evaluate(`(async()=>{const store=(await import(${JSON.stringify(storeUrl)})).createRestartStore();for(const window of await store.windows()){const drawing=(await store.manifest(window)).drawings.find(drawing=>String(drawing.id)===String(${id}));if(drawing){globalThis.invalidExportKey=drawing.key;const record=await store.read(drawing.key);return [record.current.generation,record.previous?.generation??null];}}})()`);
         await evaluate(`globalThis.invalidExportPost=Worker.prototype.postMessage;Worker.prototype.postMessage=function(value,...args){if(value.request?.operation==='restart-begin'){const request=JSON.parse(value.request.metadata);if(request.key===invalidExportKey){const envelope=JSON.parse(request.project);envelope.descriptor.metadata.last_export.recipe.jpeg_quality=0;request.project=JSON.stringify(envelope);value.request.metadata=JSON.stringify(request);}}return invalidExportPost.call(this,value,...args);};layerApp.dispatch({type:'set_zoom',zoom:.43});`);
         try {
           assert.equal(await evaluate('layerApp.documents.autosave().then(()=>false,()=>true)'),true,'The worker rejects malformed export metadata before publication');
-          assert.deepEqual(await evaluate("(async()=>{const record=await (await import('./restart-store.js')).createRestartStore().read(invalidExportKey);return [record.current.generation,record.previous?.generation??null];})()"),beforeInvalid,'Rejected export metadata retains both complete checkpoint generations');
+          assert.deepEqual(await evaluate(`(async()=>{const record=await (await import(${JSON.stringify(storeUrl)})).createRestartStore().read(invalidExportKey);return [record.current.generation,record.previous?.generation??null];})()`),beforeInvalid,'Rejected export metadata retains both complete checkpoint generations');
         } finally {await evaluate('Worker.prototype.postMessage=invalidExportPost');}
         await evaluate('layerApp.documents.autosave()');
       }

@@ -7,6 +7,11 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 
 ## Operations
 
+Required-only shader startup and first-use tool preparation are unmeasured on
+this reference device. Earlier idle-catalog measurements describe their named
+builds, not the current startup policy. See [startup preparation](responsiveness.md#demand-driven-startup)
+for the Apple diagnostic and its limits.
+
 The M3 cutover is committed at `b3f6f8e51`. The latest G-Pen measurements use
 frozen baseline BUILD29 and M3 BUILD32 binaries based on `192601dac`; their
 forward and reverse results are [below](#current-m3-g-pen-comparison).
@@ -46,6 +51,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
+| Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
 | Tool cursor hover, with and without brush size | 120 | Renderer 119.3–119.6 submissions/s; submission interval p99 15.0–15.6 ms. Presentation unqualified. | [Tool cursors](#tool-cursors) |
 | Pan: Hand tool, one or two fingers | 120 | **Misses on 61 MP:** two-finger pan 33.93–35.12 presented fps, p99 41.67 ms, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/top/` |
 | Pinch zoom | 120 | **Misses on 61 MP:** 33.13–35.66 presented fps, p99 41.67–50.00 ms, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/top/` |

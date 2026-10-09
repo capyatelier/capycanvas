@@ -11,6 +11,11 @@ is 4248 × 2832.
 
 ## Operations
 
+Required-only shader startup and first-use tool preparation are unmeasured on
+this reference device. Earlier idle-catalog measurements describe their named
+builds, not the current startup policy. See [startup preparation](responsiveness.md#demand-driven-startup)
+for the Apple diagnostic and its limits.
+
 The BUILD32 G-Pen pair measures the M3 candidate captured on `192601dac`.
 BUILD28 and selected BUILD20 canvas diagnostics measure frozen `4a2cf6aa0`
 binaries. Earlier operation rows and 83/BUILD15 probes apply to their named
@@ -70,6 +75,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
+| Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
 | Tool cursor hover, with and without brush size | 60 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
 | G-Pen 1024 px, Android with idle brush preparation | 60 | **Meets these strokes.** Pending: 75.57–75.87 fresh updates/s, fresh completion-gap p99 22.64–24.01 ms; fully warm: 75.00–76.19/s, p99 22.50–24.20 ms | [Idle brush preparation](#idle-brush-preparation), Perceptual, 100 × 60 px radii |
 | G-Pen 1024 px, Web while brush warmup is paused | 60 | **Unqualified; CPU proxy below target.** After the in-flight compile: 17.58–22.30 frame calls/s, interval p99 84.6–148.1 ms; fully warm: 21.36–23.31/s. Presentation unmeasured | [Idle brush preparation](#idle-brush-preparation) |

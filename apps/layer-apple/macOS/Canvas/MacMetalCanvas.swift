@@ -49,6 +49,7 @@ final class MacCanvasView: NSView {
             guard let self, self.window?.isKeyWindow == true, self.window?.attachedSheet == nil else { return }
             self.window?.makeFirstResponder(self)
         }
+        frames.canPresent = { [weak self] in self?.window?.occlusionState.contains(.visible) == true }
         frames.setPaused = { [weak self] paused in self?.displayLink?.isPaused = paused }
         frames.submittedViewport = { [weak self] in self?.setAccessibilityValue(self?.store.bootstrap["canvas_ready"].string) }
     }

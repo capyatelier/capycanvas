@@ -19,11 +19,12 @@ use super::OsFeatures;
 
 /// Walks up from `start` to the `NSWindow` hosting this layer: the first ancestor
 /// layer with a delegate is the backing `NSView`, and we return its `window`.
-/// `None` if no ancestor has a delegate.
+/// `None` off the main thread or if no ancestor has a delegate.
 #[cfg(target_os = "macos")]
 fn hosting_window(
     start: Retained<objc2_quartz_core::CALayer>,
 ) -> Option<Retained<objc2::runtime::NSObject>> {
+    let _main_thread = objc2::MainThreadMarker::new()?;
     let mut current = Some(start);
     while let Some(layer) = current {
         if let Some(delegate) = layer.delegate() {
@@ -412,4 +413,52 @@ impl crate::Surface for super::Surface {
     }
 
     unsafe fn discard_texture(&self, _texture: super::SurfaceTexture) {}
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::hosting_window;
+    use objc2::{define_class, msg_send, rc::{autoreleasepool, Retained}, runtime::NSObject, ClassType};
+    use objc2_foundation::NSObjectProtocol;
+    use objc2_quartz_core::{CALayer, CALayerDelegate};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static WINDOW_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        struct HostingWindowTestDelegate;
+
+        unsafe impl NSObjectProtocol for HostingWindowTestDelegate {}
+        unsafe impl CALayerDelegate for HostingWindowTestDelegate {}
+
+        impl HostingWindowTestDelegate {
+            #[unsafe(method(window))]
+            fn window(&self) -> *mut NSObject {
+                WINDOW_CALLS.fetch_add(1, Ordering::SeqCst);
+                core::ptr::null_mut()
+            }
+        }
+    );
+
+    #[test]
+    fn background_hosting_window_does_not_message_delegate() {
+        let (found, calls) = std::thread::spawn(|| autoreleasepool(|_| {
+            assert!(objc2::MainThreadMarker::new().is_none());
+            let delegate: Retained<HostingWindowTestDelegate> =
+                unsafe { msg_send![HostingWindowTestDelegate::class(), new] };
+            let layer = CALayer::new();
+            layer.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*delegate)));
+            WINDOW_CALLS.store(0, Ordering::SeqCst);
+            let control: Option<Retained<NSObject>> = unsafe { msg_send![&*delegate, window] };
+            assert!(control.is_none());
+            assert_eq!(WINDOW_CALLS.load(Ordering::SeqCst), 1);
+            WINDOW_CALLS.store(0, Ordering::SeqCst);
+            let found = hosting_window(layer).is_some();
+            let calls = WINDOW_CALLS.load(Ordering::SeqCst);
+            (found, calls)
+        })).join().unwrap();
+        assert!(!found);
+        assert_eq!(calls, 0, "Background hosting_window must not send window to the layer delegate");
+    }
 }

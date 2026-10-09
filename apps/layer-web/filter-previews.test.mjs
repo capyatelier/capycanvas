@@ -34,22 +34,28 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
     layerApp.dispatch({type:'invoke',command:'import_image'});
   })()`);
   await wait(`layerApp.state().commands.find(c=>c.id==='placement_original_size').enabled`);
+  assert.equal(await evaluate('layerApp.documents.busy()'),false,'Image import host work has finished before Apply');
+  assert.equal(await evaluate("layerApp.state().commands.find(command=>command.id==='apply_transform').enabled"),true,'The first imported placement can be applied');
   await evaluate(`window.showOpenFilePicker=previewPicker;delete window.previewPicker;layerApp.dispatch({type:'invoke',command:'apply_transform'})`);
+  const applied=await evaluate("({busy:layerApp.documents.busy(),apply:layerApp.state().commands.find(command=>command.id==='apply_transform').enabled,tool:layerApp.state().layer_tools.tool,host_error:layerApp.state().host_error})");
+  assert.equal(applied.apply,false,'The first Apply commits placement: '+JSON.stringify(applied));
   await wait(`layerApp.state().layer_tools.editing_layer.object&&layerApp.state().layer_tools.editing_layer.label==='Preview checker'&&layerApp.state().canvas_bar?.context.kind==='transform'&&!layerApp.state().canvas_bar.completion.length`);
   await wait('layerApp.app.brush_ready()');
   await capture('web-preview-import');
   const imported=await histogram();
   assert.notDeepEqual(imported,blank,'The imported checker changes document pixels');
   await evaluate(`(()=>{
-    const app=layerApp.app,original=app.poll_filter_previews;
+    const app=layerApp.app,original=app.poll_filter_previews,step=app.compile_startup_step;
     const pipeline=GPUDevice.prototype.createRenderPipelineAsync;
-    window.previewCheck={pipelineCalls:0,restore(){app.poll_filter_previews=original;GPUDevice.prototype.createRenderPipelineAsync=pipeline;}};
+    window.previewCheck={pipelineCalls:0,optionalAdmissions:0,restore(){app.poll_filter_previews=original;app.compile_startup_step=step;GPUDevice.prototype.createRenderPipelineAsync=pipeline;}};
+    app.compile_startup_step=function(optional){
+      if(optional)previewCheck.optionalAdmissions++;
+      return step.call(this,optional);
+    };
     GPUDevice.prototype.createRenderPipelineAsync=function(descriptor){
       if(descriptor.label==='pointwise effect chain')previewCheck.pipelineCalls++;
       return pipeline.call(this,descriptor);
     };
-    // Hold a host pen contact outside the canvas. Preview requests may queue,
-    // but optional compiler admission must wait for release and quiet time.
     document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:987,pointerType:'pen'}));
     app.poll_filter_previews=function(...args){
       const result=original.apply(this,args);
@@ -70,10 +76,12 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
     await settle();await show();
     await wait('layerApp.app.shader_work_pending(true)');
     await new Promise(resolve=>setTimeout(resolve,350));
-    assert.equal(await evaluate('previewCheck.pipelineCalls'),0,'Held contact defers optional preview pipelines');
+    assert.equal(await evaluate('previewCheck.optionalAdmissions'),0,'Held contact defers optional compiler admission');
+    const requiredPipelines=await evaluate('previewCheck.pipelineCalls');
     await timed('release_ms',()=>evaluate("document.body.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:987,pointerType:'pen'}));undefined"),
       `previewCheck.status?.retained.includes('curves')&&!previewCheck.status.pending&&previewCheck.pixels('curves')`);
-    assert.ok(await evaluate('previewCheck.pipelineCalls>0'),'Queued previews resume after release');
+    assert.ok(await evaluate('previewCheck.optionalAdmissions>0'),'Optional compiler admission resumes after release');
+    assert.ok(await evaluate('previewCheck.pipelineCalls')>requiredPipelines,'Queued preview pipelines resume after release');
     await wait(`previewCheck.ids.every(id=>previewCheck.status.retained.includes(id))&&!previewCheck.status.pending`);
     const first=await status();assert.equal(first.error??null,null);
     for(const theme of ['light','dark']){

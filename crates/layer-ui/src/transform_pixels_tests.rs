@@ -1,6 +1,30 @@
 use layer_core::authored::{CoverageHandle, OccurrenceHandle, PaintHandle, PortableId, RecordChange, SourceTarget};
 
 #[test]
+fn preferences_open_while_earlier_raster_edits_wait_in_order() {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+        for command in [CommandId::Settings, CommandId::KeyboardShortcuts] {
+            let mut s = session(platform);
+            s.frame(1, 1).unwrap();
+            invoke(&mut s, CommandId::SelectAll);
+            invoke(&mut s, CommandId::FillSelection);
+            invoke(&mut s, CommandId::Deselect);
+            assert!(s.engine.raster_backing_pending());
+            assert_eq!(s.deferred_edits.len(), 1);
+            invoke(&mut s, command);
+            assert!(s.state.settings_open, "{platform:?} {command:?} must open before pending raster work finishes");
+            assert_eq!(s.deferred_edits.len(), 1);
+            s.dispatch(UiAction::CloseSettings).unwrap();
+            s.frame(2, 2).unwrap();
+            assert!(s.deferred_edits.is_empty());
+            assert!(s.engine.document().working.selection.is_none());
+            invoke(&mut s, CommandId::Undo);
+            assert!(s.engine.document().working.selection.is_some());
+        }
+    }
+}
+
+#[test]
 fn fill_then_deselect_before_a_frame_keeps_raster_work_and_history_ordered() {
     let mut s = session(Platform::Gtk);
     s.frame(1, 1).unwrap();

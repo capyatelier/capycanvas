@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -80,6 +81,57 @@ class AndroidFirstUiTest {
             resume.countDown()
             CanvasHost.beforeGpuAttachForTest = null
             scenario?.close()
+        }
+    }
+
+    @Test fun startupFailureRetainsLongCauseAndRestartStaysReachable() {
+        for (theme in listOf("light", "dark")) {
+            val cause = IllegalStateException("Vulkan attach diagnostic\n" + (1..60).joinToString("\n") {
+                "Driver detail $it: preserved native cause for renderer initialization"
+            })
+            val diagnostic = cause.toString()
+            CanvasHost.beforeGpuAttachForTest = { throw cause }
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    val activity = scenario.activity()
+                    val host = activity.host
+                    host.awaitMain("original startup failure", 20_000, { "failure=${host.failure}" }, compose) {
+                        host.failure != null
+                    }
+                    compose.runOnIdle {
+                        assertEquals(diagnostic, host.failure)
+                        host.dispatch(obj("type" to "set_theme", "theme" to theme))
+                    }
+                    host.awaitMain("diagnostic theme", 10_000, { "state=${host.snapshot?.optJSONObject("state")}" }, compose) {
+                        host.snapshot?.optJSONObject("state")?.optString("theme") == theme
+                    }
+                    compose.onNodeWithText(host.bootstrap!!.getString("canvas_init_failed")).assertIsDisplayed()
+                    val detail = compose.onNodeWithText(diagnostic, useUnmergedTree = true)
+                    detail.assertIsDisplayed().assertTextEquals(diagnostic)
+                    val viewport = detail.fetchSemanticsNode().boundsInRoot
+                    assertTrue("Long diagnostic keeps a bounded viewport", viewport.height <= 180f * activity.resources.displayMetrics.density + 1f)
+                    val scroller = compose.onNode(hasScrollAction() and (hasText(diagnostic) or hasAnyDescendant(hasText(diagnostic))), useUnmergedTree = true)
+                    assertTrue("The entire cause remains available by scrolling",
+                        scroller.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f)
+                    scroller.performTouchInput { swipeUp() }
+                    val restart = compose.onNodeWithText(host.bootstrap!!.getString("restart_canvas"))
+                    restart.assertIsDisplayed().assertHasClickAction()
+                    val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+                    val button = restart.fetchSemanticsNode().boundsInRoot
+                    assertTrue("Restart stays within the editor", root.contains(button.topLeft) && root.contains(button.bottomRight))
+                    val epoch = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+                    CanvasHost.beforeGpuAttachForTest = null
+                    restart.performClick()
+                    host.awaitMain("canvas restart", 60_000, { "failure=${host.failure}; ready=${host.surfaceReady}" }, compose) {
+                        host.failure == null && host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true
+                    }
+                    compose.runOnIdle {
+                        assertEquals(epoch, host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch"))
+                    }
+                    detail.assertDoesNotExist()
+                    compose.onNodeWithTag("canvas-placeholder").assertDoesNotExist()
+                }
+            } finally { CanvasHost.beforeGpuAttachForTest = null }
         }
     }
 }

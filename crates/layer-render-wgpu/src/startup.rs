@@ -10,7 +10,7 @@ pub(super) const DOCUMENT: u8 = 2;
 pub(super) const BRUSH: u8 = 3;
 pub(super) const VALIDATION: u8 = 4;
 pub(super) const OTHER: u8 = 5;
-const WARM_BRUSH: u8 = OTHER + 1;
+const BACKGROUND: u8 = OTHER + 1;
 #[path = "shader_admission.rs"]
 mod admission;
 #[cfg(not(target_arch = "wasm32"))]
@@ -197,7 +197,6 @@ pub(super) struct Startup {
     effects_ready: bool,
     pub(super) host_catalog_pending: bool,
     pub(super) finished: bool,
-    warmed_blend: Option<layer_core::BlendSpace>,
 }
 #[derive(PartialEq, Eq)]
 struct ShaderBrushKey {
@@ -246,7 +245,6 @@ impl Startup {
             effects_ready: false,
             host_catalog_pending: false,
             finished: false,
-            warmed_blend: None,
         })
     }
     /// Pipelines a selected tool draws with, compiled before pen-down.
@@ -303,7 +301,7 @@ impl WgpuRasterizer {
             }
             startup.host_catalog_pending = false;
             let device = self.device.clone();
-            startup.compiler.enqueue(OTHER + 1, move || {
+            startup.compiler.enqueue(BACKGROUND, move || {
                 device.finish_cache();
                 Ok(())
             });
@@ -321,11 +319,7 @@ impl WgpuRasterizer {
                 || s.transform != transform
         })
     }
-    /// Called after the blank canvas has been submitted. Document, brush and
-    /// live-transform dependencies precede speculative compilation. What a
-    /// transform or warp draws with then compiles while input is quiet, so
-    /// opening one later need not wait for it. Hosts pass the engine's
-    /// preview presence before draining an interactive frame.
+    /// Prepares the document, selected brush and current transform before input.
     pub fn prepare_startup(
         &mut self,
         document: &Document,
@@ -474,7 +468,7 @@ impl WgpuRasterizer {
     }
     pub fn poll_startup(&mut self) -> Result<StartupProgress, GpuRasterError> {
         if let Some(startup) = &mut self.startup {
-            let masks = startup.masks.take_ready(startup.compiler.optional_allowed())?;
+            let masks = startup.masks.take_ready()?;
             for (id, (width, height, pixels)) in masks {
                 self.upload_mask(&id, width, height, width, &pixels)?;
             }
@@ -519,9 +513,8 @@ impl WgpuRasterizer {
         let brush_ready = brush_ready && startup.compiler.ready_through(BRUSH);
         startup.finished = brush_ready
             && !startup.host_catalog_pending
-            && startup.compiler.pending() == 0
-            && startup.masks.ready_through(WARM_BRUSH + 2);
-        let mut progress = StartupProgress {
+            && startup.compiler.pending() == 0;
+        let progress = StartupProgress {
             canvas_ready,
             brush_ready,
             complete: startup.finished,
@@ -529,64 +522,9 @@ impl WgpuRasterizer {
         if canvas_ready && self.scene.is_none() {
             self.scene = Some(scene::Scene::new(self));
         }
-        if brush_ready && self.warm_brushes() {
-            progress.complete = false;
-        }
         Ok(progress)
     }
-
-    fn warm_brushes(&mut self) -> bool {
-        let startup = self.startup.as_ref().unwrap();
-        let blend = startup.document_key.as_ref().unwrap().key.blend_space;
-        if startup.warmed_blend == Some(blend) { return false; }
-        let mut startup = self.startup.take().unwrap();
-        startup.warmed_blend = Some(blend);
-        startup.finished = false;
-        startup.compiler.input();
-        for (priority, presets) in WARM_BRUSHES {
-            for &preset in presets {
-                let brush = layer_core::default_brush(preset);
-                let mut required = Requirements::default();
-                for tool in [StrokeTool::Brush, StrokeTool::Eraser] {
-                    let style = layer_render::DabStyle { blend_space: blend, ..layer_render::DabStyle::for_brush(&brush, tool) };
-                    startup.masks.style(&startup.compiler, &style, priority);
-                    required.style(self, &style, false, true);
-                }
-                if brush.execution.retouches() {
-                    let (render, compute) = self.retouch_pipelines().all();
-                    required.render.extend(render);
-                    required.compute.extend(compute);
-                }
-                required.enqueue(&startup.compiler, priority);
-            }
-        }
-        let transforms = self.transforms.as_ref().unwrap();
-        startup.compiler.require(transforms.pipelines(), WARM_BRUSH + 1);
-        startup.compiler.require(self.selection_clip.pipelines(), WARM_BRUSH + 1);
-        startup.compiler.require(transforms.display_pipelines().into_iter().chain([&self.scene_pipelines.resample.area]), WARM_BRUSH + 1);
-        startup.compiler.require(transforms.mesh_pipelines(), WARM_BRUSH + 1);
-        startup.compiler.require(&self.scene_pipelines.resample.mesh, WARM_BRUSH + 1);
-        let mip = self.display_pipelines
-            .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-        startup.compiler.require([&mip.reduce, &mip.fused_reduce], WARM_BRUSH + 1);
-        self.startup = Some(startup);
-        true
-    }
 }
-
-const WARM_BRUSHES: [(u8, &[layer_core::DefaultBrushPreset]); 2] = {
-    use layer_core::DefaultBrushPreset::*;
-    [(WARM_BRUSH, &[GPen, Eraser, Pencil, Airbrush, Paintbrush, Marker, Smudge, WetRound,
-        LiquifyPush, CloneStamp, HealingBrush, SpotHealingBrush]),
-     (WARM_BRUSH + 2, &[Chalk, Spray,
-        RoughGPen, CalligraphyPen, AntiquePen, RealisticPen, PointyPencil,
-        ShadingPencil, Charcoal, PastelBlock, DualTexture, TexturedFlat,
-        DryScumble, TransparentGlaze, OpaqueGouache, MultiplyGlaze,
-        WetInk, BlottyInk, BrushedInk, BristlePaintbrush,
-        NaturalBlender, LoadedOil, PaletteKnife, WatercolorWash,
-        WetWatercolor, LiquifyTwirl, LiquifyTwirlClockwise,
-        LiquifyPinch, LiquifyExpand, LiquifyCrystals])]
-};
 
 #[cfg(test)]
 fn object_document(icc:bool)->Document {
@@ -770,6 +708,9 @@ mod gpu_tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("Native brush compilation timed out"));
         assert!(renderer.scene_pipelines.source.pipeline.ready(), "native paint restore and Undo require decoded tiles before painting is ready");
+        let display = renderer.display_pipelines.as_ref().expect("native canvas display pipelines must exist before input");
+        assert!(display.reduce.ready() && display.fused_reduce.ready(),
+            "native display hierarchy must not compile mip pipelines on a ready canvas frame");
         let mut recolored = brush.clone();
         recolored.color_rgba_linear = [8., 0.25, 0.5, 1.];
         assert!(!renderer.startup_needs_update(&document, &recolored, false));
@@ -794,17 +735,46 @@ mod gpu_tests {
                 .kernel(&layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush), MaterialOperation::Coverage, coverage).ready(),
                 "G-Pen commit and prediction kernels must be ready before input is enabled");
         }
-        let watercolor = layer_core::default_brush(layer_core::DefaultBrushPreset::WatercolorWash);
-        let mut required = Requirements::default();
-        required.style(&renderer, &layer_render::DabStyle::for_brush(&watercolor, StrokeTool::Brush), false, true);
-        assert!(!required.ready(), "optional brush recipes wait while input is active");
+        let unselected = [layer_core::DefaultBrushPreset::WatercolorWash,
+            layer_core::DefaultBrushPreset::CloneStamp, layer_core::DefaultBrushPreset::LiquifyPush]
+            .map(|preset| {
+                let brush = layer_core::default_brush(preset);
+                let mut required = Requirements::default();
+                for tool in [StrokeTool::Brush, StrokeTool::Eraser] {
+                    let style = layer_render::DabStyle { blend_space: document.composition().blend,
+                        ..layer_render::DabStyle::for_brush(&brush, tool) };
+                    required.style(&renderer, &style, false, true);
+                }
+                assert!(!required.ready(), "unselected {preset:?} must begin cold");
+                (preset, required)
+            });
         renderer.shader_idle(true, true);
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.complete, format_args!("Startup compilation timed out"));
-        assert!(required.ready(), "idle preparation includes unselected brush families");
-        for &preset in WARM_BRUSHES.into_iter().flat_map(|(_, presets)| presets) {
-            renderer.prepare_startup(&document, &layer_core::default_brush(preset), false).unwrap();
-            assert!(renderer.poll_startup().unwrap().brush_ready, "{preset:?} must reuse idle preparation");
+        for (preset, required) in &unselected {
+            assert!(!required.ready(), "unselected {preset:?} must remain cold after idle startup");
         }
+        let transforms = renderer.transforms.as_ref().unwrap();
+        assert!(transforms.pipelines().into_iter().chain(transforms.mesh_pipelines()).all(|p| !p.ready())
+            && transforms.display_pipelines().into_iter().all(|p| !p.ready()),
+            "unselected transforms and warps must remain cold after idle startup");
+        renderer.shader_idle(false, false);
+        for (preset, required) in &unselected {
+            renderer.prepare_startup(&document, &layer_core::default_brush(*preset), false).unwrap();
+            crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready,
+                format_args!("{preset:?} demand compilation timed out"));
+            assert!(required.ready(), "{preset:?} painting and physical eraser must be ready before input");
+        }
+        for (preset, _) in &unselected {
+            renderer.prepare_startup(&document, &layer_core::default_brush(*preset), false).unwrap();
+            assert!(renderer.poll_startup().unwrap().brush_ready, "revisiting {preset:?} must reuse its prepared dependencies");
+        }
+        let target = document.scene().targets().find(|target| matches!(target, SourceTarget::Paint(_))).unwrap();
+        renderer.prepare_retouch_sources(Some(&layer_render::RetouchPreparation {
+            target, retouch: Default::default(), points: Vec::new(),
+        }));
+        crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready,
+            format_args!("Retouch source demand compilation timed out"));
         let retouch = renderer.retouch_sources();
         let pipelines = renderer.retouch_pipelines();
         assert!(Arc::ptr_eq(&pipelines, &renderer.retouch_pipelines()));
@@ -816,19 +786,27 @@ mod gpu_tests {
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.regions.as_ref().is_none_or(|regions| regions.flood.pipelines().all(|p| !p.ready())),
             "unused region recipes must remain uncompiled");
-        let transforms = renderer.transforms.as_ref().unwrap();
-        assert!(
-            transforms.pipelines().into_iter().chain(transforms.mesh_pipelines()).all(Deferred::ready)
-                && transforms.display_pipelines().into_iter().all(Deferred::ready),
-            "what transforms and warps draw with compiles while idle after startup"
-        );
         assert!(renderer.startup_needs_update(&document, &brush, true),
             "demand readiness continues after initial completion");
         renderer.prepare_startup(&document, &brush, true).unwrap();
-        assert!(renderer.poll_startup().unwrap().brush_ready, "opening a transform waits for no compilation");
+        crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready,
+            format_args!("Transform demand compilation timed out"));
+        let transforms = renderer.transforms.as_ref().unwrap();
+        assert!(transforms.pipelines().into_iter().all(Deferred::ready)
+            && transforms.display_pipelines().into_iter().all(Deferred::ready),
+            "a demanded transform must be ready before drawing");
+        assert!(transforms.mesh_pipelines().into_iter().all(|p| !p.ready()),
+            "ordinary transforms must not prepare unused warp meshes");
+        let meshes: Vec<_> = transforms.mesh_pipelines().into_iter()
+            .chain(renderer.scene_pipelines.resample.mesh.iter()).cloned().collect();
+        assert!(!renderer.mesh_pipelines_ready(), "first warp use must request its cold dependencies");
+        crate::test_support::wait_startup(&mut renderer, deadline, |_| meshes.iter().all(Deferred::ready),
+            format_args!("Warp mesh demand compilation timed out"));
+        assert!(renderer.mesh_pipelines_ready(), "prepared warp dependencies must be reused");
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.poll_startup().unwrap().brush_ready, "cached dependencies resume immediately");
-
+        renderer.prepare_startup(&document, &brush, true).unwrap();
+        assert!(renderer.poll_startup().unwrap().brush_ready, "revisiting the transform must reuse its prepared dependencies");
     }
 
     #[test]

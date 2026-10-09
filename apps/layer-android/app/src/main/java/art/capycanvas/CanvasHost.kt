@@ -342,8 +342,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         try { block() } catch (e: Exception) {
             Log.e("CapyCanvas", "Native canvas operation failed", e)
             main.post {
-                if (canvas) failure = bootstrapForOwner?.getString("canvas_init_failed")
-                else notice = CanvasNotice(null, bootstrapForOwner?.getString("action_failed").orEmpty(), emptyList())
+                if (canvas) failure = e.toString()
+                else notice = CanvasNotice(null, e.toString(), emptyList())
             }
         }
     }

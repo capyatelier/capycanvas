@@ -68,7 +68,7 @@ extension XCTestCase {
 
     @MainActor func expectBluePaper(_ expected: [Bool], at points: [CGPoint], in app: XCUIApplication) {
         XCTAssertEqual(expected.count, points.count)
-        expectation(for: NSPredicate { _, _ in
+        let matching = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             let actual = self.editorPixelSamples(in: app, at: points, size: 8)
             for (index, pixel) in actual.enumerated() {
                 for i in stride(from: 0, to: pixel.count, by: 4) {
@@ -79,14 +79,16 @@ extension XCTestCase {
                 }
             }
             return true
-        }, evaluatedWith: app)
-        waitForExpectations(timeout: 10)
+        }, object: app)
+        let matched = XCTWaiter.wait(for: [matching], timeout: 10) == .completed
+        if !matched { attachEditor(in: app, name: "blue-paper-mismatch") }
+        XCTAssertTrue(matched, "Expected blue samples \(expected); actual RGBA \(editorPixelSamples(in: app, at: points, size: 8).map { Array($0.prefix(4)) })")
     }
 
-    @MainActor func checkSelectionAndTransform(in app: XCUIApplication) {
+    @MainActor func checkSelectionAndTransform(in app: XCUIApplication, theme: String = "light") {
         // Only choose the starting color. Selection, artwork and transforms
         // below are created through the same visible controls as normal use.
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch()
         capturePaintEditor(in: app)
 
@@ -154,8 +156,43 @@ extension XCTestCase {
                 command("Redo"); expectPixels(painted, in: app)
             }
         }
+        command("Undo"); expectPixels(painted, in: app)
+        acceptTransformWithPencil(in: app, paper: paper, painted: painted, theme: theme)
+    }
+
+    @MainActor private func acceptTransformWithPencil(in app: XCUIApplication, paper: Data, painted: Data, theme: String) {
+        editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
+        let x = app.buttons["number-value-tool-transform_x"]
+        XCTAssertTrue(x.waitForExistence(timeout: 5))
+        editTransform("x", "4096", in: app)
+        expectPixels(paper, in: app)
+        editorTool("Pencil", in: app)
+        XCTAssertTrue(x.waitForNonExistence(timeout: 30))
+        let pencil = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+            "toolbar-tile-toolbar-", "Pencil")).firstMatch
+        XCTAssertTrue(pencil.isSelected)
+        expectPixels(paper, in: app)
+        editorHistory("Undo", in: app); expectPixels(painted, in: app)
+        editorHistory("Redo", in: app); expectPixels(paper, in: app)
+        attachEditor(in: app, name: "transform-applied-by-pencil-" + theme)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
+
+    @MainActor func checkTransformToolAcceptance(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+        app.launch(); capturePaintEditor(in: app)
+        let paper = editorPixels(in: app)
+        editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
+        editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
+        expectation(for: NSPredicate { _, _ in
+            let pixel = self.editorPixels(in: app); return Int(pixel[2]) > Int(pixel[0]) + 50
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 15)
+        let painted = editorPixels(in: app)
+        editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
+        acceptTransformWithPencil(in: app, paper: paper, painted: painted, theme: theme)
+    }
+
     @MainActor func checkTransformRotationAndHandles(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
@@ -333,7 +370,8 @@ extension XCTestCase {
     }
 
     @MainActor private func revealLayerMenuAction(_ label: String, in app: XCUIApplication) -> XCUIElement {
-        let action = app.buttons["menu-action-" + label]
+        let action = app.buttons.matching(NSPredicate(format: "identifier == %@ OR (identifier BEGINSWITH %@ AND label == %@)",
+            "menu-action-" + label, "command-", label)).firstMatch
         guard !action.waitForExistence(timeout: 1) else { return action }
         let back = app.buttons["editor-menu-back"]
         while back.exists { workspaceActivate(back) }
@@ -355,7 +393,7 @@ extension XCTestCase {
         element.press(forDuration: 0.6)
         #endif
         let action = revealLayerMenuAction(label, in: app)
-        revealEditorControl(action, in: app.scrollViews.containing(.button, identifier: "menu-action-" + label).firstMatch)
+        revealEditorControl(action, in: app.scrollViews.containing(.button, identifier: action.identifier).firstMatch)
         workspaceActivate(action)
         XCTAssertTrue(action.waitForNonExistence(timeout: 5))
     }
@@ -648,8 +686,29 @@ extension XCTestCase {
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
-    @MainActor func checkMaskTransforms(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+    @MainActor func checkMaskLinkControls(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        app.launch(); capturePaintEditor(in: app)
+        let rows = artworkRows(in: app)
+        let rowID = rows.element(boundBy: 0).identifier
+        let current = rows[rowID]
+        workspaceActivate(app.buttons["layer-Add mask"])
+        let mask = current.buttons["Edit layer mask"]
+        XCTAssertTrue(mask.waitForExistence(timeout: 5))
+        for (action, expected) in [("Unlink mask from layer", "Link mask to layer"), ("Link mask to layer", "Unlink mask from layer")] {
+            workspaceActivate(current.buttons["layer-" + action])
+            XCTAssertTrue(current.buttons["layer-" + expected].waitForExistence(timeout: 5))
+        }
+        for expected in ["Link mask to layer", "Unlink mask from layer"] {
+            layerContext("Link mask to layer", on: mask, in: app)
+            XCTAssertTrue(current.buttons["layer-" + expected].waitForExistence(timeout: 5))
+        }
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "layer-mask-link-controls-\(theme)")
+    }
+
+    @MainActor func checkMaskTransforms(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
         editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
@@ -663,6 +722,13 @@ extension XCTestCase {
             CGPoint(x: bounds.minX + bounds.width * $0, y: bounds.midY)
         }
         func expectInk(_ expected: [Bool]) { expectBluePaper(expected, at: points, in: app) }
+        func shiftRight() {
+            let caption = app.buttons["number-value-tool-transform_x"].value as? String ?? ""
+            guard let position = Double(String(caption.split(separator: " ").first ?? "")) else {
+                XCTFail("Transform X must expose its current pixel position: \(caption)"); return
+            }
+            editTransform("x", String(position + 512), in: app)
+        }
         let row = artworkRows(in: app).element(boundBy: 0)
         let rowID = row.identifier
         let current = artworkRows(in: app)[rowID]
@@ -674,14 +740,13 @@ extension XCTestCase {
         attachEditor(in: app, name: "mask-after-unlink")
         XCTAssertTrue(current.buttons["layer-Link mask to layer"].waitForExistence(timeout: 5))
         workspaceActivate(mask)
-        layerContext("Invert mask", on: mask, in: app)
-        expectInk([false, false, false, false])
-        // The inverted full-selection mask hides the paper. Shrinking only the
-        // mask leaves a blue border around a white center, all through native UI.
+        expectInk([true, true, true, true])
         editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
         transformMode("uniform", in: app)
         editTransform("width", "50", in: app)
         finishTransform(true, in: app)
+        expectInk([false, true, true, false])
+        layerContext("Invert mask", on: mask, in: app)
         let baseline = [true, false, false, true]
         expectInk(baseline); attachEditor(in: app, name: "independent-mask-scaled")
 
@@ -704,12 +769,12 @@ extension XCTestCase {
                     editorHistory("Undo", in: app); expectInk(baseline)
                 }
                 editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
-                editTransform("x", "512", in: app); expectInk(moved)
+                shiftRight(); expectInk(moved)
                 attachEditor(in: app, name: "transform-" + name)
                 finishTransform(true, in: app); expectInk(moved); history()
                 // Cancellation must retain the same target and committed mask.
                 editorMenu(in: app, menu: "Edit", id: "scale_rotate", label: "Transform")
-                editTransform("x", "512", in: app); expectInk(moved)
+                shiftRight(); expectInk(moved)
                 finishTransform(false, in: app); expectInk(baseline)
                 XCTAssertTrue(target.isSelected)
                 #if os(macOS)

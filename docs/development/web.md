@@ -103,6 +103,14 @@ The next checkpoint retains that verified drawing as its previous generation.
 Lost acknowledgements retry with newer drawing generations or identical manifest
 receipts, including an already committed ownership transfer.
 
+Recovery dialogs include the actual restore failure. Retry closes the dialog and
+rechecks canvas readiness before another attempt, so GPU loss cannot trap the
+Restart canvas action behind repeated recovery dialogs. GPU notices retain the
+original failure even if renderer suspension also fails. Restart repeats renderer
+cleanup before creating a replacement; a cleanup failure remains visible and
+does not attempt a second attachment. Initial device failures offer the same
+restart action; successful attachment clears the old notice.
+
 Ordinary restart opens drawings without a dialog. Browsers may clear site storage
 under storage pressure, and Safari after seven days without a visit unless the app
 is installed. The first checkpoint of a changed drawing that was never saved to a

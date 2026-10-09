@@ -48,6 +48,9 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testPenBrushOrderDark() { checkPenBrushOrder(in: editorCaptureApplication(), theme: "dark") }
 
     @MainActor func testMaskTransforms() { checkMaskTransforms(in: editorCaptureApplication()) }
+    @MainActor func testMaskTransformsDark() { checkMaskTransforms(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testMaskLinkControls() { checkMaskLinkControls(in: editorTestApplication(), theme: "light") }
+    @MainActor func testMaskLinkControlsDark() { checkMaskLinkControls(in: editorTestApplication(), theme: "dark") }
 
     @MainActor func testMaskActionsAndHistory() { checkMaskActionsAndHistory(in: editorCaptureApplication()) }
 
@@ -100,6 +103,9 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testApplicationLinkHandoff() { checkApplicationLinkHandoff(in: editorCaptureApplication()) }
 
     @MainActor func testSelectionAndTransform() { checkSelectionAndTransform(in: editorCaptureApplication()) }
+    @MainActor func testSelectionAndTransformDark() { checkSelectionAndTransform(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testTransformToolAcceptance() { checkTransformToolAcceptance(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testTransformToolAcceptanceDark() { checkTransformToolAcceptance(in: editorCaptureApplication(), theme: "dark") }
 
     @MainActor func testCanvasSize() { checkCanvasSize(in: editorCaptureApplication()) }
     @MainActor func testImageSize() { checkImageSize(in: editorCaptureApplication()) }

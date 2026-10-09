@@ -28,11 +28,13 @@ export function gpuEnvironment({ userAgent = "", platform = "", maxTouchPoints =
   return { system, browser };
 }
 
-export function showGpuNotice({ container, error, element, button }) {
+export function showGpuNotice({ container, error, element, button, restart, restartLabel }) {
   const [title, reason] = gpuProblem({ secure: isSecureContext, api: !!navigator.gpu, stage: error?.stage });
   const content = element("div", "gpu-help");
   const intro = element("p", "", "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU.");
-  content.append(element("h1", "", title), element("p", "gpu-cause", reason), intro);
+  content.append(element("h1", "", title), element("p", "gpu-cause", reason),
+    element("p", "diagnostic-detail", error?.message ?? String(error)),
+    button(restartLabel, restart, "gpu-retry"), intro);
   const { system, browser } = gpuEnvironment(navigator);
   const address = (parent, url) => {
     const row = element("div", "gpu-address");
@@ -100,4 +102,5 @@ export function showGpuNotice({ container, error, element, button }) {
     content.append(list);
   }
   container.replaceChildren(content);
+  container.hidden = false;
 }

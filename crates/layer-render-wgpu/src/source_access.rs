@@ -4,7 +4,7 @@ use super::*;
 use layer_core::authored::PaintBase;
 
 pub(super) fn placed_targets(scene: SceneView<'_>) -> impl Iterator<Item=SourceTarget> + '_ {
-    scene.targets().filter(move |target|scene.source_owner(*target).is_some())
+    scene.targets().filter(move |target|scene.source_owner(*target).is_some_and(|owner|scene.includes(owner)))
 }
 
 pub(super) fn pending_bakes<'a>(scene: SceneView<'a>) -> impl Iterator<Item=(SceneView<'a>, &'a layer_core::SceneScope, Option<SourceTarget>)> + 'a {

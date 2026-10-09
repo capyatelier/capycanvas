@@ -59,7 +59,6 @@ impl Compiler {
         let queue = self.0.queue.lock().unwrap();
         queue.admission.delay(queue.jobs.iter().map(|job| job.priority))
     }
-    pub fn optional_allowed(&self) -> bool { self.0.queue.lock().unwrap().admission.allows(WARM_BRUSH) }
     pub fn new() -> Result<Self, GpuRasterError> {
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue::default()),
@@ -219,7 +218,7 @@ mod tests {
         };
         compiler.pipeline(&promoted, OTHER);
         let warmed = ran.clone();
-        compiler.enqueue(WARM_BRUSH, move || { warmed.send("warm").unwrap(); Ok(()) });
+        compiler.enqueue(BACKGROUND, move || { warmed.send("warm").unwrap(); Ok(()) });
         compiler.enqueue(OTHER, move || { ran.send("optional").unwrap(); Ok(()) });
         compiler.start();
         assert!(events.recv_timeout(Duration::from_millis(250)).is_err(), "a held gesture outlasts the quiet period");
@@ -241,7 +240,7 @@ mod tests {
     fn required_completion_leaves_a_quiet_interval_before_speculation() {
         let compiler = Compiler::new().unwrap();
         let (ran, events) = mpsc::channel();
-        for (priority, label) in [(BRUSH, "required"), (WARM_BRUSH, "first"), (WARM_BRUSH, "second")] {
+        for (priority, label) in [(BRUSH, "required"), (BACKGROUND, "first"), (BACKGROUND, "second")] {
             let ran = ran.clone();
             compiler.enqueue(priority, move || { ran.send(label).unwrap(); Ok(()) });
         }
