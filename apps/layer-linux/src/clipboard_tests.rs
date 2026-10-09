@@ -10,6 +10,8 @@ use std::io::Read;
 
 const CONTROL: u32 = 0xffe3;
 const SHIFT: u32 = 0xffe1;
+const INSERT: u32 = 0xff63;
+const DELETE: u32 = 0xffff;
 
 /// Press `key` while `modifiers` are held.
 fn chord(native: &mut RemoteInput, modifiers: &[u32], key: u32) {
@@ -103,8 +105,8 @@ fn native_clipboard_copy_paste_round_trips() {
 
     let clip = {
         let before = nonce();
-        chord(&mut native, &[CONTROL], 0x63);
-        copied(&w, before, "Ctrl+C")
+        chord(&mut native, &[CONTROL], INSERT);
+        copied(&w, before, "Ctrl+Insert")
     };
     let selection = document(&w).working.selection.clone().unwrap().coverage_bounds();
     assert_eq!(clip.origin, [selection.min.x.floor() as i64, selection.min.y.floor() as i64]);
@@ -137,8 +139,8 @@ fn native_clipboard_copy_paste_round_trips() {
     let erased = document(&w).scene().paint_source(paint).unwrap().raster.identity();
     let cut = {
         let before = nonce();
-        chord(&mut native, &[CONTROL], 0x78);
-        copied(&w, before, "Ctrl+X")
+        chord(&mut native, &[SHIFT], DELETE);
+        copied(&w, before, "Shift+Delete")
     };
     until(|| document(&w).scene().paint_source(paint).unwrap().raster.identity() != erased, "Cut erases the copied pixels");
     assert_eq!(cut.source.extent, clip.source.extent);
@@ -229,14 +231,20 @@ fn native_clipboard_copy_paste_round_trips() {
     entry.select_region(0, -1);
     pump(100);
     let before = nonce();
-    chord(&mut native, &[CONTROL], 0x63);
+    chord(&mut native, &[CONTROL], INSERT);
     let text = glib::MainContext::default().block_on(w.window.clipboard().read_text_future()).unwrap();
     assert_eq!(text.as_deref(), Some("Typed name"), "the focused field copies its text");
-    assert!(state(&w).requests.is_empty() && nonce() == before, "Ctrl+C in a text field copies no pixels");
+    assert!(state(&w).requests.is_empty() && nonce() == before, "Ctrl+Insert in a text field copies no pixels");
     entry.set_text("");
-    chord(&mut native, &[CONTROL], 0x76);
-    until(|| entry.text() == "Typed name", "Ctrl+V pastes text into the field");
+    chord(&mut native, &[SHIFT], INSERT);
+    until(|| entry.text() == "Typed name", "Shift+Insert pastes text into the field");
     assert!(state(&w).requests.is_empty());
+    entry.select_region(0, -1);
+    chord(&mut native, &[SHIFT], DELETE);
+    until(|| entry.text().is_empty(), "Shift+Delete cuts only focused text");
+    assert!(state(&w).requests.is_empty() && nonce() == before);
+    chord(&mut native, &[SHIFT], INSERT);
+    until(|| entry.text() == "Typed name", "Shift+Insert pastes the cut text");
     entry.emit_activate();
     pump(200);
 
@@ -244,6 +252,12 @@ fn native_clipboard_copy_paste_round_trips() {
     std::fs::write(&path, &png).unwrap();
     external_copy_type(format!("{}\r\n", gtk::gio::File::for_path(&path).uri()).as_bytes(), "text/uri-list");
     until(|| clipboard_formats(&w).iter().any(|mime| mime == "text/uri-list"), "a copied file is offered");
+    let count = document(&w).scene().order().len();
+    chord(&mut native, &[SHIFT], INSERT);
+    until(|| document(&w).scene().order().len() == count + 1 && !state(&w).document_file.busy, "Shift+Insert pastes a copied image file");
+    assert!(state(&w).canvas_bar.is_some_and(|bar| bar.context.kind == layer_ui::CanvasBarKind::Placement));
+    w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
+    until(|| document(&w).scene().order().len() == count && idle(&w), "copied-file placement cancels");
     let owner = document(&w).owner;
     w.dispatch(UiAction::Invoke { command: CommandId::PasteAsNewImage });
     until(|| w.gpu.borrow().is_some() && !w.documents.changing.get() && document(&w).owner != owner && idle(&w), "Paste as New Image opens a copied file in another tab");

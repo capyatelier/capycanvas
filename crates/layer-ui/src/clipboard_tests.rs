@@ -1386,13 +1386,43 @@ mod clipboard_checks {
     }
 
     #[test]
+    fn insert_clipboard_keys_use_the_same_requests_and_respect_text_focus() {
+        for preset in crate::keymaps::KEYMAP_PRESETS {
+            for (name, command, shift, cut) in [
+                ("Insert", true, false, Some(false)),
+                ("Delete", false, true, Some(true)),
+                ("Insert", false, true, None),
+            ] {
+                let mut s = clip_session();
+                let mut settings = Settings::default();
+                crate::keymaps::select(&mut settings, preset.id).unwrap();
+                s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
+                let before = s.engine.document().clone();
+                let input = |pressed, editing| UiInput::Key { key: name.into(), pressed, repeat: false,
+                    modifiers: Modifiers { command, shift, alt: false }, editing, divider: None };
+                assert!(!s.input(input(true, true)).unwrap().handled, "{}: text owns {name}", preset.id);
+                s.input(input(false, true)).unwrap();
+                assert!(s.state.requests.is_empty());
+                assert!(s.input(input(true, false)).unwrap().handled, "{}: canvas handles {name}", preset.id);
+                s.input(input(false, false)).unwrap();
+                let request = pending(&s).1;
+                assert!(match cut {
+                    Some(cut) => matches!(request, DocumentRequest::Copy { merged: false, cut: actual, pixels: false } if actual == cut),
+                    None => matches!(request, DocumentRequest::Paste { mode: PasteMode::Paste }),
+                }, "{}: {name}: {request:?}", preset.id);
+                assert_live_artwork_eq(s.engine.document(), &before);
+            }
+        }
+    }
+
+    #[test]
     fn clipboard_chords_and_menus() {
         let mut s = clip_session();
         for (command, chord) in [
-            (CommandId::Copy, "Ctrl+C"),
-            (CommandId::Cut, "Ctrl+X"),
+            (CommandId::Copy, "Ctrl+C / Ctrl+Insert"),
+            (CommandId::Cut, "Ctrl+X / Shift+Delete"),
             (CommandId::CopyMerged, "Ctrl+Shift+C"),
-            (CommandId::PasteImage, "Ctrl+V"),
+            (CommandId::PasteImage, "Ctrl+V / Shift+Insert"),
             (CommandId::PasteAtView, "Ctrl+Shift+V"),
             (CommandId::PasteAtCursor, "Ctrl+Alt+V"),
             (CommandId::PasteInto, "Ctrl+Alt+Shift+V"),

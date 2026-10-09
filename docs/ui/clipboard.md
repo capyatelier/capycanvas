@@ -26,6 +26,12 @@ Photoshop's chord; Paste at Cursor uses Krita's chord. Paste as New Image keeps
 Ctrl+Alt+N to leave New Layer intact.
 User shortcut overrides remain in effect.
 
+Copy also accepts Ctrl+Insert, Cut accepts Shift+Delete, and Paste accepts
+Shift+Insert in every preset. These alternatives use the same commands and
+destination rules as Ctrl+C/X/V. Focused text fields keep native text editing.
+The alternatives appear in the existing shortcut editor and can be reassigned
+or removed like other bindings.
+
 - **One edit:** each paste or cut is one undo step. Undoing Paste Into restores
   the selection. Pixel copies add a paint layer; selected image objects can join
   an editable image layer. Whole-layer copies add independent authored records

@@ -12,6 +12,7 @@ import {bindCopy,refreshCopy,refreshBindings,liveCopy} from './localization.js';
 class Element extends FakeElement {
   constructor(tag,doc){super();Object.assign(this,{tagName:tag.toUpperCase(),ownerDocument:doc,children:[],attributes:new Map(),listeners:{},value:'',style:{},dataset:{},selectionStart:0,selectionEnd:0});const classes=new Set();this.classList={add:name=>classes.add(name),remove:name=>classes.delete(name),toggle:(name,on)=>on?classes.add(name):classes.delete(name),contains:name=>classes.has(name)};}
   get firstChild(){return this.children[0];}
+  contains(node){return node===this||this.children.some(child=>child.contains?.(node));}
   get options(){return this.children.filter(node=>node.tagName==='OPTION');}
   get textContent(){return this.children.map(node=>node.nodeType===3?node.nodeValue:node.textContent).join('');}
   set textContent(value){this.children.forEach(node=>node.parentNode=null);this.children=[];this.append(this.ownerDocument.createTextNode(value));}
@@ -209,13 +210,13 @@ test('external images replace stale private copies and ignore unrelated clipboar
   assert.equal(prepared,1);assert.equal(received.length,1);assert.equal(await received[0].text(),'fresh');assert.equal(h.completed.at(-1).success,true);
 });
 
-test('native keyboard paste delivers only requests authorized by shared shortcuts',async t=>{
+for(const shortcut of [{ctrlKey:true,key:'v'},{shiftKey:true,key:'Insert'}])test(`native keyboard ${shortcut.key} paste delivers only requests authorized by shared shortcuts`,async t=>{
   const h=documentsHarness(t);let received,task,prevented=0;
   h.app.capture_image_import=()=>({free(){}});h.app.capture_control=()=>({cancel(){},cancelled:()=>false,free(){}});
   h.app.prepare_images=async(request,files)=>{received=files;return {};};h.app.adopt_images=()=>h.app.finish_document(101,true);
   const files=[new File(['pixels'],'screenshot.png',{type:'image/png'})],event={target:{closest:()=>null},clipboardData:{files},preventDefault(){prevented++;}};
   let allowed=false;
-  assert.equal(h.docs.key({target:event.target,ctrlKey:true,key:'v'},()=>{
+  assert.equal(h.docs.key({target:event.target,...shortcut},()=>{
     const request={id:101,kind:{type:'document',request:{type:'paste',mode:'at_view'}}};h.requests.push(request);
     allowed=h.docs.allowNativePaste();
   }),true);
@@ -224,7 +225,7 @@ test('native keyboard paste delivers only requests authorized by shared shortcut
   task=h.docs.handle(h.requests[0]);await task;
   assert.equal(prevented,1);assert.deepEqual(received,files);
   received=null;
-  h.docs.key({target:event.target,ctrlKey:true,key:'v'},()=>assert.equal(h.docs.allowNativePaste(),false));
+  h.docs.key({target:event.target,...shortcut},()=>assert.equal(h.docs.allowNativePaste(),false));
   h.listeners.get('paste')(event);assert.equal(received,null);assert.equal(prevented,1,'an unbound or reassigned chord cannot paste');
   h.listeners.get('paste')({...event,target:{closest:()=>({})}});assert.equal(prevented,1,'text owns native paste');
 });

@@ -560,7 +560,8 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     canOffer:()=>app.gpu_ready()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
   return {title:tabs.root,key(event,send){
-    if((event.ctrlKey||event.metaKey)&&!event.altKey&&event.key.toLowerCase()==='v'){
+    if(!event.altKey&&((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='v'
+      ||event.shiftKey&&!event.ctrlKey&&!event.metaKey&&event.key==='Insert')){
       keyboardPaste=true;setTimeout(()=>{keyboardPaste=false;},0);
       if(!navigator.clipboard?.read){
         nativeKey=!event.repeat&&!event.defaultPrevented&&!editing(event.target)?new Set(app.state().requests.map(request=>request.id)):null;

@@ -139,7 +139,8 @@ export async function checkClipboard({call,evaluate,settle}) {
   const external=await evaluate(`(async()=>{const c=new OffscreenCanvas(64,48),x=c.getContext('2d');x.fillStyle='#e04010';x.fillRect(0,0,64,48);
     await navigator.clipboard.write([new ClipboardItem({'web image/tiff':new Blob(['broken preferred TIFF'],{type:'image/tiff'}),'image/png':await c.convertToBlob()})]);return (await navigator.clipboard.read())[0].types.includes('web image/tiff');})()`);
   assert.ok(external,'the clipboard offers malformed preferred TIFF plus valid PNG');
-  await key('v');
+  await call('Input.dispatchKeyEvent',{type:'keyDown',modifiers:8,key:'Insert',code:'Insert',windowsVirtualKeyCode:45});
+  await call('Input.dispatchKeyEvent',{type:'keyUp',modifiers:8,key:'Insert',code:'Insert',windowsVirtualKeyCode:45});await settle();
   await wait(`layerApp.state().layers.length===${count+1}&&layerApp.state().canvas_bar?.context.kind==='placement'`);
   await invoke('cancel_transform');await wait(`layerApp.state().layers.length===${count}`);await idle();
   await key('v',{shift:true});
