@@ -98,7 +98,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testCanvasSize() { checkCanvasSize(in: editorCaptureApplication()) }
     @MainActor func testImageSize() { checkImageSize(in: editorCaptureApplication()) }
     @MainActor func testFrequencySeparation() { checkFrequencySeparation(in: editorCaptureApplication()) }
-    @MainActor func testPixelClipboard() { checkPixelClipboard(in: editorCaptureApplication()) }
+    @MainActor func testPixelClipboard() throws { try checkPixelClipboard(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testPixelClipboardDark() throws { try checkPixelClipboard(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testImageObjects() throws { try checkImageObjects(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testImageObjectsDark() throws { try checkImageObjects(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testLiveInterfaceLanguage() { checkLiveInterfaceLanguage(in: editorCaptureApplication(), theme: "light") }
@@ -158,12 +159,14 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testPhotoDefaultColumns() { checkDefaultWorkspaceColumns(in: editorTestApplication(), photo: true) }
 
     @MainActor func testRendererRecovery() { checkRendererRecovery(in: editorTestApplication()) }
+    @MainActor func testRendererRecoveryDark() { checkRendererRecovery(in: editorTestApplication(), theme: "dark") }
 
     @MainActor func testTitleBarSystemStatus() { checkTitleBarSystemStatus(in: ignoringSavedWindows(editorTestApplication())) }
 
     @MainActor func testIndependentEditorWindows() { checkIndependentEditorWindows(in: ignoringSavedWindows(editorTestApplication())) }
 
     @MainActor func testArtworkRecoveryAfterRestart() { checkArtworkRecoveryAfterRestart(in: ignoringSavedWindows(editorTestApplication())) }
+    @MainActor func testArtworkRecoveryAfterRestartDark() { checkArtworkRecoveryAfterRestart(in: ignoringSavedWindows(editorTestApplication()), theme: "dark") }
 
     @MainActor func testZenHidesChromeAndTabRestoresIt() {
         let app = ignoringSavedWindows(editorTestApplication())

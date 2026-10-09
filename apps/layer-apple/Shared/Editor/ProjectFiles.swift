@@ -506,7 +506,7 @@ import UIKit
         guard index < inputs.count else { prepare(task, url: nil) { try task.finishImages() }; return }
         let id = requestID, item = inputs[index]
         loadingPhoto = true
-        item.representations[representation] { [weak self, weak task] result in
+        item.representations[representation]({ [weak self, weak task] result in
             guard let self, let task, requestID == id, !finishing else { return }
             loadingPhoto = false
             if cancelled { finish(); return }
@@ -520,7 +520,7 @@ import UIKit
                 case .image(let data): try task.read(image: data, name: item.name)
                 }
             }
-        }
+        })
     }
     private func openItem(_ item: PhotoItem) {
         store?.recovery.flush { [weak self] saved in

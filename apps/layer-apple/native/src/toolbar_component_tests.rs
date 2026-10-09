@@ -42,7 +42,7 @@ fn apple_enclose_fill_category_subtool_and_source_use_native_transport() {
 #[test]
 fn apple_toolbar_queries_match_the_shared_transport_without_a_session() {
     let launch = CString::new(json!({"saved":"", "preferred_languages":["en"]}).to_string()).unwrap();
-    let prepared = App(unsafe { capy_apple_launch(0, launch.as_ptr(), std::ptr::null_mut()) });
+    let prepared = App(unsafe { capy_apple_launch(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
     assert!(!prepared.0.is_null());
     for request in [
         json!({"type":"slider_layout","width":44,"height":176,"axis":"vertical"}),

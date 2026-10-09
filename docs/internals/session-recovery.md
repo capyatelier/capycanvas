@@ -11,7 +11,11 @@ Drawings restored after an interrupted session or from a previous checkpoint hav
 “(recovered)” in their tabs until a successful manual save, including clean drawings.
 Orderly restarts preserve ordinary titles.
 Unreadable drawings remain stored and require an explicit retry or discard.
-Recovery never substitutes an empty drawing for a failed restore.
+Other drawings can reopen and continue checkpointing. If none can reopen, the
+new drawing uses a different session identity; its checkpoints and explicit close
+preserve the failed copies. Recovery never substitutes an empty drawing for a
+failed restore. Retrying a failed drawing appends it without replacing work begun
+since launch.
 
 ## Capture and completeness
 

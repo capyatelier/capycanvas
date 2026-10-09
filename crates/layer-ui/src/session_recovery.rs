@@ -314,6 +314,27 @@ impl SessionManifest {
         }
         self.reconcile(members,if active==0 {self.active}else{active},false)
     }
+    pub fn checkpoint(&self,mut drawings:Vec<SessionDrawing>,active:u64,clean_exit:bool)->Result<Self,String> {
+        for drawing in &self.drawings {
+            if self.blocked.contains(&drawing.id) && !drawings.iter().any(|live|live.id==drawing.id) {
+                drawings.push(drawing.clone());
+            }
+        }
+        let active=if active==0 {drawings.first().map_or(0,|drawing|drawing.id)} else {active};
+        self.reconcile(drawings,active,clean_exit)
+    }
+    pub fn reserve_live_identities(&self,live:&[u64])->Result<Self,String> {
+        self.validate()?;
+        let mut used:BTreeSet<_>=self.drawings.iter().map(|drawing|drawing.id).chain(live.iter().copied()).collect();
+        let mut next=1;
+        let mut mapping=Vec::new();
+        for drawing in &self.drawings {
+            if !live.contains(&drawing.id) {continue;}
+            while used.contains(&next) {next=next.checked_add(1).filter(|id|*id<=MAX_SESSION_DRAWING_ID).ok_or("Drawing identities are exhausted")?;}
+            mapping.push((drawing.id,next));used.insert(next);
+        }
+        self.remap(&mapping)
+    }
     pub fn remove(&self,id:u64)->Result<Self,String> {
         if id==0 || id>MAX_SESSION_DRAWING_ID {return Err("Invalid drawing identity".into());}
         self.validate()?;
@@ -696,6 +717,23 @@ mod tests {
         assert_eq!(staged.stage(vec![added.clone()],3).unwrap(),staged);
         assert!(staged.stage(vec![added.clone(),added],3).is_err());
         assert!(staged.stage(vec![SessionDrawing{id:7,key:"different".into()}],7).is_err());
+    }
+    #[test]
+    fn checkpoints_preserve_failed_drawings_without_reusing_live_identities() {
+        let original=manifest();
+        let pending=original.begin_restore(7).unwrap();
+        let failed=pending.finish_restore(attempt(&pending,7),false).unwrap();
+        let live=vec![original.drawings[1].clone()];
+        let saved=failed.checkpoint(live.clone(),2,true).unwrap();
+        assert_eq!(saved.blocked,vec![7]);assert_eq!(saved.drawings[1],original.drawings[0]);
+        assert!(saved.checkpoint(Vec::new(),0,true).is_err());
+        let closed=saved.remove(2).unwrap().checkpoint(Vec::new(),0,true).unwrap();
+        assert_eq!(closed.active,7);assert_eq!(closed.drawings,vec![original.drawings[0].clone()]);
+        let reserved=closed.reserve_live_identities(&[7,1,2]).unwrap();
+        assert_eq!(reserved.drawings[0].id,3);assert_eq!(reserved.drawings[0].key,original.drawings[0].key);
+        assert_eq!(reserved.blocked,vec![3]);assert_eq!(reserved.active,3);
+        assert_eq!(reserved.reserve_live_identities(&[7,1,2]).unwrap(),reserved);
+        assert!(failed.checkpoint(vec![SessionDrawing{id:7,key:"replacement".into()}],7,false).is_err());
     }
     #[test]
     fn restored_identity_remapping_preserves_keys_and_pending_failures() {

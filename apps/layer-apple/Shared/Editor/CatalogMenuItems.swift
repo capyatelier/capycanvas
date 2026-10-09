@@ -116,7 +116,7 @@ struct CatalogMenuItems: View {
 func menuShortcut(_ binding: JSON) -> KeyboardShortcut? {
     let text = binding["key"].string
     let named: [String: KeyEquivalent] = ["tab": .tab, "enter": .return, "escape": .escape,
-        "delete": .deleteForward, "backspace": .delete, "arrowleft": .leftArrow,
+        "delete": .deleteForward, "backspace": .delete, "insert": KeyEquivalent("\u{F727}"), "arrowleft": .leftArrow,
         "arrowright": .rightArrow, "arrowup": .upArrow, "arrowdown": .downArrow,
         "home": .home, "end": .end, "pageup": .pageUp, "pagedown": .pageDown]
     let function = text.first == "f" ? Int(text.dropFirst()).flatMap { number -> KeyEquivalent? in

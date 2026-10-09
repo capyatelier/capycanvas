@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 import AppKit
 
 /// Keep user clipboard data in memory and never overwrite a newer user copy.
-@MainActor private final class NativePhotoPasteboard {
+@MainActor final class NativePhotoPasteboard {
     let board = NSPasteboard.general
     let saved: [NSPasteboardItem]
     var changeCount: Int

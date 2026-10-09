@@ -153,13 +153,15 @@ final class NativeOwner: @unchecked Sendable {
                 let saved = loaded.value().settings.map { String(decoding: $0, as: UTF8.self) } ?? ""
                 let launch = try JSON(["saved": saved, "preferred_languages": preferredLanguages]).encoded()
                 var bootstrap: UnsafeMutablePointer<CChar>?
-                handle = launch.withCString { capy_apple_launch(platform, $0, &bootstrap) }
+                var launchError: UnsafeMutablePointer<CChar>?
+                handle = launch.withCString { capy_apple_launch(platform, $0, &bootstrap, &launchError) }
+                defer { if let launchError { capy_apple_string_free(launchError) } }
                 if let bootstrap {
                     defer { capy_apple_string_free(bootstrap) }
                     let view = try JSON.decode(String(cString: bootstrap))
                     receive(JSON(["bootstrap": view.raw]), nil)
                 }
-                guard handle != nil else { throw HostFailure(message: "Native session initialization failed") }
+                guard handle != nil else { throw HostFailure(message: launchError.map { String(cString: $0) } ?? "Native session initialization failed") }
                 restore()
             } catch { receive(nil, error.localizedDescription) }
         }
@@ -419,8 +421,8 @@ final class NativeOwner: @unchecked Sendable {
                     do {
                         try check(capy_apple_session_adopt(handle, task.handle)); try publish()
                         NativeProjectTask.io.async {
-                            let result = capy_session_restore_finished(task.handle)
-                            let text = result < 0 ? capy_session_error(task.handle) : nil
+                            _ = capy_session_restore_finished(task.handle)
+                            let text = capy_session_error(task.handle)
                             defer { if let text { capy_apple_string_free(text) } }
                             completion(text.map { String(cString: $0) }, true)
                         }

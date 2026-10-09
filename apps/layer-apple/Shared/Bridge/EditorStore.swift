@@ -1,4 +1,5 @@
 import SwiftUI
+import Darwin
 
 @MainActor final class CameraReadout: ObservableObject {
     @Published var value = JSON()
@@ -17,6 +18,24 @@ import SwiftUI
     var bootstrapChanged: (() -> Void)?
     @Published var failure: String?
     private var lastCanvasDiagnostic: String?
+    private static let diagnosticEnvironment: String = {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        #if os(macOS)
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var model = [UInt8](repeating: 0, count: max(1, size))
+        let machine = sysctlbyname("hw.model", &model, &size, nil, 0) == 0
+            ? String(decoding: model.prefix { $0 != 0 }, as: UTF8.self) : "unknown"
+        #else
+        var system = utsname()
+        uname(&system)
+        let machine = withUnsafeBytes(of: &system.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        #endif
+        return "Capy Canvas \(version) (\(build))\n\(ProcessInfo.processInfo.operatingSystemVersionString)\n\(machine)"
+    }()
+    var canvasDiagnostic: String { Self.diagnostic(failure ?? snapshot["error"].string) }
+    private static func diagnostic(_ error: String) -> String { "\(error)\n\n\(diagnosticEnvironment)" }
     @Published var canvasSubmitted = false
     @Published private(set) var restartingCanvas = false
     @Published var storageFailure: String?
@@ -116,7 +135,7 @@ import SwiftUI
     private func receive(_ next: JSON?, _ error: String?) {
         if next?["display_poll"].bool == true { observeDisplayHeadroom?(); return }
         if let error {
-            if failure != error { NSLog("Capy Canvas native diagnostic: %@", error) }
+            if failure != error { NSLog("Capy Canvas native diagnostic: %@", Self.diagnostic(error)) }
             failure = error
         }
         if let next {
@@ -141,7 +160,7 @@ import SwiftUI
             }
             if !next["error"].isNull && lastCanvasDiagnostic != next["error"].string {
                 lastCanvasDiagnostic = next["error"].string
-                NSLog("Capy Canvas renderer diagnostic: %@", next["error"].string)
+                NSLog("Capy Canvas renderer diagnostic: %@", Self.diagnostic(next["error"].string))
             }
             let hadRenderer = snapshot["gpu_ready"].bool
             let documentEpoch = state["document_file"]["epoch"].uint, hand = handCursor

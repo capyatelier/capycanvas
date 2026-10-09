@@ -21,7 +21,7 @@ import SwiftUI
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 _ = #"{"saved":"","preferred_languages":["en"]}"#.withCString {
-                    capy_apple_launch(9, $0, nil)
+                    capy_apple_launch(9, $0, nil, nil)
                 }
                 done.resume()
             }

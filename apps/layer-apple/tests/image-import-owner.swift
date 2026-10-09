@@ -48,6 +48,7 @@ import UniformTypeIdentifiers
             var selection: URL? = url
             var batch: [URL]?
             var clipboard = [sourceBytes]
+            var clipboardItems: [PhotoItem]?
             var clipboardLoads = 0
             let second = root.appendingPathComponent("Second photo.png")
             try sourceBytes.write(to: second)
@@ -61,7 +62,7 @@ import UniformTypeIdentifiers
                 precondition(type == .capyProject); savePanels += 1; done(saved)
             }, create: { _, done in
                 done(JSON(["extent": [64, 48], "color": ["space": "Srgb", "depth": "U8"], "background": "White"]))
-            }, paste: { done in done(.success(clipboard.map { bytes in
+            }, paste: { done in done(.success(clipboardItems ?? clipboard.map { bytes in
                 PhotoItem { loaded in clipboardLoads += 1; loaded(.success(.image(bytes))) }
             })) }))
             let files = store.projectFiles
@@ -178,6 +179,34 @@ import UniformTypeIdentifiers
                 "A failed clipboard member must preserve artwork and stop loading later images")
             files.error = nil
             clipboard = [sourceBytes]
+            for first: Result<PhotoItem.Content, Error> in [
+                .failure(HostFailure(message: "Representation unavailable")),
+                .success(.image(Data("invalid representation".utf8))),
+            ] {
+                var loads = [String]()
+                clipboardItems = [PhotoItem(name: "Fallback.png", representations: [
+                    { loads.append("first"); $0(first) },
+                    { loads.append("next"); $0(.success(.image(sourceBytes))) },
+                    { loads.append("unused"); $0(.success(.image(sourceBytes))) },
+                ])]
+                try await invoke("paste_image"); try await settled("Fallback representation")
+                try require(files.error == nil && loads == ["first", "next"] && images() == 3,
+                    files.error ?? "A failed representation must fall back once to the next encoding")
+                try await invoke("apply_transform"); try await settled("Apply fallback representation")
+                let fallback = layerState()
+                try await invoke("undo"); try await wait("Fallback Undo", native: native) { layerState() == pasted }
+                try await invoke("redo"); try await wait("Fallback Redo", native: native) { layerState() == fallback }
+                try await invoke("undo"); try await wait("Restore fallback baseline", native: native) { layerState() == pasted }
+            }
+            var failedLoads = [String]()
+            clipboardItems = [PhotoItem(representations: [
+                { failedLoads.append("unavailable"); $0(.failure(HostFailure(message: "Representation unavailable"))) },
+                { failedLoads.append("invalid"); $0(.success(.image(Data("invalid representation".utf8)))) },
+            ])]
+            try await invoke("paste_image"); try await settled("All representations fail")
+            try require(files.error != nil && failedLoads == ["unavailable", "invalid"] && layerState() == pasted,
+                "Exhausting the representations must preserve the drawing")
+            files.error = nil; clipboardItems = nil
             // Exercise actual provider delivery, including a file URL and
             // lazy encoded bytes, through the same production placement task.
             var providerLoads = [String]()
@@ -294,7 +323,7 @@ import UniformTypeIdentifiers
             try require(files.error == nil && files.pendingProfile == nil && store.state["layers"].array.count == 3, files.error ?? "Explicit interpretation must finish the pending Place")
             try await invoke("apply_transform"); try await settled("Apply interpreted photo")
             try await invoke("undo"); try await wait("Interpreted Place Undo", native: native) { layerState() == beforePrompt }
-            print("PASS platform \(platform): coordinated Place/Paste/Drop batches, file and encoded providers, delayed/immediate cancellation and late replies, Apply/Cancel, one-step history, stale/second-member failure preservation, P3 Open, safe Save and reopen")
+            print("PASS platform \(platform): coordinated Place/Paste/Drop batches, representation fallback and exhaustion, file and encoded providers, delayed/immediate cancellation and late replies, Apply/Cancel, one-step history, stale/second-member failure preservation, P3 Open, safe Save and reopen")
         }
     }
 }

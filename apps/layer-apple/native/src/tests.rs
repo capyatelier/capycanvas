@@ -1594,7 +1594,7 @@ fn stateless_color_editors_preserve_tagged_precision_and_convert_previews() {
 #[test]
 fn stateless_numeric_input_uses_shared_policy_without_a_session() {
     let launch = CString::new(json!({"saved":"", "preferred_languages":["en"]}).to_string()).unwrap();
-    let prepared = App(unsafe { capy_apple_launch(0, launch.as_ptr(), std::ptr::null_mut()) });
+    let prepared = App(unsafe { capy_apple_launch(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
     assert!(!prepared.0.is_null());
     let control = serde_json::to_value(layer_ui::ui_catalog()).unwrap()["layer_opacity"].clone();
     let resolve = |operation| localized_stateless(capy_apple_numeric,
@@ -1791,7 +1791,7 @@ fn apple_launch_resolves_saved_preference_before_native_session() {
     for platform in [0, 1] {
         let saved = json!({"language": {"Explicit": "en"}}).to_string();
         let source = CString::new(json!({"saved": saved, "preferred_languages": ["ja-JP", "ko-KR", "en-US"]}).to_string()).unwrap();
-        let app = App(unsafe { capy_apple_launch(platform, source.as_ptr(), std::ptr::null_mut()) });
+        let app = App(unsafe { capy_apple_launch(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
         assert!(!app.0.is_null());
         let localization = unsafe { (*app.0).host.session.localization().clone() };
         assert_eq!(localization.language(), layer_ui::UiLanguage::English);
@@ -1806,24 +1806,51 @@ fn apple_launch_resolves_saved_preference_before_native_session() {
 
 #[test]
 fn apple_launch_rejects_invalid_transport_without_a_session() {
-    assert!(unsafe { capy_apple_launch(0, std::ptr::null(), std::ptr::null_mut()) }.is_null());
     let malformed = CString::new("{}").unwrap();
-    assert!(unsafe { capy_apple_launch(0, malformed.as_ptr(), std::ptr::null_mut()) }.is_null());
     let valid = CString::new(r#"{"saved":"","preferred_languages":[]}"#).unwrap();
-    assert!(unsafe { capy_apple_launch(9, valid.as_ptr(), std::ptr::null_mut()) }.is_null());
+    for (platform, source, expected) in [
+        (0, std::ptr::null(), "Missing launch configuration"),
+        (0, malformed.as_ptr(), "missing field `saved`"),
+        (9, valid.as_ptr(), "Unknown Apple platform 9"),
+    ] {
+        let mut error = std::ptr::null_mut();
+        assert!(unsafe { capy_apple_launch(platform, source, std::ptr::null_mut(), &mut error) }.is_null());
+        assert!(!error.is_null());
+        let diagnostic = unsafe { CStr::from_ptr(error) }.to_str().unwrap();
+        assert!(diagnostic.starts_with("Session launch:"), "{diagnostic}");
+        assert!(diagnostic.contains(expected), "{diagnostic}");
+        unsafe { capy_apple_string_free(error) };
+    }
+    let mut error = std::ptr::dangling_mut();
+    let app = App(unsafe { capy_apple_launch(0, valid.as_ptr(), std::ptr::null_mut(), &mut error) });
+    assert!(!app.0.is_null());
+    assert!(error.is_null());
+}
+
+#[test]
+fn apple_native_boundaries_preserve_panic_diagnostics() {
+    let result: Result<(), String> = on_large_stack("capy-diagnostic", || panic!("worker detail"));
+    assert_eq!(result.unwrap_err(), "Native operation panicked: worker detail");
+    let app = App::new(0);
+    let native = unsafe { &mut *app.0 };
+    assert!(native.perform::<()>(|_| panic!("owner detail")).is_none());
+    assert_eq!(native.error.as_ref().unwrap().to_str().unwrap(), "Native operation panicked: owner detail");
+    let error = native.gpu_operation::<()>(|_| panic!("renderer detail")).unwrap_err();
+    assert_eq!(error, "Native operation panicked: renderer detail");
+    assert!(native.host.error.as_ref().unwrap().contains("renderer detail"));
 }
 
 #[test]
 fn apple_launch_prepared_context_survives_restore_and_invalid_platform_keeps_bootstrap_copy() {
     let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
-    let app = App(apple_launch_localized(1, "", localization.clone()));
+    let app = App(apple_launch_localized(1, "", localization.clone()).unwrap());
     assert!(!app.0.is_null());
     app.action(json!({"type": "restore_saved_settings", "saved": "{\"language\":{\"Explicit\":\"en\"}}"}));
     assert!(std::sync::Arc::ptr_eq(&localization, unsafe { (*app.0).host.session.localization() }));
     assert_eq!(app.request(2, json!({"type": "bootstrap"})).unwrap()["active_tag"], "ja");
     let source = CString::new(r#"{"saved":"","preferred_languages":["en"]}"#).unwrap();
     let mut bootstrap = std::ptr::null_mut();
-    assert!(unsafe { capy_apple_launch(9, source.as_ptr(), &mut bootstrap) }.is_null());
+    assert!(unsafe { capy_apple_launch(9, source.as_ptr(), &mut bootstrap, std::ptr::null_mut()) }.is_null());
     assert!(!bootstrap.is_null());
     let view: Value = serde_json::from_slice(unsafe { CStr::from_ptr(bootstrap) }.to_bytes()).unwrap();
     unsafe { capy_apple_string_free(bootstrap) };
@@ -1890,7 +1917,7 @@ fn apple_language_publication_is_atomic_deferred_and_window_local() {
 fn apple_launch_uses_each_scene_settings_instead_of_first_process_language() {
     for (platform, language) in [(0, "ja"), (1, "ko"), (0, "en")] {
         let source = CString::new(json!({"saved":json!({"language":{"Explicit":language}}).to_string(),"preferred_languages":["en"]}).to_string()).unwrap();
-        let app = App(unsafe { capy_apple_launch(platform, source.as_ptr(), std::ptr::null_mut()) });
+        let app = App(unsafe { capy_apple_launch(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
         assert!(!app.0.is_null());
         assert_eq!(app.request(2, json!({"type":"bootstrap"})).unwrap()["active_tag"], language);
     }

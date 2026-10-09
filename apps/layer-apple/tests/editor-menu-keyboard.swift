@@ -7,6 +7,8 @@ import SwiftUI
     var selected: String?
     var rowCount = 0
     var menuWidth: CGFloat = 340
+    var clipboard = false
+    var clipboardEnabled = true
     var menu: AppleContextMenu {
         func leaf(_ name: String, enabled: Bool = true) -> [String: Any] {
             let bindings: [[String: Any]]
@@ -14,10 +16,18 @@ import SwiftUI
             case "Direct": bindings = [["key": "z", "command": true, "shift": true]]
             case "Nested": bindings = [["key": "n", "command": true, "alt": true]]
             case "Disabled child": bindings = [["key": "x", "command": true, "alt": true]]
+            case "Copy": bindings = [["key": "insert", "command": true]]
+            case "Paste": bindings = [["key": "insert", "shift": true]]
+            case "Cut": bindings = [["key": "delete", "shift": true]]
             default: bindings = []
             }
             return ["label": name, "enabled": enabled, "selected": name == selected, "action": ["id": name],
                 "bindings": bindings]
+        }
+        if clipboard {
+            return AppleContextMenu(JSON(["sections": [["Copy", "Paste", "Cut"].map {
+                leaf($0, enabled: clipboardEnabled)
+            }]])) { self.actions.append($0["id"].string) }
         }
         if rowCount > 0 {
             return AppleContextMenu(JSON(["sections": [(0..<rowCount).map { leaf("Row \($0)") }]])) {
@@ -139,6 +149,64 @@ private struct MenuFixtureView: View {
             "A nested action's shortcut must work before its submenu is opened")
         print("PASS: shared popup keyboard focus, submenu return, disabled rows, action dismissal and Escape")
         try await checkWindowFit()
+        try await checkClipboardKeys()
+    }
+    @MainActor static func checkClipboardKeys() async throws {
+        let fixture = MenuFixture(); fixture.clipboard = true
+        let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 500, height: 400),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: MenuFixtureView(fixture: fixture))
+        window.makeKeyAndOrderFront(nil)
+        let insert = String(UnicodeScalar(NSInsertFunctionKey)!)
+        let help = String(UnicodeScalar(NSHelpFunctionKey)!)
+        for text in [insert, help, "q"] {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: 114)!
+            try require(AppleKeyName.name(event) == "insert", "Insert normalizes independently of native characters")
+        }
+        let shortcut = menuShortcut(JSON(["key": "insert", "command": true]))
+        try require(shortcut?.key == KeyEquivalent(insert.first!), "Insert menu equivalents use NSInsertFunctionKey")
+        for (text, code, flags, command): (String, UInt16, NSEvent.ModifierFlags, String) in [
+            (insert, 114, .command, "Copy"), (help, 114, .control, "Copy"),
+            (insert, 114, .shift, "Paste"), ("\u{F728}", 117, .shift, "Cut")
+        ] {
+            fixture.presented = true; try await drain(0.3)
+            let previous = fixture.actions.count
+            for type: NSEvent.EventType in [.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: text, charactersIgnoringModifiers: text,
+                    isARepeat: false, keyCode: code)!
+                NSApp.postEvent(event, atStart: false)
+            }
+            try await drain()
+            try require(!fixture.presented && fixture.actions.count == previous + 1 && fixture.actions.last == command,
+                "Native \(command) chord dispatches exactly once")
+        }
+        fixture.clipboardEnabled = false; fixture.presented = true; try await drain(0.3)
+        let previous = fixture.actions.count
+        for type: NSEvent.EventType in [.keyDown, .keyUp] {
+            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: .command,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: insert, charactersIgnoringModifiers: insert,
+                isARepeat: false, keyCode: 114)!
+            NSApp.postEvent(event, atStart: false)
+        }
+        try await drain()
+        try require(fixture.presented && fixture.actions.count == previous, "Disabled Copy refuses its Insert chord")
+        fixture.presented = false; try await drain()
+        let field = NSTextField(string: "Native text focus")
+        field.frame = CGRect(x: 12, y: 12, width: 250, height: 30)
+        window.contentView!.addSubview(field)
+        try require(window.makeFirstResponder(field), "The fixture text field accepts focus")
+        for command in ["copy_pixels", "copy_merged", "paste_in_place", "paste_as_new_image"] {
+            try require(nativeTextMenuAction(JSON(["type": "invoke", "command": command])),
+                "Native text focus retains \(command) instead of dispatching it to the canvas")
+        }
+        print("PASS: native Insert/Help normalization, Insert menu equivalence, clipboard chords, disabled Copy and text-focus guards")
     }
     @MainActor static func checkWindowFit() async throws {
         for size in [CGSize(width: 700, height: 500), CGSize(width: 360, height: 500), CGSize(width: 700, height: 760)] {

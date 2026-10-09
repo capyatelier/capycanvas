@@ -2,10 +2,10 @@ import XCTest
 import CoreGraphics
 
 extension XCTestCase {
-    @MainActor func checkRendererRecovery(in app: XCUIApplication) {
+    @MainActor func checkRendererRecovery(in app: XCUIApplication, theme: String = "light") {
         app.launchEnvironment["CAPY_GPU_RECOVERY_TEST"] = "1"
         app.launchEnvironment["CAPY_CAPTURE_PROBE"] = "1"
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"add_layer"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"add_layer"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]},{"type":"invoke","command":"select_all"},{"type":"invoke","command":"fill_selection"}]"#
         app.launch()
         let status = app.staticTexts["renderer-test-status"]
         func waitFor(_ text: String) {
@@ -64,6 +64,20 @@ extension XCTestCase {
             // still deliver loss, without another touch or forced frame.
             waitFor("Renderer stopped")
             XCTAssertTrue(app.staticTexts["Canvas error"].exists)
+            let detail = app.descendants(matching: .any)["canvas-error-detail"].firstMatch
+            XCTAssertTrue(detail.waitForExistence(timeout: 5))
+            let diagnostic = XCTAttachment(string: detail.debugDescription)
+            diagnostic.name = "renderer-failure-detail-" + theme + "-" + fault
+            diagnostic.lifetime = .keepAlways; add(diagnostic)
+            let report = [detail.label, detail.value as? String ?? ""].joined(separator: "\n")
+            XCTAssertFalse(report.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, detail.debugDescription)
+            XCTAssertNotNil(report.range(of: #"Capy Canvas [^\n]+ \([0-9]+\)"#, options: .regularExpression))
+            XCTAssertTrue(report.contains("Version "))
+            #if os(macOS)
+            XCTAssertTrue(report.contains("\nMac"))
+            #elseif !targetEnvironment(simulator)
+            XCTAssertTrue(report.contains("\niPad"))
+            #endif
             XCTAssertFalse(command("Undo").isEnabled)
             XCTAssertTrue(app.buttons["Save As…"].firstMatch.isEnabled)
             workspaceActivate(app.buttons["Restart Canvas"])

@@ -246,7 +246,9 @@ impl NativeHost {
         presentation: u64,
         has_presented: bool,
     ) -> Result<(), String> {
-        if has_presented || self.startup.complete {
+        if has_presented || self.session.renderer_mut().0.as_mut()
+            .ok_or("Missing native renderer")?.poll_startup().map_err(|e| e.to_string())?.canvas_ready
+        {
             let engine = self.session.engine();
             let gpu = engine
                 .backend()

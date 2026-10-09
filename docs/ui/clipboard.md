@@ -194,9 +194,15 @@ paste and Cut), `crates/layer-render-wgpu/src/snapshot/clip.rs` with
   `AndroidColorPanelTest#clipboardKeyboardKeepsColorAndTextFocusAcrossWindows`
   (both themes, color/text focus, native Dialog and windowless presentation), and
   `AndroidRasterTest#clipboardCopyLatency24mp`.
-- macOS and iPadOS: `EditorLaunchTests/testPixelClipboard` (keyboard on macOS,
-  where the test reads the PNG back from the pasteboard; the in-app Edit menu on
-  iPadOS).
+- macOS and iPadOS: `EditorLaunchTests/testPixelClipboard` and
+  `testPixelClipboardDark` check merged pixels, editable layer Copy/Cut/Paste,
+  exact Undo/Redo, Paste as New Image and preservation of the source drawing.
+  macOS uses keyboard shortcuts and reads the PNG back from the pasteboard;
+  iPadOS uses the in-app Edit menu. Run these hosts' clipboard journeys separately
+  when Universal Clipboard is enabled. `tests/image-import-owner.swift` checks
+  alternate-representation fallback and preservation when every representation
+  fails. `tests/editor-menu-keyboard.swift` checks native Insert normalization,
+  clipboard menu shortcuts and text focus.
 - Windows: `apps/layer-windows/scripts/exercise-clipboard.ps1` (keyboard Copy,
   Paste, Paste in Place and Cut, Copy Merged from the selection bar, standard
   Bitmap delivery, external images and file batches, internal pixel and image-object

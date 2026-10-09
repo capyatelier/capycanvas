@@ -32,7 +32,7 @@ fn tabs(app: &App) -> Value {
     app.request(2, json!({"type":"document_tabs","op":"view","width":800}))
         .unwrap()
 }
-fn switch(app: &App, id: u64, closing: bool) {
+pub(super) fn switch(app: &App, id: u64, closing: bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while unsafe { capy_apple_document_prepare_switch(app.0, 2_000_000_000) } == 1 {
         assert!(

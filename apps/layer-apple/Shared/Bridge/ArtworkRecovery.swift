@@ -7,6 +7,7 @@ import UIKit
     @Published private(set) var saving = false
     @Published private(set) var restoring = true
     @Published private(set) var error: String?
+    @Published private(set) var restoreError: String?
     private weak var store: EditorStore?
     private var scheduled: Task<Void, Never>?
     private var observed = ""
@@ -18,7 +19,7 @@ import UIKit
     private var flushDeadline: Date?
     private var waiters: [(Bool) -> Void] = []
     var copy: JSON { store?.bootstrap["recovery"] ?? JSON() }
-    var hasCurrentCopy: Bool { !restoring && !saving && observed == durable }
+    var hasCurrentCopy: Bool { !restoring && !restoreFailed && !saving && observed == durable }
 
     init(store: EditorStore) { self.store = store }
     func observe() {
@@ -30,9 +31,9 @@ import UIKit
             store.native?.restoreSession(sessions: sessions, scene: store.sessionIdentity, adopt: Self.adoptsUnrestoredSessions) {
                 [weak self] failure, adopted in DispatchQueue.main.async {
                 guard let self else { return }
-                self.restoring = false; self.error = failure
+                self.restoring = false; self.restoreError = failure
                 self.restoreFailed = failure != nil && !adopted
-                if failure == nil { self.schedule() }
+                if !self.restoreFailed { self.schedule() }
                 self.store?.wake?()
             } }
             return
@@ -46,7 +47,7 @@ import UIKit
         if !restoring && error == nil { schedule() }
     }
     private func schedule() {
-        guard !closed, !restoring, scheduled == nil, !saving, store?.native?.sessions != nil else { return }
+        guard !closed, !restoring, !restoreFailed, scheduled == nil, !saving, store?.native?.sessions != nil else { return }
         scheduled = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
             guard let self else { return }
@@ -54,16 +55,16 @@ import UIKit
             self.write()
         }
     }
-    private func finish(_ failure: String?, accepted: Bool = false) {
+    private func finish(_ failure: String?, accepted: Bool = false, exclusion: UInt64 = 0) {
         saving = false; error = failure
-        if failure == nil && store?.native?.sessions != nil && !waiters.isEmpty && (observed != durable || finalCheckpoint) {
+        if exclusion == 0 && failure == nil && store?.native?.sessions != nil && !waiters.isEmpty && (observed != durable || finalCheckpoint) {
             if Date() < (flushDeadline ?? .distantFuture) { write(); return }
             error = store?.catalog["document_delivery_copy"]["change_in_progress"].string ?? ""
         }
         let callbacks = waiters; waiters.removeAll()
         flushDeadline = nil
         callbacks.forEach { $0(error == nil || accepted) }
-        if failure == nil && observed != durable { schedule() }
+        if exclusion == 0 && failure == nil && observed != durable { schedule() }
     }
     private func write(exclusion: UInt64 = 0, cleanExit: Bool = false) {
         guard !saving else { return }
@@ -75,7 +76,7 @@ import UIKit
         let captured = observed
         native.checkpointSession(exclusion: exclusion, cleanExit: cleanExit, waits: !waiters.isEmpty) { [self] failure, committed in DispatchQueue.main.async { [self] in
             if committed { durable = captured }
-            finish(failure, accepted: committed)
+            finish(failure, accepted: committed, exclusion: exclusion)
         } }
     }
     func flush(cleanExit: Bool = false, _ completion: @escaping (Bool) -> Void) {
@@ -113,13 +114,19 @@ import UIKit
         #endif
     }
     func retry() {
-        guard restoreFailed, let store, let sessions = store.native?.sessions else { flush { _ in }; return }
+        guard !restoring else { return }
+        guard restoreError != nil, let store, let sessions = store.native?.sessions else { flush { _ in }; return }
+        scheduled?.cancel(); scheduled = nil
+        if saving { flush { [weak self] saved in if saved { self?.retry() } }; return }
+        let available = !restoreFailed
         restoring = true
         store.native?.restoreSession(sessions: sessions, scene: store.sessionIdentity, adopt: false, retry: true) {
             [weak self] failure, adopted in DispatchQueue.main.async {
             guard let self else { return }
-            self.restoring = false; self.restoreFailed = failure != nil && !adopted; self.error = failure
-            if failure == nil { self.schedule() }
+            self.restoring = false; self.restoreFailed = failure != nil && !adopted && !available; self.restoreError = failure
+            if !self.restoreFailed { self.schedule() }
         } }
     }
+    func later() { if !restoreFailed { restoreError = nil } }
+    var canContinue: Bool { !restoreFailed && restoreError != nil }
 }

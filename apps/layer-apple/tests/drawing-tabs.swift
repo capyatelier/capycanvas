@@ -26,6 +26,38 @@ import QuartzCore
             FileHandle.standardError.write(Data("Apple \(platform): memory-only checkpoint, removal and close callbacks completed\n".utf8))
         }
         for platform: UInt32 in [0, 1] {
+            let directory = root.appendingPathComponent("unreadable-\(platform)")
+            let session = StorageLocations.within(directory)!.sessions.appendingPathComponent("failed")
+            let drawing = session.appendingPathComponent("drawing")
+            try FileManager.default.createDirectory(at: drawing, withIntermediateDirectories: true)
+            let head = drawing.appendingPathComponent("head.json"), bytes = Data("unreadable session".utf8)
+            try bytes.write(to: head)
+            try Data(#"{"generation":1,"drawings":[{"id":1,"key":"drawing"}],"active":1,"clean_exit":false,"restoring":[],"blocked":[]}"#.utf8)
+                .write(to: session.appendingPathComponent("window.json"))
+            let store = EditorStore(platform: platform, persistence: EditorPersistence(root: directory), managedWorkspaces: false)
+            let native = store.native!, surface = attachSurface(store, CGSize(width: 256, height: 192))
+            defer { native.detach(); withExtendedLifetime(surface) {} }
+            try await CapyTest.wait("Unreadable session", seconds: 60, step: { await frame(native) }) {
+                !store.recovery.restoring && store.recovery.restoreError != nil
+            }
+            precondition(store.recovery.canContinue)
+            try await store.apply(["type": "invoke", "command": "add_layer"])
+            let saved = await withCheckedContinuation { done in store.recovery.flush { done.resume(returning: $0) } }
+            precondition(saved && store.recovery.restoreError != nil)
+            store.recovery.retry(); store.recovery.retry()
+            try await CapyTest.wait("Retry unreadable session", seconds: 60, step: { await frame(native) }) { !store.recovery.restoring }
+            precondition(store.recovery.canContinue)
+            store.recovery.later()
+            precondition(store.recovery.restoreError == nil)
+            let closed = await withCheckedContinuation { done in store.recovery.close { done.resume(returning: $0) } }
+            precondition(closed && store.recovery.error == nil)
+            let directories = try FileManager.default.contentsOfDirectory(at: native.sessions!, includingPropertiesForKeys: nil)
+            let preserved = directories.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("drawing/head.json").path) }!
+            let retained = try Data(contentsOf: preserved.appendingPathComponent("drawing/head.json"))
+            precondition(retained == bytes)
+            print("Apple \(platform): unreadable session, new checkpoint, retry, Later and close preserve the failed copy")
+        }
+        for platform: UInt32 in [0, 1] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root.appendingPathComponent("owner-\(platform)")), managedWorkspaces: false)
             let native = store.native!, surface = attachSurface(store, CGSize(width: 256, height: 192))
             defer { native.detach(); withExtendedLifetime(surface) {} }

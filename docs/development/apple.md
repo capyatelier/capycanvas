@@ -58,6 +58,18 @@ Arguments after the platform are passed to `xcodebuild`.
   `apps/layer-apple/DerivedData`, ignored by Git).
 - macOS builds are ad-hoc signed unless `CAPY_APPLE_TEAM` is set.
 
+Build both Xcode targets to check Swift types; parsing Swift sources alone does
+not check closure calls or platform-specific APIs. For startup failures, record
+the app version/build and OS version before changing the installation. The canvas
+error panel shows selectable native diagnostics with the app version/build, OS
+version and hardware model identifier. Metal errors retain the failing startup
+stage and available adapter details; launch and panic boundaries preserve the
+underlying error. Include this text when reporting a failure. In older builds
+that show only the headline, connect the iPad to Mac Console and filter for
+`Capy Canvas native diagnostic:`, `Capy Canvas renderer diagnostic:` or
+`CapyCanvas GPU stopped:` while reproducing. A recovery banner after the canvas
+loads is a separate saved-session failure.
+
 ### Xcode project
 
 `apps/layer-apple/CapyCanvas.xcodeproj` is tracked, and `scripts/project.py`
@@ -179,8 +191,12 @@ cargo test -p layer-apple tests::photo -- --test-threads=1
 ```
 
 The tests drive both Apple platform policies through the real C ABI and a
-hardware GPU, comparing exact document pixels through Undo and Redo. Reuse
-`fixtures::tempfile()` for private file descriptors. Filter by module (`tests::input`, `tests::recovery`, `tests::workspace` and the other
+hardware GPU, comparing exact document pixels through Undo and Redo.
+`apple_fill_selection_survives_background_checkpoint_undo_redo_and_restart`
+checks recovery history and the first presentation. It reads viewport output
+as well as authored pixels, so a correct export cannot hide a blank canvas.
+Reuse `fixtures::tempfile()` for private file descriptors. Filter by module
+(`tests::input`, `tests::recovery`, `tests::workspace` and the other
 `*_tests.rs` files under `native/src`). The windowless `tests::toolbar_component`
 checks category and subtool choices, remembered Enclose and Fill, and Source
 actions through the native bridge in both themes and platform policies.
@@ -249,10 +265,17 @@ filter assets. Fixtures that open windows take focus: run them one at a time and
 never alongside a UI test batch.
 
 `tests/drawing-tabs.swift` checks independent drawing history, save destinations,
-recovery and close cancellation. It also checks the memory-only owner used when
-storage locations are unavailable: checkpoint and close callbacks complete
+recovery, close cancellation, and closing a tab before opening several files.
+It exercises an unreadable session through new checkpoints, Retry, Later and
+close while verifying that the failed copy remains unchanged. It also checks the
+memory-only owner used when storage locations are unavailable: checkpoint and close callbacks complete
 without retrying an absent session store. No private recovery copy is written
 in that mode.
+
+An unreadable drawing checkpoint stays indexed while other drawings reopen and
+new work can checkpoint. The recovery banner's Later button dismisses its error;
+it does not discard the stored drawing. Retry opens repaired copies beside the
+current drawings. Superseded pre-release records are preserved without conversion.
 
 Fixtures for a single Swift file compile directly, for example:
 
@@ -271,7 +294,7 @@ and `DrawingWorkloadPlan.swift`). Other runners in `scripts/` and `tests/`:
 | `scripts/test-persistence.sh` | Atomic settings files, backup exclusion and the settings owner |
 | `scripts/test-color-input.sh` | AppKit color text entry in all RGB spaces |
 | `scripts/test-project-access.py` | Project writes through a file-only App Sandbox grant |
-| `cargo test -p layer-apple tests::session` | Session restart, history, durable removal and new windows adopting unrestored sessions on both policies |
+| `cargo test -p layer-apple tests::session` | Session restart, history, durable removal, preserved unreadable copies, retry beside new work, and new windows adopting unrestored sessions on both policies |
 | `tests/background-expiration.py` | iPad background-task lease ordering |
 | `scripts/test-native-rows.py` | UIKit row scrolling and contacts on one booted iPad simulator (`--fixture scenes` for per-scene cancellation) |
 | `scripts/test-workspace-scrolling.py` | Long workspace list on an iPad simulator |

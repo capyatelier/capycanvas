@@ -10,7 +10,7 @@ extern "C" {
 typedef struct CapyApple CapyApple;
 /* All session calls run on one serial engine/render owner. UIKit/AppKit owns
    the retained CAMetalLayer and must keep it alive until detach completes. */
-CapyApple *capy_apple_launch(uint32_t platform, const char *json, char **bootstrap);
+CapyApple *capy_apple_launch(uint32_t platform, const char *json, char **bootstrap, char **error);
 typedef struct CapyLanguageTask CapyLanguageTask;
 CapyLanguageTask *capy_apple_language_request(CapyApple *app, const char *preferred_languages);
 void capy_language_prepare(CapyLanguageTask *task);

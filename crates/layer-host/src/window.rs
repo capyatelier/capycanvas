@@ -593,10 +593,17 @@ impl<P: Parked> DocumentWindow<P> {
         }
         let mut mapping = Vec::with_capacity(candidates.len());
         let mut retired = Vec::with_capacity(candidates.len());
+        self.documents.reserve_identities(&candidates.iter().map(|(id, _)| *id).collect::<Vec<_>>())?;
         for (old, mut candidate) in candidates.drain(..) {
             let tiles = candidate.retained_document_tiles();
             if let Some(renderer) = candidate.renderer_mut().0.take() { retired.push(renderer); }
-            let id = self.documents.append_parked(park(*candidate), tiles, host.session.localization());
+            let id = if self.documents.order().contains(&old) {
+                self.documents.append_parked(park(*candidate), tiles, host.session.localization())
+            } else {
+                self.documents.append_parked_with_id(old, park(*candidate), tiles, host.session.localization())
+                    .unwrap_or_else(|_| unreachable!("validated restored identity"));
+                old
+            };
             mapping.push((old, id));
         }
         self.changed(host);
@@ -1051,23 +1058,25 @@ mod tests {
         let stamp = host.session.session_stamp();
         let document = host.session.engine().document().clone();
         let renderer = std::ptr::from_ref(host.session.engine().backend().0.as_ref().unwrap().as_ref());
-        let mut next = candidate(&window, &host).unwrap();
-        settle_candidate(&mut next);
-        let mut candidates = vec![(1, next)];
+        let mut candidates: Vec<_> = [1, 2, 9].into_iter().map(|id| {
+            let mut next = candidate(&window, &host).unwrap();
+            settle_candidate(&mut next);
+            (id, next)
+        }).collect();
         window.documents.budget.metadata = 1;
         assert!(window.append_restored_sessions(&mut host, &mut candidates, |s| s).is_err());
-        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates.len(), 3);
         assert_eq!(window.documents.order(), [1]);
         window.documents.budget = Default::default();
         let (mapping, retired) = window.append_restored_sessions(&mut host, &mut candidates, |s| s).unwrap();
-        assert_eq!(mapping, [(1, 2)]);
-        assert_eq!(window.documents.order(), [1, 2]);
+        assert_eq!(mapping, [(1, 3), (2, 2), (9, 9)]);
+        assert_eq!(window.documents.order(), [1, 3, 2, 9]);
         assert_eq!(window.documents.selected(), 1);
         assert_eq!(host.session.session_stamp(), stamp);
         assert_eq!(host.session.engine().document(), &document);
         assert_eq!(std::ptr::from_ref(host.session.engine().backend().0.as_ref().unwrap().as_ref()), renderer);
         assert!(window.documents.parked_owner_mut(2).unwrap().rendering_suspended());
-        assert_eq!(retired.len(), 1);
+        assert_eq!(retired.len(), 3);
         drop(retired);
         finish(host, window);
     }

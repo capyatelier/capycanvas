@@ -126,6 +126,10 @@ impl MetalHost {
     }
 
     pub(crate) fn stop(&mut self, host: &mut NativeHost, message: String) {
+        let message = match host.session.engine().backend().0.as_ref() {
+            Some(gpu) => format!("{message}\nGPU: {:?}\nCanvas: {:?}", gpu.adapter().get_info(), gpu.document_color()),
+            None => message,
+        };
         eprintln!("CapyCanvas GPU stopped: {message}");
         // Retire capture/encoder resources on a worker. Their completion can
         // wait, but already captured immutable rasters remain saveable.
@@ -169,7 +173,7 @@ impl MetalHost {
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
         }
-        .map_err(error)?;
+        .map_err(|e| format!("Metal surface creation: {e}"))?;
         if host.session.engine().backend().0.is_none() {
             let adapter =
                 pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -178,7 +182,7 @@ impl MetalHost {
                     power_preference: wgpu::PowerPreference::None,
                     apply_limit_buckets: false,
                 }))
-                .map_err(error)?;
+                .map_err(|e| format!("Metal adapter selection: {e}"))?;
             let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
             let (device, queue) =
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -190,7 +194,7 @@ impl MetalHost {
                     required_limits: limits,
                     ..Default::default()
                 }))
-                .map_err(error)?;
+                .map_err(|e| format!("Metal device request ({:?}): {e}", adapter.get_info()))?;
             let context = layer_host::GpuContext { adapter, device, queue };
             let (color, options) = (host.session.engine().document().composition().color, host.renderer_options(self.cache.clone()));
             let renderer = std::thread::scope(|scope| -> Result<Box<WgpuRasterizer>, String> {
@@ -200,8 +204,8 @@ impl MetalHost {
                     .spawn_scoped(scope, || context.rasterizer(color, &options, false).map(Box::new))
                     .map_err(|e| e.to_string())?
                     .join()
-                    .map_err(|_| "Renderer creation failed".to_string())?
-            })?;
+                    .map_err(super::panic_diagnostic)?
+            }).map_err(|e| format!("Metal renderer creation ({:?}): {e}", context.adapter.get_info()))?;
             self.install_renderer(host, renderer)?;
         }
         let [width, height] = host.session.state().camera.viewport;
@@ -226,7 +230,8 @@ impl MetalHost {
         if gpu.document_color().depth.is_float(){config.format=wgpu::TextureFormat::Rgba16Float;}
         config.color_space = encoding.surface_color_space();
         surface.configure(gpu.device(), &config);
-        let presenter = ViewportPresenter::for_surface(gpu, config.format, encoding).map_err(error)?;
+        let presenter = ViewportPresenter::for_surface(gpu, config.format, encoding)
+            .map_err(|e| format!("Metal viewport creation: {e}"))?;
         self.surface = Some(Surface {
             surface,
             config,

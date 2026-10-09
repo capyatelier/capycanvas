@@ -84,9 +84,10 @@ extension EditorLaunchTests {
         let undo = window.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Undo")).firstMatch
         XCTAssertTrue(undo.exists)
         XCTAssertFalse(undo.isEnabled)
-        let start = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.45))
-        let end = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.60))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        let paper = editorPaper(in: app)
+        let start = canvas.coordinate(withNormalizedOffset: paper.offset(0.3, 0.4))
+        let end = canvas.coordinate(withNormalizedOffset: paper.offset(0.7, 0.6))
+        start.click(forDuration: 0.05, thenDragTo: end)
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: undo)
         waitForExpectations(timeout: 10)
         // Real event delivery through AppKit must commit ink at mouseUp and

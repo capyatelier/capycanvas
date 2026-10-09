@@ -387,7 +387,8 @@ private struct ShortcutSearchChord {
         let command = !press.modifiers.intersection([.command, .control]).isEmpty, alt = press.modifiers.contains(.option)
         let names: [KeyEquivalent: String] = [.upArrow: "arrowup", .downArrow: "arrowdown", .leftArrow: "arrowleft",
             .rightArrow: "arrowright", .home: "home", .end: "end", .pageUp: "pageup", .pageDown: "pagedown",
-            .delete: "backspace", .deleteForward: "delete", .return: "enter", .tab: "tab", .space: " ", .escape: "escape"]
+            .delete: "backspace", .deleteForward: "delete", KeyEquivalent("\u{F727}"): "insert", KeyEquivalent("\u{F746}"): "insert",
+            .return: "enter", .tab: "tab", .space: " ", .escape: "escape"]
         let scalar = press.characters.unicodeScalars.first?.value ?? 0
         let function = (0xF704...0xF71B).contains(scalar) ? "f\(scalar - 0xF703)" : nil
         let key = names[press.key] ?? function ?? press.characters.lowercased()

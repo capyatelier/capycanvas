@@ -26,6 +26,12 @@ use layer_host::{NativeHost, PointerBatch};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+fn panic_diagnostic(payload: Box<dyn std::any::Any + Send>) -> String {
+    let detail = payload.downcast_ref::<String>().map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied()).unwrap_or("Unknown panic payload");
+    format!("Native operation panicked: {detail}")
+}
+
 pub struct CapyApple {
     metal: metal::MetalHost,
     host: NativeHost,
@@ -43,16 +49,13 @@ pub struct CapyApple {
 impl CapyApple {
     fn perform<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Option<T> {
         self.error = None;
-        match catch_unwind(AssertUnwindSafe(|| {
+        let result = catch_unwind(AssertUnwindSafe(|| {
             self.metal.observe_failure(&mut self.host, false);
             work(self)
-        })) {
-            Ok(Ok(value)) => Some(value),
-            result => {
-                let message = match result {
-                    Ok(Err(message)) => message,
-                    _ => "Native operation panicked".into(),
-                };
+        })).unwrap_or_else(|payload| Err(panic_diagnostic(payload)));
+        match result {
+            Ok(value) => Some(value),
+            Err(message) => {
                 self.error = CString::new(message.replace('\0', " ")).ok();
                 None
             }
@@ -60,7 +63,7 @@ impl CapyApple {
     }
     fn gpu_operation<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
         let result = catch_unwind(AssertUnwindSafe(|| work(self)))
-            .unwrap_or_else(|_| Err("Canvas rendering stopped unexpectedly".into()));
+            .unwrap_or_else(|payload| Err(panic_diagnostic(payload)));
         if let Err(message) = &result {
             self.metal.stop(&mut self.host, message.clone());
             self.dismissed_contacts.clear();
@@ -76,7 +79,7 @@ fn fixture_localization() -> std::sync::Arc<layer_ui::Localizer> {
 #[cfg(test)]
 #[unsafe(no_mangle)]
 pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
-    apple_launch_localized(platform, "", fixture_localization())
+    apple_launch_localized(platform, "", fixture_localization()).unwrap_or(std::ptr::null_mut())
 }
 
 #[derive(serde::Deserialize)]
@@ -96,24 +99,34 @@ struct AppleLaunch {
 }
 /// # Safety
 /// JSON must be valid NUL-terminated UTF-8 for this call. A non-null bootstrap
-/// output must be writable and its result released with capy_apple_string_free.
+/// output and error must be writable and their results released with capy_apple_string_free.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_launch(platform: u32, json: *const c_char, bootstrap: *mut *mut c_char) -> *mut CapyApple {
+pub unsafe extern "C" fn capy_apple_launch(platform: u32, json: *const c_char, bootstrap: *mut *mut c_char, error: *mut *mut c_char) -> *mut CapyApple {
     if !bootstrap.is_null() { unsafe { *bootstrap = std::ptr::null_mut() }; }
-    catch_unwind(|| {
-        if json.is_null() { return std::ptr::null_mut(); }
-        let Ok(source) = (unsafe { CStr::from_ptr(json) }).to_str() else { return std::ptr::null_mut(); };
-        let Ok(launch) = serde_json::from_str::<AppleLaunch>(source) else { return std::ptr::null_mut(); };
+    if !error.is_null() { unsafe { *error = std::ptr::null_mut() }; }
+    let result = catch_unwind(|| {
+        if json.is_null() { return Err("Missing launch configuration".into()); }
+        let source = (unsafe { CStr::from_ptr(json) }).to_str().map_err(|e| e.to_string())?;
+        let launch = serde_json::from_str::<AppleLaunch>(source).map_err(|e| e.to_string())?;
         let tags: Vec<&str> = launch.preferred_languages.iter().map(String::as_str).collect();
         let localization = layer_ui::launch_localization(&launch.saved, &tags);
         layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
         if !bootstrap.is_null() {
-            let Ok(view) = serde_json::to_string(&layer_ui::bootstrap_view(&localization)) else { return std::ptr::null_mut(); };
-            let Ok(view) = CString::new(view) else { return std::ptr::null_mut(); };
+            let view = serde_json::to_string(&layer_ui::bootstrap_view(&localization)).map_err(|e| e.to_string())?;
+            let view = CString::new(view).map_err(|e| e.to_string())?;
             unsafe { *bootstrap = view.into_raw() };
         }
         apple_launch_localized(platform, &launch.saved, localization)
-    }).unwrap_or(std::ptr::null_mut())
+    }).unwrap_or_else(|payload| Err(panic_diagnostic(payload)));
+    match result {
+        Ok(app) => app,
+        Err(message) => {
+            if !error.is_null() {
+                unsafe { *error = CString::new(format!("Session launch: {message}").replace('\0', " ")).unwrap().into_raw() };
+            }
+            std::ptr::null_mut()
+        }
+    }
 }
 /// Dispatch workers have small stacks; debug builds of the shared session exceed them.
 pub(crate) fn on_large_stack<T: Send>(name: &str, work: impl FnOnce() -> T + Send) -> Result<T, String> {
@@ -124,46 +137,40 @@ pub(crate) fn on_large_stack<T: Send>(name: &str, work: impl FnOnce() -> T + Sen
             .spawn_scoped(scope, work)
             .map_err(|e| e.to_string())?
             .join()
-            .map_err(|_| format!("{name} failed"))
+            .map_err(panic_diagnostic)
     })
 }
-fn apple_launch_localized(platform: u32, saved: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> *mut CapyApple {
-    on_large_stack("capy-launch", move || apple_launch_on_stack(platform, saved, localization) as usize)
-        .map_or(std::ptr::null_mut(), |app| app as *mut CapyApple)
+fn apple_launch_localized(platform: u32, saved: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Result<*mut CapyApple, String> {
+    on_large_stack("capy-launch", move || apple_launch_on_stack(platform, saved, localization).map(|app| app as usize))?
+        .map(|app| app as *mut CapyApple)
 }
-fn apple_launch_on_stack(platform: u32, saved: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> *mut CapyApple {
-    catch_unwind(AssertUnwindSafe(move || {
-        let platform = match platform {
-            0 => layer_ui::Platform::Ios,
-            1 => layer_ui::Platform::Mac,
-            _ => return None,
-        };
-        let mut host = NativeHost::launch_localized(platform, saved, localization).ok()?;
-        host.ui_color = layer_host::UiColor::Tagged(DISPLAY_SPACE);
-        host.dispatch(layer_ui::UiAction::RestoreWorkspace {
-            workspace: Box::new(layer_ui::WorkspaceState::for_platform(platform)),
-        })
-        .ok()?;
-        host.session.set_document_replacement(false);
-        let window = document_tabs::Window::localized(host.session.localization());
-        Some(Box::into_raw(Box::new(CapyApple {
-            language: layer_ui::LanguageTransition::new(host.session.localization().clone()),
-            published_language: None,
-            scopes: Default::default(),
-            host,
-            window,
-            session_disk: None,
-            session_capture_sequence: 0,
-            metal: metal::MetalHost::default(),
-            error: None,
-            chrome_facts: Default::default(),
-            dismissed_contacts: Default::default(),
-            workspaces: None,
-        })))
-    }))
-    .ok()
-    .flatten()
-    .unwrap_or(std::ptr::null_mut())
+fn apple_launch_on_stack(platform: u32, saved: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Result<*mut CapyApple, String> {
+    let platform = match platform {
+        0 => layer_ui::Platform::Ios,
+        1 => layer_ui::Platform::Mac,
+        _ => return Err(format!("Unknown Apple platform {platform}")),
+    };
+    let mut host = NativeHost::launch_localized(platform, saved, localization)?;
+    host.ui_color = layer_host::UiColor::Tagged(DISPLAY_SPACE);
+    host.dispatch(layer_ui::UiAction::RestoreWorkspace {
+        workspace: Box::new(layer_ui::WorkspaceState::for_platform(platform)),
+    })?;
+    host.session.set_document_replacement(false);
+    let window = document_tabs::Window::localized(host.session.localization());
+    Ok(Box::into_raw(Box::new(CapyApple {
+        language: layer_ui::LanguageTransition::new(host.session.localization().clone()),
+        published_language: None,
+        scopes: Default::default(),
+        host,
+        window,
+        session_disk: None,
+        session_capture_sequence: 0,
+        metal: metal::MetalHost::default(),
+        error: None,
+        chrome_facts: Default::default(),
+        dismissed_contacts: Default::default(),
+        workspaces: None,
+    })))
 }
 pub struct CapyLanguageTask {
     request: layer_ui::LanguageRequest,

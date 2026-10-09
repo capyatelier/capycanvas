@@ -45,7 +45,7 @@ struct ShortcutKeyCapture: NSViewRepresentable {
 enum AppleKeyName {
     static func name(_ event: NSEvent) -> String {
         let names: [UInt16: String] = [36: "enter", 48: "tab", 51: "backspace", 53: "escape",
-            76: "enter", 115: "home", 116: "pageup", 117: "delete", 119: "end", 121: "pagedown",
+            76: "enter", 114: "insert", 115: "home", 116: "pageup", 117: "delete", 119: "end", 121: "pagedown",
             123: "arrowleft", 124: "arrowright", 125: "arrowdown", 126: "arrowup",
             122: "f1", 120: "f2", 99: "f3", 118: "f4", 96: "f5", 97: "f6", 98: "f7",
             100: "f8", 101: "f9", 109: "f10", 103: "f11", 111: "f12", 105: "f13",

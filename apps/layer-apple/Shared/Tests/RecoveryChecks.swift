@@ -1,9 +1,9 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func checkArtworkRecoveryAfterRestart(in app: XCUIApplication) {
+    @MainActor func checkArtworkRecoveryAfterRestart(in app: XCUIApplication, theme: String = "light") {
         app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"add_layer"},{"type":"set_layer_opacity","opacity":0.42},{"type":"set_color","rgba":[0.1,0.3,0.9,1]}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"add_layer"},{"type":"set_layer_opacity","opacity":0.42},{"type":"set_color","rgba":[0.1,0.3,0.9,1]}]"#
         app.launch()
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
@@ -27,6 +27,8 @@ extension XCTestCase {
         // Exercise the OS lifecycle before waiting for the latest recovery
         // copy. Returning must preserve this editor and its editable history.
         #if os(macOS)
+        app.activate()
+        XCTAssertEqual(app.state, .runningForeground)
         app.typeKey("h", modifierFlags: .command)
         #else
         XCUIDevice.shared.press(.home)
@@ -67,14 +69,17 @@ extension XCTestCase {
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "open-recovery-")).firstMatch.exists)
         expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
         waitForExpectations(timeout: 30)
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
-        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == painted }, evaluatedWith: app)
-        waitForExpectations(timeout: 15)
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.editorPixels(in: app) == painted }, object: app)
+        let matched = XCTWaiter.wait(for: [restored], timeout: 15) == .completed
+        attachEditor(in: app, name: "recovered-drawing-editor")
+        XCTAssertTrue(matched, "Expected \(Array(painted.prefix(4))); restored \(Array(editorPixels(in: app).prefix(4)))")
         expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
         waitForExpectations(timeout: 30)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         XCTAssertFalse(app.alerts.firstMatch.exists)
-        attachEditor(in: app, name: "recovered-drawing-editor")
         app.terminate()
     }
 }

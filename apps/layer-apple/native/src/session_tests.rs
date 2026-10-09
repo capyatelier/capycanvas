@@ -100,6 +100,234 @@ fn checkpoint(app: &App, exclusion: u64, clean: bool) {
     task.run();
 }
 
+fn presented_pixel(app: &App) -> [u8; 4] {
+    let host = &unsafe { &*app.0 }.host;
+    let view = host.session.state().camera.view();
+    let renderer = host.session.engine().backend().0.as_ref().unwrap();
+    let device = renderer.device();
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("session presented pixel"),
+        size: wgpu::Extent3d { width: view.width_px, height: view.height_px, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut presenter = layer_render_wgpu::ViewportPresenter::for_surface(renderer,
+        wgpu::TextureFormat::Rgba8UnormSrgb, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
+    presenter.present(renderer, &texture.create_view(&Default::default()), view,
+        host.session.state().palette.surround_linear).unwrap();
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("session presented pixel readback"), size: wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0,
+        origin: wgpu::Origin3d { x: view.width_px / 2, y: view.height_px / 2, z: 0 },
+        aspect: wgpu::TextureAspect::All }, wgpu::TexelCopyBufferInfo { buffer: &buffer,
+        layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT), rows_per_image: Some(1) } },
+        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 });
+    renderer.queue().submit([encoder.finish()]);
+    let (send, receive) = std::sync::mpsc::channel();
+    buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| { send.send(result).unwrap(); });
+    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(30)) }).unwrap();
+    receive.recv_timeout(std::time::Duration::from_secs(30)).unwrap().unwrap();
+    let mapped = buffer.slice(..).get_mapped_range().unwrap();
+    let pixel = mapped[..4].try_into().unwrap();
+    drop(mapped); buffer.unmap(); pixel
+}
+
+#[test]
+fn apple_fill_selection_survives_background_checkpoint_undo_redo_and_restart() {
+    for platform in [0, 1] {
+        let path = std::env::temp_dir().join(format!("capy-apple-fill-restart-{}", layer_core::PortableId::random()));
+        let app = launch(platform, &path);
+        let blank = app.pixels();
+        app.invoke("add_layer");
+        app.action(json!({"type":"set_layer_opacity","opacity":0.42}));
+        app.action(json!({"type":"set_color","rgba":[0.1,0.3,0.9,1]}));
+        app.invoke("select_all");
+        app.invoke("fill_selection");
+        let extent = unsafe { &*app.0 }.host.session.engine().document().composition().size;
+        let center = ((extent[1] / 2 * extent[0] + extent[0] / 2) * 4) as usize;
+        let sample = |pixels: &[u8]| <[u8; 4]>::try_from(&pixels[center..center + 4]).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let painted = loop {
+            app.draw_frame();
+            let pixels = app.pixels();
+            let pixel = sample(&pixels);
+            if i32::from(pixel[2]) > i32::from(pixel[0]) + 20 { break pixels; }
+            assert!(std::time::Instant::now() < deadline, "platform {platform}: fill is not blue: {pixel:?}");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        checkpoint(&app, 0, false);
+        assert!(app.pixels() == painted, "platform {platform}: background checkpoint changed the fill");
+        for (command, expected) in [("undo", &blank), ("redo", &painted)] {
+            app.invoke(command);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                app.draw_frame();
+                let actual = app.pixels();
+                if actual == *expected { break; }
+                assert!(std::time::Instant::now() < deadline,
+                    "platform {platform}: {command} expected {:?}, got {:?}", sample(expected), sample(&actual));
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        app.invoke("deselect");
+        checkpoint(&app, 0, false);
+        let document = unsafe { &*app.0 }.host.session.engine().document().clone();
+        assert_eq!(app.state()["layers"].as_array().unwrap().len(), 3);
+        drop(app);
+        let restored = launch(platform, &path);
+        assert_eq!(restored.state()["layers"].as_array().unwrap().len(), 3);
+        assert_saved_document(unsafe { &*restored.0 }.host.session.engine().document(), &document);
+        let actual = restored.pixels();
+        assert!(actual == painted,
+            "platform {platform}: restart expected {:?}, restored {:?}", sample(&painted), sample(&actual));
+        drop(restored);
+        let first_presented = App::new(platform);
+        let gpu = native_renderer();
+        let staged = layer_host::GpuContext::of(&gpu).rasterizer(Default::default(), &Default::default(), false).unwrap();
+        unsafe { &mut *first_presented.0 }.host.session.renderer_mut().0 = Some(staged.into());
+        unsafe { &mut *first_presented.0 }.host.prepare_canvas_frame(2_000_000_000, 2_000_000_000, true).unwrap();
+        assert!(!unsafe { &*first_presented.0 }.host.startup.complete);
+        let task = open(&first_presented, &path, false);
+        task.run();
+        assert_eq!(unsafe { capy_apple_session_adopt(first_presented.0, task.0) }, 0);
+        assert_eq!(unsafe { capy_session_restore_finished(task.0) }, 0);
+        let prepared = first_presented.pixels();
+        assert!(prepared == painted, "platform {platform}: adopted prepared drawing is not blue");
+        let before = presented_pixel(&first_presented);
+        assert!(i32::from(before[2]) > i32::from(before[0]) + 20,
+            "platform {platform}: prepared viewport is not blue: {before:?}");
+        unsafe { &mut *first_presented.0 }.host.prepare_canvas_frame(2_000_000_000, 2_000_000_000, false).unwrap();
+        let backdrop = presented_pixel(&first_presented);
+        first_presented.draw_until_idle();
+        let viewport = presented_pixel(&first_presented);
+        eprintln!("platform={platform} prepared={before:?} first={backdrop:?} settled={viewport:?}");
+        assert_eq!(backdrop, before, "platform {platform}: the first frame must show the prepared drawing");
+        assert_eq!(viewport, before, "platform {platform}: first presentation must retain the prepared viewport");
+        let presented = first_presented.pixels();
+        assert!(presented == painted,
+            "platform {platform}: first presented frame expected {:?}, restored {:?}", sample(&painted), sample(&presented));
+        drop((task, first_presented));
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
+fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and_retry() {
+    for platform in [0, 1] {
+        for peer in [false, true] {
+            let path = std::env::temp_dir().join(format!("capy-apple-unreadable-{}", layer_core::PortableId::random()));
+            let app = launch(platform, &path);
+            app.stroke(); app.draw_until_idle();
+            let painted = app.pixels();
+            if peer {
+                app.invoke("new_document");
+                let project = ProjectJob::new(&app, true);
+                assert_eq!(project.create([96, 64]), 0);
+                assert_eq!(unsafe { capy_apple_project_adopt(app.0, project.0, c"Untitled".as_ptr(), c"".as_ptr()) }, 0);
+                app.draw_until_idle();
+            }
+            checkpoint(&app, 0, true);
+            drop(app);
+            let index = path.join("window.json");
+            let original = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
+            let drawing = &original.drawings[0];
+            let head_path = path.join(&drawing.key).join("head.json");
+            let original_head = std::fs::read(&head_path).unwrap();
+            let mut head: serde_json::Value = serde_json::from_slice(&original_head).unwrap();
+            let metadata_path = path.join(&drawing.key).join("generations").join(format!("{}.json", head["current"]["id"].as_str().unwrap()));
+            let original_metadata = std::fs::read(&metadata_path).unwrap();
+            let mut metadata: serde_json::Value = serde_json::from_slice(&original_metadata).unwrap();
+            metadata["current"]["working"].as_object_mut().unwrap().remove("view_origin").unwrap();
+            let incompatible = serde_json::to_vec(&metadata).unwrap();
+            head["current"]["sha256"] = layer_ui::DestinationFingerprint::read(incompatible.as_slice()).unwrap().sha256.into();
+            head["previous"] = serde_json::Value::Null;
+            let incompatible_head = serde_json::to_vec(&head).unwrap();
+            std::fs::write(&metadata_path, &incompatible).unwrap();
+            std::fs::write(&head_path, &incompatible_head).unwrap();
+            let app = launch(platform, &path);
+            let failed = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
+            assert_eq!(failed.blocked.len(), 1);
+            assert_eq!(failed.drawings.iter().find(|row| failed.blocked.contains(&row.id)).unwrap().key, drawing.key);
+            assert_eq!(unsafe { &*app.0 }.window.documents.order().len(), 1);
+            assert!(!failed.blocked.contains(&unsafe { &*app.0 }.window.documents.selected()));
+            app.invoke("add_layer"); app.draw_until_idle();
+            let live = unsafe { &*app.0 }.host.session.engine().document().clone();
+            checkpoint(&app, 0, true);
+            assert_eq!(std::fs::read(&metadata_path).unwrap(), incompatible);
+            assert_eq!(std::fs::read(&head_path).unwrap(), incompatible_head);
+            drop(app);
+            let app = launch(platform, &path);
+            assert_saved_document(unsafe { &*app.0 }.host.session.engine().document(), &live);
+            checkpoint(&app, 0, false);
+            let sessions = CString::new(path.parent().unwrap().to_str().unwrap()).unwrap();
+            let scene = CString::new(path.file_name().unwrap().to_str().unwrap()).unwrap();
+            let retry = || SessionJob(unsafe { capy_apple_session_open(app.0, sessions.as_ptr(), scene.as_ptr(), false, true) });
+            let failed_retry = retry(); failed_retry.run();
+            assert!(failed_retry.error().unwrap().contains("view_origin"));
+            assert_eq!(unsafe { capy_apple_session_adopt(app.0, failed_retry.0) }, 0);
+            assert_eq!(unsafe { capy_session_restore_finished(failed_retry.0) }, 0);
+            checkpoint(&app, 0, false);
+            drop(failed_retry);
+            std::fs::write(&metadata_path, &original_metadata).unwrap();
+            std::fs::write(&head_path, &original_head).unwrap();
+            let repaired = retry(); repaired.run();
+            assert_eq!(repaired.error(), None);
+            assert_eq!(unsafe { capy_apple_session_adopt(app.0, repaired.0) }, 0, "{:?}", unsafe { &*app.0 }.error);
+            assert_eq!(unsafe { capy_session_restore_finished(repaired.0) }, 0, "{:?}", repaired.error());
+            app.draw_until_idle();
+            assert_saved_document(unsafe { &*app.0 }.host.session.engine().document(), &live);
+            assert_eq!(unsafe { &*app.0 }.window.documents.order().len(), 2);
+            assert!(layer_ui::SessionManifest::read(&index).unwrap().unwrap().blocked.is_empty());
+            let recovered = *unsafe { &*app.0 }.window.documents.order().last().unwrap();
+            assert_ne!(recovered, unsafe { &*app.0 }.window.documents.selected());
+            checkpoint(&app, 0, true);
+            drop((repaired, app));
+            let restored = launch(platform, &path);
+            assert_eq!(unsafe { &*restored.0 }.window.documents.order().len(), 2);
+            super::document_tabs::switch(&restored, recovered, false);
+            assert_eq!(restored.pixels(), painted);
+            assert!(unsafe { &*restored.0 }.host.session.engine().can_undo());
+            drop(restored);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+}
+
+#[test]
+fn apple_closing_new_work_keeps_unrestored_session_copies() {
+    for platform in [0, 1] {
+        let path = std::env::temp_dir().join(format!("capy-apple-unrestored-close-{}", layer_core::PortableId::random()));
+        std::fs::create_dir_all(path.join("preserved")).unwrap();
+        let head = path.join("preserved/head.json");
+        std::fs::write(&head, b"unsupported head").unwrap();
+        let manifest = layer_ui::SessionManifest::default().stage(vec![layer_ui::SessionDrawing { id: 1, key: "preserved".into() }], 1).unwrap();
+        let pending = manifest.begin_restore(1).unwrap();
+        let manifest = pending.finish_restore(pending.restoring[0], false).unwrap();
+        manifest.publish(&path.join("window.json")).unwrap();
+        let app = launch(platform, &path);
+        app.stroke(); app.draw_until_idle();
+        checkpoint(&app, 0, false);
+        checkpoint(&app, u64::MAX, true);
+        let preserved = layer_ui::SessionManifest::read(&path.join("window.json")).unwrap().unwrap();
+        assert_eq!(preserved.drawings.len(), 1);
+        assert_eq!(preserved.drawings[0].key, "preserved");
+        assert_eq!(preserved.blocked, vec![preserved.drawings[0].id]);
+        assert_eq!(std::fs::read(&head).unwrap(), b"unsupported head");
+        drop(app);
+        let app = launch(platform, &path);
+        checkpoint(&app, 0, true);
+        assert_eq!(layer_ui::SessionManifest::read(&path.join("window.json")).unwrap().unwrap().drawings.len(), 2);
+        assert_eq!(std::fs::read(&head).unwrap(), b"unsupported head");
+        drop(app);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
 #[test]
 fn apple_shared_image_objects_keep_f64_poses_pixels_and_history_across_workers_and_restart() {
     use layer_core::authored::OccurrenceContent;

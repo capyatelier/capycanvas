@@ -14,10 +14,14 @@ struct RecoveryPresentation: ViewModifier {
             }
             #endif
             .overlay(alignment: .bottom) {
-                if let error = recovery.error {
+                if let error = recovery.error ?? recovery.restoreError {
                     HStack {
-                        Text(error)
-                        Button(recovery.copy["retry"].string) { recovery.retry() }.accessibilityIdentifier("recovery-retry")
+                        Text(error).textSelection(.enabled)
+                        Button(recovery.copy["retry"].string) { recovery.retry() }
+                            .disabled(recovery.restoring).accessibilityIdentifier("recovery-retry")
+                        if recovery.canContinue {
+                            Button(recovery.copy["later"].string) { recovery.later() }.accessibilityIdentifier("recovery-later")
+                        }
                     }.padding(12).modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8))).padding()
                 }
             }

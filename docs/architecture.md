@@ -129,7 +129,9 @@ which controls need refreshing.
 
 Shader startup is staged. The host can show controls and constant bottom fills
 while the renderer prepares the current document and brush, then the remaining
-catalog. Painting
+catalog. A prepared drawing uses its renderer's readiness for its first
+presentation, including after recovery or a tab change; the startup background
+must not replace its rendered artwork. Painting
 waits for the required resources; showing the first frame is not the same as being
 ready for a stroke. Native compilation workers and incremental web preparation
 implement the same dependency ordering.

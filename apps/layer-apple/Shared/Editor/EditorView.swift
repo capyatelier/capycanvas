@@ -64,6 +64,11 @@ struct EditorView<Canvas: View>: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(store.bootstrap[store.snapshot["gpu_ready"].bool ? "action_failed" : "canvas_init_failed"].string)
                         .font(.headline).accessibilityIdentifier("Canvas error")
+                    ScrollView {
+                        Text(store.canvasDiagnostic)
+                            .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("canvas-error-detail")
+                    }.frame(maxHeight: 180)
                     if !store.snapshot["gpu_ready"].bool {
                         HStack {
                             Button(store.bootstrap["restart_canvas"].string) { store.restartCanvas() }.disabled(store.restartingCanvas).accessibilityIdentifier("Restart Canvas")
