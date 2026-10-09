@@ -39,10 +39,11 @@ opens leave current drawings unchanged. Reopening a path intentionally creates a
 independent drawing, consistent with existing opening semantics.
 
 Ctrl+Tab / Ctrl+Shift+Tab cycle drawings, Ctrl+PageDown / Ctrl+PageUp do the same,
-Ctrl+W closes the current drawing, Ctrl+Shift+W closes the window, and
-Ctrl+Shift+A opens the drawing selector even when Document Title is removed or
-chrome is hidden in fullscreen/Zen mode. Ctrl+N
-continues to open the New Drawing dialog. The selector supports keyboard focus,
+Ctrl+W closes the current drawing, and Ctrl+Shift+W closes the window.
+The shared, customizable Drawings command defaults to Ctrl+Shift+A and opens the
+selector even when Document Title is removed or chrome is hidden in
+fullscreen/Zen mode. Native editors retain their keys. Ctrl+N continues to open
+the New Drawing dialog. The selector supports keyboard focus,
 full names, unsaved indicators, and individual close controls. Tab bodies reorder
 by native press/movement slop without a hold for mouse, touch, and pen. Reordering
 stays inside the window; no tear-off window is implied. Drop validation, order,

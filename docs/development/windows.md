@@ -67,10 +67,13 @@ inactive drawings use one scratch renderer at a time. The active canvas appears
 after this bounded preparation of all tabs. A drawing that cannot be read or
 prepared, or whose restore was interrupted, stays on disk with its identity
 reserved while the others reopen; the window then asks about each one with the
-shared Later, Discard and Retry copy. Retry prepares that drawing on the session
-worker and adds it as an inactive tab. Storage failures for the whole session
-present Retry or Keep Open; Keep Open starts a separate session while retaining
-those copies.
+shared Later, Discard and Retry copy. Known failure details stay with each saved
+drawing across restarts and clear only after its restore is durably acknowledged.
+Retry prepares that drawing on the session worker and adds it as an inactive tab.
+Cleanup errors for retired copies are reported separately, so readable drawings
+can reopen and successfully published checkpoints remain acknowledged. Resource
+writes and membership publication must still succeed. Storage failures for the whole session present
+Retry or Keep Open; Keep Open starts a separate session while retaining those copies.
 A restored destination is checked before saving so external changes cannot be
 silently overwritten. Use Save As when the original drawing changed.
 File workers use `color_storage::export_profile` for imported profiles in export
@@ -107,6 +110,19 @@ long buttons overflow. Run `exercise-localization.ps1 -NoticeOnly` in each theme
 for the focused image-notice journey, including a narrow canvas and returning to
 the original width.
 
+Top-level application menus retain their buttons and flyouts when the language
+changes. Captions and natural widths refresh once per localization generation;
+unchanged publications skip menu text reads and measurements. Clock widths include
+the native control's padding in both customization and fullscreen. Choice controls
+retain each option's TextBlock even while WinUI moves the selected content into
+the collapsed presenter, so visible and accessible captions update together.
+The compact workspace selector keeps its shared Workspaces caption and a
+144-DIP width. A single drawing title uses the Web header's 180-DIP natural and
+80-DIP compact widths; multiple drawing tabs keep their existing width policy.
+Expanded workspace buttons cache the measured caption plus their native padding,
+up to 130 DIP. Their named group contains both the choices and Options; scroll
+automation uses the inner viewer.
+
 Empty localization metadata preserves the current context; a pending envelope
 stays queued until a full snapshot carries it. Properties, tool controls, filter
 results and options use semantic identities for their structural keys. Current
@@ -134,11 +150,33 @@ desktop with an enabled IME; physical GPU presentation needs Windows hardware.
 narrow Preferences, in both themes. Menu selectors use semantic IDs or the exact
 current caption from the shared snapshot.
 
+`exercise-header.ps1` compares the Clock caption before and after moving it from
+the component bank into the title bar, including its visible width.
+In Paint, it also checks the full workspace group, caption padding and options
+containment at 1200 DIP, then the compact selector at 960 DIP. The switcher journey
+adopts Paint and removes its center drawing title through customization before
+creating long-named workspaces. It requires the expanded selector, checks horizontal
+scrolling and fixed Options, then tests compact presentation separately.
+
+Use `exercise-localization.ps1 -HeaderOnly` for retained application-menu names,
+widths, shared/native geometry and current menu commands across all shipped
+languages. `-BlendOnly`
+collects English/Japanese/English Properties choice captions before, during and
+after opening the popup, preserving selection, control identity and document
+state. Run both themes. WinUI can omit separate text providers for boxed button
+content and collapsed choices; review the saved raw captures for caption fit and
+visible text instead of treating accessible names alone as visual proof.
+
 Activating Preferences deliberately sends shared Blur, restoring the tool used
 before temporary eyedropping. The sampler journey checks that restoration, then
 reenters the picker and checks current captions and unchanged sample choices.
 A windowless shared test checks pure language publication while picking stays
 active; the native fixture does not claim retained sampler identity across Blur.
+Run `exercise-color-picker.ps1 -Executable <path> -Theme dark` and repeat with
+`-Theme light` to check native double presses, sample choices and picker previews
+in isolated profiles. The held-finger check scans within the visible canvas bounds
+and checks that the accepted color comes from above the finger at the current
+display scale.
 
 The Layers panel presents shared attachment actions, owner visibility and group mode.
 Decorative clipping rails and effect links use realized thumbnail geometry and remain
@@ -337,12 +375,28 @@ been verified.
 
 Fluent catalogs and shared cursor SVGs use LF checkouts through `.gitattributes`.
 Their parser structure and byte hashes must stay identical across hosts.
+Original dependency notices in `tools/build/licenses/*.txt` preserve their exact
+bytes without checkout conversion.
+
+When shader cache-key inputs change, run
+`python tools/build/test_shader_generation.py`. Dependency assertions compare
+file identity, including Windows canonical paths, before checking generation
+invalidation and reuse.
 
 `exercise-artwork-recovery.ps1 -Executable <path> -Theme dark` checks automatic
 crash and orderly restarts, tab membership, the active drawing, Undo/Redo,
 cancelled and discarded drawing closes, missing or changed saved originals,
-and idle write coalescing. Repeat with
-`-Theme light`; the VM fixture runner selects both variants.
+and idle write coalescing. It retains the owned drawing window at each restart
+and captures the composed canvas after canvas and brush readiness. Review the
+reopened artwork as well as tab and history state. Repeat with `-Theme light`;
+the VM fixture runner selects both variants. Window-free `recovery::tests` also
+check saved failure details, stale restore completions, identity remapping,
+publication failures and cleanup warnings after committed checkpoints.
+Shared filesystem and SQLite calls resolve existing paths before native publication,
+including when private storage or backup directories exceed the legacy Windows path
+length. Window-free core and native workspace regressions check long-path recovery
+details, atomic cancellation, database WAL data and exact backup contents without
+requiring the system-wide long-path setting.
 
 Drawer and expansion query lifecycle tests live in `layer-host`. Windows
 workspace tests cover native snapshot insets and the JSON/CPU packet boundary.
@@ -370,10 +424,52 @@ D3D12 uses the same pinned DXC as the app. Before direct Cargo GPU tests, prepen
 that folder to `$env:PATH`, for example
 `$env:PATH=(Resolve-Path artifacts/windows/Release).Path+';'+$env:PATH`.
 
+The zoom menu grows to fit its shared captions and shortcut hints. Its readout
+exposes localized open/closed accessibility status after the native popup events.
+`exercise-zoom-readout.ps1` checks each caption's full text and visible character
+rectangles, containment and shortcut separation, and waits for popup acknowledgment.
+Review the raw captures for complete glyphs; positive character bounds can still
+include partial glyphs. It checks wheel navigation
+while the middle or right mouse button remains held, including horizontal, Shift
+and Ctrl wheel input, zoom locks and continuing the same pan after scrolling.
+Modifier keys remain held until the app acknowledges the input. Before painting,
+the fixture focuses the canvas and closes the tool drawer with Escape. It waits
+for visible ink before scrolling and after each continuation of the same contact,
+including while Shift or Ctrl remains held, then checks the unchanged camera and
+one-step stroke history. Run both themes and review the captures.
+
+Use `exercise-zoom-readout.ps1 -Executable <path> -Navigation -Device mouse`
+for navigation tools, held keys, view commands, tool double presses and drawing
+shortcuts. Repeat with `-Device pen` and `-Device touch`, each with `-Theme dark`
+and `-Theme light`. The mouse cases capture the active Windows cursor using its
+handle and hotspot over the screen pixels; review those images separately from
+the shared cursor state. The mouse journey also checks hidden brush cursors
+after held navigation and command-search dismissal without moving the pointer.
+Synthetic input does not qualify physical pen, touch or
+trackpad behavior. Run the ordinary zoom journey separately.
+
 `exercise-clipboard.ps1 -Executable <path> -Theme dark` checks clipboard formats,
-Copy/Cut history, Paste as New Image from pixels, image objects and external file
-batches, startup Paste and ordinary Paste into a saved drawing. New-image checks
-save the result and return to an unchanged source tab. Repeat with `-Theme light`.
+Copy/Cut history and layer structure, shown-position and cursor placement,
+Paste as New Image from pixels, image objects and external file batches, startup
+Paste and ordinary Paste into a saved drawing. Selected-region checks preserve
+separate layers through Copy, Cut, Paste and Undo. Focused-mask checks keep
+internal and external paste in the mask without changing paint content or adding
+layers. New-image checks verify the save prompt for authored layers, save the
+result and return to an unchanged source
+tab. A second native window pastes the retained layer, copies it and closes;
+the original window then pastes that copy as a new image and compares its
+authored properties and raster payloads with the original saved package.
+Cursor placement waits for the shared cursor to appear in the composed
+canvas before sending the shortcut, then checks the exact saved image affine.
+Ctrl+Insert, Shift+Delete and Shift+Insert exercise artwork Copy, Cut and Paste
+and native text editing. Review the open Edit-menu capture for the longer
+shortcut hints. Repeat with `-Theme light`.
+
+`exercise-color-editor.ps1 -Executable <path> -Theme dark` checks color editing,
+native clipboard ownership and the Paper fill. It records the immediate fill,
+then waits for the same layer thumbnail to be ready before capturing it again.
+Review the thumbnail color in both themes; readiness alone does not prove its
+visible content. Repeat with `-Theme light`.
 
 `exercise-idle-brush.ps1 -Executable <path> -Theme dark` checks painting as soon
 as the selected brush is ready, later Wet Round, Smudge, Liquify and G-Pen
@@ -383,8 +479,17 @@ observation before claiming coverage of closing during compilation. Run it on
 an activated, owned private desktop with `CAPY_PRIVATE_DESKTOP` set
 to that desktop's name; it verifies both the thread and active input desktop
 before launching the app or sending input. Repeat with `-Theme light`. Its
-180-second catalogue wait checks eventual functionality; it does not replace
-startup deadline tests or performance measurements.
+180-second wait checks completion of requested shader preparation, not preparation
+of every brush. Later selections exercise first-use preparation and exact history;
+these checks do not replace startup deadlines or performance measurements.
+
+`exercise-canvas-editing.ps1 -Executable <path> -Theme dark` checks raster selection
+and transform previews with mouse and pen. Selecting Pen accepts the nonzero
+rotation preview and waits for the brush to be selected and ready; scaling and
+translation retain explicit Apply. Exact exported PNG comparisons check the
+changed result and one-step Undo, Redo and restoration. The fixture uses an
+isolated English profile and the owned drawing window. Repeat with `-Theme light`
+and review the captures, including the transform controls after changing theme.
 
 Open header menus follow shared command state while document operations finish.
 Their native items retain focus and identity; unchanged menu models skip updates.
@@ -404,6 +509,15 @@ and Photo selection tools, the Eraser category, and a drawing group added to the
 header through customization, then narrows the window until that group overflows,
 with injected mouse, pen and touch. Repeat with `-Theme light`.
 The VM fixture names are `tool-variations` and `tool-variations:light`.
+
+Properties sliders place the caption beside the inline slider and value field.
+They reuse the choice-row layout: when the remaining width is below
+`min(150, row width)`, the caption and control each occupy a full-width row.
+Long captions trim within the row and relabel without replacing the control.
+`exercise-effects.ps1 -Executable <path> -PropertyLayout -Theme dark` checks
+inline opacity and filter sliders, typed edits and drag history, narrow Russian
+captions and a return to wider English controls with retained values and identity.
+Repeat with `-Theme light` and review the composed captures.
 
 Properties, Tool Settings and Tool Options share one gradient editor
 (`GradientView.cpp`); a worker thread rasterizes its dithered preview through the
@@ -427,7 +541,7 @@ the precision and clipping controls. The `layout-dark` and `layout-light` theme
 variants check both scope panels in every registered language at 1100 and 1500
 pixels wide.
 
-Canvas cursor shapes come from shared Rust and the shared GPU presenter. Tool
+Painting cursor shapes come from shared Rust and the shared GPU presenter. Tool
 uses the active tool's icon, aligned to its working point; Tool and brush size
 adds the current brush outline for brush tools. Windows presents the shared
 cursor choices directly in Pen & Input preferences.
@@ -435,6 +549,21 @@ cursor choices directly in Pen & Input preferences.
 checks persisted settings, and compares composed mouse and pen hover pixels for
 six tools without changing the drawing. Repeat with `-Theme light`, or use
 `tools/windows-vm/windows-vm.py fixtures cursors` for both themes on WARP.
+
+Navigation follows the shared [drawing and navigation](../ui/shared-ui.md#drawing-and-navigation)
+commands and input rules. Windows consumes `navigation_cursor` for native pan,
+zoom and rotation cursors; zoom uses embedded cursor resources at multiple pixel
+sizes. Cursor changes update independent canvas input and the XAML island
+source when the pointer actually hits the canvas, including while it is still.
+The island update excludes other windows, native controls, menus and dialogs.
+Panel and header tool buttons forward double presses with the current
+shared `resolved_control`. Drawing-cycle keys and Ctrl+Shift+A for Drawings use
+customizable shared commands and respect native text input. The document service
+completes `AdjacentDrawing` before activating the next tab,
+so the originating drawing can be parked without a pending request.
+Window activation refreshes stored workspace choices while a drawing is parked;
+workspace operations use the shared controller's validation. Drawing-cycle
+fixtures also require the native canvas status to clear after activation.
 
 `exercise-ime.ps1 -Executable <path> -Theme dark` exercises the installed
 Microsoft Japanese IME on the interactive test desktop. Enable Japanese input
@@ -484,7 +613,8 @@ the focused header journeys also check placement cancellation and keyboard input
   screen rectangle on the private desktop. `PrintWindow` can return an earlier
   SwapChainPanel image. Wait for the expected visible change before comparing
   pixels. For restoration, compare with the original pixels; a fixed dark-panel
-  threshold cannot verify the same journey in the light theme. Move the owned
+  threshold cannot verify the same journey in the light theme. Keep the sample
+  grid, camera and canvas bounds from one checked projection. Move the owned
   pointer away from the capture area and dismiss tooltips before a baseline.
 - **Use current menu identifiers.** `NativeMenuItems` uses the shared command ID
   for routed commands; other layer actions use `layer-menu-<op>`. Check the shared
@@ -492,6 +622,8 @@ the focused header journeys also check placement cancellation and keyboard input
 - **Select the telemetry owner.** Use `Workspace-Root` from `CapyUia.ps1` for
   drag state and arranged workspace bounds. The outer window and inner workspace
   share an accessible name; only the inner workspace publishes this state.
+- **Keep callback data distinct.** `Wait-Until` callbacks run in its PowerShell
+  scope. Expected values must not share names with the helper's parameters.
 - **One snapshot per assertion.** Read related fields from one state file; check
   its `process_id`, `window_id` and freshness.
 - **Failures keep the app.** A failed fixture leaves its app running for
@@ -535,8 +667,8 @@ with `-Theme light`; the VM runner names are `illustration-filters` and
 image packages with built-in and ICC profiles, including Nearest sampling with
 F64 placement. It checks displayed pixels and visibility history, then saves and
 reopens each drawing while preserving shared image identities and object poses.
-Repeat with `-Theme light`. This validates existing package support; image object
-authoring remains unexposed.
+Repeat with `-Theme light`. Use `exercise-image-rows.ps1` for native
+image-authoring and conversion journeys.
 
 ### GPU reconstruction
 
@@ -580,6 +712,9 @@ cargo run --locked -p layer-ui --example compact_color_fixture -- artifacts/wind
 ./apps/layer-windows/scripts/capture-compact-color.ps1 -Executable artifacts/windows/ColorFixture/CapyCanvas.exe -FixtureFile artifacts/windows/compact-color-parity/dark-160.json
 ```
 
+The Zoom readout journey checks that opening and closing the readout preserves
+the exact camera, artwork and undo history.
+
 Pass the native reports to the `number-controls` and `color-panel` scenarios of
 [the visual tools](../../tools/visual/README.md). Rebuild normally before using
 the editor again.
@@ -587,7 +722,8 @@ the editor again.
 ## Matched editor captures
 
 Compare the editor with the Web app at the same document, workspace, theme,
-viewport and scale. Build the Web reference with `bash apps/layer-web/build.sh`
+effective accent, viewport and scale. Build the Web reference with
+`bash apps/layer-web/build.sh`
 (from Git Bash, after the [Web prerequisites](web.md#prerequisites)). Install
 Node.js and the Python packages in
 [`tools/visual/requirements.txt`](../../tools/visual/requirements.txt), and set
@@ -617,11 +753,22 @@ python tools/visual/compare.py (Join-Path $run 'web-light-initial.png') (Join-Pa
 expanded headers; repeat at 744 and 1200. It refuses smoke-test controls, measures
 the actual display scale and saves the raw client image together with the
 measured XAML surface. Windows keeps an OS frame above the XAML content; the
-manifest records the offset.
+manifest records the offset and effective palette. The Web collector supplies
+the native effective accent through the shared `system_theme_changed` action
+and asserts that the resulting accent matches. Preserve earlier captures when
+correcting unmatched inputs.
+
+Tool Set geometry compares the visible part of each control after viewport and
+ancestor clipping, retaining full DOM bounds in `unclipped_bounds`. Controls
+wholly outside the visible panel are excluded from its geometry inventory.
+Layers uses the current semantic blend button. Each host still measures its
+own controls; these records do not alter the raw images or comparison limits.
 
 Compare every image pair and look at the screenshots as well as the geometry
 reports: matching geometry does not mean matching pixels. Never rescale, crop or
 mask captures, and never loosen comparison tolerances to make a comparison pass.
+Preserve exact comparison failures; matching geometry or an inherited host
+difference does not turn a pixel failure into a parity pass.
 
 ## Diagnose a running app
 

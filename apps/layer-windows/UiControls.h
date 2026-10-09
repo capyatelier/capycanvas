@@ -292,9 +292,13 @@ inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,LocalizedCopy 
     return result;
 }
 inline void comboOptionText(ComboBoxItem const& option,hstring const& text){
-    auto content=option.Content().try_as<TextBlock>();
-    if(!content){content=TextBlock();content.TextTrimming(TextTrimming::CharacterEllipsis);option.Content(content);}
-    content.Text(text);AutomationProperties::SetName(option,text);
+    auto content=option.Tag().try_as<TextBlock>();
+    if(!content){
+        content=option.Content().try_as<TextBlock>();
+        if(!content){content=TextBlock();content.TextTrimming(TextTrimming::CharacterEllipsis);option.Content(content);}
+        option.Tag(content);
+    }
+    if(content.Text()!=text)content.Text(text);AutomationProperties::SetName(option,text);
 }
 inline ComboBoxItem comboOption(ComboBox const& control,hstring const& text,hstring const& id=L""){
     ComboBoxItem option;comboOptionText(option,text);if(!id.empty())AutomationProperties::SetAutomationId(option,id);

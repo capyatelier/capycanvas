@@ -373,7 +373,6 @@ impl Documents {
         selector.set_widget_name("document-selector");
         selector.set_hexpand(true);
         selector.add_css_class("flat");
-        selector.set_tooltip_text(Some("Switch drawing · Ctrl+Shift+A"));
         let selector_label = gtk::Label::new(None);
         selector_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         selector_label.set_width_chars(1);
@@ -487,6 +486,10 @@ impl Documents {
         let gpu = w.gpu.borrow();
         let Some(g) = gpu.as_ref() else { return; };
         let state = g.session.state();
+        if let Some(command) = state.commands.iter().find(|command| command.id == layer_ui::CommandId::Drawings)
+            && self.selector.tooltip_text().as_deref() != Some(command.tooltip.as_str()) {
+            self.selector.set_tooltip_text(Some(&command.tooltip));
+        }
         if let Some(tab) = state.tabs.first() {
             self.title.set_label(&format!(
                 "{}{} · {} × {}",
@@ -714,7 +717,6 @@ impl Documents {
         }
         let shift = modifiers.contains(gdk::ModifierType::SHIFT_MASK);
         match key {
-            gdk::Key::a | gdk::Key::A if shift => self.show_selector(w),
             gdk::Key::w | gdk::Key::W if shift => w.window.close(),
             _ => return false,
         }

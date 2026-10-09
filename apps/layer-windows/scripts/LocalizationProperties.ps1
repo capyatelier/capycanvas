@@ -1,3 +1,203 @@
+function Header-MenuState($View,$Identities){
+ $specs=@($View.application_menus);$density=[CapyRowPointer]::GetDpiForWindow([IntPtr]$script:current.hwnd)/96.
+ $entries=@($View.header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'menu_labels'})
+ if($entries.Count -ne 1 -or $View.header.editing){throw 'Menu localization requires the ordinary wide title bar'}
+ $hit=@{widths=$null;presentation=$null;captions=$null}
+ try{
+ Wait-Until {
+  $widths=@{};$buttons=@{};$captions=@{};$right=$null
+  foreach($spec in $specs){
+   $button=Find ('application-menu-'+$spec.id) -Visible -Type ([System.Windows.Automation.ControlType]::Button)
+   if(!$button -or $button.Current.Name -ne $spec.label){return $false}
+   $box=$button.Current.BoundingRectangle
+   if($box.Width -le 0 -or $box.Height -le 0 -or ($null -ne $right -and $box.Left -lt $right-1)){return $false}
+   $texts=@($button.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {!$_.Current.IsOffscreen -and ($_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -or $_.Current.ClassName -eq 'TextBlock')})
+   $captionRecords=@()
+   foreach($text in $texts){
+    $caption=$text.Current.BoundingRectangle;$bounds=$box;$bounds.Inflate(1,1)
+    if($text.Current.Name -ne $spec.label -or $caption.Width -le 0 -or $caption.Height -le 0 -or !$bounds.Contains($caption)){return $false}
+    if([Math]::Abs(($box.Width-$caption.Width)/$density-16) -gt 1){return $false}
+    $captionRecords+=[pscustomobject]@{runtime_id=($text.GetRuntimeId() -join ':');name=$text.Current.Name;bounds=$caption.ToString()}
+   }
+   $captions[$spec.id]=[pscustomobject]@{observable=($texts.Count -gt 0);caption_current=$(if($texts.Count){$true}else{$null});providers=$captionRecords;visual_review='required'}
+   $buttons[$spec.id]=$box;$widths[$spec.id]=$box.Width/$density;$right=$box.Right
+  }
+  try{$titlebar=Control 'title-bar';$presentation=$titlebar.Current.ItemStatus|ConvertFrom-Json}catch{return $false}
+  $metric=@($presentation.metrics|Where-Object id -eq $entries[0].id)
+  $geometry=@($presentation.geometry.items|Where-Object id -eq $entries[0].id)
+  $actual=@($presentation.actual_items|Where-Object id -eq $entries[0].id)
+  if($metric.Count -ne 1 -or $geometry.Count -ne 1 -or $actual.Count -ne 1 -or $metric[0].width -le 0){return $false}
+  if([Math]::Abs($metric[0].width-$geometry[0].bounds.width) -gt 1 -or [Math]::Abs($metric[0].width-$actual[0].bounds.width) -gt 1){return $false}
+  foreach($axis in @('x','y','width','height')){if([Math]::Abs($geometry[0].bounds.$axis-$actual[0].bounds.$axis) -gt 1){return $false}}
+  $origin=$titlebar.Current.BoundingRectangle;$group=$actual[0].bounds
+  if($origin.IsEmpty -or $origin.Width -le 0 -or $origin.Height -le 0 -or $group.width -le 0 -or $group.height -le 0){return $false}
+  $groupBounds=[Windows.Rect]::new($origin.Left+$group.x*$density,$origin.Top+$group.y*$density,$group.width*$density,$group.height*$density)
+  $groupBounds.Inflate(1,1)
+  foreach($buttonBounds in $buttons.Values){if(!$groupBounds.Contains($buttonBounds)){return $false}}
+  $hit.widths=$widths;$hit.presentation=$presentation;$hit.captions=$captions;$true
+ } 'Retained application menus did not present their current shared captions and measured geometry' 15
+ } catch{
+  try{
+   function Header-DiagnosticElement($Element){
+    $value=$Element.Current
+    [ordered]@{runtime_id=($Element.GetRuntimeId() -join ':');automation_id=$value.AutomationId;name=$value.Name;type=$value.ControlType.ProgrammaticName;class=$value.ClassName;process_id=$value.ProcessId;hwnd=$value.NativeWindowHandle;offscreen=$value.IsOffscreen;enabled=$value.IsEnabled;control_element=$value.IsControlElement;content_element=$value.IsContentElement;bounds=$value.BoundingRectangle.ToString()}
+   }
+   $buttons=@(foreach($spec in $specs){
+    $id='application-menu-'+$spec.id
+    $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$id)
+    $matches=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition))
+    @{expected_id=$id;expected_caption=$spec.label;matches=@(foreach($element in $matches){@{element=(Header-DiagnosticElement $element);descendants=@(foreach($child in $element.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){Header-DiagnosticElement $child})}})}
+   })
+   $title=Find 'title-bar' -Within $root
+   $presentation=$null;$presentationRaw=$null
+   if($title){$presentationRaw=$title.Current.ItemStatus;try{$presentation=$presentationRaw|ConvertFrom-Json}catch{}}
+   $currentView=Model
+   [ordered]@{utc=[DateTime]::UtcNow.ToString('o');error='Retained application menus did not present their current shared captions and measured geometry';deadline_seconds=15;expected_view_tag=$View.windows_active_tag;current_view_tag=$currentView.windows_active_tag;owned_process_id=$review.Id;retained_hwnd=$script:current.hwnd;dpi=96*$density;window=(Header-DiagnosticElement $root);shared_menus=@($specs|Select-Object id,label);current_shared_menus=@($currentView.application_menus|Select-Object id,label);header_model=$currentView.header;menu_entries=$entries;expected_identities=$Identities;native_buttons=$buttons;titlebar=$(if($title){Header-DiagnosticElement $title}else{$null});titlebar_presentation=$presentation;titlebar_presentation_raw=$presentationRaw}|ConvertTo-Json -Depth 40|Set-Content -LiteralPath (Join-Path $run 'header-menu-failure-diagnostic.json') -Encoding utf8
+  }catch{
+   ($_|Out-String)|Set-Content -LiteralPath (Join-Path $run 'header-menu-diagnostic-error.txt') -Encoding utf8
+  }
+  throw
+ }
+ Check-Identities $Identities
+ if(!$root.Current.Name.EndsWith(' · '+(Catalog-Text $View.windows_active_tag 'common-app-name' 'common'))){throw 'The retained window title did not use the current app name'}
+ [pscustomobject]@{tag=$View.windows_active_tag;labels=@($specs|Select-Object id,label);widths=$hit.widths;presentation=$hit.presentation;caption_observations=$hit.captions;visual_review='Required: inspect raw menu captions and fit; missing text providers do not establish a visual pass'}
+}
+
+function Header-MenuSurface{
+ Use-Window $second
+ if(!(Model).preferences){Menu-Command 'edit' 'settings'}
+ Invoke-Id 'preference-page-appearance';Language-Choice 1|Out-Null
+ Wait-Until {(Model $first).windows_active_tag -eq 'en'} 'Menu baseline did not adopt English' 30
+ Use-Window $first
+ $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+ Wait-Until {$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized} 'Menu localization window did not maximize' 15
+ $baseline=Fresh-Model $first 'en';$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation
+ $identities=Native-Identities @($baseline.application_menus|ForEach-Object {'application-menu-'+$_.id})
+ $baseline=Header-MenuState $baseline $identities;$evidence=@($baseline);$largest=0
+ $indices=@(1..$shippedTags.Count)
+ if($LanguageLimit -gt 0){$indices=@($indices|Select-Object -First $LanguageLimit)}
+ foreach($index in ($indices+@(1))){
+  Use-Window $second;$choice=Language-Choice $index
+  Wait-Until {(Model $first).windows_active_tag -eq $choice.tag} 'Retained header did not adopt the new context' 30
+  Use-Window $first;$view=Fresh-Model $first $choice.tag
+  if(($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu){throw 'Menu language publication changed document or GPU ownership'}
+  $current=Header-MenuState $view $identities;$evidence+=$current
+  $width=($current.widths.Values|Measure-Object -Sum).Sum
+  if($choice.tag -in @('en','de','ja','vi','th') -or $width -gt $largest -or @($current.caption_observations.Values|Where-Object {!$_.observable}).Count){Capture-Window $first ('header-menus-'+$evidence.Count+'-'+$choice.tag)}
+  $largest=[Math]::Max($largest,$width)
+  Application-Menu 'view'
+  $fit=@($view.state.commands|Where-Object id -eq 'fit_canvas')[0]
+  Wait-Until {$command=Find 'fit_canvas' -Visible;$command -and $command.Current.Name -eq $fit.label} 'Retained menu did not open its current shared command copy' 10
+  Key 27;Wait-Until {!(Find 'fit_canvas' -Visible)} 'Retained application menu did not dismiss' 10
+ }
+ foreach($id in $baseline.widths.Keys){if([Math]::Abs($current.widths[$id]-$baseline.widths[$id]) -gt 1){throw 'Returning to English retained another locale menu width'}}
+ $evidence|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'retained-header-menus.json')
+}
+
+function Blend-CaptionRecord($Box){
+ if($Box.Current.ProcessId -ne $review.Id){throw 'Blend control is outside the owned process'}
+ $selected=Selected-Option $Box
+ if(!$selected -or $selected.Current.ProcessId -ne $review.Id){throw 'Blend choice has no owned selected item'}
+ $bounds=$Box.Current.BoundingRectangle
+ $texts=@(foreach($node in $Box.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){
+  $value=$node.Current
+  if($value.ControlType -eq [System.Windows.Automation.ControlType]::Text -or $value.ClassName -eq 'TextBlock'){
+   $rect=$value.BoundingRectangle
+   [pscustomobject]@{runtime_id=($node.GetRuntimeId() -join ':');name=$value.Name;class=$value.ClassName;offscreen=$value.IsOffscreen;bounds=$rect.ToString();visible_in_combo=(!$value.IsOffscreen -and !$rect.IsEmpty -and $rect.Width -gt 0 -and $rect.Height -gt 0 -and $bounds.Contains($rect))}
+  }
+ })
+ [pscustomobject]@{combo_id=($Box.GetRuntimeId() -join ':');combo_name=$Box.Current.Name;combo_bounds=$bounds.ToString();expanded=$Box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Current.ExpandCollapseState.ToString();selected_id=($selected.GetRuntimeId() -join ':');selected_name=$selected.Current.Name;selected_offscreen=$selected.Current.IsOffscreen;selected_bounds=$selected.Current.BoundingRectangle.ToString();texts=$texts}
+}
+function Blend-CaptionSurface{
+ Use-Window $second
+ if(!(Model).preferences){Menu-Command 'edit' 'settings'}
+ Invoke-Id 'preference-page-appearance';Language-Choice 1|Out-Null
+ $japanese=1+[Array]::IndexOf($shippedTags,'ja')
+ if($japanese -lt 1){throw 'The shipped Japanese language is unavailable'}
+ Wait-Until {(Model $first).windows_active_tag -eq 'en'} 'Blend baseline did not adopt English' 30
+ Use-Window $first
+ $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
+ Wait-Until {$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized} 'Blend proof window did not maximize' 15
+ Menu-Command 'file' 'open_document';Choose-Path (Join-Path $repo 'apps/layer-web/fixtures/shared-image-f64-builtin.capy')
+ Wait-Until {@((Model).state.layers|Where-Object object).Count -eq 3 -and (Model).brush_ready} 'Blend image fixture did not prepare' 90
+ $layer=@((Model).state.layers|Where-Object object)[0].id
+ Invoke-Id "layer-$layer-name";Property-Panel 'properties'
+ $box=Control 'property-blend' -Arranged;$baseline=Fresh-Model $first 'en'
+ $field=@($baseline.state.layer_properties.controls|Where-Object key -eq 'blend')[0]
+ if($field.kind.kind -ne 'choice' -or $field.value.value -ne 0){throw 'Image Properties did not expose the unchanged Normal blend choice'}
+ $comboId=$box.GetRuntimeId() -join ':';$optionId=(Selected-Option $box).GetRuntimeId() -join ':';$rawIndex=$field.value.value
+ $document=$baseline.state.document_file|ConvertTo-Json -Depth 30 -Compress;$gpu=$baseline.windows_gpu_generation;$values=Property-Values $baseline
+ $records=@();$issues=@();$ordinal=0
+ foreach($index in @(1,$japanese,1)){
+  $ordinal++;Use-Window $second;$choice=Language-Choice $index
+  Wait-Until {(Model $first).windows_active_tag -eq $choice.tag} 'Blend window did not adopt the current language' 30
+  Use-Window $first;$view=Fresh-Model $first $choice.tag
+  $field=@($view.state.layer_properties.controls|Where-Object key -eq 'blend')[0];$expected=$field.kind.options[$rawIndex]
+  if($field.value.value -ne $rawIndex -or $expected -ne (Catalog-Text $choice.tag 'resources-blend-normal' 'resources')){throw 'Shared blend choice did not retain its semantic index/current canonical label'}
+  if(($view.state.document_file|ConvertTo-Json -Depth 30 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or (Property-Values $view) -ne $values){throw 'Language publication changed authored Properties values or document/GPU ownership'}
+  $box=Control 'property-blend' -Arranged
+  Wait-Until {$box.Current.Name -eq $field.label} 'Blend control accessibility label did not acknowledge the language' 15
+  $closed=Blend-CaptionRecord $box
+  if($closed.expanded -ne 'Collapsed'){throw 'Blend caption proof requires a closed native combo'}
+  $name=('blend-caption-{0:D2}-{1}' -f $ordinal,$choice.tag)
+  Capture-Window $first ($name+'-collapsed')
+  $afterCapture=Blend-CaptionRecord $box
+  $popup=@{options=@();selected=$null;index=-1};$pattern=$box.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+  try{
+   $pattern.Expand()
+   Wait-Until {
+    $popup.selected=Selected-Option $box;$bounds=$popup.selected.Current.BoundingRectangle
+    if($popup.selected.Current.IsOffscreen -or $bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0){return $false}
+    $popup.options=@($box.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ListItem)))
+    $ids=@($popup.options|ForEach-Object {$_.GetRuntimeId() -join ':'});$popup.index=[Array]::IndexOf($ids,($popup.selected.GetRuntimeId() -join ':'))
+    $popup.index -ge 0 -and $pattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded
+   } 'Blend popup did not arrange its retained selected item' 15
+   $opened=Blend-CaptionRecord $box
+   $selectedBounds=$popup.selected.Current.BoundingRectangle
+   $selectedTexts=@(foreach($node in $popup.selected.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){
+    $value=$node.Current
+    if($value.ControlType -eq [System.Windows.Automation.ControlType]::Text -or $value.ClassName -eq 'TextBlock'){
+     $rect=$value.BoundingRectangle
+     [pscustomobject]@{name=$value.Name;offscreen=$value.IsOffscreen;bounds=$rect.ToString();runtime_id=($node.GetRuntimeId() -join ':');arranged=(!$rect.IsEmpty -and $rect.Width -gt 0 -and $rect.Height -gt 0);contained_in_selected=$selectedBounds.Contains($rect)}
+    }
+   })
+   Capture-Window $first ($name+'-popup')
+   if($pattern.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded){throw 'The blend popup closed before its composed capture completed'}
+  }finally{
+   if($pattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded){$pattern.Collapse()}
+  }
+  Wait-Until {$pattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed} 'Blend popup did not close' 10
+  $afterPopup=Blend-CaptionRecord $box;Capture-Window $first ($name+'-after-popup')
+  $ending=Fresh-Model $first $choice.tag;$endingField=@($ending.state.layer_properties.controls|Where-Object key -eq 'blend')[0]
+  if($endingField.value.value -ne $rawIndex -or ($ending.state.document_file|ConvertTo-Json -Depth 30 -Compress) -ne $document -or $ending.windows_gpu_generation -ne $gpu -or (Property-Values $ending) -ne $values){throw 'Opening the native choice changed the semantic selection or document/GPU ownership'}
+  $closedRecords=[ordered]@{before_capture=$closed;after_capture=$afterCapture;after_popup=$afterPopup}
+  $closedCaptions=@(foreach($state in $closedRecords.Keys){
+   $record=$closedRecords[$state];$visible=@($record.texts|Where-Object {!$_.offscreen});$captionCurrent=$null
+   if($record.expanded -ne 'Collapsed'){$issues+="$name $state did not retain a collapsed native combo"}
+   if($visible.Count){
+    $captionCurrent=@($visible|Where-Object {$_.name -ne $expected -or !$_.visible_in_combo}).Count -eq 0
+    if(!$captionCurrent){$issues+="$name $state visible caption is stale or outside the arranged combo"}
+   }
+   [pscustomobject]@{state=$state;observable=($visible.Count -gt 0);caption_current=$captionCurrent;visual_review='required'}
+  })
+  $closedObservable=@($closedCaptions|Where-Object {!$_.observable}).Count -eq 0
+  $closedCurrent=if(@($closedCaptions|Where-Object {$_.observable -and !$_.caption_current}).Count){$false}elseif($closedObservable){$true}else{$null}
+  $entry=[pscustomobject]@{ordinal=$ordinal;tag=$choice.tag;expected=$expected;raw_index=$field.value.value;shared_field=$field;combo_id_expected=$comboId;option_id_expected=$optionId;collapsed=$closed;collapsed_after_capture=$afterCapture;popup=$opened;popup_selected_index=$popup.index;popup_selected_texts=$selectedTexts;after_popup=$afterPopup;collapsed_caption_states=$closedCaptions;collapsed_text_observable=$closedObservable;collapsed_caption_current=$closedCurrent;visual_review='required';document_unchanged=$true;gpu_generation=$gpu}
+  $records+=$entry
+  foreach($record in @($closed,$afterCapture,$opened,$afterPopup)){
+   if($record.combo_id -ne $comboId -or $record.selected_id -ne $optionId){$issues+="$name replaced a retained ComboBox/ComboBoxItem"}
+   if($record.selected_name -ne $expected){$issues+="$name selected-option accessibility caption is stale in $($record.expanded) state"}
+  }
+  if($popup.index -ne $rawIndex){$issues+="$name changed the native selected option index"}
+  if(($closed.texts|ConvertTo-Json -Depth 6 -Compress) -ne ($afterCapture.texts|ConvertTo-Json -Depth 6 -Compress)){$issues+="$name collapsed caption changed during screenshot capture"}
+  $visibleSelected=@($selectedTexts|Where-Object {!$_.offscreen})
+  if(!$visibleSelected.Count -or @($visibleSelected|Where-Object {$_.name -ne $expected -or !$_.arranged -or !$_.contained_in_selected}).Count){$issues+="$name selected popup captions must all be current, arranged and contained in the selected item"}
+  @{theme=$Theme;checks=$records;issues=$issues;visual_review='Required: compare raw collapsed/popup/after-popup screenshots; accessibility providers can differ from rendered selected content'}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'retained-blend-caption.json')
+ }
+ if($issues.Count){throw ('Retained blend caption proof failed: '+($issues -join '; '))}
+}
+
+
 function Shown-Value($Control){$name=$Control.Current.Name;$name.Substring($name.LastIndexOf(" ")+1)}
 function Workspace-Grips{
  $nodes=@($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {$_.Current.AutomationId -match '^(group-grip-|panel-footer-grip-|ribbon-grip-|divider-|floating-\d+-)'})

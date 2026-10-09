@@ -122,8 +122,16 @@ failure. It never rescales, crops or masks.
   ~~~
 
   Chrome reserves the measured caption area and runs the real camera commands.
-  Tool Set position, size and edges have a one-physical-pixel rounding bound,
-  which does not waive the full-image comparison.
+  The manifest records the native effective palette; Chrome supplies its accent
+  through the shared `system_theme_changed` action and verifies the result.
+  Tool Set bounds describe the visible control after viewport and ancestor
+  clipping, with full DOM bounds retained as `unclipped_bounds`; wholly clipped
+  controls are excluded from that geometry inventory. Layers identifies its
+  current semantic blend button. Workspace buttons use their shared workspace
+  IDs, with the options button identified separately. Tool Set position, size
+  and edges retain the one-physical-pixel rounding bound. Preserve prior
+  references and exact comparison failures: these geometry checks never waive
+  the full-image comparison or qualify a pixel failure as parity.
 
 Use direct editor actions and canvas-output checks for behavior; reserve UI
 automation for targeted input and lifecycle regressions.

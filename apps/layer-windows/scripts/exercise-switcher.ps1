@@ -61,7 +61,7 @@ function Check-Options {
     $active=(Storage).id;$layout=Layout;$order=(Storage).order -join '|'
     $options=(Control 'workspace-switcher-options' -Arranged).Current.BoundingRectangle
     $pill=(Control ('workspace-switch-'+$active) -Arranged).Current.BoundingRectangle
-    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     if([Math]::Abs($options.Width/$scale-20) -gt 1 -or [Math]::Abs($options.Height-$pill.Height) -gt 1 -or [Math]::Abs($options.Y-$pill.Y) -gt 1){throw 'Switcher options dimensions differ from the workspace pills'}
     $inactive=@((Storage).switcher_display.id|Where-Object {$_ -ne $active})[0]
     Invoke 'workspace-switcher-options';Options;Capture 'visibility-checklist' -Composed;Dismiss 'workspace-switcher-options'
@@ -125,9 +125,9 @@ function Check-Options {
     if((Storage).id -ne $active -or (Layout) -ne $layout){throw 'Opening the manager disturbed the workspace'}
 }
 function Check-Compact {
-    $active=(Storage).id;$layout=Layout;$scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $active=(Storage).id;$layout=Layout;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int](640*$scale)) -Height ([int](480*$scale))
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int](960*$scale)) -Height ([int](480*$scale))
     $null=Control 'header-workspace-menu' -Arranged
     $at=At 'header-workspace-menu';[CapyRowPointer]::RightClick($at.x,$at.y);Options;Dismiss 'header-workspace-menu'
     Invoke 'header-workspace-menu'
@@ -163,18 +163,19 @@ function Launch([string]$Label){
     $null=$review.Handle
     @{process_id=$review.Id;run=$run}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/switcher-review.json')
     Write-Output "Owned switcher review $($review.Id) ($Label)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Storage).ready -and !(Storage).switcher_busy} 'Switcher review did not start' 45
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $owned=@{window=$null}
+    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Model).brush_ready -and (Storage).ready -and !(Storage).switcher_busy} 'Switcher review did not start' 45
+    $script:root=$owned.window.Root;$script:drawingWindow=$owned.window.Handle
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Wait-Until {$null -ne (Find 'workspace-switcher')} 'Maximized header did not show the workspace switcher'
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
-    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     if(Find 'Test stroke' -Name){throw 'Switcher fixture requires the production UI without smoke controls'}
 }
 function Close {
     [CapyRowPointer]::Dispose()
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
 }
 try {
@@ -214,6 +215,29 @@ try {
     Close
     Launch 'empty-pins-restart'
     if(@((Storage).switcher).Count -ne 0 -or ((Storage).order -join '|') -ne ($emptyOrder -join '|')){throw 'Preferences did not survive restart'}
+    $expandedWorkspace='builtin:workspace:illustrator'
+    if((Storage).id -ne $expandedWorkspace){
+        Open-Manager
+        (Control ('workspace-manager-row-'+$expandedWorkspace)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Wait-Until {$m=Manager;$m.selected -eq $expandedWorkspace -and $m.enabled -and !$m.loading} 'Paint workspace selection did not become ready'
+        Settled;Choose (Manager).primary;Closed
+        Wait-Until {(Storage).id -eq $expandedWorkspace -and !(Storage).busy} 'Paint workspace was not adopted before overflow creation'
+    }
+    $headerBefore=(Model).header.model
+    $title=@($headerBefore.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'document_title'})
+    if($title.Count -ne 1){throw 'Paint overflow setup requires exactly one drawing title'}
+    $expectedZones=@(foreach($zone in $headerBefore.zones){,@($zone|Where-Object id -ne $title[0].id)})|ConvertTo-Json -Depth 30 -Compress
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+    Invoke 'customize_workspace_ui'
+    Wait-Until {(Model).header.editing} 'Overflow setup did not open titlebar customization'
+    Invoke ('header-select-'+$title[0].id)
+    $at=At 'header-edit-done';[CapyRowPointer]::KeyAt(0x2e,$at.x,$at.y)
+    Wait-Until {!(@((Model).header.model.zones|ForEach-Object {$_}|Where-Object id -eq $title[0].id).Count)} 'Overflow setup did not remove the selected drawing title'
+    $configured=(Model).header.model
+    if(($configured.zones|ConvertTo-Json -Depth 30 -Compress) -ne $expectedZones -or $configured.size -ne $headerBefore.size -or $configured.next_id -ne $headerBefore.next_id){throw 'Overflow setup changed more than the drawing title'}
+    Invoke 'header-edit-done'
+    Wait-Until {!(Model).header.editing -and ((Model).header.model|ConvertTo-Json -Depth 30 -Compress) -eq ($configured|ConvertTo-Json -Depth 30 -Compress)} 'Overflow titlebar setup did not commit'
+    Capture 'overflow-setup' -WithModel -Composed
     for($i=1;$i -le 6;$i++){
         Open-Manager
         Invoke 'workspace-manager-create'
@@ -222,21 +246,20 @@ try {
         Choose 'Create and Switch';Closed
         Wait-Until {$s=Storage;$s.switcher.id -contains $s.id -and $s.switcher_display.id -contains $s.id} 'Created workspace was not pinned'
     }
-    $inline=@{item=$null};Wait-Until {$inline.item=Find 'workspace-switcher';$inline.item -or (Find 'header-workspace-menu')} 'Header lost both the workspace switcher and its menu'
-    $scroller=$null
-    if($inline.item){
-        $scroller=$inline.item.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
-        Wait-Until {$scroller.Current.HorizontallyScrollable} 'Header overflow is not scrollable'
-        $scroller.SetScrollPercent(100,[System.Windows.Automation.ScrollPattern]::NoScroll)
-        Wait-Until {$scroller.Current.HorizontalScrollPercent -ge 99} 'Header did not scroll to its last choices'
-    }
+    $inline=@{item=$null};Wait-Until {$inline.item=Find 'workspace-switcher';$null -ne $inline.item} 'Expanded workspace switcher did not appear'
+    $providers=@($inline.item.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::IsScrollPatternAvailableProperty,$true)))
+    if($providers.Count -ne 1){throw 'Workspace choices did not expose one scrolling provider'}
+    $scroller=$providers[0].GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern)
+    Wait-Until {$scroller.Current.HorizontallyScrollable} 'Header overflow is not scrollable'
+    $scroller.SetScrollPercent(100,[System.Windows.Automation.ScrollPattern]::NoScroll)
+    Wait-Until {$scroller.Current.HorizontalScrollPercent -ge 99} 'Header did not scroll to its last choices'
     $fixed=(Control 'workspace-switcher-options' -Arranged).Current.BoundingRectangle
-    if($scroller){$scroller.SetScrollPercent(0,[System.Windows.Automation.ScrollPattern]::NoScroll);Wait-Until {$scroller.Current.HorizontalScrollPercent -le 1} 'Choices did not scroll back';if((Control 'workspace-switcher-options').Current.BoundingRectangle -ne $fixed){throw 'Options button scrolled with the workspace choices'};$scroller.SetScrollPercent(100,[System.Windows.Automation.ScrollPattern]::NoScroll)}
+    $scroller.SetScrollPercent(0,[System.Windows.Automation.ScrollPattern]::NoScroll);Wait-Until {$scroller.Current.HorizontalScrollPercent -le 1} 'Choices did not scroll back';if((Control 'workspace-switcher-options').Current.BoundingRectangle -ne $fixed){throw 'Options button scrolled with the workspace choices'};$scroller.SetScrollPercent(100,[System.Windows.Automation.ScrollPattern]::NoScroll)
     Capture 'header-overflow' -Composed
     $overflowCurrent=(Storage).id
     Open-Manager
     Preference $overflowCurrent 'show'
-    if($scroller){Wait-Until {$scroller.Current.HorizontalScrollPercent -le 1} 'Unpinned current workspace did not scroll into view'}
+    Wait-Until {$scroller.Current.HorizontalScrollPercent -le 1} 'Unpinned current workspace did not scroll into view'
     if((Storage).switcher_display[0].id -ne $overflowCurrent){throw 'Overflow lost the unpinned current workspace'}
     Capture 'overflow-current-fallback'
     Choose 'Cancel';Closed

@@ -74,6 +74,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     bool scheduled=false,trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     float leftInset=0,rightInset=0;
     double tile=36,iconSize=20,itemGap=6,height=48,totalHeight=48,menuWidth=0,switchWidth=36;
+    std::optional<uint64_t> menuGeneration;
     uint32_t focusedItem=0;
     std::set<uint32_t> handledRequests;
     Microsoft::UI::Dispatching::DispatcherQueueTimer requestTimer{nullptr},geometryTimer{nullptr};
@@ -151,7 +152,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 item.Resources().Insert(box_value(L"ToggleButtonForegroundChecked"),data->brush(L"text"));
                 AutomationProperties::SetAutomationId(item,L"workspace-switch-"+id);
                 auto label=CapyUi::label(data,L"");label.UseLayoutRounding(false);label.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-                label.TextTrimming(TextTrimming::CharacterEllipsis);label.MaxWidth(110);item.Content(label);
+                label.TextTrimming(TextTrimming::CharacterEllipsis);item.Content(label);
                 item.Click([weak=weak_from_this(),id](auto&&,auto&&){
                     if(auto self=weak.lock()){
                         // Toggle state always reflects adoption, including focus-only and failed switches.
@@ -168,7 +169,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 content.Text(name);
                 auto measure=CapyUi::label(data,name,false,false);measure.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
                 measure.UseLayoutRounding(false);measure.Measure({std::numeric_limits<float>::infinity(),36});
-                item.Tag(box_value(double(measure.DesiredSize().Width)));
+                auto padding=item.Padding();
+                item.Tag(box_value(std::min(130.,double(measure.DesiredSize().Width)+padding.Left+padding.Right)));
                 tooltip(item,data->caption(O({{L"type",S(L"switch_workspace")},{L"title",S(name)}})));
             }
             next.emplace_back(item,id);
@@ -224,6 +226,17 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             self->requestTimer.Stop();self->geometryTimer.Stop();
         }});
     }
+    void applyMenus(){
+        if(menuGeneration==data->localizationGeneration)return;
+        auto specs=array(data->model,L"application_menus");auto fontSize=data->textSize();
+        menuWidth=8+2*std::max(0,int(menus.size())-1);
+        for(auto const& item:menus){
+            auto caption=str(find(specs,L"id",unbox_value<hstring>(item.Tag())),L"label");
+            item.Content(box_value(caption));AutomationProperties::SetName(item,caption);item.FontSize(fontSize);
+            item.Width(textWidth(caption,false,true)+16);menuWidth+=item.Width();
+        }
+        menuGeneration=data->localizationGeneration;
+    }
     void refreshMenu(){
         if(!activeMenu)return;
         auto source=array(data->model,L"application_menus").Stringify()+object(view,L"primary_menu").Stringify()
@@ -250,14 +263,13 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     void build(){
         auto popup=std::exchange(activeMenu,nullptr);menuPopulate={};menuSource=L"";if(popup)popup.Hide();
         input->Cancel();canvas.Children().Clear();items.clear();bars.clear();bankParts.clear();workspaces.clear();menus.clear();sizes.clear();overflow.clear();zones.clear();
-        bankKey=geometryKey=desiredKey=lastMeasurement=L"";systemStatus.reset();
+        bankKey=geometryKey=desiredKey=lastMeasurement=L"";systemStatus.reset();menuGeneration.reset();
         background=Border();background.Background(clear());canvas.Children().Append(background);
         menuLabels=StackPanel();menuLabels.Orientation(Orientation::Horizontal);menuLabels.Spacing(2);
         menuLabels.UseLayoutRounding(false);menuWidth=8;
         for(auto value:array(data->model,L"application_menus")){
-            auto spec=value.GetObject();auto id=str(spec,L"id");auto item=button(data,str(spec,L"label"),[]{});style(item,data,false);item.Padding({8,0,8,0});
+            auto spec=value.GetObject();auto id=str(spec,L"id");auto item=button(data,L"",[]{});style(item,data,false);item.Padding({8,0,8,0});item.Tag(box_value(id));
             item.Height(26);item.CornerRadius({13*CornerFit,13*CornerFit,13*CornerFit,13*CornerFit});item.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-            item.Width(textWidth(str(spec,L"label"),false,true)+16);menuWidth+=item.Width()+(menus.empty()?0:2);
             AutomationProperties::SetAutomationId(item,L"application-menu-"+id);
             item.Flyout(menu([weak=weak_from_this(),id](auto target){if(auto self=weak.lock())
                 self->fillMenu(target,object(find(array(self->data->model,L"application_menus"),L"id",id),L"model"));
@@ -302,8 +314,8 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto moreIcon=icon(L"more-small",data->theme(),16);moreIcon.Opacity(.65);workspaceOptions.Content(moreIcon);
         AutomationProperties::SetAutomationId(workspaceOptions,L"workspace-switcher-options");
         Grid::SetColumn(workspaceOptions,1);switcherWell.Children().Append(workspaceOptions);
-        AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");AutomationProperties::SetName(switcher,data->caption(L"header",L"task_workspaces"));
-        workspaceOverflow=button(data,data->copyCaption(L"header",L"workspaces"),[]{});style(workspaceOverflow,data,false);workspaceOverflow.Padding({0});
+        AutomationProperties::SetAutomationId(switcherWell,L"workspace-switcher");copyName(data,switcherWell,data->copyCaption(L"header",L"task_workspaces"));
+        workspaceOverflow=button(data,data->copyCaption(L"header",L"workspaces"),[]{});style(workspaceOverflow,data,false);workspaceOverflow.Width(144);
         AutomationProperties::SetAutomationId(workspaceOverflow,L"header-workspace-menu");
         workspaceOverflow.Flyout(menu([weak=weak_from_this()](auto target){if(auto self=weak.lock())
             self->fillMenu(target,object(object(self->data->model,L"windows_workspace"),L"switcher_menu"));
@@ -367,12 +379,17 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(kind==L"menu_labels")return menuGroup;if(kind==L"workspaces")return workspaceGroup;if(kind==L"document_title")return document;
         if(kind==L"clock")return systemStatus->Clock();if(kind==L"battery")return systemStatus->Battery();
         if(kind==L"space"){Border space;space.Background(clear());return space;}
-        auto presses=kind==L"tool"&&pickerControl(object(item,L"control"))?std::make_shared<DoublePress>():nullptr;
+        auto presses=kind==L"tool"?std::make_shared<DoublePress>():nullptr;
         auto pick=button(data,L"",[weak=weak_from_this(),id,presses]{if(auto self=weak.lock()){
             if(presses&&!self->editing&&presses->second()){
-                self->data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"settings")},
-                    {L"anchor",O({{L"kind",S(L"header")},{L"id",N(id)}})}})}}));
-                return;
+                auto current=findId(array(self->view,L"items"),id);auto control=object(current,L"resolved_control");
+                if(flag(current,L"double_click")){
+                    self->data->dispatch(O({{L"type",S(L"double_click_tool")},{L"control",control}}));return;
+                }
+                if(pickerControl(control)){
+                    self->data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"settings")},
+                        {L"anchor",O({{L"kind",S(L"header")},{L"id",N(id)}})}})}}));return;
+                }
             }
             if(presses&&self->editing)presses->reset();
             self->activate(id);
@@ -542,12 +559,15 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         for(auto const& [id,native]:items){
             auto kind=str(object(native.entry,L"item"),L"kind");double natural=tile,compact=tile;
             if(kind==L"menu_labels")natural=menuWidth;
-            else if(kind==L"workspaces")natural=switchWidth;
+            else if(kind==L"workspaces"){natural=std::max(144.,switchWidth);compact=144.;}
             else if(kind==L"document_title"){
-                if(drawings->single()){natural=textWidth(drawings->plainTitle(),false,true)+16;compact=std::min(natural,80.);}
+                if(drawings->single()){natural=180.;compact=80.;}
                 else{natural=std::clamp(double(array(object(data->model,L"windows_tabs"),L"tabs").Size())*180.,180.,720.);compact=140.;}
             }
-            else if(kind==L"clock")natural=fullscreenActive||editing?textWidth(editing&&!fullscreenActive?data->caption(L"header",L"clock"):systemStatus->Clock().Child().as<TextBlock>().Text())+12:0;
+            else if(kind==L"clock"){
+                auto padding=systemStatus->Clock().Padding();
+                natural=fullscreenActive||editing?textWidth(editing&&!fullscreenActive?data->caption(L"header",L"clock"):systemStatus->Clock().Child().as<TextBlock>().Text())+padding.Left+padding.Right:0;
+            }
             else if(kind==L"battery")natural=editing||(fullscreenActive&&systemStatus->HasBattery())?tile:0;
             if(kind==L"clock"||kind==L"battery")compact=natural;
             double grip=editing?20.:0.;metrics.Append(O({{L"id",N(id)},{L"width",N(natural+grip)},{L"compact",N(compact+grip)}}));
@@ -679,12 +699,14 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         root.TabFocusNavigation(editing?Input::KeyboardNavigationMode::Cycle:Input::KeyboardNavigationMode::Local);
         drawings->refresh();
         applyWorkspaces();
+        applyMenus();
         refreshMenu();
         switchWidth=32+2*std::max(0,int(workspaces.size())-1);
-        for(auto const& [item,id]:workspaces){item.Width(std::min(130.,unbox_value<double>(item.Tag())+20));switchWidth+=item.Width();}
+        for(auto const& [item,id]:workspaces){item.Width(unbox_value<double>(item.Tag()));switchWidth+=item.Width();}
         switchWidth=std::clamp(switchWidth,tile,480.);
         for(auto const& item:overflow)item.Content(icon(L"menu",theme,iconSize));
-        for(auto item:{menuOverflow,workspaceOverflow,recovery}){item.Content(icon(L"menu",theme,iconSize));item.Width(tile);}
+        for(auto item:{menuOverflow,recovery}){item.Content(icon(L"menu",theme,iconSize));item.Width(tile);}
+        workspaceOverflow.Height(tile);
         if(num(snapshot,L"header_presentation_height",-1)!=totalHeight)lastMeasurement=L"";
         applyItems();reflow();requests();publish();
     }
@@ -738,13 +760,6 @@ void HeaderView::SetFullscreen(bool active){
 }
 void HeaderView::SetBlocked(bool blocked){impl->data->externalPopup=blocked;if(blocked)impl->input->Cancel();}
 bool HeaderView::Key(Input::KeyRoutedEventArgs const& e,bool pressed){
-    using winrt::Windows::System::VirtualKey;auto key=e.Key();bool shift=GetKeyState(VK_SHIFT)&0x8000;
-    if(pressed&&(GetKeyState(VK_CONTROL)&0x8000)&&!(GetKeyState(VK_MENU)&0x8000)&&impl->drawings&&impl->drawings->available()){
-        if(key==VirtualKey::Tab||key==VirtualKey::PageDown||key==VirtualKey::PageUp){
-            e.Handled(true);impl->drawings->send(O({{L"op",S(L"adjacent")},{L"forward",B(key==VirtualKey::PageDown||(key==VirtualKey::Tab&&!shift))}}));return true;
-        }
-        if(key==VirtualKey::A&&shift){e.Handled(true);impl->showDrawings();return true;}
-    }
     return impl->input->Key(e,pressed);
 }
 void HeaderView::SetDrawerSources(A const& sources){

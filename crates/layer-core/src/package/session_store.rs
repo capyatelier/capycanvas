@@ -607,6 +607,8 @@ fn atomic_publish_checked(path: &Path, write: impl FnOnce(&mut BufWriter<File>) 
         #[link(name = "kernel32")]
         unsafe extern "system" { fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32; }
         let parent = path.parent().ok_or("Invalid recovery destination")?;
+        let parent = fs::canonicalize(if parent.as_os_str().is_empty() { Path::new(".") } else { parent }).map_err(|error| error.to_string())?;
+        let destination = parent.join(path.file_name().ok_or("Invalid recovery destination")?);
         let temporary = parent.join(format!(".capy-save-{}", PortableId::random()));
         struct Cleanup(PathBuf);
         impl Drop for Cleanup { fn drop(&mut self) { let _ = fs::remove_file(&self.0); } }
@@ -617,7 +619,7 @@ fn atomic_publish_checked(path: &Path, write: impl FnOnce(&mut BufWriter<File>) 
         drop(file);
         ready()?;
         let from: Vec<u16> = cleanup.0.as_os_str().encode_wide().chain(Some(0)).collect();
-        let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let to: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
         if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 1 | 8) } == 0 { return Err(std::io::Error::last_os_error().to_string().into()); }
         Ok(())
     }
@@ -660,6 +662,29 @@ mod tests {
         }
     }
     impl Drop for Directory { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+    #[cfg(windows)]
+    #[test]
+    fn restore_diagnostics_publish_and_clear_in_long_directories() {
+        use std::os::windows::ffi::OsStrExt;
+        let directory = Directory::new();
+        let mut root = directory.0.clone();
+        while root.as_os_str().encode_wide().count() < 280 { root = root.join("saved-drawings"); }
+        fs::create_dir_all(&root).unwrap();
+        for cause in ["first restore failure", "second restore failure"] {
+            set_restore_error(&root, Some(cause)).unwrap();
+            assert_eq!(restore_error(&root).unwrap().as_deref(), Some(cause));
+            assert_eq!(count(&root), 1);
+        }
+        let error = atomic_publish_checked(&root.join("restore-error.txt"),
+            |file| file.write_all(b"uncommitted failure").map_err(|error| error.to_string()),
+            || Err("Cancelled".into())).unwrap_err();
+        assert!(!error.published);
+        assert_eq!(restore_error(&root).unwrap().as_deref(), Some("second restore failure"));
+        assert_eq!(count(&root), 1);
+        set_restore_error(&root, None).unwrap();
+        assert_eq!(restore_error(&root).unwrap(), None);
+        assert_eq!(count(&root), 0);
+    }
     fn capture(marker: u8) -> PreparedSession {
         let mut document = Document::new(PortableId::random(), 256, 256, DocumentNames { paint: "ink".into(), paper: "paper".into() });
         let descriptor = RasterPlane::Color.descriptor(Default::default());

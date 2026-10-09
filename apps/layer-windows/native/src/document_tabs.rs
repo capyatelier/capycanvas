@@ -299,6 +299,15 @@ impl DocumentService {
         Ok(())
     }
     pub(super) fn poll_tabs(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        if let Some((id, forward)) = host.session.state().requests.iter().find_map(|request| {
+            if let HostRequestKind::AdjacentDrawing { forward } = request.kind { Some((request.id, forward)) } else { None }
+        }) {
+            host.dispatch(layer_ui::UiAction::CompleteRequest { id, error: None })?;
+            if let Err(error) = self.tab_action(host, Action::Adjacent { forward }) {
+                host.error = Some(error);
+                host.invalidate_snapshot();
+            }
+        }
         if self.prepared_close.is_some()&&!host.session.state().document_file.close_ready {let prepared=self.prepared_close.take().unwrap();self.window.cancel_close(host,prepared)?;}
         if !self.close_window && host.session.state().document_file.close_ready && self.prepared_close.is_none() {
             if !self.idle()||!self.window.adoption_ready(host)? {return Ok(());}
@@ -321,8 +330,8 @@ impl DocumentService {
             && let Some((id, attempt, candidate)) = self.recovery.as_mut().and_then(|r| r.take_restored_drawing()) {
             let mut candidate = Some(candidate);
             let restored = match self.window.hydrate_restored(host, &mut candidate, id, |session| Parked { session }) {
-                Ok((restored, retired)) => {self.worker.retire_renderer(Renderer(retired));Some(restored)}
-                Err(error) => {if let Some(candidate) = candidate {self.worker.retire(candidate);}host.error = Some(layer_ui::document_recovery_unavailable(host.session.localization(), &error));None}
+                Ok((restored, retired)) => {self.worker.retire_renderer(Renderer(retired));Ok(restored)}
+                Err(error) => {if let Some(candidate) = candidate {self.worker.retire(candidate);}host.error = Some(layer_ui::document_recovery_unavailable(host.session.localization(), &error));Err(error)}
             };
             self.recovery.as_mut().unwrap().complete_drawing(attempt, restored)?;
             host.invalidate_snapshot();

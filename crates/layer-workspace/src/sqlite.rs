@@ -87,7 +87,7 @@ impl SqliteStore {
             options.mode(0o600);
         }
         options.open(path).map_err(unavailable)?;
-        let mut connection = Connection::open(path)?;
+        let mut connection = Connection::open(std::fs::canonicalize(path).map_err(unavailable)?)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;

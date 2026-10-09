@@ -23,15 +23,9 @@ function At([string]$Id) {
 }
 function Screen($Box) {
     $point=[CapyRowPointer+Point]::new()
-    if(![CapyRowPointer]::ClientToScreen($review.MainWindowHandle,[ref]$point)){throw 'Client origin unavailable'}
-    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    if(![CapyRowPointer]::ClientToScreen($drawingWindow,[ref]$point)){throw 'Client origin unavailable'}
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     @{x=[int]($point.x+$Box.x*$scale);y=[int]($point.y+$Box.y*$scale)}
-}
-function Tap([string]$Id) {
-    $at=At $Id;[CapyRowPointer]::Down($Device,$at.x,$at.y)
-    Wait-Until {(Gesture).phase -eq 'pressed' -and (Gesture).source.value -eq [int]($Id.Split('-')[-1])} 'Native header did not receive the tap on the requested item'
-    [CapyRowPointer]::Up()
-    Wait-Until {(Gesture).phase -eq 'idle'} 'Native header did not finish the tap'
 }
 function WindowCommand([string]$Id) {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
@@ -57,10 +51,11 @@ function Start-Review([string]$Phase) {
     $null=$review.Handle
     @{process_id=$review.Id;run=$run;device=$Device}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/header-review.json')
     Write-Output "Owned header review $($review.Id) ($Device)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Header review did not start' 45
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $native=@{window=$null}
+    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Header review did not start' 45
+    $script:root=$native.window.Root;$script:drawingWindow=$native.window.Handle
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
-    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     if($Phase -eq 'initial'){
         $workspaceId=@{sketch='builtin:workspace:painter';paint='builtin:workspace:illustrator';photo='builtin:workspace:photographer'}[$Workspace]
@@ -82,6 +77,87 @@ function Start-Review([string]$Phase) {
     }
     Check-Geometry
 }
+function Check-PenOrder {
+    $state=(Model).state;$items=@($state.tool_set.subtools);$original=$state.brush.preset
+    $rough=@(0..($items.Count-1)|Where-Object {$items[$_].preview -eq 28})
+    $blotty=@(0..($items.Count-1)|Where-Object {$items[$_].preview -eq 33})
+    $restore=@(0..($items.Count-1)|Where-Object {$items[$_].preview -eq $original})
+    if($rough.Count -ne 1 -or $blotty.Count -ne 1 -or $restore.Count -ne 1 -or $blotty[0] -ne $rough[0]+1){throw 'Blotty Ink does not follow Rough G-Pen in the shared Pen group'}
+    $target=Control ('tool-subtool-'+$blotty[0])
+    $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$scroller=$walker.GetParent($target);$scroll=$null
+    while($scroller -and !$scroller.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll)){$scroller=$walker.GetParent($scroller)}
+    if(!$scroll){throw 'The native Pen group has no scroll provider'}
+    $scrollPercent=$scroll.Current.VerticalScrollPercent
+    try{
+        $itemScroll=$null
+        if($target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$itemScroll)){$itemScroll.ScrollIntoView()}else{$target.SetFocus()}
+        $records=@(foreach($index in @($rough[0],$blotty[0])){
+            $button=Control ('tool-subtool-'+$index) -Arranged;$bounds=$button.Current.BoundingRectangle
+            if($button.Current.Name -ne $items[$index].label -or !$root.Current.BoundingRectangle.Contains($bounds)){throw 'Native Pen button has a stale label or invalid bounds'}
+            @{index=$index;preview=$items[$index].preview;name=$button.Current.Name;bounds=$bounds;runtime_id=($button.GetRuntimeId() -join ':')}
+        })
+        if($records[1].bounds.Top -lt $records[0].bounds.Bottom-1){throw 'Native Blotty Ink is not arranged below Rough G-Pen'}
+        Invoke ('tool-subtool-'+$blotty[0])
+        Wait-Until {$m=Model;$m.state.brush.preset -eq 33 -and $m.state.tool_set.subtools[$blotty[0]].selected -and (Control ('tool-subtool-'+$blotty[0])).Current.ItemStatus -eq 'Selected'} 'Native Blotty Ink selection did not reach the shared brush'
+        @{items=$records;selected=(Model).state.brush.preset;previous=$original;raw_review='required: Rough G-Pen and Blotty Ink order, captions, preview and selected styling'}|ConvertTo-Json -Depth 10|Set-Content (Join-Path $run 'blotty-ink-order-layout.json')
+        Capture 'blotty-ink-order' -WithModel -Composed
+    }finally{
+        try{
+            Invoke ('tool-subtool-'+$restore[0])
+            Wait-Until {(Model).state.brush.preset -eq $original -and (Control ('tool-subtool-'+$restore[0])).Current.ItemStatus -eq 'Selected'} 'The original Pen preset did not restore'
+        }finally{
+            if($scroll.Current.VerticallyScrollable){Scroll-Position $target $scrollPercent}
+        }
+    }
+}
+function Check-CompactWorkspace {
+    $before=$root.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int](1200*$scale)) -Height ([int](700*$scale))
+    Wait-Until {$group=Find 'workspace-switcher' -Visible;$group -and [Math]::Abs($root.Current.BoundingRectangle.Width-1200*$scale) -lt 2} 'Full workspace switcher did not appear at the ordinary wide width'
+    Check-Geometry
+    $view=Model;$group=Control 'workspace-switcher' -Arranged;$bounds=$group.Current.BoundingRectangle;$contained=[Windows.Rect]::new($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);$contained.Inflate($scale,$scale)
+    $choices=@($view.windows_workspace.switcher_display);$records=@();$errors=[Collections.Generic.List[string]]::new()
+    if($view.windows_active_tag -ne 'en' -or $choices.Count -ne 3 -or @($choices|Where-Object {$_.title -notin @('Sketch','Paint','Photo')}).Count){throw 'Workspace width fixture requires the three short English starting captions'}
+    if($group.Current.Name -ne 'Task workspaces' -or $group.Current.ControlType -ne [System.Windows.Automation.ControlType]::Group){$errors.Add('Workspace switcher does not expose its named whole-component group')}
+    foreach($choice in $choices){
+        $id='workspace-switch-'+$choice.id;$button=Control $id -Arranged;$box=$button.Current.BoundingRectangle
+        $texts=@($button.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text))|Where-Object {!$_.Current.IsOffscreen})
+        if($button.Current.Name -ne $choice.title -or !$contained.Contains($box)){$errors.Add("Workspace button is stale or outside its group: $id")}
+        if($texts.Count -ne 1){$errors.Add("Workspace caption is not observable as one native Text provider: $id")}
+        $captions=@(foreach($text in $texts){
+            $caption=$text.Current.BoundingRectangle;$inside=[Windows.Rect]::new($box.X,$box.Y,$box.Width,$box.Height);$inside.Inflate($scale,$scale)
+            $padding=($box.Width-$caption.Width)/$scale;$left=($caption.Left-$box.Left)/$scale;$right=($box.Right-$caption.Right)/$scale
+            if($text.Current.Name -ne $choice.title -or $caption.Width -le 0 -or $caption.Height -le 0 -or !$inside.Contains($caption) -or [Math]::Abs($padding-16) -gt 1 -or [Math]::Abs($left-8) -gt 1 -or [Math]::Abs($right-8) -gt 1){$errors.Add("Workspace caption does not fit its actual button padding: $id")}
+            @{name=$text.Current.Name;runtime_id=($text.GetRuntimeId() -join ':');bounds=$caption;horizontal_padding_dip=$padding;left_inset_dip=$left;right_inset_dip=$right}
+        })
+        $records+=@{id=$id;name=$button.Current.Name;runtime_id=($button.GetRuntimeId() -join ':');bounds=$box;captions=$captions}
+    }
+    $options=Control 'workspace-switcher-options' -Arranged;$optionsBox=$options.Current.BoundingRectangle
+    if(!$contained.Contains($optionsBox)){$errors.Add('Workspace options is outside the whole-component group')}
+    @{dpi=96*$scale;group=@{name=$group.Current.Name;type=$group.Current.ControlType.ProgrammaticName;bounds=$bounds;runtime_id=($group.GetRuntimeId() -join ':')};choices=$records;options=@{name=$options.Current.Name;bounds=$optionsBox};errors=@($errors);visual_review='required: inspect the whole switcher, all captions and fixed options in the composed image'}|ConvertTo-Json -Depth 20|Set-Content (Join-Path $run 'workspace-switcher-sizing-layout.json')
+    Capture 'workspace-switcher-sizing' -Composed
+    if($errors.Count){throw ($errors -join '; ')}
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int](960*$scale)) -Height ([int](700*$scale))
+    Wait-Until {$button=Find 'header-workspace-menu' -Visible;$button -and [Math]::Abs($root.Current.BoundingRectangle.Width-960*$scale) -lt 2} 'Compact Workspaces did not appear at the ordinary narrow width'
+    Check-Geometry
+    $button=Control 'header-workspace-menu' -Arranged;$box=$button.Current.BoundingRectangle
+    $entry=@(Entries|Where-Object {$_.item.kind -eq 'workspaces'})[0]
+    $presentation=Presentation;$item=@($presentation.actual_items|Where-Object id -eq $entry.id)[0]
+    $texts=@($button.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text))|Where-Object {!$_.Current.IsOffscreen})
+    @{dpi=96*$scale;name=$button.Current.Name;bounds=$box;actual=$item;presentation=$presentation;caption_providers=@($texts|ForEach-Object {@{name=$_.Current.Name;bounds=$_.Current.BoundingRectangle}});visual_review='required'}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'compact-workspaces-layout.json')
+    Capture 'compact-workspaces' -Composed
+    if([Math]::Abs($box.Width/$scale-144) -gt 1 -or [Math]::Abs($box.Height/$scale-$item.bounds.height) -gt 1){throw 'Compact Workspaces does not retain its caption-sized width and tile height'}
+    foreach($text in $texts){if($text.Current.Name -ne $button.Current.Name -or !$box.Contains($text.Current.BoundingRectangle)){throw 'Compact Workspaces caption is stale or outside its button'}}
+    Invoke 'header-workspace-menu'
+    $choice=@((Model).windows_workspace.switcher|Where-Object id -eq (Model).windows_workspace.id)[0]
+    $null=Control $choice.title -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+    [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+    Wait-Until {!(Find $choice.title -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible)} 'Compact Workspaces menu did not dismiss'
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int]$before.Width) -Height ([int]$before.Height)
+    Wait-Until {[Math]::Abs($root.Current.BoundingRectangle.Width-$before.Width) -lt 2 -and [Math]::Abs($root.Current.BoundingRectangle.Height-$before.Height) -lt 2} 'Header window did not restore its original dimensions'
+    Check-Geometry
+}
+
 function Edit-Header {
     WindowCommand 'customize_workspace_ui'
     Wait-Until {(Model).header.editing} 'Titlebar editor did not open'
@@ -91,9 +167,9 @@ function Edit-Header {
 function Check-WorkspaceOptions {
     $entry=@(Entries|Where-Object {$_.item.kind -eq 'workspaces'})[0]
     if(!$entry){return}
-    Wait-Until {!(Find 'customize_workspace_ui' -Visible)} 'Application menu did not dismiss before switcher input'
     $id='header-select-'+$entry.id
     $source=Control $id -Arranged;$source.SetFocus()
+    Wait-Until {!(Find 'customize_workspace_ui' -Visible) -and $source.Current.HasKeyboardFocus -and [CapyRowPointer]::GetForegroundWindow() -eq $drawingWindow} 'Application menu did not dismiss and return focus to the owned header item'
     $box=$source.Current.BoundingRectangle
     $at=@{x=[int]($box.X+$box.Width/2);y=[int]($box.Y+$box.Height/2)}
     $before=HeaderJson;$active=(Model).windows_workspace.id
@@ -138,11 +214,32 @@ function Drop-Component([string]$Kind='space',[switch]$Cancel,[switch]$Picker) {
 }
 
 
+function Check-ClockCaption {
+    $clock=Entries|Where-Object {$_.item.kind -eq 'clock'}|Select-Object -First 1
+    if($clock){
+        Remove-HeaderItem $clock.id
+    }
+    Wait-Until {!(Entries|Where-Object {$_.item.kind -eq 'clock'}) -and (Find 'header-component-clock' -Visible)} 'Deleted Clock did not return to the component bank'
+    $bank=Control 'header-component-clock' -Arranged
+    $text=Control $bank.Current.Name -Name -Within $bank -Type ([System.Windows.Automation.ControlType]::Text) -Arranged
+    $referenceName=$text.Current.Name;$referenceBounds=$text.Current.BoundingRectangle;$bankBounds=$bank.Current.BoundingRectangle
+    $evidence=@{dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow);reference=@{name=$referenceName;bounds=$referenceBounds.ToString();width_pixels=$referenceBounds.Width;bank_bounds=$bankBounds.ToString();contained=$bankBounds.Contains($referenceBounds)}}
+    $evidence|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'clock-caption.json')
+    if(!$bankBounds.Contains($referenceBounds)){throw 'Clock component caption is not contained in its bank tile'}
+    Drop-Component -Kind clock
+    $clock=Entries|Where-Object {$_.item.kind -eq 'clock'}|Select-Object -First 1
+    $placed=Control 'system-clock' -Type ([System.Windows.Automation.ControlType]::Text) -Arranged
+    $bounds=$placed.Current.BoundingRectangle;$frame=(Control ('header-item-'+$clock.id) -Arranged).Current.BoundingRectangle
+    $evidence.placed=@{name=$placed.Current.Name;bounds=$bounds.ToString();width_pixels=$bounds.Width;item_bounds=$frame.ToString();contained=$frame.Contains($bounds)}
+    $evidence.width_shortfall_pixels=$referenceBounds.Width-$bounds.Width
+    $evidence|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'clock-caption.json')
+    if($placed.Current.Name -ne $referenceName -or !$frame.Contains($bounds) -or $bounds.Width -lt $referenceBounds.Width-1){throw "Placed Clock caption does not fit its native bank reference: $($bounds.Width)px versus $($referenceBounds.Width)px"}
+}
 function Check-ItemDrag([int]$Id) {
     $before=HeaderJson
     $box=(Presentation).geometry.items|Where-Object id -eq $Id|Select-Object -ExpandProperty bounds
     $from=At ('header-select-'+$Id)
-    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     $distance=[int][Math]::Round($box.height*3*$scale)
     $far=@{x=$from.x;y=$from.y+$distance}
     [CapyRowPointer]::Down($Device,$from.x,$from.y)
@@ -176,11 +273,11 @@ function Check-ResizeCancel {
     [CapyRowPointer]::Down($Device,$from.x,$from.y);[CapyRowPointer]::Move($to.x,$to.y)
     Wait-Until {(Gesture).preview.target} 'Resize case has no active placement preview'
     $size=$root.Current.BoundingRectangle
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int]$size.Width+30) -Height ([int]$size.Height)
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int]$size.Width+30) -Height ([int]$size.Height)
     Wait-Until {(Gesture).phase -eq 'idle'} 'Window resize did not cancel header capture'
     [CapyRowPointer]::Cancel()
     if((HeaderJson) -ne $before){throw 'Window resize committed a drag'}
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int]$size.Width) -Height ([int]$size.Height)
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int]$size.Width) -Height ([int]$size.Height)
     Check-Geometry
 }
 function Check-Fullscreen {
@@ -312,7 +409,7 @@ function Check-Keyboard {
    $record=@{id=$focus.Current.AutomationId;name=$focus.Current.Name;parent=''}
    for($node=$focus;$node;$node=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($node)){
      if($node.Current.AutomationId -like 'header-item-*'){$record.parent=$node.Current.AutomationId;break}
-     if($node.Current.NativeWindowHandle -eq $review.MainWindowHandle){break}
+     if($node.Current.NativeWindowHandle -eq $drawingWindow){break}
    }
    $seen.Add($record)
    if($record.parent -and $record.id -notlike 'header-select-*'){$seen|ConvertTo-Json|Set-Content (Join-Path $run 'tab-order.json');throw 'Tab focused an underlying active tool while editing'}
@@ -326,8 +423,8 @@ function Check-Keyboard {
 function Check-Narrow {
  $initial=HeaderJson
  $size=$root.Current.BoundingRectangle
- $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
- & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int](640*$scale)) -Height ([int](480*$scale))
+ $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int](640*$scale)) -Height ([int](480*$scale))
  Check-Geometry
  foreach($i in 1..12){Drop-Component}
  foreach($sizeName in @('small','medium','large')){
@@ -351,7 +448,7 @@ function Check-Narrow {
  }
  Invoke 'header-edit-cancel'
  Wait-Until {!(Model).header.editing -and (HeaderJson) -eq $initial} 'Narrow overflow Cancel lost the starting layout'
- & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width ([int]$size.Width) -Height ([int]$size.Height)
+ & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int]$size.Width) -Height ([int]$size.Height)
  Check-Geometry
 }
 
@@ -369,12 +466,13 @@ try {
         Invoke 'header-edit-cancel'
         Wait-Until {!(Model).header.editing -and (HeaderJson) -eq $initial} 'Options journey changed the titlebar layout'
         Capture 'options-normal' -Composed
-        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
         @{theme=$Theme;device=$Device;workspace_options_context='passed';workspace_placement_cancel='passed';keyboard='passed'}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
         Get-Content (Join-Path $run 'results.json')
         return
     }
+    if($Workspace -eq 'paint'){Check-CompactWorkspace;Check-PenOrder}
     if($Catalog){Check-Catalog}
     $initial=HeaderJson;$footer=(Model).state.workspace.layout.canvas_info.visible
     Edit-Header;Check-WorkspaceOptions;Check-Keyboard
@@ -395,15 +493,14 @@ try {
     $space=@((Header).zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'space'})|Select-Object -Last 1
     if(!$space){throw 'No inserted space item'}
     Check-ItemDrag $space.id
-    Tap ('header-select-'+$space.id)
-    [CapyRowPointer]::Key(0x2e)
+    Remove-HeaderItem $space.id
     Wait-Until {(HeaderJson) -ne $before -and !(@((Header).zones|ForEach-Object {$_}|Where-Object id -eq $space.id).Count)} 'Delete did not remove selected header item'
     (Control 'header-show-footer').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Model).state.workspace.layout.canvas_info.visible -ne $footer} 'Footer preview did not change'
     Invoke 'header-edit-cancel'
     Wait-Until {!(Model).header.editing -and (HeaderJson) -eq $initial} 'Cancel did not restore the initial header'
     if((Model).state.workspace.layout.canvas_info.visible -ne $footer){throw 'Cancel changed footer visibility'}
-    Edit-Header;Drop-Component;if(!(Entries|Where-Object {$_.item.kind -eq 'clock'})){Drop-Component -Kind clock};$tools=Add-Tools;Capture 'customized'
+    Edit-Header;Drop-Component;Check-ClockCaption;$tools=Add-Tools;Capture 'customized'
     Invoke 'header-edit-done'
     Wait-Until {!(Model).header.editing} 'Done did not close titlebar editing'
     $saved=HeaderJson
@@ -412,7 +509,7 @@ try {
     Wait-Until {(HeaderJson) -eq $initial} 'One workspace Undo did not restore the initial header'
     WindowCommand 'redo_workspace'
     Wait-Until {(HeaderJson) -eq $saved} 'One workspace Redo did not restore the edited header'
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [CapyRowPointer]::Dispose()
     Start-Review 'restart'
@@ -420,12 +517,12 @@ try {
     Capture 'restarted'
     Edit-Header;Check-Narrow
     Edit-Header;Drop-Component
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
     [CapyRowPointer]::Dispose()
     Start-Review 'unsaved-restart'
     Wait-Until {(HeaderJson) -eq $saved -and !(Model).header.editing} 'Closing without Done saved a titlebar preview'
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
-    [pscustomobject]@{theme=$Theme;workspace_options_context='passed';device=$Device;workspace=$Workspace;catalog=[bool]$Catalog;geometry='passed';sizes='passed';native_keyboard='passed';resize_cancel='passed';held_detach_reattach='passed';keyboard_zones='passed';footer_rollback='passed';fullscreen='passed';narrow_overflow='passed';unsaved_restart='passed';inert_bank='passed';immediate_component_drag='passed';preview_and_escape='passed';delete_and_cancel='passed';picker_search_and_order='passed';native_tile_hit_area='passed';drawer_switch_and_toggle='passed';done_undo_redo='passed';restart='passed';scope='OS-delivered synthetic input; physical devices and full visual acceptance are separate'}|ConvertTo-Json
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+    [pscustomobject]@{theme=$Theme;workspace_options_context='passed';device=$Device;workspace=$Workspace;catalog=[bool]$Catalog;geometry='passed';sizes='passed';workspace_caption_padding_and_group='passed';workspace_sizing_visual_review='required';clock_caption_fit='passed';native_keyboard='passed';resize_cancel='passed';held_detach_reattach='passed';keyboard_zones='passed';footer_rollback='passed';fullscreen='passed';narrow_overflow='passed';unsaved_restart='passed';inert_bank='passed';immediate_component_drag='passed';preview_and_escape='passed';delete_and_cancel='passed';picker_search_and_order='passed';native_tile_hit_area='passed';drawer_switch_and_toggle='passed';done_undo_redo='passed';restart='passed';scope='OS-delivered synthetic input; physical devices and full visual acceptance are separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){
         try{[CapyRowPointer]::Verify();@{gesture=Gesture;header=Header;presentation=Presentation;pointer_gap_ms=[CapyRowPointer]::MaxGapMilliseconds}|ConvertTo-Json -Depth 40|Set-Content (Join-Path $run 'failure-state.json');Capture 'failure'}catch{}

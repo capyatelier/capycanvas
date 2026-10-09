@@ -416,3 +416,98 @@ fn feather_selection_is_bound_only_in_the_photoshop_preset() {
         assert!(Settings::default().keys(&command.shortcut_id()).is_empty(), "{command:?}");
     }
 }
+
+#[test]
+fn drawings_shortcut_obeys_default_custom_clear_and_editor_ownership() {
+    let default = chord("a", true, true, false);
+    let modifiers = Modifiers { command: true, shift: true, ..Modifiers::default() };
+    for platform in [Platform::Gtk, Platform::Windows, Platform::Mac] {
+        let mut s = session(platform);
+        let checkpoint = s.engine.checkpoint();
+        assert_eq!(s.command(CommandId::Drawings).shortcut, default.label(platform));
+        assert!(!s.input(UiInput::Key { key: "a".into(), pressed: true, repeat: false,
+            modifiers, editing: true, divider: None }).unwrap().handled);
+        held_key(&mut s, "a", false, modifiers);
+        assert!(s.state.requests.is_empty());
+        assert!(held_key(&mut s, "a", true, modifiers).handled);
+        held_key(&mut s, "a", false, modifiers);
+        assert_eq!(s.state.requests.len(), 1);
+        let request = &s.state.requests[0];
+        assert!(matches!(request.kind, HostRequestKind::Drawings));
+        let id = request.id;
+        s.dispatch(UiAction::CompleteRequest { id, error: None }).unwrap();
+
+        let mut settings = s.state.settings.clone();
+        settings.shortcuts.insert(CommandId::Drawings.shortcut_id(), vec![chord("f6", false, false, false)]);
+        s.apply_settings(settings).unwrap();
+        assert_eq!(s.command(CommandId::Drawings).shortcut, "F6");
+        assert!(s.command(CommandId::Drawings).tooltip.ends_with("(F6)"));
+        assert!(!held_key(&mut s, "a", true, modifiers).handled);
+        held_key(&mut s, "a", false, modifiers);
+        assert!(s.state.requests.is_empty());
+        for editing in [true, false] {
+            assert_eq!(key(&mut s, "f6", true, false, editing).handled, !editing);
+            key(&mut s, "f6", false, false, editing);
+            if editing {
+                assert!(s.state.requests.is_empty());
+            } else {
+                assert_eq!(s.state.requests.len(), 1);
+                let request = &s.state.requests[0];
+                assert!(matches!(request.kind, HostRequestKind::Drawings));
+                let id = request.id;
+                s.dispatch(UiAction::CompleteRequest { id, error: None }).unwrap();
+            }
+        }
+        let mut settings = s.state.settings.clone();
+        settings.shortcuts.insert(CommandId::Drawings.shortcut_id(), Vec::new());
+        s.apply_settings(settings).unwrap();
+        let command = s.command(CommandId::Drawings);
+        assert!(command.shortcut.is_empty());
+        assert_eq!(command.tooltip, command.label.as_ref());
+        assert!(!key(&mut s, "f6", true, false, false).handled);
+        key(&mut s, "f6", false, false, false);
+        assert!(!held_key(&mut s, "a", true, modifiers).handled);
+        held_key(&mut s, "a", false, modifiers);
+        assert!(s.state.requests.is_empty());
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+}
+
+#[test]
+fn drawings_default_respects_preset_and_saved_binding_priority() {
+    let default = chord("a", true, true, false);
+    let mut settings = Settings::default();
+    assert_eq!(bound(&settings, &default).as_deref(), Some("command.Drawings"));
+    for preset in ["krita", "gimp"] {
+        crate::keymaps::select(&mut settings, preset).unwrap();
+        assert_eq!(bound(&settings, &default).as_deref(), Some("command.Deselect"));
+        assert!(settings.keys("command.Drawings").is_empty());
+        settings.validate().unwrap();
+    }
+    crate::keymaps::select(&mut settings, "capy").unwrap();
+    settings.shortcuts.insert(CommandId::SearchCommands.shortcut_id(), vec![default.clone()]);
+    assert_eq!(bound(&settings, &default).as_deref(), Some("command.SearchCommands"));
+    assert!(settings.keys("command.Drawings").is_empty());
+    settings.validate().unwrap();
+}
+
+#[test]
+fn web_reserves_drawings_default_without_reserving_select_all() {
+    let drawings = chord("a", true, true, false);
+    let select_all = chord("a", true, false, false);
+    assert!(!drawings.available(Platform::Web));
+    assert!(select_all.available(Platform::Web));
+    let mut s = session(Platform::Web);
+    assert!(s.command(CommandId::Drawings).shortcut.is_empty());
+    assert_eq!(s.command(CommandId::SelectAll).shortcut, "Ctrl+A");
+    assert!(s.state.settings.shortcut_match(&drawings, Platform::Web, None).is_none());
+    assert_eq!(s.state.settings.shortcut_match(&select_all, Platform::Web, None).unwrap().id, "command.SelectAll");
+    let mut settings = s.state.settings.clone();
+    settings.shortcuts.insert(CommandId::Drawings.shortcut_id(), vec![chord("f6", false, false, false)]);
+    s.apply_settings(settings).unwrap();
+    assert_eq!(s.command(CommandId::Drawings).shortcut, "F6");
+    assert!(key(&mut s, "f6", true, false, false).handled);
+    key(&mut s, "f6", false, false, false);
+    assert_eq!(s.state.requests.len(), 1);
+    assert!(matches!(s.state.requests[0].kind, HostRequestKind::Drawings));
+}

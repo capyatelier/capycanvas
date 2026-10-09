@@ -202,7 +202,17 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     }
 }
 impl WorkspaceService<layer_workspace::StoreWorker> {
-    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
+    pub(crate) fn action(&mut self, native: &mut NativeHost, action: WorkspaceAction) -> Result<()> {
+        match action {
+            WorkspaceAction::PreferencesRetry
+            | WorkspaceAction::PreferencesKeepOpen
+            | WorkspaceAction::PreferencesDiscardClose => unreachable!(),
+            WorkspaceAction::Input { input } => self.input(native, input),
+            WorkspaceAction::ExportBackup { path } => self.export_backup(native, path),
+            WorkspaceAction::Failure { error } => Err(StoreError::new(ErrorKind::Unavailable, error)),
+            WorkspaceAction::BackupDatabase { path } => self.backup_database(native, path),
+        }
+    }
     pub(crate) fn backup_database(&mut self, native: &mut NativeHost, path: String) -> Result<()> {
         self.require_idle()?;
         crate::document_io::location(&path).map_err(StoreError::invalid)?;

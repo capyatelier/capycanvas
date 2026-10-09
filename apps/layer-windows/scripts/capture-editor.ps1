@@ -194,7 +194,7 @@ foreach($theme in @('dark','light')){
             })
         $model|ConvertTo-Json -Depth 100|Set-Content -LiteralPath (Join-Path $OutputDirectory "model-$name.json")
         $elements|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $OutputDirectory "elements-$name.json")
-        $fixtures+=@{name=$name;viewport=@($Width,$Height);scale=$scale;theme=$theme;scenario=$scenario;
+        $fixtures+=@{name=$name;viewport=@($Width,$Height);scale=$scale;theme=$theme;palette=$model.state.palette;scenario=$scenario;
             native="native-$name.png";full_client="client-$name.png";surface_offset_pixels=$offset;client_pixels=@($client.right,$client.bottom);
             workspace=$model.windows_workspace.id;titlebar_insets=$model.titlebar_insets;header_model=$model.header.model;workspace_switcher=$model.windows_workspace.switcher_display;
             document=$model.state.tabs[0];camera=$model.state.camera;layout=$model.layout;

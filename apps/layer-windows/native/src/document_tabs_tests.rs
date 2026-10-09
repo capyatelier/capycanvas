@@ -66,6 +66,30 @@ fn save(service: &mut DocumentService, host: &mut NativeHost, path: &std::path::
     settle(service, host);
 }
 #[test]
+fn adjacent_drawing_requests_retire_before_noop_and_service_refusal() {
+    let mut host = NativeHost::new(Platform::Windows).unwrap();
+    let mut service = DocumentService::open(|| {}).unwrap();
+    let document = host.session.engine().document().clone();
+    let checkpoint = host.session.engine().checkpoint();
+    let selected = service.window.documents.selected();
+    for blocked in [false, true] {
+        service.activating = blocked;
+        command(&mut host, CommandId::NextDrawing);
+        assert!(host.session.state().requests.iter().any(|request|
+            matches!(request.kind, HostRequestKind::AdjacentDrawing { forward: true })));
+        service.poll(&mut host).unwrap();
+        assert!(host.session.state().requests.is_empty());
+        assert_eq!(service.window.documents.selected(), selected);
+        assert_eq!(host.session.engine().document(), &document);
+        assert_eq!(host.session.engine().checkpoint(), checkpoint);
+        let error = blocked.then(|| layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()));
+        assert_eq!(host.error.as_deref(), error.as_deref());
+    }
+    service.activating = false;
+    service.stop_worker().unwrap();
+}
+
+#[test]
 #[ignore = "Requires hardware D3D12 and an isolated CAPY_STORAGE_DIR"]
 fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     use layer_core::color::{
@@ -182,6 +206,22 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
             .document_file
             .modified
     );
+    let second_checkpoint = host.session.engine().checkpoint();
+    for (next, target, parked, checkpoint) in [
+        (CommandId::PreviousDrawing, 1, 2, first),
+        (CommandId::NextDrawing, 2, 1, second_checkpoint),
+    ] {
+        command(&mut host, next);
+        assert!(!host.session.can_park_document());
+        settle(&mut service, &mut host);
+        assert_eq!(service.window.documents.selected(), target);
+        assert!(host.session.state().requests.is_empty());
+        assert!(service.window.documents.parked_owner_mut(parked).unwrap().session.state().requests.is_empty());
+        assert_eq!(host.session.engine().checkpoint(), checkpoint);
+        if target == 1 {
+            assert_eq!(super::super::gpu_tests::image(&mut host).bytes, original_pixels.bytes);
+        }
+    }
     let temporary = layer_core::temp_files::directory().unwrap();
     let _ = std::fs::remove_dir(temporary);
     std::fs::write(temporary, b"fixture blocks temporary storage").unwrap();

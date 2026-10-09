@@ -369,11 +369,11 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
         await wait(`document.querySelector('dialog[open] .error-message')?.textContent.includes(${JSON.stringify(expectError)})`);
         assert.equal(await evaluate('zoomPicks'),picks,'refused before choosing a file or rendering');
         await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Cancel').click()`);
-        await wait(`!document.querySelector('dialog[open]')&&!layerApp.state().document_file.busy`);
+        await wait(`!document.querySelector('dialog[open]')&&!layerApp.state().document_file.busy&&!layerApp.documents.busy()`);
         return null;
       }
       const extension=format==='Webp'?'webp':'png';
-      await waitLong(`[...${files}.keys()].some(k=>k.endsWith('.${extension}'))&&!layerApp.state().document_file.busy`);
+      await waitLong(`[...${files}.keys()].some(k=>k.endsWith('.${extension}'))&&!layerApp.state().document_file.busy&&!layerApp.documents.busy()`);
       return [...(await evaluate(`[...${files}.entries()].filter(([k])=>k.endsWith('.${extension}')).map(([k])=>k)`))].at(-1);
     };
     await invoke('pen');await wait('layerApp.app.brush_ready()');

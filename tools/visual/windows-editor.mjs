@@ -21,6 +21,7 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
     const [width,height]=fixture.viewport,scale=fixture.scale;
     assert.match(fixture.name,/^[a-z0-9-]+$/);
     assert.ok(['initial','canvas-under-header'].includes(fixture.scenario));
+    assert.match(fixture.palette?.accent??'',/^#[0-9a-f]{6}$/i);
     await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:scale,mobile:false});
     await evaluate(`(async()=>{
       const fixture=${JSON.stringify(fixture)}, view=()=>JSON.parse(layerApp.app.workspace_view());
@@ -48,6 +49,7 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
           icon.click();
         }
       }
+      layerApp.dispatch({type:'system_theme_changed',theme:fixture.theme,accent:fixture.palette.accent});
       layerApp.dispatch({type:'set_theme',theme:fixture.theme});
       layerApp.dispatch({type:'measure_titlebar',insets:fixture.titlebar_insets});
       window.capyWindowsCaptionInsets=fixture.titlebar_insets.slice(0,2);
@@ -75,9 +77,17 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
       await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     })()`);
     const metrics=await evaluate(`(async()=>{
-      const workspaceKeys=Object.fromEntries(${JSON.stringify(fixture.workspace_switcher||[])}.map(item=>[item.id,item.key]));
       const adapter=await navigator.gpu.requestAdapter();
       const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height}};
+      const visibleRect=node=>{
+        const b=node.getBoundingClientRect();let left=Math.max(0,b.left),top=Math.max(0,b.top),right=Math.min(innerWidth,b.right),bottom=Math.min(innerHeight,b.bottom);
+        for(let parent=node.parentElement;parent;parent=parent.parentElement){
+          const style=getComputedStyle(parent),box=parent.getBoundingClientRect(),x=box.left+parseFloat(style.borderLeftWidth),y=box.top+parseFloat(style.borderTopWidth);
+          if(['hidden','clip','auto','scroll'].includes(style.overflowX)){left=Math.max(left,x);right=Math.min(right,box.right-parseFloat(style.borderRightWidth));}
+          if(['hidden','clip','auto','scroll'].includes(style.overflowY)){top=Math.max(top,y);bottom=Math.min(bottom,box.bottom-parseFloat(style.borderBottomWidth));}
+        }
+        return {x:left,y:top,width:Math.max(0,right-left),height:Math.max(0,bottom-top)};
+      };
       const layout=layerApp.app.layout(innerWidth,innerHeight);
       const elementId=n=>{
         const row=n.closest('.layer-row');
@@ -95,10 +105,11 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
             return prefix+(n.matches('canvas')?(mask?'mask-thumbnail':'thumbnail'):(mask?'mask':'content'));
           }
         }
-        for(const [selector,id] of [['.layer-header','controls'],['.layer-options','options'],['.layer-flags','flags'],['.layer-footer','footer'],['.layer-options select','blend']])
+        for(const [selector,id] of [['.layer-header','controls'],['.layer-options','options'],['.layer-flags','flags'],['.layer-footer','footer'],['.layer-options .layer-blend','blend']])
           if(n.matches(selector))return 'layer-'+id;
         if(n.matches('.workspace-switcher'))return 'workspace-switcher';
-        if(n.matches('.workspace-switcher button'))return 'workspace-switch-'+workspaceKeys[n.dataset.workspaceId];
+        if(n.matches('.workspace-switcher-options'))return 'workspace-switcher-options';
+        if(n.matches('.workspace-switcher button[data-workspace-id]'))return 'workspace-switch-'+n.dataset.workspaceId;
         if(n.matches('#header-workspace-selector > summary'))return 'header-workspace-menu';
         if(n.matches('.header-overflow > summary'))return n.parentElement.id;
         if(n.matches('.header-menu-overflow > summary'))return 'application-primary-menu';
@@ -106,19 +117,20 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
         if(n.dataset.command==='settings')return 'settings-button';
         return n.id;
       };
-      const elements=[...document.querySelectorAll('button,summary,.panel,.panel-group,.group-tabs,.tool-choice-button,.brush-preview,#header,#document-title,.workspace-switcher,.layer-row,.layer-name,.layer-meta,.layer-grip,.layer-thumbnail canvas,.layer-header,.layer-options,.layer-flags,.layer-footer,.layer-options select')]
-        .filter(n=>{const b=n.getBoundingClientRect();return getComputedStyle(n).visibility==='visible'&&b.width>0&&b.height>0&&b.bottom>0&&b.top<innerHeight})
+      const elements=[...document.querySelectorAll('button,summary,.panel,.panel-group,.group-tabs,.tool-choice-button,.brush-preview,#header,#document-title,.workspace-switcher,.layer-row,.layer-name,.layer-meta,.layer-grip,.layer-thumbnail canvas,.layer-header,.layer-options,.layer-flags,.layer-footer')]
+        .filter(n=>{const b=n.getBoundingClientRect(),visible=n.matches('.tool-choice-button')?visibleRect(n):b;return getComputedStyle(n).visibility==='visible'&&visible.width>0&&visible.height>0&&b.bottom>0&&b.top<innerHeight})
         .map(n=>({id:n.matches('.tool-choice-button')?'tool-'+(n.parentElement.classList.contains('tool-groups')?'group':'subtool')+'-'+[...n.parentElement.children].indexOf(n):elementId(n),classes:n.className,name:n.getAttribute('aria-label')||n.textContent.trim(),command:n.dataset.command,
-          bounds:rect(n),style:Object.fromEntries(['fontFamily','fontSize','fontWeight','lineHeight','padding','gap'].map(k=>[k,getComputedStyle(n)[k]]))}));
+          bounds:n.matches('.tool-choice-button')?visibleRect(n):rect(n),unclipped_bounds:rect(n),style:Object.fromEntries(['fontFamily','fontSize','fontWeight','lineHeight','padding','gap'].map(k=>[k,getComputedStyle(n)[k]]))}));
       return JSON.parse(JSON.stringify({viewport:[innerWidth,innerHeight],scale:devicePixelRatio,canvas:[layerApp.canvas.width,layerApp.canvas.height],
         adapter:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,isFallbackAdapter:adapter.info.isFallbackAdapter},
-        theme:layerApp.state().theme,document:layerApp.state().tabs[0],camera:layerApp.state().camera,layout,elements},(_,v)=>typeof v==='bigint'?v.toString():v));
+        theme:layerApp.state().theme,palette:layerApp.state().palette,document:layerApp.state().tabs[0],camera:layerApp.state().camera,layout,elements},(_,v)=>typeof v==='bigint'?v.toString():v));
     })()`);
     assert.equal(metrics.adapter.isFallbackAdapter,false);
     assert.deepEqual(metrics.viewport,fixture.viewport);
     assert.equal(metrics.scale,scale);
     assert.deepEqual(metrics.canvas,[Math.round(width*scale),Math.round(height*scale)]);
     assert.equal(metrics.theme,fixture.theme);
+    assert.equal(metrics.palette.accent,fixture.palette.accent);
     for(const key of ['width','height','title'])assert.equal(metrics.document[key],fixture.document[key]);
     const shot=await call('Page.captureScreenshot',{format:'png',fromSurface:true});
     const png=Buffer.from(shot.data,'base64');
@@ -158,7 +170,7 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
     const report={name:fixture.name,metrics,layers:layers.entries,layers_maximum_error_pixels:layers.maximum,
       tool_set:toolSet.entries,tool_set_maximum_error_pixels:toolSet.maximum,header:header.entries,
       header_fonts:headerFonts.fonts,header_maximum_error_pixels:header.maximum,issues,native:{camera:fixture.camera,layout:fixture.layout},
-      adaptations:{shared_header_arrangement:fixture.header_model,layer_geometry_source:fixture.layer_geometry_source,native_surface_offset_pixels:fixture.surface_offset_pixels,native_full_client:fixture.full_client,native_caption_button_reservation:fixture.titlebar_insets,system_caption_buttons:'Windows owns these; Chrome leaves the reserved pixels visible'},
+      adaptations:{shared_theme_input:{theme:fixture.theme,accent:fixture.palette.accent},shared_header_arrangement:fixture.header_model,layer_geometry_source:fixture.layer_geometry_source,native_surface_offset_pixels:fixture.surface_offset_pixels,native_full_client:fixture.full_client,native_caption_button_reservation:fixture.titlebar_insets,system_caption_buttons:'Windows owns these; Chrome leaves the reserved pixels visible'},
       scope:'Full editor; differences remain unaccepted until reviewed. No masks, cropping, resampling or native-measurement substitution.'};
     await writeFile(`${output}/geometry-${fixture.name}.json`,JSON.stringify(report,null,2));
     reports.push({name:fixture.name,viewport:metrics.viewport,scale,adapter:metrics.adapter,issues,

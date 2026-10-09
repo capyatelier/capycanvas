@@ -63,15 +63,8 @@ function Tool([string]$Id) {
     Wait-Until {!(Find 'command-search' -Visible) -and @((Model).state.commands|Where-Object {$_.id -eq $Id -and $_.selected}).Count -eq 1 -and (Model).brush_ready} "Tool did not activate: $Id"
 }
 function Pixels([string]$Name='') {
-    $bitmap=[Drawing.Bitmap]::new(96,96)
-    $graphics=[Drawing.Graphics]::FromImage($bitmap)
-    try {
-        $graphics.CopyFromScreen($script:x-48,$script:y-48,0,0,$bitmap.Size)
-        $lock=$bitmap.LockBits([Drawing.Rectangle]::new(0,0,96,96),[Drawing.Imaging.ImageLockMode]::ReadOnly,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
-        try {$bytes=[byte[]]::new($lock.Stride*96);[Runtime.InteropServices.Marshal]::Copy($lock.Scan0,$bytes,0,$bytes.Length)}finally{$bitmap.UnlockBits($lock)}
-        if($Name){$bitmap.Save((Join-Path $run ($Name+'.png')))}
-        [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))
-    }finally{$graphics.Dispose();$bitmap.Dispose()}
+    $path=if($Name){Join-Path $run ($Name+'.png')}else{''}
+    Screen-Pixels $script:x $script:y $path
 }
 try {
     Enter-CapyEnvironment

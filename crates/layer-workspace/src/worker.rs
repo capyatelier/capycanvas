@@ -189,11 +189,17 @@ fn backup_database(source: &Path, destination: &Path) -> Result<()> {
         options
             .open(&temporary)
             .map_err(|e| StoreError::new(ErrorKind::FailedWrite, e.to_string()))?;
+        let unavailable =
+            |e: std::io::Error| StoreError::new(ErrorKind::Unavailable, e.to_string());
         let database = rusqlite::Connection::open_with_flags(
-            source,
+            std::fs::canonicalize(source).map_err(unavailable)?,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
-        database.backup(rusqlite::MAIN_DB, &temporary, None)?;
+        database.backup(
+            rusqlite::MAIN_DB,
+            std::fs::canonicalize(&temporary).map_err(unavailable)?,
+            None,
+        )?;
         drop(database);
         // Windows FlushFileBuffers requires a writable handle. SQLite has
         // closed its backup connection; reopen without truncating its result.

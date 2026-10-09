@@ -72,17 +72,23 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     continue;
                 }
                 bool picker=pickerControl(object(tile,L"control"));
-                auto presses=picker?std::make_shared<DoublePress>():nullptr;
+                auto presses=std::make_shared<DoublePress>();
                 auto pick=button(data,str(tile,L"label"),[data=data,id,panelId,presses,weak=std::weak_ptr<WorkspaceGestures>(gestures)]{
-                    if(auto gestures=weak.lock();gestures&&gestures->SuppressClick()){if(presses)presses->reset();return;}
-                    if(presses&&presses->second()){
-                        data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"settings")},
-                            {L"anchor",O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}})}})}}));
-                        return;
+                    if(auto gestures=weak.lock();gestures&&gestures->SuppressClick()){presses->reset();return;}
+                    if(presses->second()){
+                        auto current=findId(array(find(array(data->model,L"panels"),L"id",panelId),L"tiles"),id);
+                        auto control=object(current,L"resolved_control");
+                        if(flag(current,L"double_click")){
+                            data->dispatch(O({{L"type",S(L"double_click_tool")},{L"control",control}}));return;
+                        }
+                        if(pickerControl(control)){
+                            data->dispatch(O({{L"type",S(L"color_picker")},{L"action",O({{L"kind",S(L"settings")},
+                                {L"anchor",O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}})}})}}));return;
+                        }
                     }
                     data->dispatch(O({{L"type",S(L"activate_tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
                 });
-                if(presses)presses->listen(pick);
+                presses->listen(pick);
                 // A disabled command remains disabled and accessible as such;
                 // its surrounding tile still accepts customization gestures.
                 Border slot;slot.Background(clear());Grid tileContent;tileContent.Children().Append(pick);

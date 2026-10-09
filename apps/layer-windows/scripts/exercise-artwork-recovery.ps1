@@ -26,9 +26,10 @@ function Command([string]$Menu,[string]$Id){
 }
 function Start-Review([string]$Label,[switch]$AllowFailure){
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run "$Label.stderr.log")
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'No review window'
-    $script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    Wait-Until {$m=Model;$m.brush_ready -and $m.windows_workspace.ready -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} 'Session did not finish reopening' 120
+    $null=$review.Handle;$native=@{window=$null}
+    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'No review window'
+    $script:drawingWindow=$native.window.Handle;$script:root=$native.window.Root
+    Wait-Until {$m=Model;$m.canvas_ready -and $m.brush_ready -and $m.windows_workspace.ready -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} 'Session did not finish reopening' 120
     if(!(Model).windows_isolated_settings){throw 'Session test requires isolated settings'}
     if(!$AllowFailure -and (Model).windows_recovery.error){throw (Model).windows_recovery.error}
     if(Find-Name 'Restore drawing'){throw 'Ordinary restart presented a recovery prompt'}
@@ -36,7 +37,9 @@ function Start-Review([string]$Label,[switch]$AllowFailure){
 function Crash-Review {Stop-Process -Id $review.Id;$review.WaitForExit()}
 function Close-Review {
     Wait-Until {$canvas=Find-Id 'drawing-canvas';$canvas -and $canvas.Current.IsEnabled} 'Native document dialog did not finish closing'
-    Wait-Until {$review.Refresh();if($review.HasExited){return $true};$null=$review.CloseMainWindow();Start-Sleep -Milliseconds 250;$review.HasExited -or (Model).windows_settings_close.requested} 'Review window did not accept close'
+    $owned=Owned-DrawingWindow $review $drawingWindow.ToInt64()
+    if(![CapyWindowApi]::PostMessage($owned.Handle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'The owned drawing window did not accept Close'}
+    Wait-Until {$review.Refresh();if($review.HasExited){return $true};Start-Sleep -Milliseconds 250;$review.HasExited -or (Model).windows_settings_close.requested} 'Review window did not accept close'
     if(!$review.WaitForExit(15000)){throw 'Session flush did not complete window close'}
     if($review.ExitCode -ne 0){throw "Clean close failed: $($review.ExitCode)"}
 }
@@ -51,6 +54,26 @@ function Settled-Checkpoint([int]$Count){
 }
 function Disk-Signature {
     @(Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -Filter '*.json' -Recurse|Sort-Object FullName|ForEach-Object{@{path=$_.FullName;bytes=$_.Length;written=$_.LastWriteTimeUtc.Ticks}})|ConvertTo-Json -Compress
+}
+function Failed-Source {
+    $directory=Split-Path -Parent $head
+    @(Get-ChildItem -LiteralPath $directory -File -Recurse|Where-Object {$_.Name -notin @('restore-error.txt','.lock')}|Sort-Object FullName|ForEach-Object {
+        @{path=[IO.Path]::GetRelativePath($directory,$_.FullName);bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}
+    })|ConvertTo-Json -Compress
+}
+function Recovery-Diagnostic([string]$Label) {
+    $diagnostic=Join-Path (Split-Path -Parent $head) 'restore-error.txt'
+    Wait-Until {(Test-Path -LiteralPath $diagnostic) -and ![string]::IsNullOrWhiteSpace((Model).error)} 'Recovery did not publish its durable diagnostic'
+    $detail=[IO.File]::ReadAllText($diagnostic);$recoveryMessage=(Model).error
+    if([string]::IsNullOrWhiteSpace($detail) -or !$recoveryMessage.Contains($detail)){throw 'Recovery status lost the stored failure detail'}
+    Wait-Until {$native=Find 'canvas-status' -Visible;$native -and $native.Current.Name -eq $recoveryMessage} 'Native recovery status did not publish the stored failure'
+    $status=Control 'canvas-status' -Arranged
+    if($status.Current.Name -ne $recoveryMessage){throw 'Native recovery status differs from the reported failure'}
+    $source=Failed-Source
+    $record=@{detail=$detail;message=$recoveryMessage;diagnostic_sha256=(Get-FileHash -LiteralPath $diagnostic).Hash;source=$source;status=@{name=$status.Current.Name;bounds=$status.Current.BoundingRectangle;runtime_id=($status.GetRuntimeId() -join ':')}}
+    $record|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ($Label+'-diagnostic.json'))
+    if($source -ne $failedSource){throw 'Recovery changed the failed drawing source bytes'}
+    $record
 }
 function Signature {
     $m=Model
@@ -92,7 +115,7 @@ try {
     Start-Review 'crash-reopen'
     if((Signature) -ne $before){throw 'Crash restart changed tab order, active drawing, size, modified state or Undo/Redo'}
     if(!(Model).state.document_file.recovered){throw 'Crash restart did not mark the drawing recovered'}
-    Capture 'crash-reopened' -WithModel
+    Capture 'crash-reopened' -WithModel -Composed
     Command 'Edit' 'redo'
     Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Restored Redo did not apply'
     Command 'Edit' 'undo'
@@ -108,7 +131,7 @@ try {
     Start-Review 'clean-reopen'
     if((Signature) -ne $before){throw 'Orderly restart changed the editing session'}
     if((Model).windows_tabs.selected -ne $active){throw 'Orderly restart changed the active tab'}
-    Capture 'clean-reopened' -WithModel
+    Capture 'clean-reopened' -WithModel -Composed
     $index=Session-Index
     $generation=$index.generation
     $disk=Disk-Signature
@@ -195,18 +218,24 @@ try {
     $head=Join-Path $session "$($damaged.key)/head.json"
     $headBytes=[IO.File]::ReadAllBytes($head)
     [IO.File]::WriteAllText($head,'unreadable')
+    $failedSource=Failed-Source
     Start-Review 'unreadable-drawing'
     Wait-Until {Find-Name 'Recover drawing'} 'An unreadable drawing did not ask what to do'
     if(@((Model).windows_tabs.tabs).Count -ne 1){throw 'An unreadable drawing kept the readable one closed'}
-    Capture 'unreadable-drawing' -WithModel
+    $failedDiagnostic=Recovery-Diagnostic 'unreadable-drawing'
+    Capture 'unreadable-drawing' -WithModel -Composed
     Invoke-Control 'Later'
     Wait-Until {!(Find-Name 'Recover drawing')} 'Later did not dismiss the recovery choice'
     Close-Review
     Start-Review 'retry-drawing'
     Wait-Until {Find-Name 'Recover drawing'} 'A drawing left for later was not offered again'
+    $retriedDiagnostic=Recovery-Diagnostic 'retry-drawing'
+    Capture 'retry-drawing' -WithModel -Composed
+    if($retriedDiagnostic.detail -ne $failedDiagnostic.detail -or $retriedDiagnostic.message -ne $failedDiagnostic.message -or $retriedDiagnostic.diagnostic_sha256 -ne $failedDiagnostic.diagnostic_sha256){throw 'Restart replaced the durable recovery diagnostic'}
     [IO.File]::WriteAllBytes($head,$headBytes)
     Invoke-Control 'Retry Storage'
     Wait-Until {@((Model).windows_tabs.tabs).Count -eq 2 -and !(Model).windows_recovery.busy} 'Retry did not reopen the repaired drawing' 120
+    Wait-Until {!(Test-Path -LiteralPath (Join-Path (Split-Path -Parent $head) 'restore-error.txt'))} 'Successful recovery did not clear the saved failure detail'
     Start-Sleep -Seconds 3
     Settled-Checkpoint 2
     Close-Review
@@ -220,7 +249,7 @@ try {
     if((Find-Name 'Recover drawing') -or @((Model).windows_tabs.tabs).Count -ne 1){throw 'A discarded drawing came back'}
     Close-Review
     foreach($log in Get-ChildItem $run -Filter '*.stderr.log'){if($log.Length){throw "Native error in $($log.Name)"}}
-    [pscustomobject]@{theme=$Theme;automatic_crash_and_clean_restart='passed';tabs_active_and_history='passed';save_cancel_and_discard='passed';missing_and_changed_original_close_protection='passed';closed_drawing_stays_closed='passed';idle_write_coalescing='passed';corrupt_source_preserved_and_retried='passed';unreadable_drawing_later_retry_discard='passed';scope='isolated Windows UI on selected adapter'}|ConvertTo-Json
+    [pscustomobject]@{theme=$Theme;automatic_crash_and_clean_restart='passed';tabs_active_and_history='passed';save_cancel_and_discard='passed';missing_and_changed_original_close_protection='passed';closed_drawing_stays_closed='passed';idle_write_coalescing='passed';corrupt_source_preserved_and_retried='passed';unreadable_drawing_later_retry_discard='passed';durable_failure_detail_and_source='passed';scope='isolated Windows UI on selected adapter'}|ConvertTo-Json
 } catch {
     [Console]::Error.WriteLine($_.ScriptStackTrace)
     throw

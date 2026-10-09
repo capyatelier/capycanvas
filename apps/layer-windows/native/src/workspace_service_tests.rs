@@ -63,11 +63,11 @@ fn export_backup_waits_for_idle_and_reports_notice() {
     let mut f = Fixture::new();
     let path = f.directory.path.join("backup.capyworkspace");
     f.service
-        .export_backup(&mut f.native, path.to_string_lossy().into_owned())
+        .action(&mut f.native, WorkspaceAction::ExportBackup { path: path.to_string_lossy().into_owned() })
         .unwrap();
     assert!(
         f.service
-            .export_backup(&mut f.native, path.to_string_lossy().into_owned())
+            .action(&mut f.native, WorkspaceAction::ExportBackup { path: path.to_string_lossy().into_owned() })
             .is_err()
     );
     f.pump(|f| f.notice().is_some());
@@ -112,5 +112,41 @@ fn workspace_service_refreshes_open_prompts_and_preserves_literal_names() {
     f.pump(|f| f.service.view().name == literal && !f.service.view().busy);
     assert!(Arc::ptr_eq(f.service.controller.localization(), &english));
     assert_eq!(f.service.controller.manager.current().unwrap().metadata.name, literal);
+    f.service.stop();
+}
+
+#[test]
+fn workspace_refresh_reads_external_preferences_while_the_renderer_is_suspended() {
+    let mut f = Fixture::new();
+    let document = f.native.session.engine().document().clone();
+    let checkpoint = f.native.session.engine().checkpoint();
+    let layout = f.native.session.state().workspace.layout.clone();
+    let original = f.service.controller.manager.current_record().unwrap();
+    let active = f.service.view().id.clone();
+    let first = f.service.view().order[0].clone();
+    let moved = f.service.view().order.last().unwrap().clone();
+    f.native.session.suspend_renderer().unwrap();
+    let other = layer_workspace::WorkspaceManager::new(
+        StoreWorker::shared(&f.directory.path).unwrap(), Platform::Windows);
+    pollster::block_on(other.edit_switcher(layer_workspace::SwitcherEdit::Move {
+        id: moved.clone(), before: Some(first),
+    })).unwrap();
+    let action = serde_json::from_str(r#"{"operation":"input","input":{"type":"refresh_switcher"}}"#).unwrap();
+    f.service.action(&mut f.native, action).unwrap();
+    f.pump(|f| f.service.view().order.first() == Some(&moved));
+    assert!(f.native.session.rendering_suspended());
+    assert!(f.native.error.is_none());
+    assert!(f.service.view().error.is_none());
+    assert!(f.service.view().switcher_error.is_none());
+    assert_eq!(f.service.view().id, active);
+    let refreshed = f.service.controller.manager.current_record().unwrap();
+    assert_eq!(refreshed.entity, original.entity);
+    assert_eq!(refreshed.generations, original.generations);
+    let (claim, before) = (refreshed.claim.unwrap(), original.claim.unwrap());
+    assert_eq!((claim.owner, claim.fence), (before.owner, before.fence));
+    assert!(claim.expires_at_ms >= before.expires_at_ms);
+    assert_eq!(f.native.session.state().workspace.layout, layout);
+    assert_eq!(f.native.session.engine().document(), &document);
+    assert_eq!(f.native.session.engine().checkpoint(), checkpoint);
     f.service.stop();
 }

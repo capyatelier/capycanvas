@@ -50,6 +50,24 @@ function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle){
     if($WindowHandle -and $found.Count -ne 1){throw 'The specified window is not an owned drawing window'}
     if($found.Count){$found[0]}
 }
+function Screen-Pixels([int]$X,[int]$Y,[string]$Path='',[switch]$Cursor) {
+    $bitmap=[Drawing.Bitmap]::new(96,96)
+    $graphics=[Drawing.Graphics]::FromImage($bitmap)
+    try {
+        $graphics.CopyFromScreen($X-48,$Y-48,0,0,$bitmap.Size)
+        if($Cursor){
+            $nativeCursor=[CapyRowPointer]::Cursor()
+            $canvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+            if([CapyRowPointer]::GetForegroundWindow() -ne [IntPtr]$root.Current.NativeWindowHandle -or !$canvas.Contains([double]$nativeCursor.position.x,[double]$nativeCursor.position.y) -or [Math]::Abs($nativeCursor.position.x-$X) -gt 2 -or [Math]::Abs($nativeCursor.position.y-$Y) -gt 2){throw 'Cursor capture does not belong to the owned canvas point'}
+            $dc=$graphics.GetHdc()
+            try{[CapyRowPointer]::DrawCursor($dc,$nativeCursor,$X-48,$Y-48)}finally{$graphics.ReleaseHdc($dc)}
+        }
+        $lock=$bitmap.LockBits([Drawing.Rectangle]::new(0,0,96,96),[Drawing.Imaging.ImageLockMode]::ReadOnly,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        try {$bytes=[byte[]]::new($lock.Stride*96);[Runtime.InteropServices.Marshal]::Copy($lock.Scan0,$bytes,0,$bytes.Length)}finally{$bitmap.UnlockBits($lock)}
+        if($Path){$bitmap.Save($Path)}
+        [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))
+    }finally{$graphics.Dispose();$bitmap.Dispose()}
+}
 function Wait-StablePixels([scriptblock]$Sample){
     $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $Sample;$stable=0
     do{
@@ -224,9 +242,9 @@ function Invoke-PickerButton($Picker,[string]$Id='1'){
     if($owner -ne $review.Id){throw 'Native picker button has an unexpected owner'}
     if(![CapyWindowApi]::PostMessage($handle,245,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cannot invoke native picker button'}
 }
-function Open-Project([string]$Path){
+function Open-Project([string]$Path,[ValidateSet('open_document','import_image')][string]$Command='open_document'){
     & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'
-    Invoke-Id 'open_document'
+    Invoke-Id $Command
     $hit=@{edit=$null}
     Wait-Until {$hit.edit=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'Edit'),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1148')));$null -ne $hit.edit} 'Missing Open picker' 45
     [CapyWindowApi]::Path([IntPtr]$hit.edit.Current.NativeWindowHandle,$Path)
@@ -247,7 +265,7 @@ function Fit-Canvas{
     $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Zoom-Item 'zoom-fit_canvas')} 'The zoom menu did not close after Fit'
 }
-function Save-ProjectAs([string]$Path){
+function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
     & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'
     Invoke-Id 'save_document_as'
     $hit=@{entry=$null;picker=$null}
@@ -264,7 +282,10 @@ function Save-ProjectAs([string]$Path){
     if($hit.picker.Current.ProcessId -ne $review.Id -or $hit.entry.Current.ProcessId -ne $review.Id){throw 'Wrong picker filename owner'}
     [CapyWindowApi]::Path([IntPtr]$hit.entry.Current.NativeWindowHandle,$Path)
     Invoke-PickerButton $hit.picker
-    Wait-Until {(Test-Path -LiteralPath $Path) -and (Model).state.document_file.location.uri -eq $Path -and !(Model).state.document_file.busy -and !(Model).state.document_file.modified} 'The drawing did not save' 90
+    Wait-Until {
+        if($NativeSaved){return (Test-Path -LiteralPath $Path) -and $root.Current.Name -eq ([IO.Path]::GetFileName($Path)+' · Capy Canvas') -and (& $NativeSaved $Path)}
+        (Test-Path -LiteralPath $Path) -and (Model).state.document_file.location.uri -eq $Path -and !(Model).state.document_file.busy -and !(Model).state.document_file.modified
+    } 'The drawing did not save' 90
     Wait-Until {!(Find 'Save As' -Name) -and (Control 'drawing-canvas').Current.IsEnabled} 'The Save As dialog did not close'
 }
 function Workspace-Root{

@@ -147,8 +147,8 @@ try{
  Wait-Until {$m=Model;$tab=@($m.state.tabs|Where-Object active)[0];$tab.width -eq 320 -and $tab.height -eq 240 -and $m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'The seeded paint drawing did not open' 90
  if((Model).state.layer_tools.editing_layer.object){throw 'The seed must be an editable paint layer'}
  Fit-Canvas;Park
- Wait-Until {(Model).shaders_ready} 'Idle preparation did not reach the complete shader catalogue' 180
- $checks.idle_complete=Observe 'idle-catalogue-complete' $null
+ Wait-Until {(Model).shaders_ready} 'Requested shader preparation did not complete' 180
+ $checks.requested_preparation_complete=Observe 'requested-preparation-complete' $null
  $projection=@{bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;camera=(Camera-Key (Model).state.camera);camera_state=(Model).state.camera}
  $samplePoints=@(foreach($y in 0..23){foreach($x in 0..31){,(Point (($x+.5)*10) (($y+.5)*10) $projection)}})
  foreach($point in $samplePoints){if(!$projection.bounds.Contains([double]$point[0],[double]$point[1])){throw 'A composed sample lies outside the arranged canvas'}}

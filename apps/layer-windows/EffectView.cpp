@@ -90,6 +90,26 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             if(children.IndexOf(items[i],at))children.Move(at,i);else children.InsertAt(i,items[i]);
         }
     }
+    Grid propertyRow(std::shared_ptr<Property> const& property,FrameworkElement const& field,Bindings& bindings){
+        Grid row;row.ColumnSpacing(6);row.RowSpacing(6);
+        ColumnDefinition caption;caption.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(caption);
+        ColumnDefinition value;value.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(value);
+        for(int i=0;i<2;i++){RowDefinition line;line.Height({1,GridUnitType::Auto});row.RowDefinitions().Append(line);}
+        auto text=label(data,str(property->model(),L"label"));text.VerticalAlignment(VerticalAlignment::Center);text.TextTrimming(TextTrimming::CharacterEllipsis);row.Children().Append(text);
+        auto arrange=[text,weak=make_weak(field)](double width){
+            auto field=weak.get();if(!field)return;
+            text.Measure({INFINITY,INFINITY});
+            bool wrap=width-text.DesiredSize().Width-6<std::min(150.,width);
+            Grid::SetColumnSpan(text,wrap?2:1);
+            Grid::SetRow(field,wrap?1:0);Grid::SetColumn(field,wrap?0:1);Grid::SetColumnSpan(field,wrap?2:1);
+        };
+        row.SizeChanged([arrange](auto&&,SizeChangedEventArgs const& event){arrange(event.NewSize().Width);});
+        bindings.emplace_back([property,text,weak=make_weak(row),arrange]{
+            auto title=str(property->model(),L"label");if(text.Text()==title)return;text.Text(title);
+            if(auto row=weak.get();row&&row.ActualWidth()>0)arrange(row.ActualWidth());
+        });
+        Grid::SetColumn(field,1);row.Children().Append(field);return row;
+    }
     FrameworkElement build(J const& c,Bindings& bindings){
         auto property=std::make_shared<Property>(data,c);
         auto kind=object(c,L"kind");auto type=str(kind,L"kind");auto name=str(c,L"label");
@@ -97,32 +117,23 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             auto captured=std::make_shared<bool>(false);NumberPresentation presentation;presentation.title=property->label().current;
             presentation.identity=[weak=std::weak_ptr<Property>(property)]{if(auto current=weak.lock())return current->identity();return hstring();};
             presentation.phase=[property,captured](hstring const& phase,double v){*captured=phase==L"down";property->action(property->setting(N(v)),phase);};
-            return number(data,name,object(kind,L"numeric"),
+            bool inlineTrack=str(object(kind,L"numeric"),L"kind")==L"slider";
+            auto field=number(data,name,object(kind,L"numeric"),
                 [property]{return num(object(property->model(),L"value"),L"value");},
                 [property,captured](double v){property->action(property->setting(N(v)),*captured?L"move":L"");},
-                bindings,nullptr,false,property->id(),false,presentation);
+                bindings,nullptr,false,property->id(),inlineTrack,presentation);
+            return inlineTrack?FrameworkElement(propertyRow(property,field,bindings)):FrameworkElement(field);
         }
         if(type==L"choice"){
-            Grid row;row.ColumnSpacing(6);row.RowSpacing(6);
-            ColumnDefinition caption;caption.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(caption);
-            ColumnDefinition choiceColumn;choiceColumn.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(choiceColumn);
-            for(int i=0;i<2;i++){RowDefinition line;line.Height({1,GridUnitType::Auto});row.RowDefinitions().Append(line);}
-            auto text=label(data,name);text.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(text);
             ComboBox choices;choices.MinWidth(0);choices.MinHeight(32);choices.Height(32);
             choices.HorizontalAlignment(HorizontalAlignment::Stretch);choices.Padding({6,0,0,0});
             choices.FontSize(data->textSize());
             choices.Background(data->brush(L"input"));choices.BorderThickness({0,0,0,0});choices.CornerRadius({6,6,6,6});
-            row.SizeChanged([text,weak=make_weak(choices)](auto&&,SizeChangedEventArgs const& event){
-                auto choices=weak.get();if(!choices)return;
-                text.Measure({INFINITY,INFINITY});
-                bool wrap=event.NewSize().Width-text.DesiredSize().Width-6<std::min(150.f,event.NewSize().Width);
-                Grid::SetRow(choices,wrap?1:0);Grid::SetColumn(choices,wrap?0:1);Grid::SetColumnSpan(choices,wrap?2:1);
-            });
             for(auto option:array(kind,L"options"))comboOption(choices,option.GetString());
             AutomationProperties::SetName(choices,name);AutomationProperties::SetAutomationId(choices,property->id());
             choices.SelectionChanged([property,weak=make_weak(choices)](auto&&,auto&&){if(auto choices=weak.get();choices&&choices.SelectedIndex()>=0)property->set(N(choices.SelectedIndex()));});
-            bindings.emplace_back([property,choices,text]{auto model=property->model();auto title=str(model,L"label");text.Text(title);AutomationProperties::SetName(choices,title);auto options=array(object(model,L"kind"),L"options");for(uint32_t i=0;i<options.Size();++i)comboOptionText(choices,i,options.GetStringAt(i));auto selected=int(num(object(model,L"value"),L"value"));if(choices.SelectedIndex()!=selected)choices.SelectedIndex(selected);});
-            Grid::SetColumn(choices,1);row.Children().Append(choices);return row;
+            bindings.emplace_back([property,choices]{auto model=property->model();auto title=str(model,L"label");AutomationProperties::SetName(choices,title);auto options=array(object(model,L"kind"),L"options");for(uint32_t i=0;i<options.Size();++i)comboOptionText(choices,i,options.GetStringAt(i));auto selected=int(num(object(model,L"value"),L"value"));if(choices.SelectedIndex()!=selected)choices.SelectedIndex(selected);});
+            return propertyRow(property,choices,bindings);
         }
         if(type==L"toggle"){
             CheckBox check;auto caption=label(data,name);check.Content(caption);check.MinHeight(32);check.MinWidth(0);

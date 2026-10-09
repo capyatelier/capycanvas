@@ -762,28 +762,11 @@ pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const
             host.poll_services()?;
             return Ok(0);
         }
-        if host.native.session.rendering_suspended() {
-            fail("Workspace changes are unavailable. Save the drawing and reopen it.");
-            return Ok(1);
-        }
         let service = host
             .workspaces
             .as_mut()
             .ok_or("Workspace service is unavailable")?;
-        let result = match action {
-            WorkspaceAction::PreferencesRetry
-            | WorkspaceAction::PreferencesKeepOpen
-            | WorkspaceAction::PreferencesDiscardClose => unreachable!(),
-            WorkspaceAction::Input { input } => service.input(&mut host.native, input),
-            WorkspaceAction::ExportBackup { path } => service.export_backup(&mut host.native, path),
-            WorkspaceAction::Failure { error } => Err(layer_workspace::StoreError::new(
-                layer_workspace::ErrorKind::Unavailable,
-                error,
-            )),
-            WorkspaceAction::BackupDatabase { path } => {
-                service.backup_database(&mut host.native, path)
-            }
-        };
+        let result = service.action(&mut host.native, action);
         if let Err(error) = result {
             service.report_error(&mut host.native, error);
         }

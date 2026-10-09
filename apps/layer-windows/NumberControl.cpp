@@ -227,7 +227,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     slider.PointerCaptureLost([local,finish](auto&&,auto&&){local->dragging=false;finish(L"up");});
     slider.PointerCanceled([local,finish](auto&&,auto&&){local->dragging=false;finish(L"cancel");});
     slider.ValueChanged([data,local,caption,spec,set,setText,phase,weak=make_weak(entry)](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
-        if(data->updating)return;
+        if(data->updating||local->formatting)return;
         auto next=local->resolve(spec,local->value,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}}));
         local->value=num(next,L"value");local->editing=false;
         if(auto entry=weak.get()){
@@ -248,6 +248,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             showNumericError(entry,L"");caption->errorReason=J{};
         }
         if(local->editing||local->dragging)return;
+        bool previous=std::exchange(local->formatting,true);
+        struct Reset{bool& value;bool previous;~Reset(){value=previous;}} reset{local->formatting,previous};
         local->value=get();auto shown=local->resolve(spec,local->value,O({{L"type",S(L"format")}}));
         setText(presented?presented():str(shown,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));
         entry.Background(entry.FocusState()==FocusState::Unfocused?clear():data->brush(L"input"));

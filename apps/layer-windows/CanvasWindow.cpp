@@ -4,6 +4,7 @@
 #include "CanvasPointerSample.h"
 #include "UiControls.h"
 #include "KeyNames.h"
+#include "NavigationCursors.h"
 #include "ExternalImages.h"
 #include <microsoft.ui.xaml.media.dxinterop.h>
 #include <microsoft.ui.xaml.window.h>
@@ -11,6 +12,7 @@
 #include <CommCtrl.h>
 #include <dwmapi.h>
 #include <winrt/Windows.Graphics.h>
+#include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <algorithm>
 #include <chrono>
@@ -530,7 +532,7 @@ void CanvasWindow::StartInput() {
             InputPointerSourceDeviceKinds::Mouse|InputPointerSourceDeviceKinds::Pen|InputPointerSourceDeviceKinds::Touch);
         // The renderer draws the brush cursor. Scope native cursor suppression
         // to the canvas input target so XAML buttons and editors keep theirs.
-        inputSource.Cursor(nullptr);
+        UpdateNavigationCursor();
         // The OS supplies prediction; shared Rust keeps it out of document truth.
         try {
             pointerPredictor=PointerPredictor::CreateForInputPointerSource(inputSource);
@@ -729,10 +731,10 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     if(key==VirtualKey::Space||key==VirtualKey::Enter||key==VirtualKey::Delete||((key==VirtualKey::Z||key==VirtualKey::Y)&&(GetKeyState(VK_CONTROL)&0x8000)))
         for(auto node=focused.try_as<DependencyObject>();node&&!ownedKeys;node=VisualTreeHelper::GetParent(node))
             if(auto element=node.try_as<FrameworkElement>())if(auto tag=element.Tag().try_as<Windows::Data::Json::JsonObject>())ownedKeys=CapyUi::flag(tag,L"native_keys");
-    bool navigation=key==VirtualKey::Space||key==VirtualKey::Enter||key==VirtualKey::Tab||
+    bool navigation=key==VirtualKey::Space||key==VirtualKey::Enter||
         key==VirtualKey::Left||key==VirtualKey::Right||
         key==VirtualKey::Up||key==VirtualKey::Down||key==VirtualKey::Home||key==VirtualKey::End||
-        key==VirtualKey::PageUp||key==VirtualKey::PageDown||key==VirtualKey::F2||key==VirtualKey::F10||
+        ((key==VirtualKey::Tab||key==VirtualKey::PageUp||key==VirtualKey::PageDown)&&!(GetKeyState(VK_CONTROL)&0x8000))||key==VirtualKey::F2||key==VirtualKey::F10||
         (key!=VirtualKey::Menu&&(GetKeyState(VK_MENU)&0x8000)&&!(GetKeyState(VK_CONTROL)&0x8000));
     // F11 remains a window action while a toolbar button or native field has focus.
     bool arrow=key==VirtualKey::Left||key==VirtualKey::Right||key==VirtualKey::Up||key==VirtualKey::Down;
@@ -816,6 +818,10 @@ int CanvasWindow::DispatchWork(CanvasWork const& item,bool retiring) {
 }
 void CanvasWindow::Run() {
     try {
+        wchar_t executable[32768];auto length=GetModuleFileNameW(nullptr,executable,32768);
+        check_bool(length>0&&length<32768);hstring module(executable,length);
+        auto zoomIn=Microsoft::UI::Input::InputDesktopResourceCursor::CreateFromModule(module,CAPY_CURSOR_ZOOM_IN);
+        auto zoomOut=Microsoft::UI::Input::InputDesktopResourceCursor::CreateFromModule(module,CAPY_CURSOR_ZOOM_OUT);
         // Device/shader preparation must not hold the UI thread. The existing resize
         // handshake performs the first SetSwapChain only after preparation finishes.
         bool prepared=capy_start_services(host,this,[](void* context) noexcept {
@@ -920,7 +926,11 @@ void CanvasWindow::Run() {
             if(result<0){if(capy_device_lost(host))continue;Fail(capy_error());break;}
             dirty=result!=0;
             lastPresent=std::chrono::steady_clock::now();
-            if(!inputStarted){inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->StartInput();});}
+            if(!inputStarted){
+                inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this(),zoomIn,zoomOut]{
+                    if(auto self=weak.lock()){self->zoomInCursor=zoomIn;self->zoomOutCursor=zoomOut;self->StartInput();}
+                });
+            }
             {std::lock_guard lock(mutex);revision=capy_view_revision(host);}
             if(auto snapshot=capy_snapshot(host)) {
                 std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
@@ -1166,6 +1176,34 @@ void CanvasWindow::CloseViews() {
     if(onClosed)onClosed(windowId);
 }
 
+void CanvasWindow::UpdateNavigationCursor() {
+    if(!inputSource)return;
+    using namespace Microsoft::UI::Input;
+    InputCursor next{nullptr};
+    auto mode=navigationCursor.load();
+    switch(mode){
+    case NavigationCursor::Pan:next=InputSystemCursor::Create(InputSystemCursorShape::SizeAll);break;
+    case NavigationCursor::Zoom:next=zoomInCursor;break;
+    case NavigationCursor::ZoomOut:next=zoomOutCursor;break;
+    case NavigationCursor::Rotate:next=InputSystemCursor::Create(InputSystemCursorShape::Cross);break;
+    default:break;
+    }
+    inputSource.Cursor(next);
+    dispatcher.TryEnqueue([weak=weak_from_this(),mode,next]{
+        auto self=weak.lock();
+        if(!self||self->closing||self->closed||self->navigationCursor.load()!=mode||self->menuOpen.load()||self->dialogOpen.load())return;
+        POINT point{};
+        if(!GetCursorPos(&point)||GetAncestor(WindowFromPoint(point),GA_ROOT)!=self->Handle())return;
+        if(auto capture=GetCapture();capture&&capture!=self->Handle())return;
+        auto xaml=self->root.XamlRoot();if(!xaml)return;
+        auto coordinates=xaml.CoordinateConverter();if(!coordinates)return;
+        auto hits=VisualTreeHelper::FindElementsInHostCoordinates(coordinates.ConvertScreenToLocal(Windows::Graphics::PointInt32{point.x,point.y}),self->root,false).First();
+        if(!hits.HasCurrent())return;
+        DependencyObject hovered=hits.Current();
+        while(hovered&&hovered!=self->canvasFocus)hovered=VisualTreeHelper::GetParent(hovered);
+        if(hovered)if(auto source=Microsoft::UI::Input::InputPointerSource::GetForIsland(xaml.ContentIsland()))source.Cursor(next);
+    });
+}
 void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject const& model) {
     bool full=model.HasKey(L"state");
     std::optional<std::string> camera;
@@ -1184,10 +1222,11 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
         if(view.Size())TraceState("camera-state",identity+",\"camera\":"+to_string(view.Stringify())+"}");
     }
     if(full){
-        bool pan=model.GetNamedBoolean(L"pan_cursor",false);
-        if(panCursor.exchange(pan)!=pan&&inputDispatcher)inputDispatcher.TryEnqueue([weak=weak_from_this(),pan]{
-            using namespace Microsoft::UI::Input;
-            if(auto self=weak.lock();self&&self->inputSource)self->inputSource.Cursor(pan?InputCursor(InputSystemCursor::Create(InputSystemCursorShape::SizeAll)):InputCursor(nullptr));
+        auto mode=CapyUi::str(model,L"navigation_cursor");
+        auto cursor=mode==L"pan"?NavigationCursor::Pan:mode==L"zoom"?NavigationCursor::Zoom:
+            mode==L"zoom_out"?NavigationCursor::ZoomOut:mode==L"rotate"?NavigationCursor::Rotate:NavigationCursor::None;
+        if(navigationCursor.exchange(cursor)!=cursor&&inputDispatcher)inputDispatcher.TryEnqueue([weak=weak_from_this()]{
+            if(auto self=weak.lock())self->UpdateNavigationCursor();
         });
     }
     bool post;

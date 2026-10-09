@@ -1,7 +1,8 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',[switch]$PropertyLayout)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true;$CapyCaptureDelay=250
+Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
@@ -79,11 +80,11 @@ function Preview-Hash([string]$Id){
     if($image.Current.ItemStatus -ne 'Ready'){return ''}
     $r=$image.Current.BoundingRectangle
     $window=[CapyEffectsCapture+Rect]::new()
-    if(![CapyEffectsCapture]::GetWindowRect($review.MainWindowHandle,[ref]$window)){throw 'Window bounds unavailable'}
+    if(![CapyEffectsCapture]::GetWindowRect($drawingWindow,[ref]$window)){throw 'Window bounds unavailable'}
     $bitmap=[Drawing.Bitmap]::new($window.right-$window.left,$window.bottom-$window.top)
     try{
         $graphics=[Drawing.Graphics]::FromImage($bitmap);$dc=$graphics.GetHdc()
-        try{if(![CapyEffectsCapture]::PrintWindow($review.MainWindowHandle,$dc,2)){throw 'App capture failed'}}
+        try{if(![CapyEffectsCapture]::PrintWindow($drawingWindow,$dc,2)){throw 'App capture failed'}}
         finally{$graphics.ReleaseHdc($dc);$graphics.Dispose()}
         $area=[Drawing.Rectangle]::new([int]$r.X-$window.left+2,[int]$r.Y-$window.top+2,[int]$r.Width-4,[int]$r.Height-4)
         $crop=$bitmap.Clone($area,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -94,7 +95,7 @@ function Preview-Hash([string]$Id){
 }
 
 function Field([string]$Axis){Control "property-rgb-$Axis"}
-function Graph-Height{200*[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.}
+function Graph-Height{200*[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.}
 function Show-Graph([double]$Percent=0){
     $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent((Control 'property-rgb-curve'))
     while($node){$scroll=$null;if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll) -and $scroll.Current.VerticallyScrollable){break};$node=$walker.GetParent($node)}
@@ -109,8 +110,7 @@ function Tap-Point([int]$Index){
     Wait-Until {(Property 'rgb').curve.selected -eq $Index} "Tapping point $Index did not select it"
 }
 function Pointer-Session([scriptblock]$Body){
-    Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
-    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null
+    [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     try{& $Body}finally{[CapyRowPointer]::Dispose()}
 }
@@ -118,7 +118,7 @@ function Stops{@((Property 'gradient').value.value.stops)}
 function Gradient-Json{(Property 'gradient').value.value|ConvertTo-Json -Depth 10 -Compress}
 function Near-Stop([double]$Position){@(Stops|Where-Object {[Math]::Abs($_.position-$Position) -lt .02}).Count -gt 0}
 function Strip-Point([double]$Fraction){
-    $r=(Control 'property-gradient-gradient').Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $r=(Control 'property-gradient-gradient').Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     @([int]($r.X+6*$scale+($r.Width-12*$scale)*$Fraction),[int]($r.Y+16*$scale))
 }
 function Strip-Drag([string]$Device,[double]$From,[double]$To,[switch]$Escape){
@@ -173,13 +173,93 @@ function Check-PropertyScrub {Pointer-Session {
     $opacity=(Property 'opacity').value.value;$track=(Control 'property-opacity-slider').Current.BoundingRectangle;$y=[int]($track.Y+$track.Height/2)
     [CapyRowPointer]::Down('mouse',[int]($track.X+$track.Width*.3),$y)
     for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($track.X+$track.Width*(.3+.05*$i)),$y);Start-Sleep -Milliseconds 30}
-    [CapyRowPointer]::Up();Wait-Until {[Math]::Abs((Property 'opacity').value.value-.7) -lt .03} 'The opacity slider did not follow the drag'
+    [CapyRowPointer]::Up()
+    Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Opacity slider release did not finish its gesture'
+    Wait-Until {[Math]::Abs((Property 'opacity').value.value-.7) -lt .03} 'The opacity slider did not follow the drag'
     Invoke 'Undo' -Name;Wait-Until {(Property 'opacity').value.value -eq $opacity} 'An opacity slider drag needed more than one Undo'
 }}
+function Property-Row([string]$Key,[string]$Case,[switch]$Wrapped){
+    $property=Property $Key
+    if($property.kind.kind -ne 'number' -or $property.kind.numeric.kind -ne 'slider'){throw "Expected a shared slider property: $Key"}
+    $panel=Control 'layer-properties' -Arranged
+    $caption=Control $property.label -Name -Within $panel -Type ([System.Windows.Automation.ControlType]::Text) -Arranged
+    $field=Control ('number-root-property-'+$Key) -Within $panel -Arranged
+    $entry=Control ('property-'+$Key) -Within $field -Arranged
+    $track=Control ('property-'+$Key+'-slider') -Within $field -Arranged
+    $bounds=@{panel=$panel.Current.BoundingRectangle;caption=$caption.Current.BoundingRectangle;field=$field.Current.BoundingRectangle;entry=$entry.Current.BoundingRectangle;track=$track.Current.BoundingRectangle}
+    @{case=$Case;key=$Key;label=$property.label;wrapped=[bool]$Wrapped;bounds=$bounds;value=$property.value;dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow);identities=@{entry=($entry.GetRuntimeId() -join ':');track=($track.GetRuntimeId() -join ':')}}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ($Case+'-geometry.json'))
+    $outer=$bounds.panel;$outer.Inflate(1,1);$inner=$bounds.field;$inner.Inflate(1,1)
+    if(!$outer.Contains($bounds.caption) -or !$outer.Contains($bounds.field) -or !$inner.Contains($bounds.entry) -or !$inner.Contains($bounds.track)){throw "Property controls are outside their visible panel: $Key"}
+    $trackMiddle=$bounds.track.Top+$bounds.track.Height/2;$entryMiddle=$bounds.entry.Top+$bounds.entry.Height/2
+    if([Math]::Abs($trackMiddle-$entryMiddle) -gt 1 -or $bounds.track.Right -gt $bounds.entry.Left+1){throw "Property slider and value are not inline: $Key"}
+    if($Wrapped){
+        if($bounds.caption.Bottom -gt $bounds.field.Top+1 -or [Math]::Abs($bounds.caption.Left-$bounds.field.Left) -gt 1 -or [Math]::Abs($bounds.caption.Right-$bounds.field.Right) -gt 1){throw "Long property caption did not wrap above its full-width control: $Key"}
+    }elseif([Math]::Abs($bounds.caption.Top+$bounds.caption.Height/2-$entryMiddle) -gt 1 -or $bounds.caption.Right -gt $bounds.field.Left+1){throw "Ordinary property caption is not inline: $Key"}
+    Capture $Case -Composed
+}
+function Property-Resize([int]$Width){
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int]($Width*$scale)) -Height ([int](900*$scale))
+    Wait-Until {[Math]::Abs($root.Current.BoundingRectangle.Width-$Width*$scale) -lt 2} 'Properties window did not acknowledge its dimensions'
+}
+function Property-Language([string]$Tag){
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
+    Invoke 'settings';Invoke 'preference-page-appearance'
+    $statePath=State-File
+    $tags=@((Read-Snapshot (Join-Path (Split-Path -Parent $statePath) ((Split-Path -Leaf $statePath) -replace '^ui-state-','bootstrap-'))).shipped_tags)
+    $index=1+[Array]::IndexOf($tags,$Tag)
+    if($index -lt 1){throw "Missing shared locale: $Tag"}
+    $row=@((Model).preferences.pages.groups.rows|Where-Object id -eq 'language')[0]
+    Choose 'preference-choice-language' $row.kind.options[$index]
+    Wait-Until {(Model).windows_active_tag -eq $Tag} 'Properties language choice was not acknowledged'
+    Invoke 'CloseButton';Wait-Until {!(Model).preferences -and (Control 'drawing-canvas').Current.IsEnabled} 'Properties language preferences did not close'
+}
+function Property-Typed([string]$Key,[string]$Text,[double]$Expected){
+    $before=(Property $Key).value.value
+    Edit ('property-'+$Key) $Text;(Control ('property-'+$Key+'-slider')).SetFocus()
+    Wait-Until {[Math]::Abs((Property $Key).value.value-$Expected) -lt 1e-6} "Typed property did not commit: $Key"
+    Invoke 'Undo' -Name;Wait-Until {(Property $Key).value.value -eq $before} "Typed property needed more than one Undo: $Key"
+}
+function Check-PropertyLayout {
+    Property-Resize 960;Select-Panel 'properties'
+    Property-Row 'opacity' 'opacity-inline-en'
+    $blend=Control 'property-blend' -Arranged;$panel=(Control 'layer-properties').Current.BoundingRectangle
+    if(!$panel.Contains($blend.Current.BoundingRectangle)){throw 'Blend is not fully visible below the inline opacity row'}
+    Check-PropertyScrub
+    Property-Typed 'opacity' '60' .6
+    $document=(Model).state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=(Model).windows_gpu_generation
+    $entryId=(Control 'property-opacity').GetRuntimeId() -join ':';$blendId=(Control 'property-blend').GetRuntimeId() -join ':';$blendValue=(Property 'blend').value.value
+    $trackId=(Control 'property-opacity-slider').GetRuntimeId() -join ':';$opacityValue=(Property 'opacity').value.value
+    $retained={((Control 'property-opacity').GetRuntimeId() -join ':') -eq $entryId -and ((Control 'property-opacity-slider').GetRuntimeId() -join ':') -eq $trackId -and (Property 'opacity').value.value -eq $opacityValue -and ((Control 'property-blend').GetRuntimeId() -join ':') -eq $blendId -and (Property 'blend').value.value -eq $blendValue -and ((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -eq $document -and (Model).windows_gpu_generation -eq $gpu}
+    Property-Resize 744;Property-Language 'ru'
+    Property-Row 'opacity' 'opacity-narrow-ru' -Wrapped
+    if(!(& $retained)){throw 'Narrow localized Properties changed retained controls, values or document/GPU ownership'}
+    Property-Language 'en';Property-Resize 1200
+    Property-Row 'opacity' 'opacity-restored-en'
+    if(!(& $retained)){throw 'Restored English Properties changed retained controls, values or document/GPU ownership'}
+    Select-Filter 'color_balance' 'Color Balance'
+    $page=@((Model).state.layer_properties.pages|Where-Object id -eq 'midtones')[0]
+    Choose 'properties-page' $page.label
+    Wait-Until {(Model).state.layer_properties.page -eq 'midtones' -and (Find 'property-midtones_red')} 'Color Balance midtones did not appear'
+    Property-Row 'midtones_red' 'filter-inline-en'
+    Property-Typed 'midtones_red' '12' 12
+    Pointer-Session {
+    $before=(Property 'midtones_red').value.value;$track=Control 'property-midtones_red-slider' -Arranged;$box=$track.Current.BoundingRectangle;$y=[int]($box.Top+$box.Height/2)
+    [CapyRowPointer]::Down('mouse',[int]($box.Left+$box.Width*.3),$y)
+    for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($box.Left+$box.Width*(.3+.05*$i)),$y);Start-Sleep -Milliseconds 30}
+    Wait-Until {[Math]::Abs($track.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value-.7) -lt .03 -and (Property 'midtones_red').value.value -ne $before} 'Filter slider did not preview the live drag'
+    [CapyRowPointer]::Up()
+    Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Filter slider release did not finish its gesture'
+    $edited=(Property 'midtones_red').value.value
+    Invoke 'Undo' -Name;Wait-Until {(Property 'midtones_red').value.value -eq $before} 'Filter slider drag needed more than one Undo'
+    Invoke 'Redo' -Name;Wait-Until {(Property 'midtones_red').value.value -eq $edited} 'Filter slider drag did not redo exactly'
+    Capture 'filter-drag-redo' -Composed
+}}
+
 function Check-LogCurve {Pointer-Session {
     $grown=$false
     for($attempt=0;$attempt -lt 5 -and !$grown;$attempt++){
-        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1400
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width 1550 -Height 1400
         try{Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Resize pending' 3;$grown=$true}catch{}
     }
     if(!$grown){throw 'The window did not grow for the curve check'}
@@ -320,26 +400,33 @@ function Check-CurveGestures {
 }
 
 try {
-    if(Get-Process CapyCanvas -ErrorAction SilentlyContinue){throw 'Close the existing app before the isolated effects review'}
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
+    [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/effects-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned effects review $($review.Id)"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
+    $owned=@{window=$null}
+    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Model).brush_ready} 'Review did not start' 45
+    $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     [CapyEffectsCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     $resized=$false
     for($attempt=0;$attempt -lt 10 -and !$resized;$attempt++){
-        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1550 -Height 1400
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width 1550 -Height 1400
         try{Wait-Until {(Model).state.camera.viewport[0] -gt 1450} 'Resize pending' 3;$resized=$true}catch{}
     }
     if(!$resized){throw 'Initial resize did not reach the canvas'}
-    $root=$null
-    Wait-Until {try{$script:root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)}catch{};$null -ne $root} 'Resized window has no automation root' 20
+    $root=(Owned-DrawingWindow $review $drawingWindow.ToInt64()).Root
+    if($PropertyLayout){
+        Check-PropertyLayout
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        @{theme=$Theme;inline_opacity='passed';typed_and_drag_one_undo='passed';filter_slider='passed';narrow_localized_caption='passed';retained_property_controls='passed';visual_review='required';run=$run}|ConvertTo-Json
+        return
+    }
     Select-Panel 'adjustments'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Curves preview not ready' 120
     $original=Preview-Hash 'curves';if(!$original){throw 'No initial preview pixels'}
@@ -374,7 +461,7 @@ try {
     if(((Control 'property-rgb-curve').GetRuntimeId() -join ':') -ne $graph){throw 'Editing replaced the curve graph'}
     Capture 'curve'
     $wide=(Model).state.camera.viewport[0]
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1450 -Height 1000
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width 1450 -Height 1000
     Wait-Until {(Model).state.camera.viewport[0] -lt $wide-50} 'Resize did not reach the canvas'
     if(((Control 'property-rgb-curve').GetRuntimeId() -join ':') -ne $graph){throw 'Resize replaced the curve graph'}
     Invoke 'property-rgb-reset'
@@ -480,7 +567,7 @@ try {
     Select-Panel 'adjustments'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Retained cache not shown on reopen' 15
     Check-LogCurve
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [PSCustomObject]@{
         curve_pointer_transactions=$curveGestures

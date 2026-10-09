@@ -67,7 +67,9 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueueController inputController{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
     winrt::Microsoft::UI::Input::InputPointerSource inputSource{nullptr}; // input thread only
-    std::atomic<bool> panCursor{false};
+    enum class NavigationCursor { None, Pan, Zoom, ZoomOut, Rotate };
+    std::atomic<NavigationCursor> navigationCursor{NavigationCursor::None};
+    winrt::Microsoft::UI::Input::InputCursor zoomInCursor{nullptr},zoomOutCursor{nullptr};
     winrt::Microsoft::UI::Input::PointerPredictor pointerPredictor{nullptr}; // input thread only
     winrt::Microsoft::UI::Input::GestureRecognizer pickerHold{nullptr};
     std::optional<uint32_t> holdContact;
@@ -102,6 +104,7 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Grid root;
     CanvasSnapshotMailbox snapshots;
     bool snapshotPosted=false;
+    void UpdateNavigationCursor();
     void Publish(std::string snapshot, winrt::Windows::Data::Json::JsonObject const& model);
     void ApplyPending();
     void ApplyModel(winrt::Windows::Data::Json::JsonObject const&);

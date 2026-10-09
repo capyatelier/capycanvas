@@ -36,10 +36,28 @@ public static class CapyRowPointer {
  [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
  [StructLayout(LayoutKind.Sequential)] public struct CursorInfo {public uint size,flags;public IntPtr cursor;public Point position;}
  [DllImport("user32.dll",SetLastError=true)] static extern bool GetCursorInfo(ref CursorInfo info);
- public static bool CursorVisible() {
+ public static CursorInfo Cursor() {
   Guard(last);var info=new CursorInfo{size=(uint)Marshal.SizeOf(typeof(CursorInfo))};
   if(!GetCursorInfo(ref info))throw new Win32Exception(Marshal.GetLastWin32Error());
-  return (info.flags&1)!=0;
+  return info;
+ }
+ public static bool CursorVisible() {return (Cursor().flags&1)!=0;}
+ [DllImport("user32.dll",EntryPoint="LoadCursorW",SetLastError=true)] static extern IntPtr LoadCursor(IntPtr module,IntPtr resource);
+ public static IntPtr StockCursor(int resource) {
+  var cursor=LoadCursor(IntPtr.Zero,new IntPtr(resource));
+  if(cursor==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());
+  return cursor;
+ }
+ [StructLayout(LayoutKind.Sequential)] struct IconInfo {public bool icon;public uint x,y;public IntPtr mask,color;}
+ [DllImport("user32.dll",SetLastError=true)] static extern bool GetIconInfo(IntPtr icon,out IconInfo info);
+ [DllImport("user32.dll",SetLastError=true)] static extern bool DrawIconEx(IntPtr dc,int x,int y,IntPtr icon,int width,int height,uint step,IntPtr brush,uint flags);
+ [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr value);
+ public static void DrawCursor(IntPtr dc,CursorInfo cursor,int left,int top) {
+  Guard(cursor.position);
+  if((cursor.flags&1)==0||cursor.cursor==IntPtr.Zero)throw new InvalidOperationException("The owned cursor is not visible.");
+  IconInfo icon;if(!GetIconInfo(cursor.cursor,out icon))throw new Win32Exception(Marshal.GetLastWin32Error());
+  try{if(!DrawIconEx(dc,cursor.position.x-left-(int)icon.x,cursor.position.y-top-(int)icon.y,cursor.cursor,0,0,0,IntPtr.Zero,3))throw new Win32Exception(Marshal.GetLastWin32Error());}
+  finally{if(icon.mask!=IntPtr.Zero)DeleteObject(icon.mask);if(icon.color!=IntPtr.Zero)DeleteObject(icon.color);}
  }
  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
  [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
@@ -194,6 +212,14 @@ public static class CapyRowPointer {
    var clock=System.Diagnostics.Stopwatch.StartNew();
    if(SendInput(4,clicks,40)!=4)throw new Win32Exception(Marshal.GetLastWin32Error());
    return clock.Elapsed.TotalMilliseconds;
+  }
+ }
+ public static double DoubleClick(string device,int x,int y) {
+  if(device=="mouse")return DoubleClick(x,y);
+  lock(gate){
+   var clock=System.Diagnostics.Stopwatch.StartNew();
+   try{for(int i=0;i<2;i++){Down(device,x,y);Up(device=="pen");}return clock.Elapsed.TotalMilliseconds;}
+   finally{if(active)Cancel();}
   }
  }
  public static void Cancel() {

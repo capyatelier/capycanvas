@@ -28,6 +28,10 @@ public static class WindowsPenMotion {
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr window);
  [DllImport("user32.dll")]public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  public static void Run(uint owner,int cx,int cy,int rx,int ry,int seconds,int hz,string output) {
+  Run(owner,cx,cy,rx,ry,seconds,hz,output,double.NaN,0);
+ }
+ public static void Run(uint owner,int cx,int cy,int rx,int ry,int seconds,int hz,string output,double sweep,double startAngle) {
+  if(!double.IsNaN(sweep)&&(!double.IsFinite(sweep)||Math.Abs(sweep)>2*Math.PI||sweep==0||!double.IsFinite(startAngle)))throw new ArgumentOutOfRangeException();
   if(seconds<1||seconds>30||hz<30||hz>1000)throw new ArgumentOutOfRangeException();
   if(Marshal.SizeOf(typeof(PenInfo))!=120)throw new Exception("Requires x64 Windows ABI");
   var device=CreateSyntheticPointerDevice(3,1,3);if(device==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -40,7 +44,7 @@ public static class WindowsPenMotion {
     long remaining=next-Stopwatch.GetTimestamp();
     if(remaining>0){long delay=-Math.Max(1,remaining*10000000/Stopwatch.Frequency);
      if(!SetWaitableTimer(timer,ref delay,0,IntPtr.Zero,IntPtr.Zero,false)||WaitForSingleObject(timer,1000)!=0)throw new Win32Exception(Marshal.GetLastWin32Error());}
-    double angle=2*Math.PI*i/hz;
+    double angle=double.IsNaN(sweep)?2*Math.PI*i/hz:startAngle+sweep*i/(seconds*hz-1);
     if(i!=seconds*hz)last=new Point{x=cx+(int)(rx*Math.Cos(angle)),y=cy+(int)(ry*Math.Sin(angle))};
     uint process;GetWindowThreadProcessId(GetForegroundWindow(),out process);if(process!=owner)throw new Exception("Benchmark lost foreground ownership");
     GetWindowThreadProcessId(WindowFromPoint(last),out process);if(process!=owner)throw new Exception("Pen point is outside the owned window");

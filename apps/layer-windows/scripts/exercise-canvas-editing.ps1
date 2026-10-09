@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=10;$CapyEach={[CapyRowPointer]::Verify()}
@@ -116,12 +116,17 @@ function Cancel-Preview([string]$Name){
  Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
  if((Signature) -ne $selected -or (Stable-Pixels) -ne $baseline){throw "Cancel did not restore selection artwork: $Name"};Pass $Name
 }
-function Apply-Preview([string]$Name) {
+function Apply-Preview([string]$Name,[switch]$AcceptWithBrush) {
  if((Signature) -ne $selected){throw "$Name preview committed early"}
- $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
- Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} "$Name Apply did not commit"
+ $revision=(Model).state.document_file.revision
+ $acceptance=if($AcceptWithBrush){Invoke (Tool-Tile 'pen');'Pen selection'}else{Invoke 'canvas-bar-apply_transform';'Apply'}
+ Wait-Until {
+  $m=Model
+  $m.state.layer_tools.tool -ne 'transform' -and $m.state.document_file.revision -gt $revision -and
+   (!$AcceptWithBrush -or ($m.canvas_ready -and $m.brush_ready -and ($m.state.commands|Where-Object id -eq 'pen').selected))
+ } "$Name $acceptance did not commit"
  $applied=Export-Png ($device+'-'+$Name+'-applied-raster')
- if($applied -eq $baselinePng){throw "$Name Apply left the drawing unchanged"}
+ if($applied -eq $baselinePng){throw "$Name $acceptance left the drawing unchanged"}
  Capture ($device+'-'+$Name+'-applied')
  foreach($step in @(
   @{command='Undo';name='undo';expected=$baselinePng},
@@ -137,18 +142,20 @@ function Apply-Preview([string]$Name) {
   }
   if((Export-Png ($device+'-'+$Name+'-'+$step.name+'-raster')) -ne $step.expected){throw "$Name $($step.command) did not restore the exact full drawing"}
  }
- Pass ($Name+' Apply and full-drawing Undo/Redo')
+ Pass ($Name+' '+$acceptance+' and full-drawing Undo/Redo')
  Pass ($Name+' stationary lasso preserves selection, export and Redo')
 }
 try{
  if(Get-Process CapyCanvas -ErrorAction SilentlyContinue){throw 'Close the existing app before the isolated editing review'}
  Enter-CapyEnvironment
  $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
+ [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log') -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$review.Handle
- @{process_id=$review.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
+ @{process_id=$review.Id;executable=$Executable;theme=$Theme;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
  Write-Output "Owned canvas editing review $($review.Id): $run"
- Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Isolated editing canvas did not start' 45
- $handle=$review.MainWindowHandle;$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+ $native=@{window=$null}
+ Wait-Until {$native.window=Owned-DrawingWindow $review;$m=Model;$null -ne $native.window -and $m.brush_ready -and $m.state.theme -eq $Theme} 'Isolated editing canvas did not start' 45
+ $handle=$native.window.Handle;$root=$native.window.Root
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=(Model).state.camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close'}
@@ -205,7 +212,7 @@ try{
     Drag $device @(@($sx,([int]($cy-$radius))),@(([int]($sx+$radius)),$cy))
     Wait-Until {[Math]::Abs((Value 'transform_angle')-[Math]::PI/2) -lt .02} 'Applied rotation preview did not settle'
    }
-   Apply-Preview $mode
+   Apply-Preview $mode -AcceptWithBrush:($mode -eq 'rotate')
    $selected=Signature
   }
   Select-Tool 'scale_rotate';Origin;$from=Body-Point;Drag $device @($from,@(($from[0]+300),$from[1]))
@@ -247,7 +254,7 @@ try{
  Start-Sleep -Milliseconds 300
  if(((Model).state.canvas_bar.anchor -join ',') -ne ($moved -join ',') -or [Math]::Abs((Value 'transform_x')-$x1) -gt .01){throw 'Dragging the pivot moved the artwork'}
  Pass 'snap toggle and pivot drag'
- Capture 'transform-controls-dark'
+ Capture ('transform-controls-'+(Model).state.theme)
  $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
  Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'The anchored move did not apply'
  $once=Stable-Pixels;$revision=(Model).state.document_file.revision
@@ -256,13 +263,13 @@ try{
  Wait-Until {(Model).state.document_file.revision -gt $revision -and (Pixels) -ne $once} 'Transform Again did not repeat the move'
  Invoke 'Undo' -Name;Wait-Until {(Pixels) -eq $once} 'Transform Again was not one Undo'
  Pass 'Transform Again'
- $theme=(Model).state.theme;Invoke 'settings-button'
+ $beforeTheme=(Model).state.theme;Invoke 'settings-button'
  (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
- (Control $(if($theme -eq 'dark'){'Light'}else{'Dark'}) -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
- Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
+ (Control $(if($beforeTheme -eq 'dark'){'Light'}else{'Dark'}) -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+ Wait-Until {(Model).state.theme -ne $beforeTheme} 'Theme change not acknowledged'
  Invoke 'CloseButton';Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
  Select-Tool 'scale_rotate';Wait-Until {Find 'tool-choice-transform-reference'} 'The position anchor did not return'
- Capture 'transform-controls-alternate';Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
+ Capture ('transform-controls-'+(Model).state.theme);Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
  $switch=@{item=$null};Wait-Until {$switch.item=Find 'workspace-switch-builtin:workspace:photographer';$switch.item} 'No Photo workspace switch'
  $switch.item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
  Wait-Until {(Model).windows_workspace.id -eq 'builtin:workspace:photographer' -and !(Model).windows_workspace.busy} 'Photo did not open' 20
@@ -275,10 +282,10 @@ try{
  Capture 'transform-tool-options';Pass 'Tool Options position anchor'
  Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
  Invoke 'Undo' -Name;Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'The transform journey did not undo to a clean drawing'
- [CapyRowPointer]::Dispose();$review.CloseMainWindow()|Out-Null
+ [CapyRowPointer]::Dispose();$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
  if(!$review.WaitForExit(5000) -or $review.ExitCode -ne 0){throw 'Editing review did not close within five seconds'}
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Native editing stderr needs inspection'}
- @{checks=$checks;exports=$exports;close='zero exit within five seconds';pixel_scope='scale/rotation: exact full exported PNG history; translation: three 16x16 artwork interiors; full captures retained';scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
+ @{theme=$Theme;checks=$checks;exports=$exports;close='zero exit within five seconds';pixel_scope='scale/rotation: exact full exported PNG history; translation: three 16x16 artwork interiors; full captures retained';scope='guarded OS mouse and synthetic pen; physical devices and complete visual/performance acceptance remain separate'}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $run 'result.json')
  Write-Output "Canvas editing acceptance passed: $run"
 }catch{
  if($review -and !$review.HasExited -and $root){try{Capture 'failure';@{model=Model;checks=$checks}|ConvertTo-Json -Depth 80|Set-Content -LiteralPath (Join-Path $run 'failure-state.json')}catch{}}

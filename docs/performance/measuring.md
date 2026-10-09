@@ -462,6 +462,81 @@ a presentation observation upper bound is available in that mode. These software
 timings exclude physical digitizer and panel response. Per-window traces use
 `latency-<pid>-<window>` names. PresentMon needs administrator rights.
 
+**Canvas navigation (Windows).** Use the same capture and report with
+`-NavigationMode hand`, `zoom` or `rotate_view` and `-SkipPresentMon`, in a fresh
+private result directory for each mode. Navigation uses a maximized owned window;
+the actual viewport is recorded separately from the ordinary pen comparison.
+The selected tool runs a one-second
+priming contact, then three six-second pen circles, with Reset view before each
+contact. The existing driver records actual injection counts and QPC times; it
+does not catch up after a delayed sample. Keep `CAPY_TRACE_UI` absent. Only the
+bounded in-memory latency trace runs during motion; UI Automation observations
+and raw captures run before and after each contact. The same canvas-ownership
+check described for Object motion below excludes overlaid native controls.
+
+The capture requires the native selected tool, clean document title and disabled
+Undo/Redo to remain unchanged, and preserves the source file hash. This is
+accessible-state evidence, not an exact camera translation, work-area or history
+checkpoint comparison. Review the raw captures. The report rejects missing input,
+consumption, frames, timestamp correspondence or trace overflow. It retains
+navigation inputs without a new present by phase, including contact setup, and
+excludes priming, duplicate endpoints and net-zero input frames from its inferred
+motion set. Zoom uses horizontal displacement; Hand and Rotate use endpoint
+displacement. Exact camera motion and Rotate angle are unavailable without UI
+tracing.
+
+Reported rates and p99 intervals count distinct submitted present IDs in those
+frames, retaining intervening gaps within each contact and never joining separate
+contacts. They are renderer/submission measurements, not actual presented FPS;
+true presented FPS and target qualification remain unset. In Immediate mode,
+DXGI observation bounds retain the same limits as the ordinary pen report. A local
+project or injected input does not qualify reference-tier hardware, a physical
+pen, a trackpad or the required photographic reference workload.
+
+**Object motion (Windows).** The same pen capture accepts
+`-ObjectMotionMode move`, `scale`, `rotate` or `placement`, with
+`-ObjectPreflight <json>` and `-SkipPresentMon`. First run the existing
+`exercise-image-rows.ps1 -MotionPreflight -Device pen -Theme dark` on the exact
+measured executable. It uses Canvas Size to prepare the 9504 × 6336 extent,
+beyond the New Drawing limit, and writes a current-format drawing containing
+a compressible, opaque 4096 × 3072 blue source and a smaller red source, together
+with native bounds, DPI, projected geometry, source hashes and sampled pixels.
+This generated workload is nonphotographic; it does not qualify the tier photo.
+Use its `image-before-authoring.capy` for Move/Scale/Rotate and
+`placement-base.capy` for placement. Keep the unchanged plain pen/navigation
+project for those separate workloads.
+
+The measured app has UI tracing disabled throughout. It verifies the executable,
+project, image and handle-geometry sources, native bounds/DPI and camera readout,
+then validates the actual selected image against the preflight pixels. Every
+path point must lie inside the arranged canvas, outside visible sibling-control
+bounds, and within its actual owned native window subtree. The guard records
+those bounds and the native ancestor; it does not require the hit provider to
+expose a canvas descendant. The existing injector executes one priming
+contact followed by three six-second contacts, with a bounded arc whose endpoint
+differs from its start. Its ordinary full-circle path, pacing and input counts
+are unchanged. Only native pen delivery is covered; no mouse/touch throughput or
+physical digitizer claim follows.
+
+Outside each timed contact, inspect changed opaque artwork, save through the
+native picker, parse the package and verify the affine/source/layer invariants.
+One Undo/Redo must restore each accepted graph and composed image exactly, then
+Undo returns to the starting state. Placement is an actual Import Image preview,
+followed by Apply and the same history checks. Priming is restored before the
+three measured contacts. Preserve raw captures, packages and all input/frame
+traces; reject trace overflow or missing samples. Reserve space from the actual
+preflight package size before capture instead of assuming a photographic package
+will compress like the generated fixture.
+
+The shared report counts distinct submitted present IDs for net-distinct input
+frames, preserves gaps within each contact, and excludes priming and idle
+endpoints. Report each contact and pooled p50/p95/p99 intervals, renderer rate,
+input delivery, owner queue and frame-return timing. Object transforms and
+presented pixels are not traced per frame: these are **renderer submissions
+during inferred Object motion**, not true presented FPS or tier qualification.
+Keep the Immediate-mode DXGI observation-bound and physical-input limitations
+from the navigation report. Raw visual review remains required.
+
 **Desktop GPUs.**
 
 - `layer-bench` and the renderer examples give completed-work timings, described

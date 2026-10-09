@@ -1,0 +1,3 @@
+#include "NavigationCursors.h"
+CAPY_CURSOR_ZOOM_IN CURSOR "cursors/zoom-in.cur"
+CAPY_CURSOR_ZOOM_OUT CURSOR "cursors/zoom-out.cur"

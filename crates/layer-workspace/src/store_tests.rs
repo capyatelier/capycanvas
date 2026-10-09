@@ -17,7 +17,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let directory = temp_dir("workspace-test");
+        Self::in_directory(temp_dir("workspace-test"))
+    }
+    fn in_directory(directory: std::path::PathBuf) -> Self {
         let clock = Arc::new(TestClock(AtomicU64::new(1_000_000)));
         let store =
             SqliteStore::with_clock(&directory.join("workspaces.sqlite3"), clock.clone()).unwrap();
@@ -108,7 +110,31 @@ fn storage_enforces_included_workspace_name_and_delete_protection() {
 
 #[test]
 fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
-    let mut f = Fixture::new();
+    let f = Fixture::new();
+    let destination = f.directory.join("original-backup.sqlite3");
+    original_database_export(f, destination);
+}
+
+#[cfg(windows)]
+#[test]
+fn deep_database_paths_preserve_wal_and_original_export() {
+    use std::os::windows::ffi::OsStrExt;
+    let mut directory = temp_dir("workspace-deep-path");
+    while directory.as_os_str().encode_wide().count() < 280 {
+        directory.push("deep-workspace-path");
+    }
+    let f = Fixture::in_directory(directory);
+    assert_eq!(
+        f.store.connection.pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0)).unwrap(),
+        "wal"
+    );
+    assert!(f.directory.join("workspaces.sqlite3-wal").is_file());
+    let exports = f.directory.join("exports");
+    std::fs::create_dir_all(&exports).unwrap();
+    original_database_export(f, exports.join("original-backup.sqlite3"));
+}
+
+fn original_database_export(mut f: Fixture, destination: std::path::PathBuf) {
     let entity = f.create("Future Workspace");
     let opaque = "{\"type\":\"future_workspace\",\"private_extension\":123}";
     f.store
@@ -136,11 +162,10 @@ fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
     ] {
         assert!(wait(worker.backup_database(&f.directory.join(name))).is_err());
     }
-    let destination = f.directory.join("original-backup.sqlite3");
     // Native save pickers can authorize replacing an earlier backup.
     std::fs::write(&destination, b"previous successful backup").unwrap();
     wait(worker.backup_database(&destination)).unwrap();
-    let backup = Connection::open(&destination).unwrap();
+    let backup = Connection::open(std::fs::canonicalize(&destination).unwrap()).unwrap();
     assert_eq!(
         backup
             .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))

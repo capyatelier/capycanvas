@@ -42,9 +42,12 @@ struct ZoomReadout:std::enable_shared_from_this<ZoomReadout>{
         root.ContextRequested([weak](auto&&,ContextRequestedEventArgs const& e){e.Handled(true);if(auto self=weak.lock();self&&!self->open)self->toggle();});
         AutomationProperties::SetAutomationId(root,L"canvas-view-info");
         auto name=data->copyCaption(L"header",L"zoom");
-        auto rename=[button=root,menu=popup](hstring const& text){AutomationProperties::SetName(button,text);tooltip(button,text);AutomationProperties::SetName(menu,text);};
+        auto rename=[weak,button=root,menu=popup](hstring const& text){
+            AutomationProperties::SetName(button,text);tooltip(button,text);AutomationProperties::SetName(menu,text);
+            if(auto self=weak.lock())AutomationProperties::SetItemStatus(button,self->data->caption(L"header",self->open?L"open":L"closed"));
+        };
         rename(name);data->copyView([weak,rename,resolve=name.current]{if(!weak.lock())return false;rename(resolve());return true;});
-        body.Width(Width);body.Spacing(6);
+        body.MinWidth(Width);body.Spacing(6);
         field(name,L"zoom",L"zoom-field",&ZoomReadout::zoom,[](double value){return O({{L"type",S(L"set_zoom")},{L"zoom",N(value)}});});
         separator();items.Spacing(2);body.Children().Append(items);separator();
         field(data->copyCaption(L"header",L"rotation"),L"rotation",L"rotation-field",&ZoomReadout::rotation,[](double value){return O({{L"type",S(L"set_rotation")},{L"rotation",N(value)}});});
@@ -55,12 +58,13 @@ struct ZoomReadout:std::enable_shared_from_this<ZoomReadout>{
         scroller.Content(body);scroller.HorizontalScrollMode(ScrollMode::Disabled);scroller.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
         scroller.VerticalScrollMode(ScrollMode::Auto);scroller.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
         popup.Content(scroller);popup.ShowMode(Primitives::FlyoutShowMode::Transient);popup.Placement(Primitives::FlyoutPlacementMode::TopEdgeAlignedRight);
-        popup.Opened([weak](auto&&,auto&&){if(auto self=weak.lock()){self->open=true;self->data->popup(true);}});
+        popup.Opened([weak](auto&&,auto&&){if(auto self=weak.lock()){self->open=true;self->data->popup(true);AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"open"));}});
         popup.Closed([weak](auto&&,auto&&){if(auto self=weak.lock()){
             self->open=false;self->data->popup(false);self->menuKey=L"";
             auto focus=FocusManager::GetFocusedElement(self->root.XamlRoot()).try_as<UIElement>();
             if(!focus||self->within(focus))self->restoreFocus();
             self->previous=nullptr;
+            AutomationProperties::SetItemStatus(self->root,self->data->caption(L"header",L"closed"));
         }});
         transient=data->transient([weak]{auto self=weak.lock();if(!self||!self->open)return false;self->popup.Hide();return true;});
     }

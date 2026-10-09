@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[switch]$NoticeOnly)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[switch]$NoticeOnly,[switch]$HeaderOnly,[switch]$BlendOnly)
 $ErrorActionPreference='Stop'
 if($Theme -eq 'light-large'){$Theme='light';$LargeText=$true}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -221,6 +221,19 @@ try{
  Menu-Command 'file' 'new_window'
  Wait-Until {@(Windows).Count -eq 2} 'Second window did not register' 45
  $second=@(Windows|Where-Object id -ne $first.id)[0];Ready $second
+ if($HeaderOnly -and $BlendOnly){throw 'Choose one focused localization mode'}
+ if($BlendOnly){
+  [CapyRowPointer]::Initialize([uint32]$review.Id)
+  Blend-CaptionSurface
+  [pscustomobject]@{theme=$Theme;retained_blend_identity_and_caption_observations='collected';visual_review='required';evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+  $completed=$true;return
+ }
+ if($HeaderOnly){
+  [CapyRowPointer]::Initialize([uint32]$review.Id)
+  Header-MenuSurface
+  [pscustomobject]@{theme=$Theme;retained_header_accessibility_identity_and_geometry='passed';visible_header_captions='manual review required';visual_review='required';evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+  $completed=$true;return
+ }
  if($NoticeOnly){
   [CapyRowPointer]::Initialize([uint32]$review.Id)
   Notice-Surface
@@ -228,7 +241,7 @@ try{
   $completed=$true;return
  }
  Use-Window $first;Focus-Canvas
- [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),78)
+ Menu-Command 'file' 'new_window'
  Wait-Until {@(Windows).Count -eq 3} 'Text-draft window did not register' 45
  $textWindow=@(Windows|Where-Object {$_.id -ne $first.id -and $_.id -ne $second.id})[0];Ready $textWindow;Use-Window $textWindow
  Menu-Command 'file' 'new_document'
@@ -355,6 +368,7 @@ try{
  Menu-Command 'select' 'deselect'
  Wait-Until {$view=Model;$view -and !$view.state.layer_tools.has_selection} 'Deselect did not finish before pixel history journeys' 15
  [CapyRowPointer]::Initialize([uint32]$review.Id)
+ Header-MenuSurface
  Profile-Surfaces
  Tool-Surfaces
  Filter-Surfaces
@@ -445,7 +459,7 @@ try{
  Notice-Surface
  Use-Window $second;Language-Choice 0|Out-Null;Language-Choice $lastIndex|Out-Null
  Invoke 'CloseButton';Wait-Until {$view=Model;$view -and !$view.preferences} 'Preferences did not close' 10
- Focus-Canvas;[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),78)
+ Focus-Canvas;Menu-Command 'file' 'new_window'
  Wait-Until {@(Windows).Count -eq 4} 'Future window did not register' 45
  $future=@(Windows|Where-Object {$_.id -ne $first.id -and $_.id -ne $second.id -and $_.id -ne $textWindow.id})[0];Ready $future
  if((Fresh-Model $future $lastChoice.tag).windows_active_tag -ne $lastChoice.tag){throw 'Future window used a stale language'}

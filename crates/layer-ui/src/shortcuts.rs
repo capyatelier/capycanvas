@@ -232,7 +232,8 @@ impl KeyChord {
             && (matches!(self.key.as_str(), "f5" | "f11" | "f12")
                 || self.command
                     && !self.alt
-                    && matches!(self.key.as_str(), "w" | "t" | "n" | "r" | "l" | "q" | "p" | "tab" | "pageup" | "pagedown")))
+                    && (matches!(self.key.as_str(), "w" | "t" | "n" | "r" | "l" | "q" | "p" | "tab" | "pageup" | "pagedown")
+                        || self.shift && self.key == "a")))
     }
     pub fn label(&self, platform: Platform) -> String { self.localized_label(platform, &Localizer::shared(UiLanguage::English)) }
     pub fn localized_label(&self, platform: Platform, l: &Localizer) -> String { self.localized_label_parts(platform, l).join("+") }
@@ -579,6 +580,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.ResetView" => return vec![key("@", true, false), key("@", true, true)],
         "command.RotateLeft" => key("-", false, false),
         "command.RotateRight" => return vec![key("^", false, false), key("^", false, true)],
+        "command.Drawings" => key("a", true, true),
         "command.NextDrawing" => return vec![key("tab", true, false), key("pagedown", true, false), KeyChord { key: "pagedown".into(), command: false, shift: false, alt: true }],
         "command.PreviousDrawing" => return vec![key("tab", true, true), key("pageup", true, false), KeyChord { key: "pageup".into(), command: false, shift: false, alt: true }],
         "command.Eyedropper" => key("i", false, false),

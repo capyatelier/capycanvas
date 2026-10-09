@@ -1682,6 +1682,145 @@ Native candidate executable SHA-256 prefix is `6CB0E28F0FEA`, DLL `04468C30D911`
 and brush executable `3F5189244C13`. The preserved pen project is
 `FF686BDF3CB3`.
 
+### Windows controls comparison, 2026-10-09
+
+The same Surface Laptop 5, i7-1255U and Intel Iris Xe D3D12 driver
+`32.0.101.6737` compare preserved `8f7a9c77` binaries with `0f2ab217` plus the
+Windows controls and shared filesystem changes. The display is 2256 × 1504 at
+60 Hz; AC and Balanced remain unchanged. No other owned app, build or GPU
+workload ran. Eleven existing user Chrome processes remained open, accumulating
+0.750 CPU seconds during brush ABBA and 0.422 during pen ABBA. Endpoint GPU
+samples were zero; intermittent background activity and thermal effects remain
+unexcluded. These are Surface regression diagnostics, not reference-tier results.
+
+Brush ABBA uses the same executable path, 9504 × 6336 canvas, 1000 px brushes,
+1600 × 1000 offscreen surface and three 240-frame repetitions per preset per
+block. Only the 239 moving frames per repetition count. All four blocks and
+their exact Undo/Redo checks passed, giving six repetitions per build and preset.
+
+| Workload | Baseline completed generations/s, median (range) | Current completed generations/s, median (range) | Median run completion p99, before → after (ms) |
+| --- | ---: | ---: | ---: |
+| G-Pen | 90.87 (86.01–96.61) | 87.91 (74.03–93.28) | 19.94 → 20.73 |
+| Eraser | 88.20 (84.31–89.98) | 87.77 (80.23–91.40) | 18.00 → 18.14 |
+| Airbrush | 92.45 (86.46–96.46) | 89.86 (83.49–93.33) | 17.19 → 17.57 |
+
+Median rates fall 3.26%, 0.49% and 2.80%, respectively. This comparison spans
+upstream revisions and cannot attribute the decreases to the local port.
+The same-revision comparison below records the remaining decreases.
+Completed generations are not displayed frames.
+
+Pen ABBA uses the unchanged plain 8192 × 6336 project, 18 px G-Pen, original
+enabled-brush readiness and three-second settling. All four fresh-profile runs
+consume 2401/2401 inputs with zero unmatched samples. Nominal 240 Hz injection
+achieves 215.72–216.54 Hz. The surface remains 1418 × 988, density 1.5,
+`Rgba16Float`, Immediate and maximum frame latency 1. Each entry below is the
+median and range of the two per-run percentiles, in milliseconds.
+
+| Metric | Baseline p95 | Current p95 | Baseline p99 | Current p99 |
+| --- | ---: | ---: | ---: | ---: |
+| Injection to frame return | 6.49 (5.75–7.22) | 6.00 (5.90–6.10) | 99.69 (67.20–132.17) | 60.72 (60.03–61.41) |
+| Injection to presentation observation bound | 10.93 (10.74–11.12) | 11.15 (10.93–11.36) | 103.29 (78.72–127.87) | 66.22 (65.02–67.42) |
+| Newest input to presentation observation bound | 10.66 (10.65–10.67) | 10.81 (10.71–10.92) | 12.87 (12.72–13.02) | 13.40 (13.32–13.48) |
+| Host frame span | 3.83 (3.75–3.91) | 3.84 (3.77–3.91) | 4.92 (4.68–5.17) | 4.68 (4.65–4.71) |
+
+Newest-input observation ranges increase without overlap in this small sample;
+the same-revision native comparison below provides a further check. All original tails remain.
+Immediate provides an observation bound, not a true presentation timestamp or
+physical digitizer/scanout/panel latency. PresentMon capture privileges were
+unavailable. The ordinary paint timing path records CSV evidence without composed
+screenshots; it does not replace the separate functional painting journeys.
+
+Supplementary Hand, Zoom and Rotate view measurements subsequently completed
+on the same current binary and plain project, in a maximized 2256 × 1432 surface
+at density 1.5. Each mode uses one nominal one-second priming contact, a view
+reset, then three nominal six-second contacts with 200 × 120 px radii. Actual
+measured contacts last 6.738–6.896 seconds at 208.80–213.70 input Hz. Each mode
+consumes 4564/4564 injected inputs with zero unmatched samples. UI tracing stays
+disabled; selected tool, clean title and disabled Undo/Redo are checked before
+and after every contact. All 24 composed before/after images were reviewed.
+
+| Navigation mode | Inferred renderer submissions/s | Contact rate range | Submission interval p50 / p95 / p99 / max (ms) |
+| --- | ---: | ---: | ---: |
+| Hand | 209.73 | 209.08–210.15 | 4.66 / 5.36 / 6.09 / 29.11 |
+| Zoom | 199.12 | 198.72–199.68 | 4.67 / 6.87 / 14.17 / 29.22 |
+| Rotate view | 206.97 | 206.16–207.97 | 4.65 / 5.77 / 8.57 / 29.13 |
+
+These rates count distinct submitted present IDs in frames consuming net-distinct
+navigation input, keeping intervening gaps within each contact. They are not
+presented frame rates. Exact camera translation, work-area geometry and rotation
+angle are unavailable to this trace-disabled measurement; the native rounded
+readout and composed captures supply only before/after observations. There is
+no paired navigation baseline or target-met claim. The maximized navigation
+viewport does not change the ordinary pen ABBA viewport above.
+
+Earlier ownership/setup failures remain preserved. The successful Hand capture
+initially encountered a coordinator JSON-reader error on an empty native UIA ID;
+parsing it as a hashtable qualified the saved evidence without repeating Hand,
+then the two unrun modes completed. No timing or report assertion changed.
+Fresh Object preflight on the corrected numeric-control build passed at
+9504 × 6336, including saved artwork, camera and all 256 initial pixel samples.
+The first Move contact then failed the opaque-artwork movement assertion.
+Scale, Rotate and placement remain unrun; no Object rate is qualified. The
+failure and original setup attempts remain in the evidence for follow-up.
+
+Raw CSVs, timing reports, hardware/activity records, source and binary identities
+are under `artifacts/windows/port-20261007/performance/` in
+`batch2-brush-abba-0f2ab217`, `batch2-pen-abba-0f2ab217`,
+`navigation-0f2ab217-owned-canvas`, `object-motion-0f2ab217` and
+`object-motion-0f2ab217-canvas-size`. Current brush SHA-256 prefix is
+`D34F09D9006C`; native executable is `54D289294671`, DLL `2E82C9F64824`.
+The retained baseline brush is `3F5189244C13` and app `6CB0E28F0FEA`.
+The project remains `FF686BDF3CB3`. No reference-tier, physical-input or
+true-presented-frame target is qualified by these observations.
+
+#### Same-revision control
+
+A subsequent BCCB comparison uses `0f2ab217` for both the exported control C
+and port candidate B, including the numeric-control fix in the native candidate.
+The same Surface, power settings, workloads, pacing and assertions apply.
+All four brush blocks passed, including exact Undo/Redo, with six repetitions
+per build and preset. All four pen blocks consumed 2401/2401 inputs with zero
+unmatched samples; actual injection was 212.47–216.14 Hz. The pen surface stayed
+1418 × 988 at density 1.5. No build or other owned GPU workload ran concurrently.
+User Chrome remained open; endpoint samples cannot exclude intermittent activity
+or thermal effects.
+
+| Workload | Control generations/s, median (range) | Port generations/s, median (range) | Median completion p99, control → port (ms) |
+| --- | ---: | ---: | ---: |
+| G-Pen | 87.86 (81.28–96.00) | 87.35 (84.32–93.33) | 20.12 → 20.66 |
+| Eraser | 85.96 (82.58–96.72) | 86.93 (80.72–98.60) | 17.80 → 18.77 |
+| Airbrush | 93.33 (87.31–98.93) | 89.81 (85.32–96.39) | 16.32 → 17.75 |
+
+G-Pen and Airbrush median throughput decrease 0.58% and 3.77%; Eraser increases
+1.14%. Completion p99 increases for all three. These observations do not
+establish no regression; the decreases remain follow-up work. No runs or tails
+were discarded.
+
+The pen values below are medians and ranges of the two per-run percentiles,
+in milliseconds, using the unchanged plain drawing and 18 px G-Pen.
+
+| Metric | Control p95 | Port p95 | Control p99 | Port p99 |
+| --- | ---: | ---: | ---: | ---: |
+| Injection to frame return | 5.80 (5.64–5.96) | 6.71 (6.20–7.21) | 61.06 (60.02–62.10) | 77.15 (56.92–97.39) |
+| Injection to presentation observation bound | 10.98 (10.95–11.01) | 11.39 (11.24–11.54) | 74.81 (74.52–75.09) | 91.30 (61.74–120.87) |
+| Newest input to presentation observation bound | 10.79 (10.73–10.84) | 10.85 (10.81–10.89) | 13.66 (13.51–13.81) | 13.80 (13.54–14.06) |
+| Host frame span | 3.78 (3.72–3.84) | 3.95 (3.90–4.00) | 4.82 (4.71–4.93) | 4.97 (4.73–5.21) |
+
+Frame-return p95 increases 0.91 ms and its ranges do not overlap in this small
+sample. The first port run also has longer tails; injection-to-frame maxima
+are 161.54–161.90 ms for control and 155.36–208.06 ms for port. These differences
+remain follow-up work, with no causal or no-regression claim. Immediate mode
+provides an observation bound, excluding physical digitizer and panel latency;
+these measurements do not qualify reference-tier or presented-frame targets.
+
+Raw records and all per-run statistics are under
+`artifacts/windows/port-20261007/performance/same-head-brush-bccb-0f2ab217/`
+and `same-head-pen-bccb-0f2ab217/`. Brush SHA-256 prefixes are `37A8CA3A57DC`
+(control) and `D34F09D9006C` (port). Native prefixes are `519A8B45E2FB` and
+`F6AF9FE46867`, with DLLs `3FC038404891` and `2E82C9F64824`. The plain pen
+project remains `FF686BDF3CB3`. The fresh Object failure is retained separately
+under `object-motion-0f2ab217-numeric-feedback/`; it supplies no timing result.
+
 ## Retained-material G-Pen comparison
 
 This earlier comparison is measured on 2026-10-02 at `eb9b8bab1` with the retained-material changes:

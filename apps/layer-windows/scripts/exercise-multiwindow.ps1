@@ -255,8 +255,9 @@ try {
     [CapyWindowTest]::SetForegroundWindow([IntPtr]$second.hwnd)|Out-Null
     Wait-Until {[CapyWindowTest]::GetForegroundWindow() -eq [IntPtr]$second.hwnd} 'Second window could not become active'
     [CapyWindowTest]::Check([uint32]$review.Id,[IntPtr]$second.hwnd)
-    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),78)
-    Wait-Until {@(Windows).Count -eq 2} 'Ctrl+Shift+N failed after the original window closed'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'file'
+    Invoke 'New Window' -Name
+    Wait-Until {@(Windows).Count -eq 2} 'New Window failed after the original window closed'
     $third=@(Windows|Where-Object id -ne $second.id)[0];Ready $third
     $inherited=@{settings=$null};Wait-Until {$inherited.settings=(Model $third).state.settings;$null -ne $inherited.settings} 'New window did not publish its preferences'
     if($inherited.settings.dark_base -ne $expectedDark -or $inherited.settings.light_base -ne '#dcecfb'){throw 'New window did not inherit current preferences'}
@@ -276,7 +277,7 @@ try {
     if(!$review.WaitForExit(15000)){throw 'Reopened windows did not close'}
     if($review.ExitCode -ne 0){throw "Native process exited $($review.ExitCode)"}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{new_window_menu='passed';restart_reopens_every_window='passed';workspace_owner_activation='passed';new_window_shortcut='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';preferences_close_recovery=if($FailPreferences){'owned recovery, peer Undo/Redo, failed retry, repaired save and new-window inheritance passed'}else{'not requested'};gpu_recovery=if($RecoverGpu){'both windows recover two shared device removals, retained state and Undo/Redo'}else{'not requested'};scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{new_window_menu='passed';restart_reopens_every_window='passed';workspace_owner_activation='passed';new_window_after_original_close='passed';simultaneous_dialogs='passed';shared_preferences='passed';workspace_switcher_preferences='passed';inactive_window_order_and_fallback='passed';new_window_preferences='passed';independent_documents='passed';draw_while_other_window_modal='passed';cancel_close='passed';close_original_first='passed';final_zero_exit='passed';preferences_close_recovery=if($FailPreferences){'owned recovery, peer Undo/Redo, failed retry, repaired save and new-window inheritance passed'}else{'not requested'};gpu_recovery=if($RecoverGpu){'both windows recover two shared device removals, retained state and Undo/Redo'}else{'not requested'};scope='native windows in one process; controlled pointer replay and OS shortcut injection; physical input and presentation acceptance remain separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{

@@ -439,7 +439,10 @@ Frame calls measure CPU submissions, not fresh GPU updates or presented frames.
 - **Writing a journey.** Follow
   [workspace-manager.test.mjs](../../apps/layer-web/workspace-manager.test.mjs):
   use the runner's `call`, `evaluate` and `settle` helpers, wait for operations
-  to finish, and check the rendered controls as well as stored state.
+  to finish, and check the rendered controls as well as stored state. `settle`
+  waits for animation frames; deferred edits need their expected state change
+  before recording a result. Between file operations, wait for both
+  `document_file.busy` and `documents.busy()` to clear so browser cleanup finishes.
 - **Comparing captures with GTK.** Chrome can embed a different transfer curve
   even with `--force-color-profile=srgb`; convert each PNG's embedded profile to
   sRGB before comparing pixels. The [visual tools](../../tools/visual/README.md)

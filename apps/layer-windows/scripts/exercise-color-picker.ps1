@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyFind='visible'
@@ -96,15 +96,17 @@ function Canvas-Points{
 try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned color picker review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Color picker review did not start' 90
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $native=@{window=$null}
+    Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Color picker review did not start' 90
+    $drawingWindow=$native.window.Handle;$root=$native.window.Root
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Start-Sleep -Milliseconds 600
-    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 
     Color-Resize
@@ -186,9 +188,13 @@ try {
         Capture 'glass-layer-touch'
         [CapyCanvasTouch]::Up(2)
     }
-    $offset=0
-    for($i=1;$i -le 40 -and !(Inked (Preview).rgba);$i++){
-        [CapyCanvasTouch]::Move(1,$finger.x,($finger.y+$i*3));Start-Sleep -Milliseconds 30;$offset=$i*3
+    $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$area=(Model).state.camera.work_area
+    $scanLeft=[Math]::Max($bounds.Left,$bounds.X+$area[0])+3;$scanRight=[Math]::Min($bounds.Right,$bounds.X+$area[0]+$area[2])-3
+    $scanTop=[Math]::Max($bounds.Top,$bounds.Y+$area[1])+3;$scanBottom=[Math]::Floor([Math]::Min($bounds.Bottom,$bounds.Y+$area[1]+$area[3]))-3
+    if($finger.x -lt $scanLeft -or $finger.x -gt $scanRight -or $finger.y -lt $scanTop -or $finger.y -ge $scanBottom){throw 'Held picker contact is outside the canvas scan region'}
+    $offset=0;$scanWatch=[Diagnostics.Stopwatch]::StartNew()
+    for($scanY=$finger.y+3;$scanY -le $scanBottom -and $scanWatch.Elapsed.TotalSeconds -lt $CapyWaitSeconds -and !(Inked (Preview).rgba);$scanY+=3){
+        [CapyCanvasTouch]::Move(1,$finger.x,$scanY);Start-Sleep -Milliseconds 30;$offset=$scanY-$finger.y
     }
     if(!(Inked (Preview).rgba)){throw 'Moving the held finger did not sample the stroke above it'}
     $lifted=$finger.y+$offset-$center.y
@@ -231,7 +237,7 @@ try {
     Escape-Picker
     [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
 
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow -Action Close -DiscardUnsaved
     if(!$review.WaitForExit(8000)){throw 'Color picker review did not close'}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Color picker review wrote to stderr'}
     $counts={param($p)@{full=$p.full_updates;motion=$p.motion_updates}}

@@ -14,6 +14,64 @@ function csv(file) {
   const keys = rows.shift().split(',');
   return rows.filter(Boolean).map(line => Object.fromEntries(line.split(',').map((v, i) => [keys[i], Number(v)])));
 }
+function motionFrames(meta, inputs, consumed, frames, injected) {
+  if (meta.navigation && meta.object_motion) throw Error('Ambiguous motion workload');
+  const workload = meta.object_motion ?? meta.navigation;
+  if (!workload) return null;
+  if (meta.object_motion && (!['move', 'scale', 'rotate', 'placement'].includes(workload.mode) || !/^[A-Fa-f0-9]{64}$/.test(workload.preflight_sha256 ?? ''))) throw Error('Missing Object motion qualification');
+  if (workload.ui_trace_enabled !== false) throw Error('Navigation requires explicit disabled UI trace metadata');
+  const series = workload.contacts;
+  if (!Array.isArray(series) || series.length !== 4 || series[0].measured !== false || !Number.isFinite(series[0].seconds) || series[0].seconds < 1
+      || series.slice(1).some(c => c.measured !== true || !Number.isFinite(c.seconds) || c.seconds < 5)) throw Error('Incomplete navigation series: priming and three measured contacts of at least five seconds are required');
+  if (!injected || (!meta.object_motion && !['hand', 'zoom', 'rotate_view'].includes(workload.mode))) throw Error('Missing navigation injection metadata');
+  if (consumed.some((p, i) => p.sequence !== inputs[i].sequence)) throw Error('Navigation consumption order mismatch');
+  if (meta.object_motion && series.some(c => c.artwork_changed !== true || c.package_validated !== true || c.restored !== true)) throw Error('Object motion contact lacks artwork, package or restoration evidence');
+  const source = new Map(), contacts = [], groups = new Map(), byFrame = new Map(frames.map(f => [f.frame, f]));
+  let offset = 0;
+  for (const contact of workload.contacts) {
+    if (contact.first_index !== offset || contact.count !== contact.seconds * meta.rate_hz + 1) throw Error('Invalid navigation contact bounds');
+    const points = injected.slice(offset, offset + contact.count), received = inputs.slice(offset, offset + contact.count);
+    if (points.length !== contact.count || received.length !== contact.count) throw Error('Incomplete navigation contact');
+    for (let i = 0; i < points.length; i++) {
+      if (received[i].phase !== (i === 0 ? 1 : i === points.length - 1 ? 3 : 2)
+          || !Number.isFinite(points[i].x) || !Number.isFinite(points[i].y)) throw Error('Invalid navigation contact sequence');
+      source.set(received[i].sequence, {contact: contacts.length, measured: contact.measured, from: points[Math.max(0, i - 1)], to: points[i]});
+    }
+    const seconds = (points.at(-1).qpc_before - points[0].qpc_before) / meta.qpc_frequency;
+    if (seconds < contact.seconds) throw Error('Navigation motion ended before its requested duration');
+    contacts.push({...contact, actual_seconds: seconds, injected: points.length, actual_input_hz: (points.length - 1) / seconds});
+    offset += contact.count;
+  }
+  if (offset !== injected.length || !contacts.some(c => c.measured)) throw Error('Unassigned navigation input');
+  for (const c of consumed) {
+    const p = source.get(c.sequence);
+    if (!p) throw Error('Unassigned consumed navigation input');
+    if (!p.measured) continue;
+    const key = `${p.contact}:${c.frame}`;
+    if (!groups.has(key)) groups.set(key, {...p, frame: c.frame});
+    else groups.get(key).to = p.to;
+  }
+  const submitted = new Set(), periods = [];
+  for (let i = 0; i < contacts.length; i++) {
+    const moving = [], presents = new Set();
+    for (const group of groups.values()) {
+      if (group.contact !== i) continue;
+      const distinct = group.to.x !== group.from.x || ((meta.object_motion || workload.mode !== 'zoom') && group.to.y !== group.from.y);
+      const frame = byFrame.get(group.frame), previous = byFrame.get(group.frame - 1);
+      if (!frame) throw Error('Consumed navigation input has no completed host frame');
+      if (!distinct || !frame.last_present || previous?.last_present === frame.last_present || presents.has(frame.last_present)) continue;
+      presents.add(frame.last_present);submitted.add(frame.frame);moving.push(frame);
+    }
+    moving.sort((a, b) => a.frame - b.frame);
+    if (contacts[i].measured && moving.length < 2) throw Error('Insufficient distinct submitted navigation frames');
+    const intervals = moving.slice(1).map((f, j) => (f.render_end_ns - moving[j].render_end_ns) / 1e6);
+    if (intervals.some(v => v <= 0)) throw Error('Invalid navigation frame intervals');
+    periods.push(...intervals);
+    Object.assign(contacts[i], {distinct_submitted_frames: moving.length, frame_intervals_ms: distribution(intervals),
+      renderer_frames_per_second: intervals.length ? 1000 / distribution(intervals).mean_ms : null});
+  }
+  return {source, submitted, contacts, intervals: periods};
+}
 export function analyze(directory) {
   const meta = JSON.parse(fs.readFileSync(path.join(directory, 'capture.json'), 'utf8').replace(/^\uFEFF/, ''));
   const prefix = path.join(directory, `latency-${meta.process_id}-${meta.surface.window_id}`);
@@ -66,16 +124,23 @@ export function analyze(directory) {
       observed.set(f.displayed_present, next.acquire_start_ns / 1e6);
     }
   }
+  const navigation = motionFrames(meta, inputs, consumed, frames, injected);
+  const noPresent = {down: 0, move: 0, up: 0};
   const delivery = [], queue = [], submit = [], display = [], observation = [], latest = new Map();
   let unmatched = 0;
   for (const c of consumed) {
     const p = bySequence.get(c.sequence), f = byFrame.get(c.frame);
     if (!p || !f) { unmatched++; continue; }
-    if (!f.last_present || byFrame.get(c.frame - 1)?.last_present === f.last_present) throw Error('Consumed input has no new present');
+    const newPresent = f.last_present && byFrame.get(c.frame - 1)?.last_present !== f.last_present;
+    if (!newPresent && !navigation) throw Error('Consumed input has no new present');
+    if (!newPresent) noPresent[{1: 'down', 2: 'move', 3: 'up'}[p.phase]]++;
+    if (navigation && ((p.arrival_ns - p.sample_ns) / 1e6 < -.1 || f.render_start_ns < p.arrival_ns)) throw Error('Inconsistent navigation timestamp domains');
+    if (navigation && !navigation.source.get(c.sequence).measured) continue;
     delivery.push((p.arrival_ns - p.sample_ns) / 1e6);
     queue.push((f.render_start_ns - p.arrival_ns) / 1e6);
     submit.push((f.render_end_ns - p.sample_ns) / 1e6);
-    if (!latest.has(c.frame) || latest.get(c.frame).sample_ns < p.sample_ns) latest.set(c.frame, p);
+    if ((!navigation || navigation.submitted.has(c.frame)) && (!latest.has(c.frame) || latest.get(c.frame).sample_ns < p.sample_ns)) latest.set(c.frame, p);
+    if (!newPresent) continue;
     const shown = displayed.get(f.last_present), seen = observed.get(f.last_present);
     // Never substitute a later frame for an unobserved or dropped present.
     if (shown !== undefined) display.push(shown - p.sample_ns / 1e6);
@@ -90,7 +155,13 @@ export function analyze(directory) {
     return t === undefined ? [] : [t - latest.get(f.frame).sample_ns / 1e6];
   }));
   return {
-    scope: 'OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response',
+    scope: meta.object_motion ? 'OS-injected Object motion and renderer submissions; inferred motion, excluding per-frame affine truth, physical input and actual presentation rate' : navigation ? 'OS-injected navigation input and renderer submissions; inferred motion, excluding physical input and actual presentation rate' : 'OS-injected pen to DXGI-reported presentation, excluding physical digitizer, scanout position and panel response',
+    ...(navigation ? {[meta.object_motion ? 'object_motion' : 'navigation']: {mode: (meta.object_motion ?? meta.navigation).mode, contacts: navigation.contacts,
+      rate_basis: 'Distinct submitted present IDs in frames consuming net-distinct navigation input, with intervening gaps retained within each contact',
+      motion_inference: meta.object_motion ? 'Net injected endpoint displacement in a preflight-qualified Object gesture; exact per-frame object affine and displayed pixels are unavailable' : meta.navigation.mode === 'zoom' ? 'Net injected horizontal displacement per consumed frame' : 'Net injected endpoint displacement per consumed frame; exact camera movement and Rotate angle are unavailable',
+      no_new_present_inputs: noPresent, renderer_frame_intervals_ms: distribution(navigation.intervals),
+      renderer_frames_per_second: navigation.intervals.length ? 1000 / distribution(navigation.intervals).mean_ms : null,
+      true_presented_fps: null, target_met: null, ui_trace_enabled: (meta.object_motion ?? meta.navigation).ui_trace_enabled}} : {}),
     timestamp_origin: injected ? 'QPC immediately before each OS injection call' : 'WinUI pointer timestamp',
     pointer_timestamp_offset_ms: injected ? {min: Math.min(...offsets), max: Math.max(...offsets)} : null,
     process_id: meta.process_id, diameter: meta.diameter, present_mode: meta.surface.present_mode,

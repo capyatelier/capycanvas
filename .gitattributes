@@ -2,6 +2,7 @@
 tools/git/*.sh text eol=lf
 assets/locales/**/*.ftl text eol=lf
 apps/layer-web/icons/*.svg text eol=lf
+tools/build/licenses/*.txt -text
 
 # Preserve the published crates byte-for-byte, including their line endings and
 # Markdown hard breaks. The recorded unified patch also contains blank context.

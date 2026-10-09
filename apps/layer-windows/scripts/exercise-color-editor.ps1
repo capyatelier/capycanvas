@@ -57,11 +57,12 @@ try {
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned color editor review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Color editor review did not start' 90
-    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $owned=@{window=$null}
+    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Color editor review did not start' 90
+    $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Start-Sleep -Milliseconds 600
-    $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+    $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     $revision=(Model).state.document_file.revision
 
@@ -200,8 +201,20 @@ try {
     Closed-Editor 'Use Color did not close the fill editor'
     Wait-Until {$fill=@((Model).state.layers|Where-Object id -eq $paper.id)[0].fill_color;$fill -and $fill.color.rgba[2] -gt .97 -and $fill.color.rgba[0] -lt .9} 'Use Color did not set the Paper fill'
     Capture "paper-$Theme" -WithModel
+    $thumbnailModel=Model;$thumbnailPaper=@($thumbnailModel.state.layers|Where-Object id -eq $paper.id)[0]
+    $thumbnailRevision=$thumbnailPaper.paint_revision;$thumbnailDocument=Artwork-Identity
+    $thumbnailCamera=$thumbnailModel.state.camera|ConvertTo-Json -Depth 8 -Compress
+    Wait-Until {
+        $current=Model;$samePaper=@($current.state.layers|Where-Object id -eq $paper.id)
+        if($samePaper.Count -ne 1 -or $samePaper[0].paint_revision -ne $thumbnailRevision -or (Artwork-Identity) -ne $thumbnailDocument -or ($current.state.camera|ConvertTo-Json -Depth 8 -Compress) -ne $thumbnailCamera){throw 'The Paper item, artwork or camera changed while waiting for its thumbnail'}
+        $thumbnail=Find "layer-$($paper.id)-thumbnail"
+        $thumbnail -and !$thumbnail.Current.IsOffscreen -and $thumbnail.Current.ItemStatus -eq 'Ready'
+    } 'The same Paper thumbnail did not become ready' 45
+    $thumbnail=Control "layer-$($paper.id)-thumbnail" -Arranged
+    @{layer_id=$paper.id;paint_revision=$thumbnailRevision;artwork=$thumbnailDocument;camera=$thumbnailCamera;status=$thumbnail.Current.ItemStatus;runtime_id=($thumbnail.GetRuntimeId() -join ':');bounds=$thumbnail.Current.BoundingRectangle;visual_review='Required: Ready does not establish thumbnail pixel content'}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'paper-thumbnail-proof.json')
+    Capture "paper-thumbnail-ready-$Theme" -WithModel -Composed
 
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [pscustomobject]@{theme=$Theme;rows='passed';paste_and_copy='passed';native_clipboard_ownership='passed';formats='passed';typing_and_refusal='passed';scrub_and_step='passed';revert='passed';sheet='passed';memory='passed';canvas_pick='passed';use_color='passed';fill_thumbnail='passed';evidence=$run}|ConvertTo-Json
 }catch{

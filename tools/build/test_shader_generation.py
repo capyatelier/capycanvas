@@ -47,9 +47,14 @@ class ShaderGenerationTests(unittest.TestCase):
             **os.environ,
             "CARGO_MANIFEST_DIR": str(root / "crates/layer-shader-cache-key"),
         })
+        dependencies = [Path(line.removeprefix("cargo:rerun-if-changed="))
+                        for line in output.splitlines()
+                        if line.startswith("cargo:rerun-if-changed=")]
         for name in INPUTS:
-            if (root / name).exists():
-                self.assertIn(f"cargo:rerun-if-changed={root / name}\n", output)
+            path = root / name
+            if path.exists():
+                self.assertTrue(any(dependency.samefile(path) for dependency in dependencies),
+                                f"Missing shader input: {path}")
         return output.split("cargo:rustc-env=CAPY_SHADER_GENERATION=")[1].strip()
 
     def test_every_input_invalidates_and_restoring_reuses_generation(self):
