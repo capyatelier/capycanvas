@@ -387,8 +387,10 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
 export async function checkGpuFailureLifecycle({call,evaluate,settle,errors}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function check(){if(${condition})resolve();else if(performance.now()>end)reject(Error('GPU failure lifecycle timeout: '+${JSON.stringify(condition)}+' '+document.querySelector('#gpu-notice')?.textContent));else setTimeout(check,30)}check()})`);
   const click=async selector=>{
-    const point=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
-    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+    for(const type of ['mousePressed','mouseReleased']){
+      const point=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+      await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+    }
     await settle();
   };
   await evaluate(`(()=>{
