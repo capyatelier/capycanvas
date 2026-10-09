@@ -233,10 +233,9 @@ fn cold_object_thumbnails_and_retouch_reads_retry_until_exact_pixels_are_ready()
     let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
     let ink=doc.scene().order()[0];let paper=doc.scene().order()[1];
     doc.artwork.occurrences.get_mut(paper).unwrap().visible=false;
-    let (owner,edit)=doc.create_object_layer_edit("Reference",None,1).unwrap();doc.apply(edit).unwrap();
-    let mut object=ImageObject::new(Image::new(layer_core::color::source::rgba8_source([512;2],|_,_|[255,0,0,255])),"Photo");
+    let mut object=ImageObject::new(Image::new(layer_core::color::source::rgba8_source([512;2],|_,_|[255,0,0,255])));
     object.affine=Affine64([1./7.,0.,0.,1./7.,0.,0.]);
-    let (_,edit)=doc.add_image_object_edit(owner,object,0).unwrap();doc.apply(edit).unwrap();
+    let (owner,edit)=doc.create_object_layer_edit("Reference",object,None,1).unwrap();doc.apply(edit).unwrap();
     for thumbnail in [false,true] {
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();r.document_extent=extent;
         let packet=crate::test_support::packet(doc.scene(),extent);

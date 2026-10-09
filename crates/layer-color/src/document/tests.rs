@@ -674,9 +674,8 @@ fn fixed_reduced_color_layers_preserve_modes_and_alpha_through_document_depth_ch
 fn working_base_conversion_preserves_shared_object_image_and_base_dither_phase() {
     let mut document=fixture(DocumentColor {space:RgbSpace::ProPhoto,depth:SampleDepth::U16});
     let shared=paint(&document,1).base.as_ref().unwrap().image.clone();
-    let object=document.artwork.objects.insert(PortableId::random(),ImageObject::new(shared.clone(),"Shared photo")).unwrap();
-    let layer=document.artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![object]}).unwrap();
-    let occurrence=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(layer),"Object")).unwrap();
+    let object=document.artwork.objects.insert(PortableId::random(),ImageObject::new(shared.clone())).unwrap();
+    let occurrence=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(object),"Object")).unwrap();
     let stack=document.composition().result;
     document.artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
     let shifted=PaintSource { color_mode:Default::default(),domain:[544,272],raster:Default::default(),base:Some(PaintBase {image:shared.clone(),offset:[17,9],policy:PaintBasePolicy::WorkingPixels}),operations:Default::default()};
@@ -748,8 +747,7 @@ fn worker_color_roundtrip_interns_mixed_immutable_image_closure() {
     let layer_core::SourceTarget::Paint(paint)=original.working.target.unwrap() else {panic!("paint")};
     let image=Image::new(source(17));
     original.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(image.clone()));
-    let (layer,edit)=original.create_object_layer_edit("objects",None,0).unwrap();original.apply(edit).unwrap();
-    for index in 0..2 {let (_,edit)=original.add_image_object_edit(layer,ImageObject::new(image.clone(),"shared"),index).unwrap();original.apply(edit).unwrap();}
+    for index in 0..2 {let (_,edit)=original.create_object_layer_edit("objects",ImageObject::new(image.clone()),None,index).unwrap();original.apply(edit).unwrap();}
     original.artwork=roundtrip(original.artwork.clone());
     let image=original.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.clone();
     for policy in [PaintBasePolicy::SourceProfile,PaintBasePolicy::WorkingPixels] {

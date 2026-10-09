@@ -198,19 +198,6 @@ impl SourceThumbnails {
         self.retain(overview);
         Ok(ready)
     }
-    /// Prepare the complete image of a placed object, independent of its placement.
-    pub fn prepare_image(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        base: &layer_core::authored::PaintBase,
-        encoder: &mut crate::submission::CommandEncoder,
-        mut tile_limit: usize,
-    ) -> Result<bool, GpuRasterError> {
-        let overview = self.overview(r, base, base.image.extent, encoder, &mut tile_limit)?;
-        let ready = overview.remaining.is_empty();
-        self.retain(overview);
-        Ok(ready)
-    }
     fn retain(&mut self, overview: Overview) {
         self.cache.push_back(overview);
         while self.cache.len() > OVERVIEWS {
@@ -337,16 +324,6 @@ impl SourceThumbnails {
     ) -> Result<PageSurface, GpuRasterError> {
         self.prepare(r, layer, encoder, usize::MAX)?;
         let pixels = self.prepared.back().unwrap().pixels.clone();
-        self.display(r, &pixels, encoder)
-    }
-    pub fn render_image(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        base: &layer_core::authored::PaintBase,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<PageSurface, GpuRasterError> {
-        self.prepare_image(r, base, encoder, usize::MAX)?;
-        let pixels = self.cache.back().unwrap().pixels.clone();
         self.display(r, &pixels, encoder)
     }
     fn display(

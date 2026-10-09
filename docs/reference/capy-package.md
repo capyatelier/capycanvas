@@ -95,8 +95,7 @@ as unsupported and is preserved; there is no conversion reader.
 | `capy.occurrence/3` | Required `content`; `name`, `visible`, `opacity`, `blend`, `locked`, `alpha_locked`, `reference`, `attachment`, a signed decimal-string integer `offset` for paint, object and stack content, and an optional `mask` with its own integer `offset`, relative to its owner when linked. |
 | `capy.paint-source/2` | Required pixel `domain`; authored `color_mode` (`full_color`, `grayscale`, `two_tone`, default `full_color`), optional `base` image binding, sparse `tiles`, `material`. The binding owns its base offset and color policy. |
 | `capy.image/1` | Immutable sample `extent`, `interpretation`, complete `tiles`; optional physical `resolution`. |
-| `capy.object-layer/1` | Required ordered `children` drawable references, front to back; an empty list is valid. |
-| `capy.image-object/1` | Required immutable `image` reference; optional `name`, `visible`, F64 `affine`, `interpolation`. |
+| `capy.image-object/1` | Required immutable `image` reference; optional F64 `affine`, `interpolation`. |
 | `capy.coverage-source/2` | Required pixel `domain`; `default_coverage` and sparse `tiles`. A mask made from a selection stores that selection's coverage in tiles. |
 | `capy.effect/2` | Required inline `builtin`, parameter-data `version` and every keyed `values` entry. Effects consuming authored coordinates require F64 `spatial`. |
 | `capy.selection/1` | Required `shape`; optional `affine` and `inverted`. Pixels use coverage resources; contours keep their geometry. |
@@ -104,7 +103,7 @@ as unsupported and is preserved; there is no conversion reader.
 | `capy.output/2` | Required `source` composition endpoint; `name`, `context`, SDR rendition, proof intent and disposable optional `representation`; unfamiliar caches are ignored. Export requests own delivery size. |
 
 `content` is one of `{"paint":{"ref":"…"}}`,
-`{"objects":{"ref":"…"}}`, `{"stack":{"ref":"…"}}`, `{"effect":{"ref":"…"}}`,
+`{"objects":{"ref":"…"}}` (a direct image-object reference), `{"stack":{"ref":"…"}}`, `{"effect":{"ref":"…"}}`,
 or `{"selection":{"ref":"…"}}`.
 Exactly one alternative appears. Paper is an ordinary Solid Color effect
 occurrence, with its color in the effect values. Files using the former inline
@@ -165,8 +164,8 @@ range or combination a later version may allow, is unsupported.
 Reader, editor admission and finalized capture publication share metadata and
 record admission. Metadata is bounded to 64 MiB, fewer than 128 nested JSON
 containers and 4,194,304 traversal nodes; evaluation graphs admit 65,536 objects,
-262,144 evaluation edges, depth 128 and 4,096 image objects per image layer.
-Layer and image object names are at most 4,096 bytes. Resource bindings, including repeated
+262,144 evaluation edges and depth 128.
+Layer names are at most 4,096 bytes. Resource bindings, including repeated
 tile references, do not consume evaluation edges. There are at most 262,144
 resource records. Project admission also bounds layers, dimensions, retained
 source bytes and raster bytes using the same units on reopen. Shared source
@@ -264,7 +263,7 @@ it does not authorize weakening unrelated color or sampling contracts.
 
 The [illustration design](../development/illustration-filters-proposal.md#decisions-before-implementation)
 coordinates these additions with the
-[object-layer records](../history/object-layer-ga-design.md#5-minimal-ga-records-and-ownership).
+[object-layer ownership](authored-model.md#object-layers-and-image-objects).
 Image-input roles, seed controls and asset selections below remain planned
 extensions. Spatial references are implemented in `capy.effect/2`:
 

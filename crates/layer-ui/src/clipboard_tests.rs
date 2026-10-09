@@ -43,9 +43,19 @@ mod clipboard_checks {
             color,
             blend: layer_core::BlendSpace::Linear.for_depth(color.depth),
             png: Arc::from(&b"png"[..]),
-            objects: None,
             layers: None,
         }
+    }
+
+    fn retain_image_layers(clip: &mut PixelClip, images: Vec<(Arc<str>, layer_core::ImageObject)>) {
+        let mut artwork = layer_core::Artwork::new(clip.source.extent).unwrap();
+        let composition = artwork.compositions.get_mut(artwork.root).unwrap();
+        composition.color = clip.color;
+        composition.blend = clip.blend;
+        let mut document = Document::from_artwork(artwork).unwrap();
+        let (roots, edit) = document.import_object_layers_edit(images, None, 0).unwrap();
+        document.apply(edit).unwrap();
+        clip.layers = Some(Arc::new(clipboard::LayerClip { scene: document.snapshot(), roots }));
     }
 
     fn translation(s: &UiSession<Recorder>) -> [f32; 2] {
@@ -330,17 +340,15 @@ mod clipboard_checks {
     fn mixed_region_selection(s: &mut UiSession<Recorder>) -> [OccurrenceHandle; 3] {
         let paint = s.engine.document().working.occurrence.unwrap();
         let images = ["First photo", "Second photo"].map(|name| {
-            let (layer, edit) = s.engine.document().create_object_layer_edit(name, None, 0).unwrap();
-            s.layer_edit(edit).unwrap();
-            let image = layer_core::ImageObject::new(rgba8_source([40, 30], |_, _| [255; 4]).into(), name);
-            let (_, edit) = s.engine.document().add_image_object_edit(layer, image, 0).unwrap();
+            let image = layer_core::ImageObject::new(rgba8_source([40, 30], |_, _| [255; 4]).into());
+            let (layer, edit) = s.engine.document().create_object_layer_edit(name, image, None, 0).unwrap();
             s.layer_edit(edit).unwrap();
             layer
         });
         s.layer_edit(s.engine.document().select_occurrence_edit(images[1]).unwrap()).unwrap();
         let layers = [paint, images[0], images[1]];
         let mut working = s.engine.document().working.clone();
-        working.objects.clear(); working.layer_selection = layers.into();
+        working.layer_selection = layers.into();
         s.layer_edit(Edit::Working(working)).unwrap();
         select(s, Some(rectangle([10., 10., 20., 20.])));
         layers
@@ -553,8 +561,8 @@ mod clipboard_checks {
         let doc = s.engine.document();
         let handle = doc.working.occurrence.unwrap();
         let layer = doc.scene().occurrence(handle).unwrap();
-        let object = doc.object_layer_children(handle).expect("Paste Into makes an image layer")[0];
-        assert_eq!(doc.working.objects, [object].into());
+        let object = doc.scene().object_handle(handle).expect("Paste Into makes an image layer");
+        assert_eq!(doc.selected_objects(), [object].into());
         let pasted = doc.scene().object(object).unwrap();
         assert_eq!(pasted.affine, layer_core::Affine64([1., 0., 0., 1., 103., 52.]), "the clip is centred on the selection");
         assert_eq!(pasted.image.interpretation, clip.source.interpretation, "the image keeps its own colour interpretation");
@@ -576,33 +584,29 @@ mod clipboard_checks {
         let long = format!("  {}\u{7}photo.png", "a".repeat(300));
         let source = || Arc::unwrap_or_clone(rgba8_source([8, 8], |_, _| [1, 2, 3, 255]));
         let bounded = |name: &str| name.chars().count() == layer_core::MAX_NAME_CHARS && name.chars().all(|c| c == 'a');
-        let object_name = |s: &UiSession<Recorder>| {
-            let doc = s.engine.document();
-            doc.scene().object(*doc.working.objects.iter().next().unwrap()).unwrap().name.clone()
-        };
         let layer_name = |s: &UiSession<Recorder>| {
             let doc = s.engine.document();
             doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().name.clone()
         };
         s.place_layer_source(&long, source(), None).unwrap();
-        assert!(bounded(&object_name(&s)), "place");
+        assert!(bounded(&layer_name(&s)), "place");
         invoke(&mut s, CommandId::CancelTransform);
         let context = s.image_placement_context(None, None).unwrap();
         s.paste_layer_sources(vec![(long.clone(), source())], PasteMode::InPlace, &context).unwrap();
-        assert!(bounded(&object_name(&s)), "paste in place");
+        assert!(bounded(&layer_name(&s)), "paste in place");
         let mut copied = clip([8, 8], [4, 4], DocumentColor::default());
         copied.name = long.clone();
         s.paste_clip(&copied, PasteMode::Paste).unwrap();
         assert!(bounded(&layer_name(&s)), "paste");
         select(&mut s, Some(rectangle([10., 10., 50., 50.])));
         s.paste_clip(&copied, PasteMode::Into).unwrap();
-        assert!(bounded(&object_name(&s)), "paste into");
+        assert!(bounded(&layer_name(&s)), "paste into");
         let kept = "é".repeat(layer_core::MAX_NAME_BYTES / 2);
-        let mut object = layer_core::ImageObject::new(layer_core::Image::new(Arc::new(source())), kept.as_str());
+        let mut object = layer_core::ImageObject::new(layer_core::Image::new(Arc::new(source())));
         object.affine = layer_core::Affine64([1., 0., 0., 1., 4., 4.]);
-        copied.objects = Some(Arc::new(clipboard::ObjectClip { objects: vec![object] }));
+        retain_image_layers(&mut copied, vec![(kept.clone().into(), object)]);
         s.paste_clip(&copied, PasteMode::Paste).unwrap();
-        assert_eq!(object_name(&s).as_ref(), kept, "a copied image keeps the name the drawing admitted");
+        assert_eq!(layer_name(&s).as_ref(), kept, "a copied image keeps the name the drawing admitted");
         assert!(s.place_layer_source("\u{7} ", source(), None).is_err(), "a name of only spaces and controls is refused");
         assert!(s.import_layer_source(&long, source()).is_err(), "import keeps names literally and refuses ones past the limit");
     }
@@ -615,7 +619,7 @@ mod clipboard_checks {
         s.paste_layer_sources(image(), PasteMode::InPlace, &context).unwrap();
         assert!(!s.objects.placing());
         let doc = s.engine.document();
-        let object = *doc.working.objects.iter().next().unwrap();
+        let object = doc.scene().object_handle(doc.working.occurrence.unwrap()).unwrap();
         assert_eq!(doc.scene().object(object).unwrap().affine, layer_core::Affine64([1., 0., 0., 1., 0., 0.]));
         let context = s.image_placement_context(None, None).unwrap();
         s.paste_layer_sources(image(), PasteMode::Paste, &context).unwrap();
@@ -624,6 +628,110 @@ mod clipboard_checks {
         let context = s.image_placement_context(None, None).unwrap();
         invoke(&mut s, CommandId::AddLayer);
         assert!(s.paste_layer_sources(image(), PasteMode::InPlace, &context).is_err(), "a stale context is refused");
+    }
+
+    #[test]
+    fn external_images_paste_as_named_siblings_and_select_all_selects_canvas_pixels() {
+        let mut s = clip_session();
+        let image = |name: &str, extent| (name.to_string(), Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [90, 120, 200, 255])));
+        let context = s.image_placement_context(None, None).unwrap();
+        s.paste_layer_sources(vec![image("First", [8, 6])], PasteMode::InPlace, &context).unwrap();
+        let before = s.engine.document().clone();
+        let first = before.working.occurrence.unwrap();
+        let context = s.image_placement_context(None, None).unwrap();
+        s.paste_layer_sources(vec![image("Wide", [9, 3]), image("Tall", [2, 11])], PasteMode::InPlace, &context).unwrap();
+        let document = s.engine.document();
+        let selected = document.working.layer_selection.clone();
+        assert_eq!(selected.len(), 2);
+        assert!(!selected.contains(&first));
+        assert_eq!(document.selected_objects().len(), 2);
+        assert_eq!(document.scene().occurrence(first), before.scene().occurrence(first));
+        assert_eq!(document.scene().object_layer(first), before.scene().object_layer(first));
+        let images = document.scene().children(None).iter().filter_map(|&id| {
+            let object = document.scene().object_layer(id)?;
+            assert_eq!(document.scene().parent(id), None);
+            Some((document.scene().occurrence(id).unwrap().name.as_ref(), object.image.extent))
+        }).collect::<Vec<_>>();
+        assert_eq!(images, [("Wide", [9, 3]), ("Tall", [2, 11]), ("First", [8, 6])]);
+        invoke(&mut s, CommandId::SelectAll);
+        let document = s.engine.document();
+        assert_eq!(document.working.layer_selection, selected);
+        assert_eq!(document.working.selection.as_ref().unwrap().shape, rectangle([0., 0., 400., 300.]).shape);
+        invoke(&mut s, CommandId::Copy);
+        let (id, _) = pending(&s);
+        let capture = s.capture_clipboard(id).unwrap();
+        assert_eq!(capture.layers.as_ref().unwrap().roots.len(), 2);
+        assert_eq!(capture.layer_captures().len(), 2);
+        s.complete_document_request(id, Ok(false)).unwrap();
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().working.selection.is_none(), "Select All is its own undo step");
+        invoke(&mut s, CommandId::Undo);
+        assert_live_artwork_eq(s.engine.document(), &before);
+    }
+
+    #[test]
+    fn object_layer_cut_uses_retained_layers_and_undo_restores_named_siblings() {
+        let mut s = clip_session();
+        let context = s.image_placement_context(None, None).unwrap();
+        let images = ["First", "Second"].map(|name| (name.into(), Arc::unwrap_or_clone(rgba8_source([8, 6], |_, _| [255; 4])))).to_vec();
+        s.paste_layer_sources(images, PasteMode::InPlace, &context).unwrap();
+        let before = s.engine.document().clone();
+        let selected = before.working.layer_selection.clone();
+        invoke(&mut s, CommandId::Cut);
+        let (id, _) = pending(&s);
+        let capture = s.capture_clipboard(id).unwrap();
+        assert_eq!(capture.layers.as_ref().unwrap().roots.len(), 2);
+        assert!(capture.layer_captures().is_empty(), "whole object layers retain their original images");
+        let extent = [capture.crop[2], capture.crop[3]];
+        let copied = capture.finish("object-layers".into(), rgba8_source(extent, |_, _| [0; 4]), vec![]).unwrap();
+        assert_live_artwork_eq(s.engine.document(), &before);
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(selected.iter().all(|&layer| s.engine.document().scene().occurrence(layer).is_none()));
+        invoke(&mut s, CommandId::Undo);
+        assert_live_artwork_eq(s.engine.document(), &before);
+        s.paste_clip(&copied, PasteMode::InPlace).unwrap();
+        let document = s.engine.document();
+        assert_eq!(document.working.layer_selection.len(), 2);
+        assert!(document.working.layer_selection.is_disjoint(&selected));
+        let names = document.scene().order().iter().filter(|id| document.working.layer_selection.contains(id))
+            .map(|id| document.scene().occurrence(*id).unwrap().name.as_ref()).collect::<Vec<_>>();
+        assert_eq!(names, ["First", "Second"]);
+        for id in &document.working.layer_selection { assert_eq!(document.scene().object_layer(*id).unwrap().image.extent, [8, 6]); }
+        invoke(&mut s, CommandId::Undo);
+        assert_live_artwork_eq(s.engine.document(), &before);
+    }
+
+    #[test]
+    fn focused_object_layer_mask_takes_precedence_over_derived_object_selection() {
+        let mut s = clip_session();
+        let context = s.image_placement_context(None, None).unwrap();
+        s.paste_layer_sources(vec![("Photo".into(), Arc::unwrap_or_clone(rgba8_source([20, 10], |_, _| [255; 4])))], PasteMode::InPlace, &context).unwrap();
+        let mask = focused_mask(&mut s);
+        assert_eq!(s.engine.document().selected_objects().len(), 1);
+        invoke(&mut s, CommandId::Copy);
+        let (id, _) = pending(&s);
+        let capture = s.capture_clipboard(id).unwrap();
+        assert_eq!(capture.scope, SceneScope::Raw(mask));
+        assert!(capture.layers.is_none());
+        s.complete_document_request(id, Ok(true)).unwrap();
+        for external in [false, true] {
+            let before = s.engine.document().clone();
+            let copied = clip([4, 4], [0, 0], before.composition().color);
+            if external {
+                let context = s.image_placement_context(None, None).unwrap();
+                s.paste_layer_sources(vec![("Mask pixels".into(), (*copied.source).clone())], PasteMode::InPlace, &context).unwrap();
+            } else {
+                s.paste_clip(&copied, PasteMode::InPlace).unwrap();
+            }
+            s.frame(2, 2).unwrap();
+            assert_eq!(s.engine.document().scene().order(), before.scene().order());
+            assert_eq!(s.engine.document().artwork.objects.iter().collect::<Vec<_>>(), before.artwork.objects.iter().collect::<Vec<_>>());
+            let operations = &s.renderer_mut().pending_operations;
+            assert_eq!(operations.len(), 1);
+            assert!(operations.iter().all(|(target, operation)| *target == mask && matches!(operation.kind, RasterOperationKind::Bake { .. })));
+            invoke(&mut s, CommandId::Undo);
+            assert_live_artwork_eq(s.engine.document(), &before);
+        }
     }
 
     #[test]
@@ -1068,7 +1176,7 @@ mod clipboard_checks {
         let image = Arc::unwrap_or_clone(rgba8_source([800, 600], |_, _| [255; 4]));
         let context = s.image_placement_context(None, None).unwrap();
         s.paste_layer_sources(vec![("Large".into(), image)], PasteMode::Paste, &context).unwrap();
-        let doc = s.engine.document(); let object = doc.scene().object(*doc.working.objects.iter().next().unwrap()).unwrap();
+        let doc = s.engine.document(); let object = doc.scene().object_layer(doc.working.occurrence.unwrap()).unwrap();
         assert_eq!(&object.affine.0[..4], &[1., 0., 0., 1.], "paste never shrinks to fit");
         invoke(&mut s, CommandId::CancelTransform);
         s.set_viewport([400., 300.], [800, 600]).unwrap();
@@ -1185,7 +1293,7 @@ mod clipboard_checks {
         assert_eq!(capture.scope, SceneScope::Raw(target));
         assert_eq!(capture.crop, [10, 20, 20, 20]);
         assert_eq!(capture.coverage.as_deref(), Some(&selection));
-        assert!(capture.layers.is_none() && capture.objects.is_none() && capture.original.is_none());
+        assert!(capture.layers.is_none() && capture.original.is_none());
         assert_eq!(capture.scene.view().target_offset(target), [7, -2]);
         s.complete_document_request(id, Ok(true)).unwrap();
         let before = s.engine.document().clone();
@@ -1489,16 +1597,16 @@ mod clipboard_checks {
         assert_eq!(base.policy, copied.policy);
         assert_eq!(base.offset, [0, 0]);
         assert!(!document.scene().occurrence(document.scene().order()[1]).unwrap().visible);
-        let mut object = layer_core::ImageObject::new(copied.source.clone().into(), "Original");
+        let mut object = layer_core::ImageObject::new(copied.source.clone().into());
         object.affine = layer_core::Affine64([1., 0., 0., 1., -10., 23.]);
-        copied.objects = Some(Arc::new(super::super::clipboard::ObjectClip { objects: vec![object.clone()] }));
+        retain_image_layers(&mut copied, vec![("Original".into(), object.clone())]);
         let objects = copied.document(&localization).unwrap();
-        let kept = objects.artwork.objects.iter().next().unwrap().2;
-        assert_eq!(kept.affine, layer_core::Affine64([1., 0., 0., 1., 0., 0.]));
+        let (handle, _, kept) = objects.artwork.objects.iter().next().unwrap();
+        assert_eq!(objects.object_document_affine(handle).unwrap(), layer_core::Affine64([1., 0., 0., 1., 0., 0.]));
         assert_eq!(kept.image.extent, object.image.extent);
         assert_eq!(kept.image.interpretation, object.image.interpretation);
         assert_eq!(kept.image.tiles.values().next().unwrap().owner_identity(), object.image.tiles.values().next().unwrap().owner_identity());
-        assert_eq!(objects.working.objects.len(), 1);
+        assert_eq!(objects.selected_objects().len(), 1);
         assert_eq!(objects.scene().order().len(), 2);
         assert!(objects.artwork.paint.is_empty());
         objects.validate(Default::default()).unwrap();
@@ -1510,7 +1618,10 @@ mod clipboard_checks {
             ("Tall".into(), Arc::unwrap_or_clone(rgba8_source([2, 11], |_, _| [7; 4])))];
         let document = clipboard_document(sources, Default::default(), &Localizer::shared(UiLanguage::English)).unwrap();
         assert_eq!(document.composition().size, [9, 11]);
-        let objects: Vec<_> = document.artwork.objects.iter().map(|(_, _, object)| (object.name.as_ref(), object.affine.0)).collect();
+        let objects: Vec<_> = document.scene().order().iter().filter_map(|&id| {
+            let object = document.scene().object_layer(id)?;
+            Some((document.scene().occurrence(id).unwrap().name.as_ref(), object.affine.0))
+        }).collect();
         assert_eq!(objects, [("Wide", [1., 0., 0., 1., 0., 4.]), ("Tall", [1., 0., 0., 1., 3., 0.])]);
         assert!(clipboard_document(Vec::new(), Default::default(), &Localizer::shared(UiLanguage::English)).is_err());
     }

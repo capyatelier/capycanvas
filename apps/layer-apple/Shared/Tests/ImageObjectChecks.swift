@@ -33,13 +33,18 @@ extension XCTestCase {
         let layers = app.buttons["panel-tab-layers"]
         XCTAssertTrue(layers.waitForExistence(timeout: 10))
         if !layers.isSelected { workspaceActivate(layers) }
-        let objects = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "image-object-"))
-            .matching(NSPredicate(format: "NOT identifier BEGINSWITH %@", "image-object-grip-"))
+        #if os(macOS)
+        let candidates = app.groups
+        #else
+        let candidates = app.otherElements
+        #endif
+        let rows = candidates.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let initialCount = rows.count
         func count(_ expected: Int) {
-            expectation(for: NSPredicate(format: "count == %d", expected), evaluatedWith: objects)
+            expectation(for: NSPredicate(format: "count == %d", expected), evaluatedWith: rows)
             waitForExpectations(timeout: 20)
         }
-        func objectMenu(_ row: XCUIElement, _ label: String) {
+        func layerMenu(_ row: XCUIElement, _ label: String) {
             #if os(macOS)
             row.rightClick()
             #else
@@ -47,6 +52,7 @@ extension XCTestCase {
             #endif
             let menu = app.descendants(matching: .any)["layer-context-menu"].firstMatch
             XCTAssertTrue(menu.waitForExistence(timeout: 5))
+            if label == "Duplicate" { workspaceActivate(menu.buttons["menu-action-Organize"]) }
             let item = menu.buttons["menu-action-" + label]
             revealEditorControl(item, in: menu)
             XCTAssertTrue(item.isEnabled, "The selected image offers \(label)")
@@ -54,36 +60,22 @@ extension XCTestCase {
             XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
         }
         let blue = editorPixels(in: app)
-        command("Convert to Image Layer")
-        let expand = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-images-")).firstMatch
-        XCTAssertTrue(expand.waitForExistence(timeout: 20))
-        if expand.label == "Expand image list" { workspaceActivate(expand) }
-        count(1); expectPixels(blue, in: app)
-        let originalID = objects.firstMatch.identifier
-        workspaceActivate(objects.firstMatch)
-        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: objects.firstMatch)
-        waitForExpectations(timeout: 5)
-        objectMenu(objects.firstMatch, "Duplicate Images")
-        count(2); expectPixels(blue, in: app)
-        editorHistory("Undo", in: app); count(1)
-        editorHistory("Redo", in: app); count(2)
-        let original = app.descendants(matching: .any)[originalID].firstMatch
-        workspaceActivate(original)
-        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: original)
-        waitForExpectations(timeout: 5)
-        objectMenu(original, "Bring to Front")
-        expectation(for: NSPredicate { _, _ in objects.firstMatch.identifier == originalID }, evaluatedWith: app)
-        waitForExpectations(timeout: 5)
+        command("Convert to Object Layer")
+        count(initialCount); expectPixels(blue, in: app)
+        let originalID = rows.firstMatch.identifier
+        let original = candidates[originalID].firstMatch
+        workspaceActivate(original.buttons["Edit layer content"])
+        layerMenu(original, "Duplicate")
+        count(initialCount + 1); expectPixels(blue, in: app)
+        editorHistory("Undo", in: app); count(initialCount)
+        editorHistory("Redo", in: app); count(initialCount + 1)
+        workspaceActivate(original.buttons["Edit layer content"])
+        workspaceActivate(original.buttons["layer-Hide layer"])
+        XCTAssertTrue(original.buttons["layer-Show layer"].waitForExistence(timeout: 5))
         editorHistory("Undo", in: app)
-        expectation(for: NSPredicate { _, _ in objects.firstMatch.identifier != originalID }, evaluatedWith: app)
-        waitForExpectations(timeout: 5)
-        objectMenu(original, "Hide Image")
-        XCTAssertTrue(original.buttons["layer-Show Image"].waitForExistence(timeout: 5))
-        editorHistory("Undo", in: app)
-        XCTAssertTrue(original.buttons["layer-Hide Image"].waitForExistence(timeout: 5))
-        workspaceActivate(expand); count(0)
-        workspaceActivate(expand); count(2)
-        attachEditor(in: app, name: "image-rows-\(theme)")
+        XCTAssertTrue(original.buttons["layer-Hide layer"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-images-")).firstMatch.exists)
+        attachEditor(in: app, name: "object-layers-\(theme)")
 
         command("Clear Entire Layer")
         let notice = app.descendants(matching: .any)["canvas-notice"].firstMatch
@@ -94,10 +86,10 @@ extension XCTestCase {
         }
         command("Clear Entire Layer")
         app.buttons["canvas-notice-action-rasterize_layer"].clickOrTap()
-        XCTAssertTrue(notice.waitForNonExistence(timeout: 5)); count(0)
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 5)); count(initialCount + 1)
         expectPixels(blue, in: app)
-        editorHistory("Undo", in: app); count(2); expectPixels(blue, in: app)
-        editorHistory("Redo", in: app); count(0); expectPixels(blue, in: app)
+        editorHistory("Undo", in: app); count(initialCount + 1); expectPixels(blue, in: app)
+        editorHistory("Redo", in: app); count(initialCount + 1); expectPixels(blue, in: app)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         attachEditor(in: app, name: "image-rasterize-\(theme)")
     }

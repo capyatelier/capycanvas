@@ -194,8 +194,7 @@ class AndroidInteractionTest {
             try { bitmap.eraseColor(color); file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
         }
         fun rows() = state().array("layers").objects()
-        fun imageLayer() = rows().single { it.getInt("object_count") > 0 }
-        fun images() = imageLayer().array("objects").objects()
+        fun images() = rows().filter { it.getBoolean("object") }
         fun imageRow(id: Long) = images().single { it.getLong("id") == id }
         fun menuItem(label: String): Offset {
             var result: Offset? = null
@@ -209,8 +208,18 @@ class AndroidInteractionTest {
             }
             return result!!
         }
-        fun menuLabel(id: Long, op: String) = kotlinx.coroutines.runBlocking { host.withNative { JSONObject(Native.query(it, obj("type" to "object_menu", "id" to id).toString())) } }
-            .array("sections").values().flatMap { (it as JSONArray).objects() }.first { it.optJSONObject("action")?.optJSONObject("action")?.optString("op") == op }.getString("label")
+        fun menuPath(id: Long, op: String): List<String> {
+            val menu = kotlinx.coroutines.runBlocking { host.withNative { JSONObject(Native.query(it, obj("type" to "layer_menu", "id" to id, "mask" to false).toString())) } }
+            fun path(sections: JSONArray): List<String>? {
+                for (item in sections.values().flatMap { (it as JSONArray).objects() }) {
+                    val value = item.optJSONObject("action")?.optJSONObject("action")?.optString("op")
+                    if (value == op || value == "${op}_selected") return listOf(item.getString("label"))
+                    path(item.array("sections"))?.let { return listOf(item.getString("label")) + it }
+                }
+                return null
+            }
+            return checkNotNull(path(menu.array("sections"))) { "Missing $op in $menu" }
+        }
         fun menuTap(at: Offset) { popupInput = true; try { tap(at) } finally { popupInput = false }; settle() }
         fun hold(at: Offset) { event(MotionEvent.ACTION_DOWN, at); SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout() + 250L); event(MotionEvent.ACTION_UP) }
         fun drag(from: Offset, to: Offset) {
@@ -242,45 +251,49 @@ class AndroidInteractionTest {
             action(obj("type" to "set_theme", "theme" to theme))
             if (group("layers").getString("active") != "layers") action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
             for (file in listOf(red, blue)) { host.importImage(file); action(obj("type" to "invoke", "command" to "apply_transform")) }
-            val layer = imageLayer().getLong("id")
-            assertEquals("Second placement enters the active image layer", 2, imageLayer().getInt("object_count"))
-            if (!imageLayer().getBoolean("expanded")) tap(bounds("layer-expand-$layer").center)
-            waitFor("expanded image rows") { imageLayer().getBoolean("expanded") && images().size == 2 }
+            assertEquals("Each file imports as its own ordinary Object layer", 2, images().size)
             val (front, back) = images().map { it.getLong("id") }
-            waitFor("child rows") { shown("image-object-row-$front") && shown("image-object-row-$back") }
-            waitFor("image row previews", 30_000) { exists("image-object-thumbnail-$front") && exists("image-object-thumbnail-$back") }
-            assertEquals("Child rows keep layer row height", bounds("layer-row-$layer").height, bounds("image-object-row-$front").height, 1f)
-            tap(bounds("image-object-row-$back").center)
-            waitFor("row tap selects the obscured image") { imageRow(back).getBoolean("selected") && !imageRow(front).getBoolean("selected") }
-            tap(bounds("image-object-eye-$front").center)
-            waitFor("image hidden") { !imageRow(front).getBoolean("visible") }
-            tap(bounds("image-object-eye-$front").center)
-            waitFor("image shown") { imageRow(front).getBoolean("visible") }
+            assertEquals(setOf("rows-red", "rows-blue"), images().map { it.getString("label") }.toSet())
+            waitFor("Object layer rows") { shown("layer-row-$front") && shown("layer-row-$back") }
+            waitFor("Object layer previews", 30_000) { exists("layer-thumbnail-$front-false") && exists("layer-thumbnail-$back-false") }
+            assertFalse("Object layers have no image child rows", shown("image-object-row-$front"))
+            tap(bounds("layer-row-$back").center)
+            waitFor("row tap selects the obscured Object layer") { editingLayer() == back }
+            layerAction(obj("op" to "rename", "id" to back, "name" to "Rear photo"))
+            waitFor("ordinary layer rename changes the Object layer caption") { imageRow(back).getString("label") == "Rear photo" }
+            tap(bounds("layer-eye-$front").center)
+            waitFor("Object layer hidden") { !imageRow(front).getBoolean("visible") }
+            tap(bounds("layer-eye-$front").center)
+            waitFor("Object layer shown") { imageRow(front).getBoolean("visible") }
+            layerAction(obj("op" to "select", "id" to back, "mask" to false))
             screenshot("validation/image-rows/rows-$theme.png")
-            hold(bounds("image-object-row-$back").center)
-            val duplicate = menuItem(menuLabel(back, "duplicate"))
+            hold(bounds("layer-row-$back").center)
             screenshot("validation/image-rows/menu-$theme.png")
-            menuTap(duplicate)
-            waitFor("duplicate adds an image") { images().size == 3 }
+            for (label in menuPath(back, "duplicate")) menuTap(menuItem(label))
+            waitFor("duplicate adds an ordinary Object layer") { images().size == 3 }
             val copy = images().map { it.getLong("id") }.single { it != front && it != back }
-            waitFor("copy row") { shown("image-object-row-$copy") }
-            hold(bounds("image-object-row-$copy").center)
-            menuTap(menuItem(menuLabel(copy, "delete")))
-            waitFor("delete removes the copy") { images().size == 2 }
-            val grip = bounds("image-object-row-$back").let { Offset(it.right - 8 * density, it.center.y) }
-            drag(grip, bounds("image-object-row-$front").let { Offset(it.center.x, it.top + 4 * density) })
-            waitFor("drag reorders within the layer") { images().map { it.getLong("id") } == listOf(back, front) }
+            waitFor("copy row") { shown("layer-row-$copy") }
+            hold(bounds("layer-row-$copy").center)
+            for (label in menuPath(copy, "delete")) menuTap(menuItem(label))
+            waitFor("delete removes the Object layer copy") { images().size == 2 }
+            val grip = bounds("layer-row-$back").let { Offset(it.right - 8 * density, it.center.y) }
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            drag(grip, bounds("layer-row-$front").let { Offset(it.center.x, it.top + 4 * density) })
+            tool = MotionEvent.TOOL_TYPE_FINGER
+            waitFor("drag reorders Object layers") { images().map { it.getLong("id") } == listOf(back, front) }
             action(obj("type" to "invoke", "command" to "undo"))
             waitFor("reorder undo") { images().map { it.getLong("id") } == listOf(front, back) }
             action(obj("type" to "invoke", "command" to "move"))
-            action(obj("type" to "object", "action" to obj("op" to "deselect")))
-            waitFor("deselected") { images().none { it.getBoolean("selected") } }
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            tap(documentPoint(40.0, 40.0))
+            waitFor("clicking empty canvas clears the active Object layer") { state().getJSONObject("layer_tools").isNull("editing_layer") }
+            tool = MotionEvent.TOOL_TYPE_FINGER
             tap(documentPoint(400.0, 300.0))
-            host.awaitMain("touch selects the frontmost image", 10_000, { "images=${images()} active=${state().getJSONObject("layer_tools").optJSONObject("editing_layer")?.optLong("id")} layer=$layer camera=${state().getJSONObject("camera")} tap=${documentPoint(400.0, 300.0)}" }) { imageRow(front).getBoolean("selected") }
+            host.awaitMain("touch selects the frontmost Object layer", 10_000, { "rows=${images()} tools=${state().getJSONObject("layer_tools")} camera=${state().getJSONObject("camera")} tap=${documentPoint(400.0, 300.0)} sources=${kotlinx.coroutines.runBlocking { host.withNative { Native.imageObjects(it) } }}" }) { state().getJSONObject("layer_tools").optJSONObject("editing_layer")?.optLong("id") == front }
             val camera = state().getJSONObject("camera").getJSONArray("translation").toString()
             twoFingerPan(documentPoint(40.0, 40.0), documentPoint(40.0, 140.0), Offset(120 * density, 60 * density))
             waitFor("empty two-finger touch navigates") { state().getJSONObject("camera").getJSONArray("translation").toString() != camera }
-            assertEquals("Navigation keeps the image selection", true, imageRow(front).getBoolean("selected"))
+            assertEquals("Navigation keeps the Object layer selection", front, editingLayer())
             screenshot("validation/image-rows/picked-$theme.png")
             val before = rows().size
             action(obj("type" to "invoke", "command" to "brush"))
@@ -3183,7 +3196,7 @@ class AndroidInteractionTest {
             val beforeExternal = imageObjects().map { it.getString("id") }.toSet()
             onMain { clipboardManager().setPrimaryClip(externalClip()) }
             command("paste_image")
-            waitFor("a missing URI does not discard the valid image", 30_000) { layerStates().size == count + 1 && barKind() == "placement" && layerStates().sumOf { it.getInt("object_count") } == beforeExternal.size + 1 }
+            waitFor("a missing URI does not discard the valid image", 30_000) { layerStates().size == count + 1 && barKind() == "placement" && layerStates().count { it.getBoolean("object") } == beforeExternal.size + 1 }
             assertEquals(listOf(64, 48), imageObjects().single { it.getString("id") !in beforeExternal }.getJSONArray("extent").let { listOf(it.getInt(0), it.getInt(1)) })
             command("cancel_transform")
             waitFor("cancelling removes it", 10_000) { layerStates().size == count && documentIdle() }
@@ -3196,7 +3209,7 @@ class AndroidInteractionTest {
             val secondUri = androidx.core.content.FileProvider.getUriForFile(instrumentation.targetContext, "${instrumentation.targetContext.packageName}.clipboard", second)
             onMain { clipboardManager().setPrimaryClip(externalClip(secondUri)) }
             command("paste_image")
-            waitFor("both valid image URIs enter one placement", 30_000) { layerStates().size == count + 1 && barKind() == "placement" && layerStates().sumOf { it.getInt("object_count") } == beforeExternal.size + 2 }
+            waitFor("both valid image URIs enter one placement", 30_000) { layerStates().size == count + 2 && barKind() == "placement" && layerStates().count { it.getBoolean("object") } == beforeExternal.size + 2 }
             val batch = imageObjects().filter { it.getString("id") !in beforeExternal }
             assertEquals(setOf(listOf(64, 48), listOf(24, 16)), batch.map { it.getJSONArray("extent").let { a -> listOf(a.getInt(0), a.getInt(1)) } }.toSet())
             batch.forEach { image -> assertEquals(1.0, image.getJSONArray("affine").getDouble(0), 1e-9); assertEquals(1.0, image.getJSONArray("affine").getDouble(3), 1e-9) }
@@ -3245,15 +3258,15 @@ class AndroidInteractionTest {
                 return listOf(x, y, x + extent.getInt(0), y + extent.getInt(1))
             }
             command("convert_to_object")
-            waitFor("the red layer becomes an editable image", 30_000) { layerStates().first { it.getLong("id") == editingLayer() }.getInt("object_count") > 0 && documentIdle() }
-            command("move"); command("select_all")
+            waitFor("the red layer becomes an editable image", 30_000) { layerStates().first { it.getLong("id") == editingLayer() }.getBoolean("object") && documentIdle() }
+            command("move")
             val beforeObjectCopy = clipboardNonce()
             command("copy")
             waitFor("the editable image reaches the clipboard", 30_000) { clipboardNonce().let { it != null && it != beforeObjectCopy } && documentIdle() }
             command("fit_canvas")
             val beforeViewPaste = objectIds()
             command("paste_at_view")
-            waitFor("Paste at View completes", 30_000) { documentIdle() && layerStates().sumOf { it.getInt("object_count") } == beforeViewPaste.size + 1 }
+            waitFor("Paste at View completes", 30_000) { documentIdle() && layerStates().count { it.getBoolean("object") } == beforeViewPaste.size + 1 }
             val viewBounds = addedImageBounds(beforeViewPaste)
             listOf(0.0, 0.0, 64.0, 48.0).forEachIndexed { index, expected -> assertEquals("Paste at View centres the clip", expected, viewBounds[index], 1.0) }
             val cursor = documentPoint(48.0, 31.0)
@@ -3270,7 +3283,7 @@ class AndroidInteractionTest {
             settle()
             val beforeCursorPaste = objectIds()
             command("paste_at_cursor")
-            waitFor("Paste at Cursor completes", 30_000) { documentIdle() && layerStates().sumOf { it.getInt("object_count") } == beforeCursorPaste.size + 1 }
+            waitFor("Paste at Cursor completes", 30_000) { documentIdle() && layerStates().count { it.getBoolean("object") } == beforeCursorPaste.size + 1 }
             val cursorBounds = addedImageBounds(beforeCursorPaste)
             listOf(16.0, 7.0, 80.0, 55.0).forEachIndexed { index, expected -> assertEquals("Paste at Cursor uses the hovered document point", expected, cursorBounds[index], 1.0) }
             val oversized = File(AppStorage.of(instrumentation.targetContext).clipboard, "oversized.png")
@@ -3280,12 +3293,12 @@ class AndroidInteractionTest {
             val existingImages = imageObjects().map { it.getString("id") }.toSet()
             onMain { clipboardManager().setPrimaryClip(android.content.ClipData.newUri(instrumentation.targetContext.contentResolver, "Oversized image", oversizedUri)) }
             command("paste_image")
-            waitFor("an oversized external image opens placement at full size", 30_000) { barKind() == "placement" && layerStates().sumOf { it.getInt("object_count") } == existingImages.size + 1 }
+            waitFor("an oversized external image opens placement at full size", 30_000) { barKind() == "placement" && layerStates().count { it.getBoolean("object") } == existingImages.size + 1 }
             val added = imageObjects().single { it.getString("id") !in existingImages }
             assertEquals(128, added.getJSONArray("extent").getInt(0)); assertEquals(96, added.getJSONArray("extent").getInt(1))
             assertEquals(1.0, added.getJSONArray("affine").getDouble(0), 1e-9); assertEquals(1.0, added.getJSONArray("affine").getDouble(3), 1e-9)
             command("cancel_transform")
-            waitFor("Cancel removes only the oversized placement", 10_000) { layerStates().sumOf { it.getInt("object_count") } == existingImages.size && documentIdle() }
+            waitFor("Cancel removes only the oversized placement", 10_000) { layerStates().count { it.getBoolean("object") } == existingImages.size && documentIdle() }
             assertEquals(existingImages, imageObjects().map { it.getString("id") }.toSet())
             oversized.delete()
             external.delete()

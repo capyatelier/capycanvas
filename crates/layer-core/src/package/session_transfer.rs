@@ -42,7 +42,7 @@ fn changes(edit:&Edit,context:&Document,resources:&mut ResourceInventory,cancel:
         Edit::Composition(c)=>record!(c,Composition,compositions,Composition),Edit::Stack(c)=>record!(c,Stack,stacks,Stack),
         Edit::Occurrence(c)=>record!(c,Occurrence,occurrences,Occurrence),Edit::Paint(c)=>record!(c,PaintSource,paint,Paint),
         Edit::Coverage(c)=>record!(c,CoverageSource,coverage,Coverage),Edit::Effect(c)=>record!(c,Effect,effects,Effect),
-        Edit::ObjectLayer(c)=>record!(c,ObjectLayer,object_layers,ObjectLayer),Edit::ImageObject(c)=>record!(c,ImageObject,objects,ImageObject),Edit::SavedSelection(c)=>record!(c,Selection,selections,SavedSelection),
+        Edit::ImageObject(c)=>record!(c,ImageObject,objects,ImageObject),Edit::SavedSelection(c)=>record!(c,Selection,selections,SavedSelection),
         Edit::Guides(c)=>record!(c,Guides,guides,Guides),Edit::Output(c)=>record!(c,Output,outputs,Output),
         Edit::Working(_)=>out.working=Some(WorkingRecord::capture(&context.working,resources)?),
         Edit::Batch(edits)=>for edit in edits {changes(edit,context,resources,cancel,chunks,versions,out)?;},
@@ -145,7 +145,7 @@ fn decode_history(current:&Artwork,current_working:&WorkingState,mut previous_ch
             Some(RecordKind::Composition)=>change!(record,compositions,Composition),Some(RecordKind::Stack)=>change!(record,stacks,Stack),
             Some(RecordKind::Occurrence)=>change!(record,occurrences,Occurrence),Some(RecordKind::PaintSource)=>change!(record,paint,Paint),
             Some(RecordKind::CoverageSource)=>change!(record,coverage,Coverage),Some(RecordKind::Effect)=>change!(record,effects,Effect),
-            Some(RecordKind::ObjectLayer)=>change!(record,object_layers,ObjectLayer),Some(RecordKind::ImageObject)=>change!(record,objects,ImageObject),Some(RecordKind::Selection)=>change!(record,selections,SavedSelection),
+            Some(RecordKind::ImageObject)=>change!(record,objects,ImageObject),Some(RecordKind::Selection)=>change!(record,selections,SavedSelection),
             Some(RecordKind::Guides)=>change!(record,guides,Guides),Some(RecordKind::Output)=>change!(record,outputs,Output),
             _=>return Err("Unknown session history record type".into()),
         }}
@@ -248,14 +248,14 @@ mod tests {
     }
     #[test]
     fn incremental_history_rejects_invalid_historical_object_ownership() {
-        let mut original=editor();let (layer,edit)=original.document.create_object_layer_edit("Images",None,0).unwrap();original.perform(edit).unwrap();
-        let image=Image::new(crate::color::source::rgba8_source([2,2],|_,_|[71,29,13,255]));
-        let (_,edit)=original.document.add_image_object_edit(layer,ImageObject::new(image.clone(),"First"),0).unwrap();original.perform(edit).unwrap();
-        let (_,edit)=original.document.add_image_object_edit(layer,ImageObject::new(image,"Second"),1).unwrap();original.perform(edit).unwrap();
+        let mut original=editor();let image=Image::new(crate::color::source::rgba8_source([2,2],|_,_|[71,29,13,255]));
+        let (first,edit)=original.document.create_object_layer_edit("First",ImageObject::new(image.clone()),None,0).unwrap();original.perform(edit).unwrap();
+        let (second,edit)=original.document.create_object_layer_edit("Second",ImageObject::new(image),None,1).unwrap();original.perform(edit).unwrap();
+        original.perform(original.document.delete_layers_edit(&[first]).unwrap()).unwrap();
         let prepared=transfer(&original);let mut descriptor=prepared.descriptor().clone();
-        let change=descriptor.undo[0].changes.iter_mut().find(|change|change.kind=="capy.object-layer/1").unwrap();
-        let child=original.document.scene().object_layer(layer).unwrap().children[0];let child_id=original.document.artwork.objects.id(child).unwrap();
-        change.value.as_mut().unwrap().record["data"]["children"]=serde_json::json!([super::super::resources::reference(child_id),super::super::resources::reference(child_id)]);
+        let change=descriptor.undo[0].changes.iter_mut().find(|change|change.kind=="capy.occurrence/3").unwrap();
+        let object=original.document.scene().object_handle(second).unwrap();let object_id=original.document.artwork.objects.id(object).unwrap();
+        change.value.as_mut().unwrap().record["data"]["content"]=serde_json::json!({"objects":super::super::resources::reference(object_id)});
         let invalid=PreparedSessionTransfer {descriptor,artwork:prepared.artwork};
         assert!(invalid.adopt_verified(ProjectLimits::default(),&AtomicBool::new(false)).is_err());
     }

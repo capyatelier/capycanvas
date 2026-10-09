@@ -7,7 +7,6 @@ const thumbnailPending=new Map();
 export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext, openMenu, contentChanged = () => {} }) {
   const copy=liveCopy(app,"catalog").native_copy.layers;
   const send = action => dispatch({ type: "layer", action });
-  const sendObject = action => dispatch({ type: "object", action });
   const header = element("div", "layer-header"), footer = element("div", "layer-footer");
   header.dataset.control = "layer_opacity"; footer.dataset.control = "layer_actions";
   const active = () => state().layer_tools.editing_layer;
@@ -169,14 +168,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     thumbnails.append(gutter, content.b, link, mask.b);
     const text = element("div", "layer-text"), name = element("span", "layer-name"), meta = element("span", "layer-meta"); text.append(name, meta);
     const lock = element("span", "layer-lock"), grip = element("span", "layer-grip"); grip.append(icon("grip"));
-    const expand = glyphButton("chevron-down", ()=>get().expanded?copy.collapse_images:copy.expand_images, () => sendObject({ op: "expand", layer: get().id, expanded: !get().expanded }), "layer-expand");
     const load=button('',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'layer-icon selection-layer-load');
     load.append(icon('selection-load'));thumbnails.insertBefore(load,link);
-    row.append(eye, check, thumbnails, text, expand, lock, grip);
+    row.append(eye, check, thumbnails, text, lock, grip);
     row.onclick = e => { if (!e.target.closest("button,input")) send({op:"select_row", id:get().id, extend:e.shiftKey, toggle:e.ctrlKey || e.metaKey}); };
     name.ondblclick = e => { e.stopPropagation(); if(get().can_rename) send({ op: "begin_rename", id: get().id }); };
     menu(row, get); menu(mask.b, get, true);
-    Object.assign(record, { load, eye, check, thumbnails, content, mask, link, name, text, meta, expand, lock, grip });
+    Object.assign(record, { load, eye, check, thumbnails, content, mask, link, name, text, meta, lock, grip });
     const remove = button(()=>liveCopy(app,"bootstrap_view").common.delete, e => { e.stopPropagation(); send({ op: "delete", id: get().id }); }, "layer-swipe-delete");
     root.append(remove, row);
     let offset = 0, drag, suppressClick;
@@ -301,90 +299,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     });
     return record;
   }
-  const objectRecords = new Map();
-  const objectDropClasses = () => rows.querySelectorAll(".layer-object-row.layer-drop-before,.layer-object-row.layer-drop-after").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after"));
-  function makeObjectRow(object) {
-    const root = element("div", "layer-swipe"), row = element("div", "layer-row layer-object-row"), record = { root, row, object };
-    row.dataset.object = String(object.id); row.dataset.objectLayer = String(object.layer); root.append(row);
-    const get = () => record.object;
-    const eye = glyphButton("eye", ()=>get().visible?copy.hide_image:copy.show_image, () => sendObject({ op: "visibility", id: get().id, visible: !get().visible }));
-    const spacer = element("span", "layer-icon layer-object-spacer"); spacer.setAttribute("aria-hidden", "true");
-    const thumbnails = element("div", "layer-thumbnails"), gutter = element("span", "layer-connection-gutter");
-    const select = e => sendObject({ op: "select", id: get().id, extend: !!(e.shiftKey || e.ctrlKey || e.metaKey) });
-    const thumbnail = button("", e => { e.stopPropagation(); select(e); }, "layer-icon layer-thumbnail layer-object-thumbnail");
-    thumbnail.addEventListener("keydown", e => { if (!composingKey(e) && (e.key === "Enter" || e.key === " ")) e.stopPropagation(); });
-    const placeholder = icon("image"); placeholder.classList.add("layer-object-placeholder");
-    const image = element("canvas"); image.width = image.height = 32; image.setAttribute("aria-hidden", "true");
-    image.getContext("2d", { willReadFrequently: true });
-    thumbnail.append(placeholder, image); thumbnails.append(gutter, thumbnail);
-    const text = element("div", "layer-text"), name = element("span", "layer-name"); text.append(name);
-    const grip = element("span", "layer-grip"); grip.append(icon("grip")); bindCopy(grip,()=>copy.move_image,"title");
-    row.append(eye, spacer, thumbnails, text, grip);
-    row.onclick = e => { if (!e.target.closest("button,input")) select(e); };
-    row.dataset.context = "{}"; row.layerMenu = () => app.object_menu(get().id);
-    Object.assign(record, { eye, thumbnails, thumbnail, image, name, grip });
-    let drag, suppressClick;
-    const movable = () => get().editable && (get().can_raise || get().can_lower);
-    row.addEventListener("pointerdown", e => {
-      if (suppressClick) { row.removeEventListener("click", suppressClick, true); suppressClick = null; }
-      if (e.button || !e.isPrimary || e.target.closest("input") || (e.target.closest("button") && !grip.contains(e.target)) || !movable()) return;
-      drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId,
-        waitForHold: e.pointerType !== "mouse" && !grip.contains(e.target), held: false };
-      window.addEventListener("pointermove", move, true);
-      window.addEventListener("pointerup", finish, true);
-      window.addEventListener("pointercancel", finish, true);
-    });
-    row.addEventListener("workspace-context-claimed", e => {
-      if (drag?.ghost) e.preventDefault();
-      else if (drag) { drag.held = true; row.setPointerCapture(drag.pointer); }
-    });
-    row.addEventListener("touchmove", e => { if (drag?.held && e.touches.length === 1) e.preventDefault(); }, { passive: false });
-    const move = e => {
-      if (!drag || drag.pointer !== e.pointerId) return;
-      const distance = Math.hypot(e.clientX-drag.x, e.clientY-drag.y);
-      if (drag.waitForHold && !drag.held) { if (distance > 8) finish({ type: "pointercancel", pointerId: e.pointerId }); return; }
-      if (!drag.ghost && distance > 6) {
-        dismissContext(); row.setPointerCapture(e.pointerId);
-        drag.ghost = row.cloneNode(true); drag.ghost.classList.add("layer-drag-preview"); drag.ghost.setAttribute("aria-hidden", "true");
-        drag.ghost.style.width = `${row.clientWidth}px`; drag.ghost.style.left = `${row.getBoundingClientRect().left}px`;
-        document.body.append(drag.ghost);
-        drag.ghost.querySelector("canvas")?.getContext("2d").drawImage(image, 0, 0);
-      }
-      if (!drag.ghost) return;
-      drag.ghost.style.top = `${drag.top + e.clientY-drag.y}px`;
-      objectDropClasses(); drag.target = null;
-      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".layer-object-row");
-      const to = target && target !== row && rows.contains(target) ? objectRecords.get(target.dataset.object)?.object : null;
-      if (to && to.editable && String(to.layer) === String(get().layer)) {
-        const rect = target.getBoundingClientRect(), below = e.clientY > rect.top + rect.height * .5;
-        drag.target = { op: "drop", id: get().id, target: to.id, below };
-        target.classList.add(below ? "layer-drop-after" : "layer-drop-before");
-      }
-    };
-    const finish = e => {
-      if (!drag || (e.pointerId != null && drag.pointer !== e.pointerId)) return;
-      const previous = drag; drag = null;
-      window.removeEventListener("pointermove", move, true);
-      window.removeEventListener("pointerup", finish, true);
-      window.removeEventListener("pointercancel", finish, true);
-      if (row.hasPointerCapture(previous.pointer)) row.releasePointerCapture(previous.pointer);
-      if ((previous.held || previous.ghost) && e.type === "pointerup") {
-        const suppress = e => { e.preventDefault(); e.stopImmediatePropagation(); };
-        suppressClick = suppress;
-        row.addEventListener("click", suppress, { once: true, capture: true });
-        setTimeout(() => row.removeEventListener("click", suppress, true), 400);
-      }
-      if (e.type !== "pointerup" && previous.held) dismissContext();
-      if (previous.ghost) {
-        previous.ghost.remove(); objectDropClasses();
-        if (e.type === "pointerup" && previous.target) sendObject(previous.target);
-      }
-    };
-    record.cancelDrag = () => finish({ type: "pointercancel" });
-    row.addEventListener("lostpointercapture", e => { if (e.target === row || !row.hasPointerCapture(e.pointerId)) finish(e); });
-    return record;
-  }
-  const cancelDrags = () => { for (const r of records.values()) { r.cancelDrag(); r.closeSwipe(); } for (const r of objectRecords.values()) r.cancelDrag(); };
+  const cancelDrags = () => { for (const r of records.values()) { r.cancelDrag(); r.closeSwipe(); } };
   const closeSwipes = e => { for (const r of records.values()) if (!r.root.contains(e.target)) r.closeSwipe(); };
   document.addEventListener("pointerdown", closeSwipes, true);
   const closeOnClick = e => { if (!e.target.closest(".layer-swipe-delete")) for (const r of records.values()) r.closeSwipe(); };
@@ -392,21 +307,10 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   window.addEventListener("blur", cancelDrags);
   const cancelOnEscape = e => { if (!composingKey(e) && e.key === "Escape") cancelDrags(); };
   window.addEventListener("keydown", cancelOnEscape);
-  function refreshObject(r, depth) {
-    const object = r.object;
-    r.row.classList.toggle("selected", object.selected); r.row.classList.toggle("layer-object-hidden", !object.visible);
-    r.thumbnails.style.marginLeft = `${Math.min(depth*8,32)}px`;
-    r.name.textContent = object.label; r.name.title = object.label;
-    r.thumbnail.title = r.thumbnail.ariaLabel = object.label; r.thumbnail.setAttribute("aria-pressed", String(object.selected));
-    r.eye.replaceChildren(icon(object.visible ? "eye" : "eye-hidden")); r.eye.disabled = !object.editable;
-    r.eye.title = r.eye.ariaLabel = object.visible ? copy.hide_image : copy.show_image;
-    r.grip.hidden = !(object.editable && (object.can_raise || object.can_lower));
-  }
   function refresh() {
     const epoch=String(state().document_file.epoch);
     if(epoch!==documentEpoch){cancelDrags();documentEpoch=epoch;revisions.clear();for(const id of owned)pending.delete(id);owned.clear();
       for(const r of records.values())for(const c of [r.content.image,r.mask.image])if(c)c.width=c.width;
-      for(const r of objectRecords.values()){r.image.width=r.image.width;r.thumbnail.classList.remove("loaded");delete r.image.dataset.previewRevision;}
     }
     const view = state().layer_tools, current = view.editing_layer, controls = view.controls;
     if (current) { opacity.update(current.opacity); blendLabel.textContent = current.blend_label; }
@@ -431,23 +335,15 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       record.cancelDrag();
       record.root.remove(); records.delete(id); revisions.delete(`${id}:false`); revisions.delete(`${id}:true`);
     }
-    const objectIds = new Set(state().layers.flatMap(l => l.objects.map(o => String(o.id))));
-    for (const [id, record] of objectRecords) if (!objectIds.has(id)) {
-      record.cancelDrag(); record.root.remove(); objectRecords.delete(id); revisions.delete(`${id}:object`);
-    }
     let position = 0;
     const place = root => { if (rows.children[position] !== root) rows.insertBefore(root, rows.children[position] || null); position++; };
     for (const layer of state().layers) {
       const id = String(layer.id); if (!records.has(id)) records.set(id, makeRow(layer));
       place(records.get(id).root);
-      for (const object of layer.objects) {
-        const key = String(object.id); if (!objectRecords.has(key)) objectRecords.set(key, makeObjectRow(object));
-        const r = objectRecords.get(key); r.object = object; place(r.root); refreshObject(r, layer.depth + 1);
-      }
     }
     state().layers.forEach(layer => {
       const r = records.get(String(layer.id)); r.layer = layer;
-      const {paint_revision,mask_revision,objects,...presentation}=layer;
+      const {paint_revision,mask_revision,...presentation}=layer;
       const key=JSON.stringify([presentation,view.rename_layer===layer.id],(_,value)=>typeof value==="bigint"?String(value):value);
       // Keep the latest thumbnail revisions above, but retain unchanged row
       // widgets, SVGs and text through canvas movement and raster publications.
@@ -482,9 +378,6 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       r.meta.textContent = layer.description;
       r.meta.hidden = !r.meta.textContent; r.lock.replaceChildren(icon(layer.locked ? "lock" : "alpha-lock")); r.lock.style.opacity = layer.locked || layer.alpha_locked ? 1 : 0;
       r.grip.hidden = !layer.can_drop_below;
-      r.expand.hidden = !layer.object_count; r.expand.classList.toggle("collapsed", !layer.expanded);
-      r.expand.setAttribute("aria-expanded", String(layer.expanded));
-      r.expand.title = r.expand.ariaLabel = layer.expanded ? copy.collapse_images : copy.expand_images;
       if (view.rename_layer !== layer.id && r.entry) r.closeRename();
       if (view.rename_layer === layer.id && !r.entry) {
         const input = element("input", "layer-name-entry"); input.value = layer.label; input.maxLength = 128; r.entry = input; r.name.hidden = true; r.text.prepend(input);
@@ -498,7 +391,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     });
     // Bitmap revisions do not change row geometry. Native text, hierarchy and
     // controls do, including when this retained panel is currently offscreen.
-    const next = JSON.stringify([view.quick_mask,current?.selection_layer,view.rename_layer?.toString(), state().layers.map(({paint_revision,mask_revision,objects,...row})=>[row,objects.map(({thumbnail_revision,...object})=>object)])],
+    const next = JSON.stringify([view.quick_mask,current?.selection_layer,view.rename_layer?.toString(), state().layers.map(({paint_revision,mask_revision,...row})=>row)],
       (_,value)=>typeof value==="bigint"?String(value):value);
     if (next !== measurementKey) { measurementKey=next; contentChanged("layers"); }
     scheduleConnections();
@@ -520,18 +413,6 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
         }
       }
       const viewport = rows.getBoundingClientRect();
-      const visible = rect => !(rect.bottom < Math.max(0,viewport.top) || rect.top > innerHeight || rect.height === 0);
-      for (const [id, r] of objectRecords) {
-        if (!visible(r.row.getBoundingClientRect())) continue;
-        const key = `${id}:object`, revision = documentEpoch + ":" + String(r.object.thumbnail_revision);
-        if (revisions.get(key) === revision || pending.size >= 8) continue;
-        const token = ++thumbnailRequest;
-        if (app.request_layer_thumbnail(token, r.object.id)) {
-          owned.add(token); revisions.set(key, revision);
-          pending.set(token, { key, revision, revisions, owned, canvas: r.image, loaded: () => r.thumbnail.classList.add("loaded") });
-        } else if (app.shader_work_pending(true)) wake();
-        return;
-      }
       for (const [id, r] of records) {
         const rect = r.row.getBoundingClientRect(); if (rect.bottom < Math.max(0,viewport.top) || rect.top > innerHeight || rect.height === 0) continue;
         for (const mask of [false,true]) {

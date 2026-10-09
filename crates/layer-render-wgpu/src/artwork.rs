@@ -211,7 +211,7 @@ impl Capture {
         };
         sources.uploads_full() || scene.order().iter().any(|&h| {
             if !scene.visible(h) { return false; }
-            if scene.object_layer(h).is_some_and(|layer| !layer.children.is_empty()) { return true; }
+            if scene.object_layer(h).is_some() { return true; }
             let Some(target) = scene.source_target(h) else { return false; };
             let placed = scene.target_offset(target) != [0; 2];
             let source = scene.paint_base(target).is_some_and(|base| placed

@@ -71,7 +71,7 @@ fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
             read_bytes(&job, "Row drop.tiff", &bytes); adopt(&app, &job, false);
             let doc = unsafe { &*app.0 }.host.session.engine().document();
             let inserted = doc.scene().order()[index];
-            assert!(doc.object_layer_children(inserted).is_some_and(|children| children.len() == 1), "{position} insertion order");
+            assert!(doc.scene().object_layer(inserted).is_some(), "{position} insertion order");
             assert_eq!(doc.scene().parent(inserted), (position == "into").then_some(group));
             app.invoke("cancel_transform"); app.draw_until_idle();
             assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
@@ -374,10 +374,11 @@ fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
             let placed: Vec<_> = placed_objects(document).collect();
             assert_eq!(placed.len(), 2);
             let layer = document.scene().object_owner(placed[0]);
-            assert!(layer.is_some() && document.scene().object_owner(placed[1]) == layer, "a batch shares one image layer");
+            assert!(layer.is_some() && document.scene().object_owner(placed[1]) != layer, "each file owns its layer");
             for (index, handle) in placed.iter().enumerate() {
                 let object = document.scene().object(*handle).unwrap();
-                assert_eq!(object.name.as_ref(), format!("Photo-{}", index + 1));
+                let owner = document.scene().object_owner(*handle).unwrap();
+                assert_eq!(document.scene().occurrence(owner).unwrap().name.as_ref(), format!("Photo-{}", index + 1));
                 assert_source_samples(&object.image, &images[index].1);
             }
             if !apply {

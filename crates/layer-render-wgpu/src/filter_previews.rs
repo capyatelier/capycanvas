@@ -1134,9 +1134,8 @@ mod tests {
         let mut artwork=Artwork::new(extent).unwrap();
         let image=layer_core::authored::Image::new(layer_core::color::source::rgba8_source(extent,|x,_|
             if (30..34).contains(&x) {[20,40,230,128]} else {[230,40,20,128]}));
-        let object=artwork.objects.insert(PortableId::random(),layer_core::authored::ImageObject::new(image,"Image")).unwrap();
-        let layer=artwork.object_layers.insert(PortableId::random(),layer_core::authored::ObjectLayer {children:vec![object]}).unwrap();
-        let mut occurrence=Occurrence::new(OccurrenceContent::Objects(layer),"Images");
+        let object=artwork.objects.insert(PortableId::random(),layer_core::authored::ImageObject::new(image)).unwrap();
+        let mut occurrence=Occurrence::new(OccurrenceContent::Objects(object),"Images");
         occurrence.attachment=layer_core::Attachment::Clip;occurrence.opacity=0.35;
         let owner=artwork.occurrences.insert(PortableId::random(),occurrence).unwrap();
         let base=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|_,_|[20,240,30,255])));

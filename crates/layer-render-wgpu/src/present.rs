@@ -1302,7 +1302,7 @@ mod tests {
         let OpenOutcome::Candidate {artwork,..}=open(backing,Default::default(),&AtomicBool::new(false)).unwrap() else {panic!("Editable object fixture")};
         let mut document=layer_core::Document::from_artwork(artwork).unwrap();
         let helpers=document.scene().order().iter().copied().filter(|h|
-            !matches!(document.scene().occurrence(*h).unwrap().content,OccurrenceContent::Objects(_))).collect::<Vec<_>>();
+            !matches!(document.scene().occurrence(*h).unwrap().content,OccurrenceContent::Objects(_) | OccurrenceContent::Stack(_))).collect::<Vec<_>>();
         document.apply(document.delete_layers_edit(&helpers).unwrap()).unwrap();
         let view=ViewState {width_px:1200,height_px:900,document_to_surface:[1.1192982,0.,0.,1.1192982,327.9,348.17017]};
         let mut renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();

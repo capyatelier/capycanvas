@@ -47,7 +47,7 @@ pub(super) fn object_bounds(scene: SceneView<'_>, key: &ObjectKey) -> DocRect {
     DocRect { min: std::array::from_fn(|axis| (min[axis] - halo[axis]).floor() as i64), max: std::array::from_fn(|axis| (max[axis] + halo[axis]).ceil() as i64) }
 }
 pub(super) fn edited_damage(before: SceneView<'_>, after: SceneView<'_>, extent: [u32; 2]) -> Option<scale::Damage> {
-    if before.artwork().objects.same_root(&after.artwork().objects) && before.artwork().object_layers.same_root(&after.artwork().object_layers) { return None; }
+    if before.artwork().objects.same_root(&after.artwork().objects) { return None; }
     if before.order() != after.order() || before.composition() != after.composition() { return None; }
     let mut damage = scale::Damage::EMPTY;
     let mut changed = false;
@@ -59,16 +59,10 @@ pub(super) fn edited_damage(before: SceneView<'_>, after: SceneView<'_>, extent:
         if old == new { continue; }
         if after.object_layer(owner).is_none() || !old.same_object_layer(&new) { return None; }
         changed = true;
-        let before_children = &before.object_layer(owner)?.children;
-        let after_children = &after.object_layer(owner)?.children;
-        let reordered = before_children != after_children;
         for scene in [before, after] {
             if !scene.visible(owner) { continue; }
-            for &handle in &scene.object_layer(owner)?.children {
-                let object = scene.object(handle)?;
-                if !object.visible { continue; }
-                if !reordered && before.object(handle)?.visible == after.object(handle)?.visible
-                    && ObjectKey::new(before, owner, handle) == ObjectKey::new(after, owner, handle) { continue; }
+            {
+                let object = scene.object_layer(owner)?;
                 let affine = placement(scene, owner, object.affine);
                 let [min, max] = affine.bounds(object.image.extent);
                 let [a, b, c, d, _, _] = affine.0;

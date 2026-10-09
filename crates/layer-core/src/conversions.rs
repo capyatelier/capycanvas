@@ -105,19 +105,23 @@ impl Document {
         let mut occurrence = scene.occurrence(h).ok_or(ConversionRefusal::NoLayer)?.clone();
         let OccurrenceContent::Paint(paint) = occurrence.content else { return Err(ConversionRefusal::NotPaint); };
         let mut edits = Vec::new();
-        let mut layer = ObjectLayer::default();
-        if let Some((image, origin)) = image {
-            let mut object = ImageObject::new(image, occurrence.name.clone());
-            object.affine = Affine64([1., 0., 0., 1., origin[0] as f64, origin[1] as f64]);
-            object.validate().map_err(|_| ConversionRefusal::TooLarge)?;
-            let object = RecordChange::insert(&self.artwork.objects, object);
-            layer.children.push(object.handle);
-            edits.push(Edit::ImageObject(object));
-        }
-        let layer = RecordChange::insert(&self.artwork.object_layers, layer);
-        occurrence.content = OccurrenceContent::Objects(layer.handle);
+        let (image, origin) = match image {
+            Some(image) => image,
+            None => {
+                use crate::color::source::{SourceBuilder, SourceChannels, SourceInterpretation};
+                let mut source = SourceBuilder::new([1, 1], SourceInterpretation { channels: SourceChannels::Rgba,
+                    depth: crate::color::SampleDepth::U8, profile: Default::default(), profile_assumed: false }, crate::ProjectLimits::default().asset_bytes as usize).map_err(|_| ConversionRefusal::TooLarge)?;
+                source.push_row(&[0; 4]).map_err(|_| ConversionRefusal::TooLarge)?;
+                (Image::new(Arc::new(source.finish().map_err(|_| ConversionRefusal::TooLarge)?)), [0; 2])
+            }
+        };
+        let mut object = ImageObject::new(image);
+        object.affine = Affine64([1., 0., 0., 1., origin[0] as f64, origin[1] as f64]);
+        object.validate().map_err(|_| ConversionRefusal::TooLarge)?;
+        let object = RecordChange::insert(&self.artwork.objects, object);
+        occurrence.content = OccurrenceContent::Objects(object.handle);
         occurrence.alpha_locked = false;
-        edits.push(Edit::ObjectLayer(layer));
+        edits.push(Edit::ImageObject(object));
         edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(occurrence)).map_err(|_| ConversionRefusal::NoLayer)?));
         edits.push(Edit::Paint(RecordChange::remove(&self.artwork.paint, paint).map_err(|_| ConversionRefusal::NoLayer)?));
         let mut working = self.working.clone();
@@ -179,10 +183,7 @@ impl Document {
             mask.offset = offsets::checked_sub(previous, offset).and_then(|shift| offsets::checked_add(mask.offset, shift)).ok_or(ConversionRefusal::TooLarge)?;
         }
         edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(result)).map_err(|_| ConversionRefusal::NoLayer)?));
-        for child in &self.artwork.object_layers.get(layer).ok_or(ConversionRefusal::NoLayer)?.children {
-            edits.push(Edit::ImageObject(RecordChange::remove(&self.artwork.objects, *child).map_err(|_| ConversionRefusal::NoLayer)?));
-        }
-        edits.push(Edit::ObjectLayer(RecordChange::remove(&self.artwork.object_layers, layer).map_err(|_| ConversionRefusal::NoLayer)?));
+        edits.push(Edit::ImageObject(RecordChange::remove(&self.artwork.objects, layer).map_err(|_| ConversionRefusal::NoLayer)?));
         let mut working = self.working.clone();
         working.occurrence = Some(h);
         working.target = Some(target);

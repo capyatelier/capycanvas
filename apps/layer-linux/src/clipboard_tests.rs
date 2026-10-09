@@ -333,7 +333,7 @@ fn native_clipboard_copy_paste_round_trips() {
     chord(&mut native, &[CONTROL], 0x76);
     until(|| state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Placement), "oversized external Paste shows handles");
     let pasted = document(&w);
-    let object = pasted.object_layer_children(pasted.working.occurrence.unwrap()).unwrap()[0];
+    let object = pasted.scene().object_handle(pasted.working.occurrence.unwrap()).unwrap();
     assert_eq!(pasted.scene().object(object).unwrap().image.extent, extent);
     assert_eq!(pasted.object_document_affine(object).unwrap().0[..4], [1., 0., 0., 1.], "external Paste keeps full pixel size beyond the canvas");
     w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });

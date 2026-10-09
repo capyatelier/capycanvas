@@ -318,7 +318,6 @@ import Darwin
     }
     func invoke(_ command: String) { dispatch(["type": "invoke", "command": command]) }
     func layer(_ action: [String: Any]) { dispatch(["type": "layer", "action": action]) }
-    func object(_ action: [String: Any]) { dispatch(["type": "object", "action": action]) }
     func customize(_ action: [String: Any]) { dispatch(["type": "customize", "action": action]) }
     func doubleClickHandle(_ item: JSON) {
         query(["type": "panel_handle_target", "item": item.raw]) { [weak self] group in

@@ -1,4 +1,4 @@
-//! Convert to Image Layer and Rasterize Layer. Bakes that read image objects,
+//! Convert to Object Layer and Rasterize Layer. Bakes that read image objects,
 //! including merges, rasterizing and copying selections to layers, are
 //! evaluated on the snapshot worker, where canonical sampling finishes, and
 //! publish once the drawing is unchanged. Converting reuses an untouched photo
@@ -85,12 +85,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn start_clipboard_cut(&mut self, mut plans: std::collections::VecDeque<MergePlan>, edits: Vec<layer_core::Edit>,
         operations: Vec<(layer_core::SourceTarget, layer_core::RasterOperation)>, working: layer_core::WorkingState,
     ) -> Result<(), String> {
-        let plan = plans.pop_front().ok_or("Missing image layer capture")?;
+        let plan = plans.pop_front().ok_or("Missing object layer capture")?;
         let extent = plan.edits.iter().find_map(|edit| match edit {
             layer_core::Edit::Paint(change) if layer_core::SourceTarget::Paint(change.handle) == plan.target => change.value.as_ref().map(|paint| paint.domain),
             _ => None,
         }).ok_or("Missing rasterized layer")?;
-        let layer_core::RasterOperationKind::Bake { scene, scope, offset } = &plan.operation.kind else { return Err("Missing image layer capture".into()); };
+        let layer_core::RasterOperationKind::Bake { scene, scope, offset } = &plan.operation.kind else { return Err("Missing object layer capture".into()); };
         let capture = ImageCapture { scene: scene.clone(), scope: scope.clone(), offset: *offset, extent,
             window: [0, 0, extent[0], extent[1]], trim: None, selection: None };
         self.start_capture(capture, Publish::ClipboardCut { plan: Box::new(plan), remaining: plans, edits, operations, working: Box::new(working) })

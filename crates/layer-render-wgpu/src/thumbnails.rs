@@ -81,7 +81,6 @@ impl WgpuRasterizer {
             ThumbnailTarget::Source(SourceTarget::Paint(handle)) => scene.paint(handle).is_some(),
             ThumbnailTarget::Source(SourceTarget::Coverage(handle)) => scene.coverage(handle).is_some(),
             ThumbnailTarget::Source(SourceTarget::Selection(handle)) => scene.artwork().selections.get(handle).is_some(),
-            ThumbnailTarget::Object(handle) => scene.object(handle).is_some(),
             ThumbnailTarget::QuickMask => true,
         };
         if available { Ok(()) } else { Err(GpuRasterError::ThumbnailUnavailable(target)) }
@@ -91,12 +90,7 @@ impl WgpuRasterizer {
             ThumbnailTarget::Source(source) => Some(source),
             ThumbnailTarget::QuickMask => Some(SourceTarget::Selection(layer_core::authored::SelectionHandle::INVALID)),
             ThumbnailTarget::Occurrence(handle) => self.artwork_frame.as_ref()?.scene.view().source_target(handle),
-            ThumbnailTarget::Object(_) => None,
         }
-    }
-    fn object_thumbnail_base(&self, target: ThumbnailTarget) -> Option<layer_core::authored::PaintBase> {
-        let ThumbnailTarget::Object(handle) = target else { return None };
-        Some(layer_core::authored::PaintBase::new(self.artwork_frame.as_ref()?.scene.view().object(handle)?.image.clone()))
     }
     pub fn thumbnails_pending(&self) -> bool {
         self.thumbnails.pending > 0
@@ -112,14 +106,10 @@ impl WgpuRasterizer {
                 label: Some("background photo thumbnail batch"),
             },
         );
-        let object = self.object_thumbnail_base(target);
-        let source = if object.is_some() || source_target.is_some_and(|source| self.tiled_sources.contains_key(&source)) {
+        let source = if source_target.is_some_and(|source| self.tiled_sources.contains_key(&source)) {
             let mut gpu = self.thumbnails.sources.take()
                 .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
-            let result = match &object {
-                Some(base) => gpu.prepare_image(self, base, &mut encoder, 4),
-                None => gpu.prepare(self, source_target.unwrap(), &mut encoder, 4),
-            };
+            let result = gpu.prepare(self, source_target.unwrap(), &mut encoder, 4);
             self.thumbnails.sources = Some(gpu);
             Some(result)
         } else { None };
@@ -149,17 +139,13 @@ impl WgpuRasterizer {
                 label: Some("asynchronous layer preview"),
             },
         );
-        let object = self.object_thumbnail_base(target);
-        let source = if object.is_some() || source_target.is_some_and(|source| self.tiled_sources.contains_key(&source)) {
+        let source = if source_target.is_some_and(|source| self.tiled_sources.contains_key(&source)) {
             let mut gpu = self
                 .thumbnails
                 .sources
                 .take()
                 .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
-            let result = match &object {
-                Some(base) => gpu.render_image(self, base, &mut encoder),
-                None => gpu.render(self, source_target.unwrap(), &mut encoder),
-            };
+            let result = gpu.render(self, source_target.unwrap(), &mut encoder);
             self.thumbnails.sources = Some(gpu);
             Some(result?)
         } else {

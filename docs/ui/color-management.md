@@ -90,10 +90,10 @@ and depth, not decoder or GPU terminology.
 
 Placing or pasting into a document preserves its existing color space. Convert
 incoming colors appropriately. Keep the source's higher-depth/wider-gamut data
-when it is a retained image layer; display it through the destination's mapping.
+when it is a retained object layer; display it through the destination's mapping.
 Do not silently reduce that source to the canvas depth before the user rasterizes
 or merges it. Direct raster paste follows the destination format; disclose a
-material range/depth reduction and offer to retain an image layer or raise depth.
+material range/depth reduction and offer to retain an object layer or raise depth.
 
 Valid tagged images need no mismatch dialog by default. For an ordinary untagged
 SDR RGB image, assume sRGB and record **Profile assumed: sRGB** in image details;

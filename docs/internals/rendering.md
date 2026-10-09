@@ -127,13 +127,13 @@ that fits. Off-frame content therefore survives Merge Visible, Flatten and Stamp
 Visible. A filter whose reach can't be represented refuses the bake instead of
 being clipped. A
 bake that reads image objects, including Rasterize Layer, Rasterize and Apply
-Mask, merges of image layers and Copy Selection to Layer from one, runs on the
+Mask, merges of object layers and Copy Selection to Layer from one, runs on the
 snapshot worker instead, where canonical image sampling can finish: the worker
 evaluates the scope into one immutable working-pixel image, and the shared session
 publishes it as the new paint layer's base once the drawing is unchanged
 ([`snapshot/image_capture.rs`](../../crates/layer-render-wgpu/src/snapshot/image_capture.rs),
 [`layer_conversions.rs`](../../crates/layer-ui/src/layer_conversions.rs)). A changed
-drawing cancels the capture and edits nothing. Convert to Image Layer shares an
+drawing cancels the capture and edits nothing. Convert to Object Layer shares an
 untouched photo's image, or captures the paint layer's raw appearance, trimmed to
 its visible pixels, the same way.
 
@@ -173,7 +173,7 @@ require repainting committed raster tiles.
 
 ### Image object layers
 
-Object layers compose ordered immutable images over transparency before applying
+Object layers sample one immutable source before applying
 the layer mask, attached effects, opacity and clipping. Both the native tile
 compositor and the display graph evaluate this content directly; an object result
 has no writable `SourceTarget`. `SceneScope::RawObjects`, `ArtworkSource::Objects`
@@ -193,8 +193,8 @@ uploaded for GPU level-zero gathers. Linear evaluates
 the scale-adapted tent over its complete lattice support, including transparent
 samples beyond the image rectangle in the normalization. Decoded immutable source
 tiles share the bounded source cache across objects and paint bases; affine edits
-keep those source entries. Object metadata includes ordered children, image
-identity and interpretation, visibility, affine and interpolation. Edits damage
+keep those source entries. Object metadata includes source identity and interpretation, affine and
+interpolation; ordinary occurrence metadata owns visibility. Edits damage
 the old and new bounds with sampling and declared effect support.
 
 Smooth display shows a temporary bilinear result from shared immutable image mip
@@ -210,25 +210,23 @@ the workers busy until the next frame, so a cold document with many distinct
 images does not wait one frame per handful of tiles. Image identity and source
 interpretation select the pyramid independently of object placement. Nearest continues reading level zero.
 
-Canonical object collections accumulate privately across frames, consuming children
-in their authored order. A window larger than 512 output pixels per side is
-evaluated in equal parts that retain one child's sampling state and three
-rotating part surfaces for the sampled child, its converted color and the
-isolated collection prefix; each completed part is copied into the window's
-result. Each child enters the selected composition color space before
-source-over. Only the complete collection becomes a reusable result. A display
-region composes completed results of the same layer and density that cover it,
-and queues windows only for its uncovered remainder, so overlapping and merged
-regions never sample the same content twice. This bounds
-working storage independently of the window size and the number of overlapping
-children. Canonical work is budgeted in tent taps. An idle frame records up to
+Canonical Object results sample privately across frames. A window larger than
+512 output pixels per side is evaluated in equal parts. Each part retains one
+sampling state and output, with a conversion surface only for perceptual
+blending; completed parts copy into the window result. No image-child composition
+or private collection prefix is needed. Only complete results become reusable.
+A display region combines completed windows of the same layer and density and
+queues only uncovered regions. Private sampling storage is independent of the
+window size. Canonical work is budgeted in tent taps. An idle frame records up to
 2²³ taps across consecutive tasks; painting and object motion pause canonical
 work while previews satisfy the frame, and record at most 2²⁰ taps when a frame
-cannot be composed without it. Each child reads every source tile in its support
+cannot be composed without it. Each source reads every tile in its support
 with one dispatch, and only windows whose support crosses the image boundary
 evaluate the transparent samples of the normalization. Each private cache admits buffers, output textures, prepared geometry and
 queued metadata within 64 MiB; a window result in progress or used by the
-current frame is charged to the display that consumes it. Live display and
+current frame is charged to the display that consumes it. Native capture-window
+admission counts each visible Object layer's page-aligned result footprint, so
+large batches use the existing bounded window planner. Live display and
 exact snapshot queries use separate caches, so concurrent evaluators can retain
 up to two such allowances. The live cache keeps completed results after their
 copies are encoded and evicts the least recently used ones when admission needs
@@ -521,7 +519,7 @@ Spot Healing scores its candidates on linear values in both spaces.
 
 ## Incremental composition
 
-The *compositor* combines paint and image layers, groups, masks, clipping and
+The *compositor* combines paint and object layers, groups, masks, clipping and
 blend modes. Its [scene code](../../crates/layer-render-wgpu/src/scene.rs) tracks
 *damage*: regions whose previously rendered pixels are no longer valid.
 Stroke-finalization passes, including healing and wet edges, invalidate every

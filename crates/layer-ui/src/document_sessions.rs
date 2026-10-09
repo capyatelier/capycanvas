@@ -489,7 +489,7 @@ mod tests {
             nonce: "retained-clipboard-test".into(), name: "Retained pixels".into(),
             source: original.clone(), policy: layer_core::PaintBasePolicy::WorkingPixels,
             origin: [11, 17], color: DocumentColor::default(), blend: Default::default(),
-            png: Arc::from(&b"clipboard rendition"[..]), objects: None, layers: None,
+            png: Arc::from(&b"clipboard rendition"[..]), layers: None,
         };
         let mut older = copied.clone();
         older.nonce = "superseded-clipboard-test".into();

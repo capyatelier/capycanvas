@@ -57,3 +57,8 @@
   updates/s on the 61 MP canvas. Presentation is unmeasured; this does not meet
   the 120 fps target. See the [material-transform measurements](top-tier.md#retained-wet-photo-transforms).
   Projective and Warp motion remain unmeasured on that reference tablet.
+- **Object-layer simplification has no current motion qualification on the reference tiers.**
+  Imported-image placement, Move and Scale/Rotate still need warmed, repeated
+  measurements on the three reference canvases. Existing object and placed-photo
+  results in the tier tables describe earlier builds. Desktop browser callbacks
+  and renderer timings do not establish presented-frame rates or qualify a tier.

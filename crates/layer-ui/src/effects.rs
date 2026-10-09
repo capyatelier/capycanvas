@@ -1241,7 +1241,7 @@ mod resource_tests {
             ] {
                 let mut selected = doc.clone();
                 let content = match kind {
-                    LayerKind::Object => OccurrenceContent::Objects(selected.artwork.object_layers.insert(layer_core::authored::PortableId::random(), Default::default()).unwrap()),
+                    LayerKind::Object => OccurrenceContent::Objects(selected.artwork.objects.insert(layer_core::authored::PortableId::random(), layer_core::ImageObject::new(layer_core::color::source::rgba8_source([1, 1], |_, _| [255; 4]).into())).unwrap()),
                     LayerKind::Effect => doc.scene().occurrence(fill).unwrap().content.clone(),
                     LayerKind::Paint => doc.scene().occurrence(occurrence_handle(1).unwrap()).unwrap().content.clone(),
                     LayerKind::Group => {

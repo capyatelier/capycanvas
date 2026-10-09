@@ -15,7 +15,7 @@ function Row([int]$Row){@(0..2|ForEach-Object {Shown "edit-color-$Row-$_"})}
 function Foreground{(Model).state.colors.foreground.rgba}
 function Artwork-Identity{
  $m=Model;$stamp=@($m.windows_tabs.session_stamps|Where-Object id -eq $m.windows_tabs.selected)[0].stamp
- [ordered]@{drawing=$stamp|Select-Object artwork,checkpoint,revision,working_generation;file=$m.state.document_file|Select-Object revision,modified,location;layers=$m.state.layers|Select-Object id,label,paint_revision,mask_revision,object_count}|ConvertTo-Json -Depth 20 -Compress
+ [ordered]@{drawing=$stamp|Select-Object artwork,checkpoint,revision,working_generation;file=$m.state.document_file|Select-Object revision,modified,location;layers=$m.state.layers|Select-Object id,label,paint_revision,mask_revision,object}|ConvertTo-Json -Depth 20 -Compress
 }
 function Same($a,$b){$a -and $b -and @(0..3|Where-Object {[Math]::Abs($a[$_]-$b[$_]) -gt .002}).Count -eq 0}
 function Open-Editor{

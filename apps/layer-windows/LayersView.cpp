@@ -10,7 +10,7 @@ namespace CapyLayers {
 UIElement ElementFactory::GetElement(ElementFactoryGetArgs const& args){
     auto view=owner.lock();if(!view)return Border();
     auto row=std::make_shared<LayerRow>();row->owner=view;row->data=view->data;
-    row->id=unbox_value<double>(args.Data());row->image=imageId(row->id);row->epoch=view->epoch;row->init();if(view->pickup)view->pickup->Attach(row);row->refresh();
+    row->id=unbox_value<double>(args.Data());row->epoch=view->epoch;row->init();if(view->pickup)view->pickup->Attach(row);row->refresh();
     view->rows.emplace(row->root.as<::IUnknown>().get(),row);return row->root;
 }
 void ElementFactory::RecycleElement(ElementFactoryRecycleArgs const& args){
@@ -197,7 +197,6 @@ void LayersView::refresh(){
     std::vector<double> ids;
     for(auto value:array(data->state,L"layers")){
         auto layer=value.GetObject();ids.push_back(num(layer,L"id"));
-        for(auto child:array(layer,L"objects"))ids.push_back(num(child.GetObject(),L"id"));
     }
     // Preserve existing elements on value changes; structural edits only change
     // the affected items. ItemsRepeater creates native widgets near the viewport.
@@ -302,7 +301,7 @@ void LayersView::showMenu(J spec, FrameworkElement const& anchor){
 void LayersView::context(double id,bool mask,UIElement const& anchor,std::optional<Windows::Foundation::Point> at,bool holding,bool blendMenu){
     if(data->updating||!anchor.XamlRoot())return;
     if(!holding&&pickup)pickup->Cancel();
-    if(id>=0&&!blendMenu&&!imageId(id))action(O({{L"op",S(L"context")},{L"id",N(id)},{L"mask",B(mask)}}));
+    if(id>=0&&!blendMenu)action(O({{L"op",S(L"context")},{L"id",N(id)},{L"mask",B(mask)}}));
     auto generation=++menuGeneration;auto document=epoch;
     if(menu)menu.Hide();menuOpen=false;menuPending=true;menuTarget=id>=0?std::optional<double>(id):std::nullopt;
     auto weak=weak_from_this();auto target=make_weak(anchor);auto queue=root.DispatcherQueue();

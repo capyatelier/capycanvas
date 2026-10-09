@@ -2,7 +2,7 @@ use super::*;
 
 fn document() -> Document {
     let mut artwork = Artwork::new([32; 2]).unwrap();
-    let mut children = Vec::new();
+    let mut owners = Vec::new();
     for (color, offset) in [([255, 0, 0, 255], [0., 0.]), ([0, 0, 255, 128], [12., 8.])] {
         let extent = [256; 2];
         let mut builder = SourceBuilder::new(extent, SourceInterpretation {
@@ -10,18 +10,17 @@ fn document() -> Document {
             profile: Default::default(), profile_assumed: false,
         }, 1024 * 1024).unwrap();
         for _ in 0..extent[1] {builder.push_row(&color.repeat(extent[0] as usize)).unwrap();}
-        let mut object = ImageObject::new(layer_core::authored::Image::new(Arc::new(builder.finish().unwrap())), "Reduced image");
+        let mut object = ImageObject::new(layer_core::authored::Image::new(Arc::new(builder.finish().unwrap())));
         object.affine = Affine64([1. / 16., 0., 0., 1. / 16., offset[0], offset[1]]);
-        children.push(artwork.objects.insert(PortableId::random(), object).unwrap());
+        let handle=artwork.objects.insert(PortableId::random(), object).unwrap();
+        owners.push(artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(handle),"Reduced image")).unwrap());
     }
-    let collection = artwork.object_layers.insert(PortableId::random(), ObjectLayer {children}).unwrap();
-    let owner = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Objects(collection), "Images")).unwrap();
     let mut effect = EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
     effect.set("sigma", layer_core::EffectValue::Number(1.5)).unwrap();
     let application = artwork.effects.insert(PortableId::random(), EffectApplication::new(effect.program, effect.values, [32; 2])).unwrap();
     let effect = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "Blur")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
-    artwork.stacks.get_mut(stack).unwrap().entries = vec![effect, owner];
+    owners.insert(0,effect);artwork.stacks.get_mut(stack).unwrap().entries=owners;
     Document::from_artwork(artwork).unwrap()
 }
 
@@ -75,16 +74,15 @@ fn cancelled_deferred_object_drain_keeps_output_unpublished() {
 
 fn photo_objects(extent: [u32; 2], objects: &[([u32; 2], [f64; 6])]) -> Document {
     let mut artwork = Artwork::new(extent).unwrap();
-    let children = objects.iter().map(|&(size, affine)| {
+    let owners = objects.iter().map(|&(size, affine)| {
         let image = layer_core::color::source::rgba8_source(size, |x, y| [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) % 256) as u8, 255]);
-        let mut object = ImageObject::new(layer_core::authored::Image::new(image), "Image");
+        let mut object = ImageObject::new(layer_core::authored::Image::new(image));
         object.affine = Affine64(affine);
-        artwork.objects.insert(PortableId::random(), object).unwrap()
+        let handle=artwork.objects.insert(PortableId::random(), object).unwrap();
+        artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(handle),"Image")).unwrap()
     }).collect();
-    let collection = artwork.object_layers.insert(PortableId::random(), ObjectLayer {children}).unwrap();
-    let owner = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Objects(collection), "Images")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
-    artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
+    artwork.stacks.get_mut(stack).unwrap().entries = owners;
     Document::from_artwork(artwork).unwrap()
 }
 

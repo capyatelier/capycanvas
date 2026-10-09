@@ -54,7 +54,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || !(configures_brush || held_actions::selects_tool(action) || matches!(action, UiAction::Invoke { .. } | UiAction::Selection { .. }
                 | UiAction::Layer { .. } | UiAction::SelectLayer { .. }
                 | UiAction::SetLayerVisibility { .. } | UiAction::SetLayerOpacity { .. }
-                | UiAction::Effect { .. } | UiAction::Object { .. } | UiAction::FilterPicker { .. }
+                | UiAction::Effect { .. } | UiAction::FilterPicker { .. }
                 | UiAction::CanvasSize { .. } | UiAction::ImageSize { .. }
                 | UiAction::FrequencySeparation { .. } | UiAction::Tonal { .. }
                 | UiAction::TransformReference { .. } | UiAction::ToolbarEdit { .. }

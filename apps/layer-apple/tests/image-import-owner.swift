@@ -86,13 +86,9 @@ import UniformTypeIdentifiers
                 }).stableKey
             }
             func invoke(_ command: String) async throws { try await store.apply(["type": "invoke", "command": command]) }
-            func images() -> UInt64 { store.state["layers"].array.reduce(0) { $0 + $1["object_count"].uint } }
-            func imageNames() async throws -> [String] {
-                let collapsed = store.state["layers"].array.filter { $0["object_count"].uint > 0 && !$0["expanded"].bool }.map { $0["id"].raw }
-                for layer in collapsed { try await store.apply(["type": "object", "action": ["op": "expand", "layer": layer, "expanded": true]]) }
-                let names = store.state["layers"].array.flatMap { $0["objects"].array.map { $0["label"].string } }
-                for layer in collapsed { try await store.apply(["type": "object", "action": ["op": "expand", "layer": layer, "expanded": false]]) }
-                return names
+            func images() -> Int { store.state["layers"].array.filter { $0["object"].bool }.count }
+            func imageNames() -> [String] {
+                store.state["layers"].array.filter { $0["object"].bool }.map { $0["label"].string }
             }
             func settled(_ label: String) async throws {
                 try await wait(label, native: native) {
@@ -141,7 +137,7 @@ import UniformTypeIdentifiers
             try require(files.error == nil && store.state["layers"].array.count == 3 && images() == 1, files.error ?? "Place must add one image layer")
             try require(store.state["colors"]["rgb_space"].string == "Srgb", "Place must preserve receiving working space")
             try await invoke("apply_transform"); try await settled("Apply placed photo")
-            try require(try await imageNames() == ["Imported image"], "Use the photo name without its extension")
+            try require(imageNames() == ["Imported image"], "Use the photo name without its extension")
             let placed = layerState()
             try await invoke("undo"); try await wait("Place Undo", native: native) { layerState() == blank }
             try await invoke("redo"); try await wait("Place Redo", native: native) { layerState() == placed }
@@ -229,7 +225,7 @@ import UniformTypeIdentifiers
             try require(files.error == nil && images() == 4,
                 files.error ?? "Drop must enter placement without opening a picker")
             try await invoke("apply_transform"); try await settled("Apply dropped batch")
-            try require(try await imageNames().contains("Encoded"),
+            try require(imageNames().contains("Encoded"),
                 "A provider's supplied filename must name its retained image")
             let dropped = layerState(ignoringSelection: true)
             try await invoke("undo"); try await wait("Drop batch Undo", native: native) { layerState() == pasted }

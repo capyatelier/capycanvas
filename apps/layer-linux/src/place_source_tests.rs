@@ -38,7 +38,7 @@ fn source_is(w: &Rc<Workspace>, expected: &SourceImage) {
     let gpu = w.gpu.borrow();
     let document = gpu.as_ref().unwrap().session.engine().document();
     assert_eq!(document.composition().color, Default::default());
-    let [image] = document.working.objects.iter().copied().collect::<Vec<_>>()[..] else { panic!("one selected placed image") };
+    let [image] = document.selected_objects().into_iter().collect::<Vec<_>>()[..] else { panic!("one selected placed image") };
     assert_source_samples(document.scene().object(image).unwrap().image.as_ref(), expected);
 }
 
@@ -125,9 +125,9 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
         {
             let gpu = w.gpu.borrow();
             let document = gpu.as_ref().unwrap().session.engine().document();
-            let image = document.scene().object(*document.working.objects.iter().next().unwrap()).unwrap();
-            assert_eq!(image.name.contains("first frame"), photo.first_frame);
-            assert_eq!(image.name.contains("primary image"), photo.primary_image);
+            let name = &document.scene().occurrence(document.working.occurrence.unwrap()).unwrap().name;
+            assert_eq!(name.contains("first frame"), photo.first_frame);
+            assert_eq!(name.contains("primary image"), photo.primary_image);
         }
         invoke(&w, CommandId::ApplyTransform);
         ready(&w);
@@ -225,9 +225,9 @@ fn native_profiled_place_paste_and_source_history() {
     invoke(&w, CommandId::CancelTransform);
     ready(&w);
     assert_eq!(snapshot(&w), placed);
-    invoke(&w, CommandId::ClearSelected);
+    invoke(&w, CommandId::DeleteLayer);
     ready(&w);
-    assert!(ui_session(&w).engine().document().artwork.objects.is_empty(), "Delete Images removes the placed image");
+    assert!(ui_session(&w).engine().document().artwork.objects.is_empty(), "Delete Layer removes the placed Object");
     let cleared = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 9892))
         .unwrap();
@@ -279,8 +279,7 @@ fn native_profiled_place_paste_and_source_history() {
     invoke(&w, CommandId::ApplyTransform);
     ready(&w);
     let document = ui_session(&w).engine().document().clone();
-    assert_eq!(document.scene().order().len(), 3, "the pasted image joins the active image layer");
-    assert_eq!(document.object_layer_children(document.working.occurrence.unwrap()).unwrap().len(), 2);
+    assert_eq!(document.scene().order().len(), 4, "the pasted image creates another Object layer");
     let saved = snapshot(&w);
     let reopened =
         open_native_document(std::io::Cursor::new(saved.clone()));

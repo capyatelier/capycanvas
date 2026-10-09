@@ -430,7 +430,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let occurrence = document.scene().occurrence(*handle)?;
                 match occurrence.content {
                     OccurrenceContent::Paint(paint) => document.artwork.paint.get(paint)?.base.as_ref().map(|_| occurrence.name.to_string()),
-                    OccurrenceContent::Objects(layer) => (!document.artwork.object_layers.get(layer)?.children.is_empty()).then(|| occurrence.name.to_string()),
+                    OccurrenceContent::Objects(_) => Some(occurrence.name.to_string()),
                     _ => None,
                 }
             })

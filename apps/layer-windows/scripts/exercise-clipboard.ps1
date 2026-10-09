@@ -42,7 +42,7 @@ function Close-Review{
 function Active-Tab{@((Model).state.tabs|Where-Object active)[0]}
 function Document-Identity{
  $view=Model;$m=$view.state;$stamp=@($view.windows_tabs.session_stamps|Where-Object id -eq $view.windows_tabs.selected)[0].stamp
- [ordered]@{drawing=$stamp|Select-Object artwork,checkpoint,revision,working_generation;file=$m.document_file|Select-Object revision,modified,location;layers=$m.layers|Select-Object id,label,group,adjustment_effect,visible,locked,paint_revision,mask_revision,object_count;depth=$view.color_panel.document_depth}|ConvertTo-Json -Depth 20 -Compress
+ [ordered]@{drawing=$stamp|Select-Object artwork,checkpoint,revision,working_generation;file=$m.document_file|Select-Object revision,modified,location;layers=$m.layers|Select-Object id,label,group,adjustment_effect,visible,locked,paint_revision,mask_revision,object;depth=$view.color_panel.document_depth}|ConvertTo-Json -Depth 20 -Compress
 }
 function Cross-Window-Clip{
  $identity=Document-Identity;$sourceRoot=$root;$sourceHandle=$drawingWindow;$sourceState=$script:CapyStateFile
@@ -60,7 +60,7 @@ function Cross-Window-Clip{
   Chord @(0x11) 0x56
   Wait-Until {(Requests) -eq 0 -and (Model).state.document_file.modified -and (Model).brush_ready} 'The copied layer did not paste into the second window' 90
   Capture "cross-window-layer-$Theme" -WithModel
-  if((Model).state.layer_tools.editing_layer.label -ne $label -or (Model).state.layer_tools.editing_layer.object_count -ne 0){throw 'The second window imported the public PNG instead of retaining the copied layer'}
+  if((Model).state.layer_tools.editing_layer.label -ne $label -or (Model).state.layer_tools.editing_layer.object){throw 'The second window imported the public PNG instead of retaining the copied layer'}
   & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
  }finally{$script:root=$sourceRoot;$script:drawingWindow=$sourceHandle;$script:CapyStateFile=$sourceState;[CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null}
  Wait-Until {@((Read-Snapshot $windowsFile).windows).Count -eq $before -and (Model).brush_ready} 'Closing the clipboard destination did not return to the source window'
@@ -75,7 +75,7 @@ function New-Image([scriptblock]$Action,[string]$Extent,[string]$Name,[int]$Obje
  $tab=Active-Tab
  if("$($tab.width)x$($tab.height)" -ne $Extent -or !(Model).state.document_file.modified -or (Model).state.document_file.location){throw "$Name did not open an unsaved drawing at the clipboard bounds"}
  if((Model).state.layer_tools.tool -eq 'transform'){throw "$Name opened placement handles"}
- if($Objects -ge 0 -and ((Model).state.layers|Measure-Object -Property object_count -Sum).Sum -ne $Objects){throw "$Name did not preserve the clipboard image objects"}
+ if($Objects -ge 0 -and @((Model).state.layers|Where-Object object).Count -ne $Objects){throw "$Name did not preserve the clipboard image objects"}
  Capture "$Name-$Theme" -WithModel
  $saved=Join-Path $run "$Name 日本語.capy";Save-ProjectAs $saved
  if($Sources.Count){
@@ -247,7 +247,7 @@ try {
  New-Image {Chord @(0x11,0x12) 0x4e} '40x30' 'corrupt-png-falls-back-to-bitmap' 0 @('40x30')
  Paste-In-Place;Settled
  try{Wait-Until {(Layers) -eq $count+1} 'Paste in Place did not paste the image from another application'}catch{throw "$_ formats=$((Formats) -join ',') notice=$((Model).state.notice|ConvertTo-Json -Compress -Depth 4) requests=$(Requests)"}
- if((Model).state.layer_tools.editing_layer.object_count -ne 1){throw 'The image from another application did not become an image layer'}
+ if(!(Model).state.layer_tools.editing_layer.object){throw 'The image from another application did not become an image layer'}
  Chord @() 0x4f
  Wait-Until {((Model).state.commands|Where-Object id -eq 'move').selected -and ((Model).state.commands|Where-Object id -eq 'copy').enabled} 'Move did not target the pasted image'
  Copied {Chord @(0x11) 0x43} 'Copy did not deliver the selected image'

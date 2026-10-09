@@ -104,7 +104,7 @@ pub use selection_refine::{RefineKind, SelectionRefineView};
 mod clipboard;
 #[path = "object_editing.rs"]
 mod object_editing;
-pub use object_editing::{ObjectAction, ObjectRow, object_handle, object_token};
+pub use object_editing::{object_handle, object_token};
 pub use source_edit::SourceUse;
 pub use clipboard::{clipboard_document, clipboard_color_changes, ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
 pub use notices::{Notice, NoticeAction, NoticeActionId};
@@ -2719,7 +2719,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let UiAction::Notice { id, accept, action } = action {
             return self.notice_action(id, accept, action);
         }
-        if self.operation.placing() && matches!(&action,
+        if (self.operation.placing() || self.objects.placing()) && matches!(&action,
             UiAction::SelectLayer { .. } | UiAction::SetLayerVisibility { .. }
             | UiAction::SetLayerOpacity { .. }
             | UiAction::Effect { .. } | UiAction::FilterPicker { .. })
@@ -3051,13 +3051,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.frequency_separation_action(action)?;
                 (if radius { 0 } else { DOCUMENT | BRUSH | COMMANDS }, true)
-            }
-            UiAction::Object { action } => {
-                self.require_idle()?;
-                self.object_action(action)?;
-                self.refresh_document();
-                self.refresh_commands();
-                (DOCUMENT | BRUSH | COMMANDS, true)
             }
             UiAction::Layer { action } => {
                 self.require_idle()?;
@@ -5827,7 +5820,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let collapsed = &self.layer_interaction.collapsed;
         let drawing_target = doc.drawing_target();
         let drawing_owner = if self.selection_masks.target().is_some() { None } else { drawing_target.and_then(|id| doc.target_owner(id)) };
-        let object_rows: std::collections::BTreeMap<_, _> = self.objects.expanded.iter().map(|id| (*id, self.object_rows(*id))).collect();
         let layer_state = |id: layer_core::authored::OccurrenceHandle| {
             let scene = doc.scene();
             let l = scene.occurrence(id).expect("placed occurrence");
@@ -5852,11 +5844,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             description: {
                 let mut parts = Vec::new();
                 if let Some(paint) = scene.paint_source(id).filter(|p| p.color_mode != layer_core::color::LayerColorMode::FullColor) { parts.push(art_layers::color_mode_label(paint.color_mode, &self.state.localization).to_string()); }
-                if let Some(layer) = scene.object_layer(id) {
-                    let mut args = crate::localization::FluentArgs::new();
-                    args.set("count", layer.children.len() as i64);
-                    parts.push(self.state.localization.format(MessageId::OBJECTS_IMAGE_COUNT, &args));
-                }
                 if l.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.blend, &self.state.localization).to_string()); }
                 if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
                 parts.join(" · ")
@@ -5901,6 +5888,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             pass_through: l.passes_through(),
             reference: l.reference,
             group: l.kind() == LayerKind::Group,
+            object: l.kind() == LayerKind::Object,
             can_drop_below: true,
             depth: self.layer_interaction.depth(doc, id),
             collapsed: self.layer_interaction.collapsed.contains(&id),
@@ -5923,9 +5911,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .wrapping_add(u64::from(m.inverted))
             }),
             mask_id: l.mask.as_ref().map(|m| layer_core::authored::SourceTarget::Coverage(m.source).wire_id()),
-            object_count: scene.object_layer(id).map_or(0, |layer| layer.children.len() as u32),
-            expanded: self.objects.expanded.contains(&id),
-            objects: object_rows.get(&id).cloned().unwrap_or_default(),
         }};
         self.state.layer_tools.editing_layer = doc.working.occurrence.filter(|id| doc.scene().occurrence(*id).is_some()).map(layer_state);
         self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting, self.localization());
@@ -5944,11 +5929,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 opacity: 1., selected: true, mask_selected: false, content_selected: true, selection_icon: "layer-brush-symbolic",
                 load_selection_tooltip: "Finish Quick Mask and use it as the current selection",
                 editing: true, drawing: true, has_mask: false, mask_enabled: false, mask_linked: false,
-                alpha_locked: false, locked: false, relationship: None, right_swipe: None, pass_through: false, reference: false, group: false,
+                alpha_locked: false, locked: false, relationship: None, right_swipe: None, pass_through: false, reference: false, group: false, object: false,
                 can_drop_below: false, depth: 0, collapsed: false, blend: layer_core::LayerBlend::Normal.code(),
                 blend_label: effects::blend_label(layer_core::LayerBlend::Normal, &self.state.localization).to_string(),
                 paint_revision: self.selection_masks.preview_revision(None), mask_revision: 0, mask_id: None, fill_color: None,
-                object_count: 0, expanded: false, objects: Vec::new(),
             };
             self.state.layer_tools.editing_layer = Some(row.clone());
             self.state.layers.insert(0, row);
@@ -6479,8 +6463,7 @@ mod tests {
         document.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new(std::sync::Arc::new(source.finish().unwrap()).into()));
         let image=document.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.clone();
         let mut objects=Document::from_artwork(layer_core::Artwork::new([1,1]).unwrap()).unwrap();
-        let (layer,edit)=objects.create_object_layer_edit("Images",None,0).unwrap();objects.apply(edit).unwrap();
-        let (_,edit)=objects.add_image_object_edit(layer,layer_core::ImageObject::new(image,"Photo"),0).unwrap();objects.apply(edit).unwrap();
+        let (_,edit)=objects.create_object_layer_edit("Photo",layer_core::ImageObject::new(image),None,0).unwrap();objects.apply(edit).unwrap();
         assert!(objects.artwork.paint.is_empty());
         for document in [document,objects] {
             let result = UiSession::from_project(Recorder::default(), document.clone(), None, [256, 256], Platform::Gtk);

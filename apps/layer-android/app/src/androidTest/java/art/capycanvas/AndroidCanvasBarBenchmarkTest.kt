@@ -142,9 +142,9 @@ class AndroidCanvasBarBenchmarkTest {
             }
             fun rasterizePlaced() {
                 val editing = state().array("layers").objects().single { it.optBoolean("editing") }
-                if (editing.optInt("object_count") == 0) return
+                if (!editing.optBoolean("object")) return
                 invoke("rasterize_layer")
-                waitFor("rasterized photo") { state().array("layers").objects().single { it.optBoolean("editing") }.optInt("object_count") == 0 }
+                waitFor("rasterized photo") { state().array("layers").objects().single { it.optBoolean("editing") }.optBoolean("object") == false }
             }
             fun placedPaint(file: File) {
                 place(file)

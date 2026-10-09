@@ -355,12 +355,11 @@ fn off_frame_filter_bounds_keep_authored_coordinates_when_capture_rebases() {
 fn object_only_bounds_include_retained_off_frame_images() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut artwork = Artwork::new([32;2]).unwrap();
-    let mut image = ImageObject::new(source([16,12],|_,_|255).into(),"retained image");
+    let mut image = ImageObject::new(source([16,12],|_,_|255).into());
     image.affine = Affine64([1.,0.,0.,1.,-9.,7.]);
     image.interpolation = ImageInterpolation::Nearest;
     let image = artwork.objects.insert(PortableId::random(),image).unwrap();
-    let collection = artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![image]}).unwrap();
-    let owner = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(collection),"Images")).unwrap();
+    let owner = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(image),"Images")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
     let document = Document::from_artwork(artwork).unwrap();
@@ -375,12 +374,11 @@ fn large_position_object_bounds_retain_nonempty_candidates_and_conservative_floa
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut artwork = Artwork::new([32;2]).unwrap();
     let min = [33_554_433.,-33_554_433.];
-    let mut image = ImageObject::new(source([1;2],|_,_|255).into(),"distant pixel");
+    let mut image = ImageObject::new(source([1;2],|_,_|255).into());
     image.affine = Affine64([1.,0.,0.,1.,min[0],min[1]]);
     image.interpolation = ImageInterpolation::Nearest;
     let image = artwork.objects.insert(PortableId::random(),image).unwrap();
-    let collection = artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![image]}).unwrap();
-    let owner = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(collection),"Images")).unwrap();
+    let owner = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(image),"Images")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
     let document = Document::from_artwork(artwork).unwrap();

@@ -330,7 +330,6 @@ fn apple_closing_new_work_keeps_unrestored_session_copies() {
 
 #[test]
 fn apple_shared_image_objects_keep_f64_poses_pixels_and_history_across_workers_and_restart() {
-    use layer_core::authored::OccurrenceContent;
     use std::io::Seek;
     let packages: [(&str, &[u8]); 3] = [
         ("builtin", include_bytes!("../../../layer-web/fixtures/shared-image-f64-builtin.capy")),
@@ -351,8 +350,9 @@ fn apple_shared_image_objects_keep_f64_poses_pixels_and_history_across_workers_a
             assert!(objects.iter().all(|object| object.image.same_owner(&objects[0].image)));
             assert!(objects.iter().any(|object| object.affine.0[4].to_bits() == 16777217.125f64.to_bits()));
             assert!(expected.artwork.paint.iter().all(|(_, _, paint)| paint.base.as_ref().unwrap().image.same_owner(&objects[0].image)));
+            assert_eq!(expected.scene().order().iter().filter(|handle| expected.scene().object_layer(**handle).is_some()).count(), 3);
             let owner = expected.scene().order().iter().copied().find(|handle|
-                matches!(expected.scene().occurrence(*handle).unwrap().content, OccurrenceContent::Objects(_))).unwrap();
+                expected.scene().occurrence(*handle).unwrap().name.as_ref() == "Images").unwrap();
             let visible = app.pixels();
             assert!(visible.chunks_exact(4).any(|pixel| pixel[3] > 0), "{platform} {name}: object pixels");
             app.layer_action(json!({"op":"visibility","id":layer_ui::occurrence_token(owner),"value":false}));

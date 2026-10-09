@@ -421,7 +421,7 @@ class AndroidCommandSearchTest {
         val (width, height) = 2048 to 1536
         host.importStripes(width, height)
         action(obj("type" to "invoke", "command" to "apply_transform"))
-        waitFor("stripes") { state().array("layers").objects().any { it.optBoolean("editing") && it.optInt("object_count") == 1 } }
+        waitFor("stripes") { state().array("layers").objects().any { it.optBoolean("editing") && it.optBoolean("object") } }
         assertEquals("Stripes", runBlocking { host.withNative { org.json.JSONArray(Native.imageObjects(it)) } }.getJSONObject(0).getString("name"))
         action(obj("type" to "invoke", "command" to "zen_mode"))
         fun covered() = state().getJSONObject("camera").let { camera ->

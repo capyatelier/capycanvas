@@ -105,6 +105,45 @@ mod tests {
         layer_core::Document::from_artwork(artwork).unwrap()
     }
 
+    fn image_layers(count:usize,extent:[u32;2])->layer_core::Document {
+        use layer_core::authored::*;
+        let mut artwork=Artwork::new(extent).unwrap();
+        let image=Image::new(layer_core::color::source::rgba8_source([256;2],|_,_|[255;4]));
+        let stack=artwork.compositions.get(artwork.root).unwrap().result;
+        for _ in 0..count {
+            let mut object=ImageObject::new(image.clone());object.interpolation=ImageInterpolation::Nearest;
+            object.affine=Affine64([f64::from(extent[0])/256.,0.,0.,f64::from(extent[1])/256.,0.,0.]);
+            let object=artwork.objects.insert(PortableId::random(),object).unwrap();
+            let owner=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(object),"Image")).unwrap();
+            artwork.stacks.get_mut(stack).unwrap().entries.push(owner);
+        }
+        layer_core::Document::from_artwork(artwork).unwrap()
+    }
+
+    #[test]
+    fn sibling_image_outputs_enter_admission_and_window_when_the_full_planes_exceed_it() {
+        let extent=[2048,1536];let mut document=image_layers(3,extent);let limit=8*1024*1024;
+        let full=DocRect::from(PixelRect::full(extent));
+        assert_eq!(Scene::capture_image_bound(document.scene(),full),3*full.area()*16);
+        let plan=Plan::new(document.scene(),extent,limit,16384).unwrap().unwrap();
+        let windows=plan.regions(document.scene(),PixelRect::full(extent)).collect::<Vec<_>>();
+        assert!(windows.len()>1);assert!(windows.iter().all(|(_,window)|Scene::capture_image_bound(document.scene(),*window)<=limit));
+        let first=document.scene().order()[0];document.artwork.occurrences.get_mut(first).unwrap().visible=false;
+        let second=document.scene().order()[1];document.artwork.occurrences.get_mut(second).unwrap().offset=[1_000_000,0];
+        assert_eq!(Scene::capture_image_bound(document.scene(),full),full.area()*16);
+        let raw=layer_core::SceneScope::RawObjects(first);
+        assert_eq!(Scene::capture_image_bound(document.scene().with_scope(&raw),full),full.area()*16);
+    }
+
+    #[test]
+    fn eighty_image_planes_require_their_resident_allowance_even_with_shared_samples() {
+        let document=image_layers(80,[256;2]);let full=DocRect::from(PixelRect::full([256;2]));
+        assert_eq!(Scene::capture_image_bound(document.scene(),full),80*256*256*16);
+        assert!(Plan::new(document.scene(),[256;2],DEFAULT_IMAGE_PIXEL_BYTES,16384).unwrap().is_none());
+        assert!(Plan::new(document.scene(),[256;2],64*1024*1024,16384).is_err(),"the smallest output page still needs eighty resident image planes");
+        assert_eq!(document.artwork.images().unwrap().len(),1,"sample sharing does not collapse independent layer outputs");
+    }
+
     #[test]
     fn wide_gaussian_keeps_its_finite_clamped_dependency_window() {
         use layer_core::authored::*;

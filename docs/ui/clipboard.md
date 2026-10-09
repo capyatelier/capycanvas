@@ -2,23 +2,23 @@
 
 [Workspace and UI](README.md) · [Open and import](open-and-import.md) · [Canvas action bar](canvas-action-bar.md)
 
-Copy and Cut use the current pixel or image selection. Without either, they
+Copy and Cut use the current pixel selection or focused layer mask. Otherwise they
 copy the selected layers or folders, including their properties. Copy Merged
 publishes the visible composite. Every host uses the shared commands below;
 Apple uses Command in place of Ctrl.
 
 | Command | Default | Result |
 | --- | --- | --- |
-| **Copy** | Ctrl+C | Selected image objects, or the pixel selection from every selected layer and folder. A focused layer mask copies its raw grayscale pixels. Without either selection, the selected layers and folders, including masks, effects and positions. |
-| **Copy Pixels** | none | The active layer's own pixels before opacity, mask, blend and clipping, even where Copy would take images or whole layers. |
-| **Cut** | Ctrl+X | Copy first, then remove the copied images, selected pixels from every selected layer, mask coverage or whole layers after the system write succeeds. |
+| **Copy** | Ctrl+C | The pixel selection from every selected layer and folder. A focused layer mask copies its raw grayscale pixels. Without a pixel selection or mask focus, the selected layers and folders, including masks, effects and positions. |
+| **Copy Pixels** | none | The active layer's own pixels before opacity, mask, blend and clipping, even where Copy would take whole layers. |
+| **Cut** | Ctrl+X | Copy first, then remove selected pixels from every selected layer, mask coverage or whole layers after the system write succeeds. |
 | **Copy Merged** | Ctrl+Shift+C | The visible image, including visible paper, multiplied by the pixel selection's coverage. |
 | **Paste** | Ctrl+V | Retained content keeps its copied position, even off screen. The Photoshop preset centres it in the document. External images open placement handles at full pixel size, centred in the view (document centre in Photoshop). |
 | **Paste to Shown Position** | Ctrl+Shift+V | Centre retained or external content in the visible canvas at full size, without placement handles. |
 | **Paste in Place** | none; Photoshop Ctrl+Shift+V; GIMP Ctrl+Alt+V | Retained content keeps the copied position. External images start at the canvas origin, at full size, without handles. |
 | **Paste at Cursor** | Ctrl+Alt+V; unbound in Photoshop and GIMP presets | Centre at the canvas pointer, or the view centre when no pointer is available. |
 | **Paste as New Image** | Ctrl+Alt+N; GIMP Ctrl+Shift+V; Krita Ctrl+Shift+N | Open an unsaved drawing at the clipboard bounds with transparent paper. Retained layers, depth, colour, blending and image objects survive. External batches keep all images at full size on a canvas large enough for all of them. |
-| **Paste Into** | Ctrl+Alt+Shift+V | Centre content on the pixel selection, on whole pixels, in a new image layer with that selection as its mask. Insert above the active layer or inside the active group. Consume the selection. |
+| **Paste Into** | Ctrl+Alt+Shift+V | Centre content on the pixel selection, on whole pixels, in a new object layer with that selection as its mask. Insert above the active layer or inside the active group. Consume the selection. |
 
 Capy and Clip Studio Paint presets follow CSP's Ctrl+Shift+V placement command
 and Ctrl+Shift+N for New Layer. New Window has no default chord. Paste Into uses
@@ -33,8 +33,8 @@ The alternatives appear in the existing shortcut editor and can be reassigned
 or removed like other bindings.
 
 - **One edit:** each paste or cut is one undo step. Undoing Paste Into restores
-  the selection. Pixel copies add a paint layer; selected image objects can join
-  an editable image layer. Whole-layer copies add independent authored records
+  the selection. Pixel copies add a paint layer; external images each add a named
+  Object layer. Whole-layer copies add independent authored records
   and share immutable pixel resources. Regional copies keep separate cropped paint
   layers and group structure; image objects and generators become pixels in the
   copy. Regional copies contain source pixels before adjustment filters; use
@@ -47,13 +47,13 @@ or removed like other bindings.
   deliberately created, opened or restored, it adds to that drawing.
   Copied authored layers need their own save even when they contain no original
   photo; closing the new drawing asks to save it.
-- **Bounds:** pixel selections copy their bounds on the canvas. Whole-layer and
-  selected-image copies retain off-canvas content. Whole-layer PNG renditions
-  include the composition frame and the copied layers' full rendering bounds.
+- **Bounds:** pixel selections copy their bounds on the canvas. Whole-layer copies retain off-canvas content. Their PNG renditions use the
+  copied layers' full rendering bounds, including the sampling footprint, without
+  tile padding. Empty layers use the composition frame.
 - **Position:** the view centre or cursor is captured when Paste is requested,
   before clipboard delivery or decoding can move the view or pointer.
 - **Refusals:** Copy Pixels requires paint, images or a focused layer mask.
-  Pixel-selection Copy accepts selected paint/image layers, generators and
+  Pixel-selection Copy accepts selected paint/object layers, generators and
   folders containing them. Whole-layer Cut refuses locked layers and dependencies
   that cannot be detached. Regional Cut refuses the whole operation if a selected layer or
   descendant is locked or alpha locked. Alpha lock does not protect a layer mask.
@@ -97,7 +97,7 @@ across drawing colour spaces and HDR/SDR depths.
 Quick Mask and saved-selection editing do not accept clipboard coverage.
 Copy/Cut and paste into the current drawing stay disabled in those contexts;
 Paste as New Image remains available. Cutting selected pixels from a single
-image layer still offers Add Mask (or Edit Mask), New Paint Layer and Rasterize
+object layer still offers Add Mask (or Edit Mask), New Paint Layer and Rasterize
 Layer.
 
 Whole layers preserve their structure across destination colour spaces and

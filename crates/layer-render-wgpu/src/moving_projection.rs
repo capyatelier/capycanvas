@@ -6,7 +6,6 @@ pub(crate) struct MovingProjection {
     artwork: layer_core::authored::PortableId,
     root: layer_core::authored::CompositionHandle,
     objects: layer_core::authored::Store<layer_core::authored::ImageObject>,
-    layers: layer_core::authored::Store<layer_core::authored::ObjectLayer>,
     occurrences: layer_core::authored::Store<layer_core::authored::Occurrence>,
     stacks: layer_core::authored::Store<layer_core::authored::Stack>,
     compositions: layer_core::authored::Store<layer_core::authored::Composition>,
@@ -22,7 +21,7 @@ impl MovingProjection {
     fn matches(&self, scene: SceneView<'_>, linear: [u32;4], space: layer_core::color::RgbSpace, available: bool, failures: usize) -> bool {
         let artwork = scene.artwork();
         self.artwork == artwork.id && self.root == artwork.root && self.objects.same_root(&artwork.objects)
-            && self.layers.same_root(&artwork.object_layers) && self.occurrences.same_root(&artwork.occurrences)
+            && self.occurrences.same_root(&artwork.occurrences)
             && self.stacks.same_root(&artwork.stacks) && self.compositions.same_root(&artwork.compositions)
             && scene.scope().unwrap_or(&SceneScope::All) == &self.scope && self.linear == linear
             && self.space == space && self.available == available && self.failures == failures
@@ -47,22 +46,20 @@ impl MovingProjection {
         let failed_tiles = &*failed;
         let mut requests = std::collections::BTreeMap::<_,object_image_mips::MovingRequest>::new();
         for (id,source,level,nearest) in scene.order().iter().copied().filter(|owner| available && scene.visible(*owner))
-            .filter_map(|owner| scene.object_layer(owner).map(|layer| (owner, layer)))
-            .flat_map(|(owner, layer)| layer.children.iter().filter_map(move |handle| {
-                let object = scene.object(*handle)?;
-                if !object.visible
-                    || failed_tiles.iter().any(|(id,source,_,context,_)| *id == object.image.id() && source.ptr_eq(&Arc::downgrade(object.image.storage())) && *context == space) { return None; }
+            .filter_map(|owner| {
+                let object = scene.object_layer(owner)?;
+                if failed_tiles.iter().any(|(id,source,_,context,_)| *id == object.image.id() && source.ptr_eq(&Arc::downgrade(object.image.storage())) && *context == space) { return None; }
                 let offset = scene.occurrence_offset64(owner);
                 let placement = Affine64([1., 0., 0., 1., offset[0], offset[1]]).compose(object.affine);
                 let inverse = placement.inverse()?.compose(surface_to_document).0;
                 let nearest = object.interpolation == ImageInterpolation::Nearest;
                 Some((object.image.id(),object.image.storage(),if nearest {0} else {object_image_mips::MovingImages::level(inverse)},nearest))
-            })) {
+            }) {
             requests.entry(id).and_modify(|request|{request.level=request.level.min(level);request.nearest|=nearest;})
                 .or_insert_with(||object_image_mips::MovingRequest {id,source:source.clone(),level,nearest});
         }
         let artwork = scene.artwork();
-        *cache = Some(MovingProjection {artwork:artwork.id,root:artwork.root,objects:artwork.objects.clone(),layers:artwork.object_layers.clone(),
+        *cache = Some(MovingProjection {artwork:artwork.id,root:artwork.root,objects:artwork.objects.clone(),
             occurrences:artwork.occurrences.clone(),stacks:artwork.stacks.clone(),compositions:artwork.compositions.clone(),scope:scene.scope().cloned().unwrap_or_default(),
             linear,space,available,failures:failed.len(),identities,requests:requests.into_values().collect()});
         Ok(())
@@ -78,13 +75,12 @@ mod tests {
     fn paint_dabs_and_panning_reuse_image_requests_and_failure_identity_projection() {
         let mut artwork=Artwork::new([256;2]).unwrap();
         let image=Image::new(layer_core::color::source::rgba8_source([8;2],|_,_|[255;4]));
-        let handles=(0..1024).map(|_|artwork.objects.insert(PortableId::random(),ImageObject::new(image.clone(),"Image")).unwrap()).collect::<Vec<_>>();
-        let layer=artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:handles.clone()}).unwrap();
-        let owner=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(layer),"Images")).unwrap();
+        let handles=(0..1024).map(|_|artwork.objects.insert(PortableId::random(),ImageObject::new(image.clone())).unwrap()).collect::<Vec<_>>();
+        let owners=handles.iter().map(|&handle|artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(handle),"Image")).unwrap()).collect::<Vec<_>>();
         let paint=artwork.paint.insert(PortableId::random(),PaintSource {color_mode:Default::default(),domain:[256;2],raster:Default::default(),base:None,operations:Arc::default()}).unwrap();
         let ink=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(paint),"Ink")).unwrap();
         let stack=artwork.compositions.get(artwork.root).unwrap().result;
-        artwork.stacks.get_mut(stack).unwrap().entries=vec![owner,ink];
+        artwork.stacks.get_mut(stack).unwrap().entries=owners;artwork.stacks.get_mut(stack).unwrap().entries.push(ink);
         let mut doc=Document::from_artwork(artwork).unwrap();
         let mut cache=None;let mut failures=Vec::new();
         let mapping=[0.25,0.,0.,0.25,0.,0.];
@@ -102,8 +98,8 @@ mod tests {
         assert!(failures.is_empty());assert_eq!(cache.as_ref().unwrap().requests.len(),1);assert_eq!(cache.as_ref().unwrap().identities.as_ptr(),identities);
         MovingProjection::update(&mut cache,doc.scene(),[0.125,0.,0.,0.125,0.,0.],RgbSpace::DisplayP3,true,&mut failures).unwrap();
         assert_eq!(cache.as_ref().unwrap().requests[0].level,3);
-        let mut changed=doc.artwork.object_layers.get(layer).unwrap().clone();changed.children.clear();
-        doc.apply(Edit::ObjectLayer(RecordChange::replace(&doc.artwork.object_layers,layer,Some(changed)).unwrap())).unwrap();
+        let mut changed=doc.artwork.stacks.get(stack).unwrap().clone();changed.entries=vec![ink];
+        doc.apply(Edit::Stack(RecordChange::replace(&doc.artwork.stacks,stack,Some(changed)).unwrap())).unwrap();
         MovingProjection::update(&mut cache,doc.scene(),mapping,RgbSpace::DisplayP3,true,&mut failures).unwrap();
         assert!(cache.as_ref().unwrap().requests.is_empty());
         assert_eq!(cache.as_ref().unwrap().identities.as_ptr(),identities);

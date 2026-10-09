@@ -534,7 +534,7 @@ pub(crate) fn assert_live_artwork_eq(actual: &Document, expected: &Document) {
     assert_eq!(actual.metadata, expected.metadata);
     assert_eq!(actual.extensions, expected.extensions);
     macro_rules! records { ($($store:ident),+) => { $(assert_eq!(actual.$store.iter().collect::<Vec<_>>(), expected.$store.iter().collect::<Vec<_>>(), stringify!($store));)+ }; }
-    records!(compositions, stacks, occurrences, paint, object_layers, objects, coverage, effects, selections, guides, outputs);
+    records!(compositions, stacks, occurrences, paint, objects, coverage, effects, selections, guides, outputs);
 }
 
 pub(crate) fn package_bytes(capture: &layer_core::ArtworkCapture) -> Vec<u8> {

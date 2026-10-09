@@ -10,7 +10,6 @@ pub enum Shape {
     Stack { entries: Vec<PortableId> },
     Occurrence { content: Content, mask: Option<PortableId> },
     Paint { image: Option<PortableId> },
-    ObjectLayer { children: Vec<PortableId> },
     ImageObject { image: PortableId },
     Image,
     Coverage,
@@ -25,7 +24,6 @@ impl Shape {
         match self {
             Self::Composition { .. } | Self::Output { .. } => 1,
             Self::Stack { entries } => entries.len(),
-            Self::ObjectLayer { children } => children.len(),
             Self::Paint { image } => usize::from(image.is_some()),
             Self::ImageObject { .. } => 1,
             Self::Occurrence { mask, .. } => 1 + usize::from(mask.is_some()),
@@ -37,7 +35,6 @@ impl Shape {
         match self {
             Self::Composition { result } => vec![*result],
             Self::Stack { entries } => entries.clone(),
-            Self::ObjectLayer { children } => children.clone(),
             Self::Paint { image } => image.iter().copied().collect(),
             Self::ImageObject { image } => vec![*image],
             Self::Occurrence { content, mask } => match content {
@@ -53,9 +50,9 @@ impl Shape {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct GraphLimits { pub objects: usize, pub edges: usize, pub depth: usize, pub layer_objects: usize }
+pub struct GraphLimits { pub objects: usize, pub edges: usize, pub depth: usize }
 impl Default for GraphLimits {
-    fn default() -> Self { Self { objects: 65_536, edges: 262_144, depth: 128, layer_objects: 4096 } }
+    fn default() -> Self { Self { objects: 65_536, edges: 262_144, depth: 128 } }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,7 +133,7 @@ impl GraphShape {
                 Shape::Occurrence { content, mask } => {
                     let target = match content {
                         Content::Paint(id) => { expect(*id, |s| matches!(s, Shape::Paint { .. }))?; *id },
-                        Content::Objects(id) => { expect(*id, |s| matches!(s, Shape::ObjectLayer { .. }))?; *id },
+                        Content::Objects(id) => { expect(*id, |s| matches!(s, Shape::ImageObject { .. }))?; *id },
                         Content::Group(id) => { expect(*id, |s| matches!(s, Shape::Stack { .. }))?; *id },
                         Content::Effect(id) => { expect(*id, |s| matches!(s, Shape::Effect))?; *id },
                         Content::Selection(id) => { expect(*id, |s| matches!(s, Shape::Selection))?; *id },
@@ -148,15 +145,6 @@ impl GraphShape {
                         *uses.entry(target).or_default() += 1;
                         dependencies.push(target);
                     }
-                }
-                Shape::ObjectLayer { children } => {
-                    if children.len() > limits.layer_objects { return Err(GraphError::Unsupported("Image layer object limit exceeded")); }
-                    for child in children {
-                        expect(*child, |s|matches!(s,Shape::ImageObject { .. }))?;
-                        if *memberships.entry(*child).or_default()!=0 {return Err("Drawable belongs to multiple collection slots".into());}
-                        *memberships.get_mut(child).unwrap()+=1;
-                    }
-                    dependencies.extend(children);
                 }
                 Shape::Paint { image:Some(image) } => {expect(*image,|s|matches!(s,Shape::Image))?;dependencies.push(*image);}
                 Shape::ImageObject { image } => {expect(*image,|s|matches!(s,Shape::Image))?;dependencies.push(*image);}

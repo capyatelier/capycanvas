@@ -68,7 +68,7 @@ pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
 pub use session::tonal_selection::{TonalAction, TonalOptions};
-pub use session::{ThumbnailRequests, occurrence_token, occurrence_handle, object_token, object_handle, ObjectAction, ObjectRow, SourceUse, FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
+pub use session::{ThumbnailRequests, occurrence_token, occurrence_handle, object_token, object_handle, SourceUse, FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod color;
 mod tool_settings;
 mod toolbar_components;
@@ -1273,6 +1273,7 @@ pub struct LayerState {
     pub pass_through: bool,
     pub reference: bool,
     pub group: bool,
+    pub object: bool,
     pub can_drop_below: bool,
     pub depth: u32,
     pub collapsed: bool,
@@ -1282,9 +1283,6 @@ pub struct LayerState {
     pub mask_revision: u64,
     pub mask_id: Option<u64>,
     pub fill_color: Option<LayerFillColor>,
-    pub object_count: u32,
-    pub expanded: bool,
-    pub objects: Vec<ObjectRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1406,9 +1404,6 @@ pub enum UiAction {
     },
     Layer {
         action: LayerAction,
-    },
-    Object {
-        action: ObjectAction,
     },
     /// Native caption controls reserve left/right widths and a height in DIPs.
     MeasureTitlebar {

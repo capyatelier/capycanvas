@@ -18,10 +18,10 @@ fn read(path: &Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-/// The image layer a placement made active and its images, front to back.
+/// Active Object layer and the images selected by the placement.
 fn placed_images(doc: &layer_core::Document) -> (layer_core::authored::OccurrenceHandle, Vec<layer_core::authored::ImageObjectHandle>) {
     let layer = doc.working.occurrence.unwrap();
-    (layer, doc.object_layer_children(layer).expect("placed images are in an image layer").to_vec())
+    (layer, doc.selected_objects().into_iter().collect())
 }
 
 /// The rendered document composite at a document pixel.
@@ -31,7 +31,7 @@ fn document_pixel(w: &Workspace, [x, y]: [usize; 2]) -> [u8; 4] {
 }
 
 fn image_names(doc: &layer_core::Document, images: &[layer_core::authored::ImageObjectHandle]) -> Vec<String> {
-    let mut names: Vec<String> = images.iter().map(|h| doc.scene().object(*h).unwrap().name.to_string()).collect();
+    let mut names: Vec<String> = images.iter().map(|h| doc.scene().occurrence(doc.scene().object_owner(*h).unwrap()).unwrap().name.to_string()).collect();
     names.sort();
     names
 }
@@ -311,11 +311,11 @@ fn native_multiple_photo_import_chooser() {
         finish(&w);
         ready(&w);
         let imported = ui_session(&w).engine().document().clone();
-        assert_eq!(imported.scene().order().len(), before.scene().order().len() + 1, "both photos enter one new image layer");
+        assert_eq!(imported.scene().order().len(), before.scene().order().len() + 2, "each photo enters a named Object layer");
         let (layer, images) = placed_images(&imported);
         assert_eq!(imported.scene().position(layer), Some(0), "above the painted layer");
         assert_eq!(image_names(&imported, &images), ["First photo", "Second photo"]);
-        assert_eq!(imported.working.objects, images.iter().copied().collect(), "placement selects the new images");
+        assert_eq!(imported.selected_objects(), images.iter().copied().collect(), "placement selects the new images");
         for h in images {
             assert_source_samples(imported.scene().object(h).unwrap().image.as_ref(), &source);
         }
@@ -433,7 +433,7 @@ fn native_photo_file_drops() {
             .engine()
             .document()
             .clone();
-        assert_eq!(doc.scene().order().len(), original.scene().order().len() + 1, "both photos enter one new image layer");
+        assert_eq!(doc.scene().order().len(), original.scene().order().len() + 2, "each photo enters a named Object layer");
         let (_, images) = placed_images(&doc);
         assert_eq!(image_names(&doc, &images), ["First photo", "Second – photo"]);
         for image in images {

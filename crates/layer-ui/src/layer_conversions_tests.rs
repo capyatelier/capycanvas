@@ -8,11 +8,9 @@ fn session() -> UiSession<Recorder> {
 }
 fn picture() -> Image { rgba8_source([80, 60], |x, y| [x as u8, y as u8, 7, 255]).into() }
 fn images(s: &mut UiSession<Recorder>, x: f64) -> OccurrenceHandle {
-    let (layer, edit) = s.engine.document().create_object_layer_edit("Images", None, 0).unwrap();
-    s.engine.apply_edit(edit).unwrap();
-    let mut object = ImageObject::new(picture(), "Photo");
+    let mut object = ImageObject::new(picture());
     object.affine = Affine64([1., 0., 0., 1., x, 20.]);
-    let (_, edit) = s.engine.document().add_image_object_edit(layer, object, 0).unwrap();
+    let (layer, edit) = s.engine.document().create_object_layer_edit("Photo", object, None, 0).unwrap();
     s.engine.apply_edit(edit).unwrap();
     layer_action(s, LayerAction::Select { id: occurrence_token(layer), mask: false });
     s.refresh_document();
@@ -48,7 +46,7 @@ fn rasterize_layer_captures_raw_object_content_then_publishes_one_undoable_paint
     let base = doc.scene().paint_source(layer).unwrap().base.as_ref().unwrap();
     assert_eq!((base.offset, base.policy), ([70, 20], layer_core::authored::PaintBasePolicy::WorkingPixels));
     assert_eq!(doc.working.target, doc.scene().source_target(layer), "the new paint is the drawing target");
-    assert!(doc.working.objects.is_empty());
+    assert!(doc.selected_objects().is_empty());
     invoke(&mut s, CommandId::Undo);
     assert_eq!(s.engine.document().artwork.objects.len(), before.artwork.objects.len());
     assert_eq!(s.engine.document().scene().occurrence(layer).unwrap().kind(), LayerKind::Object);
@@ -83,8 +81,7 @@ fn convert_to_image_layer_shares_an_untouched_photo_without_a_capture() {
     invoke(&mut s, CommandId::ConvertToObject);
     assert!(s.engine.backend().snapshot_requests.is_empty());
     let doc = s.engine.document();
-    let [object] = doc.scene().object_layer(ink).unwrap().children[..] else { panic!("one image") };
-    assert!(doc.scene().object(object).unwrap().image.same_owner(&photo));
+    assert!(doc.scene().object_layer(ink).unwrap().image.same_owner(&photo));
 }
 
 #[test]
@@ -144,7 +141,7 @@ fn every_new_command_label_and_reason_is_localized() {
         ConversionRefusal::NoMask, ConversionRefusal::MaskDisabled, ConversionRefusal::TooLarge] {
         assert!(!conversion_refusal_text(refusal, l).is_empty());
     }
-    assert_eq!(CommandId::ConvertToObject.localized_label(l).as_ref(), "Convert to Image Layer");
+    assert_eq!(CommandId::ConvertToObject.localized_label(l).as_ref(), "Convert to Object Layer");
 }
 
 #[test]
@@ -174,15 +171,12 @@ fn repairing_an_image_objects_profile_leaves_other_users_of_the_image_unchanged(
     let ink = s.engine.document().working.occurrence.unwrap();
     let OccurrenceContent::Paint(paint) = s.engine.document().scene().occurrence(ink).unwrap().content else { panic!("paint") };
     let layer = images(&mut s, 10.);
-    let object = s.engine.document().scene().object_layer(layer).unwrap().children[0];
+    let object = s.engine.document().scene().object_handle(layer).unwrap();
     let shared = s.engine.document().scene().object(object).unwrap().image.clone();
     let mut source = s.engine.document().artwork.paint.get(paint).unwrap().clone();
     source.base = Some(layer_core::authored::PaintBase { image: shared.clone(), offset: [0, 0], policy: layer_core::authored::PaintBasePolicy::SourceProfile });
     s.engine.apply_edit(layer_core::Edit::Paint(layer_core::RecordChange::replace(&s.engine.document().artwork.paint, paint, Some(source)).unwrap())).unwrap();
     layer_action(&mut s, LayerAction::Select { id: occurrence_token(layer), mask: false });
-    let mut working = s.engine.document().working.clone();
-    working.objects = [object].into();
-    s.engine.apply_edit(layer_core::Edit::Working(working)).unwrap();
     s.refresh_commands();
     assert_eq!(s.active_source_use(), Some(SourceUse::Object(object)));
     assert!(s.command(CommandId::RepairSourceProfile).enabled);

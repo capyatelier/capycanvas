@@ -43,14 +43,15 @@ fn stamp_visible_keeps_image_layers_and_bakes_their_off_frame_pixels() {
         engine.apply_canvas_geometry(&grown()).unwrap();
         let revealed = image(&mut engine, 3_000_000_000);
         assert!(engine.undo().unwrap());
-        let objects = engine.document().scene().object_layer(layer).unwrap().children.clone();
+        let objects = engine.document().artwork.objects.clone();
+        let layers = engine.document().scene().order().iter().copied().filter(|h|engine.document().scene().object_layer(*h).is_some()).collect::<Vec<_>>();
         let plan = engine.document().merge_plan(MergeKind::Stamp).unwrap();
         let stamp = bake(&mut engine, plan);
         image(&mut engine, 4_000_000_000);
         let scene = engine.document().scene();
         assert_eq!(scene.order()[0], stamp, "{space:?}");
-        assert_eq!(scene.object_layer(layer).unwrap().children, objects, "{space:?}: Stamp Visible keeps its sources");
-        for hidden in [layer, ink] { edit(&mut engine, hidden, |o| o.visible = false); }
+        assert_eq!(engine.document().artwork.objects, objects, "{space:?}: Stamp Visible keeps its sources");
+        for hidden in layers.into_iter().chain([ink]) { edit(&mut engine, hidden, |o| o.visible = false); }
         image(&mut engine, 5_000_000_000).assert_near(&original, TOLERANCE, &format!("{space:?}: the stamp alone"));
         engine.apply_canvas_geometry(&grown()).unwrap();
         image(&mut engine, 6_000_000_000).assert_near(&revealed, TOLERANCE, &format!("{space:?}: the stamp keeps pixels beyond the frame"));
@@ -88,7 +89,7 @@ fn merge_group_bakes_image_descendants_and_keeps_outer_properties_once() {
         assert!(engine.document().artwork.objects.is_empty(), "{space:?}: the group's images are consumed");
         assert!(engine.undo().unwrap());
         image(&mut engine, 4_000_000_000).assert_eq(&original, &format!("{space:?}: undo"));
-        assert_eq!(engine.document().scene().object_layer(layer).unwrap().children.len(), 1);
+        assert!(engine.document().scene().object_layer(layer).is_some());
     }
 }
 

@@ -1895,7 +1895,7 @@ class AndroidRasterTest {
         fun press(command: String) = pressCanvasBar(command, 20_000)
         fun extent(project: JSONObject, record: JSONObject) = project.packageData(record.getJSONObject("data").getJSONObject("image").getString("ref")).getJSONArray("extent")
         val baseLayers=layers()
-        batch(photos);assertEquals(photos.size,count());assertEquals("One image layer holds the batch",baseLayers+1,layers())
+        batch(photos);assertEquals(photos.size,count());assertEquals("Each file has its own Object layer",baseLayers+photos.size,layers())
         assertEquals("Recovery defers while a placement is provisional", 0L, selectedSessionCapture())
         press("cancel_transform");assertEquals(0,count());assertEquals(baseLayers,layers())
         batch(photos)
@@ -1910,9 +1910,9 @@ class AndroidRasterTest {
         }
         invoke("undo");assertEquals(0,count());invoke("redo");assertEquals(photos.size,count())
         open(File(files,"batch-placement.capy"));assertEquals(identity,manifest(save("batch-reopened.capy")).objectImageIdentity())
-        native { h -> val images=state(h).array("layers").objects().single { it.getInt("object_count")>0 }.getLong("id")
+        native { h -> val images=state(h).array("layers").objects().first { it.getBoolean("object") }.getLong("id")
             Native.dispatch(h,obj("type" to "layer","action" to obj("op" to "select","id" to images,"mask" to false)).toString()) }
-        invoke("move");invoke("select_all");invoke("placement_original_size")
+        native { h -> state(h).array("layers").objects().filter { it.getBoolean("object") }.drop(1).forEach { row -> Native.dispatch(h,obj("type" to "layer","action" to obj("op" to "toggle_selection","id" to row.getLong("id"))).toString()) } };invoke("move");invoke("placement_original_size")
         val originalSize=manifest(save("batch-original-size.capy"))
         for(record in originalSize.imageObjectRecords()) {
             val pose=record.getJSONObject("data").getJSONArray("affine");val before=fitted.imageObjectRecords().single { it.getString("id")==record.getString("id") }.getJSONObject("data").getJSONArray("affine")
@@ -1942,7 +1942,7 @@ class AndroidRasterTest {
                 open(File(files, "batch-placement.capy"))
                 action(obj("type" to "set_theme", "theme" to theme))
                 invoke("fit_canvas")
-                val ink = native { state(it).array("layers").objects().first { row -> row.getInt("object_count")==0 && !row.getBoolean("group") && row.isNull("fill_color") } }
+                val ink = native { state(it).array("layers").objects().first { row -> !row.getBoolean("object") && !row.getBoolean("group") && row.isNull("fill_color") } }
                 action(obj("type" to "layer", "action" to obj("op" to "select", "id" to ink.getLong("id"), "mask" to false)))
                 invoke("brush")
                 action(obj("type" to "select_brush", "id" to 21))
@@ -3629,7 +3629,7 @@ class AndroidRasterTest {
         val uri=resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,values)!!
         val clipboard=activity.getSystemService(android.content.ClipboardManager::class.java)
         var previous:android.content.ClipData?=null
-        native { h -> val images=state(h).array("layers").objects().single { it.getInt("object_count")>0 }.getLong("id")
+        native { h -> val images=state(h).array("layers").objects().single { it.getBoolean("object") }.getLong("id")
             Native.dispatch(h,obj("type" to "layer","action" to obj("op" to "select","id" to images,"mask" to false)).toString()) };tick()
         try {
             resolver.openOutputStream(uri)!!.use {it.write(pixels)}
@@ -3641,13 +3641,13 @@ class AndroidRasterTest {
             compose.waitUntil(30_000) {native { org.json.JSONArray(Native.imageObjects(it)).length() }==placed.imageObjectRecords().size+2}
             compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
             assertNull(host.actionError)
-            assertEquals("External paste adds to the active image layer",placed.occurrenceRecords().length(),native { state(it).array("layers").length() })
+            assertEquals("Each external image adds an Object layer",placed.occurrenceRecords().length()+2,native { state(it).array("layers").length() })
             pressCanvasBar("apply_transform")
             compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind")!="placement" }
             DocumentController.nativeFileJobsForTest=true
             val pasted=manifest(save("placement-pasted.capy"))
             assertEquals("u8",pasted.compositionColor().optString("depth","u8"))
-            assertEquals(placed.occurrenceRecords().length(),pasted.occurrenceRecords().length())
+            assertEquals(placed.occurrenceRecords().length()+2,pasted.occurrenceRecords().length())
             assertEquals(placed.imageObjectRecords().size+2,pasted.imageObjectRecords().size)
             for(image in pasted.objectImages().objects()) {
                 assertEquals("u16",image.getJSONObject("interpretation").optString("depth","u8"))
@@ -3806,7 +3806,7 @@ class AndroidRasterTest {
                 resolver.delete(uri, null, null)
             }
             val masked = rows().single { it.getBoolean("editing") }
-            assertTrue("Paste Into masks a new image layer", masked.getBoolean("has_mask") && masked.getInt("object_count") == 1)
+            assertTrue("Paste Into masks a new image layer", masked.getBoolean("has_mask") && masked.getBoolean("object"))
             val framed = manifest(save("$theme-paste-into.capy"))
             fun maskOf(m: JSONObject) = m.occurrenceRecords().objects().single { it.getJSONObject("data").getJSONObject("content").has("objects") && it.getJSONObject("data").has("mask") }.getJSONObject("data").getJSONObject("mask")
             val frame = maskOf(framed)
@@ -3824,23 +3824,23 @@ class AndroidRasterTest {
             action(obj("type" to "set_layer_opacity", "opacity" to .5))
             val composite = png("$theme-before-rasterize.png")
             invoke("rasterize_layer")
-            compose.waitUntil(60_000) { refresh(); rows().single { it.getBoolean("editing") }.getInt("object_count") == 0 }
+            compose.waitUntil(60_000) { refresh(); rows().single { it.getBoolean("editing") }.getBoolean("object") == false }
             val rasterized = rows().single { it.getBoolean("editing") }
             assertEquals("Rasterize keeps the mask", true, rasterized.getBoolean("has_mask"))
             assertEquals("Rasterize keeps the opacity", .5, rasterized.getDouble("opacity"), 1e-6)
-            assertEquals("Rasterized layer is paint", 0, rasterized.getInt("object_count"))
+            assertFalse("Rasterized layer is paint", rasterized.getBoolean("object"))
             assertSamePixels("$theme: rasterize applies mask and opacity once", composite, png("$theme-after-rasterize.png"))
             invoke("undo")
-            assertEquals("Undo restores the image layer", 1, rows().single { it.getBoolean("editing") }.getInt("object_count"))
+            assertTrue("Undo restores the Object layer", rows().single { it.getBoolean("editing") }.getBoolean("object"))
             invoke("redo")
             action(obj("type" to "layer", "action" to obj("op" to "new", "group" to false, "clipped" to false)))
             invoke("brush"); compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
             stroke(0.0)
             val painted = png("$theme-before-convert.png")
             invoke("convert_to_object")
-            compose.waitUntil(60_000) { refresh(); rows().single { it.getBoolean("editing") }.getInt("object_count") == 1 }
+            compose.waitUntil(60_000) { refresh(); rows().single { it.getBoolean("editing") }.getBoolean("object") }
             assertSamePixels("$theme: conversion keeps the appearance", painted, png("$theme-after-convert.png"))
-            invoke("undo"); assertEquals("Undo restores paint", 0, rows().single { it.getBoolean("editing") }.getInt("object_count")); invoke("redo")
+            invoke("undo"); assertFalse("Undo restores paint", rows().single { it.getBoolean("editing") }.getBoolean("object")); invoke("redo")
             val saved = manifest(save("$theme-objects.capy"))
             val reopenedPoses = poses()
             open(File(files, "$theme-objects.capy"))
@@ -3865,10 +3865,8 @@ class AndroidRasterTest {
             invoke("redo"); assertEquals("Recovered Redo restores the edit", edited, poses())
             assertSamePixels("$theme: recovered pixels", editedPixels, png("$theme-recovered.png"))
             fun previewsArrive(label: String) {
-                for (row in rows().filter { it.getInt("object_count") > 0 && !it.getBoolean("expanded") })
-                    action(obj("type" to "object", "action" to obj("op" to "expand", "layer" to row.getLong("id"), "expanded" to true)))
-                val previews = rows().filter { it.getInt("object_count") > 0 }.flatMap { row ->
-                    listOf(row.getLong("id") to "layer-thumbnail-${row.getLong("id")}-false") + row.array("objects").objects().map { it.getLong("id") to "image-object-thumbnail-${it.getLong("id")}" }
+                val previews = rows().filter { it.getBoolean("object") }.map { row ->
+                    row.getLong("id") to "layer-thumbnail-${row.getLong("id")}-false"
                 }
                 assertTrue(previews.size >= 2)
                 for ((key, tag) in previews) {
@@ -3938,7 +3936,9 @@ class AndroidRasterTest {
                 place(image("clip-blue.png", android.graphics.Color.BLUE, 120, 90))
                 val originals = objects()
                 assertEquals(2, originals.size)
-                invoke("move"); invoke("select_all")
+                val rear = native { state(it).array("layers").objects().filter { row -> row.getBoolean("object") }.last().getLong("id") }
+                action(obj("type" to "layer", "action" to obj("op" to "toggle_selection", "id" to rear)))
+                invoke("move")
                 hostCommand("copy")
                 val nonce = clipboard.primaryClipDescription?.extras?.getString(ClipboardController.NONCE)
                 assertNotNull("$theme: Copy publishes a nonce with the PNG fallback", nonce)
@@ -3947,10 +3947,9 @@ class AndroidRasterTest {
                 val pasted = objects()
                 assertEquals("$theme: Paste adds both images", 4, pasted.size)
                 assertEquals("$theme: same-document paste shares the image records", originals.map { it.getString("image") }.toSet(), pasted.map { it.getString("image") }.toSet())
-                val layer = native { state(it).array("layers").objects().first { row -> row.getInt("object_count") > 0 } }
-                if (!layer.getBoolean("expanded")) action(obj("type" to "object", "action" to obj("op" to "expand", "layer" to layer.getLong("id"), "expanded" to true)))
-                val front = native { state(it).array("layers").objects().first { row -> row.getLong("id") == layer.getLong("id") } }.array("objects").getJSONObject(0).getLong("id")
-                action(obj("type" to "object", "action" to obj("op" to "select", "id" to front, "extend" to false)))
+                val layer = native { state(it).array("layers").objects().first { row -> row.getBoolean("object") } }
+                val front = layer.getLong("id")
+                action(obj("type" to "layer", "action" to obj("op" to "select", "id" to front, "mask" to false)))
                 val beforeCut = objects().map { it.getString("id") }.toSet()
                 hostCommand("cut")
                 val cut = beforeCut - objects().map { it.getString("id") }.toSet()
@@ -3978,7 +3977,10 @@ class AndroidRasterTest {
                     assertEquals("$theme: a mismatched nonce pastes the external image", 5, after.size)
                     assertTrue("$theme: the external image has its own record", after.map { it.getString("image") }.toSet().size == before.size + 1)
                 } finally { resolver.delete(foreign, null, null) }
-                invoke("select_all"); hostCommand("copy")
+                val objectLayers = native { state(it).array("layers").objects().filter { row -> row.getBoolean("object") }.map { row -> row.getLong("id") } }
+                action(obj("type" to "layer", "action" to obj("op" to "select", "id" to objectLayers.first(), "mask" to false)))
+                objectLayers.drop(1).forEach { id -> action(obj("type" to "layer", "action" to obj("op" to "toggle_selection", "id" to id))) }
+                hostCommand("copy")
                 val copied = manifest(save("$theme-clip-source.capy"))
                 newDocument(800, 600)
                 hostCommand("paste_image")

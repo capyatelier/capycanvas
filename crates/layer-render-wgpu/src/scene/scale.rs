@@ -1411,7 +1411,9 @@ impl Evaluator<'_> {
         let mut request=self.scene.collection_job(self.r,self.packet,content.owner(),content.clone(),window);
         request.live=true;request.display=true;
         if request.keys.is_empty() {self.release(target.slot);return self.materialize(Value::Color([0.;4]),output);}
-        if !moving && let Some(pieces)=self.scene.canonical_cover(self.r,self.packet,content,&request)? {
+        let moving = moving || self.r.moving_layer.is_some();
+        let preview = if moving {Scene::collection_preview(self.r,&request)?} else {None};
+        if (!moving || preview.is_none()) && let Some(pieces)=self.scene.canonical_cover(self.r,self.packet,content,&request)? {
             let window=request.bounds();
             self.r.encode_clear(self.encoder,&target.view,"canonical object pieces");
             for (view,piece) in pieces {
@@ -1427,7 +1429,7 @@ impl Evaluator<'_> {
             }
             return self.materialize(Value::Image {view:target.view,slot:target.slot,opacity:1.,plan,preview:None,encode:false},output);
         }
-        let Some((sources,objects))=Scene::collection_preview(self.r,&request)? else {self.release(target.slot);return Err(GpuRasterError::DeferredObjectWork);};
+        let Some((sources,objects))=(if moving {preview} else {Scene::collection_preview(self.r,&request)?}) else {self.release(target.slot);return Err(GpuRasterError::DeferredObjectWork);};
         let scratch=(crate::object_sampling::CollectionPreview::passes(&objects)>1).then(||self.target());
         self.scene.jobs.push(Job::Collection(Box::new(crate::object_sampling::CollectionPreview {sources,objects,size:plan.size,output:target.view.clone(),
             scratch:scratch.as_ref().map(|scratch|scratch.view.clone()),encode:self.packet.blend_space==layer_core::BlendSpace::Perceptual})));

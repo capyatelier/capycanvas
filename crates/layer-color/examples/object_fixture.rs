@@ -20,20 +20,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         DocumentNames {paint:"Photo".into(),paper:"Paper".into()}, SampleDepth::U8)?;
     let SourceTarget::Paint(paint) = document.working.target.ok_or("Photo paint target is unavailable")? else { return Err("Photo source is not paint".into()); };
     let image = document.artwork.paint.get(paint).and_then(|paint|paint.base.as_ref()).ok_or("Photo base image is unavailable")?.image.clone();
-    let (layer, edit) = document.create_object_layer_edit("Images", None, 0)?;
-    document.apply(edit)?;
-    document.artwork.occurrences.get_mut(layer).ok_or("Object layer is unavailable")?.opacity = 0.35;
+    let mut layers=Vec::new();
     for index in 0..count {
         let source = if shared { image.clone() } else { Image::new(Arc::new(decode()?)) };
-        let mut object = ImageObject::new(source, format!("Image {}",index+1));
+        let mut object = ImageObject::new(source);
         object.interpolation = interpolation;
         let phase = index as f64 / count as f64 * std::f64::consts::TAU;
         object.affine = Affine64([0.55,0.,0.,0.55,
             extent[0] as f64 * (0.225 + 0.08 * phase.cos()),
             extent[1] as f64 * (0.225 + 0.08 * phase.sin())]);
-        let (_, edit) = document.add_image_object_edit(layer, object, index)?;
+        let (layer, edit) = document.create_object_layer_edit(format!("Image {}",index+1), object, None, index)?;
         document.apply(edit)?;
+        layers.push(layer);
     }
+    document.apply(document.group_layers_edit(&layers,layer_core::LayerBlend::Normal,"Images")?)?;
+    let group=*document.scene().order().iter().find(|h|document.scene().occurrence(**h).unwrap().name.as_ref()=="Images").ok_or("Image group is unavailable")?;
+    document.artwork.occurrences.get_mut(group).ok_or("Image group is unavailable")?.opacity=0.35;
     let capture = Editor::new(document.clone()).capture(0, EvaluationContext::default())?;
     let cancelled = AtomicBool::new(false);
     let prepared = layer_core::package::codec::PreparedPackage::prepare(&capture, None, &cancelled)?;

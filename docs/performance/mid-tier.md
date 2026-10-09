@@ -66,6 +66,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Pixel transform: Warp | 90 | screen 59.0/s; renderer 72.5 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |
 | Selection transform, full canvas | 90 | Renderer 217 submissions/s (handle and Distort); worst frame after release 16.4–27.1 ms | `6fcc6fba`, 2026-09-27 |
 | Move tool layer drag | 90 | | |
+| Object Layer placement, Move and Scale/Rotate | 90 | Current Object-layer simplification unmeasured on the reference tablet | [Qualification gap](known-gaps.md) |
 | Marquee, Lasso or Polygon drag | 90 | | |
 | Enclose and Fill: loop drag and navigation during completion | 90 | Unmeasured on the reference tablet | Shared lasso overlay; GPU region discovery starts on release. Desktop checks do not qualify this tier |
 | Selection Brush or Quick Mask, 1536 px | 90 | | |

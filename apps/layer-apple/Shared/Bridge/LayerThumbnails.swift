@@ -41,10 +41,6 @@ import CoreGraphics
         var result: [String: Version] = [:]
         let ids = Set(visible.values)
         for layer in store?.state["layers"].array ?? [] {
-            for object in layer["objects"].array where ids.contains(object["id"].uint) {
-                result[Self.key(object["id"].uint, false)] = Version(
-                    target: object["id"].uint, revision: object["thumbnail_revision"].uint)
-            }
             guard ids.contains(layer["id"].uint) else { continue }
             for mask in [false, true] {
                 if mask ? !layer["has_mask"].bool : !layer["has_thumbnail"].bool { continue }
@@ -66,7 +62,7 @@ import CoreGraphics
             if completed[key] == version || pending.values.contains(where: { $0.key == key }) { continue }
             next &+= 1; requests[next] = Request(key: key, version: version)
         }
-        let ids = Set(store.state["layers"].array.flatMap { [$0] + $0["objects"].array }.map { String($0["id"].uint) })
+        let ids = Set(store.state["layers"].array.map { String($0["id"].uint) })
         let obsolete = images.keys.filter { !ids.contains(String($0.split(separator: ":")[0])) }
         for key in obsolete { images.removeValue(forKey: key); completed.removeValue(forKey: key) }
         guard !requests.isEmpty || !pending.isEmpty else { return false }

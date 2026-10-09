@@ -52,7 +52,7 @@ fn image_placement_context_keeps_drop_point_and_rejects_changed_targets() {
     let context = session.image_placement_context(None, None).unwrap();
     session.state.document_file.epoch += 1;
     assert!(session.validate_image_placement(&context).is_err());
-    let (images, edit) = session.engine.document().create_object_layer_edit("Images", None, 0).unwrap();
+    let (images, edit) = session.engine.document().create_object_layer_edit("Images", layer_core::ImageObject::new(rgba8_source([2, 1], |_, _| [255; 4]).into()), None, 0).unwrap();
     session.engine.apply_edit(edit).unwrap();
     session.engine.apply_edit(session.engine.document().select_occurrence_edit(images).unwrap()).unwrap();
     let context = session.image_placement_context(None, None).unwrap();
@@ -63,7 +63,7 @@ fn image_placement_context_keeps_drop_point_and_rejects_changed_targets() {
 }
 
 #[test]
-fn image_batch_placement_is_atomic_ordered_and_shares_one_object_layer() {
+fn image_batch_placement_creates_ordered_sibling_layers_in_one_atomic_edit() {
     let source = |extent| Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [255; 4]));
     let first = source([600, 400]);
     let second = source([100, 300]);
@@ -72,8 +72,10 @@ fn image_batch_placement_is_atomic_ordered_and_shares_one_object_layer() {
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         photo, [800, 600], Platform::Gtk).unwrap();
     session.set_selected_layers(session.engine.document().scene().order().iter().copied().collect()).unwrap();
+    select(&mut session, rectangle([10., 20., 80., 90.]));
     let selected = session.engine.document().working.layer_selection.clone();
     let original = session.engine.document().clone();
+    let checkpoint = session.engine.checkpoint();
     assert!(session.place_layer_sources(vec![("First".into(), first.clone()), ("\n".into(), second.clone())],
         None, None).is_err());
     assert_eq!(session.engine.document(), &original, "failed batch reserves no live IDs and inserts nothing");
@@ -81,12 +83,15 @@ fn image_batch_placement_is_atomic_ordered_and_shares_one_object_layer() {
     session.place_layer_sources(images(), Some(Point { x: 75., y: 55. }), None).unwrap();
     let doc = session.engine.document();
     let layer = doc.working.occurrence.unwrap();
-    let children = doc.object_layer_children(layer).unwrap().to_vec();
-    assert_eq!(session.engine.backend().moving_layer, Some(layer));
-    assert_eq!(children.iter().map(|h| doc.scene().object(*h).unwrap().name.as_ref()).collect::<Vec<_>>(), ["First", "Second"]);
-    assert_eq!(doc.working.layer_selection, [layer].into());
-    assert_eq!(doc.working.objects, children.iter().copied().collect());
-    assert!(!session.engine.can_undo());
+    let layers: Vec<_> = doc.scene().order().iter().copied().filter(|h| doc.working.layer_selection.contains(h)).collect();
+    let children: Vec<_> = layers.iter().map(|h| doc.scene().object_handle(*h).unwrap()).collect();
+    assert_eq!(session.engine.backend().moving_layer, Some(layers[0]));
+    assert_eq!(layers.iter().map(|h| doc.scene().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(), ["First", "Second"]);
+    assert!(layers.contains(&layer));
+    assert_eq!(doc.working.layer_selection, layers.iter().copied().collect());
+    assert_eq!(doc.selected_objects(), children.iter().copied().collect());
+    assert!(doc.working.selection.is_none(), "placement moves the imported images as a whole");
+    assert_eq!(session.engine.checkpoint(), checkpoint);
     let before: Vec<_> = children.iter().map(|h| doc.scene().object(*h).unwrap().affine).collect();
     let third = 1. / 3.;
     assert_eq!(before, [layer_core::Affine64([third, 0., 0., third, 75. - 600. * third * 0.5, 55. - 400. * third * 0.5]), layer_core::Affine64([0.5, 0., 0., 0.5, 50., -20.])]);
@@ -94,12 +99,13 @@ fn image_batch_placement_is_atomic_ordered_and_shares_one_object_layer() {
     assert!(children.iter().zip(&before).all(|(h, start)| session.engine.document().scene().object(*h).unwrap().affine != *start));
     invoke(&mut session, CommandId::ResetTransform);
     assert_eq!(children.iter().map(|h| session.engine.document().scene().object(*h).unwrap().affine).collect::<Vec<_>>(), before, "Reset restores exact initial affines");
-    assert!(!session.engine.can_undo(), "provisional reset adds no history");
+    assert_eq!(session.engine.checkpoint(), checkpoint, "provisional reset adds no history");
     invoke(&mut session, CommandId::CancelTransform);
     assert_eq!(session.engine.backend().moving_layer, None);
     assert_live_artwork_eq(session.engine.document(), &original);
     assert_eq!(session.engine.document().working.layer_selection, selected);
-    assert!(!session.engine.can_undo());
+    assert_eq!(session.engine.document().working.selection, original.working.selection);
+    assert_eq!(session.engine.checkpoint(), checkpoint);
 
     session.place_layer_sources(images(), None, None).unwrap();
     invoke(&mut session, CommandId::ApplyTransform);
@@ -107,13 +113,14 @@ fn image_batch_placement_is_atomic_ordered_and_shares_one_object_layer() {
     assert_eq!(session.engine.backend().moving_layer, None);
     invoke(&mut session, CommandId::Undo);
     assert_live_artwork_eq(session.engine.document(), &original);
-    assert!(!session.engine.can_undo(), "the whole batch is one artwork history entry");
+    assert_eq!(session.engine.checkpoint(), checkpoint, "the whole batch is one artwork history entry");
+    assert_eq!(session.engine.document().working.selection, original.working.selection);
     invoke(&mut session, CommandId::Redo);
     assert_live_artwork_eq(session.engine.document(), &committed);
     let restored = reopen_capture(&session.capture_artwork().unwrap());
     for (h, portable, object) in committed.artwork.objects.iter() {
         let restored = restored.scene().object(restored.artwork.objects.resolve(portable).unwrap()).unwrap();
-        assert_eq!((&restored.name, restored.affine.0.map(f64::to_bits)), (&object.name, object.affine.0.map(f64::to_bits)), "{h:?}");
+        assert_eq!(restored.affine.0.map(f64::to_bits), object.affine.0.map(f64::to_bits), "{h:?}");
         assert_eq!(restored.image.as_ref(), object.image.as_ref());
     }
     assert_eq!(restored.artwork.metadata, original.artwork.metadata, "placing images keeps the document's own metadata");
@@ -164,8 +171,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     session.place_layer_sources(vec![("Menu import".into(), source.clone())], None, None).unwrap();
     let menu = session.engine.document().scene().order()[1];
     assert_eq!(menu, placed_layer(&session), "default Import goes above the complete clipped stack");
-    let child = session.engine.document().object_layer_children(menu).unwrap()[0];
-    assert_eq!(session.engine.document().scene().object(child).unwrap().name.as_ref(), "Menu import");
+    assert_eq!(session.engine.document().scene().occurrence(menu).unwrap().name.as_ref(), "Menu import");
     assert_eq!(session.engine.document().scene().occurrence(session.engine.document().scene().order()[2]).unwrap().attachment, layer_core::Attachment::Clip);
     invoke(&mut session, CommandId::CancelTransform);
     assert_live_artwork_eq(session.engine.document(), &original);
@@ -175,7 +181,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
         let doc = session.engine.document();
         assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().attachment, layer_core::Attachment::None);
         assert_eq!(doc.scene().parent(doc.working.occurrence.unwrap()), (position == LayerDropPosition::Into).then_some(group_id));
-        let object = *doc.working.objects.iter().next().unwrap();
+        let object = *doc.selected_objects().iter().next().unwrap();
         assert_eq!(doc.object_document_affine(object).unwrap().map([1., 0.5]), [100., 75.]);
         assert_eq!(doc.scene().position(doc.working.occurrence.unwrap()).unwrap(),
             if position == LayerDropPosition::Into { 1 } else { 3 });
@@ -217,7 +223,7 @@ fn image_placement_centres_cancel_apply_and_one_step_history() {
         Document::new(layer_core::authored::PortableId::random(), 200, 150, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], Platform::Gtk).unwrap();
     let original = session.engine.document().clone();
     session.place_layer_source("Photo", source.clone(), None).unwrap();
-    let object = *session.engine.document().working.objects.iter().next().unwrap();
+    let object = *session.engine.document().selected_objects().iter().next().unwrap();
     let third = 1. / 3.;
     assert_eq!(session.engine.document().scene().object(object).unwrap().affine, layer_core::Affine64([third, 0., 0., third, 100. - 600. * third * 0.5, 75. - 400. * third * 0.5]));
     assert!(session.objects.placing());
@@ -229,7 +235,7 @@ fn image_placement_centres_cancel_apply_and_one_step_history() {
     assert!(!session.engine.can_undo());
 
     session.place_layer_source("Photo", source.clone(), Some(Point { x: 60.5, y: 80.5 })).unwrap();
-    let second = *session.engine.document().working.objects.iter().next().unwrap();
+    let second = *session.engine.document().selected_objects().iter().next().unwrap();
     assert_ne!(session.engine.document().artwork.objects.id(second), original.artwork.objects.iter().next().map(|(_, id, _)| id), "cancelled IDs are never reused");
     let placed = session.engine.document().scene().object(second).unwrap().clone();
     assert_eq!(placed.affine, layer_core::Affine64([third, 0., 0., third, 60.5 - 600. * third * 0.5, 80.5 - 400. * third * 0.5]));
@@ -660,8 +666,8 @@ fn source_workflow_interns_verified_worker_tiles_shared_with_objects() {
     let mut document=Document::new(PortableId::random(),40,40,layer_core::DocumentNames {paint:"Photo".into(),paper:"Paper".into()});
     let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {panic!()};
     document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase {image:image.clone(),offset:[7,11],policy:PaintBasePolicy::SourceProfile});
-    let (layer,edit)=document.create_object_layer_edit("Objects",None,0).unwrap();document.apply(edit).unwrap();
-    let (object,edit)=document.add_image_object_edit(layer,ImageObject::new(image.clone(),"Shared"),0).unwrap();document.apply(edit).unwrap();
+    let (layer,edit)=document.create_object_layer_edit("Shared",ImageObject::new(image.clone()),None,0).unwrap();document.apply(edit).unwrap();
+    let object=document.scene().object_handle(layer).unwrap();
     let mut session=UiSession::new(Recorder {tiled_sources:true,..Default::default()},document,[800,600],Platform::Gtk).unwrap();
     session.frame(1,1).unwrap();invoke(&mut session,CommandId::RasterizeSource);
     let request=session.state.requests.first().unwrap().id;

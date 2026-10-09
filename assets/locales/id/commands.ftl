@@ -32,7 +32,7 @@ command-repair-source-profile = Perbaiki Profil Sumber…
 
 command-rasterize-source = Rasterisasi Sumber…
 command-rasterize-layer = Rasterisasi Lapisan
-command-convert-to-object = Ubah ke Lapisan Gambar
+command-convert-to-object = Ubah ke Lapisan Objek
 command-rasterize-and-apply-mask = Rasterisasi dan Terapkan Mask
 
 command-new-document = Baru…
@@ -573,7 +573,7 @@ commands-help-clear-selected = Hapus piksel terpilih di lapisan aktif; tepi lemb
 
 commands-help-clear-outside = Hapus piksel lapisan aktif di luar seleksi.
 
-commands-help-copy-selection-to-layer = Salin piksel terpilih ke lapisan baru di atasnya, di tempat yang sama. Tanpa seleksi, duplikasi lapisan. Pada lapisan gambar, duplikasi gambar yang dipilih.
+commands-help-copy-selection-to-layer = Salin piksel terpilih ke lapisan baru di atasnya, di tempat yang sama. Tanpa seleksi, duplikasi lapisan.
 
 commands-help-cut-selection-to-layer = Pindahkan piksel terpilih dari lapisan aktif ke lapisan baru di atas, pada posisi yang sama.
 
@@ -635,13 +635,13 @@ commands-help-crop-cycle-overlay = Tampilkan garis bantu pangkas berikutnya: sep
 
 commands-help-crop-straighten = Gambar garis sepanjang sesuatu yang seharusnya datar atau tegak; pangkasan diputar untuk mencocokkannya.
 
-commands-help-crop-delete-cropped-pixels = Buang piksel lukisan di luar pangkasan saat diterapkan, alih-alih mempertahankannya tersembunyi. Gambar yang ditempatkan tetap utuh; rasterisasi lapisan gambar untuk memangkasnya.
+commands-help-crop-delete-cropped-pixels = Buang piksel lukisan di luar pangkasan saat diterapkan, alih-alih mempertahankannya tersembunyi. Gambar yang ditempatkan tetap utuh; rasterisasi lapisan objek untuk memangkasnya.
 
 commands-help-straighten-to-guide = Mulai pangkasan yang diputar agar sejajar dengan garis bantu lurus terpilih.
 
 commands-help-crop-fit-content = Atur pangkasan ke batas piksel terlihat, termasuk yang berada di luar kanvas.
 
-commands-help-image-size = Skalakan seluruh gambar ke ukuran baru dalam piksel atau persen, atau ubah hanya resolusinya. Sampel lapisan cat diambil ulang sekali; lapisan gambar menskalakan gambarnya tanpa mengambil ulang sampel.
+commands-help-image-size = Skalakan seluruh gambar ke ukuran baru dalam piksel atau persen, atau ubah hanya resolusinya. Sampel lapisan cat diambil ulang sekali; lapisan objek menskalakan gambarnya tanpa mengambil ulang sampel.
 
 commands-help-rotate-image-left = Putar seluruh gambar beserta seleksi dan garis bantunya. Piksel berpindah tanpa pengambilan sampel ulang.
 
@@ -658,13 +658,13 @@ commands-help-copy = Salin piksel atau gambar yang dipilih. Tanpa seleksi piksel
 commands-help-cut = Salin piksel, gambar, atau seluruh lapisan yang dipilih, lalu hapus setelah berhasil ditulis ke papan klip.
 
 commands-help-copy-merged = Salin gambar terlihat dalam seleksi, sebagaimana hasil ekspor.
-commands-help-copy-pixels = Salin piksel lapisan aktif di dalam seleksi, sebelum opasitas, mask, dan efeknya. Pada lapisan gambar, gambarnya disalin sebagai piksel.
+commands-help-copy-pixels = Salin piksel lapisan aktif di dalam seleksi, sebelum opasitas, mask, dan efeknya. Pada lapisan objek, gambarnya disalin sebagai piksel.
 
 commands-help-paste-image = Tambahkan isi papan klip sebagai lapisan atau gambar. Gambar dari aplikasi lain dibuka dengan gagang penempatan pada ukuran aslinya.
 
 commands-help-paste-in-place = Tempel di posisi saat disalin. Gambar dari aplikasi lain ditempatkan di titik asal kanvas, dengan ukuran aslinya.
 
-commands-help-paste-into = Tambahkan isi papan klip sebagai gambar di lapisan gambar baru yang masknya hanya menampilkan seleksi. Pindahkan gambar untuk mengubah bagian yang terlihat.
+commands-help-paste-into = Tambahkan isi papan klip sebagai gambar di lapisan objek baru yang masknya hanya menampilkan seleksi. Pindahkan gambar untuk mengubah bagian yang terlihat.
 
 commands-help-new-dodge-burn-layer = Tambah lapisan Cahaya Lembut berwarna abu-abu netral di atas lapisan aktif. Lukis putih untuk menerangkan dan hitam untuk menggelapkan.
 
@@ -1107,7 +1107,7 @@ commands-refusal-merges-move-the-selection-layers-out-of-the-group-first = Pinda
 
 commands-refusal-merges-the-merged-layer-would-exceed-the-1-gib-limit-for-one-edit = Lapisan gabungan akan melebihi batas 1 GiB untuk satu pengeditan
 commands-refusal-merges-a-filter-reaches-too-far = Filter di sini menjangkau terlalu jauh untuk digabungkan tanpa kehilangan piksel
-commands-refusal-conversions-select-an-image-layer = Pilih lapisan gambar
+commands-refusal-conversions-select-an-image-layer = Pilih lapisan objek
 commands-refusal-conversions-too-large = Isi lapisan terlalu besar untuk diubah dalam satu pengeditan
 commands-refusal-conversions-layer-changed = Lapisan berubah saat sedang diubah
 

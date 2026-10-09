@@ -1,5 +1,5 @@
 use super::*;
-use crate::session::test_support::{Recorder, event, invoke, key, pen_at, select, rectangle};
+use crate::session::test_support::{Recorder, assert_live_artwork_eq, event, invoke, key, pen_at, select, rectangle};
 use layer_core::{Document, DocumentNames, ImageObject, PortableId, SceneScope, color::source::rgba8_source};
 
 fn translate(x: f64, y: f64) -> Affine64 { Affine64([1., 0., 0., 1., x, y]) }
@@ -8,17 +8,15 @@ fn session() -> UiSession<Recorder> {
         Document::new(PortableId::random(), 1000, 1000, DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [1000, 1000], Platform::Gtk).unwrap()
 }
 fn image(extent: [u32; 2]) -> layer_core::Image { rgba8_source(extent, |x, y| [x as u8, y as u8, 7, 255]).into() }
-fn object_layer(s: &mut UiSession<Recorder>, name: &str, parent: Option<OccurrenceHandle>) -> OccurrenceHandle {
-    let (layer, edit) = s.engine.document().create_object_layer_edit(name, parent, 0).unwrap();
-    s.engine.apply_edit(edit).unwrap();
-    layer
-}
-fn add(s: &mut UiSession<Recorder>, layer: OccurrenceHandle, name: &str, affine: Affine64, at: usize) -> ImageObjectHandle {
-    let mut object = ImageObject::new(image([100, 100]), name);
+fn add(s: &mut UiSession<Recorder>, name: &str, parent: Option<OccurrenceHandle>, affine: Affine64, at: usize) -> (OccurrenceHandle, ImageObjectHandle) {
+    let mut object = ImageObject::new(image([100, 100]));
     object.affine = affine;
-    let (handle, edit) = s.engine.document().add_image_object_edit(layer, object, at).unwrap();
+    let (layer, edit) = s.engine.document().create_object_layer_edit(name, object, parent, at).unwrap();
     s.engine.apply_edit(edit).unwrap();
-    handle
+    (layer, s.engine.document().scene().object_handle(layer).unwrap())
+}
+fn owner(s: &UiSession<Recorder>, object: ImageObjectHandle) -> OccurrenceHandle {
+    s.engine.document().scene().object_owner(object).unwrap()
 }
 fn activate(s: &mut UiSession<Recorder>, layer: OccurrenceHandle) {
     s.layer_action(LayerAction::Select { id: occurrence_token(layer), mask: false }).unwrap();
@@ -27,19 +25,18 @@ fn activate(s: &mut UiSession<Recorder>, layer: OccurrenceHandle) {
 }
 fn fixture() -> (UiSession<Recorder>, OccurrenceHandle, [ImageObjectHandle; 2]) {
     let mut s = session();
-    let layer = object_layer(&mut s, "Images", None);
-    let back = add(&mut s, layer, "Back", translate(100., 100.), 0);
-    let front = add(&mut s, layer, "Front", translate(160., 100.), 0);
+    let (_, back) = add(&mut s, "Back", None, translate(100., 100.), 0);
+    let (layer, front) = add(&mut s, "Front", None, translate(160., 100.), 0);
     activate(&mut s, layer);
     (s, layer, [front, back])
 }
 fn affine(s: &UiSession<Recorder>, object: ImageObjectHandle) -> Affine64 { s.engine.document().scene().object(object).unwrap().affine }
 fn live(artwork: &layer_core::Artwork) -> String {
-    format!("{:?}", (artwork.stacks.iter().collect::<Vec<_>>(), artwork.occurrences.iter().collect::<Vec<_>>(), artwork.object_layers.iter().collect::<Vec<_>>(),
-        artwork.objects.iter().map(|(h, id, o)| (h, id, o.name.clone(), o.affine, o.visible)).collect::<Vec<_>>(), artwork.coverage.iter().count()))
+    format!("{:?}", (artwork.stacks.iter().collect::<Vec<_>>(), artwork.occurrences.iter().collect::<Vec<_>>(),
+        artwork.objects.iter().map(|(h, id, o)| (h, id, o.affine)).collect::<Vec<_>>(), artwork.coverage.iter().count()))
 }
 fn near(actual: Affine64, expected: Affine64) { assert!(actual.0.iter().zip(expected.0).all(|(a, b)| (a - b).abs() < 1e-3), "{actual:?} != {expected:?}"); }
-fn selected(s: &UiSession<Recorder>) -> BTreeSet<ImageObjectHandle> { s.engine.document().working.objects.clone() }
+fn selected(s: &UiSession<Recorder>) -> BTreeSet<ImageObjectHandle> { s.engine.document().selected_objects() }
 fn pen(s: &mut UiSession<Recorder>, phase: PenPhase, at: [f32; 2]) {
     pen_at(s, 1, phase, at);
     s.frame(1, 1).unwrap();
@@ -56,12 +53,10 @@ fn drag(s: &mut UiSession<Recorder>, from: [f32; 2], to: [f32; 2]) {
 }
 
 #[test]
-fn move_picks_front_to_back_across_layers_and_a_miss_clears_only_object_selection() {
+fn move_picks_front_to_back_across_layers_and_a_miss_clears_layer_selection() {
     let (mut s, layer, [front, back]) = fixture();
-    let other = object_layer(&mut s, "Other", None);
-    let far = add(&mut s, other, "Far", translate(600., 600.), 0);
+    let (other, far) = add(&mut s, "Far", None, translate(600., 600.), 0);
     activate(&mut s, layer);
-    select(&mut s, rectangle([0., 0., 10., 10.]));
     click(&mut s, [230., 180.]);
     assert_eq!(selected(&s), [front].into());
     click(&mut s, [120., 180.]);
@@ -71,9 +66,113 @@ fn move_picks_front_to_back_across_layers_and_a_miss_clears_only_object_selectio
     assert_eq!(selected(&s), [far].into());
     click(&mut s, [900., 50.]);
     assert!(selected(&s).is_empty());
-    assert_eq!(s.engine.document().working.occurrence, Some(other));
-    assert!(s.engine.document().working.selection.is_some(), "a canvas miss keeps the pixel selection");
+    assert_eq!(s.engine.document().working.occurrence, None);
     assert_eq!(affine(&s, far), translate(600., 600.));
+}
+
+#[test]
+fn clearing_layer_selection_still_allows_frontmost_picking_and_shift_selection() {
+    for tool in [LayerCanvasTool::Move, LayerCanvasTool::Transform] {
+        let (mut s, layer, [front, back]) = fixture();
+        s.layer_action(LayerAction::Tool { tool }).unwrap();
+        key(&mut s, "Escape", true, false, false);
+        key(&mut s, "Escape", false, false, false);
+        let cleared = s.engine.document().working.clone();
+        let checkpoint = s.engine.checkpoint();
+        assert_eq!(cleared.occurrence, None);
+        assert!(cleared.layer_selection.is_empty());
+        click(&mut s, [180., 140.]);
+        assert_eq!(selected(&s), [front].into());
+        assert_eq!(s.engine.document().working.occurrence, Some(layer));
+        s.interaction.modifiers = Modifiers { shift: true, ..Default::default() };
+        click(&mut s, [120., 160.]);
+        assert_eq!(selected(&s), [front, back].into());
+        assert_eq!(s.engine.document().working.occurrence, Some(owner(&s, back)));
+        assert_eq!(affine(&s, front), translate(160., 100.));
+        assert_eq!(affine(&s, back), translate(100., 100.));
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+}
+
+#[test]
+fn cancelling_a_pick_and_drag_restores_cleared_layer_selection() {
+    let (mut s, _, [front, back]) = fixture();
+    click(&mut s, [900., 50.]);
+    let cleared = s.engine.document().working.clone();
+    let checkpoint = s.engine.checkpoint();
+    assert_eq!(cleared.occurrence, None);
+    assert!(cleared.layer_selection.is_empty());
+    pen(&mut s, PenPhase::Down, [180., 140.]);
+    assert_eq!(selected(&s), [front].into());
+    pen(&mut s, PenPhase::Move, [200., 150.]);
+    near(affine(&s, front), translate(180., 110.));
+    pen(&mut s, PenPhase::Cancel, [200., 150.]);
+    assert_eq!(s.engine.document().working.occurrence, cleared.occurrence);
+    assert_eq!(s.engine.document().working.layer_selection, cleared.layer_selection);
+    assert_eq!(s.engine.document().working.layer_anchor, cleared.layer_anchor);
+    assert_eq!(affine(&s, front), translate(160., 100.));
+    assert_eq!(affine(&s, back), translate(100., 100.));
+    assert_eq!(s.engine.checkpoint(), checkpoint);
+}
+
+#[test]
+fn touch_can_pick_without_layer_selection_but_empty_canvas_and_pixel_mask_contexts_cannot() {
+    use crate::session::test_support::{on_surface, pointer_input};
+    let (mut s, layer, _) = fixture();
+    key(&mut s, "Escape", true, false, false);
+    key(&mut s, "Escape", false, false, false);
+    assert_eq!(s.engine.document().working.occurrence, None);
+    let surface = |s: &UiSession<Recorder>, p: [f32; 2]| {
+        let q = on_surface(s, Point { x: p[0], y: p[1] }); [q.x, q.y]
+    };
+    let touch = |id, phase, position| pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, position, 0);
+    let inside = surface(&s, [180., 140.]);
+    assert!(s.object_touch_target(inside));
+    assert!(s.input(touch(7, ContactPhase::Down, inside)).unwrap().paint);
+    s.input(touch(7, ContactPhase::Cancel, inside)).unwrap();
+    let cleared = s.engine.document().working.clone();
+    let checkpoint = s.engine.checkpoint();
+    let camera = s.state.camera.document_to_surface();
+    let outside = surface(&s, [900., 50.]);
+    let moved = [outside[0] + 30., outside[1] + 20.];
+    let second = [outside[0], outside[1] + 100.];
+    let second_moved = [moved[0], moved[1] + 100.];
+    assert!(!s.object_touch_target(outside));
+    for (id, phase, position) in [(7, ContactPhase::Down, outside), (8, ContactPhase::Down, second),
+        (7, ContactPhase::Move, moved), (8, ContactPhase::Move, second_moved),
+        (7, ContactPhase::Up, moved), (8, ContactPhase::Up, second_moved)] {
+        assert!(!s.input(touch(id, phase, position)).unwrap().paint);
+    }
+    assert_ne!(s.state.camera.document_to_surface(), camera);
+    assert_eq!(s.engine.document().working, cleared);
+    assert_eq!(s.engine.checkpoint(), checkpoint);
+    select(&mut s, rectangle([120., 120., 180., 180.]));
+    assert!(!s.object_touch_target(surface(&s, [180., 140.])));
+    assert!(!s.object_picking_enabled());
+    invoke(&mut s, CommandId::Deselect);
+    activate(&mut s, layer);
+    let id = occurrence_token(layer);
+    s.layer_action(LayerAction::AddMask { id, replace: false }).unwrap();
+    s.layer_action(LayerAction::Select { id, mask: true }).unwrap();
+    s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Move }).unwrap();
+    assert!(matches!(s.engine.document().working.target, Some(SourceTarget::Coverage(_))));
+    assert!(!s.object_touch_target(surface(&s, [180., 140.])));
+    assert!(!s.object_picking_enabled());
+}
+
+#[test]
+fn object_transform_target_respects_pixel_and_mixed_layer_selections() {
+    let (mut s, layer, [front, back]) = fixture();
+    s.select_objects(layer, [front, back].into()).unwrap();
+    assert_eq!(s.object_target(), Some(layer));
+    select(&mut s, rectangle([120., 120., 180., 180.]));
+    assert!(s.object_target().is_none(), "pixel selection must not transform whole images");
+    assert_eq!(selected(&s), [front, back].into());
+    invoke(&mut s, CommandId::Deselect);
+    assert_eq!(s.object_target(), Some(layer));
+    let paint = *s.engine.document().scene().order().iter().find(|h| s.engine.document().scene().paint_source(**h).is_some()).unwrap();
+    s.set_selected_layers([layer, paint].into()).unwrap();
+    assert!(s.object_target().is_none(), "an object-only transform cannot ignore selected paint");
 }
 
 #[test]
@@ -90,19 +189,18 @@ fn a_drag_whose_first_moves_arrive_before_a_frame_moves_the_image() {
 }
 
 #[test]
-fn shift_click_adds_and_removes_within_the_active_layer_only() {
+fn shift_click_adds_and_removes_object_layers() {
     let (mut s, layer, [front, back]) = fixture();
-    let other = object_layer(&mut s, "Other", None);
-    let far = add(&mut s, other, "Far", translate(600., 600.), 0);
+    let (other, far) = add(&mut s, "Far", None, translate(600., 600.), 0);
     activate(&mut s, layer);
-    for (at, expected) in [([230., 180.], BTreeSet::from([front])), ([120., 180.], BTreeSet::from([front, back])), ([230., 180.], BTreeSet::from([back]))] {
-        s.interaction.modifiers = Modifiers { shift: !selected(&s).is_empty(), ..Default::default() };
+    for (index, (at, expected)) in [([230., 180.], BTreeSet::from([front])), ([120., 180.], BTreeSet::from([front, back])), ([230., 180.], BTreeSet::from([back]))].into_iter().enumerate() {
+        s.interaction.modifiers = Modifiers { shift: index != 0, ..Default::default() };
         click(&mut s, at);
         assert_eq!(selected(&s), expected);
     }
     s.interaction.modifiers = Modifiers { shift: true, ..Default::default() };
     click(&mut s, [650., 650.]);
-    assert_eq!((s.engine.document().working.occurrence, selected(&s)), (Some(layer), BTreeSet::from([back])), "Shift never switches layers");
+    assert_eq!((s.engine.document().working.occurrence, selected(&s)), (Some(other), BTreeSet::from([back, far])));
     assert_eq!(affine(&s, far), translate(600., 600.));
 }
 
@@ -179,37 +277,29 @@ fn held_arrow_nudges_coalesce_into_one_step_and_escape_cancels() {
 }
 
 #[test]
-fn shortcut_commands_follow_the_visible_object_or_pixel_target() {
+fn selection_shortcuts_edit_pixels_while_layer_actions_duplicate_and_delete_images() {
     let (mut s, layer, [front, back]) = fixture();
-    let hidden = add(&mut s, layer, "Hidden", translate(400., 400.), 2);
-    s.layer_edit(s.engine.document().set_image_object_visible_edit(hidden, false).unwrap()).unwrap();
     select(&mut s, rectangle([0., 0., 50., 50.]));
     let pixels = s.engine.document().working.selection.clone();
-    assert_eq!(s.command(CommandId::SelectAll).label.as_ref(), s.localization().text(MessageId::OBJECTS_SELECT_ALL_IMAGES).as_ref());
+    let selected_layers = s.engine.document().working.layer_selection.clone();
+    assert_eq!(s.command(CommandId::SelectAll).label, CommandId::SelectAll.localized_label(s.localization()));
     invoke(&mut s, CommandId::SelectAll);
-    assert_eq!(selected(&s), [front, back, hidden].into());
-    assert_eq!(s.engine.document().working.selection, pixels);
-    invoke(&mut s, CommandId::Deselect);
-    assert!(selected(&s).is_empty());
-    assert_eq!(s.engine.document().working.selection, pixels);
-    assert!(!s.command(CommandId::ClearSelected).enabled);
-    assert!(!s.command(CommandId::CutSelectionToLayer).enabled);
-    assert_eq!(s.command(CommandId::CutSelectionToLayer).disabled_reason.as_deref(), Some(s.localization().text(MessageId::OBJECTS_CUT_TO_LAYER_UNAVAILABLE).as_ref()));
-    s.select_objects(layer, [front].into()).unwrap();
-    invoke(&mut s, CommandId::CopySelectionToLayer);
-    let copy = *selected(&s).iter().next().unwrap();
-    assert_eq!(s.engine.document().object_layer_children(layer).unwrap(), &[copy, front, back, hidden]);
-    assert_eq!(s.engine.document().scene().occurrence(layer).map(|l| l.name.clone()).unwrap().as_ref(), "Images");
-    invoke(&mut s, CommandId::ClearSelected);
-    assert_eq!(s.engine.document().object_layer_children(layer).unwrap(), &[front, back, hidden]);
-    assert!(s.engine.document().scene().occurrence(layer).is_some(), "Delete never removes the object layer");
-    s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Selection { kind: SelectionTool::Rectangle } }).unwrap();
-    assert!(s.object_target().is_none());
-    invoke(&mut s, CommandId::SelectAll);
-    assert!(selected(&s).is_empty());
     assert_ne!(s.engine.document().working.selection, pixels);
-    s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Move }).unwrap();
-    assert_eq!(s.object_target(), Some(layer));
+    assert_eq!(s.engine.document().working.layer_selection, selected_layers);
+    invoke(&mut s, CommandId::Deselect);
+    assert!(s.engine.document().working.selection.is_none());
+    assert_eq!(selected(&s), [front].into());
+    s.layer_action(LayerAction::DuplicateSelected).unwrap();
+    let copy = *selected(&s).iter().next().unwrap();
+    let copy_layer = owner(&s, copy);
+    assert_ne!(copy_layer, layer);
+    assert!(s.engine.document().scene().object(copy).unwrap().image.same_owner(&s.engine.document().scene().object(front).unwrap().image));
+    s.layer_action(LayerAction::DeleteSelected).unwrap();
+    assert!(s.engine.document().scene().occurrence(copy_layer).is_none());
+    assert!(s.engine.document().scene().object(front).is_some());
+    assert!(s.engine.document().scene().object(back).is_some());
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().scene().object_handle(copy_layer), Some(copy));
 }
 
 #[test]
@@ -258,8 +348,8 @@ fn original_size_uses_the_orthogonal_polar_factor_and_keeps_mirrors() {
 
 #[test]
 fn the_object_canvas_bar_names_image_commands() {
-    let (mut s, _, [front, _]) = fixture();
-    s.object_action(ObjectAction::Select { id: object_token(front), extend: false }).unwrap();
+    let (mut s, layer, [front, _]) = fixture();
+    s.select_objects(layer, [front].into()).unwrap();
     s.frame(1, 1).unwrap();
     let bar = s.state.canvas_bar.clone().expect("an image canvas bar");
     let labels: Vec<String> = bar.items.iter().flat_map(|item| match &item.option {
@@ -267,45 +357,40 @@ fn the_object_canvas_bar_names_image_commands() {
         _ => vec![item.label.to_string()],
     }).collect();
     let l = s.localization();
-    for expected in [MessageId::OBJECTS_DUPLICATE_IMAGES, MessageId::OBJECTS_DELETE_IMAGES, MessageId::OBJECTS_INTERPOLATION_LINEAR, MessageId::OBJECTS_ORIGINAL_SIZE] {
+    for expected in [MessageId::OBJECTS_INTERPOLATION_LINEAR, MessageId::OBJECTS_ORIGINAL_SIZE] {
         assert!(labels.iter().any(|label| *label == *l.text(expected)), "{expected:?} in {labels:?}");
     }
-    assert!(!labels.iter().any(|label| *label == *CommandId::CopySelectionToLayer.localized_label(l)), "{labels:?}");
 }
 
 #[test]
-fn object_rows_project_children_and_reorder_only_inside_their_layer() {
-    let (mut s, layer, [front, back]) = fixture();
-    let other = object_layer(&mut s, "Other", None);
-    let far = add(&mut s, other, "", translate(600., 600.), 0);
-    s.object_action(ObjectAction::Expand { layer: occurrence_token(layer), expanded: true }).unwrap();
-    s.object_action(ObjectAction::Expand { layer: occurrence_token(other), expanded: true }).unwrap();
+fn object_rows_use_ordinary_layer_selection_order_visibility_and_menus() {
+    let (mut s, front_layer, [front, back]) = fixture();
+    let back_layer = owner(&s, back);
+    let (far_layer, far) = add(&mut s, "Far", None, translate(600., 600.), 0);
     s.refresh_document();
     let row = |s: &UiSession<Recorder>, layer| s.state.layers.iter().find(|row| row.id == occurrence_token(layer)).unwrap().clone();
-    let rows = row(&s, layer);
-    assert_eq!((rows.object_count, rows.expanded), (2, true));
-    assert_eq!(rows.description, "2 images");
-    assert_ne!(rows.objects[0].thumbnail_revision, rows.objects[1].thumbnail_revision, "each image previews its own pixels");
-    assert_eq!(layer_render::ThumbnailTarget::from_wire_id(rows.objects[0].id), Some(layer_render::ThumbnailTarget::Object(front)));
-    assert_eq!(rows.objects.iter().map(|r| (r.id, r.label.as_str(), r.can_raise, r.can_lower)).collect::<Vec<_>>(),
-        vec![(object_token(front), "Front", false, true), (object_token(back), "Back", true, false)]);
-    assert_eq!(row(&s, other).objects[0].label, s.localization().text(MessageId::OBJECTS_UNNAMED_IMAGE).as_ref());
-    assert!(object_handle(occurrence_token(layer)).is_err());
+    for (layer, label) in [(front_layer, "Front"), (back_layer, "Back"), (far_layer, "Far")] {
+        let row = row(&s, layer);
+        assert_eq!(row.label, label);
+        assert!(row.object && row.has_thumbnail);
+        assert_eq!(layer_render::ThumbnailTarget::from_wire_id(row.id), Some(layer_render::ThumbnailTarget::Occurrence(layer)));
+    }
+    assert!(object_handle(occurrence_token(front_layer)).is_err());
     assert!(occurrence_handle(object_token(front)).is_err());
-    s.object_action(ObjectAction::Select { id: object_token(back), extend: false }).unwrap();
+    s.layer_action(LayerAction::Select { id: occurrence_token(back_layer), mask: false }).unwrap();
     assert_eq!(selected(&s), [back].into());
-    s.object_action(ObjectAction::Order { order: ObjectOrder::Front }).unwrap();
-    assert_eq!(s.engine.document().object_layer_children(layer).unwrap(), &[back, front]);
-    s.object_action(ObjectAction::Drop { id: object_token(back), target: object_token(front), below: true }).unwrap();
-    assert_eq!(s.engine.document().object_layer_children(layer).unwrap(), &[front, back]);
-    assert!(s.object_action(ObjectAction::Drop { id: object_token(back), target: object_token(far), below: false }).is_err());
-    s.object_action(ObjectAction::Visibility { id: object_token(front), visible: false }).unwrap();
+    invoke(&mut s, CommandId::RaiseLayer);
+    let order = s.engine.document().scene().order();
+    assert!(order.iter().position(|h| *h == back_layer).unwrap() < order.iter().position(|h| *h == front_layer).unwrap());
+    s.layer_action(LayerAction::Reparent { id: occurrence_token(back_layer), parent: None, index: 2 }).unwrap();
+    assert_eq!(s.engine.document().scene().order()[2], back_layer);
+    s.layer_action(LayerAction::Visibility { id: occurrence_token(front_layer), value: false }).unwrap();
     s.refresh_document();
-    assert!(!row(&s, layer).objects[0].visible);
-    s.object_action(ObjectAction::Select { id: object_token(far), extend: true }).unwrap();
-    assert_eq!((s.engine.document().working.occurrence, selected(&s)), (Some(other), BTreeSet::from([far])));
-    let menu = s.object_menu(object_token(far)).unwrap();
-    assert!(menu.sections.iter().flatten().any(|item| item.action == Some(UiAction::Object { action: ObjectAction::Delete }) && item.enabled));
+    assert!(!row(&s, front_layer).visible);
+    s.layer_action(LayerAction::SelectRow { id: occurrence_token(far_layer), extend: false, toggle: true }).unwrap();
+    assert_eq!(selected(&s), [back, far].into());
+    let menu = s.layer_menu_with(occurrence_token(far_layer), false, true).unwrap();
+    assert!(menu.sections.iter().flatten().any(|item| item.action == Some(UiAction::Layer { action: LayerAction::DeleteSelected }) && item.enabled));
 }
 
 #[test]
@@ -332,16 +417,146 @@ fn placement_inserts_objects_with_one_commit_and_cancel_leaves_no_records() {
     let layer = s.engine.document().working.occurrence.unwrap_or(layer);
     let first = *selected(&s).iter().next().unwrap();
     near(affine(&s, first), translate(210., 250.));
-    assert_eq!(s.engine.document().scene().object_layer(layer).unwrap().children, vec![first]);
+    assert_eq!(s.engine.document().scene().object_handle(layer), Some(first));
     s.place_layer_sources(vec![("Second".into(), std::sync::Arc::unwrap_or_clone(source()))], None, None).unwrap();
     invoke(&mut s, CommandId::ApplyTransform);
-    assert_eq!(s.engine.document().scene().object_layer(layer).unwrap().children.len(), 2, "a second paste enters the active object layer");
+    let second_layer = s.engine.document().working.occurrence.unwrap();
+    assert_ne!(second_layer, layer, "a second paste creates its own sibling layer");
+    assert_eq!(s.engine.document().artwork.objects.len(), 2);
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(s.engine.document().scene().object_layer(layer).unwrap().children, vec![first]);
+    assert_eq!(s.engine.document().scene().object_handle(layer), Some(first));
+    assert!(s.engine.document().scene().occurrence(second_layer).is_none());
     s.place_layer_sources(vec![("Third".into(), std::sync::Arc::unwrap_or_clone(source()))], None, None).unwrap();
     invoke(&mut s, CommandId::Undo);
     assert!(!s.objects.placing());
-    assert_eq!(s.engine.document().scene().object_layer(layer).unwrap().children, vec![first]);
+    assert_eq!(s.engine.document().scene().object_handle(layer), Some(first));
+    assert_eq!(s.engine.document().artwork.objects.len(), 1);
+}
+
+#[test]
+fn placement_picking_keeps_existing_images_out_of_the_provisional_edit() {
+    for finish in [CommandId::CancelTransform, CommandId::ApplyTransform] {
+        let (mut s, _, [front, back]) = fixture();
+        let original = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        let sources = [([200, 100], "First"), ([100, 80], "Second")].into_iter()
+            .map(|(extent, name)| (name.into(), std::sync::Arc::unwrap_or_clone(rgba8_source(extent, |_, _| [255; 4])))).collect();
+        s.place_layer_sources(sources, Some(Point { x: 600., y: 600. }), None).unwrap();
+        let provisional = selected(&s);
+        let layers = s.engine.document().working.layer_selection.clone();
+        let active = s.engine.document().working.occurrence;
+        let starts: Vec<_> = provisional.iter().map(|h| (*h, affine(&s, *h))).collect();
+        assert_eq!(provisional.len(), 2);
+        for shift in [false, true] {
+            s.interaction.modifiers = Modifiers { shift, ..Default::default() };
+            for point in [[180., 140.], [120., 160.], [900., 50.]] {
+                drag(&mut s, point, [point[0] + 20., point[1] + 10.]);
+                assert_eq!(selected(&s), provisional);
+                assert_eq!(s.engine.document().working.layer_selection, layers);
+                assert_eq!(s.engine.document().working.occurrence, active);
+                for (object, start) in &starts { assert_eq!(affine(&s, *object), *start); }
+                assert_eq!(affine(&s, front), translate(160., 100.));
+                assert_eq!(affine(&s, back), translate(100., 100.));
+            }
+        }
+        drag(&mut s, [535., 620.], [555., 620.]);
+        assert_eq!(selected(&s), provisional);
+        for (object, start) in &starts { near(affine(&s, *object), translate(20., 0.).compose(*start)); }
+        assert_eq!(affine(&s, front), translate(160., 100.));
+        assert_eq!(affine(&s, back), translate(100., 100.));
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        s.interaction.modifiers = Modifiers::default();
+        invoke(&mut s, finish);
+        assert!(!s.objects.placing());
+        if finish == CommandId::ApplyTransform {
+            assert_eq!(s.engine.document().artwork.objects.len(), original.artwork.objects.len() + 2);
+            assert_eq!(affine(&s, front), translate(160., 100.));
+            assert_eq!(affine(&s, back), translate(100., 100.));
+            let accepted = s.engine.document().clone();
+            invoke(&mut s, CommandId::Undo);
+            assert_live_artwork_eq(s.engine.document(), &original);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            invoke(&mut s, CommandId::Redo);
+            assert_live_artwork_eq(s.engine.document(), &accepted);
+        } else {
+            assert_live_artwork_eq(s.engine.document(), &original);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert_eq!(selected(&s), original.selected_objects());
+        }
+    }
+}
+
+#[test]
+fn placement_hint_survives_transforms_and_cancelled_drags_until_completion() {
+    for finish in [CommandId::CancelTransform, CommandId::ApplyTransform] {
+        let mut s = session();
+        let source = std::sync::Arc::unwrap_or_clone(rgba8_source([200, 100], |_, _| [255; 4]));
+        s.place_layer_sources(vec![("First".into(), source.clone()), ("Second".into(), source)],
+            Some(Point { x: 300., y: 300. }), None).unwrap();
+        let selected = selected(&s);
+        let hint = s.engine.document().working.occurrence;
+        assert!(hint.is_some());
+        for command in [CommandId::TransformFlipHorizontal, CommandId::TransformRotateRight, CommandId::ResetTransform] {
+            invoke(&mut s, command);
+            assert_eq!(s.engine.backend().moving_layer, hint);
+        }
+        s.transform_selected(translate(17.25, -3.5)).unwrap();
+        assert_eq!(s.engine.backend().moving_layer, hint);
+        let before: Vec<_> = selected.iter().map(|h| (*h, affine(&s, *h))).collect();
+        let point = s.session_frame().unwrap().unit.map([0.25, 0.75]).map(|v| v as f32);
+        let moved = [point[0] + 20., point[1] + 10.];
+        pen(&mut s, PenPhase::Down, point);
+        pen(&mut s, PenPhase::Move, moved);
+        assert_eq!(s.engine.backend().moving_layer, hint);
+        assert!(before.iter().all(|(h, start)| affine(&s, *h) != *start));
+        pen(&mut s, PenPhase::Cancel, moved);
+        assert_eq!(s.engine.backend().moving_layer, hint);
+        for (h, start) in &before { assert_eq!(affine(&s, *h), *start); }
+        invoke(&mut s, finish);
+        assert_eq!(s.engine.backend().moving_layer, None);
+        assert!(!s.objects.placing());
+    }
+}
+
+#[test]
+fn placement_refuses_row_and_direct_property_actions_without_changing_the_document() {
+    let (mut s, layer, _) = fixture();
+    let id = occurrence_token(layer);
+    let original = s.engine.document().clone();
+    s.place_layer_sources(vec![("Photo".into(), std::sync::Arc::unwrap_or_clone(rgba8_source([200, 100], |_, _| [255; 4])))],
+        Some(Point { x: 600., y: 600. }), None).unwrap();
+    let provisional = s.engine.document().clone();
+    let checkpoint = s.engine.checkpoint();
+    let refusal = s.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST);
+    for action in [LayerAction::Select { id, mask: false }, LayerAction::SelectRow { id, extend: false, toggle: true },
+        LayerAction::SelectAllLayers { selected: false }, LayerAction::Visibility { id, value: false },
+        LayerAction::Reparent { id, parent: None, index: 0 }, LayerAction::DuplicateSelected, LayerAction::DeleteSelected] {
+        assert_eq!(s.layer_action(action).unwrap_err(), refusal.as_ref());
+        assert_eq!(s.engine.document(), &provisional);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert!(s.objects.placing());
+    }
+    let search = s.state.filter_picker.search.clone();
+    for action in [UiAction::SelectLayer { id }, UiAction::SetLayerVisibility { id, visible: false },
+        UiAction::SetLayerOpacity { id: Some(id), opacity: 0.25 }, UiAction::SetLayerOpacity { id: None, opacity: 0.5 },
+        UiAction::Effect { action: EffectAction::Set { layer: id, key: "opacity".into(), value: layer_core::EffectValue::Number(0.75) } },
+        UiAction::Effect { action: EffectAction::InsertAttached { effect: "gaussian_blur".into(), owner: id, epoch: s.state.document_file.epoch } },
+        UiAction::FilterPicker { action: FilterPickerAction::Search { query: "blur".into() } }] {
+        assert_eq!(s.dispatch(action).unwrap_err(), refusal.as_ref());
+        assert_eq!(s.engine.document(), &provisional);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.state.filter_picker.search, search);
+        assert!(s.objects.placing());
+    }
+    invoke(&mut s, CommandId::CancelTransform);
+    assert_live_artwork_eq(s.engine.document(), &original);
+    s.dispatch(UiAction::SelectLayer { id }).unwrap();
+    assert_eq!(s.engine.document().working.occurrence, Some(layer));
+    s.dispatch(UiAction::SetLayerOpacity { id: Some(id), opacity: 0.25 }).unwrap();
+    assert_eq!(s.engine.document().scene().occurrence(layer).unwrap().opacity, 0.25);
+    invoke(&mut s, CommandId::Undo);
+    assert_live_artwork_eq(s.engine.document(), &original);
+    assert_eq!(s.engine.checkpoint(), checkpoint);
 }
 
 #[test]
@@ -350,8 +565,7 @@ fn touch_lands_on_unselected_images_and_object_layers_join_snap_candidates() {
     let surface = |s: &UiSession<Recorder>, p: [f32; 2]| { let q = crate::session::test_support::on_surface(s, Point { x: p[0], y: p[1] }); [q.x, q.y] };
     assert!(s.object_touch_hit(surface(&s, [230., 180.])));
     assert!(!s.object_touch_hit(surface(&s, [900., 900.])));
-    let other = object_layer(&mut s, "Other", None);
-    add(&mut s, other, "Far", translate(600., 600.), 0);
+    let (other, _) = add(&mut s, "Far", None, translate(600., 600.), 0);
     activate(&mut s, layer);
     s.select_objects(layer, [front].into()).unwrap();
     let candidates = s.measured_snap_bounds();
@@ -367,6 +581,21 @@ fn pending_copy(s: &UiSession<Recorder>) -> u32 {
 }
 
 #[test]
+fn copying_an_integer_positioned_object_uses_its_exact_image_extent() {
+    let mut s = session();
+    let mut object = ImageObject::new(image([8, 6]));
+    object.affine = translate(11., -5.);
+    let (layer, edit) = s.engine.document().create_object_layer_edit("Small photo", object, None, 0).unwrap();
+    s.engine.apply_edit(edit).unwrap();
+    activate(&mut s, layer);
+    invoke(&mut s, CommandId::Copy);
+    let capture = s.capture_clipboard(pending_copy(&s)).unwrap();
+    assert_eq!(capture.origin, [11, -5]);
+    assert_eq!(capture.crop, [0, 0, 8, 6]);
+    assert_eq!(capture.window, Some(([11, -5], [8, 6])));
+}
+
+#[test]
 fn painting_on_an_image_layer_offers_mask_paint_and_rasterize_actions_that_revalidate() {
     let (mut s, layer, _) = fixture();
     s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Paint }).unwrap();
@@ -374,11 +603,11 @@ fn painting_on_an_image_layer_offers_mask_paint_and_rasterize_actions_that_reval
     pen(&mut s, PenPhase::Down, [600., 600.]);
     pen(&mut s, PenPhase::Up, [600., 600.]);
     let notice = s.state.notice.clone().expect("a refusal notice");
-    let mut args = FluentArgs::new(); args.set("layer", "Images");
+    let mut args = FluentArgs::new(); args.set("layer", "Front");
     assert_eq!(notice.text, s.localization().format(MessageId::OBJECTS_REFUSAL_PAINT, &args));
     assert_eq!(notice.actions.iter().map(|a| (a.id, a.enabled)).collect::<Vec<_>>(),
         vec![(NoticeActionId::AddMask, true), (NoticeActionId::NewPaintLayer, true), (NoticeActionId::RasterizeLayer, true)]);
-    assert!(s.engine.document().scene().object_layer(layer).is_some_and(|l| l.children.len() == 2), "no stroke reached the images");
+    assert_eq!(s.engine.document().artwork.objects.len(), 2, "no stroke reached the images");
     s.dispatch(UiAction::Notice { id: notice.id, accept: true, action: Some(NoticeActionId::RasterizeLayer) }).unwrap();
     assert!(matches!(s.engine.backend().snapshot_requests.last(), Some(layer_render::SnapshotRequest::Image(capture)) if capture.scope == SceneScope::RawObjects(layer)));
     assert!(s.engine.document().scene().object_layer(layer).is_some(), "rasterizing waits for its capture");
@@ -416,48 +645,48 @@ fn painting_on_an_image_layer_offers_mask_paint_and_rasterize_actions_that_reval
 }
 
 #[test]
-fn copying_images_publishes_a_structured_clip_and_cut_removes_them_only_after_success() {
+fn copying_images_keeps_sibling_layers_and_cut_removes_them_only_after_success() {
     let (mut s, layer, [front, back]) = fixture();
+    let back_layer = owner(&s, back);
     s.layer_edit(s.engine.document().set_image_object_affines_edit(&[(front, Affine64([0., 2., -2., 0., -50.5, 30.25]))]).unwrap()).unwrap();
     s.select_objects(layer, [front, back].into()).unwrap();
     assert!(s.command(CommandId::Copy).enabled);
     invoke(&mut s, CommandId::Copy);
     let id = pending_copy(&s);
     let capture = s.capture_clipboard(id).unwrap();
-    assert_eq!(capture.origin, [-251, 30]);
-    assert_eq!(capture.crop, [0, 0, 451, 201]);
-    assert_eq!(capture.scope, SceneScope::RawObjects(layer));
-    assert_eq!(capture.window, Some(([-251, 30], [451, 201])), "the copy evaluates a signed window");
-    let view = capture.scene.view();
-    assert_eq!(view.composition().size, [1000, 1000], "the copy keeps the authored frame");
-    assert_eq!(view.object_layer(layer).unwrap().children, vec![front, back]);
-    let objects = capture.objects.clone().unwrap();
-    assert_eq!(objects.objects.iter().map(|o| o.affine).collect::<Vec<_>>(), vec![Affine64([0., 2., -2., 0., -50.5, 30.25]), translate(100., 100.)]);
-    let clip = capture.finish("nonce".into(), rgba8_source([451, 201], |_, _| [0; 4]), vec![1, 2, 3]).unwrap();
+    assert_eq!(capture.origin, [-254, 27]);
+    assert_eq!(capture.crop, [0, 0, 454, 207]);
+    assert!(matches!(&capture.scope, SceneScope::Members(members) if members.contains(&layer) && members.contains(&back_layer)));
+    assert_eq!(capture.window, Some(([-254, 27], [454, 207])));
+    assert_eq!(capture.scene.view().composition().size, [1000, 1000]);
+    let layers = capture.layers.as_ref().unwrap();
+    assert_eq!(layers.roots, [layer, back_layer]);
+    assert_eq!(layers.roots.iter().map(|h| layers.scene.view().object_layer(*h).unwrap().affine).collect::<Vec<_>>(),
+        vec![Affine64([0., 2., -2., 0., -50.5, 30.25]), translate(100., 100.)]);
+    let clip = capture.finish("nonce".into(), rgba8_source([454, 207], |_, _| [0; 4]), vec![1, 2, 3]).unwrap();
     s.complete_document_request(id, Ok(true)).unwrap();
-    assert_eq!(s.engine.document().object_layer_children(layer).unwrap(), &[front, back]);
     s.paste_clip(&clip, PasteMode::InPlace).unwrap();
     let doc = s.engine.document();
-    let children = doc.object_layer_children(layer).unwrap().to_vec();
-    assert_eq!(children.len(), 4);
-    let pasted: Vec<_> = children.iter().copied().filter(|h| doc.working.objects.contains(h)).collect();
+    let pasted: Vec<_> = doc.scene().order().iter().copied().filter(|h| doc.working.layer_selection.contains(h))
+        .map(|h| doc.scene().object_handle(h).unwrap()).collect();
+    assert_eq!(doc.artwork.objects.len(), 4);
     assert_eq!(pasted.len(), 2);
     assert!(pasted.iter().all(|h| ![front, back].contains(h)));
     assert_eq!(doc.scene().object(pasted[0]).unwrap().affine, Affine64([0., 2., -2., 0., -50.5, 30.25]));
-    assert_eq!(doc.scene().object(pasted[0]).unwrap().image.id(), doc.scene().object(front).unwrap().image.id());
     assert!(doc.scene().object(pasted[0]).unwrap().image.same_owner(&doc.scene().object(front).unwrap().image));
     invoke(&mut s, CommandId::Undo);
-    s.select_objects(layer, [back].into()).unwrap();
+    s.select_objects(back_layer, [back].into()).unwrap();
     invoke(&mut s, CommandId::Cut);
     let id = pending_copy(&s);
     s.capture_clipboard(id).unwrap();
     s.complete_document_request(id, Ok(false)).unwrap();
-    assert_eq!(s.engine.document().object_layer_children(layer).unwrap(), &[front, back], "a failed Cut keeps the images");
+    assert!(s.engine.document().scene().object_handle(back_layer).is_some(), "a failed Cut keeps the layer");
     invoke(&mut s, CommandId::Cut);
     let id = pending_copy(&s);
     s.capture_clipboard(id).unwrap();
     s.complete_document_request(id, Ok(true)).unwrap();
-    assert_eq!(s.engine.document().object_layer_children(layer).unwrap(), &[front]);
+    assert!(s.engine.document().scene().occurrence(back_layer).is_none());
+    assert_eq!(s.engine.document().scene().object_handle(layer), Some(front));
 }
 
 #[test]
@@ -474,15 +703,17 @@ fn pasting_a_clip_from_another_drawing_remaps_images_into_the_destination_layer_
     let mut occurrence = s.engine.document().scene().occurrence(group).unwrap().clone();
     occurrence.offset = [40, -10];
     s.engine.apply_edit(Edit::Occurrence(layer_core::RecordChange::replace(&s.engine.document().artwork.occurrences, group, Some(occurrence)).unwrap())).unwrap();
-    let destination = object_layer(&mut s, "Destination", Some(group));
+    let (destination, _) = add(&mut s, "Destination", Some(group), Affine64::default(), 0);
     activate(&mut s, destination);
     s.paste_clip(&clip, PasteMode::InPlace).unwrap();
     let doc = s.engine.document();
-    let pasted = *doc.working.objects.iter().next().unwrap();
-    assert_eq!(doc.scene().object_owner(pasted), Some(destination));
-    assert_eq!(doc.scene().object(pasted).unwrap().affine, translate(120., 110.));
+    let pasted = *doc.selected_objects().iter().next().unwrap();
+    let pasted_layer = doc.scene().object_owner(pasted).unwrap();
+    assert_ne!(pasted_layer, destination);
+    assert_eq!(doc.scene().parent(pasted_layer), Some(group));
+    assert_eq!(doc.scene().object(pasted).unwrap().affine, translate(160., 100.));
     assert_eq!(doc.object_document_affine(pasted).unwrap(), translate(160., 100.));
-    assert_ne!(doc.scene().object(pasted).unwrap().image.id(), source.engine.document().scene().object(front).unwrap().image.id());
+    assert!(doc.scene().object(pasted).unwrap().image.same_owner(&source.engine.document().scene().object(front).unwrap().image));
 }
 
 #[test]
@@ -493,7 +724,7 @@ fn paste_into_a_selection_makes_a_masked_object_layer_and_moving_the_image_keeps
     s.paste_layer_sources(vec![("Photo".into(), std::sync::Arc::unwrap_or_clone(rgba8_source([160, 120], |_, _| [9; 4])))], PasteMode::Into, &context).unwrap();
     let doc = s.engine.document();
     let layer = doc.working.occurrence.unwrap();
-    let object = *doc.working.objects.iter().next().unwrap();
+    let object = *doc.selected_objects().iter().next().unwrap();
     assert!(doc.scene().object_layer(layer).is_some());
     let mask = doc.scene().occurrence(layer).unwrap().mask.clone().expect("a mask from the selection");
     assert!(doc.working.selection.is_none());
@@ -513,16 +744,16 @@ fn paste_into_centres_pixel_external_and_image_clips_on_the_selection() {
     let id = pending_copy(&s);
     let images = s.capture_clipboard(id).unwrap().finish("images".into(), rgba8_source([160, 100], |_, _| [0; 4]), vec![]).unwrap();
     s.complete_document_request(id, Ok(true)).unwrap();
-    let pixels = PixelClip { objects: None, origin: [10, 10], ..images.clone() };
+    let pixels = PixelClip { layers: None, origin: [10, 10], ..images.clone() };
     let paste_into = |s: &mut UiSession<Recorder>, paste: &dyn Fn(&mut UiSession<Recorder>) -> Result<(), String>| {
         select(s, rectangle([600., 500., 700., 560.]));
         paste(s).unwrap();
         let doc = s.engine.document();
         let layer = doc.working.occurrence.unwrap();
         assert!(doc.scene().occurrence(layer).unwrap().mask.is_some(), "Paste Into masks a new image layer");
-        doc.object_layer_children(layer).unwrap().iter().map(|h| doc.object_document_affine(*h).unwrap()).collect::<Vec<_>>()
+        doc.selected_objects().iter().map(|h| doc.object_document_affine(*h).unwrap()).collect::<Vec<_>>()
     };
-    assert_eq!(paste_into(&mut s, &|s| s.paste_clip(&images, PasteMode::Into)), vec![translate(630., 480.), translate(570., 480.)]);
+    assert_eq!(paste_into(&mut s, &|s| s.paste_clip(&images, PasteMode::Into)), vec![translate(570., 480.)]);
     assert_eq!(paste_into(&mut s, &|s| s.paste_clip(&pixels, PasteMode::Into)), vec![translate(570., 480.)]);
     let photo = || vec![("Photo".to_string(), std::sync::Arc::unwrap_or_clone(rgba8_source([40, 20], |_, _| [9; 4])))];
     assert_eq!(paste_into(&mut s, &|s| s.image_placement_context(None, None).and_then(|context| s.paste_layer_sources(photo(), PasteMode::Into, &context))),
@@ -558,7 +789,7 @@ fn pixel_clear_and_cut_on_image_content_raise_the_image_refusal() {
     assert!(!s.state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Copy { .. } })), "a refused Cut publishes nothing");
     invoke(&mut s, CommandId::Copy);
     let capture = s.capture_clipboard(pending_copy(&s)).unwrap();
-    assert_eq!((capture.scope, capture.objects.is_none()), (SceneScope::RawObjects(layer), true), "pixel Copy reads the images");
+    assert_eq!((capture.scope, capture.layers.is_none()), (SceneScope::RawObjects(layer), true), "pixel Copy reads the images");
 }
 
 #[test]
@@ -594,8 +825,10 @@ fn choosing_an_image_while_its_layer_mask_is_edited_moves_the_image_behind_the_m
     for (image, start) in [(front, translate(160., 100.)), (back, translate(100., 100.))] {
         s.layer_action(LayerAction::Select { id, mask: true }).unwrap();
         assert_eq!(s.engine.document().working.target, Some(SourceTarget::Coverage(mask.source)));
-        s.object_action(ObjectAction::Select { id: object_token(image), extend: false }).unwrap();
-        assert_eq!((s.engine.document().working.target, s.object_target()), (None, Some(layer)), "choosing an image edits the images");
+        let image_layer = owner(&s, image);
+        s.layer_action(LayerAction::Select { id: occurrence_token(image_layer), mask: false }).unwrap();
+        assert_eq!((s.engine.document().working.target, s.object_target()), (None, Some(image_layer)), "choosing a layer edits its image");
+        s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Move }).unwrap();
         let grab = start.map([30., 70.]);
         drag(&mut s, [grab[0] as f32, grab[1] as f32], [grab[0] as f32 + 30., grab[1] as f32 + 20.]);
         near(affine(&s, image), Affine64([1., 0., 0., 1., start.0[4] + 30., start.0[5] + 20.]));
@@ -674,8 +907,7 @@ fn layer_drag(s: &mut UiSession<Recorder>, sequence: u64, from: [f32; 2], to: [f
 #[test]
 fn move_layer_moves_image_layers_and_their_groups_by_whole_pixels_with_mask_linkage() {
     let mut s = session();
-    let layer = object_layer(&mut s, "Images", None);
-    let object = add(&mut s, layer, "Photo", translate(100., 100.), 0);
+    let (layer, object) = add(&mut s, "Photo", None, translate(100., 100.), 0);
     s.layer_action(LayerAction::AddMask { id: occurrence_token(layer), replace: false }).unwrap();
     let mask = SourceTarget::Coverage(s.engine.document().scene().occurrence(layer).unwrap().mask.as_ref().unwrap().source);
     let origin = |s: &UiSession<Recorder>| s.engine.document().scene().target_origin(mask);
@@ -720,10 +952,8 @@ fn surface_pen(s: &mut UiSession<Recorder>, sequence: u64, phase: PenPhase, at: 
 #[test]
 fn far_drags_and_snaps_use_camera_relative_binary64_input() {
     let mut s = session();
-    let layer = object_layer(&mut s, "Far", None);
-    let moving = add(&mut s, layer, "Moving", translate(1e7, 1e7), 0);
-    let other = object_layer(&mut s, "Edge", None);
-    add(&mut s, other, "Edge", translate(1e7 + 200.5, 1e7), 0);
+    let (layer, moving) = add(&mut s, "Moving", None, translate(1e7, 1e7), 0);
+    add(&mut s, "Edge", None, translate(1e7 + 200.5, 1e7), 0);
     activate(&mut s, layer);
     s.select_objects(layer, [moving].into()).unwrap();
     let camera = &mut s.state.camera;
@@ -777,31 +1007,29 @@ fn reset_restores_the_starting_affines_of_an_ordinary_object_session() {
 }
 
 #[test]
-fn shift_scales_from_a_handle_and_adds_only_from_the_active_layer() {
-    let (mut s, layer, [front, back]) = fixture();
+fn shift_scales_from_a_handle_and_adds_visible_layers_front_to_back() {
+    let (mut s, layer, [front, _]) = fixture();
     s.select_objects(layer, [front].into()).unwrap();
     s.interaction.modifiers = Modifiers { shift: true, ..Default::default() };
     drag(&mut s, [260., 200.], [310., 220.]);
     near(affine(&s, front), Affine64([1.5, 0., 0., 1.5, 160., 100.]));
     assert_eq!(selected(&s), [front].into(), "a handle wins over additive selection");
     invoke(&mut s, CommandId::Undo);
-    let cover = object_layer(&mut s, "Cover", None);
-    add(&mut s, cover, "Cover", translate(100., 100.), 0);
+    let (cover, cover_image) = add(&mut s, "Cover", None, translate(100., 100.), 0);
     activate(&mut s, layer);
     s.select_objects(layer, [front].into()).unwrap();
     s.interaction.modifiers = Modifiers { shift: true, ..Default::default() };
     click(&mut s, [120., 180.]);
-    assert_eq!((s.engine.document().working.occurrence, selected(&s)), (Some(layer), BTreeSet::from([front, back])), "Shift picks inside the active layer");
+    assert_eq!((s.engine.document().working.occurrence, selected(&s)), (Some(cover), BTreeSet::from([front, cover_image])), "Shift picks the frontmost visible object layer");
     click(&mut s, [600., 600.]);
-    assert_eq!(selected(&s), [front, back].into(), "a Shift miss keeps the selection");
-    let hidden = object_layer(&mut s, "Elsewhere", None);
-    add(&mut s, hidden, "Elsewhere", translate(600., 600.), 0);
+    assert_eq!(selected(&s), [front, cover_image].into(), "a Shift miss keeps the selection");
+    let (elsewhere, far) = add(&mut s, "Elsewhere", None, translate(600., 600.), 0);
     activate(&mut s, layer);
     s.select_objects(layer, [front].into()).unwrap();
     s.interaction.modifiers = Modifiers { shift: true, ..Default::default() };
     click(&mut s, [650., 650.]);
-    assert_eq!((s.engine.document().working.occurrence, selected(&s)), (Some(layer), BTreeSet::from([front])));
-    assert_eq!(s.state.notice.as_ref().map(|n| n.text.clone()), Some(s.localization().text(MessageId::OBJECTS_SHIFT_SAME_LAYER).to_string()));
+    assert_eq!((s.engine.document().working.occurrence, selected(&s)), (Some(elsewhere), BTreeSet::from([front, far])));
+    assert!(s.state.notice.is_none());
 }
 
 #[test]
@@ -822,44 +1050,36 @@ fn transform_again_follows_the_history_of_its_own_drawing() {
 }
 
 #[test]
-fn delete_or_deselect_with_no_images_selected_does_nothing_and_copy_pixels_copies_the_layer_as_pixels() {
+fn object_layer_copy_pixels_is_flattened_and_normal_copy_keeps_the_layer() {
     let (mut s, layer, [front, _]) = fixture();
     let before = s.engine.document().clone();
     let checkpoint = s.engine.checkpoint();
-    assert!(key(&mut s, "Delete", true, false, false).handled);
-    key(&mut s, "Delete", false, false, false);
-    s.object_action(ObjectAction::Delete).unwrap();
-    s.object_action(ObjectAction::Deselect).unwrap();
-    assert_eq!(s.engine.document(), &before);
+    select(&mut s, rectangle([0., 0., 20., 20.]));
+    invoke(&mut s, CommandId::Deselect);
+    assert_eq!(selected(&s), [front].into(), "Deselect only affects pixel selection");
     assert_eq!(s.engine.checkpoint(), checkpoint);
-    assert!(s.state.notice.is_none(), "an empty image selection deletes nothing and says nothing");
-    assert!(s.command(CommandId::CopyPixels).enabled, "an image layer can always be copied as pixels");
+    assert!(s.command(CommandId::CopyPixels).enabled);
     assert_eq!(s.command(CommandId::CopyPixels).label.as_ref(), "Copy Pixels");
     invoke(&mut s, CommandId::CopyPixels);
-    let (id, request) = s.state.requests.iter().find_map(|r| match &r.kind {
-        HostRequestKind::Document { request } => Some((r.id, request.clone())),
-        _ => None,
-    }).unwrap();
-    assert!(matches!(request, DocumentRequest::Copy { merged: false, cut: false, pixels: true }));
+    let id = pending_copy(&s);
     let capture = s.capture_clipboard(id).unwrap();
-    assert_eq!((capture.scope, capture.crop, capture.window, capture.objects.is_none()), (SceneScope::RawObjects(layer), [0, 0, 1000, 1000], None, true));
+    assert_eq!((capture.scope, capture.crop, capture.window, capture.layers.is_none()), (SceneScope::RawObjects(layer), [0, 0, 1000, 1000], None, true));
     s.complete_document_request(id, Ok(true)).unwrap();
-    s.select_objects(layer, [front].into()).unwrap();
     invoke(&mut s, CommandId::Copy);
     let capture = s.capture_clipboard(pending_copy(&s)).unwrap();
-    assert!(capture.objects.is_some(), "Copy keeps the structured image flavour");
+    assert_eq!(capture.layers.as_ref().unwrap().roots, [layer]);
+    assert_eq!(live(&s.engine.document().artwork), live(&before.artwork));
 }
 
 #[test]
 fn object_snapping_excludes_the_moving_layer_and_its_groups() {
     let mut s = session();
-    let layer = object_layer(&mut s, "Moving", None);
-    let moving = add(&mut s, layer, "Moving", translate(10., 10.), 0);
+    let (layer, moving) = add(&mut s, "Moving", None, translate(10., 10.), 0);
     let edit = s.engine.document().group_layers_edit(&[layer], layer_core::LayerBlend::Normal, "Group").unwrap();
     s.engine.apply_edit(edit).unwrap();
     let group = s.engine.document().scene().parent(layer).unwrap();
-    let sibling = object_layer(&mut s, "Sibling", None);
-    add(&mut s, sibling, "Sibling", translate(300., 300.), 0);
+    let (sibling, _) = add(&mut s, "Sibling", None, translate(300., 300.), 0);
+    let (reference, _) = add(&mut s, "Reference", None, translate(600., 600.), 0);
     let paint = *s.engine.document().scene().order().iter().find(|h| s.engine.document().scene().paint_source(**h).is_some()).unwrap();
     s.layer_action(LayerAction::Select { id: occurrence_token(paint), mask: false }).unwrap();
     s.layer_action(LayerAction::Tool { tool: LayerCanvasTool::Move }).unwrap();
@@ -874,20 +1094,21 @@ fn object_snapping_excludes_the_moving_layer_and_its_groups() {
     activate(&mut s, layer);
     s.select_objects(layer, [moving].into()).unwrap();
     let mut working = s.engine.document().working.clone();
-    working.layer_selection = [sibling].into();
+    working.layer_selection = [layer, sibling].into();
     s.layer_edit(Edit::Working(working)).unwrap();
     let targets: Vec<_> = s.object_snap_targets().into_iter().map(|(h, _)| h).collect();
     assert!(!targets.contains(&Some(group)) && !targets.contains(&Some(layer)), "{targets:?}");
-    assert!(targets.contains(&Some(sibling)));
+    assert!(!targets.contains(&Some(sibling)), "every selected object layer moves");
+    assert!(targets.contains(&Some(reference)));
 }
 
 #[test]
 fn image_help_describes_pasting_and_copying_images() {
     let l = Localizer::shared(UiLanguage::English);
-    assert!(l.text(MessageId::COMMANDS_HELP_PASTE_INTO).contains("image layer"));
+    assert!(l.text(MessageId::COMMANDS_HELP_PASTE_INTO).contains("object layer"));
     assert!(l.text(MessageId::COMMANDS_HELP_PASTE_IN_PLACE).contains("original size"));
-    assert!(l.text(MessageId::COMMANDS_HELP_COPY).contains("selected images"));
-    assert!(l.text(MessageId::COMMANDS_HELP_CUT).contains("selected images"));
+    assert!(l.text(MessageId::COMMANDS_HELP_COPY).contains("layer"));
+    assert!(l.text(MessageId::COMMANDS_HELP_CUT).contains("layer"));
     assert!(l.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_IMPORT_IMAGE).contains("move, scale and rotate"));
     assert!(!l.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_PASTE_INTO).contains("new layer"));
 }

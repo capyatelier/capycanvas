@@ -323,13 +323,12 @@ pub struct ReadbackImage {
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum ThumbnailTarget {Occurrence(OccurrenceHandle),Source(SourceTarget),Object(layer_core::authored::ImageObjectHandle),QuickMask}
+pub enum ThumbnailTarget {Occurrence(OccurrenceHandle),Source(SourceTarget),QuickMask}
 impl ThumbnailTarget {
     pub fn from_wire_id(id: u64) -> Option<Self> {
         Some(if id == 0 { Self::QuickMask } else if id >> 32 == 0 {
             Self::Occurrence(OccurrenceHandle::from_index(u32::try_from(id - 1).ok()?))
-        } else if let Some(object) = layer_core::authored::ImageObjectHandle::from_wire_id(id) { Self::Object(object) }
-        else { Self::Source(SourceTarget::from_wire_id(id)?) })
+        } else { Self::Source(SourceTarget::from_wire_id(id)?) })
     }
 }
 
@@ -444,7 +443,7 @@ pub struct ColorSample {
 pub enum RegionSource {
     Composite,
     Objects(OccurrenceHandle),
-    /// An image layer's own content alpha, in document coordinates.
+    /// An object layer's own content alpha, in document coordinates.
     ObjectCoverage(OccurrenceHandle),
     /// Placed raw paint, in document coordinates.
     Source(SourceTarget),
@@ -905,7 +904,7 @@ mod tests {
         let source = SourceTarget::Coverage(layer_core::authored::CoverageHandle::from_index(3));
         assert_eq!(ThumbnailTarget::from_wire_id(source.wire_id()), Some(ThumbnailTarget::Source(source)));
         let object = layer_core::authored::ImageObjectHandle::from_index(4);
-        assert_eq!(ThumbnailTarget::from_wire_id(object.wire_id()), Some(ThumbnailTarget::Object(object)));
+        assert_eq!(ThumbnailTarget::from_wire_id(object.wire_id()), None);
         assert_eq!(ThumbnailTarget::from_wire_id(3u64 << 32), None);
         assert_eq!(ThumbnailTarget::from_wire_id(4u64 << 32 | 1), None);
     }

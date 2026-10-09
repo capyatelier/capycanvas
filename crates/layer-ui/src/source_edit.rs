@@ -79,12 +79,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.can_repair_source(SourceUse::Paint(handle))
     }
     /// The image use Repair Source Profile edits: the one selected image of
-    /// the active image layer, or the active layer's retained photo.
+    /// the active object layer, or the active layer's retained photo.
     pub(super) fn active_source_use(&self) -> Option<SourceUse> {
         let document = self.engine.document();
         let active = document.working.occurrence?;
         if document.scene().object_layer(active).is_some() {
-            let [object] = document.working.objects.iter().copied().collect::<Vec<_>>()[..] else { return None; };
+            let [object] = document.selected_objects().iter().copied().collect::<Vec<_>>()[..] else { return None; };
             return (document.scene().object_owner(object) == Some(active)).then_some(SourceUse::Object(object));
         }
         Some(SourceUse::Paint(active))

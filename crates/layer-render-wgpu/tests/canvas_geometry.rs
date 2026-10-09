@@ -151,11 +151,9 @@ fn turning_an_edited_photo_moves_every_sample_and_stroke_exactly() {
     use ImageOrientation::*;
     let (mut engine, _input, photo) = edited_photo();
     let source = paint(engine.document(), photo).base.clone().unwrap();
-    let (layer, created) = engine.document().create_object_layer_edit("Reference", None, 0).unwrap();
-    engine.apply_edit(created).unwrap();
-    let mut object = layer_core::ImageObject::new(source.image.clone(), "Reference");
+    let mut object = layer_core::ImageObject::new(source.image.clone());
     object.affine = layer_core::Affine64([1., 0., 0., 1., 8., 210.]);
-    let (_, added) = engine.document().add_image_object_edit(layer, object, 0).unwrap();
+    let (_, added) = engine.document().create_object_layer_edit("Reference", object, None, 0).unwrap();
     engine.apply_edit(added).unwrap();
     let original = image(&mut engine, 2_000_000_000);
     let mut time = 3_000_000_000;
@@ -687,12 +685,10 @@ fn p3_photo(extent: [u32; 2], offset: [u32; 2]) -> (Engine, OccurrenceHandle, la
     let mut base = layer_core::authored::PaintBase::new(image.clone());
     base.offset = offset;
     paint_mut(&mut doc, photo).base = Some(base);
-    let (layer, edit) = doc.create_object_layer_edit("Reference", None, 0).unwrap();
+    let (layer, edit) = doc.create_object_layer_edit("Reference", layer_core::ImageObject::new(image.clone()), None, 0).unwrap();
     doc.apply(edit).unwrap();
-    let mut object = layer_core::ImageObject::new(image.clone(), "Reference");
-    object.visible = false;
-    let (object, edit) = doc.add_image_object_edit(layer, object, 0).unwrap();
-    doc.apply(edit).unwrap();
+    doc.artwork.occurrences.get_mut(layer).unwrap().visible = false;
+    let object = doc.scene().object_handle(layer).unwrap();
     let (engine, _) = engine(doc);
     (engine, photo, object, image)
 }

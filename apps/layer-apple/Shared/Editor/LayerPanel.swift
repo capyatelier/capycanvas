@@ -12,7 +12,7 @@ struct LayerPanel: View {
     private var current: JSON { view["editing_layer"] }
     private var layers: [JSON] { store.state["layers"].array }
     private var rows: [LayerPanelRow] {
-        layers.flatMap { layer in [LayerPanelRow(layer: layer)] + layer["objects"].array.map { LayerPanelRow(layer: layer, object: $0) } }
+        layers.map { LayerPanelRow(layer: $0) }
     }
     private func visible(_ control: String) -> Bool {
         panel["controls"].array.contains { $0["control"].string == control && $0["visible_in_panel"].bool }
@@ -27,18 +27,13 @@ struct LayerPanel: View {
                             ForEach(rows) { row in
                                 let thumbnailToken = "\(popupID):\(row.id)"
                                 Group {
-                                    if let object = row.object {
-                                        ImageObjectRow(store: store, object: object, depth: row.layer["depth"].uint + 1,
-                                            previews: store.layerThumbnails, interaction: interaction)
-                                    } else {
-                                        LayerSwipeRow(store: store, swipe: store.layerSwipe, owner: interaction.swipeOwner, layer: row.layer) {
-                                            LayerRow(store: store, layer: row.layer, previews: store.layerThumbnails, interaction: interaction)
-                                        }.modifier(PhotoDropTarget(store: store, row: row.id))
-                                    }
+                                    LayerSwipeRow(store: store, swipe: store.layerSwipe, owner: interaction.swipeOwner, layer: row.layer) {
+                                        LayerRow(store: store, layer: row.layer, previews: store.layerThumbnails, interaction: interaction)
+                                    }.modifier(PhotoDropTarget(store: store, row: row.id))
                                 }
                                     .modifier(LayerRowMeasurement(id: row.id))
                                     .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
-                                    .overlay(alignment: .topLeading) { dropMark(row.object ?? row.layer) }
+                                    .overlay(alignment: .topLeading) { dropMark(row.layer) }
                                     .editorPopover(isPresented: menuPresented(at: .row(row.id)), placement: .inward) { menuContent }
                                     .onAppear { store.layerThumbnails.show(token: thumbnailToken, id: row.id) }
                                     .onDisappear {
@@ -75,11 +70,7 @@ struct LayerPanel: View {
         if let drag = interaction.drag,
            let row = rows.first(where: { $0.id == drag.id }) {
             Group {
-                if let object = row.object {
-                    ImageObjectRow(store: store, object: object, depth: row.layer["depth"].uint + 1, previews: store.layerThumbnails, preview: true)
-                } else {
-                    LayerRow(store: store, layer: row.layer, previews: store.layerThumbnails, preview: true)
-                }
+                LayerRow(store: store, layer: row.layer, previews: store.layerThumbnails, preview: true)
             }
                 .frame(width: drag.bounds.width)
                 .background(palette["panel"]).opacity(0.7).allowsHitTesting(false).accessibilityHidden(true)
@@ -288,8 +279,7 @@ private extension JSON { var id: UInt64 { self["id"].uint } }
 
 private struct LayerPanelRow: Identifiable {
     let layer: JSON
-    var object: JSON?
-    var id: UInt64 { (object ?? layer).id }
+    var id: UInt64 { layer.id }
 }
 
 private struct LayerButton: View {
@@ -351,13 +341,6 @@ private struct LayerRow: View {
                         selectRow()
                     }
                 }
-            if layer["object_count"].uint > 0 {
-                let copy = store.catalog["native_copy"]["layers"]
-                IconTile(icon: "chevron-down", label: copy[layer["expanded"].bool ? "collapse_images" : "expand_images"].string, size: 12) {
-                    perform { store.object(["op": "expand", "layer": id, "expanded": !layer["expanded"].bool]) }
-                }.rotationEffect(.degrees(layer["expanded"].bool ? 0 : -90)).frame(width: 20, height: 36)
-                    .accessibilityIdentifier("layer-images-\(id)")
-            }
             SharedIcon(name: layer["locked"].bool ? "lock" : "alpha-lock", size: 12)
                 .opacity(layer["locked"].bool || layer["alpha_locked"].bool ? 1 : 0)
             if layer["can_drop_below"].bool {
@@ -469,67 +452,6 @@ private struct LayerRow: View {
         }
         #endif
         return ""
-    }
-}
-
-private struct ImageObjectRow: View {
-    @Environment(\.editorPalette) private var surface
-    @ObservedObject var store: EditorStore
-    let object: JSON
-    let depth: UInt64
-    @ObservedObject var previews: LayerThumbnails
-    var preview = false
-    var interaction: LayerRowInteraction?
-    private var copy: JSON { store.catalog["native_copy"]["layers"] }
-    private var id: UInt64 { object["id"].uint }
-    var body: some View {
-        HStack(spacing: 2) {
-            LayerButton(icon: object["visible"].bool ? "eye" : "eye-hidden",
-                label: copy[object["visible"].bool ? "hide_image" : "show_image"].string,
-                enabled: object["editable"].bool, height: 36) {
-                perform { store.object(["op": "visibility", "id": id, "visible": !object["visible"].bool]) }
-            }
-            Color.clear.frame(width: 24, height: 36).accessibilityHidden(true)
-            ZStack {
-                if let image = previews.images[LayerThumbnails.key(id, false)] {
-                    Image(decorative: image, scale: 1).resizable().scaledToFit().frame(width: 28, height: 28)
-                        .clipShape(SquircleShape.tile)
-                } else {
-                    SharedIcon(name: "image", size: 16).foregroundStyle(surface["text"]).opacity(0.55)
-                }
-            }.frame(width: 30, height: 30)
-                .padding(.leading, 3 + min(CGFloat(depth) * 8, 24))
-                .accessibilityHidden(true)
-                .modifier(LayerRowMeasurement(id: id, part: \.content, enabled: !preview))
-            Text(object["label"].string).lineLimit(1).help(object["label"].string)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
-                .modifier(LayerRowMeasurement(id: id, part: \.name, enabled: !preview))
-                .contentShape(Rectangle()).onTapGesture { select() }
-            if object["editable"].bool && (object["can_raise"].bool || object["can_lower"].bool) {
-                SharedIcon(name: "grip").opacity(0.6).frame(width: 16, height: 36)
-                    .contentShape(Rectangle())
-                    .modifier(LayerRowMeasurement(id: id, part: \.grip, enabled: !preview))
-                    .accessibilityLabel(copy["move_image"].string).accessibilityIdentifier("image-object-grip-\(id)")
-            }
-        }.padding(.horizontal, 6).padding(.vertical, 2).frame(minHeight: 40)
-            .opacity(object["visible"].bool ? 1 : 0.6)
-            .modifier(LayerRowMeasurement(id: id, part: \.swipe, enabled: !preview))
-            .background((object["selected"].bool ? surface.active : Color.clear)
-                .contentShape(Rectangle()).onTapGesture { select() })
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(object["label"].string)
-            .accessibilityValue(object["selected"].bool ? copy["selected"].string : "")
-            .accessibilityAddTraits(object["selected"].bool ? .isSelected : [])
-            .accessibilityAction { perform { store.object(["op": "select", "id": id, "extend": false]) } }
-            .accessibilityIdentifier("image-object-\(id)")
-    }
-    private func select() {
-        let keys = ThumbnailSelectionLoad.modifiers()
-        perform { store.object(["op": "select", "id": id, "extend": keys.shift || keys.toggle]) }
-    }
-    private func perform(_ action: () -> Void) {
-        guard !preview, interaction?.contact.consumeClick() != true else { return }
-        action()
     }
 }
 

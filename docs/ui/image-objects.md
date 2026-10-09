@@ -1,104 +1,75 @@
-# Image layers and image objects
+# Object layers
 
 [Workspace and UI](README.md)
 
-An image layer holds placed images instead of paint. Each image keeps its own
-pixels, color interpretation, Nearest or Linear smoothing and a 64-bit affine
-placement, so it can be moved, scaled, rotated and flipped any number of times
-without resampling. The layer itself keeps the name, visibility, opacity, blend
-mode, lock, mask and filters. Shared Rust owns every rule below; hosts present
-the projections and forward native input. The record contract is in the
-[authored model](../reference/authored-model.md#object-layers-and-image-objects).
+Raster layers contain editable pixels. Object layers retain source content and a
+nondestructive transform. Images are the supported object content today; vectors
+can use the same layer concept when supported. Groups organize ordinary layers.
+There is no image-container layer or separate image selection.
 
-## Creating image layers
+## Import and placement
 
-Place Image, an image file dropped on the canvas or a layer row, and an image
-pasted from another app become images. They join the active editable image
-layer, otherwise a new image layer uses the ordinary
-[insertion rules](open-and-import.md). Place and ordinary Paste open placement
-handles: Apply commits one undo step, and Cancel or Undo leaves no records or
-history. A second pasted image joins the same layer as the first.
-Paste Into a pixel selection makes a new image layer whose stored mask is that
-selection, with the pasted content centred on it; moving the image moves it behind
-the fixed mask. Pixels copied inside Capy Canvas still paste as a paint layer.
-See [copy and paste](clipboard.md) for copying images between drawings.
+Place Image, dropping an image, and pasting an external image create one named
+Object layer per file using the ordinary [insertion rules](open-and-import.md).
+Each source keeps its original samples, color interpretation, Nearest or Linear
+sampling and 64-bit affine transform. Importing while an Object layer is active
+creates a sibling layer. Multiple files create selected sibling layers in the
+provider's order, with shared placement handles.
 
-Convert to Image Layer turns a paint layer's current appearance into one image,
-and Rasterize Layer turns an image layer back into paint. Both keep the layer's
-mask, filters, opacity and blend so they apply once, and each is one undo step;
-[documents](../internals/documents.md) describes the conversions and merges.
+Apply commits the whole batch as one undo step. Cancel or Undo removes the
+provisional layers and restores the previous selection without adding history.
+The placement handles stay with the imported layers until Apply or Cancel.
+Placement clears a pixel selection. Paste Into instead consumes the selection
+and stores it as the new layer's mask; the source moves behind that fixed mask.
+See [copy and paste](clipboard.md) for destination and shortcut rules.
 
-## Selecting and moving images
+Convert to Object Layer preserves a Raster layer's current source appearance.
+Rasterize Layer produces editable pixels. Both preserve layer properties, masks
+and filters, applying them once, and are one undo step. An empty Raster layer
+converts to a transparent source and remains a valid editable layer.
 
-With an image layer active, Move and Scale–Rotate target its images. Selection
-tools, mask editing, Crop, the ruler and an explicit Move Layer keep their own
-targets. Image selection is separate from the layer-row selection and from a
-pixel selection: a pixel selection never cuts or clears an image, and Delete on
-selected images removes whole images.
+## Selection and transforms
 
-- A click picks the frontmost visible image in an unlocked, visible image layer,
-  using its placed rectangle. Clicking an image in another layer activates that
-  layer. The handles of the current selection win over other images, and a click
-  on empty canvas clears the image selection without changing the active layer.
-- Shift-click adds or removes an image in the active layer. Shift on an image in
-  another layer keeps the selection and explains that Shift adds images from the
-  same layer only. A Shift drag on a handle scales proportionally.
-- Touch on an image selects or moves it; touch on empty canvas keeps the usual
-  pan and zoom gestures.
-- A drag moves, scales or rotates the selection about its pivot, and dragging the
-  pivot moves it. Every pose previews from the starting affines and is checked by
-  the renderer before it is shown; a completed drag is one undo step and Escape
-  cancels it. Alt (or Leave Copy) copies the images when the drag starts;
-  cancelling removes the copies.
-- Arrow keys nudge by one pixel, or ten with Shift. A held key is one undo step.
-- Image-layer bounds are snap targets for Move. The moving layer and its groups
-  are excluded.
+Object layers use ordinary layer rows, thumbnails, selection, ordering, naming,
+visibility, locks, masks, opacity, blending, filters and context menus.
 
-The layer panel, canvas bar, menus and shortcuts share one target rule, so their
-labels and enabled states always agree:
+- Move and Scale–Rotate transform selected Object layers without resampling the
+  source. Each source retains its own layer and ancestor offsets.
+- Canvas picking selects the frontmost visible, unlocked Object layer under the
+  pointer. Shift-click extends or reduces the ordinary layer selection across
+  layers. Existing transform handles take precedence over picking.
+- Dragging moves, scales or rotates about the pivot. Each gesture is one undo
+  step; Escape cancels it. Alt or Leave Copy duplicates the selected layers at
+  gesture start; cancellation removes the copies.
+- Arrow keys nudge one pixel, or ten with Shift. A held key is one undo step.
+- Original Size restores one source pixel per document pixel while retaining
+  center, rotation and mirroring. Flips and quarter turns are exact.
+- All moving layers and their ancestors are excluded from snapping targets.
+- Pixel selections, mask editing and mixed layer selections retain the ordinary
+  target rules. Select All and Deselect act on the pixel selection.
 
-| Command | With images selected |
-| --- | --- |
-| Select All / Deselect | Selects every image in the active image layer, including hidden ones, or clears the image selection. |
-| Delete, Duplicate (Ctrl/Cmd+J), Copy, Cut | Act on whole images in one undo step. Cut removes them only after the clipboard accepts them. Delete with nothing selected does nothing. |
-| Transform Again | Repeats the last committed image transform of this drawing; Undo or another drawing makes it unavailable. |
-| Original Size | Restores one source pixel per document pixel, keeping each image's centre, rotation and mirroring. |
-| Flip and rotate | Exact reflections and quarter turns about the pivot, one undo step. |
-| Smoothing | Nearest or Linear only. Distort, Warp, Perspective, Bicubic and Lanczos are paint-only. |
-| Copy Pixels | Copies the image layer's appearance as pixels instead of the images. |
+Copy, Cut and Duplicate use ordinary selected layers. Without a pixel selection,
+Copy preserves the source, transform, mask and filters and publishes a rendered
+PNG for other apps. Cut removes layers only after clipboard publication succeeds.
+Copy Pixels explicitly captures appearance before layer properties.
 
-## Image rows
+Brushes, fills, pixel cuts, retouch and Frequency Separation require Raster
+content. The existing notice offers Add/Edit Mask, New Paint Layer or Rasterize
+Layer and does not replay a refused stroke. Distort, Warp, Perspective, Bicubic
+and Lanczos require rasterization; Object transforms use Nearest or Linear.
 
-An image layer's row shows its image count and an expand control. Expanded,
-`LayerState.objects` lists one indented row per image, front to back, with a
-visibility toggle, a preview requested through `ThumbnailTarget::Object`, the
-name and a grip. Rows use object tokens, never layer IDs. A click selects an
-image and Shift, Ctrl or Cmd extends the selection; the row menu offers the same
-commands plus a touch-friendly Add to Selection. Dragging a row reorders the
-image within its layer, following the [drag convention](drag-and-reorder.md).
-Image rows have no mask, clip, lock, alpha-lock, swipe or filter controls; those
-stay on the layer row. Hidden or overlapping images are reached through these
-rows.
+## Ownership and verification
 
-## Painting on an image layer
+An occurrence refers directly to one image object containing its immutable
+source, affine and interpolation. Names and visibility belong only to the layer.
+Layer selection is the only object selection. See the
+[authored model](../reference/authored-model.md#object-layers-and-image-objects)
+and [package contract](../reference/capy-package.md).
 
-Brushes, fills, clears, pixel cuts, retouch tools and Frequency Separation
-never write to an image layer. They raise a notice naming the layer with three
-actions: Add Mask (or Edit Mask), New Paint Layer and Rasterize Layer. A disabled
-action carries its reason. Choosing an action rechecks the drawing and layer and
-never replays the refused stroke. Notices carry an ordered `actions` list with
-stable `NoticeActionId` tokens, and hosts answer with
-`UiAction::Notice { id, accept, action }`.
-
-## Tests
-
-`object_editing_tests` in `layer-ui` cover picking, both command tables, gestures,
-nudges, copies, cancel and undo; `notice` and `clipboard` tests cover the refusal
-actions and image clips. Host journeys are GTK's
-`native_image_object_rows_picking_and_transforms`,
-`native_image_object_clipboard_and_paste_into`,
-`native_image_layer_conversions_merges_and_alpha_selection` and
-`native_image_and_pixel_targets_and_crop_keep_images`, Web's `--image-rows`,
-Android's `AndroidInteractionTest#imageRowsTouchPickingMenusAndRefusalActions`,
-Apple's `EditorLaunchTests/testImageObjects` and `testImageObjectsDark`, and the
-Windows `exercise-image-rows.ps1` fixture.
+Shared `object_editing_tests`, `image_object_edit_tests`, conversion and clipboard
+tests cover insertion, selection, transforms, masks, cancellation and undo.
+Native journeys are GTK's `native_image_object_rows_picking_and_transforms` and
+conversion/clipboard tests, Web's `--image-rows`, Android's
+`AndroidInteractionTest#imageRowsTouchPickingMenusAndRefusalActions`, Apple's
+`EditorLaunchTests/testImageObjects` and `testImageObjectsDark`, and Windows'
+`exercise-image-rows.ps1`. Run UI journeys in both themes.

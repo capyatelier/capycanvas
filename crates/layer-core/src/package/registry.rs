@@ -7,7 +7,7 @@ pub enum RecordContext { Portable, Private }
 pub enum RecordRole { Object, Resource }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
-    Composition, Stack, Occurrence, PaintSource, Image, ObjectLayer, ImageObject,
+    Composition, Stack, Occurrence, PaintSource, Image, ImageObject,
     CoverageSource, Effect, Selection, Guides, Output, RasterTile, SelectionCoverage, Icc, Wgsl, PhotoMetadata, Lut3d,
 }
 pub struct RecordDescriptor {
@@ -33,8 +33,7 @@ records! {
     Occurrence, "capy.occurrence/3", Object, ["content", "name", "visible", "locked", "alpha_locked", "reference", "opacity", "blend", "attachment", "offset", "mask"], [];
     PaintSource, "capy.paint-source/2", Object, ["domain", "tiles", "material", "base", "color_mode"], [];
     Image, "capy.image/1", Object, ["extent", "interpretation", "tiles", "resolution"], [];
-    ObjectLayer, "capy.object-layer/1", Object, ["children"], [];
-    ImageObject, "capy.image-object/1", Object, ["image", "name", "visible", "affine", "interpolation"], [];
+    ImageObject, "capy.image-object/1", Object, ["image", "affine", "interpolation"], [];
     CoverageSource, "capy.coverage-source/2", Object, ["domain", "tiles", "material", "default_coverage"], [];
     Effect, "capy.effect/2", Object, ["builtin", "version", "program", "values", "spatial"], [];
     Selection, "capy.selection/1", Object, ["shape", "affine", "inverted"], [];

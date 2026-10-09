@@ -26,14 +26,14 @@ position; releasing commits that position as one undo step.
 
 ## Layer transforms
 
-Move shifts a paint layer, image layer or group by whole pixels; a linked mask
+Move shifts a paint layer, object layer or group by whole pixels; a linked mask
 follows its owner and an unlinked mask stays in place. **Transform**, with
 Distort, Perspective and Warp, works on one paint layer: applying it resamples
 the layer's current pixels once, including content outside the canvas and paint
 wetness, together with a linked mask. Exact flips and quarter turns move samples
 without resampling. A Distort or Warp only needs to be valid over the content it
-moves. Groups and several layers move by whole pixels only, and image layers
-transform their images instead ([image layers](image-objects.md)).
+moves. Groups and several layers move by whole pixels only, and object layers
+transform their images instead ([object layers](image-objects.md)).
 
 The work runs in the background with Cancel on the canvas bar. A failed or
 canceled transform changes nothing; one Undo restores the layer and its mask.
@@ -70,7 +70,7 @@ place.
   and Vertically** move pixels exactly, without resampling. Quarter turns swap
   the width and height, and the horizontal and vertical resolution. A photo layer
   turns its photo exactly, keeping its own color and depth, while a worker moves
-  its samples; image layers turn their images, and the selection, Selection
+  its samples; object layers turn their images, and the selection, Selection
   Layers and guides follow.
   The view's own rotation and flips (View menu) never change pixels.
 - **Trim** shrinks the canvas to the visible pixels on it, cutting away transparent

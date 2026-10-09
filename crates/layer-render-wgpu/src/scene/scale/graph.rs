@@ -543,17 +543,17 @@ fn native_level_retained_branches_batch_live_graph_pages_and_keep_islands_separa
 mod object_reuse_tests {
     use super::*;
     use layer_core::{Edit, authored::*};
-    fn collection(root:&Node)->Node {
+    fn collection(root:&Node,owner:OccurrenceHandle)->Node {
         let mut nodes=HashSet::new();Expression::visit(root,&mut nodes);
-        assert!(nodes.len()<8,"A collection remains one cached expression regardless of child count");
-        nodes.into_iter().find(|node|matches!(node.as_ref(),Expression::Objects {..})).unwrap()
+        assert!(nodes.len()<4*1024+8,"Sibling image layers produce a linear number of expressions");
+        nodes.into_iter().find(|node|matches!(node.as_ref(),Expression::Objects {content,..} if content.owner()==owner)).unwrap()
     }
     #[test]
     fn paint_only_edits_reuse_the_object_collection_branch_and_object_edits_replace_it() {
         let (mut doc,owner,handles)=object_spatial::tests::document();
         let mut cache=object_spatial::SpatialIndex::default();
         let build=|doc:&layer_core::Document,cache:&mut object_spatial::SpatialIndex| {
-            collection(&compose(crate::test_support::packet(doc.scene(),doc.composition().size),None,None,0,doc.composition().color.space,Some(cache)).unwrap())
+            collection(&compose(crate::test_support::packet(doc.scene(),doc.composition().size),None,None,0,doc.composition().color.space,Some(cache)).unwrap(),owner)
         };
         let before=build(&doc,&mut cache);
         let paint=doc.artwork.paint.iter().next().unwrap().0;
@@ -564,7 +564,7 @@ mod object_reuse_tests {
         let packet=crate::test_support::packet(doc.scene(),doc.composition().size);
         assert!(scratch_images(packet,2,doc.composition().color.space,Some(&cache)).unwrap()>=4);
         let mut planning=cache.clone();
-        let planned=collection(&compose(packet,None,None,2,doc.composition().color.space,Some(&mut planning)).unwrap());
+        let planned=collection(&compose(packet,None,None,2,doc.composition().color.space,Some(&mut planning)).unwrap(),owner);
         assert!(before==planned,"scratch planning and display retain the same collection index after a paint edit");
         if let (Expression::Objects {content:a,..},Expression::Objects {content:b,..})=(before.as_ref(),painted.as_ref()) {
             assert!(Arc::ptr_eq(&a.keys(),&b.keys()));

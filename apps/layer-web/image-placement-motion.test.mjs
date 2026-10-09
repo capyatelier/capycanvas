@@ -8,7 +8,7 @@ const summary=values=>{
   const v=values.slice().sort((a,b)=>a-b),p=q=>v[Math.round((v.length-1)*q)];
   return {count:v.length,p50:p(.5),p95:p(.95),max:v.at(-1)};
 };
-import {readPackage,packageObject,packageObjects,packageResources,rasterIdentity,imageIdentity} from './package-fixture.test.mjs';
+import {readPackage,packageObject,packageObjects,packageResources,packageOccurrences,rasterIdentity,imageIdentity} from './package-fixture.test.mjs';
 export {imageIdentity} from './package-fixture.test.mjs';
 export const placementSave=({evaluate,invoke,idle})=>async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'placementTest.saved');};
 
@@ -19,7 +19,6 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,base
   const report={...hardware??{cpu:cpus()[0]?.model,gpu:(await call('SystemInfo.getInfo',{},null)).gpu.devices},loading_ms:loadingMs,runs:[]};
   const sources=imageIdentity(baseline),objects=packageObjects(baseline,'capy.image-object/1');
   const state=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state(),(_,v)=>typeof v==="bigint"?Number(v):v))');
-  const layer=(await state()).layers.find(l=>l.object_count===objects.length).id;
   let profileIndex=0;
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const screen=async(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
@@ -72,12 +71,12 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,base
     await send({type:'customize',action:{type:'set_column_collapsed',group:statsGroup,collapsed:false}});
     await send({type:'select_panel_tab',group:statsGroup,panel:'stats'});
     await invoke('fit_canvas');
-    await send({type:'object',action:{op:'expand',layer,expanded:true}});
-    const rows=(await state()).layers.find(l=>l.id===layer).objects;
+    const rows=(await state()).layers.filter(l=>l.object);
     for(let index=0;index<objects.length;index++)for(const size of ['fit','original']) {
-      for(const row of rows)await send({type:'object',action:{op:'visibility',id:row.id,visible:row.label===objects[index].data.name}});
-      const row=rows.find(r=>r.label===objects[index].data.name);
-      await invoke('move');await send({type:'object',action:{op:'select',id:row.id,extend:false}});
+      const name=packageOccurrences(baseline).find(o=>o.data.content.objects?.ref===objects[index].id)?.data.name;
+      const row=rows.find(r=>r.label===name)??rows[index];
+      for(const candidate of rows)await send({type:'layer',action:{op:'visibility',id:candidate.id,value:candidate.id===row.id}});
+      await invoke('move');await send({type:'select_layer',id:row.id});
       if(size==='original')await invoke('placement_original_size');
       const extent=packageObject(baseline,objects[index].data.image).data.extent;
       const entry={extent,size,translation:[],drawing:null};
@@ -95,7 +94,7 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,base
       report.runs.push(entry);await writeFile(join(directory,'motion.json'),JSON.stringify(report,null,2));
       console.log(`Image ${extent[0]}×${extent[1]} at ${size} size: translation GPU ${JSON.stringify(entry.translation.at(-1).gpu_ms)}, drawing GPU ${JSON.stringify(entry.drawing.gpu_ms)}`);
     }
-    for(const row of rows)await send({type:'object',action:{op:'visibility',id:row.id,visible:true}});
+    for(const row of rows)await send({type:'layer',action:{op:'visibility',id:row.id,value:true}});
     if(objects.length>1){
       await invoke('add_layer');await invoke('pen');
       report.two_images=await motion('pen','measure');assert.deepEqual(imageIdentity(await save()),sources);

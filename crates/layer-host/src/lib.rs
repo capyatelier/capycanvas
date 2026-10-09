@@ -767,9 +767,6 @@ impl NativeHost {
             LayerBlendMenu {
                 id: u64,
             },
-            ObjectMenu {
-                id: u64,
-            },
             PaletteMenu {
                 target: layer_ui::PaletteMenuTarget,
             },
@@ -924,7 +921,6 @@ impl NativeHost {
             Query::ZoomMenu => json!(self.session.zoom_menu()),
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::LayerBlendMenu { id } => json!(self.session.layer_blend_menu(id)?),
-            Query::ObjectMenu { id } => json!(self.session.object_menu(id)?),
             Query::StrokeRecording { action } => {
                 let platform = json!(self.session.state().platform);
                 let mut recorder = self.session.stroke_recording();
@@ -1297,12 +1293,10 @@ mod tests {
     #[test]
     fn the_first_eraser_stroke_on_a_new_image_layer_mask_waits_for_its_shaders_and_is_stored() {
         let mut document = layer_ui::new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
-        document.apply(edit).unwrap();
         let image = layer_core::color::source::rgba8_source([960, 720], |x, y| [(x % 256) as u8, (y % 256) as u8, 40, 255]);
-        let mut object = layer_core::authored::ImageObject::new(image.into(), "Photo");
+        let mut object = layer_core::authored::ImageObject::new(image.into());
         object.affine = layer_core::Affine64([1., 0., 0., 1., -160., -120.]);
-        let (_, edit) = document.add_image_object_edit(layer, object, 0).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Photo", object, None, 0).unwrap();
         document.apply(edit).unwrap();
         let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
         let clock = std::cell::Cell::new(0);
@@ -1331,19 +1325,19 @@ mod tests {
     #[test]
     fn input_held_for_shaders_keeps_saving_waiting_until_it_is_delivered_or_cancelled() {
         let mut document = layer_ui::new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
-        document.apply(edit).unwrap();
-        let mut object = layer_core::authored::ImageObject::new(layer_core::color::source::rgba8_source([200, 150], |_, _| [200, 40, 30, 255]).into(), "Photo");
+        let mut object = layer_core::authored::ImageObject::new(layer_core::color::source::rgba8_source([200, 150], |_, _| [200, 40, 30, 255]).into());
         object.affine = layer_core::Affine64([1., 0., 0., 1., 100., 100.]);
-        let (image, edit) = document.add_image_object_edit(layer, object, 0).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Photo", object, None, 0).unwrap();
         document.apply(edit).unwrap();
+        let image = document.scene().object_handle(layer).unwrap();
         let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
         let clock = std::cell::Cell::new(0);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while !host.startup.brush_ready { frame_step(&mut host, &clock, deadline); }
-        let choose = UiAction::Object { action: layer_ui::ObjectAction::Select { id: layer_ui::object_token(image), extend: false } };
+        let choose = UiAction::Layer { action: layer_ui::LayerAction::Select { id: layer_ui::occurrence_token(layer), mask: false } };
         host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::AddMask { id: layer_ui::occurrence_token(layer), replace: false } }).unwrap();
         host.dispatch(choose).unwrap();
+        host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Tool { tool: layer_ui::LayerCanvasTool::Move } }).unwrap();
         assert!(!host.paint_ready(), "the first mask needs shaders the drawing did not use before");
         let surface = layer_core::Affine(host.session.state().camera.document_to_surface());
         let contact = |host: &mut NativeHost, id: u64, path: &[([f64; 2], f64)]| {
@@ -1372,16 +1366,14 @@ mod tests {
     #[test]
     fn thumbnails_in_flight_during_a_renderer_replacement_still_arrive() {
         let mut document = layer_ui::new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
-        document.apply(edit).unwrap();
         let image = layer_core::color::source::rgba8_source([64; 2], |_, _| [20, 200, 40, 255]);
-        let (object, edit) = document.add_image_object_edit(layer, layer_core::authored::ImageObject::new(image.into(), "Photo"), 0).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Photo", layer_core::authored::ImageObject::new(image.into()), None, 0).unwrap();
         document.apply(edit).unwrap();
         let (reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
         let clock = std::cell::Cell::new(0);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while !host.startup.brush_ready { frame_step(&mut host, &clock, deadline); }
-        let target = object.wire_id();
+        let target = layer_ui::occurrence_token(layer);
         let mut request = 40;
         let request = loop {
             request += 1;
@@ -1409,10 +1401,8 @@ mod tests {
     #[test]
     fn thumbnail_work_left_for_canvas_frames_wakes_the_host() {
         let mut document = layer_ui::new_drawing(2048, 1024, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
-        document.apply(edit).unwrap();
         let image = layer_core::color::source::rgba8_source([1024; 2], |x, y| [x as u8, y as u8, 90, 255]);
-        let (_, edit) = document.add_image_object_edit(layer, layer_core::authored::ImageObject::new(image.into(), "Photo"), 0).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Photo", layer_core::authored::ImageObject::new(image.into()), None, 0).unwrap();
         document.apply(edit).unwrap();
         document.artwork.occurrences.get_mut(layer).unwrap().visible = false;
         let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
@@ -1527,24 +1517,31 @@ mod tests {
     }
 
     #[test]
-    fn object_menu_query_returns_the_shared_image_menu() {
+    fn object_layer_menu_query_keeps_layer_context_and_selection() {
         use layer_core::color::source::{SourceBuilder,SourceChannels,SourceInterpretation};
         let localizer=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
         let mut document=layer_ui::new_drawing(32,32,&localizer).unwrap();
         let mut builder=SourceBuilder::new([4;2],SourceInterpretation{channels:SourceChannels::Rgba,depth:layer_core::color::SampleDepth::U8,profile:Default::default(),profile_assumed:false},1<<20).unwrap();
         for _ in 0..4 { builder.push_row(&[255;16]).unwrap(); }
         let image=layer_core::authored::Image::new(std::sync::Arc::new(builder.finish().unwrap()));
-        let (layer,edit)=document.create_object_layer_edit("Images",None,0).unwrap();document.apply(edit).unwrap();
-        let (object,edit)=document.add_image_object_edit(layer,layer_core::ImageObject::new(image,"Photo"),0).unwrap();document.apply(edit).unwrap();
+        let (layer,edit)=document.create_object_layer_edit("Photo",layer_core::ImageObject::new(image),None,0).unwrap();document.apply(edit).unwrap();
+        let object=document.scene().object_handle(layer).unwrap();
         let reference=layer_render_wgpu::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let gpu=GpuContext::of(&reference).rasterizer(Default::default(),&RendererOptions::default(),true).unwrap();
         let mut host=NativeHost::new(layer_ui::Platform::Android).unwrap();
         host.session=UiSession::from_project(Renderer(Some(gpu.into())),document,None,[640,480],layer_ui::Platform::Android).unwrap();
-        let id=layer_ui::object_token(object);
-        let menu=host.query(json!({"type":"object_menu","id":id})).unwrap();
-        assert_eq!(menu,json!(host.session.object_menu(id).unwrap()));
+        let id=layer_ui::occurrence_token(layer);
+        let before=host.session.engine().document().working.clone();
+        let menu=host.query(json!({"type":"layer_menu","id":id,"mask":false})).unwrap();
+        assert_eq!(menu,json!(host.session.layer_menu(id,false).unwrap()));
         assert!(menu["sections"].as_array().is_some_and(|sections|!sections.is_empty()));
-        assert!(host.query(json!({"type":"object_menu","id":layer_ui::occurrence_token(layer)})).is_err());
+        assert_eq!(host.session.engine().document().working,before,"querying a menu does not change selection");
+        host.dispatch(UiAction::Layer{action:layer_ui::LayerAction::Context{id,mask:false}}).unwrap();
+        let working=&host.session.engine().document().working;
+        assert_eq!(working.occurrence,Some(layer));
+        assert_eq!(working.layer_selection,[layer].into());
+        assert_eq!(host.session.engine().document().selected_objects(),[object].into());
+        assert!(host.query(json!({"type":"layer_menu","id":layer_ui::object_token(object),"mask":false})).is_err());
     }
 
     #[test]

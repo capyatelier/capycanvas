@@ -24,7 +24,7 @@ function Canonical($Value){
     $Value
 }
 function Identity($Manifest){
-    $objects=@($Manifest.objects|Where-Object type -in @('capy.image-object/1','capy.object-layer/1','capy.image/1','capy.paint-source/2','capy.occurrence/3')|Sort-Object id)
+    $objects=@($Manifest.objects|Where-Object type -in @('capy.image-object/1','capy.image/1','capy.paint-source/2','capy.occurrence/3')|Sort-Object id)
     foreach($source in $objects|Where-Object type -eq 'capy.paint-source/2'){
         if(!$source.data.PSObject.Properties['color_mode']){$source.data|Add-Member color_mode 'full_color'}
     }
@@ -38,19 +38,21 @@ function Invoke-History([bool]$Redo=$false){
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),$(if($Redo){0x59}else{0x5A}))
 }
 function Samples{
-    $camera=(Model).state.camera;$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
-    $tab=@((Model).state.tabs|Where-Object active)[0]
-    $bitmap=[Drawing.Bitmap]::new(1,1);$graphics=[Drawing.Graphics]::FromImage($bitmap)
+    $model=Model;$camera=$model.state.camera;$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+    $tab=@($model.state.tabs|Where-Object active)[0]
+    $bitmap=[Drawing.Bitmap]::new([int]$bounds.Width,[int]$bounds.Height);$graphics=[Drawing.Graphics]::FromImage($bitmap)
     try{
+        $graphics.CopyFromScreen([int]$bounds.X,[int]$bounds.Y,0,0,$bitmap.Size)
         foreach($point in @(@(.1,.45),@(.1,.6),@(.1,.75),@(.25,.18),@(.25,.2),@(.25,.22),@(.82,.4),@(.82,.5),@(.82,.6))){
             $x=$point[0];$y=$point[1]
-            $sx=[int]($bounds.X+($tab.width*$x*$camera.zoom+$camera.translation[0])*$bounds.Width/$camera.viewport[0])
-            $sy=[int]($bounds.Y+($tab.height*$y*$camera.zoom+$camera.translation[1])*$bounds.Height/$camera.viewport[1])
-            $graphics.CopyFromScreen($sx,$sy,0,0,[Drawing.Size]::new(1,1));$c=$bitmap.GetPixel(0,0)
+            $sx=[int](($tab.width*$x*$camera.zoom+$camera.translation[0])*$bounds.Width/$camera.viewport[0])
+            $sy=[int](($tab.height*$y*$camera.zoom+$camera.translation[1])*$bounds.Height/$camera.viewport[1])
+            $c=$bitmap.GetPixel($sx,$sy)
             @([int]$c.R,[int]$c.G,[int]$c.B) -join ','
         }
     }finally{$graphics.Dispose();$bitmap.Dispose()}
 }
+
 function Colored($Samples){
     @($Samples|Where-Object {$rgb=$_ -split ','|ForEach-Object {[int]$_};($rgb|Measure-Object -Maximum).Maximum-($rgb|Measure-Object -Minimum).Minimum -gt 8}).Count
 }

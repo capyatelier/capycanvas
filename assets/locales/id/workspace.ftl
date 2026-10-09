@@ -384,7 +384,7 @@ workspace-tool-description-change-bit-depth = Ubah presisi pengeditan dengan Uru
 workspace-tool-description-import-image = Tempatkan foto sebagai gambar yang bisa dipindahkan, diskalakan, dan diputar, dengan profil dan kedalaman aslinya
 
 workspace-tool-description-rasterize-source = Konversi gambar asli yang disimpan menjadi piksel dokumen
-workspace-tool-description-rasterize-layer = Ubah lapisan gambar menjadi piksel cat
+workspace-tool-description-rasterize-layer = Ubah lapisan objek menjadi piksel cat
 workspace-tool-description-convert-to-object = Ubah lapisan cat menjadi gambar yang bisa dipindahkan dan diskalakan
 
 workspace-tool-description-repair-source-profile = Perbaiki profil sumber gambar asli yang disimpan dengan mempertahankan pengeditan yang diterapkan
@@ -394,7 +394,7 @@ workspace-tool-description-copy = { commands-help-copy }
 workspace-tool-description-cut = { commands-help-cut }
 
 workspace-tool-description-copy-merged = Salin gambar terlihat di dalam seleksi ke papan klip
-workspace-tool-description-copy-pixels = Salin piksel lapisan aktif ke papan klip, termasuk gambar pada lapisan gambar
+workspace-tool-description-copy-pixels = Salin piksel lapisan aktif ke papan klip, termasuk gambar pada lapisan objek
 
 workspace-tool-description-paste-image = Tempel isi papan klip sebagai lapisan baru atau gambar
 
@@ -522,7 +522,7 @@ workspace-tool-description-clear-selected = Hapus piksel terpilih, dengan memper
 
 workspace-tool-description-clear-outside = Hapus piksel di luar seleksi
 
-workspace-tool-description-copy-selection-to-layer = Salin piksel terpilih ke lapisan baru; tanpa seleksi, duplikasi lapisan; pada lapisan gambar, duplikasi gambar yang dipilih
+workspace-tool-description-copy-selection-to-layer = Salin piksel terpilih ke lapisan baru; tanpa seleksi, duplikasi lapisan
 
 workspace-tool-description-cut-selection-to-layer = Pindahkan piksel terpilih ke lapisan baru
 

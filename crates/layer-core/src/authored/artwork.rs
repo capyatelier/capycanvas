@@ -1,4 +1,4 @@
-use super::{Handle, PortableId, Store, Image, ImageObject, ObjectLayer, PaintBase};
+use super::{Handle, PortableId, Store, Image, ImageObject, PaintBase};
 use crate::{BlendSpace, EffectProgram, EffectValue, ImageResolution, LayerBlend,
     PhotoMetadata, RulerGeometry, Selection, SelectionMaskProperties,
     color::{DocumentColor, ProofRecipe, hdr::SdrRendition}, raster::RasterRevision};
@@ -8,7 +8,6 @@ pub type CompositionHandle = Handle<Composition>;
 pub type StackHandle = Handle<Stack>;
 pub type OccurrenceHandle = Handle<Occurrence>;
 pub type PaintHandle = Handle<PaintSource>;
-pub type ObjectLayerHandle = Handle<ObjectLayer>;
 pub type ImageObjectHandle = Handle<ImageObject>;
 
 pub type CoverageHandle = Handle<CoverageSource>;
@@ -24,7 +23,6 @@ pub struct Artwork {
     pub stacks: Store<Stack>,
     pub occurrences: Store<Occurrence>,
     pub paint: Store<PaintSource>,
-    pub object_layers: Store<ObjectLayer>,
     pub objects: Store<ImageObject>,
     pub coverage: Store<CoverageSource>,
     pub effects: Store<EffectApplication>,
@@ -47,7 +45,7 @@ pub struct Composition {
 pub struct Stack { pub entries: Vec<OccurrenceHandle> }
 #[derive(Clone, Debug, PartialEq)]
 pub enum OccurrenceContent {
-    Paint(PaintHandle), Objects(ObjectLayerHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle),
+    Paint(PaintHandle), Objects(ImageObjectHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle),
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Attachment { #[default] None, Clip, Effect }
@@ -173,7 +171,6 @@ pub struct WorkingState {
     pub occurrence: Option<OccurrenceHandle>,
     pub target: Option<SourceTarget>,
     pub inspect_mask: Option<OccurrenceHandle>,
-    pub objects: BTreeSet<ImageObjectHandle>,
     pub view_origin: [i64; 2],
 }
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -212,7 +209,7 @@ impl Artwork {
         let default_output = outputs.insert(PortableId::random(), Output { composition:root, name:Arc::from(""), context:EvaluationContext::default(),
             sdr:SdrRendition::default(), proof:None })?;
         Ok(Self { id:PortableId::random(), root, compositions, stacks, outputs, default_output,
-            occurrences:Store::default(), paint:Store::default(), object_layers:Store::default(), objects:Store::default(), coverage:Store::default(), effects:Store::default(),
+            occurrences:Store::default(), paint:Store::default(), objects:Store::default(), coverage:Store::default(), effects:Store::default(),
             selections:Store::default(), guides:Store::default(), metadata:Arc::new(PhotoMetadata::default()), extensions:Arc::default() })
     }
     pub fn capture(&self, checkpoint: CaptureCheckpoint) -> Result<ArtworkCapture, &'static str> {
@@ -244,7 +241,7 @@ impl Artwork {
         for (_,identity,occurrence) in self.occurrences.iter() {
             let content=match occurrence.content {
                 OccurrenceContent::Paint(handle)=>Content::Paint(id(&self.paint,handle)?),
-                OccurrenceContent::Objects(handle)=>Content::Objects(id(&self.object_layers,handle)?),
+                OccurrenceContent::Objects(handle)=>Content::Objects(id(&self.objects,handle)?),
                 OccurrenceContent::Stack(handle)=>Content::Group(id(&self.stacks,handle)?),
                 OccurrenceContent::Effect(handle)=>Content::Effect(id(&self.effects,handle)?),
                 OccurrenceContent::Selection(handle)=>Content::Selection(id(&self.selections,handle)?),
@@ -256,7 +253,6 @@ impl Artwork {
             if let Some(base) = &paint.base { collect_image(&mut images, &base.image)?; }
             insert(identity,Shape::Paint { image:paint.base.as_ref().map(|base|base.image.id()) })?;
         }
-        for (_,identity,layer) in self.object_layers.iter() { insert(identity,Shape::ObjectLayer { children:layer.children.iter().map(|h|id(&self.objects,*h)).collect::<Result<_,_>>()? })?; }
         for (_,identity,object) in self.objects.iter() { collect_image(&mut images,&object.image)?; insert(identity,Shape::ImageObject { image:object.image.id() })?; }
         for identity in images.keys() { insert(*identity,Shape::Image)?; }
         for (_,identity,_) in self.coverage.iter() {insert(identity,Shape::Coverage)?;}

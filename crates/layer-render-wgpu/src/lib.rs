@@ -3389,7 +3389,7 @@ impl CanvasRenderer for WgpuRasterizer {
             || self.moving_images_pending()
             || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.pending())
                 && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
-            || (self.object_deferred || self.scene.as_ref().is_some_and(|scene| scene.objects_pending()))
+            || (self.object_deferred || self.moving_layer.is_none() && self.scene.as_ref().is_some_and(|scene| scene.objects_pending()))
                 && (!cfg!(target_arch="wasm32") || !self.image_decode_waiting())
             || self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
     }

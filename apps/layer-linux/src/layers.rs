@@ -2,7 +2,7 @@
 use crate::{number_control::NumberControl, workspace::Workspace};
 use gtk::{gdk, gio, glib, prelude::*};
 use layer_render::CanvasRenderer;
-use layer_ui::{LayerAction as A, LayerState, NumericControl, ObjectAction, ObjectRow, UiAction, UiState};
+use layer_ui::{LayerAction as A, LayerState, NumericControl, UiAction, UiState};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -52,7 +52,6 @@ pub struct LayerPanel {
     context: gtk::PopoverMenu,
     owner: Rc<RefCell<Weak<Workspace>>>,
     rows: Rc<RefCell<HashMap<usize, Row>>>,
-    objects: Rc<RefCell<HashMap<usize, ObjectWidgets>>>,
     connections: connections::Connections,
     previews: RefCell<HashMap<(u64, bool), (u64, gdk::Texture)>>,
     requested: RefCell<HashMap<(u64, bool), u64>>,
@@ -61,30 +60,11 @@ pub struct LayerPanel {
     renderer: Cell<u64>,
 }
 #[derive(Clone)]
-struct ObjectItem {
-    row: ObjectRow,
-    depth: u32,
-}
-#[derive(Clone)]
-struct ObjectWidgets {
-    copy: Rc<RefCell<LayerCopy>>,
-    item: glib::WeakRef<gtk::ListItem>,
-    id: Cell<u64>,
-    root: gtk::Box,
-    eye: gtk::Button,
-    image: gtk::Picture,
-    thumbnail: gtk::Overlay,
-    name: gtk::Label,
-    grip: gtk::Image,
-}
-#[derive(Clone)]
 struct Row {
     copy: Rc<RefCell<LayerCopy>>,
     id: Cell<u64>,
     bound: Cell<bool>,
-    stack: gtk::Stack,
     swipe: crate::swipe_row::SwipeRow,
-    expand: gtk::Button,
     content_image: gtk::Picture,
     effect_icon: gtk::Image,
     pass_through: gtk::Image,
@@ -117,19 +97,14 @@ fn action(w: &Rc<Workspace>, action: A) {
 fn row_state(item: &gtk::ListItem) -> Option<LayerState> {
     Some(item.item()?.downcast::<glib::BoxedAnyObject>().ok()?.try_borrow::<LayerState>().ok()?.clone())
 }
-fn object_state(item: &gtk::ListItem) -> Option<ObjectItem> {
-    Some(item.item()?.downcast::<glib::BoxedAnyObject>().ok()?.try_borrow::<ObjectItem>().ok()?.clone())
-}
 fn item_id(object: &glib::BoxedAnyObject) -> Option<u64> {
-    object.try_borrow::<LayerState>().map(|l| l.id).ok().or_else(|| object.try_borrow::<ObjectItem>().map(|o| o.row.id).ok())
+    object.try_borrow::<LayerState>().map(|l| l.id).ok()
 }
 fn panel_items(layers: &[LayerState]) -> Vec<glib::BoxedAnyObject> {
-    layers.iter().flat_map(|layer| std::iter::once(glib::BoxedAnyObject::new(layer.clone()))
-        .chain(layer.objects.iter().map(|row| glib::BoxedAnyObject::new(ObjectItem { row: row.clone(), depth: layer.depth + 1 }))))
-        .collect()
+    layers.iter().map(|layer| glib::BoxedAnyObject::new(layer.clone())).collect()
 }
 fn panel_ids(layers: &[LayerState]) -> Vec<u64> {
-    layers.iter().flat_map(|layer| std::iter::once(layer.id).chain(layer.objects.iter().map(|row| row.id))).collect()
+    layers.iter().map(|layer| layer.id).collect()
 }
 fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay) {
     let button = button("layer-image-symbolic", tooltip);
@@ -282,221 +257,6 @@ pub(crate) fn drag_preview(
 fn dragged_layer(value: &glib::Value) -> Option<u64> {
     value.get::<String>().ok()?.strip_prefix("capy-layer:")?.parse().ok()
 }
-fn dragged_object(value: &glib::Value) -> Option<u64> {
-    value.get::<String>().ok()?.strip_prefix("capy-object:")?.parse().ok()
-}
-fn touch_contact(source: &gtk::DragSource) -> bool {
-    source.current_event().is_some_and(|e| e.device_tool().is_some())
-        || source.current_event_device().is_some_and(|d| matches!(d.source(), gdk::InputSource::Touchscreen | gdk::InputSource::Pen))
-}
-fn object_drag(
-    item: &gtk::ListItem,
-    root: &gtk::Box,
-    handle: bool,
-    held: &Rc<Cell<bool>>,
-    owner: &Rc<RefCell<Weak<Workspace>>>,
-    context: &gtk::PopoverMenu,
-) -> gtk::DragSource {
-    let source = gtk::DragSource::new();
-    source.set_actions(gdk::DragAction::MOVE);
-    source.set_propagation_phase(gtk::PropagationPhase::Capture);
-    source.connect_prepare(glib::clone!(
-        #[strong] held, #[weak] item, #[weak] root, #[strong] owner, #[weak] context,
-        #[upgrade_or] None,
-        move |source, x, y| {
-            if !handle && !held.get() && touch_contact(source) { return None; }
-            let object = object_state(&item)?;
-            if !object.row.editable || !(object.row.can_raise || object.row.can_lower) { return None; }
-            let w = owner.borrow().upgrade()?;
-            context.popdown();
-            context.set_autohide(true);
-            let color = w.gpu.borrow().as_ref()?.session.state().palette.panel;
-            let preview = drag_preview(root.upcast_ref(), color);
-            let hotspot = source.widget()?.compute_point(&root, &gtk::graphene::Point::new(x as f32, y as f32))?;
-            source.set_icon(preview.as_ref(), hotspot.x() as i32, hotspot.y() as i32);
-            Some(gdk::ContentProvider::for_value(&format!("capy-object:{}", object.row.id).to_value()))
-        }
-    ));
-    source
-}
-fn object_drop_target(w: &Workspace, dragged: u64, target: &ObjectItem) -> bool {
-    dragged != target.row.id && target.row.editable && w.gpu.borrow().as_ref().is_some_and(|g| g.session.state().layers.iter()
-        .any(|layer| layer.id == target.row.layer && layer.objects.iter().any(|row| row.id == dragged)))
-}
-fn show_object_drop_hint(objects: &RefCell<HashMap<usize, ObjectWidgets>>, hint: Option<(u64, bool)>) {
-    for row in objects.borrow().values() {
-        row.root.remove_css_class("layer-drop-before");
-        row.root.remove_css_class("layer-drop-after");
-        if let Some((_, below)) = hint.filter(|(target, _)| *target == row.id.get()) {
-            row.root.add_css_class(if below { "layer-drop-after" } else { "layer-drop-before" });
-        }
-    }
-}
-fn object_menu(w: &Rc<Workspace>, context: &gtk::PopoverMenu, anchor: &gtk::Widget, id: u64, [x, y]: [f64; 2]) {
-    let menu = w.gpu.borrow().as_ref().and_then(|g| g.session.object_menu(id).ok());
-    let Some(menu) = menu else { return };
-    w.populate_workspace_menu(context, menu);
-    if let Some(p) = context.parent().and_then(|root| anchor.compute_point(&root, &gtk::graphene::Point::new(x as f32, y as f32))) {
-        context.set_pointing_to(Some(&gdk::Rectangle::new(p.x() as i32, p.y() as i32, 1, 1)));
-    }
-    context.popup();
-}
-fn object_action(owner: &RefCell<Weak<Workspace>>, action: ObjectAction) {
-    if let Some(w) = owner.borrow().upgrade() { w.dispatch(UiAction::Object { action }); }
-}
-fn object_row(
-    item: &gtk::ListItem,
-    copy: &Rc<RefCell<LayerCopy>>,
-    owner: &Rc<RefCell<Weak<Workspace>>>,
-    context: &gtk::PopoverMenu,
-    objects: &Rc<RefCell<HashMap<usize, ObjectWidgets>>>,
-) -> ObjectWidgets {
-    let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    root.add_css_class("layer-row");
-    root.add_css_class("layer-object-row");
-    root.add_css_class("customizable-target");
-    let eye = button("layer-eye-symbolic", copy.borrow().layer.hide_image.as_ref());
-    eye.add_css_class("layer-column");
-    root.append(&eye);
-    let spacer = button("layer-selection-empty-symbolic", "");
-    spacer.add_css_class("layer-column");
-    spacer.set_opacity(0.);
-    spacer.set_can_target(false);
-    spacer.set_focusable(false);
-    spacer.update_state(&[gtk::accessible::State::Hidden(true)]);
-    root.append(&spacer);
-    let picture = gtk::Picture::new();
-    picture.set_can_shrink(true);
-    picture.set_content_fit(gtk::ContentFit::Contain);
-    picture.set_size_request(28, 28);
-    picture.set_overflow(gtk::Overflow::Hidden);
-    let size = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    size.set_size_request(28, 28);
-    let placeholder = crate::icons::image("layer-image-symbolic");
-    placeholder.add_css_class("dim-label");
-    let thumbnail = gtk::Overlay::new();
-    thumbnail.set_child(Some(&size));
-    thumbnail.add_overlay(&placeholder);
-    thumbnail.add_overlay(&picture);
-    thumbnail.set_measure_overlay(&picture, false);
-    thumbnail.add_css_class("layer-object-thumbnail");
-    thumbnail.set_valign(gtk::Align::Center);
-    thumbnail.set_can_target(false);
-    root.append(&thumbnail);
-    let name = gtk::Label::new(None);
-    name.add_css_class("layer-name");
-    name.set_xalign(0.);
-    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    name.set_width_chars(1);
-    name.set_hexpand(true);
-    name.set_margin_start(6);
-    root.append(&name);
-    let grip = crate::icons::image("layer-grip-symbolic");
-    grip.add_css_class("dim-label");
-    grip.add_css_class("drag-immediate");
-    grip.set_tooltip_text(Some(copy.borrow().layer.move_image.as_ref()));
-    root.append(&grip);
-    eye.connect_clicked(glib::clone!(#[weak] item, #[strong] owner, move |_| {
-        if let Some(object) = object_state(&item) {
-            object_action(&owner, ObjectAction::Visibility { id: object.row.id, visible: !object.row.visible });
-        }
-    }));
-    let click = gtk::GestureClick::new();
-    click.set_button(1);
-    click.connect_released(glib::clone!(#[weak] item, #[weak] root, #[strong] owner, move |gesture, _, x, y| {
-        let mut target = root.pick(x, y, gtk::PickFlags::DEFAULT);
-        while let Some(widget) = target {
-            if widget.is::<gtk::Button>() { return; }
-            if widget == root { break; }
-            target = widget.parent();
-        }
-        let Some(object) = object_state(&item) else { return };
-        let modifiers = gesture.current_event_state();
-        object_action(&owner, ObjectAction::Select {
-            id: object.row.id,
-            extend: modifiers.intersects(gdk::ModifierType::SHIFT_MASK | gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK),
-        });
-    }));
-    root.add_controller(click);
-    let secondary = gtk::GestureClick::new();
-    secondary.set_button(3);
-    secondary.connect_pressed(glib::clone!(#[strong] context, #[weak] item, #[strong] owner, move |g, _, x, y| {
-        let (Some(object), Some(w)) = (object_state(&item), owner.borrow().upgrade()) else { return };
-        g.set_state(gtk::EventSequenceState::Claimed);
-        context.set_autohide(true);
-        object_menu(&w, &context, &g.widget().unwrap(), object.row.id, [x, y]);
-    }));
-    root.add_controller(secondary);
-    let held = Rc::new(Cell::new(false));
-    let drag = object_drag(item, &root, false, &held, owner, context);
-    root.add_controller(drag.clone());
-    grip.add_controller(object_drag(item, &root, true, &held, owner, context));
-    let hold = gtk::GestureLongPress::new();
-    hold.set_touch_only(false);
-    hold.set_propagation_phase(gtk::PropagationPhase::Capture);
-    hold.connect_begin(glib::clone!(#[strong] held, move |_, _| held.set(false)));
-    hold.connect_pressed(glib::clone!(#[strong] context, #[strong] held, #[weak] item, #[weak] root, #[strong] owner, move |g, x, y| {
-        if !crate::input::touch_or_pen(g) { return; }
-        let (Some(object), Some(w)) = (object_state(&item), owner.borrow().upgrade()) else { return };
-        held.set(object.row.editable);
-        g.set_state(gtk::EventSequenceState::Claimed);
-        context.set_autohide(false);
-        object_menu(&w, &context, root.upcast_ref(), object.row.id, [x, y]);
-    }));
-    root.add_controller(hold.clone());
-    hold.group_with(&drag);
-    let drop = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
-    drop.set_preload(true);
-    drop.connect_accept(|_, drop| !drop.formats().contain_mime_type("text/uri-list"));
-    let preview = glib::clone!(#[weak] item, #[weak] root, #[strong] owner, #[strong] objects,
-        #[upgrade_or] gdk::DragAction::empty(),
-        move |drop: &gtk::DropTarget, _x: f64, y: f64| {
-            let hint = (|| {
-                let dragged = dragged_object(&drop.value()?)?;
-                let target = object_state(&item)?;
-                let w = owner.borrow().upgrade()?;
-                object_drop_target(&w, dragged, &target).then_some((target.row.id, y > f64::from(root.height()) * 0.5))
-            })();
-            show_object_drop_hint(&objects, hint);
-            if hint.is_some() { gdk::DragAction::MOVE } else { gdk::DragAction::empty() }
-        });
-    drop.connect_enter(preview.clone());
-    drop.connect_motion(preview);
-    drop.connect_leave(glib::clone!(#[strong] objects, move |_| show_object_drop_hint(&objects, None)));
-    drop.connect_drop(glib::clone!(#[weak] item, #[weak] root, #[strong] owner, #[strong] objects,
-        #[upgrade_or] false,
-        move |_, value, _, y| {
-            show_object_drop_hint(&objects, None);
-            let (Some(dragged), Some(target), Some(w)) = (dragged_object(value), object_state(&item), owner.borrow().upgrade()) else { return false };
-            if !object_drop_target(&w, dragged, &target) { return false; }
-            w.dispatch(UiAction::Object { action: ObjectAction::Drop { id: dragged, target: target.row.id, below: y > f64::from(root.height()) * 0.5 } });
-            true
-        }));
-    root.add_controller(drop);
-    ObjectWidgets { copy: copy.clone(), item: item.downgrade(), id: Cell::new(0), root, eye, image: picture, thumbnail, name, grip }
-}
-impl ObjectWidgets {
-    fn refresh(&self, object: &ObjectItem) {
-        let copy = self.copy.borrow();
-        let row = &object.row;
-        if self.id.replace(row.id) != row.id { self.image.set_paintable(None::<&gdk::Paintable>); }
-        self.root.set_widget_name(&format!("image-object-{}", row.id));
-        self.thumbnail.set_margin_start(5 + (object.depth * 8).min(32) as i32);
-        self.name.set_text(&row.label);
-        self.name.set_tooltip_text(Some(&row.label));
-        if row.selected { self.root.add_css_class("selected"); } else { self.root.remove_css_class("selected"); }
-        self.root.set_opacity(if row.visible { 1. } else { 0.6 });
-        crate::icons::set_button(&self.eye, if row.visible { "layer-eye-symbolic" } else { "layer-eye-hidden-symbolic" });
-        caption(&self.eye, if row.visible { copy.layer.hide_image.as_ref() } else { copy.layer.show_image.as_ref() });
-        self.eye.set_sensitive(row.editable);
-        self.grip.set_visible(row.editable && (row.can_raise || row.can_lower));
-        if let Some(item) = self.item.upgrade() {
-            item.set_accessible_label(&row.label);
-            item.set_accessible_description(if row.selected { copy.layer.selected.as_ref() } else { "" });
-        }
-        self.root.update_state(&[gtk::accessible::State::Selected(Some(row.selected))]);
-    }
-}
 fn drop_hit(root: &gtk::Box, content: &gtk::Button, x: f64, y: f64) -> (f32, layer_ui::LayerDropSurface) {
     let thumbnail = content.compute_bounds(root).is_some_and(|rect| rect.contains_point(&gtk::graphene::Point::new(x as f32, y as f32)));
     ((y / root.height().max(1) as f64) as f32, if thumbnail { layer_ui::LayerDropSurface::Thumbnail } else { layer_ui::LayerDropSurface::Row })
@@ -555,7 +315,6 @@ impl LayerPanel {
             row.content_image.set_paintable(None::<&gdk::Texture>);
             row.mask_image.set_paintable(None::<&gdk::Texture>);
         }
-        for row in self.objects.borrow().values() { row.image.set_paintable(None::<&gdk::Texture>); }
         self.model.remove_all();
     }
     #[cfg(test)]
@@ -664,7 +423,6 @@ impl LayerPanel {
         let factory = gtk::SignalListItemFactory::new();
         let rows: Rc<RefCell<HashMap<usize, Row>>> = Rc::default();
         let connections = connections::Connections::new(rows.clone());
-        let objects: Rc<RefCell<HashMap<usize, ObjectWidgets>>> = Rc::default();
         factory.connect_setup(glib::clone!(
             #[weak]
             connections,
@@ -674,8 +432,6 @@ impl LayerPanel {
             context,
             #[strong]
             rows,
-            #[strong]
-            objects,
             #[strong]
             owner,
             move |_, item| {
@@ -751,14 +507,6 @@ impl LayerPanel {
                 meta.set_width_chars(1);
                 text.append(&meta);
                 root.append(&text);
-                let expand = button("layer-chevron-down-symbolic", copy.borrow().layer.expand_images.as_ref());
-                expand.add_css_class("layer-expand");
-                expand.set_valign(gtk::Align::Center);
-                expand.connect_clicked(glib::clone!(#[weak] item, #[strong] owner, move |_| {
-                    let Some(row) = row_state(&item) else { return };
-                    object_action(&owner, ObjectAction::Expand { layer: row.id, expanded: !row.expanded });
-                }));
-                root.append(&expand);
                 let load_selection = button("layer-selection-load-symbolic", copy.borrow().load_selection.as_ref());
                 load_selection.set_size_request(30, 30);
                 load_selection.set_valign(gtk::Align::Center);
@@ -1091,23 +839,14 @@ impl LayerPanel {
                             }
                         }
                     }, glib::clone!(#[weak] connections, move || connections.queue_draw()));
-                let object = object_row(item, &copy, &owner, &context, &objects);
-                let stack = gtk::Stack::new();
-                stack.set_hhomogeneous(false);
-                stack.set_vhomogeneous(false);
-                stack.add_named(&swipe, Some("layer"));
-                stack.add_named(&object.root, Some("object"));
-                item.set_child(Some(&stack));
-                objects.borrow_mut().insert(item.as_ptr() as usize, object);
+                item.set_child(Some(&swipe));
                 rows.borrow_mut().insert(
                     item.as_ptr() as usize,
                     Row {
                         copy: copy.clone(),
                         id: Cell::new(0),
                         bound: Cell::new(false),
-                        stack,
                         swipe,
-                        expand,
                         content_image,
                         effect_icon,
                         pass_through,
@@ -1135,23 +874,15 @@ impl LayerPanel {
             connections,
             #[strong]
             rows,
-            #[strong]
-            objects,
             move |_, item| {
                 let item = item.downcast_ref::<gtk::ListItem>().unwrap();
                 let rows = rows.borrow();
                 let row = &rows[&(item.as_ptr() as usize)];
                 if let Some(state) = row_state(item) {
-                    row.stack.set_visible_child_name("layer");
                     item.set_accessible_label("");
                     item.set_accessible_description("");
                     row.bound.set(true);
                     row.refresh(&state);
-                } else if let Some(object) = object_state(item) {
-                    row.stack.set_visible_child_name("object");
-                    row.bound.set(false);
-                    row.id.set(0);
-                    objects.borrow()[&(item.as_ptr() as usize)].refresh(&object);
                 }
                 connections.queue_draw();
             }
@@ -1159,11 +890,8 @@ impl LayerPanel {
         factory.connect_teardown(glib::clone!(
             #[strong]
             rows,
-            #[strong]
-            objects,
             move |_, item| {
                 rows.borrow_mut().remove(&(item.as_ptr() as usize));
-                objects.borrow_mut().remove(&(item.as_ptr() as usize));
             }
         ));
         factory.connect_unbind(glib::clone!(
@@ -1182,11 +910,6 @@ impl LayerPanel {
         let selection = gtk::NoSelection::new(Some(model.clone()));
         let view = gtk::ListView::new(Some(selection), Some(factory));
         view.set_single_click_activate(false);
-        view.connect_activate(glib::clone!(#[weak] model, #[strong] owner, move |_, position| {
-            let object = model.item(position).and_downcast::<glib::BoxedAnyObject>()
-                .and_then(|item| item.try_borrow::<ObjectItem>().ok().map(|o| o.row.id));
-            if let Some(id) = object { object_action(&owner, ObjectAction::Select { id, extend: false }); }
-        }));
         view.add_css_class("layer-list");
         let list = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -1234,7 +957,6 @@ impl LayerPanel {
             context,
             owner,
             rows,
-            objects,
             previews: Default::default(),
             requested: Default::default(),
             pending: Default::default(),
@@ -1543,13 +1265,9 @@ impl LayerPanel {
             let Some(object) = self.model.item(i).and_downcast::<glib::BoxedAnyObject>() else { continue };
             if let Ok(state) = object.try_borrow::<LayerState>() {
                 for row in self.rows.borrow().values().filter(|row| row.id.get() == state.id) { row.refresh(&state); }
-            } else if let Ok(item) = object.try_borrow::<ObjectItem>() {
-                self.refresh_object(&item);
+
             }
         }
-    }
-    fn refresh_object(&self, object: &ObjectItem) {
-        for widgets in self.objects.borrow().values().filter(|widgets| widgets.id.get() == object.row.id) { widgets.refresh(object); }
     }
     pub fn refresh(&self, state: &UiState) {
         let ids = panel_ids(&state.layers);
@@ -1568,15 +1286,7 @@ impl LayerPanel {
                     *object.borrow_mut::<LayerState>() = l.clone();
                     for row in self.rows.borrow().values().filter(|row| row.id.get() == l.id) { row.refresh(l); }
                 }
-                for child in &l.objects {
-                    let object = self.model.item(position).and_downcast::<glib::BoxedAnyObject>().unwrap();
-                    position += 1;
-                    let next = ObjectItem { row: child.clone(), depth: l.depth + 1 };
-                    if object.borrow::<ObjectItem>().row != next.row || object.borrow::<ObjectItem>().depth != next.depth {
-                        *object.borrow_mut::<ObjectItem>() = next.clone();
-                        self.refresh_object(&next);
-                    }
-                }
+
             }
         }
         if let Some(l) = &state.layer_tools.editing_layer {
@@ -1628,9 +1338,7 @@ impl LayerPanel {
             .is_some_and(|b| b.y() + b.height() > 0. && b.y() < view.list.height() as f32);
         let rows: Vec<_> = views.iter().flat_map(|view| view.rows.borrow().values()
             .filter(|r| r.bound.get() && shown(view, &r.root)).cloned().collect::<Vec<_>>()).collect();
-        let objects: Vec<_> = views.iter().flat_map(|view| view.objects.borrow().values()
-            .filter(|o| o.id.get() != 0 && o.root.is_mapped() && shown(view, &o.root)).cloned().collect::<Vec<_>>()).collect();
-        if rows.is_empty() && objects.is_empty() {
+        if rows.is_empty() {
             return;
         }
         let mut gpu = w.gpu.borrow_mut();
@@ -1678,10 +1386,6 @@ impl LayerPanel {
             }
             wanted.push((state.id, false, state.has_thumbnail.then_some(state.id), state.paint_revision, row.content_image.clone()));
             wanted.push((state.id, true, state.mask_id, state.mask_revision, row.mask_image.clone()));
-        }
-        for object in objects {
-            let Some(state) = g.session.state().layers.iter().flat_map(|l| &l.objects).find(|o| o.id == object.id.get()).cloned() else { continue };
-            wanted.push((state.id, false, Some(state.id), state.thumbnail_revision, object.image.clone()));
         }
         for (id, mask, target, revision, picture) in wanted {
             let Some(target) = target else { continue };
@@ -1840,10 +1544,6 @@ impl Row {
         caption(&self.lock, if s.locked { copy.layer.locked.as_ref() } else { copy.layer.alpha_locked.as_ref() });
         self.meta.set_text(&s.description);
         self.meta.set_visible(!s.description.is_empty());
-        self.expand.set_visible(s.object_count > 0);
-        if s.expanded { self.expand.remove_css_class("collapsed"); } else { self.expand.add_css_class("collapsed"); }
-        caption(&self.expand, if s.expanded { copy.layer.collapse_images.as_ref() } else { copy.layer.expand_images.as_ref() });
-        self.expand.update_state(&[gtk::accessible::State::Expanded(Some(s.expanded))]);
     }
 }
 

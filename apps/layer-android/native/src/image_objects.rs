@@ -14,11 +14,12 @@ pub extern "system" fn Java_art_capycanvas_Native_imageObjects(
         let owner = sources.iter().position(|previous| std::sync::Arc::ptr_eq(previous, source)).unwrap_or_else(|| {
             sources.push(source.clone()); sources.len()-1
         });
-        serde_json::json!({"id":id, "image":value.image.id(), "name":value.name,
+        let occurrence = document.scene().object_owner(object).and_then(|owner| document.scene().occurrence(owner));
+        serde_json::json!({"id":id, "image":value.image.id(), "name":occurrence.map(|o| o.name.as_ref()),
             "source_owner":owner,
             "paint_base_image_shared":document.artwork.paint.iter().any(|(_,_,paint)| paint.base.as_ref().is_some_and(|base|base.image.id()==value.image.id())),
             "paint_base_source_shared":document.artwork.paint.iter().any(|(_,_,paint)| paint.base.as_ref().is_some_and(|base|std::sync::Arc::ptr_eq(base.image.storage(),source))),
-            "affine":value.affine, "visible":value.visible, "extent":value.image.extent,
+            "affine":value.affine, "visible":occurrence.is_some_and(|o| o.visible), "extent":value.image.extent,
             "owner":document.scene().object_owner(object).map(|owner|owner.index())})
     }).collect();
     string(&mut env, serde_json::to_string(&rows).map_err(error))

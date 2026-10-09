@@ -290,7 +290,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn snap_target_ids(&self) -> Vec<OccurrenceHandle> {
         let doc = self.engine.document();
         let scene = doc.scene();
-        let roots = self.object_target().map_or_else(|| self.transform_roots(), |layer| vec![layer]);
+        let roots = self.transform_roots();
         let mut excluded = doc.layer_subtrees(&roots);
         for root in roots {
             let mut parent = scene.parent(root);

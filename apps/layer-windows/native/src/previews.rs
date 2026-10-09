@@ -95,12 +95,9 @@ pub fn layer_menu(host: &mut NativeHost, json: &str) -> Result<CapyPreview, Stri
     let mask = query.mask.unwrap_or(document.working.target.is_some_and(|t| matches!(t,layer_core::authored::SourceTarget::Coverage(_))));
     let epoch_matches = query.epoch.parse::<u64>().map_err(|e| e.to_string())? == epoch;
     let quick_mask = id == 0 && !mask && host.session.state().layer_tools.quick_mask;
-    let image = !mask && layer_ui::object_handle(id).ok().is_some_and(|h| document.scene().object(h).is_some());
     let exists = quick_mask || layer_ui::occurrence_handle(id).ok()
         .and_then(|h| document.scene().occurrence(h)).is_some_and(|o| !mask || o.mask.is_some());
-    let menu = if epoch_matches && image && !query.blend {
-        host.query(serde_json::json!({"type":"object_menu","id":id}))?
-    } else if epoch_matches && exists && query.blend {
+    let menu = if epoch_matches && exists && query.blend {
         serde_json::to_value(host.session.layer_blend_menu(id)?).map_err(|e| e.to_string())?
     } else if epoch_matches && exists {
         serde_json::to_value(host.session.layer_menu(id, mask)?).map_err(|e| e.to_string())?
@@ -292,31 +289,31 @@ mod tests {
         );
     }
     #[test]
-    fn image_rows_open_their_shared_menu_and_reject_stale_images() {
+    fn object_layers_open_their_shared_menu_and_reject_stale_layers() {
         let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48,
             layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
-        document.apply(edit).unwrap();
         let image = layer_core::color::source::rgba8_source([4, 3], |_, _| [10, 20, 30, 255]).into();
-        let (object, edit) = document.add_image_object_edit(layer, layer_core::ImageObject::new(image, "Photo"), 0).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Photo", layer_core::ImageObject::new(image), None, 0).unwrap();
         document.apply(edit).unwrap();
         let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         host.session = layer_ui::UiSession::new(layer_host::Renderer(Some(gpu.into())), document, [64, 48], layer_ui::Platform::Windows).unwrap();
         let epoch = host.session.state().document_file.epoch;
-        let id = layer_ui::object_token(object);
+        let id = layer_ui::occurrence_token(layer);
         let menu = |host: &mut NativeHost, json: serde_json::Value| -> serde_json::Value {
             let packet = layer_menu(host, &json.to_string()).unwrap();
             serde_json::from_str::<serde_json::Value>(packet.metadata.to_str().unwrap()).unwrap()["menu"].clone()
         };
         let before = host.session.engine().document().revision;
         assert_eq!(menu(&mut host, serde_json::json!({"epoch":epoch.to_string(),"id":id.to_string(),"mask":false})),
-            serde_json::to_value(host.session.object_menu(id).unwrap()).unwrap());
+            serde_json::to_value(host.session.layer_menu(id, false).unwrap()).unwrap());
+        assert_eq!(menu(&mut host, serde_json::json!({"epoch":epoch.to_string(),"id":id.to_string(),"blend":true})),
+            serde_json::to_value(host.session.layer_blend_menu(id).unwrap()).unwrap());
         assert_eq!(before, host.session.engine().document().revision);
         for stale in [
+
             serde_json::json!({"epoch":(epoch + 1).to_string(),"id":id.to_string(),"mask":false}),
             serde_json::json!({"epoch":epoch.to_string(),"id":id.to_string(),"mask":true}),
-            serde_json::json!({"epoch":epoch.to_string(),"id":id.to_string(),"blend":true}),
             serde_json::json!({"epoch":epoch.to_string(),"id":(id + 1).to_string(),"mask":false}),
         ] {
             assert!(menu(&mut host, stale).is_null());

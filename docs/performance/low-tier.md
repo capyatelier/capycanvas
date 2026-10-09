@@ -97,6 +97,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Pixel resize after placing the photo at 45% size | 60 | Navigator closed: screen 58.6 presents/s, p99 16.8 ms; renderer 224.6 completed updates/s | Earlier direct-presentation comparison below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
 | Move tool layer drag | 60 | | |
+| Object Layer placement, Move and Scale/Rotate | 60 | Current Object-layer simplification unmeasured on the reference tablet | [Qualification gap](known-gaps.md) |
 | Move selected pixels: whole image | 60 | Screen 59.1 presents/s, p99 16.8 ms; renderer 81.0 completed updates/s | Two-page-refinement qualification below, `move-all-drag` |
 | Move selected pixels: partial selection | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 134.2 completed updates/s | Two-page-refinement qualification below, `move-part-drag` |
 | Move selected pixels: Leave Copy | 60 | Screen 59.3 presents/s, p99 16.7 ms; renderer 131.1 completed updates/s | Two-page-refinement qualification below, `move-part-leave-copy-drag` |

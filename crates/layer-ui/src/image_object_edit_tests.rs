@@ -5,12 +5,11 @@ use layer_core::color::source::rgba8_source;
 #[test]
 fn object_only_layer_accepts_local_filters_and_keeps_paint_color_modes_read_only() {
     let mut doc = Document::from_artwork(layer_core::authored::Artwork::new([64;2]).unwrap()).unwrap();
-    let (owner, edit) = doc.create_object_layer_edit("Images",None,0).unwrap();
-    doc.apply(edit).unwrap();
-    let mut image = ImageObject::new(rgba8_source([8;2],|_,_|[17,33,65,255]).into(),"Photo");
+    let mut image = ImageObject::new(rgba8_source([8;2],|_,_|[17,33,65,255]).into());
     image.affine = Affine64([1.,0.,0.,1.,17.125,9.]);
-    let (object, edit) = doc.add_image_object_edit(owner,image,0).unwrap();
+    let (owner, edit) = doc.create_object_layer_edit("Photo",image,None,0).unwrap();
     doc.apply(edit).unwrap();
+    let object = doc.scene().object_handle(owner).unwrap();
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },doc,[64;2],Platform::Gtk).unwrap();
     s.dispatch(UiAction::SelectLayer { id: occurrence_token(owner) }).unwrap();
     assert!(s.engine.document().artwork.paint.is_empty());
@@ -50,16 +49,18 @@ fn object_only_layer_accepts_local_filters_and_keeps_paint_color_modes_read_only
 fn object_motion_previews_without_history_and_commits_one_atomic_edit() {
     let mut session = session(Platform::Android);
     let source = rgba8_source([1,1],|_,_|[17,33,65,255]);
-    let (layer, edit) = session.engine.document().create_object_layer_edit("Images",None,0).unwrap();
+    let (layer, edit) = session.engine.document().create_object_layer_edit("Photo",
+        ImageObject::new(Image::new(source.clone())),None,0).unwrap();
     session.engine.apply_edit(edit).unwrap();
-    let (first, edit) = session.engine.document().add_image_object_edit(layer,
-        ImageObject::new(Image::new(source.clone()),"Photo"),0).unwrap();
+    let first = session.engine.document().scene().object_handle(layer).unwrap();
+    let mut second = ImageObject::new(Image::new(source));second.affine = Affine64([2.,0.,0.,2.,5.,7.]);
+    let (second_layer, edit) = session.engine.document().create_object_layer_edit("Second",second,None,1).unwrap();
     session.engine.apply_edit(edit).unwrap();
-    let mut second = ImageObject::new(Image::new(source),"Second");second.affine = Affine64([2.,0.,0.,2.,5.,7.]);
-    let (second, edit) = session.engine.document().add_image_object_edit(layer,second,1).unwrap();
-    session.engine.apply_edit(edit).unwrap();
-    let mut offset = session.engine.document().artwork.occurrences.get(layer).unwrap().clone();offset.offset = [3, -4];
-    session.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&session.engine.document().artwork.occurrences,layer,Some(offset)).unwrap())).unwrap();
+    let second = session.engine.document().scene().object_handle(second_layer).unwrap();
+    for (owner, position) in [(layer, [3, -4]), (second_layer, [-8, 6])] {
+        let mut offset = session.engine.document().artwork.occurrences.get(owner).unwrap().clone();offset.offset = position;
+        session.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&session.engine.document().artwork.occurrences,owner,Some(offset)).unwrap())).unwrap();
+    }
     let before = session.engine.document().clone();
     let checkpoint = session.engine.checkpoint();
     session.begin_object_motion(&[first,second]).unwrap();
@@ -76,14 +77,15 @@ fn object_motion_previews_without_history_and_commits_one_atomic_edit() {
     for singular in [Affine64([0.;6]), Affine64([2.,1.,4.,2.,0.,0.]), Affine64([1.,1.,1.,1.,0.,0.])] {
         assert!(session.preview_object_motion(singular).is_err(), "a singular pose is refused");
         assert_live_artwork_eq(session.engine.document(),&posed);
-        assert_eq!(session.engine.backend().moving_layer,Some(layer),"the gesture continues from the last valid pose");
+        assert_eq!(session.engine.backend().moving_layer,Some(layer));
     }
     let change = session.commit_object_motion().unwrap();
     assert_ne!(change.regions & regions::DOCUMENT,0);
     assert_eq!(session.engine.backend().moving_layer,None);
     let local = Affine64([1.,0.,0.,1.,-3.,4.]).compose(turn).compose(Affine64([1.,0.,0.,1.,3.,-4.]));
     assert_eq!(session.engine.document().scene().object(first).unwrap().affine,local);
-    assert_eq!(session.engine.document().scene().object(second).unwrap().affine,local.compose(Affine64([2.,0.,0.,2.,5.,7.])));
+    let second_local = Affine64([1.,0.,0.,1.,8.,-6.]).compose(turn).compose(Affine64([1.,0.,0.,1.,-8.,6.]));
+    assert_eq!(session.engine.document().scene().object(second).unwrap().affine,second_local.compose(Affine64([2.,0.,0.,2.,5.,7.])));
     let accepted = session.engine.document().clone();
     session.engine.undo().unwrap();
     assert_live_artwork_eq(session.engine.document(),&before);
@@ -100,8 +102,8 @@ fn object_motion_previews_without_history_and_commits_one_atomic_edit() {
 #[test]
 fn unsupported_image_sampling_leaves_document_checkpoint_and_redo_intact() {
     let mut session=session(Platform::Android);
-    let (layer,edit)=session.engine.document().create_object_layer_edit("Images",None,0).unwrap();session.engine.apply_edit(edit).unwrap();
-    let (object,edit)=session.engine.document().add_image_object_edit(layer,ImageObject::new(rgba8_source([1,1],|_,_|[17,33,65,255]).into(),"Photo"),0).unwrap();session.engine.apply_edit(edit).unwrap();
+    let (layer,edit)=session.engine.document().create_object_layer_edit("Photo",ImageObject::new(rgba8_source([1,1],|_,_|[17,33,65,255]).into()),None,0).unwrap();session.engine.apply_edit(edit).unwrap();
+    let object=session.engine.document().scene().object_handle(layer).unwrap();
     session.begin_object_motion(&[object]).unwrap();session.preview_object_motion(Affine64([1.,0.,0.,1.,12.,9.])).unwrap();session.commit_object_motion().unwrap();
     let accepted=session.engine.document().clone();
     session.engine.undo().unwrap();let before=session.engine.document().clone();let checkpoint=session.engine.checkpoint();

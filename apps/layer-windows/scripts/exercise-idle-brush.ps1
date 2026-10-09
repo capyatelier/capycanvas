@@ -145,7 +145,7 @@ try{
  }finally{$bitmap.Dispose()}
  Open-Project $seed
  Wait-Until {$m=Model;$tab=@($m.state.tabs|Where-Object active)[0];$tab.width -eq 320 -and $tab.height -eq 240 -and $m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'The seeded paint drawing did not open' 90
- if((Model).state.layer_tools.editing_layer.object_count){throw 'The seed must be an editable paint layer'}
+ if((Model).state.layer_tools.editing_layer.object){throw 'The seed must be an editable paint layer'}
  Fit-Canvas;Park
  Wait-Until {(Model).shaders_ready} 'Idle preparation did not reach the complete shader catalogue' 180
  $checks.idle_complete=Observe 'idle-catalogue-complete' $null

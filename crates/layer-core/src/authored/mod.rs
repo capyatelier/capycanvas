@@ -23,5 +23,5 @@ pub use occurrence_edits::{OccurrenceDropPlan, OccurrenceDropPosition};
 
 mod objects;
 mod object_edits;
-pub use object_edits::{ObjectOrder, ordered_objects, placed_bounds};
-pub use objects::{Image, Affine64, Affine64Error, ImageInterpolation, ImageObject, ObjectLayer, PaintBase, PaintBasePolicy, MAX_NAME_BYTES, MAX_NAME_CHARS, bounded_name};
+pub use object_edits::{placed_bounds};
+pub use objects::{Image, Affine64, Affine64Error, ImageInterpolation, ImageObject, PaintBase, PaintBasePolicy, MAX_NAME_BYTES, MAX_NAME_CHARS, bounded_name};

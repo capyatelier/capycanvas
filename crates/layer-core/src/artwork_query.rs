@@ -167,9 +167,8 @@ impl SceneView<'_> {
             (None,None)=>true,
             (Some(a),Some(b))=>{
                 if self.artwork().objects.same_root(&other.artwork().objects)
-                    && self.artwork().object_layers.same_root(&other.artwork().object_layers)
                     && self.occurrence(h).map(|owner|&owner.content)==other.occurrence(h).map(|owner|&owner.content) {return true;}
-                a.children==b.children && a.children.iter().all(|h|match(self.object(*h),other.object(*h)){(Some(a),Some(b))=>a.image==b.image&&a.affine==b.affine&&a.visible==b.visible&&a.interpolation==b.interpolation,_=>false})
+                a == b
             },
             _=>false,
         }

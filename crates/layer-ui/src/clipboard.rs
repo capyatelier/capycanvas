@@ -42,16 +42,9 @@ pub struct PixelClip {
     pub blend: layer_core::BlendSpace,
     /// sRGB 8-bit rendition for other applications.
     pub png: Arc<[u8]>,
-    pub objects: Option<Arc<ObjectClip>>,
     pub layers: Option<Arc<LayerClip>>,
 }
 
-/// Selected image objects in document coordinates, front to back. The pixel
-/// fields of their clip are the rendered fallback of their unclipped bounds.
-#[derive(Clone, Debug)]
-pub struct ObjectClip {
-    pub objects: Vec<layer_core::ImageObject>,
-}
 #[derive(Clone, Debug)]
 pub struct LayerClip {
     pub scene: Arc<SceneSnapshot>,
@@ -85,12 +78,6 @@ impl PixelClip {
             document.apply(edit).map_err(error)?;
             document.apply(document.delete_layers_edit(&[initial]).map_err(error)?).map_err(error)?;
         }
-        if let Some(objects) = &self.objects {
-            let shift = layer_core::Affine64([1., 0., 0., 1., -self.origin[0] as f64, -self.origin[1] as f64]);
-            clipboard_objects(&mut document, &self.name, objects.objects.iter().map(|object| layer_core::ImageObject {
-                affine: shift.compose(object.affine), ..object.clone()
-            }).collect())?;
-        }
         document.validate(Default::default())?;
         layer_color::validate_document_color(&document)?;
         Ok(document)
@@ -123,25 +110,22 @@ pub fn clipboard_document(sources: Vec<(String, SourceImage)>, policy: PhotoOpen
             let at = std::array::from_fn(|i| f64::from((extent[i] - source.extent[i]) / 2));
             placed(&name, Arc::new(source).into(), at)
         }).collect();
-        clipboard_objects(&mut document, &localization.text(MessageId::OBJECTS_LAYER_NAME), objects)?;
+        clipboard_objects(&mut document, objects)?;
     }
     document.validate(Default::default())?;
     layer_color::validate_document_color(&document)?;
     Ok(document)
 }
 
-fn clipboard_objects(document: &mut layer_core::Document, name: &str, objects: Vec<layer_core::ImageObject>) -> Result<(), String> {
+fn clipboard_objects(document: &mut layer_core::Document, objects: Vec<(Arc<str>, layer_core::ImageObject)>) -> Result<(), String> {
     let paint = document.working.occurrence.unwrap();
-    let (layer, edit) = document.create_object_layer_edit(layer_core::bounded_name(name), None, 0).map_err(error)?;
-    document.apply(edit).map_err(error)?;
-    let (handles, edit) = document.import_image_objects_edit(layer, objects, 0).map_err(error)?;
+    let (layers, edit) = document.import_object_layers_edit(objects, None, 0).map_err(error)?;
     document.apply(edit).map_err(error)?;
     document.apply(document.delete_layers_edit(&[paint]).map_err(error)?).map_err(error)?;
-    document.working.occurrence = Some(layer);
+    document.working.occurrence = layers.first().copied();
     document.working.target = None;
-    document.working.layer_selection = [layer].into();
-    document.working.layer_anchor = Some(layer);
-    document.working.objects = handles.into_iter().collect();
+    document.working.layer_anchor = document.working.occurrence;
+    document.working.layer_selection = layers.into_iter().collect();
     Ok(())
 }
 
@@ -164,7 +148,6 @@ pub struct ClipboardCapture {
     /// A signed document window evaluated instead of the composition frame;
     /// `crop` is then relative to it.
     pub window: Option<([i64; 2], [u32; 2])>,
-    pub objects: Option<Arc<ObjectClip>>,
     pub layers: Option<Arc<LayerClip>>,
     pub regions: Vec<OccurrenceHandle>,
 }
@@ -211,13 +194,8 @@ impl ClipboardCapture {
             let handle = match old.content {
                 OccurrenceContent::Paint(handle) => { *scene.artwork.paint.get_mut(handle).ok_or("Missing paint")? = paint; handle }
                 OccurrenceContent::Objects(handle) => {
-                    let children = scene.artwork.object_layers.get(handle).ok_or("Missing image layer")?.children.clone();
-                    for child in children {
-                        let change = RecordChange::remove(&scene.artwork.objects, child)?;
-                        scene.artwork.objects.change(change.handle, change.id, change.value)?;
-                    }
-                    let change = RecordChange::remove(&scene.artwork.object_layers, handle)?;
-                    scene.artwork.object_layers.change(change.handle, change.id, change.value)?;
+                    let change = RecordChange::remove(&scene.artwork.objects, handle)?;
+                    scene.artwork.objects.change(change.handle, change.id, change.value)?;
                     let change = RecordChange::insert(&scene.artwork.paint, paint);
                     scene.artwork.paint.change(change.handle, change.id, change.value)?;
                     change.handle
@@ -292,7 +270,6 @@ impl ClipboardCapture {
             policy: self.policy,
             origin: self.origin,
             png: png.into(),
-            objects: self.objects,
             layers: self.layers,
         })
     }
@@ -304,7 +281,6 @@ pub(super) struct PendingCut {
     revision: u64,
     layer: OccurrenceHandle,
     target: Option<SourceTarget>,
-    objects: std::collections::BTreeSet<layer_core::ImageObjectHandle>,
     layers: Vec<OccurrenceHandle>,
     pixels: Vec<OccurrenceHandle>,
     working: layer_core::WorkingState,
@@ -343,9 +319,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.selection_masks.target().is_some() {
             return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
-        }
-        if matches!(command, CommandId::Copy | CommandId::Cut) && !document.working.objects.is_empty() && let Some(layer) = self.object_target() {
-            return (command == CommandId::Cut && !document.objects_editable(layer)).then(|| l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED));
         }
         if self.copies_layers(command) {
             let roots = self.clipboard_layer_roots();
@@ -446,10 +419,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn request_copy(&mut self, command: CommandId) -> Result<(), String> {
         self.require_document_idle()?;
         refused(self.copy_refusal(command))?;
-        if command == CommandId::Cut && !self.copies_objects(command) && !self.copies_layers(command) && !matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) && self.refuse_image_content() {
+        if command == CommandId::Cut && !self.copies_layers(command) && !matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) && self.refuse_image_content() {
             return Ok(());
         }
-        if self.copies_objects(command) { self.object_clip_window()?; } else { self.clipboard_crop()?; }
+        self.clipboard_crop()?;
         self.request_document(DocumentRequest::Copy {
             merged: command == CommandId::CopyMerged,
             cut: command == CommandId::Cut,
@@ -486,7 +459,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => CommandId::Copy,
         };
         refused(self.copy_refusal(command))?;
-        if self.copies_objects(command) { return self.capture_objects(cut); }
         if self.copies_layers(command) { return self.capture_layers(cut); }
         let crop = self.clipboard_crop()?;
         let selection = self.engine.document().working.selection.clone();
@@ -504,7 +476,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Some(target @ SourceTarget::Coverage(_)) = document.working.target {
                 self.files.cut = cut.then(|| PendingCut {
                     epoch: self.state.document_file.epoch, revision: document.revision, layer: active,
-                    target: Some(target), objects: Default::default(), layers: Vec::new(),
+                    target: Some(target), layers: Vec::new(),
                     pixels: Vec::new(), working: document.working.clone(),
                 });
                 let mut mask_scene = (*scene).clone();
@@ -512,10 +484,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 color.space = layer_core::color::RgbSpace::Srgb;
                 color.depth = color.depth.coverage();
                 return Ok(self.pixel_capture(Arc::new(mask_scene), SceneScope::Raw(target), crop, coverage, None,
-                    PaintBasePolicy::WorkingPixels, occurrence.name.to_string(), None));
+                    PaintBasePolicy::WorkingPixels, occurrence.name.to_string()));
             }
             if document.scene().object_layer(active).is_some() {
-                return Ok(self.pixel_capture(scene, SceneScope::RawObjects(active), crop, coverage, None, PaintBasePolicy::WorkingPixels, occurrence.name.to_string(), None));
+                return Ok(self.pixel_capture(scene, SceneScope::RawObjects(active), crop, coverage, None, PaintBasePolicy::WorkingPixels, occurrence.name.to_string()));
             }
             let paint = document.scene().paint_source(active).ok_or("Select a paint layer first")?;
             let target = document.scene().source_target(active).ok_or("Select a paint layer first")?;
@@ -532,32 +504,25 @@ impl<R: CanvasRenderer> UiSession<R> {
             revision: self.engine.document().revision,
             layer: active.expect("cut requires an active paint layer"),
             target: document.working.target,
-            objects: Default::default(),
             layers: Vec::new(), pixels: Vec::new(), working: document.working.clone(),
         });
-        Ok(self.pixel_capture(scene, scope, crop, coverage, original, policy, name, None))
+        Ok(self.pixel_capture(scene, scope, crop, coverage, original, policy, name))
     }
 
     #[expect(clippy::too_many_arguments, reason = "A clip capture keeps scope, region, coverage and source policy explicit")]
     fn pixel_capture(&self, scene: Arc<SceneSnapshot>, scope: SceneScope, crop: [u32; 4], coverage: Option<Arc<Selection>>,
-        original: Option<Arc<SourceImage>>, policy: PaintBasePolicy, name: String, objects: Option<(Arc<ObjectClip>, [i64; 2])>) -> ClipboardCapture {
-        let (objects, window) = objects.map_or((None, None), |(objects, origin)| (Some(objects), Some((origin, [crop[2], crop[3]]))));
+        original: Option<Arc<SourceImage>>, policy: PaintBasePolicy, name: String) -> ClipboardCapture {
         ClipboardCapture {
             scene, scope, crop, coverage, original, policy, name,
             large: u64::from(crop[2]) * u64::from(crop[3]) > LARGE_CLIP_PIXELS,
-            origin: window.map_or([i64::from(crop[0]), i64::from(crop[1])], |(origin, _)| origin),
-            window,
-            objects,
+            origin: [i64::from(crop[0]), i64::from(crop[1])],
+            window: None,
             layers: None, regions: Vec::new(),
         }
     }
 
-    fn copies_objects(&self, command: CommandId) -> bool {
-        matches!(command, CommandId::Copy | CommandId::Cut) && self.object_target().is_some() && !self.engine.document().working.objects.is_empty()
-    }
-
     fn copies_layers(&self, command: CommandId) -> bool {
-        matches!(command, CommandId::Copy | CommandId::Cut) && !self.copies_objects(command)
+        matches!(command, CommandId::Copy | CommandId::Cut)
             && (self.engine.document().working.selection.is_none()
                 || self.engine.document().working.layer_selection.len() > 1
                 || self.engine.document().working.occurrence.is_some_and(|id| {
@@ -606,7 +571,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.files.cut = cut.then(|| PendingCut {
             epoch: self.state.document_file.epoch, revision: document.revision,
             layer: document.working.occurrence.unwrap_or(roots[0]), target: document.working.target,
-            objects: Default::default(), layers: document.layer_subtrees(&roots).into_iter().collect(),
+            layers: document.layer_subtrees(&roots).into_iter().collect(),
             pixels: Vec::new(), working: document.working.clone(),
         });
         if let Some(selection) = document.working.selection.clone() {
@@ -615,59 +580,23 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Some(cut) = &mut self.files.cut { cut.layers.clear(); cut.pixels = pixels.clone(); }
             let crop = self.clipboard_crop()?;
             let mut capture = self.pixel_capture(Arc::new(public), scope, crop, Some(Arc::new(selection)), None,
-                PaintBasePolicy::WorkingPixels, name, None);
+                PaintBasePolicy::WorkingPixels, name);
             capture.layers = Some(layers); capture.regions = pixels;
             capture.large |= u64::from(crop[2]) * u64::from(crop[3]) * capture.regions.len() as u64 > LARGE_CLIP_PIXELS;
             return Ok(capture);
         }
-        let (at, extent) = document.bake_window(public.view().with_scope(&scope)).map_err(|_| self.localization().text(MessageId::COMMANDS_COPY_PIXELS_TOO_LARGE).to_string())?;
-        let origin = layer_core::offsets::rounded(at).ok_or("The copied layers exceed the editor's range")?;
+        let support = layer_core::output_support(public.view().with_scope(&scope), layer_core::Reach::Content)
+            .map_err(|_| self.localization().text(MessageId::COMMANDS_COPY_PIXELS_TOO_LARGE).to_string())?;
+        let [origin, end] = if support.is_empty() { [[0; 2], document.composition().size.map(i64::from)] }
+            else { support.grid().ok_or("The copied layers exceed the editor's range")? };
+        let extent = [0, 1].map(|axis| u32::try_from(end[axis] - origin[axis]).unwrap_or(u32::MAX));
+        if extent.iter().any(|v| *v > layer_core::MAX_EXTENT) || !layer_core::offsets::admitted(origin) {
+            return Err(self.localization().text(MessageId::COMMANDS_COPY_PIXELS_TOO_LARGE).to_string());
+        }
         let mut capture = self.pixel_capture(Arc::new(public), scope,
-            [0, 0, extent[0], extent[1]], None, None, PaintBasePolicy::WorkingPixels, name, None);
+            [0, 0, extent[0], extent[1]], None, None, PaintBasePolicy::WorkingPixels, name);
         capture.origin = origin; capture.window = Some((origin, extent)); capture.layers = Some(layers);
         Ok(capture)
-    }
-
-    fn object_clip_window(&self) -> Result<([i64; 2], [u32; 2]), String> {
-        let document = self.engine.document();
-        let [min, max] = document.object_document_bounds(document.working.objects.iter().copied()).ok_or_else(|| self.localization().text(MessageId::OBJECTS_SELECT_IMAGES_FIRST).to_string())?;
-        let origin = min.map(f64::floor);
-        let extent = [0, 1].map(|axis| (max[axis].ceil() - origin[axis]).max(1.));
-        if origin.iter().any(|v| v.abs() > 1e15) || extent.iter().any(|v| *v > f64::from(layer_core::MAX_EXTENT))
-            || extent[0] * extent[1] > (layer_core::MAX_EXTENT as f64) * (layer_core::MAX_EXTENT as f64) / 4. {
-            return Err(self.localization().text(MessageId::OBJECTS_COPY_TOO_LARGE).to_string());
-        }
-        Ok((origin.map(|v| v as i64), extent.map(|v| v as u32)))
-    }
-
-    fn capture_objects(&mut self, cut: bool) -> Result<ClipboardCapture, String> {
-        self.require_raster_snapshot()?;
-        let (origin, extent) = self.object_clip_window()?;
-        let document = self.engine.document();
-        let layer = document.working.occurrence.ok_or("Select an object layer")?;
-        let selected = document.working.objects.clone();
-        let children: Vec<_> = document.object_layer_children(layer).unwrap_or_default().iter().copied().filter(|h| selected.contains(h)).collect();
-        let objects = children.iter().map(|h| {
-            let mut object = document.scene().object(*h).ok_or("Unknown image")?.clone();
-            object.affine = document.object_document_affine(*h).ok_or("Unknown image")?;
-            Ok(object)
-        }).collect::<Result<Vec<_>, String>>()?;
-        let mut scene = (*self.engine.scene_snapshot()).clone();
-        let OccurrenceContent::Objects(record) = scene.artwork.occurrences.get(layer).ok_or("Unknown layer")?.content else { return Err("Choose an object layer".into()); };
-        scene.artwork.object_layers.get_mut(record).ok_or("Unknown layer")?.children = children;
-        scene.index = Arc::new(layer_core::SceneIndex::build(&scene.artwork)?);
-        let name = objects.first().map_or_else(String::new, |object| object.name.to_string());
-        let name = if name.is_empty() { self.localization().text(MessageId::OBJECTS_UNNAMED_IMAGE).to_string() } else { name };
-        self.files.cut = cut.then_some(PendingCut {
-            epoch: self.state.document_file.epoch,
-            revision: document.revision,
-            layer,
-            target: None,
-            objects: selected,
-            layers: Vec::new(), pixels: Vec::new(), working: document.working.clone(),
-        });
-        Ok(self.pixel_capture(Arc::new(scene), SceneScope::RawObjects(layer), [0, 0, extent[0], extent[1]], None, None,
-            PaintBasePolicy::WorkingPixels, name, Some((Arc::new(ObjectClip { objects }), origin))))
     }
 
     /// Erase what a successful Cut copied, unless the drawing changed while
@@ -685,8 +614,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Err(error) = self.cut_layer_pixels(&cut.pixels) { self.notify(error); }
         } else if !cut.layers.is_empty() {
             if let Err(error) = document.delete_layers_edit(&cut.layers).map_err(super::error).and_then(|edit| self.layer_edit(edit)) { self.notify(error); }
-        } else if !cut.objects.is_empty() {
-            if let Err(error) = document.delete_image_objects_edit(&cut.objects).map_err(super::error).and_then(|edit| self.layer_edit(edit)) { self.notify(error); }
         } else if let Some(target @ SourceTarget::Coverage(_)) = cut.target {
             let selection = document.working.selection.clone().unwrap_or_else(|| Selection::polygon(Rect::from_extent(document.composition().size).corners().to_vec()).unwrap());
             let result = self.erase_operation(target, &selection, false)
@@ -801,13 +728,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.layer_edit(edit)?;
             self.refresh_document(); self.refresh_commands();
             return Ok(());
-        }
-        if let Some(objects) = &clip.objects {
-            let delta = [f64::from(position.x) - clip.origin[0] as f64, f64::from(position.y) - clip.origin[1] as f64];
-            let objects = objects.objects.iter().map(|object| layer_core::ImageObject {
-                affine: layer_core::Affine64([1., 0., 0., 1., delta[0], delta[1]]).compose(object.affine), ..object.clone()
-            }).collect();
-            return self.paste_objects(objects, None, mode == PasteMode::Into);
         }
         if mode == PasteMode::Into {
             return self.paste_objects(vec![placed(&clip.name, clip.source.clone().into(), [f64::from(position.x), f64::from(position.y)])], None, true);
@@ -953,7 +873,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    fn paste_objects(&mut self, objects: Vec<layer_core::ImageObject>, destination: Option<ImageLayerDestination>, masked: bool) -> Result<(), String> {
+    fn paste_objects(&mut self, objects: Vec<(Arc<str>, layer_core::ImageObject)>, destination: Option<ImageLayerDestination>, masked: bool) -> Result<(), String> {
         self.require_document_idle()?;
         if self.operation.placing() || self.objects.placing() { return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string()); }
         if masked { refused(self.paste_into_refusal())?; }
@@ -971,18 +891,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    fn centred_in_selection(&self, objects: Vec<layer_core::ImageObject>) -> Result<Vec<layer_core::ImageObject>, String> {
+    fn centred_in_selection(&self, objects: Vec<(Arc<str>, layer_core::ImageObject)>) -> Result<Vec<(Arc<str>, layer_core::ImageObject)>, String> {
         let [x, y, width, height] = self.clipboard_crop()?.map(f64::from);
-        let [min, max] = layer_core::placed_bounds(objects.iter().map(|object| (object.affine, object.image.extent))).ok_or("Copy an image to paste")?;
+        let [min, max] = layer_core::placed_bounds(objects.iter().map(|(_, object)| (object.affine, object.image.extent))).ok_or("Copy an image to paste")?;
         let delta = [x + width * 0.5 - (min[0] + max[0]) * 0.5, y + height * 0.5 - (min[1] + max[1]) * 0.5].map(f64::round);
-        Ok(objects.into_iter().map(|object| layer_core::ImageObject {
+        Ok(objects.into_iter().map(|(name, object)| (name, layer_core::ImageObject {
             affine: layer_core::Affine64([1., 0., 0., 1., delta[0], delta[1]]).compose(object.affine), ..object
-        }).collect())
+        })).collect())
     }
 }
 
-fn placed(name: &str, image: layer_core::Image, at: [f64; 2]) -> layer_core::ImageObject {
-    let mut object = layer_core::ImageObject::new(image, layer_core::bounded_name(name));
+fn placed(name: &str, image: layer_core::Image, at: [f64; 2]) -> (Arc<str>, layer_core::ImageObject) {
+    let mut object = layer_core::ImageObject::new(image);
     object.affine = layer_core::Affine64([1., 0., 0., 1., at[0], at[1]]);
-    object
+    (layer_core::bounded_name(name), object)
 }

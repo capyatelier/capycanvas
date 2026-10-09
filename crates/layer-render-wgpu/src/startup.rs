@@ -61,7 +61,7 @@ impl DocumentKey {
     fn new(document: &Document) -> Self {
         let scene = document.scene();
         let operations = || scene.targets().filter_map(|t| scene.operations(t)).flatten();
-        let objects=scene.order().iter().any(|&h|scene.object_layer(h).is_some_and(|layer|!layer.children.is_empty()));
+        let objects=scene.order().iter().any(|&h|scene.object_layer(h).is_some());
         Self {
             extent: document.composition().size, color: document.composition().color,
             selection: document.working.selection.is_some(), mask: document.working.target.is_some_and(SourceTarget::is_coverage),
@@ -591,9 +591,8 @@ fn object_document(icc:bool)->Document {
     if icc {source.interpretation.profile=layer_core::color::ColorProfile::Icc(
         layer_color::profile_bytes(&layer_core::color::ColorProfile::default()).unwrap().into());}
     let mut artwork=Artwork::new([16;2]).unwrap();
-    let object=artwork.objects.insert(PortableId::random(),ImageObject::new(layer_core::authored::Image::new(Arc::new(source)),"Image")).unwrap();
-    let objects=artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![object]}).unwrap();
-    let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(objects),"Images")).unwrap();
+    let object=artwork.objects.insert(PortableId::random(),ImageObject::new(layer_core::authored::Image::new(Arc::new(source)))).unwrap();
+    let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(object),"Images")).unwrap();
     let stack=artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
     Document::from_artwork(artwork).unwrap()
@@ -610,20 +609,22 @@ mod tests {
         assert!(document.scene().targets().next().is_none());
         let handle=document.artwork.objects.iter().next().unwrap().0;
         let object=document.artwork.objects.get_mut(handle).unwrap();
-        object.affine.0[4]=8.;object.visible=false;
+        object.affine.0[4]=8.;
+        let owner=document.scene().object_owner(handle).unwrap();
+        document.artwork.occurrences.get_mut(owner).unwrap().visible=false;
         document.revision+=1;
         assert!(key.matches(&document));
         document.artwork.objects.get_mut(handle).unwrap().image=object_document(true).artwork.objects.iter().next().unwrap().2.image.clone();
         document.revision+=1;
         assert!(key.matches(&document));
-        let layer=document.artwork.object_layers.iter().next().unwrap().0;
-        document.artwork.object_layers.get_mut(layer).unwrap().children.clear();
-        document.revision+=1;
+        let stack=document.composition().result;
+        let original=document.artwork.stacks.get(stack).unwrap().clone();
+        let mut removed=original.clone();removed.entries.clear();
+        document.apply(layer_core::Edit::Stack(layer_core::RecordChange::replace(&document.artwork.stacks,stack,Some(removed)).unwrap())).unwrap();
         assert!(!key.matches(&document));
         let key=ShaderDocument::new(&document);
         assert!(!key.key.source && !key.key.objects);
-        document.artwork.object_layers.get_mut(layer).unwrap().children.push(handle);
-        document.revision+=1;
+        document.apply(layer_core::Edit::Stack(layer_core::RecordChange::replace(&document.artwork.stacks,stack,Some(original)).unwrap())).unwrap();
         assert!(!key.matches(&document));
     }
     #[test]

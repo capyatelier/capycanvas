@@ -130,8 +130,7 @@ fn objects_support(scene: SceneView<'_>, h: OccurrenceHandle) -> SupportBounds {
     let Some(layer) = scene.object_layer(h) else { return SupportBounds::EMPTY; };
     let origin = scene.occurrence_offset64(h);
     let placement = Affine64([1., 0., 0., 1., origin[0], origin[1]]);
-    layer.children.iter().filter_map(|child| scene.object(*child)).filter(|object| object.visible)
-        .fold(SupportBounds::EMPTY, |bounds, object| bounds.union(object_support(placement.compose(object.affine), object)))
+    object_support(placement.compose(layer.affine), layer)
 }
 
 /// Whether paint contributes its painted pages or its whole editable domain.

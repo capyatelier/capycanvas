@@ -13,8 +13,8 @@ fn scene(space: BlendSpace) -> (Document, OccurrenceHandle) {
     let mut doc = named_document(&["Ink"], SIZE, space);
     let image = photo([120, 90], |x, y| if (x + y) % 11 == 0 { 40 } else { 255 });
     let layer = images(&mut doc, vec![
-        placed(&image, [0.8, 0.45, -0.45, 0.8, 120., 20.], false),
         placed(&image, [1.5, 0., 0., 1.5, -60.25, 100.5], true),
+        placed(&image, [0.8, 0.45, -0.45, 0.8, 120., 20.], false),
     ]);
     let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), SIZE, [0; 2]);
     mask.source.default_coverage = 0.5;
@@ -56,7 +56,9 @@ fn rasterize_layer_keeps_the_composite_and_one_undo_restores_the_images() {
             let occurrence = document.scene().occurrence(layer).unwrap();
             assert_eq!(occurrence.kind(), LayerKind::Paint);
             assert_eq!((occurrence.opacity, occurrence.mask.is_some()), (0.6, !apply_mask), "{what}");
-            assert!(document.artwork.objects.is_empty(), "{what}");
+            assert_eq!(document.artwork.objects.len(), before.artwork.objects.len()-1, "{what}: the sibling image remains editable");
+            let sibling=before.scene().order().iter().copied().find(|h|*h!=layer && before.scene().object_layer(*h).is_some()).unwrap();
+            assert_eq!(document.scene().object_layer(sibling),before.scene().object_layer(sibling),"{what}: the sibling source and pose stay unchanged");
             let base = paint(document, layer).base.as_ref().unwrap();
             assert!(base.offset[0] < 256 && occurrence.offset[0] < 0, "{what}: the off-frame image is baked left of the frame");
             assert!(engine.undo().unwrap());
@@ -99,9 +101,7 @@ fn convert_to_image_layer_keeps_the_composite_of_painted_and_untouched_layers() 
             let what = format!("{space:?} {name}");
             image(&mut engine, 3_000_000_000).assert_near(&original, TOLERANCE, &format!("{what}: converted"));
             let document = engine.document();
-            let children = &document.scene().object_layer(layer).unwrap().children;
-            assert_eq!(children.len(), 1, "{what}");
-            let object = document.scene().object(children[0]).unwrap();
+            let object = document.scene().object_layer(layer).unwrap();
             assert!(object.affine.0[..4] == [1., 0., 0., 1.] && object.affine.0[4..].iter().all(|v| v.fract() == 0.), "{what}: pixels stay on the grid");
         }
         assert!(engine.undo().unwrap() && engine.undo().unwrap());
@@ -121,16 +121,17 @@ fn merges_bake_image_layers_and_keep_their_off_frame_pixels() {
         let (mut doc, layer) = scene(space);
         let edit = occurrence_edit(&doc, named_occurrence(&doc, "Paper"), |o| o.visible = false);
         doc.apply(edit).unwrap();
-        let shifted = |engine: &mut Engine, handle: OccurrenceHandle, time: u64| {
-            let edit = occurrence_edit(engine.document(), handle, |o| o.offset = [o.offset[0] + 80, o.offset[1]]);
-            engine.apply_edit(edit).unwrap();
+        let shifted = |engine: &mut Engine, time: u64| {
+            let edits=engine.document().scene().order().iter().copied().filter(|h|engine.document().scene().object_layer(*h).is_some())
+                .map(|h|occurrence_edit(engine.document(),h,|o|o.offset=[o.offset[0]+80,o.offset[1]])).collect();
+            engine.apply_edit(Edit::Batch(edits)).unwrap();
             let shown = image(engine, time);
             assert!(engine.undo().unwrap());
             shown
         };
         let (mut engine, _input) = engine(doc);
         let original = image(&mut engine, 0);
-        let revealed = shifted(&mut engine, layer, 1);
+        let revealed = shifted(&mut engine, 1);
         for kind in [MergeKind::Down, MergeKind::Visible] {
             let what = format!("{space:?} {kind:?}");
             let plan = engine.document().merge_plan(kind).unwrap();

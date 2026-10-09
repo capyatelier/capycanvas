@@ -15,11 +15,16 @@ fn image(extent: [u32; 2], color: [u8; 4]) -> AuthoredImage {
 fn document(extent: [u32; 2], objects: Vec<ImageObject>) -> (layer_core::Document, OccurrenceHandle, Vec<ImageObjectHandle>) {
     let mut artwork = Artwork::new(extent).unwrap();
     let handles: Vec<_> = objects.into_iter().map(|object| artwork.objects.insert(PortableId::random(), object).unwrap()).collect();
-    let collection = artwork.object_layers.insert(PortableId::random(), ObjectLayer { children: handles.clone() }).unwrap();
-    let owner = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Objects(collection), "Images")).unwrap();
+    let owners = handles.iter().map(|&handle| artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Objects(handle), "Image")).unwrap()).collect::<Vec<_>>();
+    let owner = owners[0];
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
-    artwork.stacks.get_mut(stack).unwrap().entries.push(owner);
+    artwork.stacks.get_mut(stack).unwrap().entries = owners;
     (layer_core::Document::from_artwork(artwork).unwrap(), owner, handles)
+}
+
+fn resident_object_bytes(extent: [u32; 2], owners: u64, level: u32) -> u64 {
+    let side = 256u32 << level;
+    owners * extent.into_iter().map(|length|u64::from(length.div_ceil(side))).product::<u64>() * 256 * 256 * 16
 }
 
 fn native(r: &mut WgpuRasterizer, doc: &layer_core::Document, output: Output) -> Vec<[f32; 4]> {
@@ -56,10 +61,10 @@ fn canonical_request(r: &WgpuRasterizer, scene: &mut Scene, doc: &layer_core::Do
 }
 
 #[test]
-fn object_only_native_and_display_composite_ordered_children_and_raw_queries() {
-    let mut front = ImageObject::new(image([8; 2], [0, 0, 255, 128]), "Blue");
+fn object_only_native_and_display_composite_ordered_siblings_and_raw_queries() {
+    let mut front = ImageObject::new(image([8; 2], [0, 0, 255, 128]));
     front.affine = Affine64([1., 0., 0., 1., 4., 4.]);
-    let back = ImageObject::new(image([8; 2], [255, 0, 0, 255]), "Red");
+    let back = ImageObject::new(image([8; 2], [255, 0, 0, 255]));
     let (mut doc, owner, _) = document([16; 2], vec![front, back]);
     assert!(doc.scene().source_target(owner).is_none());
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -69,6 +74,7 @@ fn object_only_native_and_display_composite_ordered_children_and_raw_queries() {
     assert!(crate::test_support::max_error(&native_pixels, &float_pixels(&r, &display)) < 2e-5);
     let alpha = 128. / 255.;
     assert!(crate::test_support::max_error(&native_pixels[5 * 16 + 5..5 * 16 + 6], &[[1. - alpha, 0., alpha, 1.]]) < 2e-5);
+    let raw_pixels = native(&mut r, &doc, Output::Objects(owner));
     let coverage = doc.artwork.coverage.next_handle();
     let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, [16; 2], Default::default());
     mask.source.default_coverage = 0.5;
@@ -89,12 +95,12 @@ fn object_only_native_and_display_composite_ordered_children_and_raw_queries() {
     }
     r.scene = Some(scene);
     assert!(captured, "hidden raw images complete through the deferred query path");
-    assert!(crate::test_support::max_error(&native_pixels, &float_pixels(&r, &target)) < 2e-5);
+    assert!(crate::test_support::max_error(&raw_pixels, &float_pixels(&r, &target)) < 2e-5);
 }
 
 #[test]
 fn object_affine_preflight_rejects_unsupported_sampling_without_changing_the_scene() {
-    let (doc, _, children) = document([64; 2], vec![ImageObject::new(image([8; 2], [255; 4]), "Image")]);
+    let (doc, _, children) = document([64; 2], vec![ImageObject::new(image([8; 2], [255; 4]))]);
     let r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let view = packet(doc.scene(), [64; 2]).view;
     let before = doc.artwork.clone();
@@ -108,8 +114,8 @@ fn object_affine_preflight_rejects_unsupported_sampling_without_changing_the_sce
 #[test]
 fn object_damage_excludes_unchanged_children() {
     let shared = image([8; 2], [255; 4]);
-    let mut distant = ImageObject::new(shared.clone(), "Unchanged"); distant.affine.0[4] = 600.;
-    let (mut doc, _, children) = document([768, 256], vec![ImageObject::new(shared, "Moving"), distant]);
+    let mut distant = ImageObject::new(shared.clone()); distant.affine.0[4] = 600.;
+    let (mut doc, _, children) = document([768, 256], vec![ImageObject::new(shared), distant]);
     let before = doc.scene().snapshot(layer_core::EvaluationContext::default());
     doc.artwork.objects.get_mut(children[0]).unwrap().affine.0[4] = 32.;
     let damage = edited_damage(before.view(), doc.scene(), [768, 256]).unwrap();
@@ -120,9 +126,9 @@ fn object_damage_excludes_unchanged_children() {
 #[test]
 fn affine_edits_clear_vacated_bounds_and_keep_shared_source_residency() {
     let shared = image([16; 2], [255, 0, 0, 255]);
-    let mut second = ImageObject::new(shared.clone(), "Second");
+    let mut second = ImageObject::new(shared.clone());
     second.affine.0[4] = 48.;
-    let (mut doc, _, children) = document([768, 256], vec![ImageObject::new(shared, "First"), second]);
+    let (mut doc, _, children) = document([768, 256], vec![ImageObject::new(shared), second]);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     submit_ready(&mut r, packet(doc.scene(), doc.composition().size));
     let misses = r.source_cache_work()[1];
@@ -140,7 +146,7 @@ fn affine_edits_clear_vacated_bounds_and_keep_shared_source_residency() {
 
 #[test]
 fn object_read_mapping_preserves_f64_relative_coordinates_and_requested_density() {
-    let mut object = ImageObject::new(image([2; 2], [255, 0, 0, 255]), "Far image");
+    let mut object = ImageObject::new(image([2; 2], [255, 0, 0, 255]));
     object.affine.0[4] = 1_048_576.125;
     let (doc, owner, _) = document([16; 2], vec![object]);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -162,7 +168,7 @@ fn object_read_mapping_preserves_f64_relative_coordinates_and_requested_density(
 }
 #[test]
 fn private_canonical_jobs_yield_and_cancel_before_publication() {
-    let mut object = ImageObject::new(image([512; 2], [255, 0, 0, 255]), "Reduced image");
+    let mut object = ImageObject::new(image([512; 2], [255, 0, 0, 255]));
     object.affine = Affine64([1. / 16., 0., 0., 1. / 16., 0., 0.]);
     let (mut doc, owner, children) = document([64; 2], vec![object]);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -203,12 +209,11 @@ fn private_canonical_jobs_yield_and_cancel_before_publication() {
 }
 #[test]
 fn object_masks_attached_effects_and_clipping_follow_both_stack_evaluators() {
-    let (mut doc, owner, _) = document([64; 2], vec![ImageObject::new(image([16; 2], [255, 0, 0, 255]), "Base")]);
-    let mut clip_image = ImageObject::new(image([16; 2], [0, 0, 255, 128]), "Clip");
+    let (mut doc, owner, _) = document([64; 2], vec![ImageObject::new(image([16; 2], [255, 0, 0, 255]))]);
+    let mut clip_image = ImageObject::new(image([16; 2], [0, 0, 255, 128]));
     clip_image.affine.0[4] = 8.; clip_image.affine.0[5] = 8.;
     let child = doc.artwork.objects.insert(PortableId::random(), clip_image).unwrap();
-    let collection = doc.artwork.object_layers.insert(PortableId::random(), ObjectLayer { children: vec![child] }).unwrap();
-    let mut clip = Occurrence::new(OccurrenceContent::Objects(collection), "Clipped image"); clip.attachment = layer_core::Attachment::Clip;
+    let mut clip = Occurrence::new(OccurrenceContent::Objects(child), "Clipped image"); clip.attachment = layer_core::Attachment::Clip;
     let clip = doc.artwork.occurrences.insert(PortableId::random(), clip).unwrap();
     let instance = layer_core::EffectInstance::new(crate::tests::fixture("invert").program());
     let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication::new(instance.program, instance.values, [64; 2])).unwrap();
@@ -235,7 +240,7 @@ fn object_masks_attached_effects_and_clipping_follow_both_stack_evaluators() {
 
 #[test]
 fn coarse_linear_object_node_includes_source_outside_its_output_cell() {
-    let mut object = ImageObject::new(image([8; 2], [255, 0, 0, 255]), "Thin reduced image");
+    let mut object = ImageObject::new(image([8; 2], [255, 0, 0, 255]));
     object.affine.0[4] = 200.; object.affine.0[5] = 200.;
     let (doc, _, _) = document([8192; 2], vec![object]);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -280,7 +285,7 @@ fn nearest_reduced_object_display_keeps_level_zero_aliases_after_idle() {
     for y in 0..256 { builder.push_row(&(0..256).flat_map(|x| {
         let value = if (x + y) % 2 == 0 { 255 } else { 0 }; [value, value, value, 255]
     }).collect::<Vec<_>>()).unwrap(); }
-    let mut object = ImageObject::new(AuthoredImage::new(Arc::new(builder.finish().unwrap())), "Nearest checker");
+    let mut object = ImageObject::new(AuthoredImage::new(Arc::new(builder.finish().unwrap())));
     object.interpolation = ImageInterpolation::Nearest;
     object.affine = Affine64([0.25, 0., 0., 0.25, 0., 0.]);
     let (doc, _, _) = document([64; 2], vec![object]);
@@ -299,17 +304,17 @@ fn nearest_reduced_object_display_keeps_level_zero_aliases_after_idle() {
 #[test]
 fn simultaneous_photo_results_bound_batches_and_survive_deferred_retries() {
     let shared = image([4000, 3000], [255, 0, 0, 255]);
-    let mut objects = vec![ImageObject::new(shared.clone(), "Shared one"), ImageObject::new(shared, "Shared two"),
-        ImageObject::new(image([4000, 3000], [0, 255, 0, 255]), "Green"),
-        ImageObject::new(image([4000, 3000], [0, 0, 255, 255]), "Blue")];
+    let mut objects = vec![ImageObject::new(shared.clone()), ImageObject::new(shared),
+        ImageObject::new(image([4000, 3000], [0, 255, 0, 255])),
+        ImageObject::new(image([4000, 3000], [0, 0, 255, 255]))];
     for object in &mut objects { object.affine = Affine64([1. / 7., 0., 0., 1. / 7., 0., 0.]); }
-    let (doc, owner, _) = document([768; 2], objects);
+    let (doc, _, _) = document([768; 2], objects);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.document_extent = [768; 2];
     let mut compositor=Scene::new(&r);
     let mut cache = super::super::object_cache::ObjectCache::default();
     let requests: Vec<_> = [[0., 0.], [256., 0.], [0., 256.], [256., 256.]].into_iter()
-        .map(|origin| canonical_request(&r, &mut compositor, &doc, owner, ObjectWindow { origin, side: 1., size: [256; 2] })).collect();
+        .zip(doc.scene().order().iter().copied()).map(|(origin,owner)| canonical_request(&r, &mut compositor, &doc, owner, ObjectWindow { origin, side: 1., size: [256; 2] })).collect();
     for request in &requests { assert!(cache.resolve_collection(&r, doc.scene(), request).unwrap().is_none()); }
     let mut complete = false;
     for _ in 0..4000 {
@@ -346,9 +351,9 @@ fn simultaneous_photo_results_bound_batches_and_survive_deferred_retries() {
 #[test]
 fn tablet_fit_photo_scene_completes_many_private_windows_within_cache_budget() {
     let shared = image([4000, 3000], [255, 0, 0, 255]);
-    let mut objects = vec![ImageObject::new(shared.clone(), "Shared one"), ImageObject::new(shared, "Shared two"),
-        ImageObject::new(image([4000, 3000], [0, 255, 0, 255]), "Green"),
-        ImageObject::new(image([4000, 3000], [0, 0, 255, 255]), "Blue")];
+    let mut objects = vec![ImageObject::new(shared.clone()), ImageObject::new(shared),
+        ImageObject::new(image([4000, 3000], [0, 255, 0, 255])),
+        ImageObject::new(image([4000, 3000], [0, 0, 255, 255]))];
     for object in &mut objects { object.affine = Affine64([0.55, 0., 0., 0.55, 80., 80.]); object.interpolation = ImageInterpolation::Nearest; }
     let (doc, _, _) = document([4248, 2832], objects);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -360,7 +365,7 @@ fn tablet_fit_photo_scene_completes_many_private_windows_within_cache_budget() {
         r.submit(FramePacket { composite_all: iteration == 0, reset_layers: iteration == 0, ..frame }).unwrap();
         let scene = r.scene.as_ref().unwrap();
         let bytes = scene.object_results.bytes(); peak = peak.max(bytes);
-        assert!(bytes <= 64 * 1024 * 1024, "complete and pending windows share one cache allowance: {bytes}");
+        assert!(bytes <= 64 * 1024 * 1024 + resident_object_bytes([4248,2832],4,1), "private sampling scratch and four independently paged output planes stay bounded: {bytes}");
         r.wait_idle().unwrap();
         if !r.has_pending_work() { ready = true; break; }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -380,11 +385,11 @@ fn tablet_fit_shared_photos_with_paint_above_remain_admitted_during_strokes() {
     let extent = [4248, 2832];
     let shared = image(extent, [180, 90, 40, 255]);
     let objects = [[955.8, 863.76], [1295.64, 637.2], [615.96, 637.2], [955.8, 410.64]].into_iter().map(|[x,y]| {
-        let mut object = ImageObject::new(shared.clone(), "Photo");
+        let mut object = ImageObject::new(shared.clone());
         object.affine = Affine64([0.55, 0., 0., 0.55, x, y]); object
     }).collect();
-    let (mut doc, owner, _) = document(extent, objects);
-    doc.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.35;
+    let (mut doc, _, handles) = document(extent, objects);
+    for &handle in &handles { let owner=doc.scene().object_owner(handle).unwrap();doc.artwork.occurrences.get_mut(owner).unwrap().opacity=0.35; }
     let (_, base) = crate::test_support::add_paint(&mut doc.artwork, "Original", extent);
     let SourceTarget::Paint(base) = base else { unreachable!() };
     doc.artwork.paint.get_mut(base).unwrap().base = Some(PaintBase { image: shared, offset: [0;2], policy: PaintBasePolicy::SourceProfile });
@@ -418,7 +423,7 @@ fn tablet_fit_shared_photos_with_paint_above_remain_admitted_during_strokes() {
         batch.stroke_start = step == 0; batch.stroke_end = step ==159;
         r.submit(FramePacket {dabs:std::slice::from_ref(&ink),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
         r.wait_idle().unwrap();
-        assert!(r.scene.as_ref().unwrap().object_results.bytes() <= 64*1024*1024);
+        assert!(r.scene.as_ref().unwrap().object_results.bytes() <= 64*1024*1024 + resident_object_bytes(extent,4,2));
         scratch_peak = scratch_peak.max(r.scene.as_ref().unwrap().pool.len());
         assert!(scratch_peak <= 64,"stroke scratch stays bounded: {scratch_peak} tiles");
     }
@@ -429,7 +434,7 @@ fn tablet_fit_shared_photos_with_paint_above_remain_admitted_during_strokes() {
     while start.elapsed() < std::time::Duration::from_secs(120) {
         r.submit(frame).unwrap(); r.wait_idle().unwrap();
         let scene = r.scene.as_ref().unwrap();
-        assert!(scene.object_results.bytes() <= 64*1024*1024);
+        assert!(scene.object_results.bytes() <= 64*1024*1024 + resident_object_bytes(extent,4,2));
         scratch_peak = scratch_peak.max(scene.pool.len());
         assert!(scratch_peak <= 64);
         if !r.has_pending_work() { ready = true; break; }
@@ -447,7 +452,7 @@ fn tablet_fit_shared_photos_with_paint_above_remain_admitted_during_strokes() {
 
 #[test]
 fn live_object_read_defers_without_inline_decode_then_returns_canonical_pixels() {
-    let mut object = ImageObject::new(image([512; 2], [255, 0, 0, 255]), "Reference");
+    let mut object = ImageObject::new(image([512; 2], [255, 0, 0, 255]));
     object.affine = Affine64([1. / 7., 0., 0., 1. / 7., 0., 0.]);
     let (doc, owner, _) = document([128; 2], vec![object]);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -481,7 +486,7 @@ fn live_object_read_defers_without_inline_decode_then_returns_canonical_pixels()
 
 #[test]
 fn cold_object_reads_advance_every_finished_tile_and_the_idle_budget_per_attempt() {
-    let mut object = ImageObject::new(image([2048; 2], [255, 0, 0, 255]), "Reference");
+    let mut object = ImageObject::new(image([2048; 2], [255, 0, 0, 255]));
     object.affine = Affine64([1. / 16., 0., 0., 1. / 16., 0., 0.]);
     let (doc, owner, _) = document([128; 2], vec![object]);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -519,7 +524,7 @@ fn hide_objects(doc: &mut layer_core::Document, owner: OccurrenceHandle) {
 #[test]
 fn cold_composite_color_sample_retries_its_frame_before_accepting_the_next_query() {
     use layer_render::{ColorSampleRequest, ColorSampleSource, ColorSampleArea};
-    let mut object = ImageObject::new(image([512; 2], [255, 0, 0, 255]), "Red");
+    let mut object = ImageObject::new(image([512; 2], [255, 0, 0, 255]));
     object.affine = Affine64([1. / 7., 0., 0., 1. / 7., 0., 0.]);
     let (mut doc, owner, _) = document([128; 2], vec![object]);
     let mut r = cold_query_renderer(&doc);
@@ -554,7 +559,7 @@ fn cold_composite_color_sample_retries_its_frame_before_accepting_the_next_query
 fn cold_composite_region_classification_progresses_beyond_its_capture_cache() {
     use layer_render::{RegionRequest, RegionSource};
     let extent = [257, 8449];
-    let mut object = ImageObject::new(image([1; 2], [255, 0, 0, 255]), "Red");
+    let mut object = ImageObject::new(image([1; 2], [255, 0, 0, 255]));
     object.interpolation = ImageInterpolation::Nearest;
     object.affine = Affine64([f64::from(extent[0]), 0., 0., f64::from(extent[1]), 0., 0.]);
     let (doc, _, _) = document(extent, vec![object]);
@@ -582,7 +587,7 @@ fn cold_composite_region_classification_progresses_beyond_its_capture_cache() {
 #[test]
 fn cancelling_a_cold_object_region_never_publishes_into_its_replacement() {
     use layer_render::{RegionRequest, RegionSource};
-    let (mut doc, owner, _) = document([32; 2], vec![ImageObject::new(image([16; 2], [255, 0, 0, 255]), "Red")]);
+    let (mut doc, owner, _) = document([32; 2], vec![ImageObject::new(image([16; 2], [255, 0, 0, 255]))]);
     let mut r = cold_query_renderer(&doc);
     let request = RegionRequest {request_id:300,source:RegionSource::Composite,position:[8;2],tolerance:0.,contiguous:true,selection:None,refinement:Default::default(),limit:None,enclosure:None};
     assert!(r.request_region(request.clone()).unwrap());
@@ -598,35 +603,31 @@ fn cancelling_a_cold_object_region_never_publishes_into_its_replacement() {
 }
 
 #[test]
-fn overlapping_collection_consumes_children_with_bounded_residency_and_preserves_order() {
+fn overlapping_sibling_images_keep_bounded_residency_and_composite_order() {
     let colors=[[211,37,83,32],[29,163,61,57],[73,43,197,91]];
     let images=colors.map(|color|image([256;2],color));
     let objects=(0..80).map(|index| {
-        let mut object=ImageObject::new(images[index%3].clone(),"Translucent image");
+        let mut object=ImageObject::new(images[index%3].clone());
         object.interpolation=ImageInterpolation::Nearest;object
     }).collect();
-    let (doc,owner,_)=document([256;2],objects);
+    let (mut doc,_,_)=document([256;2],objects);
     for blend in [layer_core::BlendSpace::Linear,layer_core::BlendSpace::Perceptual] {
+        doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=blend;
         let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();r.document_extent=[256;2];
-        let mut scene=Scene::new(&r);
-        let content=scene.object_spatial.content(doc.scene(),owner).unwrap();
-        let frame=FramePacket {blend_space:blend,..packet(doc.scene(),[256;2])};
-        let request=scene.collection_job(&r,frame,owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]});
-        let mut cache=super::super::object_cache::ObjectCache::default();
-        assert!(cache.resolve_collection(&r,doc.scene(),&request).unwrap().is_none());
-        let start=std::time::Instant::now();let mut peak=0;let view=loop {
-            assert!(start.elapsed()<std::time::Duration::from_secs(40),"ordered collection must make bounded progress");
+        let (target,_) = create_color_target(&r.device,[256;2],"overlapping sibling images");
+        let mut scene=Scene::new(&r);let start=std::time::Instant::now();let mut peak=0;
+        loop {
+            assert!(start.elapsed()<std::time::Duration::from_secs(40),"ordered sibling images make bounded progress");
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-            r.drain_image_decode(&mut encoder).unwrap();let taps=cache.advance(&mut r,&mut scene,&mut encoder,true).unwrap();
-            peak=peak.max(cache.bytes());assert!(peak<16*1024*1024,"one child plus isolated prefix: {peak}");
-            let limit=super::super::object_cache::INTERACTIVE_TAPS+crate::object_sampling::DISPATCH_TAPS;
-            assert!(taps<=limit && encoder.pass_count()*super::super::object_cache::PASS_TAPS<=limit+16*super::super::object_cache::PASS_TAPS,"sampling work and passes per batch are bounded");
+            let result=scene.capture_region_prepared(&mut r,FramePacket {blend_space:blend,..packet(doc.scene(),[256;2])},&target,PixelRect::full([256;2]),Output::Artwork(None),&mut encoder);
+            if let Err(error)=&result {assert!(matches!(error,GpuRasterError::DeferredObjectWork),"{error:?}");}
+            peak=peak.max(scene.object_results.bytes());
+            assert!(scene.object_results.bytes()<=64*1024*1024+80*256*256*16,"resident outputs are bounded by eighty image planes plus private scratch");
             r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
-            if let Some(view)=cache.resolve_collection(&r,doc.scene(),&request).unwrap() {break view;}
+            if result.is_ok() {break;}
             std::thread::sleep(std::time::Duration::from_millis(1));
-        };
-        let pixels=float_pixels(&r,view.texture());
-        let mut expected=[0f64;4];
+        }
+        let pixels=float_pixels(&r,&target);let mut expected=[0f64;4];
         for index in (0..80).rev() {
             let alpha=f64::from(colors[index%3][3])/255.;
             for axis in 0..3 {
@@ -636,15 +637,16 @@ fn overlapping_collection_consumes_children_with_bounded_residency_and_preserves
             }
             expected[3]=alpha+expected[3]*(1.-alpha);
         }
+        if blend==layer_core::BlendSpace::Perceptual {for axis in 0..3 {expected[axis]=layer_core::color::RgbSpace::Srgb.decode(expected[axis]/expected[3])*expected[3];}}
         for (actual,expected) in pixels[128*256+128].iter().zip(expected) {assert!((f64::from(*actual)-expected).abs()<0.00002,"{actual} != {expected}");}
-        assert!(!cache.pending());
-        eprintln!("overlapping collection {blend:?} peak={peak} elapsed={:?}",start.elapsed());
+        assert!(!scene.object_results.pending());
+        eprintln!("overlapping siblings {blend:?} peak={peak} elapsed={:?}",start.elapsed());
     }
 }
 
 #[test]
 fn unfinished_collection_cancels_changed_content_and_display_visibility_but_keeps_raw_queries() {
-    let mut object=ImageObject::new(image([256;2],[171,37,83,190]),"Nearest");object.interpolation=ImageInterpolation::Nearest;
+    let mut object=ImageObject::new(image([256;2],[171,37,83,190]));object.interpolation=ImageInterpolation::Nearest;
     let (mut doc,owner,handles)=document([256;2],vec![object.clone(),object]);
     let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();r.document_extent=[256;2];
     let mut scene=Scene::new(&r);scene.object_display=true;
@@ -658,10 +660,15 @@ fn unfinished_collection_cancels_changed_content_and_display_visibility_but_keep
     let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());cache.flush_retired(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
     let mut raw=request.clone();raw.display=false;
     cache.resolve_collection(&r,doc.scene(),&raw).unwrap();cache.retain(doc.scene(),raw.blend,raw.context);assert!(cache.pending(),"raw objects include hidden owners");
-    let collection=doc.artwork.occurrences.get(owner).unwrap().content.clone();
-    let OccurrenceContent::Objects(collection)=collection else {unreachable!()};
-    doc.artwork.object_layers.get_mut(collection).unwrap().children.reverse();
-    cache.retain(doc.scene(),raw.blend,raw.context);assert!(!cache.pending(),"reordering cancels the captured child cursor");
+    let sibling=doc.scene().object_owner(handles[1]).unwrap();
+    let mut first=doc.scene().occurrence(owner).unwrap().clone();let mut second=doc.scene().occurrence(sibling).unwrap().clone();
+    std::mem::swap(&mut first.content,&mut second.content);
+    let undo=doc.apply(layer_core::Edit::Batch(vec![
+        layer_core::Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,owner,Some(first)).unwrap()),
+        layer_core::Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,sibling,Some(second)).unwrap()),
+    ])).unwrap();
+    cache.retain(doc.scene(),raw.blend,raw.context);assert!(!cache.pending(),"replacing the image cancels its captured source");
+    doc.apply(undo).unwrap();
     let content=scene.object_spatial.content(doc.scene(),owner).unwrap();
     raw=scene.collection_job(&r,packet(doc.scene(),[256;2]),owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]});raw.display=false;
     cache.resolve_collection(&r,doc.scene(),&raw).unwrap();
@@ -678,7 +685,7 @@ fn unfinished_collection_cancels_changed_content_and_display_visibility_but_keep
 #[test]
 fn collection_nearest_preserves_f64_source_floor_at_affine_boundaries() {
     let source=AuthoredImage::new(rgba8_source([256;2],|x,y|[if x%2==0 {211} else {29},if y%2==0 {37} else {163},83,255]));
-    let mut object=ImageObject::new(source,"Nearest boundary");object.interpolation=ImageInterpolation::Nearest;
+    let mut object=ImageObject::new(source);object.interpolation=ImageInterpolation::Nearest;
     object.affine=Affine64([0.55,0.,0.,0.55,80.,13.]);
     let inverse=object.affine.inverse().unwrap();
     let (doc,owner,_)=document([256;2],vec![object]);
@@ -696,7 +703,7 @@ fn collection_nearest_preserves_f64_source_floor_at_affine_boundaries() {
 
 #[test]
 fn deferred_collection_construction_discards_unencoded_prefix_and_reuses_scratch() {
-    let mut object=ImageObject::new(image([256;2],[171,37,83,190]),"Nearest");object.interpolation=ImageInterpolation::Nearest;
+    let mut object=ImageObject::new(image([256;2],[171,37,83,190]));object.interpolation=ImageInterpolation::Nearest;
     let (doc,owner,_)=document([256;2],vec![object]);
     let r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut scene=Scene::new(&r);scene.object_query=true;
@@ -715,17 +722,17 @@ fn tablet_scene(distinct: bool, count: usize, blur: bool) -> (layer_core::Docume
     let objects = (0..count).map(|index| {
         let phase = index as f64 / count as f64 * std::f64::consts::TAU;
         let source = if distinct { AuthoredImage::new(rgba8_source(extent, move |x, y| [((x + index as u32 * 31) % 256) as u8, (y % 256) as u8, 90, 255])) } else { photo.clone() };
-        let mut object = ImageObject::new(source, "Image");
+        let mut object = ImageObject::new(source);
         object.affine = Affine64([0.55, 0., 0., 0.55, f64::from(extent[0]) * (0.225 + 0.08 * phase.cos()), f64::from(extent[1]) * (0.225 + 0.08 * phase.sin())]);
         object
     }).collect();
     let (mut doc, owner, handles) = document(extent, objects);
-    doc.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.35;
-    let (base, target) = crate::test_support::add_paint(&mut doc.artwork, "Photo", extent);
+    for &handle in &handles { let owner=doc.scene().object_owner(handle).unwrap();doc.artwork.occurrences.get_mut(owner).unwrap().opacity=0.35; }
+    let (_, target) = crate::test_support::add_paint(&mut doc.artwork, "Photo", extent);
     let SourceTarget::Paint(target) = target else { unreachable!() };
     doc.artwork.paint.get_mut(target).unwrap().base = Some(PaintBase { image: photo, offset: [0; 2], policy: PaintBasePolicy::SourceProfile });
     let stack = doc.composition().result;
-    let mut entries = vec![owner, base];
+    let mut entries = doc.scene().children(None).to_vec();
     if blur {
         let instance = layer_core::EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
         let mut application = EffectApplication::new(instance.program, instance.values, extent);
@@ -744,13 +751,66 @@ fn tablet_scene(distinct: bool, count: usize, blur: bool) -> (layer_core::Docume
 }
 
 fn settle_frames(r: &mut WgpuRasterizer, frame: FramePacket<'_>, limit: usize) -> usize {
-    r.submit(FramePacket { composite_all: true, reset_layers: true, ..frame }).unwrap();
+    settle_live_frames(r,FramePacket {composite_all:true,reset_layers:true,..frame},limit)
+}
+
+fn settle_live_frames(r: &mut WgpuRasterizer, frame: FramePacket<'_>, limit: usize) -> usize {
+    r.submit(frame).unwrap();
     for submitted in 1..=limit {
         r.wait_idle().unwrap();
         if !r.has_pending_work() { return submitted; }
         r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
     }
-    panic!("object scene must settle within {limit} submissions");
+    panic!("object scene must settle within {limit} submissions: deferred={}, image_waiting={}, moving={}, analysis={}, awaiting_meshes={}, results_pending={}, results_bytes={}, completed_images={}, passes={}",
+        r.object_deferred,r.image_decode_waiting(),r.moving_images_pending(),r.analysis_dirty,r.awaiting_meshes,
+        r.scene.as_ref().is_some_and(|scene|scene.object_results.pending()),r.scene.as_ref().map_or(0,|scene|scene.object_results.bytes()),
+        r.moving_images.completed_images,r.metrics.command_passes);
+}
+
+#[test]
+fn batch_motion_of_twenty_sibling_images_pauses_queued_canonical_work_and_resumes_it() {
+    let images=(0..4).map(|index|AuthoredImage::new(rgba8_source([64;2],|x,y|[(x*7%256) as u8,(y*5%256) as u8,40+index*45,160]))).collect::<Vec<_>>();
+    let objects=(0..20).map(|index| {
+        let mut object=ImageObject::new(images[index%4].clone());object.interpolation=ImageInterpolation::Nearest;
+        object.affine=Affine64([1.,0.,0.,1.,(index%5) as f64*4.+0.25,(index/5) as f64*4.+0.125]);object
+    }).collect();
+    let (mut doc,owner,handles)=document([128;2],objects);
+    let view=layer_render::ViewState {width_px:32,height_px:32,document_to_surface:[0.25,0.,0.,0.25,0.,0.]};
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    settle_frames(&mut r,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
+    let mut scene=r.scene.take().unwrap();
+    let request=canonical_request(&r,&mut scene,&doc,owner,ObjectWindow {origin:[3.,5.],side:4.,size:[32;2]});
+    assert!(scene.object_results.resolve_collection(&r,doc.scene(),&request).unwrap().is_none());
+    assert!(scene.object_results.pending());r.scene=Some(scene);
+    layer_render::CanvasRenderer::prepare_moving_layer(&mut r,Some(owner));
+    settle_live_frames(&mut r,FramePacket {view,reset_layers:false,composite_all:true,..packet(doc.scene(),[128;2])},2000);
+    assert!(r.scene.as_ref().unwrap().object_results.pending(),"accepted canonical work stays queued during motion");
+    let paused=r.scene.as_ref().unwrap().object_results.work_progress();
+    for _ in 0..3 {
+        r.submit(FramePacket {view,reset_layers:false,composite_all:false,..packet(doc.scene(),[128;2])}).unwrap();r.wait_idle().unwrap();
+        assert!(!r.has_pending_work());assert_eq!(r.scene.as_ref().unwrap().object_results.work_progress(),paused);
+    }
+    let original=handles.iter().map(|h|doc.scene().object(*h).unwrap().affine).collect::<Vec<_>>();
+    for delta in [4.,8.,-4.] {
+        let changes=handles.iter().copied().zip(&original).map(|(h,original)| {
+            let mut affine=*original;affine.0[4]+=delta;affine.0[5]+=delta;(h,affine)
+        }).collect::<Vec<_>>();
+        doc.apply(doc.set_image_object_affines_edit(&changes).unwrap()).unwrap();
+        settle_live_frames(&mut r,FramePacket {view,reset_layers:false,composite_all:true,..packet(doc.scene(),[128;2])},2000);
+        let mut reference=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        layer_render::CanvasRenderer::prepare_moving_layer(&mut reference,Some(owner));
+        settle_frames(&mut reference,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
+        let actual=float_pixels(&r,r.scale_display.as_ref().unwrap().texture());
+        let expected=float_pixels(&reference,reference.scale_display.as_ref().unwrap().texture());
+        assert!(crate::test_support::max_error(&actual,&expected)<2e-5,"every moved sibling matches a fresh pose at {delta}");
+        assert!(!r.scene.as_ref().unwrap().object_results.pending(),"new canonical jobs stay paused while previews are available");
+    }
+    layer_render::CanvasRenderer::prepare_moving_layer(&mut r,None);
+    settle_live_frames(&mut r,FramePacket {view,reset_layers:false,composite_all:true,..packet(doc.scene(),[128;2])},2000);
+    assert!(!r.scene.as_ref().unwrap().object_results.pending());
+    let mut reference=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    settle_frames(&mut reference,FramePacket {view,..packet(doc.scene(),[128;2])},2000);
+    assert!(crate::test_support::max_error(&float_pixels(&r,r.scale_display.as_ref().unwrap().texture()),&float_pixels(&reference,reference.scale_display.as_ref().unwrap().texture()))<2e-5);
 }
 
 #[test]
@@ -777,7 +837,7 @@ fn moving_blurred_object_layer_publishes_every_pose_without_queueing_canonical_w
         let display = r.scale_display.as_ref().unwrap();
         assert!(display.plan.level > 0);
         let bytes = r.scene.as_ref().unwrap().object_results.bytes();
-        assert!(bytes <= 64 * 1024 * 1024, "settled canonical windows stay within one private allowance: {bytes}");
+        assert!(bytes <= 64 * 1024 * 1024 + resident_object_bytes([4248,2832],4,1), "settled canonical scratch and four independently paged output planes stay bounded: {bytes}");
     }
 }
 
@@ -803,7 +863,7 @@ fn moving_collection_preview_composes_ordered_children_across_source_batches() {
     let colors: Vec<[u8; 4]> = (0..10u8).map(|index| [20 + index * 23, 200 - index * 17, 60 + index * 9, 40 + index * 7]).collect();
     let images: Vec<_> = colors.iter().map(|color| image([64; 2], *color)).collect();
     let objects = (0..20).map(|index| {
-        let mut object = ImageObject::new(images[index % 10].clone(), "Translucent");
+        let mut object = ImageObject::new(images[index % 10].clone());
         object.affine = Affine64([1., 0., 0., 1., f64::from((index % 5) as u32 * 4), f64::from((index / 5) as u32 * 4)]);
         object
     }).collect();
@@ -842,7 +902,7 @@ fn moving_nearest_objects_publish_level_zero_poses_with_and_without_effects() {
     for y in 0..64 { builder.push_row(&(0..64).flat_map(|x| { let value = if (x + y) % 2 == 0 { 255 } else { 0 }; [value, value, value, 255] }).collect::<Vec<_>>()).unwrap(); }
     let checker = AuthoredImage::new(Arc::new(builder.finish().unwrap()));
     for blur in [false, true] {
-        let mut object = ImageObject::new(checker.clone(), "Nearest checker");
+        let mut object = ImageObject::new(checker.clone());
         object.interpolation = ImageInterpolation::Nearest;
         object.affine = Affine64([0.75, 0., 0., 0.75, 64., 64.]);
         let (mut doc, owner, handles) = document([256; 2], vec![object]);

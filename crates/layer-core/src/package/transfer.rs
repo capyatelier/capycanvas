@@ -9,18 +9,18 @@ use std::{collections::{BTreeMap, BTreeSet}, mem::MaybeUninit, sync::{Arc, atomi
 pub struct TransferLayout {
     compositions: Vec<PortableId>, stacks: Vec<PortableId>, occurrences: Vec<PortableId>,
     paint: Vec<PortableId>, coverage: Vec<PortableId>, effects: Vec<PortableId>,
-    object_layers:Vec<PortableId>, objects:Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
+    objects:Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
 }
 impl TransferLayout {
     pub(crate) fn capture(art: &Artwork)->Self {
         fn slots<T>(store:&Store<T>)->Vec<PortableId>{(0..store.capacity()).map(|i|store.id(Handle::from_index(i as u32)).unwrap()).collect()}
-        Self {compositions:slots(&art.compositions),stacks:slots(&art.stacks),occurrences:slots(&art.occurrences),paint:slots(&art.paint),coverage:slots(&art.coverage),effects:slots(&art.effects),object_layers:slots(&art.object_layers),objects:slots(&art.objects),selections:slots(&art.selections),guides:slots(&art.guides),outputs:slots(&art.outputs)}
+        Self {compositions:slots(&art.compositions),stacks:slots(&art.stacks),occurrences:slots(&art.occurrences),paint:slots(&art.paint),coverage:slots(&art.coverage),effects:slots(&art.effects),objects:slots(&art.objects),selections:slots(&art.selections),guides:slots(&art.guides),outputs:slots(&art.outputs)}
     }
     pub(crate) fn install(&self,art:&mut Artwork)->super::values::DecodeResult<()> {
         fn slots<T>(store:&mut Store<T>,ids:&[PortableId])->super::values::DecodeResult<()>{for id in ids {store.reserve(*id)?;}Ok(())}
         slots(&mut art.compositions,&self.compositions)?;slots(&mut art.stacks,&self.stacks)?;slots(&mut art.occurrences,&self.occurrences)?;
         slots(&mut art.paint,&self.paint)?;slots(&mut art.coverage,&self.coverage)?;slots(&mut art.effects,&self.effects)?;
-        slots(&mut art.object_layers,&self.object_layers)?;slots(&mut art.objects,&self.objects)?;slots(&mut art.selections,&self.selections)?;slots(&mut art.guides,&self.guides)?;slots(&mut art.outputs,&self.outputs)
+        slots(&mut art.objects,&self.objects)?;slots(&mut art.selections,&self.selections)?;slots(&mut art.guides,&self.guides)?;slots(&mut art.outputs,&self.outputs)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

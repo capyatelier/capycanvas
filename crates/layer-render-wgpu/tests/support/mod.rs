@@ -240,14 +240,11 @@ pub fn photo(extent: [u32; 2], alpha: impl Fn(u32, u32) -> u8) -> authored::Imag
     color::source::rgba8_source(extent, |x, y| [(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x ^ y) * 3 % 256) as u8, alpha(x, y)]).into()
 }
 
-/// A new top image layer holding `objects`, made the active layer.
+/// New sibling image layers, with the first made active.
 pub fn images(doc: &mut Document, objects: Vec<ImageObject>) -> OccurrenceHandle {
-    let (layer, edit) = doc.create_object_layer_edit("Images", None, 0).unwrap();
+    let (layers, edit) = doc.import_object_layers_edit(objects.into_iter().map(|object| ("Images".into(), object)).collect(), None, 0).unwrap();
     doc.apply(edit).unwrap();
-    for (index, object) in objects.into_iter().enumerate() {
-        let (_, edit) = doc.add_image_object_edit(layer, object, index).unwrap();
-        doc.apply(edit).unwrap();
-    }
+    let layer = layers[0];
     doc.working.occurrence = Some(layer);
     doc.working.target = None;
     layer
@@ -255,7 +252,7 @@ pub fn images(doc: &mut Document, objects: Vec<ImageObject>) -> OccurrenceHandle
 
 /// `image` placed by `affine`, Nearest or Linear.
 pub fn placed(image: &authored::Image, affine: [f64; 6], nearest: bool) -> ImageObject {
-    let mut object = ImageObject::new(image.clone(), "Photo");
+    let mut object = ImageObject::new(image.clone());
     object.affine = Affine64(affine);
     object.interpolation = if nearest { ImageInterpolation::Nearest } else { ImageInterpolation::Linear };
     object

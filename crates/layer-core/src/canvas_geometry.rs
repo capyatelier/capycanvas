@@ -746,8 +746,8 @@ impl Document {
             }
             if let OccurrenceContent::Objects(layer) = old.content {
                 let map = translation(offsets::checked_sub([0; 2], candidate.scene().layer_origin(Some(*h))).ok_or_else(out_of_range)?).compose(to_canvas64).compose(translation(scene.layer_origin(Some(*h))));
-                for child in &self.artwork.object_layers.get(layer).ok_or(DocumentError::MissingOccurrence(*h))?.children {
-                    let object = candidate.artwork.objects.get_mut(*child).ok_or(DocumentError::MissingOccurrence(*h))?;
+                {
+                    let object = candidate.artwork.objects.get_mut(layer).ok_or(DocumentError::MissingOccurrence(*h))?;
                     object.affine = map.compose(object.affine);
                     object.admit_affine().map_err(|_| CanvasGeometryError::Unsupported("A placed image would exceed the editor's range"))?;
                 }

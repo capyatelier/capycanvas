@@ -501,9 +501,8 @@ fn spatial_reference_edits_invalidate_effect_outputs_and_downstream_inputs() {
 #[test]
 fn raw_object_queries_track_owner_and_ancestor_placement_without_layer_appearance() {
     let mut doc=fixture::document([128,96],&["Group"]);
-    let (layer,edit)=doc.create_object_layer_edit("Objects",None,0).unwrap();doc.apply(edit).unwrap();
     let image=Image::new(crate::color::source::rgba8_source([4;2],|_,_|[255,0,0,255]));
-    let (_,edit)=doc.add_image_object_edit(layer,ImageObject::new(image,"Image"),0).unwrap();doc.apply(edit).unwrap();
+    let (layer,edit)=doc.create_object_layer_edit("Objects",ImageObject::new(image),None,0).unwrap();doc.apply(edit).unwrap();
     let group=fixture::nest(&mut doc,"Group",&["Objects"]);
     let assert_current=|query:&crate::ArtworkQuery,doc:&Document,current:bool| {
         assert_eq!(query.matches_artwork(doc),current);
@@ -526,16 +525,13 @@ fn raw_object_queries_track_owner_and_ancestor_placement_without_layer_appearanc
 fn object_query_identity_reuses_shared_roots_but_tracks_rebound_owners_and_changed_content() {
     let mut doc=document();
     let image=Image::new(crate::color::source::rgba8_source([4;2],|_,_|[255,0,0,255]));
-    let (first,edit)=doc.create_object_layer_edit("First",None,0).unwrap();doc.apply(edit).unwrap();
-    let (child,edit)=doc.add_image_object_edit(first,ImageObject::new(image.clone(),"First image"),0).unwrap();doc.apply(edit).unwrap();
-    let (second,edit)=doc.create_object_layer_edit("Second",None,0).unwrap();doc.apply(edit).unwrap();
-    let mut moved=ImageObject::new(image,"Second image");moved.affine.0[4]=8.;
-    let (_,edit)=doc.add_image_object_edit(second,moved,0).unwrap();doc.apply(edit).unwrap();
+    let (first,edit)=doc.create_object_layer_edit("First",ImageObject::new(image.clone()),None,0).unwrap();doc.apply(edit).unwrap();let child=doc.scene().object_handle(first).unwrap();
+    let mut moved=ImageObject::new(image);moved.affine.0[4]=8.;
+    let (second,edit)=doc.create_object_layer_edit("Second",moved,None,0).unwrap();doc.apply(edit).unwrap();
     let query=crate::ArtworkQuery::new(&doc,ArtworkSource::Objects(first));
     let paint=doc.artwork.paint.iter().next().unwrap().0;
     change_paint(&mut doc,paint,|source|source.domain=[129,96]);
     assert!(query.snapshot.view().artwork().objects.same_root(&doc.artwork.objects));
-    assert!(query.snapshot.view().artwork().object_layers.same_root(&doc.artwork.object_layers));
     assert!(query.matches_source(&doc));
     let mut a=doc.scene().occurrence(first).unwrap().clone();
     let mut b=doc.scene().occurrence(second).unwrap().clone();
@@ -545,12 +541,11 @@ fn object_query_identity_reuses_shared_roots_but_tracks_rebound_owners_and_chang
         Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,second,Some(b)).unwrap()),
     ])).unwrap();
     assert!(query.snapshot.view().artwork().objects.same_root(&doc.artwork.objects));
-    assert!(query.snapshot.view().artwork().object_layers.same_root(&doc.artwork.object_layers));
     assert!(!query.matches_source(&doc),"Shared object stores cannot hide an owner rebound to different content");
     let query=crate::ArtworkQuery::new(&doc,ArtworkSource::Objects(second));
-    let mut renamed=doc.artwork.objects.get(child).unwrap().clone();renamed.name="Renamed".into();
-    doc.apply(Edit::ImageObject(RecordChange::replace(&doc.artwork.objects,child,Some(renamed)).unwrap())).unwrap();
-    assert!(!query.snapshot.view().artwork().objects.same_root(&doc.artwork.objects));
+    let mut renamed=doc.scene().occurrence(second).unwrap().clone();renamed.name="Renamed".into();
+    doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,second,Some(renamed)).unwrap())).unwrap();
+    assert!(query.snapshot.view().artwork().objects.same_root(&doc.artwork.objects));
     assert!(query.matches_source(&doc),"Image names do not change sampled content");
     doc.apply(doc.set_image_object_affine_edit(child,Affine64([1.,0.,0.,1.,16.,0.])).unwrap()).unwrap();
     assert!(!query.matches_source(&doc));

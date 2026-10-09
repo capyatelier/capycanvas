@@ -204,9 +204,9 @@ actions through the native bridge in both themes and platform policies.
 opens the fixed built-in, ICC and Nearest image-object packages through Apple
 project workers. It checks shared image ownership, F64 placement, exact visibility
 history, save/reopen, renderer replacement and private recovery with pending Redo.
-Image layers expose expandable image rows, selection, visibility, ordering and
-image menus through the shared object actions. Place Image and external paste
-keep images in an image layer; Convert to Image Layer and Rasterize Layer use
+Object layers use ordinary layer rows, selection, visibility, ordering and
+menus. Place Image and external paste create one named Object layer per image;
+Convert to Object Layer and Rasterize Layer use
 the shared background conversion jobs.
 The photo-owner fixture compares reopened layer rows and swipe targets by stack
 position because runtime handles are allocated afresh when reading a package.
@@ -333,8 +333,8 @@ type takes the remaining space, including when the panel needs a scrollbar.
 tab icon updates and the transparency circle. Run these on both native targets;
 simulator compilation does not establish Metal canvas behavior.
 
-`testImageObjects` and `testImageObjectsDark` exercise Convert to Image Layer,
-the expanded image rows, duplication, ordering, visibility, collapse and expand,
+`testImageObjects` and `testImageObjectsDark` exercise Convert to Object Layer,
+ordinary Object layer rows, duplication, ordering and visibility,
 and the painting refusal's Rasterize Layer action. Undo and Redo check both the
 rows and exact displayed pixels. The commands use native toolbar buttons and
 row menus. `tests/image-import-owner.swift` covers placement, external paste,

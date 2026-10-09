@@ -322,10 +322,10 @@ manual save checkpoints and undo/redo after an actual process death.
     save/open, private history recovery and pixels after replacing the GPU.
   - `#imageObjectsCancelPasteIntoConversionsAndRecovery` cancels placement and
     a transform without history, pastes an external image into a selection,
-    moves it behind the fixed mask, rasterizes the masked half-opacity image
-    layer and converts painted ink to an image layer with unchanged pixels and
+    moves it behind the fixed mask, rasterizes the masked half-opacity Object
+    layer and converts painted ink to an Object layer with unchanged pixels and
     one-step undo, then checks save/reopen, private recovery, recovered Redo and
-    GPU replacement in both themes, and that image-layer and image-row previews
+    GPU replacement in both themes, and that ordinary Object layer previews
     arrive before and after the GPU is replaced. `#imageObjectClipboardCopyCutPasteNonceAndOtherDocument`
     copies, cuts and pastes images through the system clipboard, pastes another
     app's image when the nonce does not match and pastes the copy into a new
@@ -333,7 +333,7 @@ manual save checkpoints and undo/redo after an actual process death.
     takes the same `restartFixture`/`restartPhase` arguments as the other
     restart case and checks binary64 poses and recovered Undo/Redo after the
     process is killed. `AndroidInteractionTest#imageRowsTouchPickingMenusAndRefusalActions`
-    drives the image rows, their menu and drag order, finger picking, two-finger
+    drives ordinary Object layer rows, their menu and drag order, finger picking, two-finger
     navigation and the image paint refusal.
   - `#drawingTabsRestoreMultipleInactiveDrawingsWithoutPrompt` restores order,
     active tab, camera, saved checkpoints and independent undo/redo history.
@@ -552,7 +552,7 @@ APK calls, so test-APK benchmarks use the unminified build.
   previews drawn. `-e refine grow` (or `shrink`, `border`) picks another
   operation, `-e refineSpan` the fraction of the track, and `-e refineBar off`
   hides the canvas action bar. `crop` drags a crop handle over a placed photo.
-  Scenarios that edit a placed photo's pixels rasterize its image layer first.
+  Scenarios that edit a placed photo's pixels rasterize its Object layer first.
   `move` drags the selected pixels of a placed `width` × `height` photo with
   Move: all of it, the middle half, and the middle half with Leave Copy.
   `merge` paints eight layers over a placed photo and times Merge Visible and

@@ -150,23 +150,15 @@ and their undo history in both themes, alongside the existing pickup fixture var
 The default layers fixture closes with a focused opacity draft, reopens the same
 private profile, and verifies the saved draft and its clean Undo checkpoint.
 
-Image layers list their images as child rows after the layer row while the shared
-state marks them expanded. Child rows carry the shared object IDs, previews from the
-object thumbnail target, visibility, selection, the shared image menu and grip
-reordering within their layer; they have no mask, lock or swipe controls. Their menu
-uses the layer-menu query with the image ID, answered by shared `object_menu`.
-`exercise-image-rows.ps1` checks rows, previews, selection, visibility, collapsing,
-reordering and cancellation. It authors images with Move, Scale–Rotate and Rotate
-Right, then exercises Duplicate Images, structured Copy/Cut/Paste, the painting
-refusal actions, Rasterize Layer and Convert to Image Layer. Composed pixel
-comparisons check edits and one-step Undo/Redo. Saved packages verify immutable
-image sources, selected affines and ordered layer members through editing,
-clipboard operations and Unicode save/reopen. Run each `-Device mouse|pen|touch`
+Each imported image has one ordinary Object layer row. Its shared layer ID owns
+the thumbnail, selection, visibility, masks, locks, context menu and reordering.
+`exercise-image-rows.ps1` checks previews, selection, visibility, reordering and
+cancellation, then ordinary Duplicate, structured Copy/Cut/Paste, Rasterize Layer,
+history and Unicode save/reopen. Run each `-Device mouse|pen|touch`
 variant with `-Theme dark` and `-Theme light`.
-Conversion checks allow at most one 8-bit display level per channel at every
-fixed artwork sample, matching the [shared renderer tests](../../crates/layer-render-wgpu/tests/object_layer_consumers.rs).
-Undo and Redo require exact pixels for each recorded image, raster and
-converted state; conversion deltas and sample geometry are saved with the run.
+The [shared renderer tests](../../crates/layer-render-wgpu/tests/object_layer_consumers.rs)
+check conversion pixels with at most one 8-bit display level of error per channel;
+Undo and Redo require exact pixels.
 
 ### Where files live
 

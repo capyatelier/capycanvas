@@ -22,7 +22,7 @@ fn same_records(actual: &layer_core::Artwork, expected: &layer_core::Artwork) {
     macro_rules! same { ($($store:ident),+) => { $(
         assert_eq!(actual.$store.iter().collect::<Vec<_>>(), expected.$store.iter().collect::<Vec<_>>(), stringify!($store));
     )+ }; }
-    same!(compositions, stacks, occurrences, paint, object_layers, objects, coverage, effects, selections, guides, outputs);
+    same!(compositions, stacks, occurrences, paint, objects, coverage, effects, selections, guides, outputs);
 }
 
 fn frames_until(owner: &mut NativeHost, ready: impl Fn(&layer_core::Document) -> bool) {
@@ -63,10 +63,8 @@ fn layered(selection: Selection, grouped: bool, objects: bool) -> (NativeHost, V
     let mut document = layer_core::Document::from_artwork(document.artwork).unwrap();
     let mut members = vec![first, second];
     if objects {
-        let (id, edit) = document.create_object_layer_edit("Photo", None, 0).unwrap();
-        document.apply(edit).unwrap();
-        let object = layer_core::ImageObject::new(photo([64, 48], |_, _| [15, 30, 210, 255]).into(), "Blue");
-        let (_, edit) = document.add_image_object_edit(id, object, 0).unwrap();
+        let object = layer_core::ImageObject::new(photo([64, 48], |_, _| [15, 30, 210, 255]).into());
+        let (id, edit) = document.create_object_layer_edit("Photo", object, None, 0).unwrap();
         document.apply(edit).unwrap();
         members.push(id);
     }

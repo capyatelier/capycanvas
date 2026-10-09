@@ -63,8 +63,7 @@ impl Metadata {
         normalize(self) == normalize(other)
     }
     pub(super) fn new(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> Self {
-        let keys=scene.object_layer(handle).map_or_else(Vec::new,|layer|layer.children.iter().copied()
-            .filter(|h|scene.object(*h).is_some_and(|object|object.visible)).map(|h|objects::ObjectKey::new(scene,handle,h)).collect());
+        let keys:Vec<_>=scene.object_handle(handle).into_iter().map(|h|objects::ObjectKey::new(scene,handle,h)).collect();
         Self::with_objects(scene,handle,keys.into())
     }
     pub(super) fn new_cached(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle, cache:&mut object_spatial::SpatialIndex) -> Self {
@@ -113,7 +112,7 @@ mod tests {
     use layer_core::color::{SampleDepth, source::*};
 
     #[test]
-    fn paint_edits_reuse_object_metadata_without_enumerating_its_children() {
+    fn paint_edits_reuse_object_metadata_without_enumerating_sibling_images() {
         let (mut doc,owner,handles)=object_spatial::tests::document();
         let mut cache=object_spatial::SpatialIndex::default();
         let before=Metadata::new_cached(doc.scene(),owner,&mut cache);

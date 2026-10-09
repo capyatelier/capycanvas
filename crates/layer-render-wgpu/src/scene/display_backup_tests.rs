@@ -10,11 +10,10 @@ fn cold_late_object_window_preserves_accepted_pixels_and_pose_until_complete() {
     let mut builder=SourceBuilder::new([1024;2],SourceInterpretation {channels:SourceChannels::Rgba,
         depth:layer_core::color::SampleDepth::U8,profile:Default::default(),profile_assumed:false},8<<20).unwrap();
     for _ in 0..1024 {builder.push_row(&[0,0,255,255].repeat(1024)).unwrap();}
-    let mut object=ImageObject::new(layer_core::authored::Image::new(Arc::new(builder.finish().unwrap())),"Cold image");
+    let mut object=ImageObject::new(layer_core::authored::Image::new(Arc::new(builder.finish().unwrap())));
     object.affine=Affine64([0.25,0.,0.,0.25,0.,0.]);object.interpolation=ImageInterpolation::Nearest;
     let child=artwork.objects.insert(PortableId::random(),object).unwrap();
-    let collection=artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:vec![child]}).unwrap();
-    let mut owner=Occurrence::new(OccurrenceContent::Objects(collection),"Cold images");owner.visible=false;
+    let mut owner=Occurrence::new(OccurrenceContent::Objects(child),"Cold images");owner.visible=false;
     let owner=artwork.occurrences.insert(PortableId::random(),owner).unwrap();
     let mut fill=EffectInstance::new(layer_core::bundled_effect_catalog().get("solid_color").unwrap().program());
     fill.set("color",EffectValue::Color(layer_core::color::RgbColor::from_linear(RgbSpace::Srgb,[1.,0.,0.,1.]).unwrap())).unwrap();

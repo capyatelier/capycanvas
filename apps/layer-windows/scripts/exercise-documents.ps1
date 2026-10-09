@@ -429,12 +429,10 @@ Wait-Until {(Model).windows_document.stage -eq 'error'} 'Invalid image did not r
 $script:scope=$root;$script:scope=Find-Id 'document-workflow';Invoke-Control 'Close';Import-Idle
 if(@((Model).state.layers).Count -ne 2 -or (Model).state.document_file.modified){throw 'Invalid image changed the document'}
 Import-Start;Choose-Path $imageSource;Import-Idle
-Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.object_count -eq 1} 'Image layer was not selected'
+Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.object} 'Image layer was not selected'
 if((Model).error){throw 'Successful import did not clear the previous decoder error'}
 $imported=(Model).state.layer_tools.editing_layer.id
-$script:scope=$root;Wait-Until {$expand=Find-Id "layer-$imported-expand";$expand -and $expand.Current.IsEnabled} 'The image layer did not offer its image list'
-(Find-Id "layer-$imported-expand").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-Wait-Until {$layer=@((Model).state.layers|Where-Object id -eq $imported)[0];$layer.expanded -and @($layer.objects).Count -eq 1 -and $layer.objects[0].label -eq 'Source image 日本語'} 'The imported image was not named after its file'
+Wait-Until {$layer=@((Model).state.layers|Where-Object id -eq $imported)[0];$layer.object -and $layer.label -eq 'Source image 日本語'} 'The imported image layer was not named after its file'
 Wait-Until {(Find-Id "layer-$imported-thumbnail").Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not arrive' 15
 Invoke-Control 'Apply transform'
 Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Placement did not enter undo history'

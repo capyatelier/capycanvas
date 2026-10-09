@@ -528,7 +528,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         destination: Option<ImageLayerDestination>,
     ) -> Result<ImagePlacementContext, String> {
         self.require_document_idle()?;
-        if !self.pasting_new_image() { self.object_destination(destination)?; }
+        if !self.pasting_new_image() { self.image_layer_destination(destination)?; }
         Ok(ImagePlacementContext {
             epoch: self.state.document_file.epoch,
             revision: self.engine.document().revision,
@@ -545,7 +545,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err("The document or selected layer changed while importing; try again".into());
         }
-        if !self.pasting_new_image() { self.object_destination(context.destination)?; }
+        if !self.pasting_new_image() { self.image_layer_destination(context.destination)?; }
         Ok(())
     }
     pub fn image_layer_drop_hint(&self, target: u64, fraction: f32) -> Option<LayerDropPosition> {
@@ -554,9 +554,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         { return None; }
         let handle = occurrence_handle(target).ok()?;
         let row = self.engine.document().scene().occurrence(handle)?;
-        let position = if matches!(row.kind(), LayerKind::Group | LayerKind::Object) && (0.25..0.75).contains(&fraction) { LayerDropPosition::Into }
+        let position = if row.kind() == LayerKind::Group && (0.25..0.75).contains(&fraction) { LayerDropPosition::Into }
             else if fraction < 0.5 { LayerDropPosition::Above } else { LayerDropPosition::Below };
-        self.object_destination(Some(ImageLayerDestination { target: handle, position })).ok()?;
+        self.image_layer_destination(Some(ImageLayerDestination { target: handle, position })).ok()?;
         Some(position)
     }
     pub(super) fn image_layer_destination(&self, destination: Option<ImageLayerDestination>) -> Result<(usize, Option<OccurrenceHandle>), String> {
@@ -589,7 +589,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc = self.engine.document();
         for id in &references {
             if !doc.scene().occurrence(*id).is_some_and(|l| matches!(l.kind(), LayerKind::Paint | LayerKind::Object | LayerKind::Group)) {
-                return Err("Choose a paint layer, image layer or group as a reference".into());
+                return Err("Choose a paint layer, object layer or group as a reference".into());
             }
         }
         let edits = doc.scene().order().iter().filter_map(|id| {
@@ -748,7 +748,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.selection_masks.quick() && matches!(action,LayerAction::Delete {..}|LayerAction::DeleteSelected) {return Err("Return to artwork before deleting artwork layers".into());}
 
-        if self.operation.placing() && !matches!(action, LayerAction::Tool { .. }) {
+        if (self.operation.placing() || self.objects.placing()) && !matches!(action, LayerAction::Tool { .. }) {
             return Err(self.localization().text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST).to_string());
         }
         let hide_selection = matches!(action, LayerAction::MaskSelection { hide: true, .. });
@@ -862,7 +862,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let scene = doc.scene();
                 let active = doc.working.occurrence;
                 if clipped && !active.is_some_and(|h| scene.eligible_target(h)) {
-                    return Err("Choose a paint layer, image layer or isolated group to clip to".into());
+                    return Err("Choose a paint layer, object layer or isolated group to clip to".into());
                 }
                 let parent = active.and_then(|h| if !clipped && scene.occurrence(h).is_some_and(|l| l.kind() == LayerKind::Group) { Some(h) } else { scene.parent(h) });
                 if parent.is_some_and(|p| doc.is_locked(p)) { return Err("The destination group is locked".into()); }

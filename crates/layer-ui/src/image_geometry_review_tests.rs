@@ -128,7 +128,7 @@ fn transparent_image_placements_frame_their_full_extent_without_alpha_queries() 
         s.place_layer_sources(sources, Some(Point { x: 75., y: 55. }), None).unwrap();
         let expected = if batch { [[65., 40.], [85., 70.]] } else { [[65., 50.], [85., 60.]] };
         let doc = s.engine.document();
-        assert_eq!(doc.object_document_bounds(doc.working.objects.iter().copied()), Some(expected), "the frame uses each image's full extent");
+        assert_eq!(doc.object_document_bounds(doc.selected_objects()), Some(expected), "the frame uses each image's full extent");
         assert!(!s.content_bounds.busy(), "transparent images need no alpha query");
         assert!(s.engine.backend().bounds_requests.is_empty());
         assert!(s.command(CommandId::PlacementOriginalSize).enabled);

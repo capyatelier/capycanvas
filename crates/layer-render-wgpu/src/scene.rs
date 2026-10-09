@@ -1426,7 +1426,15 @@ impl Scene {
         }
     }
     pub(super) fn capture_image_bound(scene: SceneView<'_>, window: impl Into<DocRect>) -> u64 {
-        if matches!(scene.scope(),Some(layer_core::SceneScope::Raw(_) | layer_core::SceneScope::RawObjects(_))) {return 0;}
+        if matches!(scene.scope(),Some(layer_core::SceneScope::Raw(_))) {return 0;}
+        let window = window.into();
+        let raw = match scene.scope() { Some(layer_core::SceneScope::RawObjects(owner)) => Some(*owner), _ => None };
+        let objects = scene.order().iter().copied()
+            .filter(|owner| raw.map_or_else(|| scene.visible(*owner), |raw| raw == *owner) && scene.object_layer(*owner).is_some())
+            .map(|owner| Self::object_content_bounds(scene, owner).intersect(window).aligned(PAGE_SIZE).area().saturating_mul(16))
+            .fold(0u64, u64::saturating_add);
+        if raw.is_some() {return objects;}
+
         let mut images = 0u64;
         let mut scratch = 0;
         for &handle in scene.order() {
@@ -1436,7 +1444,7 @@ impl Scene {
                 scratch = scratch.max(effect.program.passes.len().saturating_sub(1).min(2) as u64);
             }
         }
-        window.into().area().saturating_mul(16).saturating_mul(images + scratch)
+        objects.saturating_add(window.area().saturating_mul(16).saturating_mul(images + scratch))
     }
 
     /// Capture a document-coordinate crop with its finite upstream dependencies.

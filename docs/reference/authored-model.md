@@ -12,7 +12,7 @@ transport rules; this guide owns runtime state and resource lifetime.
 ## Objects and identity
 
 An artwork owns typed stores for compositions, stacks, occurrences, paint
-sources, object layers, image objects, coverage sources, effects, saved
+sources, image objects, coverage sources, effects, saved
 selections, guides and outputs. Every authored record has an opaque 128-bit
 portable ID. A decoded ID maps once to a typed `u32` handle. Each store allocates
 handles monotonically and never reuses a slot during its lifetime; exhaustion
@@ -33,7 +33,7 @@ immutable program directly. Undo retains the application ID, values, spatial
 reference and program owners; equal programs share storage without an authored
 definition identity.
 
-Stacks own front-to-back layer order; object layers own their child order.
+Stacks own front-to-back layer order.
 An occurrence has at most one containing stack. Groups refer to nested stacks;
 there is no second authoritative parent
 field or flat layer order. Parent, sibling, clipping, ancestry and target indexes
@@ -81,7 +81,6 @@ current UI preferences.
 | `WorkingState.selection_overlays.visibility` | Transient per-occurrence visibility for saved-selection overlays; absent entries are visible. | Navigation and eye toggles never edit artwork; delete repairs entries, undo restores them, and private recovery retains them while portable save omits them. |
 | `WorkingState.selection_overlays.properties` | Transient per-saved-selection overlay color and opacity; absent entries use sRGB red `[1,0,0,1]` and `0.5`. | Property edits preserve artwork and redo; parked tabs and recovery retain them, while portable save omits them. |
 | `WorkingState.inspect_mask` | Optional occurrence whose mask is inspected. | Omit from portable artwork and output pixels. |
-| `WorkingState.objects` | Selected image objects, all children of the active image layer; initially empty. | Separate from layer-row and pixel selection. Selection repair drops images outside the active layer; delete and undo repair it; private recovery retains it while portable save omits it. |
 | `WorkingState.view_origin` | Accumulated signed integer offset of the canvas frame from crops and grows, initially `[0,0]`. | Working edits, history and private sessions record it; Undo/Redo and camera follow use its change without editing artwork coordinates; portable save omits it. |
 | `WorkingState.generation` | Runtime working-state generation. | Reject stale working requests without treating navigation as an authored edit. |
 
@@ -115,13 +114,13 @@ shared session or workspace owners.
 
 | Field | Meaning, default and units | Required assertion |
 | --- | --- | --- |
-| `Occurrence.content` | Paint-source use, object-layer use, nested stack, effect application or saved selection. | Groups, effects and selections do not acquire fake paint sources. |
+| `Occurrence.content` | Paint-source use, image-object use, nested stack, effect application or saved selection. | Groups, effects and selections do not acquire fake paint sources. |
 | `Occurrence.name` | Literal UTF-8 name supplied at creation. | Rename preserves identity and does not invalidate pixels. |
 | `Occurrence.visible` | Artwork contribution visibility, initially true; fixed true for saved selections. | Hiding artwork contribution does not disable a source demanded by an explicit input. Selection overlay visibility belongs to working state. |
 | `Occurrence.opacity` | Finite contribution factor `[0,1]`, initially 1. | Affect only this occurrence and retain pass-through interpolation. |
 | `Occurrence.blend` | Actual blend operation, initially Normal. | Pass Through is an explicit mode; isolating a Pass Through group makes it Normal. |
 | `Occurrence.attachment` | `None`, `Clip` or `Effect`, initially None. | Publication resolves a common clipping base or an effect owner from sibling order, independent of visibility. |
-| `Occurrence.offset` | Signed integer offset in the containing stack's pixels for paint, image-layer and group content, initially `[0,0]`. Effects and saved selections have no offset. | Ancestor offsets accumulate with checked arithmetic; moving a group moves its descendants once. Editor admission bounds each value; image children own their affine geometry. |
+| `Occurrence.offset` | Signed integer offset in the containing stack's pixels for paint, object-layer and group content, initially `[0,0]`. Effects and saved selections have no offset. | Ancestor offsets accumulate with checked arithmetic; moving a group moves its descendants once. Editor admission bounds each value; image objects own their affine geometry. |
 | `Occurrence.locked`, `alpha_locked` | Editing locks, initially false. | Derive ancestor locks; valid undo restores records without changing source sample identity. |
 | `Occurrence.reference` | Authored reference designation, initially false. | Preserve independently of visibility and rebuild reference scopes after grouping or reorder. |
 | `Occurrence.mask` | Optional `MaskUse` in the occurrence's mask slot. | Source edits differ from use enablement, linkage, inversion and offset edits. |
@@ -197,33 +196,30 @@ evaluated bounds even while their raster backing remains empty.
 
 ### Object layers and image objects
 
-Object layers own front-to-back `children` lists of typed image-object handles.
-A drawable ID cannot appear in multiple collection slots. Each object-layer
-occurrence owns the layer presentation, mask and effects; the collection adds no
-second name, blend, opacity or writable pixel target. Object layers are isolated,
-can serve as clipping bases and can own attached effects.
+An Object layer occurrence refers directly to one `ImageObject`. The occurrence
+owns its name, visibility, opacity, blend, mask and effects. There is no collection
+record or second layer hierarchy. Object layers are isolated, can serve as
+clipping bases and can own attached effects.
 
-An `ImageObject` retains an `Image`, authored name and visibility, one `Affine64`
-placement and `Nearest` or `Linear` interpolation. Linear is the insertion default.
-The six finite F64 coefficients map source image coordinates into the layer frame
-as `[xx,yx,xy,yy,tx,ty]`; validation requires an invertible map and finite image
-bounds. Nonfinite and singular mappings are invalid; finite mappings beyond the
-implemented numerical support are refused as unsupported. Duplication allocates new object and collection IDs while sharing immutable
-images. Foreign image-object import assigns new image, tile and profile IDs to the
-whole dependency batch while retaining shared immutable payloads. Object-only
-documents require no paint source. Opening or replacing the renderer still
-requires tiled-image support whenever paint bases or image objects are retained.
+An `ImageObject` retains an immutable `Image`, one `Affine64` placement and
+`Nearest` or `Linear` interpolation. Linear is the insertion default. The six
+finite F64 coefficients map source coordinates into the layer frame as
+`[xx,yx,xy,yy,tx,ty]`; validation requires an invertible map and finite image
+bounds. Nonfinite and singular mappings are invalid; finite mappings beyond
+implemented numerical support are unsupported. Duplication allocates new
+occurrence and object IDs while sharing immutable images. Foreign layer import
+assigns fresh image, tile and profile IDs across the dependency batch while
+preserving shared payloads. Object-only documents need no paint source.
 
-Shared `Document` planners create object layers, insert image objects and replace
-affine placements with atomic reversible record edits. They respect ancestor locks
-and validate before publication. The shared session asks the renderer to preflight
-the candidate affine against the current scene and view before committing history.
-A rejected sampling request preserves the document, checkpoint and both history
-directions. [`object_edits.rs`](../../crates/layer-core/src/authored/object_edits.rs)
-adds front-to-back bounds picking, document-space affines and bounds, and batch
-affine, delete, duplicate, reorder, visibility, rename and interpolation edits.
-`WorkingState.objects` holds the selection; the shared editor routes Move gestures
-through these planners as [image layers](../ui/image-objects.md) describes.
+Shared `Document` planners create one layer per imported source and replace
+placements through atomic reversible record edits. Ordinary layer planners own
+delete, duplicate, reorder, visibility and rename. Layer selection determines
+selected objects; there is no separate object-selection field. Picking, bounds,
+affines and interpolation live in
+[`object_edits.rs`](../../crates/layer-core/src/authored/object_edits.rs).
+The session preflights candidate affines before publishing history. A rejected
+sampling request preserves the document and both history directions. See
+[Object layers](../ui/image-objects.md) for user-facing behavior.
 
 `RasterData.tiles` retains plane, local tile coordinate, pixel descriptor and
 immutable publication. Color, Wetness and WatercolorWetness are paint-source
@@ -432,8 +428,8 @@ context. `SceneSnapshot` retains artwork, index, owner, revision, context, scope
 and evaluation offset, excluding working selection and mask inspection.
 `SceneScope` selects All, Raw source, RawObjects, Members or EffectInput for an occurrence.
 RawObjects and `ArtworkSource::Objects` expose an object layer's internal content
-without creating a writable `SourceTarget`; their query dependencies track child
-order, image identity, affine placement, visibility, interpolation and the owner
+without creating a writable `SourceTarget`; their query dependencies track image
+identity, affine placement, interpolation and the owner
 and ancestor offsets in document coordinates. Layer opacity, masks and attached
 effects remain outside the raw content scope.
 Member scopes preserve original offset ancestry while evaluating the selected

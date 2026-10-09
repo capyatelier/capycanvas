@@ -51,13 +51,13 @@ fn fixture()->Editor {
         visibility:[(selection,false)].into(),properties:[(saved,SelectionMaskProperties {
             color:RgbColor {space:RgbSpace::DisplayP3,rgba:[0.25,0.5,0.75,1.],linear_rgb:None},opacity:0.75})].into()},
         layer_selection:[ink,selection].into(),layer_anchor:Some(ink),solo_visibility:Some([(ink,true),(selection,false)].into()),
-        occurrence:Some(ink),target:Some(SourceTarget::Coverage(coverage)),inspect_mask:Some(ink),view_origin:[-300,17],objects:Default::default()};
+        occurrence:Some(ink),target:Some(SourceTarget::Coverage(coverage)),inspect_mask:Some(ink),view_origin:[-300,17]};
     Editor::new(document)
 }
 fn edit_family(edit:&Edit)->&'static str {
     match edit {
         Edit::Composition(_)=>"composition",Edit::Stack(_)=>"stack",Edit::Occurrence(_)=>"occurrence",
-        Edit::ObjectLayer(_)=>"objects",Edit::ImageObject(_)=>"image",Edit::Paint(_)=>"paint",Edit::Coverage(_)=>"coverage",Edit::Effect(_)=>"effect",
+        Edit::ImageObject(_)=>"image",Edit::Paint(_)=>"paint",Edit::Coverage(_)=>"coverage",Edit::Effect(_)=>"effect",
         Edit::SavedSelection(_)=>"selection",Edit::Guides(_)=>"guides",Edit::Output(_)=>"output",Edit::Working(_)=>"working",
         Edit::Batch(_)=>"batch",Edit::SetRaster{..}=>"raster",
     }

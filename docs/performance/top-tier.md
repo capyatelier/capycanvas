@@ -70,6 +70,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Pixel transform: Warp | 120 | | |
 | Selection transform, full canvas | 120 | | |
 | Move tool layer drag | 120 | | |
+| Object Layer placement, Move and Scale/Rotate | 120 | Current Object-layer simplification unmeasured on the reference tablet | [Qualification gap](known-gaps.md) |
 | Marquee, Lasso or Polygon drag | 120 | Met on a small document: in-stroke interval p50/p99 4.2/6.9 ms with the canvas bar shown, p99 8.8 ms with it off (2048 × 1536) | `ba9483a8`, 2026-09-27 |
 | Enclose and Fill: loop drag and navigation during completion | 120 | Unmeasured on the reference tablet; 61 MP completion exceeds the current 128 MiB component-buffer binding limit | Shared lasso overlay; GPU region discovery starts on release. Desktop checks do not qualify this tier |
 | Selection Brush or Quick Mask, 2048 px | 120 | | |

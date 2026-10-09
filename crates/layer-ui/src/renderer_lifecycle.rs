@@ -35,7 +35,6 @@ impl ThumbnailRequests {
             layer_render::ThumbnailTarget::Source(SourceTarget::Paint(handle)) => scene.paint(handle).is_some(),
             layer_render::ThumbnailTarget::Source(SourceTarget::Coverage(handle)) => scene.coverage(handle).is_some(),
             layer_render::ThumbnailTarget::Source(SourceTarget::Selection(handle)) => scene.artwork().selections.get(handle).is_some(),
-            layer_render::ThumbnailTarget::Object(handle) => scene.object(handle).is_some(),
             layer_render::ThumbnailTarget::QuickMask => true,
         };
         if !unavailable || !exists { self.resubmit.pop_front(); }
@@ -538,7 +537,9 @@ mod tests {
             assert_eq!(first.affine.0.map(f64::to_bits), expected.affine.0.map(f64::to_bits));
             assert_eq!(first.image.id(), identity(11));
             assert!(first.image.same_owner(&second.image));
-            assert!(!second.visible);
+            let second_handle = document.artwork.objects.resolve(identity(10)).unwrap();
+            let second_owner = document.scene().object_owner(second_handle).unwrap();
+            assert!(!document.scene().occurrence(second_owner).unwrap().visible);
             assert_eq!(second.interpolation, layer_core::ImageInterpolation::Nearest);
             let source = document.artwork.paint.get(document.artwork.paint.resolve(identity(7)).unwrap()).unwrap();
             assert!(first.image.same_owner(&source.base.as_ref().unwrap().image));

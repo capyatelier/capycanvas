@@ -59,7 +59,7 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
       const prior=await evaluate('objectJourney.jobs');
       const coordinates=await evaluate('objectJourney.coordinates');
       await evaluate(`(async()=>{const response=await fetch(${JSON.stringify(url)});if(!response.ok)throw Error('Missing object fixture');objectJourney.input=new Uint8Array(await response.arrayBuffer())})()`);
-      if(onlyObjects){const input=await readPackage(evaluate,'objectJourney.input');assert.equal(packageObjects(input,'capy.paint-source/2').length,0);assert.equal(packageOccurrences(input).length,1);assert.ok(packageOccurrences(input)[0].data.content.objects);}
+      if(onlyObjects){const input=await readPackage(evaluate,'objectJourney.input');assert.equal(packageObjects(input,'capy.paint-source/2').length,0);assert.equal(packageOccurrences(input).length,3);assert.ok(packageOccurrences(input)[0].data.content.objects);}
       await invoke('open_document');
       await evaluate('layerApp.app.wait_for_canvas()');
       await wait(`objectJourney.jobs>${prior}`);

@@ -247,16 +247,14 @@ mod tests {
     fn copied_images_render_their_signed_window_without_changing_the_frame() {
         let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         crate::test_support::hide_paper(&mut document);
-        let (layer, edit) = document.create_object_layer_edit("Images", None, 0).unwrap();
-        document.apply(edit).unwrap();
-        let mut object = layer_core::ImageObject::new(photo([8, 6], |x, y| [(x * 30) as u8, (y * 40) as u8, 90, 255]).into(), "Photo");
+        let mut object = layer_core::ImageObject::new(photo([8, 6], |x, y| [(x * 30) as u8, (y * 40) as u8, 90, 255]).into());
         object.affine = layer_core::Affine64([1., 0., 0., 1., -5., -3.]);
-        let (handle, edit) = document.add_image_object_edit(layer, object, 0).unwrap();
+        let (layer, edit) = document.create_object_layer_edit("Photo", object, None, 0).unwrap();
         document.apply(edit).unwrap();
         let mut working = document.working.clone();
         working.occurrence = Some(layer);
         working.target = None;
-        working.objects = [handle].into();
+        working.layer_selection = [layer].into();
         document.apply(layer_core::Edit::Working(working)).unwrap();
         let mut host = host(document);
         host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Tool { tool: layer_ui::LayerCanvasTool::Move } }).unwrap();
@@ -264,7 +262,9 @@ mod tests {
         let clip = copy(&mut host, CommandId::Copy);
         assert_eq!(clip.origin, [-5, -3]);
         assert_eq!(clip.source.extent, [8, 6]);
-        assert_eq!(clip.objects.as_ref().unwrap().objects.len(), 1);
+        let layers = clip.layers.as_ref().unwrap();
+        assert_eq!(layers.roots.len(), 1);
+        assert_eq!(layers.scene.artwork.objects.len(), 1);
         let copied = rows(&clip.source);
         for (y, row) in copied.iter().enumerate() {
             for (x, pixel) in row.chunks_exact(4).enumerate() {

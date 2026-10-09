@@ -213,7 +213,6 @@ enum CanvasBarCaption {
     Message(MessageId),
     Editing { message: MessageId, name: std::sync::Arc<str> },
     Layers(usize),
-    Images(usize),
 }
 impl CanvasBarCaption {
     fn resolve(&self, localizer: &Localizer) -> String {
@@ -227,10 +226,6 @@ impl CanvasBarCaption {
             Self::Layers(count) => {
                 args.set("count", *count as i64);
                 MessageId::TOOLBAR_LAYER_COUNT
-            }
-            Self::Images(count) => {
-                args.set("count", *count as i64);
-                MessageId::OBJECTS_IMAGE_COUNT
             }
         };
         localizer.format(message, &args)
@@ -446,14 +441,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn object_plan(&self, completion: [CommandId; 2]) -> Option<Plan> {
         let placing = self.objects.placing();
         if self.object_target().is_none() || !matches!(self.layer_interaction.tool, LayerCanvasTool::Move | LayerCanvasTool::Transform)
-            || (!placing && self.engine.document().working.objects.is_empty()) { return None; }
+            || (!placing && self.engine.document().selected_objects().is_empty()) { return None; }
         let transforms = [CommandId::TransformFlipHorizontal, CommandId::TransformFlipVertical, CommandId::TransformRotateLeft, CommandId::TransformRotateRight,
             CommandId::PlacementOriginalSize, CommandId::TransformNearest, CommandId::TransformBilinear];
-        let editing = [CommandId::CopySelectionToLayer, CommandId::ClearSelected, CommandId::Deselect];
         Some(Plan {
             kind: if placing { CanvasBarKind::Placement } else { CanvasBarKind::Transform },
-            label: (self.engine.document().working.objects.len() > 1).then(|| CanvasBarCaption::Images(self.engine.document().working.objects.len())),
-            items: transforms.into_iter().chain(if placing { &[][..] } else { &editing[..] }.iter().copied()).map(PlanItem::Command).collect(),
+            label: (self.engine.document().selected_objects().len() > 1).then(|| CanvasBarCaption::Layers(self.engine.document().selected_objects().len())),
+            items: transforms.into_iter().map(PlanItem::Command).collect(),
             completion: if placing { completion.map(PlanItem::Command).into() } else { Vec::new() },
             placement: None,
         })

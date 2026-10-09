@@ -251,11 +251,9 @@ fn image_reference_document() -> (Document, OccurrenceHandle) {
     let mut doc = Document::new(PortableId::random(), EXTENT[0], EXTENT[1],
         layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color.depth = layer_core::color::SampleDepth::F32;
-    let (layer, edit) = doc.create_object_layer_edit("Images", None, 1).unwrap();
-    doc.apply(edit).unwrap();
-    let mut object = layer_core::ImageObject::new(rgba8_source([320, 240], pattern).into(), "Photo");
+    let mut object = layer_core::ImageObject::new(rgba8_source([320, 240], pattern).into());
     object.affine = layer_core::Affine64([1.2, 0.35, -0.35, 1.2, 140.25, 20.5]);
-    let (_, edit) = doc.add_image_object_edit(layer, object, 0).unwrap();
+    let (layer, edit) = doc.create_object_layer_edit("Images", object, None, 1).unwrap();
     doc.apply(edit).unwrap();
     let edit = occurrence_edit(&doc, layer, |o| o.reference = true);
     doc.apply(edit).unwrap();
@@ -280,7 +278,7 @@ fn clone_copies_reference_image_layers_by_their_canonical_pixels_at_any_zoom() {
     let (native, engine) = cloned(doc.clone(), 1.);
     assert!(native.iter().flatten().any(|pixel| pixel[3] > 0.99 && pixel[..3].iter().any(|v| *v > 0.05)), "the stroke copied the image");
     let scene = engine.document().scene();
-    assert_eq!(scene.object_layer(layer).unwrap().children.len(), 1, "the image layer is only read");
+    assert_eq!(scene.object_layer(layer), doc.scene().object_layer(layer), "the image layer is only read");
     assert_eq!(engine.document().working.target, Some(TARGET));
     drop(engine);
     let (reduced, _) = cloned(doc.clone(), 0.25);
@@ -329,5 +327,5 @@ fn smudge_keeps_to_paint_and_never_writes_image_layers() {
     stroke(&mut engine, &mut input, 1, [160., 80.], [400., 120.]);
     assert!((0..2).map(|x| layer_page(engine.backend(), TARGET, [x, 0])).flatten().all(|pixel| pixel[3] == 0.),
         "smudging empty paint above the image picks up nothing from it");
-    assert_eq!(engine.document().scene().object_layer(layer).unwrap().children.len(), 1);
+    assert!(engine.document().scene().object_layer(layer).is_some());
 }

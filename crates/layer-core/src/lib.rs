@@ -1269,7 +1269,7 @@ impl Stroke {
 }
 
 pub use authored::{
-    Affine64, Affine64Error, Image, ImageInterpolation, ImageObject, ImageObjectHandle, ObjectLayer, ObjectLayerHandle, ObjectOrder, PaintBase, PaintBasePolicy, placed_bounds,
+    Affine64, Affine64Error, Image, ImageInterpolation, ImageObject, ImageObjectHandle, PaintBase, PaintBasePolicy, placed_bounds,
     MAX_NAME_BYTES, MAX_NAME_CHARS, bounded_name,
     Attachment, Artwork, ArtworkCapture, CaptureCheckpoint, Composition, CompositionHandle, CoverageHandle,
     CoverageSource, EffectApplication, EffectHandle,
@@ -1523,7 +1523,6 @@ impl Document {
             Edit::Stack(c) => change!(stacks, Stack, c),
             Edit::Occurrence(c) => change!(occurrences, Occurrence, c),
             Edit::Paint(c) => change!(paint, Paint, c),
-            Edit::ObjectLayer(c) => change!(object_layers, ObjectLayer, c),
             Edit::ImageObject(c) => change!(objects, ImageObject, c),
             Edit::Coverage(c) => change!(coverage, Coverage, c),
             Edit::Effect(c) => change!(effects, Effect, c),
@@ -1595,9 +1594,6 @@ impl Document {
         self.working.target = target;
         self.working.inspect_mask = inspect;
         self.working.layer_selection.retain(|h| self.artwork.occurrences.get(*h).is_some());
-        let objects = std::mem::take(&mut self.working.objects);
-        let scene = self.scene();
-        self.working.objects = objects.into_iter().filter(|h| occurrence.is_some() && scene.object_owner(*h) == occurrence).collect();
         self.working.layer_anchor = self.working.layer_anchor.filter(|h| self.artwork.occurrences.get(*h).is_some());
         if let Some(visibility) = &mut self.working.solo_visibility {
             visibility.retain(|h, _| self.artwork.occurrences.get(*h).is_some());
@@ -1725,7 +1721,6 @@ pub enum Edit {
     Stack(RecordChange<Stack>),
     Occurrence(RecordChange<Occurrence>),
     Paint(RecordChange<PaintSource>),
-    ObjectLayer(RecordChange<ObjectLayer>),
     ImageObject(RecordChange<ImageObject>),
     Coverage(RecordChange<CoverageSource>),
     Effect(RecordChange<EffectApplication>),
@@ -1819,7 +1814,6 @@ impl Edit {
                         || a.mask.as_ref().map(|m| m.source) != b.mask.as_ref().map(|m| m.source)
                 }),
             Self::Paint(c) => c.value.is_none() || document.artwork.paint.get(c.handle).is_none() || c.value.as_ref().and_then(|s|s.base.as_ref().map(|b|b.image.id()))!=document.artwork.paint.get(c.handle).and_then(|s|s.base.as_ref().map(|b|b.image.id())),
-            Self::ObjectLayer(_)=>true,
             Self::ImageObject(c)=>c.value.as_ref().zip(document.artwork.objects.get(c.handle)).is_none_or(|(a,b)|a.image.id()!=b.image.id()),
             Self::Coverage(c) => {
                 c.value.is_none() || document.artwork.coverage.get(c.handle).is_none()
@@ -1877,7 +1871,6 @@ impl Edit {
             },
             Self::Paint(c)=>previous!(paint,Paint,c),
             Self::ImageObject(c)=>previous!(objects,ImageObject,c),
-            Self::ObjectLayer(_)=>return false,
             Self::Coverage(c)=>previous!(coverage,Coverage,c),
             Self::Effect(c)=>previous!(effects,Effect,c),
             Self::Occurrence(c)=>previous!(occurrences,Occurrence,c),
@@ -1894,7 +1887,6 @@ impl Edit {
         match self {
             Self::Composition(c)=>out.record_ids.push(c.id),
             Self::Stack(c)=>out.record_ids.push(c.id),
-            Self::ObjectLayer(c)=>out.record_ids.push(c.id),
             Self::Guides(c)=>out.record_ids.push(c.id),
             Self::Paint(c) => {
                 out.record_ids.push(c.id);
@@ -2189,7 +2181,7 @@ fn edit_metadata(edit: &Edit) -> usize {
             .iter()
             .map(edit_metadata)
             .fold(0usize, usize::saturating_add),
-        Edit::Working(w)=>w.selection_overlays.metadata_bytes().saturating_add(w.layer_selection.len().saturating_add(w.objects.len()).saturating_add(w.solo_visibility.as_ref().map_or(0, |v| v.len())).saturating_mul(64)),
+        Edit::Working(w)=>w.selection_overlays.metadata_bytes().saturating_add(w.layer_selection.len().saturating_add(w.solo_visibility.as_ref().map_or(0, |v| v.len())).saturating_mul(64)),
         Edit::Stack(c) => c.value.as_ref().map_or(0, |s| {
             s.entries.len() * std::mem::size_of::<OccurrenceHandle>()
         }),
@@ -2204,8 +2196,7 @@ fn edit_metadata(edit: &Edit) -> usize {
                 .map(|(_, g)| json_len(g).saturating_mul(4))
                 .sum()
         }),
-        Edit::ObjectLayer(c)=>c.value.as_ref().map_or(0,|o|o.children.len()*std::mem::size_of::<ImageObjectHandle>()),
-        Edit::ImageObject(c)=>c.value.as_ref().map_or(0,|o|o.name.len()),
+        Edit::ImageObject(_)=>0,
         Edit::Output(c) => c.value.as_ref().map_or(0, |o| {
             o.name.len()
                 + o.proof.as_ref().map_or(0, |p| p.name.len())

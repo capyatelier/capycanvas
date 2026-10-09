@@ -4,15 +4,9 @@ use crate::operation_test_support as fixture;
 use fixture::*;
 
 fn images(doc: &mut Document, affines: &[Affine64]) -> OccurrenceHandle {
-    let (layer, edit) = doc.create_object_layer_edit("Images", None, 0).unwrap();
-    doc.apply(edit).unwrap();
-    let image: Image = rgba8_source([40, 30], |x, y| [x as u8, y as u8, 9, 255]).into();
-    for (index, affine) in affines.iter().enumerate() {
-        let mut object = ImageObject::new(image.clone(), format!("Image {index}"));
-        object.affine = *affine;
-        let (_, edit) = doc.add_image_object_edit(layer, object, index).unwrap();
-        doc.apply(edit).unwrap();
-    }
+    let image:Image=rgba8_source([40,30],|x,y|[x as u8,y as u8,9,255]).into();
+    assert!(affines.len()<=1);let mut object=ImageObject::new(image);object.affine=affines.first().copied().unwrap_or_default();
+    let (layer,edit)=doc.create_object_layer_edit("Image",object,None,0).unwrap();doc.apply(edit).unwrap();
     doc.working.occurrence = Some(layer);
     doc.working.target = None;
     layer
@@ -32,7 +26,7 @@ fn edited(doc: &mut Document, h: OccurrenceHandle, update: impl FnOnce(&mut Occu
 #[test]
 fn rasterize_keeps_the_occurrence_and_bakes_off_frame_images_into_one_undoable_paint_layer() {
     let mut doc = fixture::document([600, 400], &["Ink"]);
-    let layer = images(&mut doc, &[translation(-300., 10.), translation(500., 380.)]);
+    let layer = images(&mut doc, &[translation(-300.,10.)]);
     edited(&mut doc, layer, |o| { o.opacity = 0.5; o.blend = LayerBlend::Multiply; });
     let before = doc.clone();
     let plan = doc.rasterize_plan(layer, false).unwrap();
@@ -42,7 +36,7 @@ fn rasterize_keeps_the_occurrence_and_bakes_off_frame_images_into_one_undoable_p
     assert_eq!(occurrence.offset, [-512, 0], "whole pages reach the off-frame image");
     let OccurrenceContent::Paint(paint) = occurrence.content else { panic!("paint") };
     let source = changed(&plan.edits, |e| match e { Edit::Paint(c) if c.handle == paint => c.value.clone(), _ => None });
-    assert_eq!(source.domain, [1112, 410]);
+    assert_eq!(source.domain, [1112, 400]);
     let RasterOperationKind::Bake { scene, scope, offset } = &plan.operation.kind else { panic!("bake") };
     assert_eq!((scope, *offset), (&SceneScope::RawObjects(layer), Point { x: 512., y: 0. }));
     let raw = scene.view().occurrence(layer).unwrap();
@@ -52,12 +46,12 @@ fn rasterize_keeps_the_occurrence_and_bakes_off_frame_images_into_one_undoable_p
         if let Edit::Paint(change) = edit { Arc::make_mut(&mut change.value.as_mut().unwrap().operations).push(plan.operation.clone()); }
     }
     let undo = doc.apply(Edit::Batch(edits)).unwrap();
-    assert!(doc.artwork.objects.is_empty() && doc.artwork.object_layers.is_empty());
+    assert!(doc.artwork.objects.is_empty());
     assert_eq!(doc.working.target, Some(plan.target));
     assert!(!doc.artwork.topology().unwrap().objects.values().any(|shape| matches!(shape, crate::authored::Shape::Image)), "a portable save omits the image's last use");
     doc.apply(undo).unwrap();
     restored(&before, &doc);
-    assert_eq!(doc.artwork.objects.len(), 2);
+    assert_eq!(doc.artwork.objects.len(), 1);
 }
 
 #[test]
@@ -100,7 +94,7 @@ fn rasterize_refuses_other_layers_locks_and_unaddressable_content_without_change
     assert!(doc.rasterize_plan(layer, false).is_ok(), "hidden layers rasterize their raw content");
     edited(&mut doc, layer, |o| o.locked = true);
     assert_eq!(doc.rasterize_plan(layer, false).err(), Some(ConversionRefusal::Locked));
-    let far = images(&mut doc, &[translation(0., 0.), translation(100_000., 0.)]);
+    let far = images(&mut doc, &[Affine64([10000.,0.,0.,10000.,0.,0.])]);
     let before = doc.clone();
     assert_eq!(doc.rasterize_plan(far, false).err(), Some(ConversionRefusal::TooLarge));
     assert_eq!(doc, before);
@@ -145,7 +139,7 @@ fn a_filter_whose_reach_overflows_refuses_every_bake_without_changes() {
 
 #[test]
 fn smooth_fractional_images_reach_beyond_their_rectangle_but_exact_placements_do_not() {
-    let image = ImageObject::new(rgba8_source([10, 10], |_, _| [0, 0, 0, 255]).into(), "");
+    let image = ImageObject::new(rgba8_source([10, 10], |_, _| [0, 0, 0, 255]).into());
     assert_eq!(object_support(translation(3., 4.), &image), SupportBounds { min: [3., 4.], max: [13., 14.] });
     assert_eq!(object_support(Affine64([0., 1., -1., 0., 10., 0.]), &image), SupportBounds { min: [0., 0.], max: [10., 10.] });
     let smooth = object_support(translation(3.5, 4.), &image);
@@ -199,8 +193,7 @@ fn convert_to_object_reuses_an_untouched_photo_and_captures_edited_paint() {
     assert_eq!((occurrence.kind(), occurrence.offset, occurrence.alpha_locked), (LayerKind::Object, [-4, 6], false));
     assert_eq!(occurrence.mask.as_ref().map(|m| m.source), Some(mask));
     assert_eq!(doc.scene().mask_origin(photo), world);
-    let [object] = doc.scene().object_layer(photo).unwrap().children[..] else { panic!("one image") };
-    let object = doc.scene().object(object).unwrap();
+    let object=doc.scene().object_layer(photo).unwrap();
     assert!(object.image.same_owner(&image), "the image is shared, not copied");
     assert_eq!(object.affine, translation(13., 29.));
     assert!(doc.artwork.paint.get(paint).is_none());
@@ -215,8 +208,15 @@ fn convert_to_object_reuses_an_untouched_photo_and_captures_edited_paint() {
     let target = fixture::target(&doc, "Photo");
     assert_eq!((&capture.scope, capture.trim, capture.offset, capture.extent, capture.window), (&SceneScope::Raw(target), Some(target), Point { x: 4., y: -6. }, [600, 400], [13, 0, 499, 256]));
     let mut empty = doc.clone();
-    empty.apply(doc.object_conversion_edit(photo, None).unwrap()).unwrap();
-    assert!(empty.scene().object_layer(photo).unwrap().children.is_empty(), "a layer without pixels becomes an empty image layer");
+    let undo=empty.apply(doc.object_conversion_edit(photo, None).unwrap()).unwrap();
+    assert_eq!(empty.scene().object_layer(photo).unwrap().image.extent,[1,1]);
+    let mut row=[0;4];empty.scene().object_layer(photo).unwrap().image.rows().read(0,&mut row).unwrap();assert_eq!(row,[0;4]);
+    let restored_empty=crate::Editor::new(empty.clone());let capture=restored_empty.capture(0,Default::default()).unwrap();
+    let package=crate::package::codec::PreparedPackage::prepare(&capture,None,&std::sync::atomic::AtomicBool::new(false)).unwrap();let mut bytes=Vec::new();package.write(&mut bytes,&std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let backing=crate::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+    let crate::package::codec::OpenOutcome::Candidate {artwork,..}=crate::package::codec::open(backing,Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() else {panic!("blank object must reopen")};
+    let reopened=Document::from_artwork(artwork).unwrap();let reopened_object=reopened.scene().object_layer(reopened.artwork.occurrences.resolve(empty.artwork.occurrences.id(photo).unwrap()).unwrap()).unwrap();let mut row=[0;4];reopened_object.image.rows().read(0,&mut row).unwrap();assert_eq!(row,[0;4]);
+    empty.apply(undo).unwrap();restored(&doc,&empty);
     occurrence_mut(&mut doc, "Photo").locked = true;
     assert_eq!(doc.convert_to_object(photo).err(), Some(ConversionRefusal::Locked));
     let empty = images(&mut doc, &[]);
@@ -226,27 +226,33 @@ fn convert_to_object_reuses_an_untouched_photo_and_captures_edited_paint() {
 #[test]
 fn grouping_ungrouping_and_duplicating_keep_image_layer_membership_and_placement() {
     let mut doc = fixture::document([600, 400], &["Ink"]);
-    let layer = images(&mut doc, &[translation(-30.5, 12.25), translation(100., 40.)]);
+    let layer = images(&mut doc, &[translation(-30.5, 12.25)]);
     edited(&mut doc, layer, |o| o.offset = [7, -3]);
-    let children = doc.scene().object_layer(layer).unwrap().children.clone();
+    let original=doc.scene().object_handle(layer).unwrap();
     let world = |doc: &Document, h: OccurrenceHandle| doc.scene().layer_origin(Some(h));
     let before = world(&doc, layer);
     doc.apply(doc.group_layers_edit(&[layer], LayerBlend::Normal, "Group").unwrap()).unwrap();
     let group = doc.scene().parent(layer).unwrap();
-    assert_eq!(doc.scene().object_layer(layer).unwrap().children, children, "grouping keeps the image list");
+    assert_eq!(doc.scene().object_handle(layer),Some(original));
     assert_eq!(world(&doc, layer), before);
     edited(&mut doc, group, |o| o.offset = [40, 5]);
     let moved = world(&doc, layer);
     doc.apply(doc.ungroup_layer_edit(group).unwrap()).unwrap();
     assert_eq!((world(&doc, layer), doc.scene().parent(layer)), (moved, None), "ungrouping keeps the document position");
-    assert_eq!(doc.scene().object_layer(layer).unwrap().children, children);
+    assert_eq!(doc.scene().object_handle(layer),Some(original));
     let (edit, copies) = doc.duplicate_layers_edit(&[layer]).unwrap();
     doc.apply(edit).unwrap();
-    let copied = &doc.scene().object_layer(copies[0]).unwrap().children;
-    assert_eq!(copied.len(), 2);
-    assert!(copied.iter().all(|h| !children.contains(h)), "duplicates get their own image identities");
-    for (copy, original) in copied.iter().zip(&children) {
-        let [copy, original] = [copy, original].map(|h| doc.scene().object(*h).unwrap());
-        assert!(copy.image.same_owner(&original.image) && copy.affine == original.affine);
-    }
+    let copied=doc.scene().object_handle(copies[0]).unwrap();assert_ne!(copied,original);
+    let [copy,original]=[copied,original].map(|h|doc.scene().object(h).unwrap());assert!(copy.image.same_owner(&original.image) && copy.affine==original.affine);
+}
+
+#[test]
+fn sibling_objects_merge_both_off_frame_sources_and_restore_identity_on_undo() {
+    let mut doc=fixture::document([600,400],&["Ink"]);
+    let first=images(&mut doc,&[translation(-300.,10.)]);let second=images(&mut doc,&[translation(500.,380.)]);
+    let before=doc.clone();let plan=doc.merge_plan(MergeKind::Visible).unwrap();
+    let RasterOperationKind::Bake {scope:SceneScope::Members(members),..}=&plan.operation.kind else {panic!("bake")};assert!(members.contains(&first)&&members.contains(&second));
+    let occurrence=occurrence_after(&plan.edits,plan.result);let OccurrenceContent::Paint(paint)=occurrence.content else {panic!("paint")};
+    let source=changed(&plan.edits,|edit|match edit {Edit::Paint(c) if c.handle==paint=>c.value.clone(),_=>None});assert_eq!((occurrence.offset,source.domain),([-512,0],[1112,410]));
+    let undo=doc.apply(Edit::Batch(plan.edits)).unwrap();doc.apply(undo).unwrap();restored(&before,&doc);
 }

@@ -1,12 +1,9 @@
-//! Image objects inside object layers: typed selection, Move-tool picking,
-//! binary64 transform gestures, ordering and the object rows of the layer panel.
 use super::*;
 use super::operation::Snapping;
-use layer_core::{Edit, ImageInterpolation, ObjectOrder, Point, Rect};
+use layer_core::{Edit, ImageInterpolation, Point, Rect};
 use layer_core::authored::{Affine64, ImageObjectHandle, OccurrenceHandle, SourceTarget};
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::CursorSegment;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 type InsertedObjects = (Edit, Vec<ImageObjectHandle>, Vec<(SourceTarget, layer_core::RasterOperation)>);
@@ -16,37 +13,6 @@ const UNIT_HANDLES: [[f64; 2]; 8] = [[0., 0.], [0.5, 0.], [1., 0.], [1., 0.5], [
 pub fn object_token(handle: ImageObjectHandle) -> u64 { handle.wire_id() }
 pub fn object_handle(token: u64) -> Result<ImageObjectHandle, String> {
     ImageObjectHandle::from_wire_id(token).ok_or_else(|| "Invalid image identity".into())
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub enum ObjectAction {
-    Select { id: u64, #[serde(default)] extend: bool },
-    Expand { layer: u64, expanded: bool },
-    Visibility { id: u64, visible: bool },
-    Rename { id: u64, name: String },
-    Order { order: ObjectOrder },
-    Drop { id: u64, target: u64, below: bool },
-    Interpolation { nearest: bool },
-    SelectAll,
-    Deselect,
-    Delete,
-    Duplicate,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct ObjectRow {
-    pub id: u64,
-    pub layer: u64,
-    pub label: String,
-    pub visible: bool,
-    pub selected: bool,
-    pub editable: bool,
-    pub index: u32,
-    pub can_raise: bool,
-    pub can_lower: bool,
-    pub nearest: bool,
-    pub thumbnail_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,9 +49,6 @@ struct Gesture {
 
 struct Placement { insert: Edit, inverse: Edit, objects: Vec<ImageObjectHandle> }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ObjectDestination { Existing(OccurrenceHandle), New { index: usize, parent: Option<OccurrenceHandle> } }
-
 #[derive(Default)]
 pub(super) struct ObjectEditing {
     gesture: Option<Gesture>,
@@ -93,7 +56,6 @@ pub(super) struct ObjectEditing {
     frame: Option<(BTreeSet<ImageObjectHandle>, u64, Frame)>,
     session: Option<(OccurrenceHandle, Vec<(ImageObjectHandle, Affine64)>)>,
     last: Option<(u64, u64, Affine64)>,
-    pub expanded: BTreeSet<OccurrenceHandle>,
     pub layer_move: bool,
     pub changed: bool,
 }
@@ -125,35 +87,47 @@ pub(super) fn original_size(affine: Affine64, extent: [u32; 2]) -> Affine64 {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn object_placement_layer(&self) -> Option<OccurrenceHandle> {
+        self.objects.placement.as_ref().and_then(|placement| placement.objects.first())
+            .and_then(|object| self.engine.document().scene().object_owner(*object))
+    }
     pub(super) fn object_target(&self) -> Option<OccurrenceHandle> {
         self.object_target_for(self.layer_interaction.tool)
     }
     pub(super) fn object_target_for(&self, tool: LayerCanvasTool) -> Option<OccurrenceHandle> {
         let doc = self.engine.document();
         let layer = doc.working.occurrence?;
-        (doc.scene().object_layer(layer).is_some()
+        (self.object_selection_enabled(tool) && doc.scene().object_layer(layer).is_some()).then_some(layer)
+    }
+    fn object_selection_enabled(&self, tool: LayerCanvasTool) -> bool {
+        let doc = self.engine.document();
+        doc.working.selection.is_none()
+            && doc.working.layer_selection.iter().all(|h| doc.scene().object_layer(*h).is_some())
             && self.selection_masks.target().is_none()
             && !matches!(doc.working.target, Some(SourceTarget::Coverage(_)))
             && !self.objects.layer_move
             && tool.selection_tool().is_none()
-            && !matches!(tool, LayerCanvasTool::Crop | LayerCanvasTool::Ruler { .. })).then_some(layer)
+            && !matches!(tool, LayerCanvasTool::Crop | LayerCanvasTool::Ruler { .. })
     }
-    pub(super) fn selected_objects(&self) -> &BTreeSet<ImageObjectHandle> { &self.engine.document().working.objects }
+    fn object_picking_enabled(&self) -> bool {
+        let tool = self.layer_interaction.tool;
+        matches!(tool, LayerCanvasTool::Move | LayerCanvasTool::Transform)
+            && self.object_selection_enabled(tool)
+            && self.engine.document().working.occurrence.is_none_or(|layer| self.engine.document().scene().object_layer(layer).is_some())
+    }
+    pub(super) fn selected_objects(&self) -> BTreeSet<ImageObjectHandle> { self.engine.document().selected_objects() }
     fn object_selection_edit(&self, layer: OccurrenceHandle, objects: BTreeSet<ImageObjectHandle>) -> Edit {
         let mut working = self.engine.document().working.clone();
-        if working.occurrence != Some(layer) {
-            working.occurrence = Some(layer);
-            working.layer_selection = BTreeSet::from([layer]);
-            working.layer_anchor = Some(layer);
-        }
+        working.layer_selection = objects.iter().filter_map(|h| self.engine.document().scene().object_owner(*h)).collect();
+        working.occurrence = working.layer_selection.contains(&layer).then_some(layer).or_else(|| working.layer_selection.first().copied());
+        working.layer_anchor = working.occurrence;
         working.target = None;
         working.inspect_mask = None;
-        working.objects = objects;
         Edit::Working(working)
     }
     pub(super) fn select_objects(&mut self, layer: OccurrenceHandle, objects: BTreeSet<ImageObjectHandle>) -> Result<(), String> {
         let doc = self.engine.document();
-        if doc.working.occurrence == Some(layer) && doc.working.objects == objects && doc.working.target.is_none() && doc.working.inspect_mask.is_none() { return Ok(()); }
+        if doc.working.occurrence == Some(layer) && doc.selected_objects() == objects && doc.working.target.is_none() && doc.working.inspect_mask.is_none() { return Ok(()); }
         self.layer_edit(self.object_selection_edit(layer, objects))?;
         self.objects.changed = true;
         Ok(())
@@ -161,7 +135,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn session_frame(&self) -> Option<Frame> {
         if let Some(gesture) = &self.objects.gesture { return Some(gesture.frame.moved(gesture.delta)); }
         let doc = self.engine.document();
-        let objects = &doc.working.objects;
+        let objects = &doc.selected_objects();
         if let Some((selected, revision, frame)) = &self.objects.frame && selected == objects && *revision == doc.revision { return Some(*frame); }
         let unit = if let [object] = objects.iter().copied().collect::<Vec<_>>()[..] {
             let [w, h] = doc.scene().object(object)?.image.extent.map(f64::from);
@@ -184,7 +158,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.camera.surface_to_document64(surface.map(f64::from))
     }
     pub(super) fn object_touch_target(&self, position: [f32; 2]) -> bool {
-        self.object_target().is_some() && matches!(self.layer_interaction.tool, LayerCanvasTool::Move | LayerCanvasTool::Transform) && {
+        self.object_picking_enabled() && {
             let point = self.pointer64(position);
             self.object_hit(point).is_some() || self.engine.document().pick_image_object(point).is_some()
         }
@@ -193,8 +167,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.objects.gesture.as_ref().is_some_and(|gesture| gesture.nudge.is_some()) { self.finish_object_gesture(true)?; }
         if self.objects.gesture.is_none() {
             if event.phase == PenPhase::Cancel && self.objects.placing() { return Ok(true); }
-            if event.phase != PenPhase::Down || self.object_target().is_none()
-                || !matches!(self.layer_interaction.tool, LayerCanvasTool::Move | LayerCanvasTool::Transform) { return Ok(false); }
+            if event.phase != PenPhase::Down || !self.object_picking_enabled() { return Ok(false); }
         }
         let point = self.pointer64([event.surface_position.x, event.surface_position.y]);
         if event.phase != PenPhase::Cancel && !point.iter().all(|v| v.is_finite()) { return Err("Invalid canvas point".into()); }
@@ -212,21 +185,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle_except_placement()?;
         let modifiers = self.interaction.modifiers;
         let doc = self.engine.document();
-        let active = doc.working.occurrence.ok_or("Select an object layer")?;
-        let selected = doc.working.objects.clone();
+        let Some(active) = doc.working.occurrence.or_else(|| doc.pick_image_object(point).map(|(layer, _)| layer)) else { return Ok(()); };
+        let selected = doc.selected_objects();
         let hit = self.object_hit(point);
         let (handle, layer, objects) = match hit {
+            _ if self.objects.placing() => (hit.unwrap_or(ObjectHandle::Pivot), active, selected.clone()),
             Some(handle) if handle != ObjectHandle::Move || !modifiers.shift => (handle, active, selected.clone()),
-            _ if modifiers.shift => match doc.pick_image_object_in(active, point) {
-                Some(object) => {
+            _ if modifiers.shift => match doc.pick_image_object(point) {
+                Some((layer, object)) => {
                     let mut objects = selected.clone();
                     if !objects.remove(&object) { objects.insert(object); }
-                    (ObjectHandle::Pivot, active, objects)
+                    (ObjectHandle::Pivot, layer, objects)
                 }
-                None => {
-                    if doc.pick_image_object(point).is_some() { self.raise_message_notice(MessageId::OBJECTS_SHIFT_SAME_LAYER); }
-                    (ObjectHandle::Pivot, active, selected.clone())
-                }
+                None => (ObjectHandle::Pivot, active, selected.clone()),
             },
             _ => match doc.pick_image_object(point) {
                 Some((layer, object)) if layer == active && selected.contains(&object) => (ObjectHandle::Move, layer, selected.clone()),
@@ -310,8 +281,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         let gesture = self.objects.gesture.as_ref().ok_or("Move an image first")?;
         if !gesture.moved {
             if gesture.copy {
-                let selected: BTreeSet<_> = gesture.start.iter().map(|(h, _)| *h).collect();
-                let (copies, duplicate) = self.engine.document().duplicate_image_objects_edit(&selected).map_err(error)?;
+                let doc = self.engine.document();
+                let selected: Vec<_> = gesture.start.iter().filter_map(|(h, _)| doc.scene().object_owner(*h)).collect();
+                let (duplicate, copies) = doc.duplicate_layers_edit(&selected).map_err(error)?;
+                let mut candidate = doc.clone();
+                candidate.apply(duplicate.clone()).map_err(error)?;
+                let objects = copies.iter().filter_map(|h| candidate.scene().object_handle(*h)).collect::<Vec<_>>();
+                let mut working = candidate.working.clone();
+                working.occurrence = copies.first().copied();
+                working.layer_anchor = working.occurrence;
+                working.layer_selection = copies.into_iter().collect();
+                working.target = None;
+                working.inspect_mask = None;
+                let duplicate = Edit::Batch(vec![duplicate, Edit::Working(working)]);
                 let inverse = self.engine.document().clone().apply(duplicate.clone()).map_err(error)?;
                 self.engine.preview_edit(duplicate.clone()).map_err(error)?;
                 let gesture = self.objects.gesture.as_mut().unwrap();
@@ -319,7 +301,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     Some((forward, backward)) => (Edit::Batch(vec![forward, duplicate]), Edit::Batch(vec![inverse, backward])),
                     None => (duplicate, inverse),
                 });
-                gesture.start = copies.into_iter().zip(gesture.start.iter().map(|(_, a)| *a)).collect();
+                gesture.start = objects.into_iter().map(|h| (h, self.engine.document().scene().object(h).unwrap().affine)).collect();
             }
             let objects: Vec<_> = self.objects.gesture.as_ref().unwrap().start.iter().map(|(h, _)| *h).collect();
             self.start_object_motion(&objects)?;
@@ -348,8 +330,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             if let Some(commit) = commit {
                 self.engine.preview_edit(commit).map_err(error)?;
             }
-            let layer = self.engine.document().working.occurrence;
-            self.engine.backend_mut().prepare_moving_layer(layer);
             return Ok(true);
         }
         if let Some((_, inverse)) = &gesture.setup { self.engine.preview_edit(inverse.clone()).map_err(error)?; }
@@ -357,7 +337,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let edits: Vec<_> = gesture.setup.map(|(forward, _)| forward).into_iter().chain(commit).collect();
         if edits.is_empty() {
             if gesture.pivot {
-                let objects = self.selected_objects().clone();
+                let objects = self.selected_objects();
                 self.objects.frame = Some((objects, self.engine.document().revision, gesture.frame));
             }
             return Ok(true);
@@ -367,7 +347,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if changed {
             self.remember_transform(gesture.delta);
             let doc = self.engine.document();
-            self.objects.frame = Some((doc.working.objects.clone(), doc.revision, frame));
+            self.objects.frame = Some((doc.selected_objects(), doc.revision, frame));
         }
         self.refresh_document();
         self.refresh_commands();
@@ -388,8 +368,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn object_layer_bounds64(&self, layer: OccurrenceHandle) -> Option<[[f64; 2]; 2]> {
         let doc = self.engine.document();
-        let children = doc.object_layer_children(layer)?;
-        doc.object_document_bounds(children.iter().copied().filter(|h| doc.scene().object(*h).is_some_and(|o| o.visible)))
+        doc.object_document_bounds([doc.scene().object_handle(layer)?])
     }
     pub(super) fn object_layer_bounds(&self, layer: OccurrenceHandle) -> Option<Rect> {
         self.object_layer_bounds64(layer).map(|bounds| rect(bounds, [0.; 2]))
@@ -405,7 +384,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.objects.gesture.is_none() {
             self.require_document_idle_except_placement()?;
             let doc = self.engine.document();
-            let start = doc.working.objects.iter().map(|h| Ok((*h, doc.scene().object(*h).ok_or("Unknown image")?.affine))).collect::<Result<Vec<_>, String>>()?;
+            let start = doc.selected_objects().iter().map(|h| Ok((*h, doc.scene().object(*h).ok_or("Unknown image")?.affine))).collect::<Result<Vec<_>, String>>()?;
             let frame = self.session_frame().ok_or("Select images first")?;
             self.objects.gesture = Some(Gesture { handle: ObjectHandle::Move, nudge: Some(key.into()), press: [0.; 2], setup: None, copy: false, start,
                 frame, delta: Affine64::default(), snapping: None, moved: false, pivot: false });
@@ -434,14 +413,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         let edit = edit?;
         if self.objects.placing() { self.engine.preview_edit(edit).map_err(error)?; } else { self.layer_edit(edit)?; self.remember_transform(delta); }
         let doc = self.engine.document();
-        self.objects.frame = frame.map(|frame| (doc.working.objects.clone(), doc.revision, frame));
+        self.objects.frame = frame.map(|frame| (doc.selected_objects(), doc.revision, frame));
         self.objects.changed = true;
         Ok(())
     }
     fn object_original_size(&mut self) -> Result<(), String> {
         let doc = self.engine.document();
         self.object_target().ok_or("Select images first")?;
-        let affines: Vec<_> = doc.working.objects.iter().map(|h| {
+        let affines: Vec<_> = doc.selected_objects().iter().map(|h| {
             let object = doc.scene().object(*h).ok_or("Unknown image")?;
             let affine = original_size(object.affine, object.image.extent);
             self.engine.backend().preflight_image_object_affine(doc.scene(), *h, affine, self.engine.view()).map_err(error)?;
@@ -453,16 +432,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn object_command_enabled(&self, id: CommandId) -> Option<bool> {
-        let layer = self.object_target()?;
+        self.object_target()?;
         let doc = self.engine.document();
         let idle = self.require_document_idle_except_placement().is_ok();
-        let selected = !doc.working.objects.is_empty();
-        let editable = doc.objects_editable(layer);
+        let selected = !doc.selected_objects().is_empty();
+        let editable = doc.selected_objects().iter().all(|h| doc.scene().object_owner(*h).is_some_and(|owner| doc.objects_editable(owner)));
         Some(match id {
-            CommandId::SelectAll => idle && doc.object_layer_children(layer).is_some_and(|c| !c.is_empty()),
-            CommandId::Deselect => idle && selected,
-            CommandId::ClearSelected | CommandId::CopySelectionToLayer => idle && selected && editable && !self.objects.placing(),
-            CommandId::CutSelectionToLayer | CommandId::InvertSelection | CommandId::TransformBicubic | CommandId::TransformLanczos
+            CommandId::TransformBicubic | CommandId::TransformLanczos
             | CommandId::TransformDistort | CommandId::TransformWarp | CommandId::TransformPerspective => false,
             CommandId::TransformAgain => idle && selected && editable && self.last_transform().is_some(),
             CommandId::TransformFlipHorizontal | CommandId::TransformFlipVertical | CommandId::TransformRotateLeft | CommandId::TransformRotateRight
@@ -476,7 +452,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn object_command_selected(&self, id: CommandId) -> Option<bool> {
         self.object_target()?;
         let doc = self.engine.document();
-        let nearest = |nearest: bool| !doc.working.objects.is_empty() && doc.working.objects.iter()
+        let nearest = |nearest: bool| !doc.selected_objects().is_empty() && doc.selected_objects().iter()
             .all(|h| doc.scene().object(*h).is_some_and(|o| (o.interpolation == ImageInterpolation::Nearest) == nearest));
         match id {
             CommandId::TransformNearest => Some(nearest(true)),
@@ -488,10 +464,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.object_target()?;
         let l = self.localization();
         Some(match id {
-            CommandId::ClearSelected => l.text(MessageId::OBJECTS_DELETE_IMAGES),
-            CommandId::CopySelectionToLayer => l.text(MessageId::OBJECTS_DUPLICATE_IMAGES),
-            CommandId::SelectAll => l.text(MessageId::OBJECTS_SELECT_ALL_IMAGES),
-            CommandId::Deselect => l.text(MessageId::OBJECTS_DESELECT_IMAGES),
             CommandId::TransformBilinear => l.text(MessageId::OBJECTS_INTERPOLATION_LINEAR),
             CommandId::PlacementOriginalSize => l.text(MessageId::OBJECTS_ORIGINAL_SIZE),
             _ => return None,
@@ -503,32 +475,24 @@ impl<R: CanvasRenderer> UiSession<R> {
         let l = self.localization();
         let doc = self.engine.document();
         Some(match id {
-            CommandId::CutSelectionToLayer => l.text(MessageId::OBJECTS_CUT_TO_LAYER_UNAVAILABLE),
             CommandId::TransformBicubic | CommandId::TransformLanczos => l.text(MessageId::OBJECTS_INTERPOLATION_UNAVAILABLE),
             CommandId::TransformDistort | CommandId::TransformWarp | CommandId::TransformPerspective => l.text(MessageId::OBJECTS_DISTORTION_UNAVAILABLE),
-            CommandId::InvertSelection => l.text(MessageId::OBJECTS_PAINT_ONLY),
             CommandId::TransformAgain if self.last_transform().is_none() => l.text(MessageId::COMMANDS_TRANSFORM_AGAIN_EMPTY),
             _ if !doc.objects_editable(layer) && doc.scene().object_layer(layer).is_some() => l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED),
-            _ if doc.working.objects.is_empty() => l.text(MessageId::OBJECTS_SELECT_IMAGES_FIRST),
+            _ if doc.selected_objects().is_empty() => l.text(MessageId::OBJECTS_SELECT_IMAGES_FIRST),
             _ => return None,
         })
     }
     pub(super) fn object_command(&mut self, id: CommandId) -> Option<Result<(), String>> {
-        let layer = self.object_target()?;
-        if matches!(id, CommandId::ClearSelected | CommandId::Deselect) && self.selected_objects().is_empty() { return Some(Ok(())); }
+        self.object_target()?;
         if !self.object_command_enabled(id).unwrap_or(false) {
-            return matches!(id, CommandId::SelectAll | CommandId::Deselect | CommandId::ClearSelected | CommandId::CopySelectionToLayer | CommandId::CutSelectionToLayer
-                | CommandId::TransformAgain | CommandId::TransformFlipHorizontal | CommandId::TransformFlipVertical
+            return matches!(id, CommandId::TransformAgain | CommandId::TransformFlipHorizontal | CommandId::TransformFlipVertical
                 | CommandId::TransformRotateLeft | CommandId::TransformRotateRight | CommandId::PlacementOriginalSize | CommandId::TransformNearest
-                | CommandId::TransformBilinear | CommandId::TransformBicubic | CommandId::TransformLanczos | CommandId::InvertSelection).then(|| Err(self.object_disabled_reason(id).map_or_else(|| self.localization().text(MessageId::OBJECTS_SELECT_IMAGES_FIRST).to_string(), |r| r.to_string())));
+                | CommandId::TransformBilinear | CommandId::TransformBicubic | CommandId::TransformLanczos).then(|| Err(self.object_disabled_reason(id).map_or_else(|| self.localization().text(MessageId::OBJECTS_SELECT_IMAGES_FIRST).to_string(), |r| r.to_string())));
         }
-        let selected = self.selected_objects().clone();
+        let selected = self.selected_objects();
         let pivot = self.session_frame().map_or([0.; 2], |frame| frame.pivot);
         Some(match id {
-            CommandId::SelectAll => self.select_objects(layer, self.engine.document().object_layer_children(layer).unwrap_or_default().iter().copied().collect()),
-            CommandId::Deselect => self.select_objects(layer, BTreeSet::new()),
-            CommandId::ClearSelected => self.engine.document().delete_image_objects_edit(&selected).map_err(error).and_then(|edit| self.layer_edit(edit)),
-            CommandId::CopySelectionToLayer => self.engine.document().duplicate_image_objects_edit(&selected).map_err(error).and_then(|(_, edit)| self.layer_edit(edit)),
             CommandId::TransformAgain => self.last_transform().ok_or_else(|| self.localization().text(MessageId::COMMANDS_TRANSFORM_AGAIN_EMPTY).to_string())
                 .and_then(|delta| self.transform_selected(delta)),
             CommandId::ResetTransform => self.reset_object_session(),
@@ -552,86 +516,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_tools();
         Ok(())
     }
-    pub(super) fn object_action(&mut self, action: ObjectAction) -> Result<(), String> {
-        let doc = self.engine.document();
-        match action {
-            ObjectAction::Select { id, extend } => {
-                let object = object_handle(id)?;
-                let layer = doc.scene().object_owner(object).ok_or("Unknown image")?;
-                let mut objects = if extend && doc.working.occurrence == Some(layer) { doc.working.objects.clone() } else { BTreeSet::new() };
-                if extend && !objects.insert(object) { objects.remove(&object); } else { objects.insert(object); }
-                self.objects.layer_move = false;
-                if !matches!(self.layer_interaction.tool, LayerCanvasTool::Move | LayerCanvasTool::Transform) { self.object_tool(LayerCanvasTool::Move)?; }
-                self.return_to_artwork()?;
-                self.select_objects(layer, objects)
-            }
-            ObjectAction::Expand { layer, expanded } => {
-                let layer = occurrence_handle(layer)?;
-                if doc.scene().object_layer(layer).is_none() { return Err("Choose an object layer".into()); }
-                if expanded { self.objects.expanded.insert(layer); } else { self.objects.expanded.remove(&layer); }
-                Ok(())
-            }
-            ObjectAction::Visibility { id, visible } => { let edit = doc.set_image_object_visible_edit(object_handle(id)?, visible).map_err(error)?; self.layer_edit(edit) }
-            ObjectAction::Rename { id, name } => { let edit = doc.rename_image_object_edit(object_handle(id)?, &name).map_err(error)?; self.layer_edit(edit) }
-            ObjectAction::Order { order } => { let edit = doc.reorder_image_objects_edit(&doc.working.objects, order).map_err(error)?; self.layer_edit(edit) }
-            ObjectAction::Drop { id, target, below } => {
-                let (object, target) = (object_handle(id)?, object_handle(target)?);
-                let layer = doc.scene().object_owner(object).ok_or("Unknown image")?;
-                if doc.scene().object_owner(target) != Some(layer) { return Err(self.localization().text(MessageId::OBJECTS_REORDER_WITHIN_LAYER).to_string()); }
-                let children = doc.object_layer_children(layer).unwrap_or_default();
-                let from = children.iter().position(|h| *h == object).ok_or("Unknown image")?;
-                let to = children.iter().position(|h| *h == target).ok_or("Unknown image")? + usize::from(below);
-                let edit = doc.move_image_object_edit(object, if to > from { to - 1 } else { to }).map_err(error)?;
-                self.layer_edit(edit)
-            }
-            ObjectAction::Interpolation { nearest } => self.object_command(if nearest { CommandId::TransformNearest } else { CommandId::TransformBilinear }).unwrap_or_else(|| Err(self.localization().text(MessageId::OBJECTS_SELECT_IMAGES_FIRST).to_string())),
-            ObjectAction::SelectAll => self.object_command(CommandId::SelectAll).unwrap_or(Ok(())),
-            ObjectAction::Deselect => self.object_command(CommandId::Deselect).unwrap_or(Ok(())),
-            ObjectAction::Delete => self.object_command(CommandId::ClearSelected).unwrap_or_else(|| Err(self.localization().text(MessageId::OBJECTS_SELECT_IMAGES_FIRST).to_string())),
-            ObjectAction::Duplicate => self.object_command(CommandId::CopySelectionToLayer).unwrap_or_else(|| Err(self.localization().text(MessageId::OBJECTS_SELECT_IMAGES_FIRST).to_string())),
-        }?;
-        self.objects.changed = true;
-        Ok(())
-    }
-    pub(super) fn object_rows(&self, layer: OccurrenceHandle) -> Vec<ObjectRow> {
-        let doc = self.engine.document();
-        let Some(children) = doc.object_layer_children(layer).filter(|_| self.objects.expanded.contains(&layer)) else { return Vec::new(); };
-        let editable = doc.objects_editable(layer);
-        let selected = (doc.working.occurrence == Some(layer)).then_some(&doc.working.objects);
-        let unnamed = self.localization().text(MessageId::OBJECTS_UNNAMED_IMAGE);
-        let rendition = self.effective_sdr_rendition().parameters().into_iter().fold(0u64, |h, v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())));
-        children.iter().enumerate().filter_map(|(index, &h)| {
-            let object = doc.scene().object(h)?;
-            let image = object.image.id().bytes().into_iter().fold(rendition, |h, v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v)));
-            Some(ObjectRow { id: object_token(h), layer: occurrence_token(layer),
-                label: if object.name.is_empty() { unnamed.to_string() } else { object.name.to_string() },
-                visible: object.visible, selected: selected.is_some_and(|s| s.contains(&h)), editable, index: index as u32,
-                can_raise: editable && index > 0, can_lower: editable && index + 1 < children.len(),
-                nearest: object.interpolation == ImageInterpolation::Nearest,
-                thumbnail_revision: image & ((1u64 << 53) - 1) })
-        }).collect()
-    }
-    pub fn object_menu(&self, id: u64) -> Result<ContextMenu, String> {
-        let object = object_handle(id)?;
-        let doc = self.engine.document();
-        let layer = doc.scene().object_owner(object).ok_or("Unknown image")?;
-        let value = doc.scene().object(object).ok_or("Unknown image")?;
-        let l = self.localization();
-        let editable = doc.objects_editable(layer);
-        let selected = doc.working.occurrence == Some(layer) && doc.working.objects.contains(&object);
-        let item = |label: std::sync::Arc<str>, action: ObjectAction, enabled: bool| ContextMenuItem { enabled, ..ContextMenuItem::command(label.as_ref(), UiAction::Object { action }) };
-        let children = doc.object_layer_children(layer).unwrap_or_default();
-        let index = children.iter().position(|h| *h == object).unwrap_or_default();
-        Ok(ContextMenu { title: if value.name.is_empty() { l.text(MessageId::OBJECTS_UNNAMED_IMAGE).to_string() } else { value.name.to_string() }, sections: vec![
-            vec![item(l.text(if selected { MessageId::OBJECTS_REMOVE_FROM_SELECTION } else { MessageId::OBJECTS_ADD_TO_SELECTION }), ObjectAction::Select { id, extend: true }, true),
-                item(l.text(if value.visible { MessageId::OBJECTS_HIDE_IMAGE } else { MessageId::OBJECTS_SHOW_IMAGE }), ObjectAction::Visibility { id, visible: !value.visible }, editable)],
-            [(MessageId::OBJECTS_BRING_TO_FRONT, ObjectOrder::Front, index > 0), (MessageId::OBJECTS_BRING_FORWARD, ObjectOrder::Forward, index > 0),
-                (MessageId::OBJECTS_SEND_BACKWARD, ObjectOrder::Backward, index + 1 < children.len()), (MessageId::OBJECTS_SEND_TO_BACK, ObjectOrder::Back, index + 1 < children.len())]
-                .into_iter().map(|(label, order, enabled)| item(l.text(label), ObjectAction::Order { order }, editable && selected && enabled)).collect(),
-            vec![item(l.text(MessageId::OBJECTS_DUPLICATE_IMAGES), ObjectAction::Duplicate, editable && selected),
-                item(l.text(MessageId::OBJECTS_DELETE_IMAGES), ObjectAction::Delete, editable && selected)],
-        ] }.with_shortcuts_localized(&self.state.settings, self.state.platform, l))
-    }
     pub(super) fn append_object_overlay(&self, segments: &mut Vec<CursorSegment>) {
         if self.object_target().is_none() || !matches!(self.layer_interaction.tool, LayerCanvasTool::Move | LayerCanvasTool::Transform) { return; }
         let map = self.document_to_logical();
@@ -642,14 +526,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let doc = self.engine.document();
         let mut line = |a: [f32; 2], b: [f32; 2], solid: bool| segments.push(CursorSegment { from: a, to: b, distance: 0., marker: f32::from(solid), scale: 1. });
-        for &h in &doc.working.objects {
+        let selected = doc.selected_objects();
+        for &h in &selected {
             let (Some(affine), Some(object)) = (doc.object_document_affine(h), doc.scene().object(h)) else { continue; };
             let [w, hgt] = object.image.extent.map(f64::from);
             let corners = [[0., 0.], [w, 0.], [w, hgt], [0., hgt]].map(|p| point(affine.map(p)));
-            for i in 0..4 { line(corners[i], corners[(i + 1) % 4], doc.working.objects.len() == 1); }
+            for i in 0..4 { line(corners[i], corners[(i + 1) % 4], selected.len() == 1); }
         }
-        let Some(frame) = self.session_frame().filter(|_| !doc.working.objects.is_empty()) else { return; };
-        if doc.working.objects.len() > 1 {
+        let Some(frame) = self.session_frame().filter(|_| !selected.is_empty()) else { return; };
+        if selected.len() > 1 {
             let corners = [[0., 0.], [1., 0.], [1., 1.], [0., 1.]].map(|p| point(frame.unit.map(p)));
             for i in 0..4 { line(corners[i], corners[(i + 1) % 4], true); }
         }
@@ -667,7 +552,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn begin_object_placement(&mut self, insert: Edit, objects: Vec<ImageObjectHandle>) -> Result<(), String> {
         let inverse = self.engine.document().clone().apply(insert.clone()).map_err(error)?;
         self.engine.preview_edit(insert.clone()).map_err(error)?;
-        let layer = self.engine.document().scene().object_owner(objects[0]);
+        let layer = objects.first().and_then(|object| self.engine.document().scene().object_owner(*object));
         self.objects.placement = Some(Placement { insert, inverse, objects });
         self.objects.layer_move = false;
         self.engine.backend_mut().prepare_moving_layer(layer);
@@ -692,65 +577,38 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
         Ok(())
     }
-    pub(super) fn object_destination(&self, destination: Option<ImageLayerDestination>) -> Result<ObjectDestination, String> {
-        let doc = self.engine.document();
-        let into_objects = |layer: OccurrenceHandle| -> Result<ObjectDestination, String> {
-            if doc.is_locked(layer) { return Err(self.localization().text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string()); }
-            Ok(ObjectDestination::Existing(layer))
-        };
-        match destination {
-            Some(ImageLayerDestination { target, position: LayerDropPosition::Into }) if doc.scene().object_layer(target).is_some() => into_objects(target),
-            None if doc.working.occurrence.is_some_and(|layer| doc.objects_editable(layer)) => into_objects(doc.working.occurrence.unwrap()),
-            destination => self.image_layer_destination(destination).map(|(index, parent)| ObjectDestination::New { index, parent }),
-        }
-    }
-    pub(super) fn insert_objects_edit(&self, objects: Vec<layer_core::ImageObject>, destination: Option<ImageLayerDestination>, masked: bool) -> Result<InsertedObjects, String> {
+    pub(super) fn insert_objects_edit(&self, objects: Vec<(std::sync::Arc<str>, layer_core::ImageObject)>, destination: Option<ImageLayerDestination>, masked: bool) -> Result<InsertedObjects, String> {
         if objects.is_empty() { return Err("Copy an image to paste".into()); }
-        for object in &objects { object.validate()?; }
+        let (index, parent) = self.image_layer_destination(destination)?;
         let mut candidate = self.engine.document().clone();
-        let mut edits = Vec::new();
-        let mut operations = Vec::new();
-        let target = if masked {
-            let (index, parent) = self.image_layer_destination(destination)?;
-            ObjectDestination::New { index, parent }
-        } else { self.object_destination(destination)? };
-        let (layer, at) = match target {
-            ObjectDestination::Existing(layer) => (layer, 0),
-            ObjectDestination::New { index, parent } => {
-                let (layer, edit) = candidate.create_object_layer_edit(self.localization().text(MessageId::OBJECTS_LAYER_NAME).as_ref(), parent, index).map_err(error)?;
-                candidate.apply(edit.clone()).map_err(error)?;
-                edits.push(edit);
-                if masked {
-                    let occurrence = candidate.scene().occurrence(layer).ok_or("Unknown layer")?.clone();
-                    let (coverage, mask, operation) = self.selection_mask(&occurrence, false, parent, candidate.composition().size)?;
-                    let coverage = layer_core::RecordChange::insert(&candidate.artwork.coverage, coverage.value.ok_or("Missing pasted mask")?);
-                    operations.extend(operation.map(|mut operation| {
-                        operation.coverage.target = coverage.handle;
-                        operation.coverage.use_.source = coverage.handle;
-                        (SourceTarget::Coverage(coverage.handle), operation)
-                    }));
-                    let mut occurrence = occurrence;
-                    occurrence.mask = Some(layer_core::authored::MaskUse { source: coverage.handle, ..mask });
-                    let edit = Edit::Batch(vec![Edit::Coverage(coverage), Edit::Occurrence(layer_core::RecordChange::replace(&candidate.artwork.occurrences, layer, Some(occurrence))?)]);
-                    candidate.apply(edit.clone()).map_err(error)?;
-                    edits.push(edit);
-                }
-                (layer, 0)
-            }
-        };
-        let offset = candidate.scene().occurrence_offset64(layer);
-        let objects = objects.into_iter().map(|object| layer_core::ImageObject { affine: translation(offset.map(|v| -v)).compose(object.affine), ..object }).collect();
-        let (handles, edit) = candidate.import_image_objects_edit(layer, objects, at).map_err(error)?;
+        let offset = candidate.scene().layer_origin(parent).map(|v| -(v as f64));
+        let objects = objects.into_iter().map(|(name, object)| (name, layer_core::ImageObject { affine: translation(offset).compose(object.affine), ..object })).collect();
+        let (layers, edit) = candidate.import_object_layers_edit(objects, parent, index).map_err(error)?;
         candidate.apply(edit.clone()).map_err(error)?;
-        edits.push(edit);
+        let mut edits = vec![edit];
+        let mut operations = Vec::new();
+        for &layer in layers.iter().filter(|_| masked) {
+            let mut occurrence = candidate.scene().occurrence(layer).ok_or("Unknown layer")?.clone();
+            let (coverage, mask, operation) = self.selection_mask(&occurrence, false, parent, candidate.composition().size)?;
+            let coverage = layer_core::RecordChange::insert(&candidate.artwork.coverage, coverage.value.ok_or("Missing pasted mask")?);
+            operations.extend(operation.map(|mut operation| {
+                operation.coverage.target = coverage.handle;
+                operation.coverage.use_.source = coverage.handle;
+                (SourceTarget::Coverage(coverage.handle), operation)
+            }));
+            occurrence.mask = Some(layer_core::authored::MaskUse { source: coverage.handle, ..mask });
+            let edit = Edit::Batch(vec![Edit::Coverage(coverage), Edit::Occurrence(layer_core::RecordChange::replace(&candidate.artwork.occurrences, layer, Some(occurrence))?)]);
+            candidate.apply(edit.clone()).map_err(error)?;
+            edits.push(edit);
+        }
+        let handles = layers.iter().filter_map(|h| candidate.scene().object_handle(*h)).collect();
         let mut working = candidate.working.clone();
-        working.occurrence = Some(layer);
+        working.occurrence = layers.first().copied();
         working.target = None;
         working.inspect_mask = None;
-        working.layer_selection = BTreeSet::from([layer]);
-        working.layer_anchor = Some(layer);
-        working.objects = handles.iter().copied().collect();
-        if masked { working.selection = None; }
+        working.layer_selection = layers.into_iter().collect();
+        working.layer_anchor = working.occurrence;
+        working.selection = None;
         edits.push(Edit::Working(working));
         Ok((Edit::Batch(edits), handles, operations))
     }
@@ -776,9 +634,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let objects = sources.into_iter().map(|(name, source)| {
             let name = layer_core::bounded_name(&name);
             if name.is_empty() { return Err("Use an image name with 1 to 128 characters".to_string()); }
-            let mut object = layer_core::ImageObject::new(layer_core::Image::new(std::sync::Arc::new(source)), name);
+            let mut object = layer_core::ImageObject::new(layer_core::Image::new(std::sync::Arc::new(source)));
             object.affine = self.fitted_affine(object.image.extent, centre, fit);
-            Ok(object)
+            Ok((name, object))
         }).collect::<Result<Vec<_>, String>>()?;
         let (edit, handles, _) = self.insert_objects_edit(objects, destination, false)?;
         self.source_edit_candidates(&edit, Default::default())?;
@@ -793,11 +651,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn sync_object_session(&mut self) {
         let doc = self.engine.document();
-        let layer = doc.working.occurrence.filter(|_| !doc.working.objects.is_empty());
+        let layer = doc.working.occurrence.filter(|_| !doc.selected_objects().is_empty());
         let same = matches!((&self.objects.session, layer), (Some((owner, start)), Some(active))
-            if *owner == active && start.iter().map(|(h, _)| *h).eq(doc.working.objects.iter().copied()));
+            if *owner == active && start.iter().map(|(h, _)| *h).eq(doc.selected_objects().iter().copied()));
         if !same {
-            self.objects.session = layer.map(|layer| (layer, doc.working.objects.iter().filter_map(|h| Some((*h, doc.scene().object(*h)?.affine))).collect()));
+            self.objects.session = layer.map(|layer| (layer, doc.selected_objects().iter().filter_map(|h| Some((*h, doc.scene().object(*h)?.affine))).collect()));
         }
     }
     fn session_changes(&self) -> Vec<(ImageObjectHandle, Affine64)> {

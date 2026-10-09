@@ -58,52 +58,18 @@ fn admitted_layer_tile_and_dependency_boundaries_reopen() {
 
 #[test]
 fn image_layer_object_and_name_boundaries_save_and_reopen() {
-    let limit=crate::authored::GraphLimits::default().layer_objects;
     let image=Image::new(crate::color::source::rgba8_source([4;2],|_,_|[1,2,3,255]));
-    let mut artwork=Artwork::new([64;2]).unwrap();
-    let children:Vec<_>=(0..limit).map(|n|artwork.objects.insert(PortableId::random(),
-        ImageObject::new(image.clone(),if n==0 {"x".repeat(crate::MAX_NAME_BYTES)} else {String::new()})).unwrap()).collect();
-    let layer=artwork.object_layers.insert(PortableId::random(),ObjectLayer {children:children.clone()}).unwrap();
-    let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(layer),"é".repeat(crate::MAX_NAME_BYTES/2))).unwrap();
-    let stack=artwork.compositions.get(artwork.root).unwrap().result;
-    artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
-    let document=crate::Document::from_artwork(artwork.clone()).unwrap();
-    document.admit(Default::default()).unwrap();
-    let bytes=serialize(&prepare(&artwork,false));
-    let restored=editable(bytes.clone());
-    assert_eq!(restored.objects.len(),limit);
-    crate::Document::from_artwork(restored).unwrap().admit(Default::default()).unwrap();
-
-    assert!(document.add_image_object_edit(occurrence,ImageObject::new(image.clone(),""),0).is_err(),"editing refuses one image past the limit");
-    let mut over=artwork.clone();
-    let extra=over.objects.insert(PortableId::random(),ImageObject::new(image.clone(),"")).unwrap();
-    over.object_layers.get_mut(layer).unwrap().children.push(extra);
-    assert!(crate::Document::from_artwork(over.clone()).is_err());
-    assert!(PreparedPackage::prepare(&capture(&over),None,&AtomicBool::new(false)).is_err());
-    let added=rewrite(&bytes,|manifest|{
-        let objects=manifest["objects"].as_array_mut().unwrap();
-        let mut record=objects.iter().find(|r|r["type"]=="capy.image-object/1").unwrap().clone();
-        record["id"]=json!(identity(900_000));
-        objects.iter_mut().find(|r|r["type"]=="capy.object-layer/1").unwrap()["data"]["children"].as_array_mut().unwrap().push(resources::reference(identity(900_000)));
-        objects.push(record);
-    });
-    assert!(matches!(open(backing(added),Default::default(),&AtomicBool::new(false)).unwrap(),OpenOutcome::Preserved {..}));
-
+    let mut document=crate::Document::from_artwork(Artwork::new([64;2]).unwrap()).unwrap();
+    let (occurrence,edit)=document.create_object_layer_edit("é".repeat(crate::MAX_NAME_BYTES/2),ImageObject::new(image.clone()),None,0).unwrap();document.apply(edit).unwrap();
+    let artwork=document.artwork.clone();let bytes=serialize(&prepare(&artwork,false));let restored=editable(bytes.clone());
+    assert_eq!(restored.objects.len(),1);crate::Document::from_artwork(restored).unwrap().admit(Default::default()).unwrap();
     let long="x".repeat(crate::MAX_NAME_BYTES+1);
-    assert!(document.rename_image_object_edit(children[1],&long).is_err());
+    assert!(document.create_object_layer_edit(long.as_str(),ImageObject::new(image),None,0).is_err());
     let mut long_layer=document.scene().occurrence(occurrence).unwrap().clone();long_layer.name=long.as_str().into();
-    assert!(document.clone().apply(crate::Edit::Occurrence(crate::RecordChange::replace(&artwork.occurrences,occurrence,Some(long_layer)).unwrap())).is_err(),"editing refuses a layer name past the limit");
-    let mut renamed=artwork.clone();renamed.objects.get_mut(children[1]).unwrap().name=long.as_str().into();
-    assert!(crate::Document::from_artwork(renamed).is_err());
-    let mut layer_named=artwork;layer_named.occurrences.get_mut(occurrence).unwrap().name=long.as_str().into();
-    assert!(crate::Document::from_artwork(layer_named).is_err());
-    for kind in ["capy.occurrence/3","capy.image-object/1"] {
-        let named=rewrite(&bytes,|manifest|{
-            manifest["objects"].as_array_mut().unwrap().iter_mut().find(|r|r["type"]==kind).unwrap()["data"]["name"]=json!(long);
-        });
-        let outcome=open(backing(named),Default::default(),&AtomicBool::new(false)).unwrap();
-        assert!(!matches!(outcome,OpenOutcome::Candidate {..}),"{kind}: {outcome:?}");
-    }
+    assert!(document.clone().apply(crate::Edit::Occurrence(crate::RecordChange::replace(&artwork.occurrences,occurrence,Some(long_layer)).unwrap())).is_err());
+    let mut named=artwork;named.occurrences.get_mut(occurrence).unwrap().name=long.as_str().into();assert!(crate::Document::from_artwork(named).is_err());
+    let named=rewrite(&bytes,|manifest|{manifest["objects"].as_array_mut().unwrap().iter_mut().find(|r|r["type"]=="capy.occurrence/3").unwrap()["data"]["name"]=json!(long);});
+    assert!(!matches!(open(backing(named),Default::default(),&AtomicBool::new(false)).unwrap(),OpenOutcome::Candidate {..}));
 }
 
 #[test]
@@ -275,9 +241,8 @@ fn ancillary_only_images_are_dropped_and_unplaced_hidden_authored_uses_are_kept(
             let mut image=records.iter().find(|record|record["type"]=="capy.image/1").unwrap().clone();image["id"]=json!(identity(900));records.push(image);
             records.push(json!({"id":identity(901),"type":"example.note/1","ancillary":true,"copy_safe":true,"data":{"image":resources::reference(identity(900))}}));
             if authored_use {
-                records.push(json!({"id":identity(903),"type":"capy.image-object/1","data":{"image":resources::reference(identity(900)),"visible":false}}));
-                records.push(json!({"id":identity(904),"type":"capy.object-layer/1","data":{"children":[resources::reference(identity(903))]}}));
-                records.push(json!({"id":identity(905),"type":"capy.occurrence/3","data":{"content":{"objects":resources::reference(identity(904))}}}));
+                records.push(json!({"id":identity(903),"type":"capy.image-object/1","data":{"image":resources::reference(identity(900))}}));
+                records.push(json!({"id":identity(905),"type":"capy.occurrence/3","data":{"content":{"objects":resources::reference(identity(903))},"visible":false}}));
             }
         });
         let artwork=editable(changed);let prepared=prepare(&artwork,false);
@@ -287,7 +252,7 @@ fn ancillary_only_images_are_dropped_and_unplaced_hidden_authored_uses_are_kept(
         assert_eq!(records.iter().any(|record|record["id"]==json!(identity(901))),authored_use);
         let reopened=editable(serialize(&prepared));
         assert_eq!(reopened.objects.resolve(identity(903)).is_some(),authored_use);
-        if authored_use {assert!(!reopened.objects.get(reopened.objects.resolve(identity(903)).unwrap()).unwrap().visible);}
+        if authored_use {assert!(!reopened.occurrences.get(reopened.occurrences.resolve(identity(905)).unwrap()).unwrap().visible);}
     }
 }
 

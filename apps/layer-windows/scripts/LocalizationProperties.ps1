@@ -325,8 +325,8 @@ function Notice-Surface{
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Menu-Command 'file' 'open_document'
  Choose-Path (Join-Path $repo 'apps/layer-web/fixtures/shared-image-f64-builtin.capy')
- Wait-Until {@((Model).state.layers|Where-Object object_count -gt 0).Count -eq 1 -and (Model).brush_ready} 'The notice image fixture did not prepare' 90
- $layer=@((Model).state.layers|Where-Object object_count -gt 0)[0].id
+ Wait-Until {@((Model).state.layers|Where-Object object).Count -eq 3 -and (Model).brush_ready} 'The notice image fixture did not prepare' 90
+ $layer=@((Model).state.layers|Where-Object object)[0].id
  Invoke-Id "layer-$layer-name"
  Focus-Canvas;Key 66
  Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected} 'The brush did not activate for the image refusal'

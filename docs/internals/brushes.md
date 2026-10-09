@@ -130,7 +130,7 @@ decode or a wait stays empty, and the stroke is reported as a miss. The engine
 replays it once contact ends, as it replays an end taper, and the replay stays
 one undo step. Completed-stroke replay restores only its target raster on
 renderers that track raster damage; untouched composition pages remain valid.
-Image layers among the references are read through their canonical pixels,
+Object layers among the references are read through their canonical pixels,
 whatever the view's zoom. When a replay finds such a page still being evaluated,
 the renderer keeps the pages it needs, captures them on later frames, and reports
 the stroke again once they are cached; until then the stroke stays correctable

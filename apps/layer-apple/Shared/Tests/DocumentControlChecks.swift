@@ -226,14 +226,14 @@ extension XCTestCase {
         let paper = editorPixels(in: app)
         for cancel in [true, false] {
             try clipboard.replace([item(original), item(original)])
-            paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 3)
+            paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 4)
             workspaceActivate(cancel ? app.buttons["canvas-bar-action-cancel_transform"] : apply)
             XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
             if cancel { expect(2, paper) }
         }
         let painted = editorPixels(in: app)
         XCTAssertGreaterThan(Int(painted[2]), Int(painted[0]) + 100)
-        for (command, count, pixels) in [("Undo", 2, paper), ("Redo", 3, painted)] {
+        for (command, count, pixels) in [("Undo", 2, paper), ("Redo", 4, painted)] {
             editorHistory(command, in: app); expect(count, pixels)
         }
         try clipboard.replace([item(original), item(Data("invalid PNG".utf8))])
@@ -242,15 +242,15 @@ extension XCTestCase {
         XCTAssertTrue(failure.waitForExistence(timeout: 20))
         workspaceActivate(failure.buttons["OK"])
         XCTAssertTrue(failure.waitForNonExistence(timeout: 10))
-        XCTAssertFalse(apply.exists); expect(3, painted)
+        XCTAssertFalse(apply.exists); expect(4, painted)
         // A failed batch must not insert its first valid member or add history.
-        for (command, count, pixels) in [("Undo", 2, paper), ("Redo", 3, painted)] {
+        for (command, count, pixels) in [("Undo", 2, paper), ("Redo", 4, painted)] {
             editorHistory(command, in: app); expect(count, pixels)
         }
         try clipboard.replace([item(photo.dataRepresentation, type: .fileURL)])
-        paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 3, "A pasted image joins the active image layer")
+        paste(); XCTAssertTrue(apply.waitForExistence(timeout: 20)); XCTAssertEqual(rows.count, 5, "A pasted file creates its own Object layer")
         workspaceActivate(app.buttons["canvas-bar-action-cancel_transform"])
-        XCTAssertTrue(apply.waitForNonExistence(timeout: 10)); expect(3, painted)
+        XCTAssertTrue(apply.waitForNonExistence(timeout: 10)); expect(4, painted)
         XCTAssertEqual(try Data(contentsOf: photo), original)
         XCTAssertFalse(app.sheets.firstMatch.exists)
         attachEditor(in: app, name: "native-clipboard-batch-history-and-failure-retry")
@@ -305,10 +305,7 @@ extension XCTestCase {
         XCTAssertEqual(rows.count, 3)
         // AppKit can expose this file as PNG bytes with no suggested name.
         // Supplied names are checked separately through the provider owner test.
-        let images = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-images-")).firstMatch
-        XCTAssertTrue(images.waitForExistence(timeout: 5)); workspaceActivate(images)
         XCTAssertTrue(app.staticTexts["Dropped blue"].firstMatch.waitForExistence(timeout: 10) || app.staticTexts["Imported image"].firstMatch.exists)
-        workspaceActivate(images)
         for (command, count) in [("Undo", 2), ("Redo", 3)] {
             editorHistory(command, in: app)
             expectation(for: NSPredicate(format: "count == %d", count), evaluatedWith: rows)
@@ -465,11 +462,8 @@ extension XCTestCase {
         activateCanvasBarAction("placement_original_size", label: "Original Size (100%)", in: app)
         workspaceActivate(apply)
         XCTAssertTrue(apply.waitForNonExistence(timeout: 10))
-        let images = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-images-")).firstMatch
-        XCTAssertTrue(images.waitForExistence(timeout: 5)); workspaceActivate(images)
         XCTAssertTrue(app.staticTexts[url.deletingPathExtension().lastPathComponent].firstMatch.waitForExistence(timeout: 10),
-            "Use the selected photo name for its image")
-        workspaceActivate(images)
+            "Use the selected photo name for its Object layer")
         let imported = editorPixels(in: app)
         attachEditor(in: app, name: "native-image-imported")
         for (command, count, expected) in [("Undo", 2, paper), ("Redo", 3, imported)] {

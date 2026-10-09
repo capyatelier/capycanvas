@@ -867,12 +867,11 @@ fn inserting_spatial_effect_after_crop_uses_the_current_local_frame() {
 #[test]
 fn canvas_maps_reach_image_objects_and_effect_references_in_double_precision() {
     let mut doc = fixture::document([1000, 500], &["Current ink"]);
-    let (layer, edit) = doc.create_object_layer_edit("Images", None, 0).unwrap();
-    doc.apply(edit).unwrap();
-    let mut object = ImageObject::new(Arc::new(photo_source([30, 20])).into(), "Photo");
+    let mut object = ImageObject::new(Arc::new(photo_source([30, 20])).into());
     object.affine = Affine64([1.25, 0.5, -0.5, 1.25, 123.375, 77.0625]);
-    let (handle, edit) = doc.add_image_object_edit(layer, object.clone(), 0).unwrap();
+    let (layer, edit) = doc.create_object_layer_edit("Photo", object.clone(), None, 0).unwrap();
     doc.apply(edit).unwrap();
+    let handle=doc.scene().object_handle(layer).unwrap();
     for (geometry, scale) in [(CanvasGeometry::resize([1000, 500], [100, 50], Interpolation::Bicubic), 0.1), (CanvasGeometry::resize([1000, 500], [3000, 1500], Interpolation::Bicubic), 3.)] {
         let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();
         let mut editor = Editor::new(doc.clone());
@@ -1070,10 +1069,9 @@ fn resampled_photos_fold_into_paint_unless_their_own_samples_can_keep_their_inte
 fn a_photo_shared_with_an_image_object_resamples_without_touching_the_object_image() {
     let (mut doc, photo) = with_photo();
     let image = paint_source(&doc, photo).base.as_ref().unwrap().image.clone();
-    let (layer, edit) = doc.create_object_layer_edit("Images", None, 0).unwrap();
+    let (layer, edit) = doc.create_object_layer_edit("Shared", ImageObject::new(image.clone()), None, 0).unwrap();
     doc.apply(edit).unwrap();
-    let (object, edit) = doc.add_image_object_edit(layer, ImageObject::new(image.clone(), "Shared"), 0).unwrap();
-    doc.apply(edit).unwrap();
+    let object=doc.scene().object_handle(layer).unwrap();
     for geometry in [CanvasGeometry::resize([512, 256], [256, 128], Interpolation::Bicubic), CanvasGeometry::orient([512, 256], ImageOrientation::RotateLeft)] {
         let plan = remapped(&doc, doc.canvas_geometry_plan(&geometry, limits()).unwrap());
         let mut editor = Editor::new(doc.clone());

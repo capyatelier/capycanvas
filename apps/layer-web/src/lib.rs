@@ -189,9 +189,6 @@ impl WebApp {
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_menu(id, mask).map_err(js)?)
     }
-    pub fn object_menu(&self, id: u64) -> Result<JsValue, JsValue> {
-        serialize(&self.session.object_menu(id).map_err(js)?)
-    }
     pub fn layer_blend_menu(&self, id: u64) -> Result<JsValue, JsValue> {
         serialize(&self.session.layer_blend_menu(id).map_err(js)?)
     }

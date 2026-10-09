@@ -412,11 +412,6 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .layer-drag-preview { position: fixed; z-index: 100; pointer-events: none; opacity: .7; background: var(--panel); }
 .layer-row > button.layer-expand { align-self: center; height: 24px; }
 .layer-expand.collapsed svg { transform: rotate(-90deg); }
-.layer-object-row.layer-object-hidden { opacity: .6; }
-.layer-object-spacer { visibility: hidden; }
-.layer-object-thumbnail > * { grid-area: 1 / 1; }
-.layer-object-thumbnail > .layer-object-placeholder { opacity: .6; }
-.layer-object-thumbnail.loaded > .layer-object-placeholder { display: none; }
 .panel.palettes-panel { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; overflow: hidden; }
 .drawer-column > .panel.palettes-panel { padding: 6px 8px; }
 .palettes-panel [hidden] { display: none !important; }

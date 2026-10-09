@@ -15,14 +15,8 @@ fn copy_occurrence(source: &Artwork, target: &mut Artwork, id: OccurrenceHandle,
             let content = OccurrenceContent::Paint(change.handle); edits.push(Edit::Paint(change)); content
         }
         OccurrenceContent::Objects(h) => {
-            let layer=source.object_layers.get(h).ok_or(invalid("Unknown object layer"))?;
-            let mut children=Vec::with_capacity(layer.children.len());
-            for &h in &layer.children {
-                let change=insert(&mut target.objects,source.objects.get(h).ok_or(invalid("Unknown image object"))?.clone())?;
-                children.push(change.handle);edits.push(Edit::ImageObject(change));
-            }
-            let change=insert(&mut target.object_layers,ObjectLayer {children})?;
-            let content=OccurrenceContent::Objects(change.handle);edits.push(Edit::ObjectLayer(change));content
+            let change=insert(&mut target.objects,source.objects.get(h).ok_or(invalid("Unknown object source"))?.clone())?;
+            let content=OccurrenceContent::Objects(change.handle);edits.push(Edit::ImageObject(change));content
         }
         OccurrenceContent::Stack(h) => {
             let original = source.stacks.get(h).ok_or(invalid("Unknown stack"))?;
@@ -303,7 +297,7 @@ impl Document {
             matches!(o.content, OccurrenceContent::Paint(_) | OccurrenceContent::Objects(_) | OccurrenceContent::Stack(_))))
             .or_else(|| imported.first().copied());
         working.target = working.occurrence.and_then(|h| artwork.occurrences.get(h)).and_then(|o| match o.content { OccurrenceContent::Paint(h) => Some(SourceTarget::Paint(h)), OccurrenceContent::Selection(h) => Some(SourceTarget::Selection(h)), _ => None });
-        working.inspect_mask = None; working.objects.clear();
+        working.inspect_mask = None;
         working.layer_selection = imported.iter().copied().collect(); working.layer_anchor = working.occurrence;
         edits.push(Edit::Working(working));
         let edit = Edit::Batch(edits);

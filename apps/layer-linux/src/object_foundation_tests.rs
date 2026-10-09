@@ -22,12 +22,12 @@ fn pixels(w: &Rc<Workspace>, id: u64) -> layer_render::ReadbackImage {
 fn assert_objects(document: &layer_core::Document, nearest: bool) {
     assert!(document.artwork.paint.is_empty());
     assert!(document.scene().targets().next().is_none());
-    assert_eq!(document.scene().order().len(), 1);
+    assert_eq!(document.scene().order().len(), 3);
     let owner = document.scene().order()[0];
     assert!(matches!(document.scene().occurrence(owner).unwrap().content, OccurrenceContent::Objects(_)));
     let objects = document.artwork.objects.iter().map(|(_, _, object)| object).collect::<Vec<_>>();
     assert_eq!(objects.len(), 3);
-    assert!(objects.iter().all(|object| object.visible && object.image.same_owner(&objects[0].image)));
+    assert!(objects.iter().all(|object| object.image.same_owner(&objects[0].image)));
     assert!(objects.iter().any(|object| object.affine.0[4].to_bits() == 16777217.125f64.to_bits()));
     if nearest { assert!(objects.iter().all(|object| object.interpolation == ImageInterpolation::Nearest)); }
 }

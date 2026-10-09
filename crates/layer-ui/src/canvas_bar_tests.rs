@@ -363,7 +363,7 @@ fn image_placement_bar_offers_object_commands_and_counts_a_batch() {
     s.place_layer_sources(vec![("First".into(), source.clone()), ("Second".into(), source)], None, None).unwrap();
     s.frame(1, 1).unwrap();
     let batch = s.state.canvas_bar.as_ref().unwrap();
-    assert_eq!(batch.label.as_deref(), Some("2 images"));
+    assert_eq!(batch.label.as_deref(), Some("2 layers"));
     assert_ne!(batch.context, bar.context);
     let context = batch.context;
     let caption = batch.label.as_ref().unwrap().as_ptr();
@@ -377,8 +377,13 @@ fn image_placement_bar_offers_object_commands_and_counts_a_batch() {
     s.frame(3, 3).unwrap();
     let selected = s.state.canvas_bar.as_ref().unwrap();
     assert_eq!(selected.context.kind, CanvasBarKind::Transform);
-    assert!(bar_commands(&selected.items).ends_with(&[CommandId::CopySelectionToLayer, CommandId::ClearSelected, CommandId::Deselect]));
+    assert_eq!(bar_commands(&selected.items), bar_commands(&bar.items));
     assert!(selected.completion.is_empty());
+    for (language, caption) in [(UiLanguage::English, "2 layers"), (UiLanguage::Japanese, "レイヤー2個")] {
+        s.set_localization(Localizer::shared(language));
+        s.frame(4, 4).unwrap();
+        assert_eq!(s.state.canvas_bar.as_ref().unwrap().label.as_deref(), Some(caption));
+    }
 }
 
 #[test]

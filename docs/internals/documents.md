@@ -17,7 +17,7 @@ is attached.
 [`Document`](../../crates/layer-core/src/lib.rs) owns typed authored stores and
 working state. A stack owns ordered occurrence handles. An occurrence owns its
 name, integer offset and composition properties, and refers to a paint source,
-image layer, child stack, effect application or saved selection. Paper is an ordinary Solid Color
+object layer, child stack, effect application or saved selection. Paper is an ordinary Solid Color
 effect occurrence. Paint and coverage sources
 own immutable raster roots; masks bind a coverage source to an occurrence.
 Working selection, image selection, the canvas view origin and explicit
@@ -40,7 +40,7 @@ Paper. The fill starts without a mask and follows ordinary layer rules: it can
 be renamed, moved, grouped, duplicated, hidden, deleted or merged. Add a mask to
 paint on it. Its thumbnail shows its color and alpha over the checkerboard.
 
-Paint layers, image layers and groups are positioned only by signed integer
+Paint layers, object layers and groups are positioned only by signed integer
 offsets that accumulate through their parents; a mask adds its own offset, plus
 its owner's when linked. Pixel writers use `validate_content_write` and the
 target's integer offset. Explicit local extents stay fixed when a capture grows
@@ -58,7 +58,7 @@ history directions.
 
 Effect layers hold filters in the layer stack. An adjustment transforms the
 combined image below it within its group. An attached adjustment instead processes
-one paint layer, image layer or isolated group; local effects run bottom-to-top after the
+one paint layer, object layer or isolated group; local effects run bottom-to-top after the
 owner's mask and before its outer clipping. Clipped content shares the first
 eligible unclipped base below it, including that base's completed effects.
 Hidden effects bypass processing without changing owners. An unattached
@@ -128,7 +128,7 @@ Merge Down, Merge Group, Merge Visible, Flatten Image and Stamp Visible, in the
 Layer menu and the layer's menu, replace layers with one new paint layer in one
 undo step ([`merge.rs`](../../crates/layer-core/src/merge.rs)). The new layer has
 full opacity, Normal blending and no mask. It takes the place, name and clipping
-of the layer it replaces, and references move to it. Image layers and placed
+of the layer it replaces, and references move to it. Object layers and placed
 photos become ordinary document pixels.
 
 - **Merge Down** merges the active layer into the artwork layer below it in its
@@ -163,29 +163,29 @@ the canvas they are defined on; filters that resample the whole image stay
 within what they resample. A merge whose filter reaches too far to represent is
 refused rather than cut off at the canvas.
 
-### Image layers and paint
+### Object layers and paint
 
-**Convert to Image Layer** turns the active paint layer into an image layer
+**Convert to Object Layer** turns the active paint layer into an object layer
 holding one image of its current appearance, painted edits and settled wet paint
 included, at the same place. The layer keeps its name, opacity, blending, mask,
 clipping and filters. An untouched photo keeps its own image and color
 interpretation; edited paint becomes an image in the document's color.
-**Rasterize Layer** turns the active image layer back into paint: its visible
-images, at the document's pixel grid, including those beyond the canvas. The
+**Rasterize Layer** turns the active object layer back into paint: its source
+at the document's pixel grid, including pixels beyond the canvas. The
 layer's mask, filters, opacity and blending stay on the layer and apply once,
-as before. A hidden layer rasterizes the content it would show. On an image layer,
+as before. A hidden layer rasterizes the content it would show. On an object layer,
 **Rasterize and Apply Mask** replaces Apply Mask and bakes the mask into the
 pixels too. Each is one undo step and refuses, changing nothing, when the result
 would exceed the editor's limits ([`conversions.rs`](../../crates/layer-core/src/conversions.rs)).
 
-Image layers are read like other artwork: they can be references, clipping
+Object layers are read like other artwork: they can be references, clipping
 bases, Select Layer Opacity sources, Wand and Fill Editing sources, merged, and
 copied as pixels with a selection tool. Brushes, fills, Fill Selection, Clear
 Layer, clearing and cutting pixels, Cut Selection to Layer and Frequency
-Separation need paint: on an image layer they change nothing and raise one notice
+Separation need paint: on an object layer they change nothing and raise one notice
 offering Add Mask (or Edit Mask), New Paint Layer and Rasterize Layer
 ([`notices.rs`](../../crates/layer-ui/src/notices.rs)).
-Repair Source Profile on an image layer repairs the selected image only; other
+Repair Source Profile on an object layer repairs the selected image only; other
 layers and images that share its pixels keep their interpretation.
 
 ### Retouching layers

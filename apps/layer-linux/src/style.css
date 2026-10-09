@@ -148,8 +148,6 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .layers-panel button.layer-thumbnail { min-width: 28px; min-height: 28px; padding: 0; border: 1px solid alpha(var(--window-fg-color), .10); border-radius: calc(15px * var(--corner-fit)); background: transparent; box-shadow: none; }
 .layers-panel button.layer-thumbnail.layer-editing { border-color: var(--accent-bg-color); outline: 3px solid var(--accent-bg-color); outline-offset: -2px; }
 .layer-thumbnail picture { border-radius: calc(14px * var(--corner-fit)); }
-.layer-object-thumbnail { min-width: 28px; min-height: 28px; border: 1px solid alpha(var(--window-fg-color), .10); border-radius: calc(15px * var(--corner-fit)); }
-.layer-object-thumbnail picture { border-radius: calc(14px * var(--corner-fit)); }
 .layers-panel button.layer-expand { min-width: 24px; min-height: 24px; padding: 0; }
 .layers-panel button.layer-expand.collapsed image { -gtk-icon-transform: rotate(-90deg); }
 .layer-type-symbol { padding: 1px; border-radius: 2px; background: var(--input-bg); color: var(--window-fg-color); }

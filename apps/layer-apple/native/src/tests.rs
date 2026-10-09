@@ -180,7 +180,7 @@ fn first_original(document: &layer_core::Document) -> &layer_core::color::source
     document.scene().paint_source(imported_occurrences(document).next().unwrap()).unwrap().base.as_ref().map(|base|base.image.as_ref()).unwrap()
 }
 fn placed_objects(document: &layer_core::Document) -> impl Iterator<Item = layer_core::authored::ImageObjectHandle> + '_ {
-    document.scene().order().iter().filter_map(|h| document.object_layer_children(*h)).flatten().copied()
+    document.scene().order().iter().filter_map(|h| document.scene().object_handle(*h))
 }
 fn first_placed_image(document: &layer_core::Document) -> &layer_core::color::source::SourceImage {
     &document.scene().object(placed_objects(document).next().unwrap()).unwrap().image
@@ -1516,22 +1516,17 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
         let id = app.state()["layer_tools"]["editing_layer"]["id"]
             .as_u64()
             .unwrap();
-        assert_eq!(app.layer(id)["object_count"], 1);
-        assert_eq!(app.layer(id)["objects"], json!([]), "Image rows stay collapsed until expanded");
-        app.action(json!({"type":"object","action":{"op":"expand","layer":id,"expanded":true}}));
-        let row = app.layer(id)["objects"][0].clone();
-        assert_eq!(row["label"], "Test image");
-        let object = row["id"].as_u64().unwrap();
-        assert_ne!(object >> 32, 0, "Image rows use their own identity namespace");
-        let menu = app.request(2, json!({"type":"object_menu","id":object})).unwrap();
+        assert_eq!(app.layer(id)["object"], true);
+        assert_eq!(app.layer(id)["label"], "Test image");
+        let menu = app.request(2, json!({"type":"layer_menu","id":id,"mask":false})).unwrap();
         assert!(!menu["sections"].as_array().unwrap().is_empty());
         app.draw_until_idle();
         let imported = app.pixels();
         assert!(imported != paper, "Import must reach the GPU document");
         let deadline = Instant::now() + Duration::from_secs(5);
-        let mut waiting = vec![json!([99, id]), json!([100, object])];
+        let mut waiting = vec![json!([99, id])];
         let mut images = Vec::new();
-        while images.len() < 2 {
+        while images.len() < 1 {
             assert!(Instant::now() < deadline, "Thumbnail readback timed out");
             let reply = app
                 .request(2, json!({"type":"layer_thumbnails","requests":waiting}))
@@ -1542,7 +1537,7 @@ fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
             std::thread::sleep(Duration::from_millis(1));
         }
         images.sort_by_key(|image| image[0].as_u64());
-        for (image, request) in images.iter().zip([99, 100]) {
+        for (image, request) in images.iter().zip([99]) {
             assert_eq!(image[0], request);
             assert_eq!(
                 image[3].as_array().unwrap().len(),

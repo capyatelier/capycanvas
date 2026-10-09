@@ -121,7 +121,6 @@ fn shape(record: &Value, refs: &[PortableId], context: RecordContext, reasons: &
         },
         RecordKind::PaintSource => Shape::Paint { image: data.get("base").map(|base| reference(required(object(base)?, "image")?)).transpose()? },
         RecordKind::Image => Shape::Image,
-        RecordKind::ObjectLayer => Shape::ObjectLayer { children: array(required(data, "children")?)?.iter().map(reference).collect::<Result<_,_>>()? },
         RecordKind::ImageObject => Shape::ImageObject { image: reference(required(data, "image")?)? },
         RecordKind::CoverageSource => Shape::Coverage,
         RecordKind::Effect => Shape::Effect,

@@ -47,8 +47,8 @@ export async function checkDeviceImagePlacement({call,evaluate,settle}) {
     await evaluate(`placementTest.photos=placementTest.files;placementTest.files=[new File([placementTest.saved],'tablet-placement.capy')]`);
     await invoke('open_document');await idle();assert.deepEqual(imageIdentity(await save()),sources);
     const first=packageObjects(baseline,'capy.image-object/1')[0].data.name;
-    const layer=await evaluate('Number(layerApp.state().layers.find(l=>l.object_count>0).id)');
-    await invoke('move');await evaluate(`layerApp.dispatch({type:'object',action:{op:'expand',layer:${layer},expanded:true}});layerApp.dispatch({type:'object',action:{op:'select',id:Number(layerApp.state().layers.find(l=>l.object_count>0).objects.find(o=>o.label===${JSON.stringify(first)}).id),extend:false}})`);await settle();
+    const layer=await evaluate('Number(layerApp.state().layers.find(l=>l.object).id)');
+    await invoke('move');await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(layerApp.state().layers.find(l=>l.object&&l.label===${JSON.stringify(first)}).id)})`);await settle();
     await press('placement_original_size');
     assert.equal(packageObjects(await save(),'capy.image-object/1').find(o=>o.data.name===first).data.affine[0],1);
     await evaluate('placementTest.files=placementTest.photos');

@@ -275,9 +275,9 @@ pub(super) const HANDLES: [[f32; 2]; 8] = [
 
 
 fn source_frame(doc: &Document, target: OccurrenceHandle) -> Rect {
-    if let Some(children) = doc.object_layer_children(target) {
+    if let Some(object) = doc.scene().object_handle(target) {
         let origin = doc.scene().layer_origin(Some(target)).map(|v| v as f64);
-        return doc.object_document_bounds(children.iter().copied()).map_or(Rect::EMPTY, |[min, max]| Rect {
+        return doc.object_document_bounds([object]).map_or(Rect::EMPTY, |[min, max]| Rect {
             min: Point { x: (min[0] - origin[0]) as f32, y: (min[1] - origin[1]) as f32 },
             max: Point { x: (max[0] - origin[0]) as f32, y: (max[1] - origin[1]) as f32 },
         });

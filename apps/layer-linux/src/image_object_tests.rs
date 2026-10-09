@@ -5,7 +5,7 @@ use super::canvas_bar_tests::{center, document, remote_input};
 use super::new_photo::{capture_ui, invoke, ready};
 use super::*;
 use layer_core::authored::{Affine64, ImageObjectHandle, OccurrenceHandle};
-use layer_ui::{LayerCanvasTool, NoticeActionId, ObjectAction};
+use layer_ui::{LayerCanvasTool, NoticeActionId};
 use serde_json::json;
 
 const SHIFT: u32 = 0xffe1;
@@ -16,30 +16,27 @@ fn solid(extent: [u32; 2], rgba: [u8; 4]) -> layer_core::authored::Image {
     layer_core::color::source::rgba8_source(extent, move |_, _| rgba).into()
 }
 
-/// A paint layer below an image layer whose blue image overlaps and covers
-/// part of a red one.
+/// A raster layer below separate blue and red Object layers.
 fn fixture() -> (layer_core::Document, OccurrenceHandle, [ImageObjectHandle; 2]) {
     let mut doc = new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    let (layer, edit) = doc.create_object_layer_edit("Images", None, 0).unwrap();
-    doc.apply(edit).unwrap();
     let mut handles = Vec::new();
+    let mut layers = Vec::new();
     for (index, (name, rgba, offset)) in [("Blue", [30, 60, 220, 255], [180., 140.]), ("Red", [220, 40, 30, 255], [100., 100.])].into_iter().enumerate() {
-        let mut object = layer_core::ImageObject::new(solid([200, 150], rgba), name);
+        let mut object = layer_core::ImageObject::new(solid([200, 150], rgba));
         object.affine = Affine64([1., 0., 0., 1., offset[0], offset[1]]);
-        let (handle, edit) = doc.add_image_object_edit(layer, object, index).unwrap();
+        let (layer, edit) = doc.create_object_layer_edit(name, object, None, index).unwrap();
         doc.apply(edit).unwrap();
-        handles.push(handle);
+        handles.push(doc.scene().object_handle(layer).unwrap()); layers.push(layer);
     }
-    doc.working.occurrence = Some(layer);
-    doc.working.target = None;
-    doc.working.layer_selection = [layer].into();
-    doc.working.layer_anchor = Some(layer);
+    let layer = layers[1];
+    doc.working.occurrence = Some(layer); doc.working.target = None;
+    doc.working.layer_selection = [layer].into(); doc.working.layer_anchor = Some(layer);
     (doc, layer, [handles[1], handles[0]])
 }
 
-fn selected(w: &Workspace) -> Vec<ImageObjectHandle> { document(w).working.objects.iter().copied().collect() }
+fn selected(w: &Workspace) -> Vec<ImageObjectHandle> { document(w).selected_objects().into_iter().collect() }
 fn affine(w: &Workspace, object: ImageObjectHandle) -> Affine64 { document(w).scene().object(object).unwrap().affine }
-fn children(w: &Workspace, layer: OccurrenceHandle) -> Vec<ImageObjectHandle> { document(w).object_layer_children(layer).unwrap().to_vec() }
+fn image_order(w: &Workspace) -> Vec<ImageObjectHandle> { let doc = document(w); doc.scene().order().iter().filter_map(|&id| doc.scene().object_handle(id)).collect() }
 
 fn mapped(w: &Workspace, name: &str) -> gtk::Widget {
     super::canvas_bar_tests::until_some(
@@ -49,7 +46,7 @@ fn mapped(w: &Workspace, name: &str) -> gtk::Widget {
 }
 
 fn object_row(w: &Workspace, object: ImageObjectHandle) -> gtk::Widget {
-    mapped(w, &format!("image-object-{}", layer_ui::object_token(object)))
+    mapped(w, &format!("art-layer-{}", layer_ui::occurrence_token(document(w).scene().object_owner(object).unwrap())))
 }
 
 fn row_child(row: &gtk::Widget, class: &str) -> gtk::Widget {
@@ -65,12 +62,6 @@ fn settle(w: &Rc<Workspace>) {
     pump(100);
 }
 
-fn compositor_capture(native: &mut RemoteInput, w: &Workspace, name: &str) {
-    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_none() { return; }
-    let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap_or_else(|_| "default".into());
-    native.perform(json!([{"wait_ms":300},{"capture":format!("{name}-{theme}-{}", w.window.width())}]));
-}
-
 fn capture(w: &Rc<Workspace>, name: &str) {
     let Some(output) = std::env::var_os("LAYER_TEST_ARTIFACTS") else { return };
     let output = std::path::PathBuf::from(output);
@@ -83,7 +74,7 @@ fn capture(w: &Rc<Workspace>, name: &str) {
 #[ignore = "isolated compositor, GPU and native keyboard, mouse and touch delivery"]
 fn native_image_object_rows_picking_and_transforms() {
     let app = native_test_app("art.capycanvas.ImageObjects");
-    let (project, layer, [red, blue]) = fixture();
+    let (project, _layer, [red, blue]) = fixture();
     let w = Workspace::with_project(&app, Some((project, None)));
     apply_fixture_theme(&w);
     w.window.present();
@@ -94,19 +85,11 @@ fn native_image_object_rows_picking_and_transforms() {
     w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Tool { tool: LayerCanvasTool::Move } });
     settle(&w);
     let mut native = remote_input();
-    let token = layer_ui::occurrence_token(layer);
 
-    let expand = row_child(&mapped(&w, &format!("art-layer-{token}")), "layer-expand");
-    assert!(expand.has_css_class("collapsed"));
-    native.click(center(&w, &expand));
-    until(|| state(&w).layers.iter().any(|l| l.id == token && l.expanded && l.objects.len() == 2), "the image list expands");
     let row = object_row(&w, red);
-    let label = widgets(&row).find_map(|widget| widget.downcast::<gtk::Label>().ok().filter(|l| l.is_mapped())).unwrap();
-    assert_eq!(label.text(), "Red");
-    assert_eq!(state(&w).layers.iter().find(|l| l.id == token).unwrap().description, "2 images");
-    until(|| row_child(&object_row(&w, blue), "layer-object-thumbnail").first_child().is_some()
-        && widgets(&object_row(&w, blue)).filter_map(|widget| widget.downcast::<gtk::Picture>().ok()).any(|p| p.paintable().is_some()),
-        "image rows show their own previews");
+    assert!(widgets(&row).filter_map(|widget| widget.downcast::<gtk::Label>().ok()).any(|label| label.text() == "Red"));
+    assert_eq!(state(&w).layers.iter().filter(|row| row.object).count(), 2);
+    until(|| widgets(&object_row(&w, blue)).filter_map(|widget| widget.downcast::<gtk::Picture>().ok()).any(|p| p.paintable().is_some()), "Object layers show their own previews");
     capture(&w, "image-rows");
 
     native.click(doc_point(&w, [120., 120.]));
@@ -115,15 +98,15 @@ fn native_image_object_rows_picking_and_transforms() {
     until(|| selected(&w).len() == 2, "Shift-click adds the blue image");
     capture(&w, "image-selection-handles");
     native.click(doc_point(&w, [600., 450.]));
-    until(|| selected(&w).is_empty(), "an empty click clears image selection");
-    assert_eq!(document(&w).working.occurrence, Some(layer), "and keeps the active layer");
+    assert_eq!(image_order(&w).len(), 2, "empty canvas leaves both Object layers intact");
+
 
     native.click(center(&w, &object_row(&w, red)));
     until(|| selected(&w) == vec![red], "the list selects the obscured image");
     native.perform(json!([{"key":SHIFT,"down":true},{"point":center(&w, &object_row(&w, blue))},{"down":true},{"down":false},{"key":SHIFT,"down":false}]));
     until(|| selected(&w).len() == 2, "Shift-click on a row adds to the selection");
-    native.click(center(&w, &object_row(&w, red)));
-    until(|| selected(&w) == vec![red], "a plain row click selects one image");
+    native.click(center(&w, &row_child(&object_row(&w, red), "layer-thumbnail")));
+    until(|| selected(&w) == vec![red], "the content thumbnail selects one Object layer");
 
     let before = affine(&w, red);
     let checkpoint = ui_session(&w).engine().checkpoint();
@@ -149,56 +132,44 @@ fn native_image_object_rows_picking_and_transforms() {
     assert_eq!(affine(&w, red), moved);
 
     native.click(center(&w, &row_child(&object_row(&w, red), "layer-column")));
-    until(|| !document(&w).scene().object(red).unwrap().visible, "the row eye hides the image");
+    until(|| !document(&w).scene().occurrence(document(&w).scene().object_owner(red).unwrap()).unwrap().visible, "the row eye hides the image");
     native.click(center(&w, &row_child(&object_row(&w, red), "layer-column")));
-    until(|| document(&w).scene().object(red).unwrap().visible, "and shows it again");
+    until(|| document(&w).scene().occurrence(document(&w).scene().object_owner(red).unwrap()).unwrap().visible, "and shows it again");
 
-    assert_eq!(children(&w, layer), vec![blue, red]);
+    assert_eq!(image_order(&w), vec![blue, red]);
     let start = center(&w, &row_child(&object_row(&w, red), "layer-name"));
     let target = object_row(&w, blue).compute_bounds(&w.window).unwrap();
     let end = [start[0], target.y() + target.height() * 0.2];
     native.perform(json!([{"point":start,"down":true},{"point":[start[0],start[1]-4.]},{"point":[start[0],start[1]-12.]},{"wait_ms":60},{"point":end},{"wait_ms":120},{"point":end},{"down":false}]));
-    until(|| children(&w, layer) == vec![red, blue], "a mouse drag on the red row body above the blue row brings it forward");
+    until(|| image_order(&w) == vec![red, blue], "a mouse drag on the red row body above the blue row brings it forward");
     invoke(&w, CommandId::Undo); settle(&w);
-    assert_eq!(children(&w, layer), vec![blue, red], "reordering is one undo step");
+    assert_eq!(image_order(&w), vec![blue, red], "reordering is one undo step");
 
     let start = center(&w, &row_child(&object_row(&w, red), "layer-name"));
     let target = object_row(&w, blue).compute_bounds(&w.window).unwrap();
     let end = [start[0], target.y() + target.height() * 0.2];
     native.perform(json!([{"touch":"down","point":start},{"touch":"move","point":[start[0],start[1]-14.]},{"touch":"up"}]));
     pump(200);
-    assert_eq!(children(&w, layer), vec![blue, red], "an unheld touch on a row does not reorder");
+    assert_eq!(image_order(&w), vec![blue, red], "an unheld touch on a row does not reorder");
     native.perform(json!([{"touch":"down","point":start},{"wait_ms":900},{"touch":"move","point":[start[0],start[1]-6.]},
         {"touch":"move","point":[start[0],start[1]-14.]},{"wait_ms":60},{"touch":"move","point":end},{"wait_ms":120},{"touch":"move","point":end},{"touch":"up"}]));
-    until(|| children(&w, layer) == vec![red, blue], "a held touch drag reorders the rows");
+    until(|| image_order(&w) == vec![red, blue], "a held touch drag reorders the rows");
     invoke(&w, CommandId::Undo); settle(&w);
-    assert_eq!(children(&w, layer), vec![blue, red]);
-    w.dispatch(UiAction::Object { action: ObjectAction::Select { id: layer_ui::object_token(red), extend: false } });
+    assert_eq!(image_order(&w), vec![blue, red]);
+    w.dispatch(UiAction::SelectLayer { id: layer_ui::occurrence_token(document(&w).scene().object_owner(red).unwrap()) });
     settle(&w);
-
-    native.perform(json!([{"point":center(&w, &object_row(&w, red))},{"button":RIGHT,"down":true},{"button":RIGHT,"down":false}]));
-    let item = super::canvas_bar_tests::until_some(|| mapped_label(w.layer_panel.root.upcast_ref(), "Bring to Front"), "the image context menu");
-    compositor_capture(&mut native, &w, "image-row-menu");
-    native.click(center(&w, &item));
-    until(|| children(&w, layer) == vec![red, blue], "Bring to Front orders the image first");
 
     let layers = document(&w).scene().order().len();
     native.perform(json!([{"key":CONTROL,"down":true},{"key":0x6a,"down":true},{"key":0x6a,"down":false},{"key":CONTROL,"down":false}]));
-    until(|| children(&w, layer).len() == 3, "Ctrl+J duplicates the selected image inside its layer");
-    assert_eq!(document(&w).scene().order().len(), layers, "duplication adds no layer");
+    until(|| image_order(&w).len() == 3, "Ctrl+J duplicates the selected Object layer");
+    assert_eq!(document(&w).scene().order().len(), layers + 1, "duplication adds a sibling layer");
     let copy = selected(&w);
     assert_eq!(copy.len(), 1);
     assert!(!copy.contains(&red), "the copy becomes the selection");
     w.area.grab_focus(); pump(50);
-    native.key(0xffff);
-    until(|| children(&w, layer).len() == 2, "Delete removes the selected image, not its layer");
+    invoke(&w, CommandId::DeleteLayer);
+    until(|| image_order(&w).len() == 2, "Delete Layer removes the duplicate");
     assert_eq!(document(&w).scene().order().len(), layers);
-    native.key(0xffff);
-    pump(200);
-    assert_eq!(children(&w, layer).len(), 2, "Delete with no selected image removes nothing");
-
-    native.click(doc_point(&w, [600., 450.]));
-    until(|| selected(&w).is_empty(), "cleared");
     native.perform(json!([{"touch":"down","point":doc_point(&w, [360., 270.])},{"wait_ms":40},{"touch":"up"}]));
     until(|| selected(&w).contains(&blue), "a touch selects an unselected image");
     let camera = state(&w).camera.document_to_surface();
@@ -227,9 +198,8 @@ fn native_image_object_rows_picking_and_transforms() {
     let doc = document(&w);
     let active = doc.working.occurrence.unwrap();
     assert!(doc.scene().paint_source(active).is_some_and(|p| p.raster.is_empty()), "the refused stroke is not replayed");
-    assert_eq!(children(&w, layer).len(), 2);
-    w.dispatch(UiAction::Object { action: ObjectAction::Expand { layer: token, expanded: false } });
-    until(|| state(&w).layers.iter().all(|l| l.objects.is_empty()), "the image list collapses");
+    assert_eq!(image_order(&w).len(), 2);
+
     native.finish();
     w.window.destroy();
     pump(100);
@@ -283,18 +253,18 @@ fn native_image_layer_conversions_merges_and_alpha_selection() {
     until(|| kind(&w, layer) == layer_core::LayerKind::Paint, "Rasterize Layer makes paint");
     settle(&w);
     near_pixels(&shown_points(&w, &points), &original, "rasterized images keep their appearance");
-    assert!(document(&w).artwork.objects.is_empty(), "the image records are consumed");
+    assert!(document(&w).scene().object(red).is_none(), "the rasterized layer consumes its object");
     capture(&w, "image-rasterized");
     invoke(&w, CommandId::Undo); settle(&w);
     assert_eq!(kind(&w, layer), layer_core::LayerKind::Object);
-    assert_eq!(children(&w, layer), vec![blue, red], "undo restores the same images");
+    assert_eq!(image_order(&w), vec![blue, red], "undo restores the same images");
 
     w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Select { id: layer_ui::occurrence_token(ink), mask: false } });
     settle(&w);
-    layer_menu(&w, &mut native, ink, "Convert to Image Layer");
+    layer_menu(&w, &mut native, ink, "Convert to Object Layer");
     until(|| kind(&w, ink) == layer_core::LayerKind::Object, "Convert to Image Layer makes images");
     settle(&w);
-    assert_eq!(document(&w).object_layer_children(ink).unwrap().len(), 1);
+    assert_eq!(usize::from(document(&w).scene().object_handle(ink).is_some()), 1);
     near_pixels(&shown_points(&w, &points), &original, "converted paint keeps its appearance");
     invoke(&w, CommandId::Undo); settle(&w);
     assert_eq!(kind(&w, ink), layer_core::LayerKind::Paint);
@@ -310,13 +280,13 @@ fn native_image_layer_conversions_merges_and_alpha_selection() {
     near_pixels(&shown_points(&w, &points), &original, "merging keeps the composite");
     invoke(&w, CommandId::Undo); settle(&w);
     assert_eq!(document(&w).scene().order().len(), layers);
-    assert_eq!(children(&w, layer), vec![blue, red]);
+    assert_eq!(image_order(&w), vec![blue, red]);
 
     let thumbnail = row_child(&mapped(&w, &format!("art-layer-{}", layer_ui::occurrence_token(layer))), "layer-thumbnail");
     native.perform(json!([{"key":CONTROL,"down":true},{"point":center(&w, &thumbnail)},{"down":true},{"down":false},{"key":CONTROL,"down":false}]));
     until(|| document(&w).working.selection.is_some(), "Ctrl-click on the image layer preview selects its opacity");
     let bounds = document(&w).working.selection.clone().unwrap().coverage_bounds();
-    assert!((bounds.min.x - 100.).abs() < 1. && (bounds.min.y - 100.).abs() < 1. && (bounds.max.x - 380.).abs() < 1. && (bounds.max.y - 290.).abs() < 1., "{bounds:?}");
+    assert!((bounds.min.x - 100.).abs() < 1. && (bounds.min.y - 100.).abs() < 1. && (bounds.max.x - 300.).abs() < 1. && (bounds.max.y - 250.).abs() < 1., "{bounds:?}");
     assert_eq!(kind(&w, layer), layer_core::LayerKind::Object, "selecting opacity keeps the images");
     invoke(&w, CommandId::Deselect); settle(&w);
 
@@ -359,7 +329,7 @@ fn mouse_path(native: &mut RemoteInput, points: &[[f32; 2]]) {
 #[ignore = "isolated compositor, GPU, wl-clipboard and native keyboard and mouse delivery"]
 fn native_image_object_clipboard_and_paste_into() {
     let app = native_test_app("art.capycanvas.ImageClipboard");
-    let (project, layer, [red, blue]) = fixture();
+    let (project, _layer, [red, blue]) = fixture();
     let w = Workspace::with_project(&app, Some((project, None)));
     apply_fixture_theme(&w);
     w.window.present();
@@ -374,15 +344,14 @@ fn native_image_object_clipboard_and_paste_into() {
     until(|| selected(&w) == vec![red], "the red image is selected");
 
     let clip = copied(&w, { let before = clip_nonce(); chord(&mut native, 0x63); before });
-    let objects = clip.objects.clone().expect("Ctrl+C copies the selected images, not pixels");
-    assert_eq!(objects.objects.len(), 1);
+    assert_eq!(clip.layers.as_ref().expect("Ctrl+C retains the selected Object layer").roots.len(), 1);
     assert_eq!(clip.origin, [100, 100], "the picture fallback covers the image's own bounds");
     let formats: Vec<String> = w.window.clipboard().formats().mime_types().iter().map(|m| m.to_string()).collect();
     assert!(formats.iter().any(|m| m == "image/png"), "{formats:?}");
-    assert_eq!(children(&w, layer), vec![blue, red], "Copy leaves the drawing unchanged");
+    assert_eq!(image_order(&w), vec![blue, red], "Copy leaves the drawing unchanged");
 
     chord(&mut native, 0x76);
-    until(|| children(&w, layer).len() == 3, "Ctrl+V pastes the image into its image layer");
+    until(|| image_order(&w).len() == 3, "Ctrl+V pastes a sibling Object layer");
     let pasted = selected(&w);
     assert_eq!(pasted.len(), 1);
     assert!(!pasted.contains(&red), "the paste is a new image object");
@@ -390,16 +359,16 @@ fn native_image_object_clipboard_and_paste_into() {
     assert_eq!(copy.affine, affine(&w, red), "pasting keeps the copied document position");
     assert_eq!(copy.image.id(), red_image, "the paste shares the immutable image");
     invoke(&w, CommandId::Undo); settle(&w);
-    assert_eq!(children(&w, layer), vec![blue, red], "pasting is one undo step");
+    assert_eq!(image_order(&w), vec![blue, red], "pasting is one undo step");
 
     native.click(doc_point(&w, [140., 120.]));
     until(|| selected(&w) == vec![red], "reselect red");
     let place = affine(&w, red);
     let cut = copied(&w, { let before = clip_nonce(); chord(&mut native, 0x78); before });
-    assert!(cut.objects.is_some());
-    until(|| children(&w, layer) == vec![blue], "Cut removes the image after the clipboard has it");
+    assert!(cut.layers.is_some());
+    until(|| image_order(&w) == vec![blue], "Cut removes the image after the clipboard has it");
     chord(&mut native, 0x76);
-    until(|| children(&w, layer).len() == 2, "pasting the cut image restores it");
+    until(|| image_order(&w).len() == 2, "pasting the cut image restores it");
     let restored = selected(&w)[0];
     assert_eq!(affine(&w, restored), place);
     capture(&w, "image-cut-paste");
@@ -417,7 +386,7 @@ fn native_image_object_clipboard_and_paste_into() {
     assert_eq!(doc.scene().occurrence(frame_layer).unwrap().kind(), layer_core::LayerKind::Object);
     let mask = doc.scene().occurrence(frame_layer).unwrap().mask.clone().expect("a mask from the selection");
     assert!(doc.working.selection.is_none(), "the selection became the mask");
-    let inner = doc.object_layer_children(frame_layer).unwrap().to_vec();
+    let inner = vec![doc.scene().object_handle(frame_layer).unwrap()];
     assert_eq!(inner.len(), 1);
     settle(&w);
     capture(&w, "image-paste-into");
@@ -442,7 +411,7 @@ fn native_image_object_clipboard_and_paste_into() {
 #[ignore = "isolated compositor, GPU and native keyboard and mouse delivery"]
 fn native_image_and_pixel_targets_and_crop_keep_images() {
     let app = native_test_app("art.capycanvas.ImageTargets");
-    let (project, layer, [red, blue]) = fixture();
+    let (project, _layer, [red, blue]) = fixture();
     let w = Workspace::with_project(&app, Some((project, None)));
     apply_fixture_theme(&w);
     w.window.present();
@@ -465,18 +434,18 @@ fn native_image_and_pixel_targets_and_crop_keep_images() {
     w.area.grab_focus(); pump(50);
     native.key(0xffff);
     until(|| w.notice.root.is_visible() && state(&w).notice.is_some_and(|notice| notice.actions.len() == 3), "Delete on images offers the image actions");
-    assert_eq!(children(&w, layer), vec![blue, red], "the pixel target never deletes images");
+    assert_eq!(image_order(&w), vec![blue, red], "the pixel target never deletes images");
     capture(&w, "image-pixel-target-refusal");
 
     w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Tool { tool: LayerCanvasTool::Move } });
     settle(&w);
     assert!(document(&w).working.selection.is_some(), "returning to Move keeps the pixel selection");
     w.area.grab_focus(); pump(50);
-    native.key(0xffff);
-    until(|| children(&w, layer) == vec![blue], "Move's Delete removes the selected image, not pixels");
+    invoke(&w, CommandId::DeleteLayer);
+    until(|| image_order(&w) == vec![blue], "Delete Layer removes the selected Object occurrence");
     assert!(document(&w).working.selection.is_some(), "and leaves the pixel selection");
     invoke(&w, CommandId::Undo); settle(&w);
-    assert_eq!(children(&w, layer), vec![blue, red]);
+    assert_eq!(image_order(&w), vec![blue, red]);
 
     let before = [red, blue].map(|h| document(&w).object_document_affine(h).unwrap());
     invoke(&w, CommandId::CropCanvasToSelection);
@@ -484,7 +453,7 @@ fn native_image_and_pixel_targets_and_crop_keep_images() {
     settle(&w);
     let doc = document(&w);
     let size = doc.composition().size;
-    assert_eq!(children(&w, layer), vec![blue, red], "cropping keeps every image, inside the frame or not");
+    assert_eq!(image_order(&w), vec![blue, red], "cropping keeps every image, inside the frame or not");
     let after = [red, blue].map(|h| doc.object_document_affine(h).unwrap());
     let shift = [after[0].0[4] - before[0].0[4], after[0].0[5] - before[0].0[5]];
     assert!(shift[0] < 0. && shift[1] < 0., "content moves by the crop origin: {shift:?}");
@@ -523,8 +492,7 @@ fn native_previews_in_flight_during_a_renderer_replacement_still_arrive() {
     apply_fixture_theme(&w);
     w.window.present();
     settle(&w);
-    w.dispatch(UiAction::Object { action: ObjectAction::Expand { layer: layer_ui::occurrence_token(layer), expanded: true } });
-    let images = [red, blue].map(layer_ui::object_token);
+    let images = [red, blue].map(|id| layer_ui::occurrence_token(document(&w).scene().object_owner(id).unwrap()));
     let mut lost = Vec::new();
     until(|| {
         pump(1);
@@ -593,9 +561,6 @@ fn native_image_objects_with_the_pen() {
     settle(&w);
     let mut native = remote_input();
     let token = layer_ui::occurrence_token(layer);
-    tap(&mut native, Device::Pen, center(&w, &row_child(&mapped(&w, &format!("art-layer-{token}")), "layer-expand")));
-    until(|| state(&w).layers.iter().any(|l| l.id == token && l.objects.len() == 2), "a pen tap expands the image list");
-
     tap(&mut native, Device::Pen, doc_point(&w, [140., 120.]));
     until(|| selected(&w) == vec![red], "a pen tap selects the red image");
     let before = affine(&w, red);
@@ -617,18 +582,11 @@ fn native_image_objects_with_the_pen() {
     tap(&mut native, Device::Pen, center(&w, &row_child(&object_row(&w, red), "layer-name")));
     until(|| selected(&w) == vec![red], "and selects the obscured image");
     tap(&mut native, Device::Pen, center(&w, &row_child(&object_row(&w, red), "layer-column")));
-    until(|| !document(&w).scene().object(red).unwrap().visible, "a pen tap on the eye hides the image");
+    until(|| !document(&w).scene().occurrence(document(&w).scene().object_owner(red).unwrap()).unwrap().visible, "a pen tap on the eye hides the image");
     tap(&mut native, Device::Pen, center(&w, &row_child(&object_row(&w, red), "layer-column")));
-    until(|| document(&w).scene().object(red).unwrap().visible, "and shows it");
+    until(|| document(&w).scene().occurrence(document(&w).scene().object_owner(red).unwrap()).unwrap().visible, "and shows it");
 
-    assert_eq!(children(&w, layer), vec![blue, red]);
-    pen_hold(&mut native, center(&w, &row_child(&object_row(&w, red), "layer-name")));
-    pen_release(&mut native);
-    run_open_menu_item(&w, "Bring to Front");
-    until(|| children(&w, layer) == vec![red, blue], "a pen hold opens the image menu");
-    invoke(&w, CommandId::Undo); settle(&w);
-    assert_eq!(children(&w, layer), vec![blue, red]);
-
+    assert_eq!(image_order(&w), vec![blue, red]);
     let order = document(&w).scene().order().len();
     w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Tool { tool: LayerCanvasTool::Paint } });
     settle(&w);
@@ -649,7 +607,7 @@ fn native_image_objects_with_the_pen() {
     w.area.grab_focus(); pump(50);
     native.key(0xffff);
     pump(300);
-    assert_eq!(children(&w, layer), vec![blue, red], "pixel Delete never removes images");
+    assert_eq!(image_order(&w), vec![blue, red], "pixel Delete never removes images");
     invoke(&w, CommandId::Deselect); settle(&w);
 
     let row = row_child(&mapped(&w, &format!("art-layer-{token}")), "layer-name");
@@ -658,7 +616,7 @@ fn native_image_objects_with_the_pen() {
     run_open_menu_item(&w, "Rasterize Layer");
     until(|| kind(&w, layer) == layer_core::LayerKind::Paint, "a pen-opened layer menu rasterizes the image layer");
     invoke(&w, CommandId::Undo); settle(&w);
-    assert_eq!(children(&w, layer), vec![blue, red], "undo restores the images");
+    assert_eq!(image_order(&w), vec![blue, red], "undo restores the images");
     capture(&w, "image-pen");
     native.finish();
     w.window.destroy();

@@ -56,11 +56,11 @@ export async function checkImagePlacement({call,evaluate,settle}) {
   };
   const save=placementSave({evaluate,invoke,idle});
   const imageLayers=m=>packageOccurrences(m).filter(o=>o.data.content.objects);
-  const objectsIn=m=>imageLayers(m).flatMap(o=>packageObject(m,o.data.content.objects).data.children.map(ref=>packageObject(m,ref)));
+  const objectsIn=m=>imageLayers(m).map(o=>packageObject(m,o.data.content.objects));
   const extent=(m,object)=>packageObject(m,object.data.image).data.extent;
   const affine=object=>object.data.affine??[1,0,0,1,0,0];
   const activeLayer=async()=>(await state()).layers.find(l=>l.editing);
-  const selectedImages=async()=>(await activeLayer())?.objects?.filter(o=>o.selected).map(o=>o.id)??[];
+  const selectedImages=async()=>(await state()).layers.filter(o=>o.object&&o.selected).map(o=>o.id);
   const screen=async(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
   const pointer=async(type,p,pointerType='pen')=>{await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,pointerType,force:type==='mouseReleased'?0:.65});await settle();};
   const drag=async(p,dx,dy)=>{await pointer('mousePressed',p);for(let i=1;i<=4;i++)await pointer('mouseMoved',{x:p.x+dx*i/4,y:p.y+dy*i/4});await pointer('mouseReleased',{x:p.x+dx,y:p.y+dy});await wait('layerApp.app.brush_ready()');};
@@ -75,11 +75,10 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     const shot=await call('Page.captureScreenshot',{format:'png',clip:{x:p.x,y:p.y,width:1,height:1,scale:1}});
     return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return Array.from(context.getImageData(0,0,1,1).data);})()`);
   };
-  const selectImage=async(layer,name)=>{
+  const selectImage=async layer=>{
     await wait('!layerApp.documents.busy()');
-    await evaluate(`layerApp.dispatch({type:'object',action:{op:'expand',layer:${layer}n,expanded:true}})`);await settle();
-    const row=(await state()).layers.find(l=>l.id===String(layer)).objects.find(o=>o.label===name);
-    await evaluate(`layerApp.dispatch({type:'object',action:{op:'select',id:${row.id}n,extend:false}})`);await settle();
+    const row=(await state()).layers.find(o=>o.id===String(layer));
+    await evaluate(`layerApp.dispatch({type:'select_layer',id:${row.id}n})`);await settle();
     assert.deepEqual(await selectedImages(),[row.id]);
   };
   let files;
@@ -117,9 +116,8 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     assert.deepEqual(await evaluate('layerApp.app.photo_formats().map(f=>f.name)'),['OpenEXR','TIFF','PNG','WebP','BMP','JPEG','GIF','HEIF','AVIF']);
 
     await importFiles(files);
-    assert.equal((await state()).layers.length,baseCount+1,'A batch arrives as one image layer');
-    assert.equal((await activeLayer()).object_count,files.length);
-    await evaluate(`layerApp.dispatch({type:'object',action:{op:'expand',layer:${(await activeLayer()).id}n,expanded:true}})`);await settle();
+    assert.equal((await state()).layers.length,baseCount+files.length,'Each file arrives as a named Object layer');
+    assert.equal((await state()).layers.filter(l=>l.object).length,files.length);
     assert.equal((await selectedImages()).length,files.length,'Placement selects every inserted image');
     await click('.canvas-action-bar [data-command=cancel_transform]');
     assert.equal((await state()).layers.length,baseCount,'Cancel leaves no records');
@@ -129,7 +127,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await importFiles(files);
     await click('.canvas-action-bar [data-command=apply_transform]');
     const fitted=await save(),sources=imageIdentity(fitted),originalContents=imageContent(fitted);
-    assert.equal(imageLayers(fitted).length,1);
+    assert.equal(imageLayers(fitted).length,files.length);
     assert.equal(sources.length,files.length,'Each placed photo is one immutable image');
     const placedObjects=objectsIn(fitted);
     assert.equal(placedObjects.length,files.length);
@@ -139,7 +137,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       assert.equal(object.data.interpolation??'linear','linear');
     }
     await invoke('undo');assert.equal((await state()).layers.length,baseCount,'Placement is one undo step');
-    await invoke('redo');assert.equal((await state()).layers.length,baseCount+1);
+    await invoke('redo');assert.equal((await state()).layers.length,baseCount+files.length);
     await evaluate(`window.showOpenFilePicker=async()=>[{async getFile(){return new File([placementTest.saved],'placed.capy')}}]`);
     await invoke('open_document');await idle();await wait('layerApp.app.brush_ready()');
     await evaluate('window.showOpenFilePicker=undefined');
@@ -157,8 +155,9 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     const reopened=await save(),large=objectsIn(reopened).find(o=>extent(reopened,o)[0]===Math.max(...objectsIn(reopened).map(o=>extent(reopened,o)[0]))),largeExtent=extent(reopened,large);
     const objectAffine=async()=>affine(packageObject(await save(),large.id));
     const start=affine(large),largeCentre=map(start,largeExtent[0]/2,largeExtent[1]/2);
-    const layer=(await state()).layers.find(l=>l.object_count===files.length).id;
-    await invoke('move');await selectImage(layer,large.data.name);
+    const name=packageOccurrences(reopened).find(o=>o.data.content.objects?.ref===large.id).data.name;
+    const layer=(await state()).layers.find(l=>l.object&&l.label===name).id;
+    await invoke('move');await selectImage(layer);
     for(const id of ['transform_distort','transform_warp']) {
       const shown=await command(id);
       if(shown){assert.equal(shown.enabled,false,`${id} is unavailable for images`);assert.ok(shown.reason,`${id} says why`);}
@@ -200,7 +199,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
 
     for(const theme of ['light','dark']){
       await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
-      const before=await save(),label=imageLayers(before)[0].data.name;
+      const before=await save(),label=(await state()).layers.find(l=>l.id===String(layer)).label;
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'select',id:${layer},mask:false}})`);await settle();
       await invoke('brush');
       await evaluate(`layerApp.dispatch({type:'select_brush',id:21});layerApp.dispatch({type:'set_brush_size',value:80});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'Srgb',rgba:[.15,.25,.9,1]}}});`);await settle();
@@ -216,9 +215,9 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       const actionButton=await evaluate(`(()=>{const b=document.querySelectorAll('.canvas-notice-actions .canvas-notice-action')[2];const r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2,label:b.textContent,disabled:b.disabled}})()`);
       assert.equal(actionButton.disabled,false,'Rasterize Layer is offered enabled');
       for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...actionButton,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();
-      await wait(`!layerApp.state().layers.find(l=>l.id==${layer}n)?.object_count&&layerApp.app.brush_ready()&&!layerApp.state().document_file.busy`);
+      await wait(`!layerApp.state().layers.find(l=>l.id==${layer}n)?.object&&layerApp.app.brush_ready()&&!layerApp.state().document_file.busy`);
       const rasterized=await save();
-      assert.equal(imageLayers(rasterized).length,0,'Rasterize Layer turns the image layer into paint');
+      assert.equal(imageLayers(rasterized).length,files.length-1,'Rasterize Layer converts only the selected Object layer');
       const paint=packageOccurrences(rasterized).find(o=>o.data.name===label&&o.data.content.paint);
       assert.ok(paint,'The occurrence keeps its name');
       await stroke();
@@ -230,7 +229,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await invoke('undo');await invoke('undo');assert.deepEqual(rasterIdentity(await save()),rasterIdentity(rasterized));
       await invoke('undo');
       const restored=await save();
-      assert.equal(imageLayers(restored).length,1,'One Undo restores the image layer');
+      assert.equal(imageLayers(restored).length,files.length,'One Undo restores the selected Object beside its unchanged siblings');
       assert.deepEqual(imageIdentity(restored),sources);
       assert.deepEqual(objectsIn(restored).map(o=>o.id).sort(),objectsIn(before).map(o=>o.id).sort(),'Undo restores the image identities');
       console.log(`Image placement ${theme}: paint refusal, Rasterize Layer, painting, Liquify and one-step Undo passed`);
@@ -248,40 +247,36 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await click('.canvas-action-bar [data-command=cancel_transform]');
     assert.equal((await state()).layers.length,before.layers.length);
     const p=await evaluate(`(()=>{const r=layerApp.canvas.getBoundingClientRect(),c=layerApp.app.camera(),a=c.work_area;return{x:r.x+(a[0]+a[2]*.6)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]*.6)*r.height/c.viewport[1]}})()`);
-    const imageLayer=(await state()).layers.find(l=>l.id===String(layer));
     await evaluate(`layerApp.dispatch({type:'layer',action:{op:'select',id:${layer},mask:false}})`);await settle();
     await drop(p,[files[0]]);
     await idle();await placed();
-    assert.equal((await state()).layers.length,before.layers.length,'A canvas drop adds to the active image layer');
-    assert.equal((await state()).layers.find(l=>l.id===String(layer)).object_count,imageLayer.object_count+1);
+    assert.equal((await state()).layers.length,before.layers.length+1,'A canvas drop creates a sibling Object layer');
     await click('.canvas-action-bar [data-command=cancel_transform]');
-    assert.equal((await state()).layers.find(l=>l.id===String(layer)).object_count,imageLayer.object_count);
-    const paint=before.layers.find(l=>!l.group&&!l.object_count&&l.label!=='Paper');
+    assert.equal((await state()).layers.length,before.layers.length);
+    const paint=before.layers.find(l=>!l.group&&!l.object&&l.label!=='Paper');
     await evaluate(`layerApp.dispatch({type:'layer',action:{op:'select',id:${paint.id},mask:false}})`);await settle();
     await drop(p,[files[0]]);
     await idle();await placed();
     assert.equal((await state()).layers.length,before.layers.length+1,'A canvas drop above paint makes an image layer');
     await click('.canvas-action-bar [data-command=cancel_transform]');
     assert.equal((await state()).layers.length,before.layers.length);
-    await evaluate(`layerApp.dispatch({type:'object',action:{op:'expand',layer:${layer}n,expanded:true}})`);await settle();
-    const childRow=await evaluate(`(()=>{const r=document.querySelector('.layer-object-row[data-object-layer="${layer}"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    const childRow=await evaluate(`(()=>{const r=document.querySelector('.layer-row[data-layer="${layer}"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await drop(childRow,[files[1]]);
     await idle();await placed();
-    assert.equal((await state()).layers.length,before.layers.length,'A drop on an image row adds to that image layer');
-    assert.equal((await state()).layers.find(l=>l.id===String(layer)).object_count,imageLayer.object_count+1);
+    assert.equal((await state()).layers.length,before.layers.length+1,'A drop on an Object row creates a named sibling');
     await click('.canvas-action-bar [data-command=cancel_transform]');
-    assert.equal((await state()).layers.find(l=>l.id===String(layer)).object_count,imageLayer.object_count);
+    assert.equal((await state()).layers.length,before.layers.length);
 
 
     await call('Browser.grantPermissions',{origin:await evaluate('location.origin'),permissions:['clipboardReadWrite','clipboardSanitizedWrite']},null);
     const copied=await call('Runtime.evaluate',{expression:`navigator.clipboard.write([new ClipboardItem({['web '+placementTest.inputFiles[0].type]:placementTest.inputFiles[0]})])`,userGesture:true,awaitPromise:true});
     assert.equal(copied.exceptionDetails,undefined);
-    const countBefore=(await state()).layers.find(l=>l.id===String(layer)).object_count;
+    const countBefore=(await state()).layers.length;
     await invoke('paste_image');await idle();await placed();
     await click('.canvas-action-bar [data-command=apply_transform]');
     const pasted=imageContent(await save());
     assert.ok(pasted.some(image=>originalContents.some(original=>JSON.stringify(image)===JSON.stringify(original))),'Clipboard retains original source samples');
-    await invoke('undo');assert.equal((await state()).layers.find(l=>l.id===String(layer))?.object_count,countBefore);
+    await invoke('undo');assert.equal((await state()).layers.length,countBefore);
 
     await evaluate(`placementTest.read=File.prototype.arrayBuffer;File.prototype.arrayBuffer=function(){const file=this;return new Promise(resolve=>{placementTest.release=()=>placementTest.read.call(file).then(resolve)})}`);
     const pendingLayers=(await state()).layers.length;
@@ -319,7 +314,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await invoke('open_document');await idle();await wait('layerApp.app.brush_ready()');await evaluate('window.showOpenFilePicker=undefined');
     for(const theme of ['light','dark']) {
       await ready();await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
-      const baseline=await save(),ownerOccurrence=imageLayers(baseline)[0],masked=(await state()).layers.find(l=>l.object_count>0).id;
+      const baseline=await save(),ownerOccurrence=imageLayers(baseline)[0],masked=(await state()).layers.find(l=>l.object).id;
       await ready();await evaluate(`layerApp.dispatch({type:'layer',action:{op:'add_mask',id:${masked},replace:false}});layerApp.dispatch({type:'layer',action:{op:'link_mask',id:${masked},value:false}});layerApp.dispatch({type:'layer',action:{op:'select',id:${masked},mask:true}})`);await settle();
       await invoke('eraser');await ready();await evaluate(`layerApp.dispatch({type:'select_brush',id:3});layerApp.dispatch({type:'set_brush_size',value:120});`);await settle();
       await stroke();

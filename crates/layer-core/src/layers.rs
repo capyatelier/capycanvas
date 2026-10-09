@@ -700,11 +700,11 @@ impl Document {
         for h in roots {
             let o = scene.occurrence(h).ok_or(DocumentError::MissingOccurrence(h))?;
             if !o.positioned() {
-                return Err(DocumentError::InvalidLayerOperation("Select paint layers, image layers or groups to move"));
+                return Err(DocumentError::InvalidLayerOperation("Select paint layers, object layers or groups to move"));
             }
             let subtree = self.layer_subtrees(&[h]);
             if !subtree.iter().any(|h| scene.occurrence(*h).is_some_and(|o| matches!(o.kind(), LayerKind::Paint | LayerKind::Object))) {
-                return Err(DocumentError::InvalidLayerOperation("This group has no paint or image layers"));
+                return Err(DocumentError::InvalidLayerOperation("This group has no paint or object layers"));
             }
             members.extend(subtree);
         }
@@ -1011,7 +1011,7 @@ impl Document {
 
     pub(crate) fn removal_edits(&self, ids: &BTreeSet<OccurrenceHandle>) -> Result<Vec<Edit>, DocumentError> {
         let mut paints = BTreeSet::new();
-        let mut object_layers=BTreeSet::new();
+        let mut objects=BTreeSet::new();
         let mut coverage = BTreeSet::new();
         let mut stacks = BTreeSet::new();
         let mut effects = BTreeSet::new();
@@ -1022,7 +1022,7 @@ impl Document {
                 OccurrenceContent::Paint(h) => {
                     paints.insert(h);
                 }
-                OccurrenceContent::Objects(h)=>{object_layers.insert(h);},
+                OccurrenceContent::Objects(h)=>{objects.insert(h);},
                 OccurrenceContent::Stack(h) => {
                     stacks.insert(h);
                 }
@@ -1043,7 +1043,7 @@ impl Document {
                 OccurrenceContent::Paint(h) => {
                     paints.remove(&h);
                 }
-                OccurrenceContent::Objects(h)=>{object_layers.remove(&h);},
+                OccurrenceContent::Objects(h)=>{objects.remove(&h);},
                 OccurrenceContent::Stack(h) => {
                     stacks.remove(&h);
                 }
@@ -1065,11 +1065,7 @@ impl Document {
         for h in paints {
             edits.push(Edit::Paint(RecordChange::remove(&self.artwork.paint, h)?));
         }
-        let mut objects=BTreeSet::new();
-        for &h in &object_layers {objects.extend(self.artwork.object_layers.get(h).ok_or(DocumentError::InvalidLayerOperation("Missing object layer"))?.children.iter().copied());}
-        for (h,_,layer) in self.artwork.object_layers.iter() {if !object_layers.contains(&h) {for object in &layer.children {objects.remove(object);}}}
         for h in objects {edits.push(Edit::ImageObject(RecordChange::remove(&self.artwork.objects,h)?));}
-        for h in object_layers {edits.push(Edit::ObjectLayer(RecordChange::remove(&self.artwork.object_layers,h)?));}
         for h in coverage {
             edits.push(Edit::Coverage(RecordChange::remove(&self.artwork.coverage, h)?));
         }

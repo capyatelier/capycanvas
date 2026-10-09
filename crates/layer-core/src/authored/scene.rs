@@ -69,7 +69,7 @@ impl SceneIndex {
             let o=artwork.occurrences.get(h).ok_or("Missing placed occurrence")?;
             match o.content {
                 OccurrenceContent::Paint(p)=>index.paint_uses[p.index() as usize]=Some(h),
-                OccurrenceContent::Objects(p)=>{for &child in &artwork.object_layers.get(p).ok_or("Missing object layer")?.children {index.object_uses[child.index() as usize]=Some(h);}},
+                OccurrenceContent::Objects(p)=>index.object_uses[p.index() as usize]=Some(h),
                 OccurrenceContent::Selection(p)=>index.selection_uses[p.index() as usize]=Some(h),_=>(),
             }
             if let Some(mask)=&o.mask {index.coverage_uses[mask.source.index() as usize]=Some(h);}
@@ -153,7 +153,8 @@ impl<'a> SceneView<'a> {
     pub fn original(self,t:SourceTarget)->Option<&'a Arc<crate::color::source::SourceImage>>{match t{SourceTarget::Paint(h)=>Some(self.paint(h)?.base.as_ref()?.image.storage()),_=>None}}
     #[inline]
     pub fn paint_base(self,t:SourceTarget)->Option<&'a PaintBase>{match t{SourceTarget::Paint(h)=>self.paint(h)?.base.as_ref(),_=>None}}
-    pub fn object_layer(self,h:OccurrenceHandle)->Option<&'a ObjectLayer>{match self.occurrence(h)?.content{OccurrenceContent::Objects(h)=>self.artwork.object_layers.get(h),_=>None}}
+    pub fn object_handle(self,h:OccurrenceHandle)->Option<ImageObjectHandle>{match self.occurrence(h)?.content{OccurrenceContent::Objects(h)=>Some(h),_=>None}}
+    pub fn object_layer(self,h:OccurrenceHandle)->Option<&'a ImageObject>{self.object(self.object_handle(h)?)}
     pub fn object_owner(self,h:ImageObjectHandle)->Option<OccurrenceHandle>{self.index.object_uses.get(h.index() as usize).copied().flatten()}
     pub fn object(self,h:ImageObjectHandle)->Option<&'a ImageObject>{self.artwork.objects.get(h)}
     pub fn artwork(self)->&'a Artwork{self.artwork}

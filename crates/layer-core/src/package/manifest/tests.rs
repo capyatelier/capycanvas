@@ -220,9 +220,9 @@ fn metadata_and_reference_limits_apply_before_graph_adoption() {
 
 fn objects_fixture() -> Value {
     let mut value = fixture("empty");
-    value["objects"][1]["data"]["entries"] = json!([reference_value(3)]);
-    push_object(&mut value,json!({"id":id(3),"type":"capy.occurrence/3","data":{"content":{"objects":reference_value(7)},"offset":["-256","128"]}}));
-    push_object(&mut value,json!({"id":id(7),"type":"capy.object-layer/1","data":{"children":[reference_value(8),reference_value(9)]}}));
+    value["objects"][1]["data"]["entries"] = json!([reference_value(3),reference_value(7)]);
+    push_object(&mut value,json!({"id":id(3),"type":"capy.occurrence/3","data":{"content":{"objects":reference_value(8)},"offset":["-256","128"]}}));
+    push_object(&mut value,json!({"id":id(7),"type":"capy.occurrence/3","data":{"content":{"objects":reference_value(9)}}}));
     for n in [8,9] { push_object(&mut value,json!({"id":id(n),"type":"capy.image-object/1","data":{"image":reference_value(10)}})); }
     push_object(&mut value,json!({"id":id(10),"type":"capy.image/1","data":{"extent":[1,1],"interpretation":{"channels":"rgba","depth":"u8","profile":{"builtin":"srgb"}},"tiles":[]}}));
     value
@@ -235,11 +235,11 @@ fn drawable_ownership_is_distinct_from_immutable_image_sharing() {
     assert_eq!(manifest.support,Support::Editable);
     assert_eq!(manifest.objects[&id(8)]["data"]["image"],manifest.objects[&id(9)]["data"]["image"]);
     let mut duplicated = value.clone();
-    duplicated["objects"][4]["data"]["children"] = json!([reference_value(8),reference_value(8)]);
-    assert!(matches!(parse(&duplicated,&directory(&[])),Err(DecodeError::Invalid(_))));
+    duplicated["objects"][4]["data"]["content"]["objects"] = reference_value(8);
+    assert!(matches!(known(&duplicated,&directory(&[])).support,Support::Preserved(_)));
     let mut shared_child = value.clone();
-    push_object(&mut shared_child,json!({"id":id(11),"type":"capy.object-layer/1","data":{"children":[reference_value(8)]}}));
-    assert!(matches!(parse(&shared_child,&directory(&[])),Err(DecodeError::Invalid(_))));
+    push_object(&mut shared_child,json!({"id":id(11),"type":"capy.occurrence/3","data":{"content":{"objects":reference_value(8)}}}));
+    assert!(matches!(known(&shared_child,&directory(&[])).support,Support::Preserved(_)));
     let mut wrong_type = value.clone();
     wrong_type["objects"][5]["data"]["image"] = reference_value(7);
     assert!(matches!(parse(&wrong_type,&directory(&[])),Err(DecodeError::Invalid(_))));
@@ -295,7 +295,7 @@ fn effect_programs_share_context_restrictions_and_removed_types_preserve() {
         value["objects"][3]["data"] = data;
         assert!(matches!(parse(&value,&directory(&[])),Err(DecodeError::Invalid(_))));
     }
-    for removed in ["capy.paint-source/1","capy.effect/1","capy.effect-definition/1"] {
+    for removed in ["capy.paint-source/1","capy.effect/1","capy.effect-definition/1","capy.object-layer/1"] {
         value["objects"][3] = json!({"id":id(7),"type":removed,"data":{}});
         assert!(matches!(known(&value,&directory(&[])).support,Support::Preserved(_)));
     }

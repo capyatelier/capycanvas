@@ -1,6 +1,6 @@
 use super::registry::{self,RecordKind};
 use super::{archive::{self, Directory, InputMember, Member}, artwork_records, manifest::{Manifest, ManifestLimits, ManifestRead}, resources::{self, ResourceInventory, ResourceReader, PreparedResources}, selection_records, transfer::TransferLayout, transport::BackingReader, ImmutableBacking};
-use crate::{authored::{Artwork, ArtworkCapture, CaptureCheckpoint, Handle, ImageObjectHandle, OccurrenceHandle, PortableId, SourceTarget, Support, WorkingState}, Document, Edit, Editor, HistoryEntry, ProjectLimits};
+use crate::{authored::{Artwork, ArtworkCapture, CaptureCheckpoint, Handle, OccurrenceHandle, PortableId, SourceTarget, Support, WorkingState}, Document, Edit, Editor, HistoryEntry, ProjectLimits};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, io::{Cursor, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
@@ -70,17 +70,17 @@ fn active(cancel:&AtomicBool)->Result<(),String> {if cancel.load(Ordering::Relax
 pub(crate) struct WorkingRecord {
     pub(crate) generation:u64, selection:Option<Value>, selection_overlays:crate::authored::SelectionOverlays,
     layer_selection:BTreeSet<OccurrenceHandle>,layer_anchor:Option<OccurrenceHandle>,solo_visibility:Option<BTreeMap<OccurrenceHandle,bool>>,
-    occurrence:Option<OccurrenceHandle>,target:Option<SourceTarget>,inspect_mask:Option<OccurrenceHandle>,view_origin:[i64;2],objects:BTreeSet<ImageObjectHandle>,
+    occurrence:Option<OccurrenceHandle>,target:Option<SourceTarget>,inspect_mask:Option<OccurrenceHandle>,view_origin:[i64;2],
 }
 impl WorkingRecord {
     pub(crate) fn capture(working:&WorkingState,resources:&mut ResourceInventory)->Result<Self,String> {
-        let WorkingState {generation,selection,selection_overlays,layer_selection,layer_anchor,solo_visibility,occurrence,target,inspect_mask,view_origin,objects}=working;
+        let WorkingState {generation,selection,selection_overlays,layer_selection,layer_anchor,solo_visibility,occurrence,target,inspect_mask,view_origin}=working;
         Ok(Self {generation:*generation,selection:selection.as_ref().map(|s|selection_records::encode_selection(s,resources)).transpose()?,
-            selection_overlays:selection_overlays.clone(),layer_selection:layer_selection.clone(),layer_anchor:*layer_anchor,solo_visibility:solo_visibility.clone(),occurrence:*occurrence,target:*target,inspect_mask:*inspect_mask,view_origin:*view_origin,objects:objects.clone()})
+            selection_overlays:selection_overlays.clone(),layer_selection:layer_selection.clone(),layer_anchor:*layer_anchor,solo_visibility:solo_visibility.clone(),occurrence:*occurrence,target:*target,inspect_mask:*inspect_mask,view_origin:*view_origin})
     }
     pub(crate) fn decode(&self,reader:&mut ResourceReader<'_>)->Result<WorkingState,String> {
         Ok(WorkingState {generation:self.generation,selection:self.selection.as_ref().map(|s|selection_records::decode_selection(s,reader)).transpose().map_err(|e|e.to_string())?,
-            selection_overlays:self.selection_overlays.clone(),layer_selection:self.layer_selection.clone(),layer_anchor:self.layer_anchor,solo_visibility:self.solo_visibility.clone(),occurrence:self.occurrence,target:self.target,inspect_mask:self.inspect_mask,view_origin:self.view_origin,objects:self.objects.clone()})
+            selection_overlays:self.selection_overlays.clone(),layer_selection:self.layer_selection.clone(),layer_anchor:self.layer_anchor,solo_visibility:self.solo_visibility.clone(),occurrence:self.occurrence,target:self.target,inspect_mask:self.inspect_mask,view_origin:self.view_origin})
     }
 }
 const RASTER_INDEX_CHUNK:usize=64;
@@ -249,7 +249,7 @@ pub(crate) fn validate_history_checkpoints(current:u64,next:u64,undo:impl IntoIt
 
 fn difference(before:&Document,after:&Document)->Result<Edit,String> {
     for artwork in [&before.artwork,&after.artwork] {
-        let Artwork {id:_,root:_,compositions:_,stacks:_,occurrences:_,paint:_,coverage:_,effects:_,object_layers:_,objects:_,selections:_,guides:_,outputs:_,default_output:_,metadata:_,extensions:_}=artwork;
+        let Artwork {id:_,root:_,compositions:_,stacks:_,occurrences:_,paint:_,coverage:_,effects:_,objects:_,selections:_,guides:_,outputs:_,default_output:_,metadata:_,extensions:_}=artwork;
     }
     if before.artwork.id!=after.artwork.id || before.artwork.root!=after.artwork.root || before.artwork.default_output!=after.artwork.default_output
         || before.artwork.metadata!=after.artwork.metadata || before.artwork.extensions!=after.artwork.extensions {return Err("Inconsistent session history roots".into());}
@@ -266,7 +266,7 @@ fn difference(before:&Document,after:&Document)->Result<Edit,String> {
         }};
     }
     store!(compositions,Composition);store!(stacks,Stack);store!(occurrences,Occurrence);store!(paint,Paint);store!(coverage,Coverage);
-    store!(effects,Effect);store!(object_layers,ObjectLayer);store!(objects,ImageObject);store!(selections,SavedSelection);store!(guides,Guides);store!(outputs,Output);
+    store!(effects,Effect);store!(objects,ImageObject);store!(selections,SavedSelection);store!(guides,Guides);store!(outputs,Output);
     let mut working=after.working.clone();working.generation=before.working.generation;
     if before.working!=working {edits.push(Edit::Working(after.working.clone()));}
     Ok(Edit::Batch(edits))
@@ -285,7 +285,7 @@ fn intern_artwork(art:&mut Artwork,state:&StateRecord,objects:&[ObjectVersion],d
             match object["type"].as_str().and_then(registry::descriptor).map(|record|record.kind) {
                 Some(RecordKind::Composition)=>reuse!(compositions),Some(RecordKind::Stack)=>reuse!(stacks),Some(RecordKind::Occurrence)=>reuse!(occurrences),
                 Some(RecordKind::PaintSource)=>reuse!(paint),Some(RecordKind::CoverageSource)=>reuse!(coverage),Some(RecordKind::Effect)=>reuse!(effects),
-                Some(RecordKind::ObjectLayer)=>reuse!(object_layers),Some(RecordKind::ImageObject)=>reuse!(objects),Some(RecordKind::Image)=>{},
+                Some(RecordKind::ImageObject)=>reuse!(objects),Some(RecordKind::Image)=>{},
                 Some(RecordKind::Selection)=>reuse!(selections),Some(RecordKind::Guides)=>reuse!(guides),Some(RecordKind::Output)=>reuse!(outputs),_=>return Err("Unsupported interned session record".into()),
             }
         }else {owners[*index]=Some(documents.len());}
