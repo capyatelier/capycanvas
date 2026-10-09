@@ -826,3 +826,49 @@ gesture, and compare canvas submissions with the canvas `SurfaceView`'s latches
 and the UI layer's. Restarting the app hides the cause. Do not add device-idle
 waits or reconfiguration loops before the missing completion or consumption
 signal is found.
+
+## Distribution APK verification
+
+The GitHub APK must open without Google Play or Google services. Play App Signing
+preserves the signing identity used by existing installations; Automatic
+protection adds an installer and licence check that prevents this use.
+
+[`android_apk.py`](../../tools/build/android_apk.py) downloads the
+[unprotected standalone APKs](https://developers.google.com/android-publisher/api-ref/rest/v3/generatedapks/list)
+provided by Play. When protection is disabled, it can use the universal APK.
+It checks the actual manifest and DEX for Play licensing and Google service code,
+rejects split APKs, checks the package, version, Android 10 minimum and ARM64
+renderer, and verifies the signature before publishing the download. The public
+signing certificate in the script matches existing Android installations; an
+upload-key signature is not a substitute. A signing-key change needs explicit
+upgrade testing before changing this check.
+
+APK verification uses Java 25 and Android Build Tools 37.0.0. Play's APK
+Signature Scheme v3.2 signatures use ML-DSA; Java 17 cannot verify them. The
+download step selects the runner's Java 25 through `JAVA_HOME_25_X64`. For local
+verification, point `JAVA_HOME` at Java 25 and prepend `$JAVA_HOME/bin` to `PATH`.
+
+If Play supplies only unprotected splits, turn off Automatic protection for the
+release in Play Console before uploading its bundle. A per-release opt-out does
+not disable protection for later releases. The workflow fails rather than
+publishing a protected or incomplete APK. See Google's
+[unprotected APK instructions](https://support.google.com/googleplay/android-developer/answer/10183279?hl=en).
+
+Run the packaging regression checks without credentials or a device:
+
+```bash
+python3 -m unittest discover -s tools/build -p 'test_android_*.py'
+```
+
+For local verification, set `CAPY_APK_VERSION` to the APK's version and
+`CAPY_APK_PATH` to its path, then run:
+
+```bash
+python3 tools/build/android_apk.py verify "$CAPY_APK_VERSION" "$CAPY_APK_PATH"
+```
+
+Before release, test the exact download on private Android installs with and
+without Google services: first launch offline, painting, import, save/reopen,
+export, restart and updating an existing installation without losing drawings.
+Google service independence does not
+relax the [Android GPU requirements](#prerequisites).

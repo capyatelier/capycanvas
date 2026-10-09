@@ -2,19 +2,249 @@
 
 [Developer guide](README.md)
 
+Use this guide to release Linux, Web, Android, Windows, macOS and iPadOS from
+one tested source tag. Run commands from the repository root. Platform guides
+provide test and build details; the release sequence lives here.
+
+## Distribution channels
+
+| Platform | Release channel today | What the agent must finish |
+| --- | --- | --- |
+| Linux x86_64 | Signed Flatpak download and project-hosted update repository | Publish the GitHub Release, deploy Flatpak updates, verify installation and updating. Flathub app publication is not configured by these workflows. |
+| Web | Downloadable static/PWA ZIP and `editor.capycanvas.art` | Publish the ZIP and deploy the editor from the same tag; verify the live revision and offline/update journeys. |
+| Android ARM64 | Direct Play-signed APK and working Play internal testing | Verify both installation paths. Closed testing (`alpha`) may be awaiting Google review; check its state before promotion. Production Play rollout is outside this procedure. |
+| Windows x64 | Signed installer and portable ZIP | Verify both downloads. Microsoft Store is not set up; retain the generated MSIX and report Store submission as deferred. |
+| macOS Apple silicon | Signed, notarized DMG | Verify download, Gatekeeper, installation and updating. The workflow does not submit a Mac App Store build. |
+| iPadOS | Working TestFlight beta | Verify the exact build and its availability to the intended tester group. Beta review and production App Store submission are separate actions. |
+
+Check current account and review states before each release. A public beta link,
+successful upload or previous release does not prove that this build is available
+to testers. Store setup and production launch are separate tasks; complete the
+configured channels and report deferred channels explicitly.
+
+## Publishing a release
+
+### 1. Check access and readiness
+
+Use the assigned worktree and install the [Git hooks](../COMMIT_GUIDE.md).
+Confirm authorized Actions access to `capyatelier/capycanvas`,
+`capyatelier/capycanvas-release` and `capyatelier/capycanvas-web`, approval access
+to the protected `release` environment, and the configured
+[signing credentials](#signing-credentials). Confirm Play upload/internal testing
+access and App Store Connect upload/TestFlight access. Check existing reviews
+before changing either testing channel.
+
+**Pushing a release tag has store side effects.** It signs packages, uploads to
+Play, rolls out internal testing, and uploads the iPad build to App Store Connect.
+Every platform job must succeed before CI creates the draft GitHub Release.
+Missing Play or Apple upload access blocks that draft; missing Microsoft Store
+setup does not. There is no platform-skip input. Restore missing required access
+before tagging; an unsigned build is not a substitute for signed distribution.
+
+Run the [checks for the changes](testing.md), the
+[publication checks](publication.md#separate-binary-release-gate) and affected
+[performance measurements](../PERFORMANCE_TARGETS.md) on reference hardware.
+Arrange private test profiles and [reserved devices](devices.md) for final
+package verification on every host. Keep sanitized evidence under
+`artifacts/release/<tag>/`; record the tag, commit, workflow runs, package hashes,
+journeys, failures and each channel's actual state.
+
+### 2. Prepare one version and source commit
+
+Choose an unused version under the [version rules](#versions), edit the workspace
+version in `Cargo.toml`, then regenerate derived files:
+
+```bash
+cargo update --workspace --offline
+python3 apps/layer-apple/scripts/project.py
+```
+
+Add the matching `<release>` with notes in words a painter knows to
+`apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml`. Commit these files
+together. Fetch and rebase onto `origin/main`, rerun checks, and land the tested
+commit on `origin/main` under the [commit guide](../COMMIT_GUIDE.md).
+Set these variables to that version and commit, not a later moving `main`:
+
+```bash
+CAPY_RELEASE_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
+CAPY_RELEASE_TAG="v$CAPY_RELEASE_VERSION"
+CAPY_RELEASE_COMMIT=$(git rev-parse HEAD)
+gh run list --repo capyatelier/capycanvas --workflow ci.yml \
+  --commit "$CAPY_RELEASE_COMMIT" --json databaseId,status,conclusion,url
+```
+
+Wait for CI on that commit to pass. Optional build rehearsal:
+`gh workflow run release.yml --repo capyatelier/capycanvas --ref main`.
+This is unsigned only when dispatched on a branch; dispatching on a release tag
+performs the same signing and store uploads as pushing it. Confirm the rehearsal's
+source SHA, since `main` can advance. It does not publish or verify user journeys,
+and the unsigned iPad archive is not retained as a downloadable artifact.
+
+### 3. Tag and collect the signed candidate
+
+```bash
+git tag -a "$CAPY_RELEASE_TAG" "$CAPY_RELEASE_COMMIT" -m "Capy Canvas $CAPY_RELEASE_VERSION"
+git push origin "$CAPY_RELEASE_TAG"
+gh run list --repo capyatelier/capycanvas --workflow release.yml \
+  --branch "$CAPY_RELEASE_TAG" --json databaseId,headSha,status,conclusion,url
+```
+
+Approve the protected environment when required. Follow the run for this tag and
+commit until all jobs finish. Use `gh run view <run-id> --repo
+capyatelier/capycanvas` to inspect results. If a job fails, follow
+[recovery](#recovering-a-failed-release) before retrying uploads.
+
+CI creates a draft with the [package outputs](#release-workflow), `SHA256SUMS`
+and provenance attestations. Confirm every expected asset is present, download
+to a fresh directory, and check its hashes:
+
+```bash
+gh release download "$CAPY_RELEASE_TAG" --repo capyatelier/capycanvas \
+  --dir "artifacts/release/$CAPY_RELEASE_TAG/downloads"
+(cd "artifacts/release/$CAPY_RELEASE_TAG/downloads" && sha256sum --check SHA256SUMS)
+```
+
+### 4. Verify the exact packages and beta build
+
+On each supported host, test first launch, painting, import, save/reopen, export,
+restart, installation and updating from the previous release with fixture
+drawings. Exercise UI in light and dark themes. Use private profiles and test
+identities under [testing](testing.md) and [devices](devices.md); never replace a
+user's installation or use their drawings. Record any limitation in verifying
+the production identity rather than treating a rebuilt test package as the
+exact download.
+
+Verify Android's downloaded APK without Google services and Play internal
+installation separately ([Android checks](#android-apk)). On macOS check the
+downloaded DMG's signature and Gatekeeper acceptance; on Windows check signatures
+of the executables inside the ZIP and of the installer, plus installation/update
+journeys under [Windows packaging](windows.md#package). Test the Web ZIP's offline
+and update journeys under [Web packaging](web-packaging.md#preview-and-test). Verify the
+TestFlight build number derived from this version on a reserved iPad.
+
+For an intentional pre-release format change, follow [AGENTS.md](../../AGENTS.md):
+include the limitation in release and beta notes, preserve original fixture
+files, and tell testers to export flattened PNGs before updating. Report old-file
+editing/recovery separately from current-format save/reopen. A failed package
+check needs a fix and new version before publication.
+
+### 5. Complete the configured store channels
+
+Check Play Console for the exact internal version and any closed-track review.
+If that version is already in review, record the pending state and leave the
+review running. If a newer version needs promotion and no review is pending, use
+the
+[Android promotion procedure](#android-apk). An internal-only release can finish
+with closed testing reported as awaiting review or setup; never cancel a review
+to force the release through.
+
+Complete the [TestFlight procedure](#store-submission-is-separate-from-upload)
+for the intended tester group. Keep Microsoft Store deferred until its setup and
+submission are requested; its unsigned MSIX is for Partner Center, not a signed
+direct download. Report beta review as submitted, awaiting review or available,
+according to the actual state. Do not claim store production availability.
+
+### 6. Publish and deploy all public surfaces
+
+Publish the tested draft through GitHub Releases or:
+
+```bash
+gh release edit "$CAPY_RELEASE_TAG" --repo capyatelier/capycanvas --draft=false
+```
+
+With immutable releases enabled, assets and tag cannot change afterward. Keep
+this a stable GitHub Release: Flatpak updates deploy only from the latest
+published release that is neither a draft nor a prerelease, even while mobile
+distribution remains in beta.
+
+Wait for `flatpak-publish.yml`, verify the public reference and repository
+signatures, and test installation and updates from the preceding Flatpak release
+in an isolated environment ([Linux Flatpak](#linux-flatpak)). Then deploy the
+[website and online editor](#website-and-online-editor). Website deployment is
+a required release step; the release and editor workflows do not refresh it.
+
+### 7. Report completion by channel
+
+Verify live downloads and release notes, the editor's source commit, the Flatpak
+update source, Play internal installation and TestFlight tester availability.
+Report the version/tag and evidence, each delivered channel, pending reviews,
+deferred stores, failures and unverified journeys. Required checks or deployments
+still failing make the release incomplete; Microsoft Store awaiting setup and
+closed testing awaiting review must stay visible in the report.
+
+## Store submission is separate from upload
+
+For iPad, wait for App Store Connect processing, select the exact version/build
+in TestFlight, complete test information and export-compliance questions, and
+add it to the intended external group. Follow Apple's
+[external-testing steps](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers/)
+to submit for beta review or start testing when eligible. Verify the beta review
+state and tester availability separately. An uploaded build or membership in an
+internal group does not confirm external distribution. TestFlight beta review
+and production App Store submission are separate actions.
+
+For Windows, CI produces the MSIX but does not submit it to Microsoft Store.
+The Store is currently awaiting setup; retain the package without submitting it.
+When Store submission is requested and the account is ready, upload it through
+an authorized Partner Center session and verify submission status there.
+Azure signing access alone does not establish Partner Center
+access. If access is unavailable, report Store submission as incomplete; the
+published signed installer is a separate delivery channel.
+
+## Website and online editor
+
+The marketing site reads published GitHub Releases when it builds. After the
+release is public, dispatch its workflow:
+
+```bash
+gh workflow run deploy.yml --repo capyatelier/capycanvas-web
+```
+
+The editor is deployed separately from the tested source tag:
+
+```bash
+gh workflow run deploy.yml --repo capyatelier/capycanvas-release -f ref="$CAPY_RELEASE_TAG"
+```
+
+Wait for the site's build, browser checks and Pages deployment, and for both
+the editor's `deploy.yml` and triggered `pages.yml`. Verify the public
+[downloads](https://capycanvas.art/download/) and
+[release notes](https://capycanvas.art/download/past-versions/), including any
+compatibility warning. Verify [the editor](https://editor.capycanvas.art/)
+against the deployed repository's `release/source.json`: its `commit` must match
+`CAPY_RELEASE_COMMIT`. Compare the live `index.html` and Wasm hashes with
+`release/manifest.json` in that repository. Pages caches can temporarily serve an
+older deployment after Actions succeeds; check the live
+content before reporting the update complete. A release asset alone does not
+update either site.
+
+## Recovering a failed release
+
+If an application check requires a code fix, discard the unpublished draft,
+fix `main` and release the next patch version. Never move a tag or reuse a
+version. A delivery or store-setup failure can be retried with the preserved,
+unchanged build. Download retained artifacts with `gh run download <run-id>
+--repo capyatelier/capycanvas --dir artifacts/release/<tag>/recovered` and follow
+the [Android recovery steps](#android-apk). Inspect completed store uploads before
+rerunning any job: rerunning the successful Apple iPad job repeats the same
+version/build upload, and the workflow has no duplicate-upload recovery for it.
+Rerun only failed jobs when safe, rather than the whole release workflow.
+
+For a published release, repeat delivery with the unchanged assets: use
+`gh workflow run flatpak-publish.yml --repo capyatelier/capycanvas -f tag=<tag>`
+for the latest stable release, or repeat the
+[website/editor deployment](#website-and-online-editor).
+These retries do not require a new application version. Recheck live results and
+record any channel still blocked; never replace immutable assets or move the tag.
+
 ## Access and public documentation
 
 The [security policy](../../SECURITY.md) covers private vulnerability reporting
 and repository protections. Security automation opens findings and update pull
 requests; publication still follows the testing and signing steps in this guide.
 
-This is the publishing guide for maintainers and agents. Read the workflows
-before a release and check live store status; previous release reports do not
-establish the next release's state. Use an authorized GitHub session with access
-to Actions and the protected `release` environment, plus the relevant store
-accounts. CI uses the credentials named below. Ask the maintainer for missing
-access through a private channel; do not ask them to paste credentials into an
-issue or commit.
+Read current workflows before releasing. Obtain missing access privately from
+the maintainer; never request credentials in an issue or commit.
 
 Keep workflow names, commands, public download URLs, credential variable names
 and public verification keys here. Keep credential values, account identifiers,
@@ -42,14 +272,10 @@ its own numbers from it at build time:
   a distribution channel, never to the version.
 - Every build that leaves the project, including a store test upload, gets a new
   version. Stores reject a reused number, and a skipped number is harmless.
-- To change the version, edit the workspace version, run
-  `cargo update --workspace --offline` and `python3 apps/layer-apple/scripts/project.py`,
-  add a matching `<release>` entry to
-  `apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml`, and commit the
-  results together. The entry's `<description>` holds the release notes: a
-  short paragraph and a list of what changed, in words a painter knows. Linux
-  software centers show it, the GitHub Release starts with it, and the release
-  workflow refuses a version without it.
+- The AppStream release entry's `<description>` holds the release notes: a short
+  paragraph and a list of what changed, in words a painter knows. Linux software
+  centers show it, the GitHub Release starts with it, and the release workflow
+  refuses a version without it.
 
 ## Continuous integration
 
@@ -72,33 +298,19 @@ the same scripts developers run and the Rust version pinned in the workflow:
 | Windows | `package.ps1`, `package-msix.ps1`, `test-msix.ps1` and `package-installer.ps1` | Portable ZIP, setup program and Store MSIX |
 | macOS, iPadOS | `apps/layer-apple/scripts/release.sh mac` and `ipad` | `capycanvas-<version>-macos-arm64.dmg`; the iPad build goes to App Store Connect |
 
-Run it from the Actions tab to build unsigned packages as workflow artifacts.
-Pushing a `v*` tag checks that the tag names the workspace version and is on
-`main` and runs `cargo deny`, then signs with the protected `release`
-environment, uploads the iPad build to TestFlight, verifies the Android download
-and rolls out its bundle to Play's internal track, and creates a draft GitHub Release holding the release
-notes, every download, `SHA256SUMS` and build provenance attestations.
+Dispatching on a branch checks unsigned builds and saves downloadable artifacts
+for every platform except iPad. Dispatching on a tag or pushing it follows the
+signed release path. CI checks that the tag names the workspace version and its
+commit belongs to `main`, and runs `cargo deny`. All platform jobs must pass
+before the draft release job runs; neither store processing nor tester
+availability is checked by that job.
 
 ### Android APK
 
-The GitHub APK must open without Google Play or Google services. Play App Signing
-preserves the signing identity used by existing installations; Automatic
-protection adds an installer and licence check that prevents this use.
-
-[`android_apk.py`](../../tools/build/android_apk.py) downloads the
-[unprotected standalone APKs](https://developers.google.com/android-publisher/api-ref/rest/v3/generatedapks/list)
-provided by Play. When protection is disabled, it can use the universal APK.
-It checks the actual manifest and DEX for Play licensing and Google service code,
-rejects split APKs, checks the package, version, Android 10 minimum and ARM64
-renderer, and verifies the signature before publishing the download. The public
-signing certificate in the script matches existing Android installations; an
-upload-key signature is not a substitute. A signing-key change needs explicit
-upgrade testing before changing this check.
-
-APK verification uses Java 25 and Android Build Tools 37.0.0. Play's APK
-Signature Scheme v3.2 signatures use ML-DSA; Java 17 cannot verify them. The
-download step selects the runner's Java 25 through `JAVA_HOME_25_X64`. For local
-verification, point `JAVA_HOME` at Java 25 and prepend `$JAVA_HOME/bin` to `PATH`.
+CI downloads and verifies a standalone Play-signed APK that opens without Google
+services or Play licensing checks. The
+[Android distribution guide](android.md#distribution-apk-verification) describes
+protection settings, signing verification and local checks.
 
 The Android job saves the `android-bundle` artifact before uploading to Play,
 which consumes the version number. It saves the verified APK separately as
@@ -107,17 +319,18 @@ artifacts from that workflow run instead of rebuilding or uploading the same
 version. `android_publish.py upload` checks Play's version and SHA-256 against
 the saved AAB and reuses an identical existing upload. Both upload and promotion
 refuse to cancel changes already in review. Retry APK download with
-`android_apk.py download`; retry internal
-rollout with the promotion workflow below. A code change still needs a new
-version.
+`android_apk.py download`; retry internal rollout with the promotion workflow
+below. A code change still needs a new version.
 
-After testing the final internal build, run **Promote Android testing release**
-from its release tag with `track=alpha`. This promotes the existing bundle to
-the `alpha` closed track, preserving release notes, and submits the edit for
-review. For example:
+After testing the final internal build, check closed-track setup and review state.
+When promotion is needed and no changes are in review, run **Promote Android
+testing release** from its release tag with `track=alpha`. This promotes the
+existing bundle to the `alpha` closed track, preserving release notes, and submits
+the edit for review:
 
 ```bash
-gh workflow run android-promote.yml --ref v1.0.11 -f track=alpha
+gh workflow run android-promote.yml --repo capyatelier/capycanvas \
+  --ref "$CAPY_RELEASE_TAG" -f track=alpha
 ```
 
 The workflow also accepts `track=internal` to retry internal rollout without
@@ -152,25 +365,6 @@ Play installer on a [reserved device](devices.md). A successful sideload does
 not verify the Play installation journey. Keep the invitation and tester account
 out of public test reports.
 
-If Play supplies only unprotected splits, turn off Automatic protection for the
-release in Play Console before uploading its bundle. A per-release opt-out does
-not disable protection for later releases. The workflow fails rather than
-publishing a protected or incomplete APK. See Google's
-[unprotected APK instructions](https://support.google.com/googleplay/android-developer/answer/10183279?hl=en).
-
-Run the packaging regression checks without credentials or a device:
-
-```bash
-python3 -m unittest discover -s tools/build -p 'test_android_*.py'
-python3 tools/build/android_apk.py verify 1.0.9 path/to/capycanvas-1.0.9-android.apk
-```
-
-Use the version of the APK being checked. Before release, test the exact download
-on private Android installs with and without Google services: first launch
-offline, painting, import, save/reopen, export, restart and updating an existing
-installation without losing drawings. Google service independence does not
-relax the [Android GPU requirements](android.md).
-
 ### Linux Flatpak
 
 `packaging/flatpak/build.sh` builds against `org.gnome.Platform//50` and
@@ -180,26 +374,8 @@ runtime. `packaging/flatpak/export.sh` exports `art.capycanvas.CapyCanvas` on th
 summary with the release key and add the reference and repository archive; the
 key's public half is `packaging/flatpak/release-key.asc`.
 
-AppStream catalog generation runs with temporary `.Devel` build metadata so the
-SDK's Glycin icon loader can run without a desktop portal during builds. The
-exported application keeps `art.capycanvas.CapyCanvas` as its identity.
-
-With Flatpak and its host SVG image loader installed (`librsvg2-common` on
-Debian or Ubuntu), build and export a local unsigned bundle:
-
-```bash
-bash packaging/flatpak/build.sh
-bash packaging/flatpak/export.sh
-```
-
-The local output is `dist/flatpak/capycanvas-<version>-linux-x86_64.flatpak`.
-Unsigned builds do not produce the reference or repository archive and do not
-configure the published update source. Native distribution builds can also use
-the [Arch recipe](../../packaging/arch/README.md).
-
-Users need their distribution's Flatpak package, a Wayland session and hardware
-Vulkan support. The Flatpak runtime supplies toolkit dependencies; it does not
-remove the [canvas requirements](linux.md#prerequisites).
+For local unsigned builds and runtime requirements, use the
+[Linux packaging guide](linux.md#flatpak-runtime-and-portals).
 
 Open the release's `capycanvas.flatpakref` in Fedora Software and choose Install,
 or use `flatpak install capycanvas.flatpakref`, to download the application from
@@ -213,28 +389,6 @@ updates according to its update settings; the command-line equivalent is
 Generate store images with the [GTK capture helper](store-screenshots.md).
 Artwork, recipes and published images belong in `capycanvas-web`; AppStream
 references their public HTTPS URLs.
-
-The sandbox grants the Wayland socket for windows, clipboard and input, and GPU
-devices for rendering. The battery indicator reads the kernel's
-`/sys/class/power_supply` data on a worker at startup and every 30 seconds;
-Flatpak already exposes these files and their device targets read-only. It needs
-no system-service or extra filesystem permission. System batteries are combined
-by their energy capacities; peripheral batteries are excluded. Unavailable or
-incomplete multi-battery readings hide the indicator. GTK uses the default portals
-for file dialogs, selected-file access and opening links; the clock observes GNOME's time format through the
-Settings portal. Settings, workspace libraries, recovery files and
-caches use Flatpak's private application directories. The exported desktop entry
-forwards files through the document portal when launched from a file manager.
-Software's permission summary does not list these per-file portal grants as
-access to the user's folders.
-
-If opening a selected file fails with `Transport endpoint is not connected`,
-check the document portal's FUSE mount with
-`findmnt -T "$XDG_RUNTIME_DIR/doc"`; its filesystem type should be `fuse.portal`.
-A running `xdg-document-portal` service can still have a disconnected or missing
-mount. Close Flatpak applications before repairing the shared service with
-`systemctl --user restart xdg-document-portal.service`, then reopen them so their
-sandboxes receive the restored mount.
 
 The repository archive contains the OSTree objects and metadata needed to serve
 updates. The bundle and reference alone cannot supply a Flatpak repository.
@@ -288,76 +442,3 @@ describe what must be backed up, not where those backups live. Reuse working
 signing identities; do not generate or revoke certificates to troubleshoot an
 unrelated publishing error. Ignore rules help prevent accidental staging but
 do not make a credential safe to publish.
-
-## Publishing a release
-
-1. Bump the version on `main` and push a tag for that commit:
-   `git tag -a v1.0.0 -m 'Capy Canvas 1.0.0' && git push origin v1.0.0`.
-2. Test the exact draft downloads and the TestFlight build: the
-   [checks](testing.md) and user journeys on every host, installation, updating
-   from the previous release with existing drawings, and the
-   [performance targets](../PERFORMANCE_TARGETS.md) on reference hardware.
-   If the release crosses an intentional pre-release format change, follow the
-   compatibility policy in [AGENTS.md](../../AGENTS.md). Warn testers before
-   updating to export flattened PNGs and retain original drawing files; include
-   the limitation in release and beta notes. Report incompatible old-file
-   editing or recovery separately from current-format save/reopen results.
-3. Confirm the internal-track installation, run the Android promotion workflow
-   with `track=alpha`, upload the
-   MSIX to Partner Center, and submit the TestFlight build for review.
-4. Publish the draft. With immutable releases enabled, its assets and tag can no
-   longer change. Wait for the Flatpak publishing workflow and verify that the
-   published reference installs from the Pages repository and that Flatpak
-   accepts its signatures. Check updates from the preceding Flatpak release
-   when one exists.
-5. Update the website and editor as described below, then verify the live
-   download links, release notes and editor source revision.
-
-If an application check requires a code fix, discard the unpublished draft,
-fix `main` and release the next patch version. Never move a tag or reuse a
-version. A delivery or store-setup failure can be retried with the preserved,
-unchanged build; follow the Android recovery steps above. Record each channel's
-actual state and any failed or unavailable checks in local release evidence.
-
-### Store submission is separate from upload
-
-For iPad, wait for App Store Connect processing, select the exact version/build
-in TestFlight, complete test information and export-compliance questions, and
-add it to the intended external group. Follow Apple's
-[external-testing steps](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers/)
-to submit for beta review or start testing when eligible. Verify the beta review
-state and tester availability separately. An uploaded build or membership in an
-internal group does not confirm external distribution. TestFlight beta review
-and production App Store submission are separate actions.
-
-For Windows, CI produces the MSIX but does not submit it to Microsoft Store.
-Upload it through an authorized Partner Center session and verify submission
-status there. Azure signing access alone does not establish Partner Center
-access. If access is unavailable, report Store submission as incomplete; the
-published signed installer is a separate delivery channel.
-
-### Website and online editor
-
-The marketing site reads published GitHub Releases when it builds. After the
-release is public, dispatch its workflow:
-
-```bash
-gh workflow run deploy.yml --repo capyatelier/capycanvas-web
-```
-
-The editor is deployed separately from a tested source tag. Replace the example
-tag with the release being published:
-
-```bash
-gh workflow run deploy.yml --repo capyatelier/capycanvas-release -f ref=v1.0.11
-```
-
-Wait for the site's build, browser checks and Pages deployment, and for both
-the editor's `deploy.yml` and triggered `pages.yml`. Verify the public
-[downloads](https://capycanvas.art/download/) and
-[release notes](https://capycanvas.art/download/past-versions/), including any
-compatibility warning. Verify [the editor](https://editor.capycanvas.art/)
-against the deployed repository's `release/source.json`. Pages caches can
-temporarily serve an older deployment after Actions succeeds; check the live
-content before reporting the update complete. A release asset alone does not
-update either site.

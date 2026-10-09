@@ -471,3 +471,49 @@ python3 tools/validation/gtk_package_photo.py \
   --photo /path/to/photo.heic --photo /path/to/photo.avif \
   --output artifacts/package-photo-check
 ```
+
+### Flatpak runtime and portals
+
+AppStream catalog generation runs with temporary `.Devel` build metadata so the
+SDK's Glycin icon loader can run without a desktop portal during builds. The
+exported application keeps `art.capycanvas.CapyCanvas` as its identity.
+
+With Flatpak and its host SVG image loader installed (`librsvg2-common` on
+Debian or Ubuntu), build and export a local unsigned bundle:
+
+```bash
+bash packaging/flatpak/build.sh
+bash packaging/flatpak/export.sh
+```
+
+The local output is `dist/flatpak/capycanvas-<version>-linux-x86_64.flatpak`.
+Unsigned builds do not produce the reference or repository archive and do not
+configure the published update source. Native distribution builds can also use
+the [Arch recipe](../../packaging/arch/README.md).
+
+Users need their distribution's Flatpak package, a Wayland session and hardware
+Vulkan support. The Flatpak runtime supplies toolkit dependencies; it does not
+remove the [canvas requirements](#prerequisites).
+
+The sandbox grants the Wayland socket for windows, clipboard and input, and GPU
+devices for rendering. The battery indicator reads the kernel's
+`/sys/class/power_supply` data on a worker at startup and every 30 seconds;
+Flatpak exposes these files and their device targets read-only. System batteries
+are combined by their energy capacities; peripheral batteries are excluded.
+Unavailable or incomplete readings hide the indicator.
+
+GTK uses the default portals for file dialogs, selected-file access and opening
+links; the clock observes GNOME's time format through the Settings portal.
+Settings, workspace libraries, recovery files and caches use Flatpak's private
+application directories. The exported desktop entry forwards files through the
+document portal when launched from a file manager. Software's permission summary
+does not list these per-file portal grants as access to the user's folders.
+
+If opening a selected file fails with `Transport endpoint is not connected`,
+check the document portal's FUSE mount with
+`findmnt -T "$XDG_RUNTIME_DIR/doc"`; its filesystem type should be `fuse.portal`.
+A running `xdg-document-portal` service can still have a disconnected or missing
+mount. Repair the shared service only when other sessions' Flatpak applications
+are closed and the shared-machine rules allow it:
+`systemctl --user restart xdg-document-portal.service`. Reopen applications so
+their sandboxes receive the restored mount.
