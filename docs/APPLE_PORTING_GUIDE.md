@@ -94,6 +94,12 @@ commands are in [macOS and iPadOS development](development/apple.md).
   full state and geometry updates (for example `{command_search, revision}`).
   Handle each in `EditorSnapshotState.receive` without promoting the content
   revision, so retained panels and thumbnails do not refresh.
+- **Navigation.** Present the published navigation cursor and shared tool
+  double-activation action. Native timing and gesture phases stay in the host;
+  view recall, command availability and customized shortcuts stay in Rust.
+  Complete drawing-cycle requests before switching so they cannot replay when
+  a parked drawing is restored. Group overlapping native recognizers around
+  the first accepted event, including a beginning blocked by a pen contact.
 - **Queries that decide visibility.** SwiftUI never runs `.task` or `.onAppear`
   on an empty `Group`. Attach a query that decides whether content appears (such
   as `canvas_bar_layout`) to a container that is always present.

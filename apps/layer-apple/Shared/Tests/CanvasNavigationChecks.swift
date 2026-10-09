@@ -137,4 +137,214 @@ extension XCTestCase {
         attachEditor(in: app, name: "eyedropper-controls")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
+
+    @MainActor func checkCanvasNavigationControls(in app: XCUIApplication, theme: String) throws {
+        var actions: [[String: Any]] = [
+            ["type": "set_theme", "theme": theme],
+            ["type": "workspace_manager", "command": ["type": "switch", "id": "builtin:workspace:illustrator"]],
+            ["type": "set_color", "rgba": [0.2, 0.45, 0.8, 1]],
+            ["type": "invoke", "command": "select_all"],
+            ["type": "invoke", "command": "fill_selection"],
+            ["type": "invoke", "command": "deselect"],
+            ["type": "customize", "action": ["type": "insert_tools", "panel": "commands", "before": NSNull()]]
+        ]
+        for command in ["reset_view", "fit_canvas"] {
+            actions.append(["type": "customize", "action": ["type": "picker_select",
+                "control": ["kind": "command", "command": command], "selected": true]])
+        }
+        actions.append(["type": "customize", "action": ["type": "confirm_tools"]])
+        for command in ["hand", "reset_view"] {
+            actions.append(["type": "customize", "action": ["type": "header", "action": ["type": "add",
+                "zone": "right", "before": NSNull(), "item": ["kind": "tool", "control": ["kind": "command", "command": command]]]]])
+        }
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch()
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        let status = app.buttons["camera-status"]
+        let drawer = app.descendants(matching: .any)["tool-drawer"].firstMatch
+        let flip = app.buttons["navigator-flip_horizontal"]
+        func readout() -> String { (status.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? status.label }
+        func expectCamera(_ expected: String) {
+            let matching = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in readout() == expected }, object: status)
+            let matched = XCTWaiter.wait(for: [matching], timeout: 10) == .completed
+            if !matched { attachEditor(in: app, name: "navigation-camera-mismatch-" + theme) }
+            XCTAssertTrue(matched, "Expected camera \(expected), actual \(status.exists ? readout() : "missing camera readout")")
+        }
+        func tile(_ label: String, panel: String = "toolbar") -> XCUIElement {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "toolbar-tile-" + panel + "-", label)).firstMatch
+        }
+        func activateCommand(_ label: String) {
+            let button = tile(label, panel: "commands")
+            XCTAssertTrue(button.waitForExistence(timeout: 10))
+            let scroll = app.scrollViews.containing(.button, identifier: button.identifier).firstMatch
+            if scroll.exists { revealEditorControl(button, in: scroll) }
+            workspaceActivate(button)
+        }
+        func setCamera() {
+            XCTAssertTrue(status.waitForExistence(timeout: 10))
+            let frame = status.frame, window = workspaceViewport(in: app)
+            let close = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: frame.midX - window.frame.minX, dy: frame.midY - window.frame.minY))
+            workspaceActivate(status)
+            let menu = app.descendants(matching: .any)["zoom-menu"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 10))
+            for (id, text) in [("zoom", "250"), ("rotation", "30")] {
+                let value = app.buttons["number-value-" + id]
+                let scroll = app.scrollViews.containing(.button, identifier: value.identifier).firstMatch
+                if scroll.exists { revealEditorControl(value, in: scroll) }
+                workspaceActivate(value)
+                let entry = app.textFields["number-entry-" + id]
+                XCTAssertTrue(entry.waitForExistence(timeout: 5))
+                entry.typeKey("a", modifierFlags: .command); entry.typeText(text + "\n")
+            }
+            close.clickOrTap()
+            XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
+            expectCamera("250% · 30°")
+        }
+        func navigation(_ label: String, header: Bool) -> XCUIElement {
+            header ? app.buttons["header-tool-hand"] : tile(label)
+        }
+        func chooseNavigation(_ label: String, current: String, header: Bool) {
+            let button = navigation(current, header: header)
+            XCTAssertTrue(button.waitForExistence(timeout: 10))
+            if !header {
+                let scroll = app.scrollViews.containing(.button, identifier: button.identifier).firstMatch
+                if scroll.exists { revealEditorControl(button, in: scroll) }
+            }
+            #if os(macOS)
+            button.rightClick()
+            if header {
+                let items = app.menuItems.matching(identifier: label)
+                expectation(for: NSPredicate { _, _ in items.allElementsBoundByIndex.contains { $0.isHittable } }, evaluatedWith: app)
+                waitForExpectations(timeout: 10)
+                guard let item = items.allElementsBoundByIndex.first(where: { $0.isHittable }) else {
+                    XCTFail("The presented native menu must offer \(label)"); return
+                }
+                item.click()
+            } else { workspaceActivate(app.buttons["menu-action-" + label]) }
+            #else
+            button.press(forDuration: 0.8)
+            workspaceActivate(app.buttons["menu-action-" + label])
+            #endif
+            expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: navigation(label, header: header))
+            waitForExpectations(timeout: 10)
+        }
+        activateCommand("Reset view")
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        let reset = readout(), painted = editorPixels(in: app)
+        XCTAssertLessThan(Int(painted[0]), Int(painted[2]), "The authored fill must be visible")
+        var current = "Hand"
+        for header in [false, true] {
+            for label in ["Hand", "Zoom", "Rotate view"] {
+                chooseNavigation(label, current: current, header: header); current = label
+                workspaceActivate(flip)
+                expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: flip)
+                waitForExpectations(timeout: 5)
+                setCamera()
+                var expected = label == "Zoom" ? "100% · 30°" : "250% · 0°"
+                if label == "Hand" {
+                    activateCommand("Fit canvas")
+                    expectation(for: NSPredicate { _, _ in readout().hasSuffix(" 30°") && readout() != "250% · 30°" }, evaluatedWith: status)
+                    waitForExpectations(timeout: 10)
+                    expected = readout()
+                    setCamera()
+                }
+                let button = navigation(label, header: header)
+                #if os(macOS)
+                button.doubleClick()
+                #else
+                button.doubleTap()
+                #endif
+                expectCamera(expected)
+                XCTAssertTrue(button.isSelected)
+                XCTAssertTrue(flip.isSelected, "Navigation double activation preserves the mirrored view")
+                XCTAssertTrue(drawer.waitForNonExistence(timeout: 10), "Double activation closes tool settings")
+                if header { workspaceActivate(app.buttons["header-tool-reset_view"]) }
+                else { activateCommand("Reset view") }
+                expectCamera(reset)
+                expectation(for: NSPredicate(format: "selected == NO"), evaluatedWith: flip)
+                waitForExpectations(timeout: 5)
+                expectPixels(painted, in: app)
+                attachEditor(in: app, name: "navigation-\(header ? "header" : "toolbar")-\(label)-\(theme)")
+            }
+        }
+        workspaceActivate(app.descendants(matching: .any)["zen-button"].firstMatch)
+        XCTAssertTrue(status.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["header-tool-hand"].waitForNonExistence(timeout: 10))
+        workspaceActivate(app.descendants(matching: .any)["zen-button"].firstMatch)
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["header-tool-hand"].waitForExistence(timeout: 10))
+        expectCamera(reset); expectPixels(painted, in: app)
+        editorHistory("Undo", in: app); expectPixels(painted, in: app)
+        editorHistory("Undo", in: app)
+        expectation(for: NSPredicate { _, _ in self.editorPixels(in: app).allSatisfy { $0 == 255 } }, evaluatedWith: canvas)
+        waitForExpectations(timeout: 10)
+        let paper = editorPixels(in: app)
+        editorHistory("Undo", in: app); expectPixels(paper, in: app)
+        let undo = tile("Undo", panel: "commands")
+        expectation(for: NSPredicate(format: "enabled == NO"), evaluatedWith: undo)
+        waitForExpectations(timeout: 10)
+        editorHistory("Redo", in: app); expectPixels(paper, in: app)
+        editorHistory("Redo", in: app); expectPixels(painted, in: app)
+        editorHistory("Redo", in: app); expectPixels(painted, in: app)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
+    @MainActor func checkNavigationDrawingCycle(in app: XCUIApplication, theme: String) throws {
+        var actions: [[String: Any]] = [
+            ["type": "set_theme", "theme": theme],
+            ["type": "workspace_manager", "command": ["type": "switch", "id": "builtin:workspace:illustrator"]],
+            ["type": "customize", "action": ["type": "insert_tools", "panel": "commands", "before": NSNull()]]
+        ]
+        for command in ["new_document", "next_drawing", "previous_drawing", "drawings"] {
+            actions.append(["type": "customize", "action": ["type": "picker_select",
+                "control": ["kind": "command", "command": command], "selected": true]])
+        }
+        actions.append(["type": "customize", "action": ["type": "confirm_tools"]])
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch()
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        func command(_ label: String) {
+            let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "toolbar-tile-commands-", label)).firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 10))
+            let scroll = app.scrollViews.containing(.button, identifier: button.identifier).firstMatch
+            if scroll.exists { revealEditorControl(button, in: scroll) }
+            workspaceActivate(button)
+        }
+        command("New…")
+        let create = app.buttons["new-document-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 15)); workspaceActivate(create)
+        XCTAssertTrue(create.waitForNonExistence(timeout: 60))
+        func expectDrawing(_ id: Int) {
+            command("Drawings…")
+            let selector = app.descendants(matching: .any)["drawing-selector"].firstMatch
+            XCTAssertTrue(selector.waitForExistence(timeout: 15))
+            for candidate in [1, 2] {
+                let row = selector.buttons["drawing-tab-\(candidate)"].firstMatch
+                XCTAssertTrue(row.waitForExistence(timeout: 10))
+                XCTAssertEqual(row.isSelected, candidate == id)
+            }
+            workspaceActivate(app.buttons["Done"].firstMatch)
+            XCTAssertTrue(selector.waitForNonExistence(timeout: 10))
+        }
+        expectDrawing(2)
+        for _ in 0..<2 {
+            command("Next drawing"); expectDrawing(1)
+            command("Previous drawing"); expectDrawing(2)
+        }
+        #if os(macOS)
+        app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [.control]); expectDrawing(1)
+        app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [.control, .shift]); expectDrawing(2)
+        #endif
+        attachEditor(in: app, name: "navigation-drawing-cycle-\(theme)")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
 }

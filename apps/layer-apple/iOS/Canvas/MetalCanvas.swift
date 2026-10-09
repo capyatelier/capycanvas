@@ -24,6 +24,7 @@ final class CanvasView: UIView {
     private let shaderActivity = ShaderActivityRecognizer()
     private var workspaceBottom: CGFloat = -1
     var contacts: [ObjectIdentifier: PencilContact] = [:]
+    var indirectGestures = Set<ObjectIdentifier>()
     var nextContact: UInt64 = 0
     var ignoredContacts: Set<ObjectIdentifier> = []
     var pickerHold: PickerHold?

@@ -39,6 +39,17 @@ private final class Scroll: UIPanGestureRecognizer {
     override func setTranslation(_ translation: CGPoint, in view: UIView?) { delta = translation }
 }
 
+private final class NativePinch: UIPinchGestureRecognizer {
+    var phase: UIGestureRecognizer.State = .possible
+    override var state: UIGestureRecognizer.State { get { phase } set { phase = newValue } }
+    override func location(in view: UIView?) -> CGPoint { CGPoint(x: 500, y: 400) }
+}
+private final class NativeRotation: UIRotationGestureRecognizer {
+    var phase: UIGestureRecognizer.State = .possible
+    override var state: UIGestureRecognizer.State { get { phase } set { phase = newValue } }
+    override func location(in view: UIView?) -> CGPoint { CGPoint(x: 500, y: 400) }
+}
+
 @MainActor private final class ModifierChecks: NSObject, UIApplicationDelegate, UIWindowSceneDelegate {
     var window: UIWindow?
     private var completedGroups = 0
@@ -267,13 +278,20 @@ private final class Scroll: UIPanGestureRecognizer {
             let touch = Contact(), event = ContactEvent(); touch.device = device
             event.flags = modifiers
             let camera = store.state["camera"]
-            func position(_ p: CGPoint) -> CGPoint {
-                CGPoint(x: camera["translation"][0].number + p.x * camera["zoom"].number,
-                    y: camera["translation"][1].number + p.y * camera["zoom"].number)
+            func position(_ p: CGPoint) throws -> CGPoint {
+                let angle = CGFloat(camera["rotation"].number), zoom = CGFloat(camera["zoom"].number)
+                let x = p.x * (camera["flipped"][0].bool ? -zoom : zoom)
+                let y = p.y * (camera["flipped"][1].bool ? -zoom : zoom)
+                let surface = CGPoint(x: CGFloat(camera["translation"][0].number) + cos(angle) * x - sin(angle) * y,
+                    y: CGFloat(camera["translation"][1].number) + sin(angle) * x + cos(angle) * y)
+                try require(surface.x >= 0 && surface.y >= 0
+                    && surface.x < CGFloat(camera["viewport"][0].number)
+                    && surface.y < CGFloat(camera["viewport"][1].number), "Supplied artwork contact must lie within the published viewport")
+                return CGPoint(x: surface.x / canvas.contentScaleFactor, y: surface.y / canvas.contentScaleFactor)
             }
-            touch.point = position(points[0]); canvas.touchesBegan([touch], with: event)
+            touch.point = try position(points[0]); canvas.touchesBegan([touch], with: event)
             for point in points.dropFirst() {
-                touch.point = position(point); touch.time = max(touch.time.nextUp, ProcessInfo.processInfo.systemUptime)
+                touch.point = try position(point); touch.time = max(touch.time.nextUp, ProcessInfo.processInfo.systemUptime)
                 canvas.touchesMoved([touch], with: event)
             }
             touch.time = max(touch.time.nextUp, ProcessInfo.processInfo.systemUptime)
@@ -370,6 +388,93 @@ private final class Scroll: UIPanGestureRecognizer {
         try require(try await pixels() == paper, "Middle-button navigation must preserve every artwork pixel")
         try await action(["type":"select_brush", "id":1])
         try await wait("Prepare navigation exclusion brush") { store.snapshot["brush_ready"].bool }
+        let pinch = NativePinch(), rotation = NativeRotation()
+        func recalledCamera(_ before: JSON) -> Bool {
+            near(store.state["camera"]["zoom"].number, before["zoom"].number)
+                && near(store.state["camera"]["rotation"].number, before["rotation"].number)
+                && store.state["camera"]["flipped"].stableKey == before["flipped"].stableKey
+                && (0..<2).allSatisfy { near(store.state["camera"]["translation"][$0].number, before["translation"][$0].number) }
+        }
+        func pinched(_ phase: UIGestureRecognizer.State, scale: CGFloat = 1) async throws {
+            pinch.phase = phase; pinch.scale = scale
+            canvas.pinched(pinch); try await flush()
+        }
+        func rotated(_ phase: UIGestureRecognizer.State, angle: CGFloat = 0) async throws {
+            rotation.phase = phase; rotation.rotation = angle
+            canvas.rotated(rotation); try await flush()
+        }
+        func recall(_ before: JSON, completed: JSON) async throws {
+            try await invoke("previous_view")
+            try require(recalledCamera(before), "Previous View must recall the beginning of the entire UIKit gesture")
+            try await invoke("previous_view")
+            try require(recalledCamera(completed), "Previous View must return to the completed UIKit gesture")
+        }
+        try await path([CGPoint(x: 24, y: 64), CGPoint(x: 104, y: 64)], device: .pencil)
+        let gesturePainted = try await pixels()
+        try require(gesturePainted != paper, "The UIKit gesture checks must retain authored artwork")
+        for theme in ["light", "dark"] {
+            try await action(["type": "set_theme", "theme": theme])
+            for mode in ["pinch", "rotation", "combined"] {
+                let beginning = store.state["camera"]
+                if mode != "rotation" {
+                    try await pinched(.began)
+                    try await pinched(.changed, scale: 1.25)
+                }
+                if mode != "pinch" {
+                    try await rotated(.began)
+                    try await rotated(.changed, angle: .pi / 9)
+                }
+                if mode != "rotation" {
+                    try await pinched(.changed, scale: 1.10)
+                    try await pinched(.ended)
+                }
+                if mode != "pinch" {
+                    try await rotated(.changed, angle: .pi / 18)
+                    try await rotated(.ended)
+                }
+                let completed = store.state["camera"]
+                try require(!recalledCamera(beginning), "The supplied UIKit \(mode) gesture must move the view")
+                try await recall(beginning, completed: completed)
+            }
+            for interruption in ["cancel", "blur"] {
+                try await pinched(.began)
+                try await pinched(.changed, scale: 1.10)
+                if interruption == "cancel" { try await pinched(.cancelled) }
+                else { store.input(["type": "blur"]); try await flush() }
+                let resumed = store.state["camera"]
+                try await rotated(.began)
+                try await rotated(.changed, angle: .pi / 18)
+                try await rotated(.changed, angle: .pi / 36)
+                try await rotated(.ended)
+                try await recall(resumed, completed: store.state["camera"])
+            }
+            try await tool("select")
+            for device: UITouch.TouchType in [.indirectPointer, .pencil] {
+                try await invoke("fit_canvas"); try await invoke("zoom_out")
+                let earlierRecall = store.state["camera"]
+                try await invoke("fit_canvas")
+                let rejectedBegin = store.state["camera"]
+                try require(!recalledCamera(earlierRecall), "The old recall view must differ from the first accepted UIKit transform view")
+                let contact = Contact(), event = ContactEvent(); contact.device = device
+                canvas.touchesBegan([contact], with: event); try await flush()
+                try await pinched(.began); try await rotated(.began)
+                try require(sameCamera(rejectedBegin), "Rejected transform beginnings must preserve the active \(device) contact view")
+                contact.time += 0.01; canvas.touchesEnded([contact], with: event); try await flush()
+                try require(canvas.contacts.isEmpty, "The stationary \(device) selection contact must release normally")
+                try require(try await pixels() == gesturePainted, "The released selection contact must preserve every artwork pixel")
+                let firstAccepted = store.state["camera"]
+                try require(recalledCamera(rejectedBegin), "The released contact must preserve the transform's starting view")
+                try await pinched(.changed, scale: 1.10)
+                try await rotated(.changed, angle: .pi / 18)
+                try await pinched(.ended)
+                try await rotated(.changed, angle: .pi / 36)
+                try await rotated(.ended)
+                try await recall(firstAccepted, completed: store.state["camera"])
+            }
+            try await action(["type": "select_brush", "id": 1])
+            try await wait("Restore the navigation exclusion brush") { store.snapshot["brush_ready"].bool }
+            try require(try await pixels() == gesturePainted, "UIKit recall must preserve every artwork pixel in \(theme)")
+        }
         for device: UITouch.TouchType in [.indirectPointer, .pencil, .direct] {
             let touch = Contact(), event = ContactEvent(); touch.device = device
             canvas.touchesBegan([touch], with: event); try await flush()
@@ -380,10 +485,21 @@ private final class Scroll: UIPanGestureRecognizer {
                 canvas.scrolled(scroll); try await flush()
                 try require(sameCamera(before), "Scroll must preserve the camera during a primary \(device) contact")
             }
+            try await pinched(.began); try await pinched(.changed, scale: 1.25); try await pinched(.ended)
+            try await rotated(.began); try await rotated(.changed, angle: .pi / 6); try await rotated(.ended)
+            try require(sameCamera(before), "Indirect transforms must preserve the camera during a primary \(device) contact")
             touch.time += 0.01; canvas.touchesCancelled([touch], with: event); try await flush()
         }
+        let resumed = store.state["camera"]
+        try await pinched(.began)
+        try await pinched(.changed, scale: 1.10)
+        try await pinched(.changed, scale: 1.05)
+        try await pinched(.ended)
+        try await recall(resumed, completed: store.state["camera"])
+        try require(try await pixels() == gesturePainted, "Captured-contact exclusion and resumed recall must preserve every pixel")
+        try await history(paper, gesturePainted)
         try await newDocument()
-        passed("PASS: UIKit held middle-button scrolling and zoom, continued drag, release/cancellation and primary contact exclusion")
+        passed("PASS: UIKit middle-button scrolling, indirect gesture grouping/recall, interruption, primary contact exclusion and exact artwork history")
         for device: UITouch.TouchType in [.indirectPointer, .pencil] {
             for shape in ["line", "rectangle", "ellipse"] {
                 for paint in shape == "line" ? ["outline"] : ["outline", "fill", "both"] {

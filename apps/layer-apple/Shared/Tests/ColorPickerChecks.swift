@@ -50,8 +50,8 @@ extension XCTestCase {
         attachEditor(in: app, name: "live-color-tab-\(theme)")
     }
 
-    @MainActor func checkColorPicker(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
+    @MainActor func checkColorPicker(in app: XCUIApplication, theme: String = "light") {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launchEnvironment["CAPY_COLOR_PROBE"] = "1"
         app.launch(); capturePaintEditor(in: app)
         func expectSelected(_ element: XCUIElement, _ selected: Bool) {
@@ -79,7 +79,7 @@ extension XCTestCase {
         expectSelected(eyedropper, true)
         #if os(macOS)
         canvas.hover()
-        attachEditor(in: app, name: "picker-loupe")
+        attachEditor(in: app, name: "picker-loupe-\(theme)")
         expectColor([0.2, 0.45, 0.8, 1])
         app.descendants(matching: .any)["color-panel-controls"].firstMatch.hover()
         XCTAssertTrue(eyedropper.isSelected, "Leaving the canvas keeps picking")
@@ -126,7 +126,7 @@ extension XCTestCase {
         for label in circles { XCTAssertTrue(app.buttons[label].firstMatch.waitForExistence(timeout: 5), label) }
         workspaceActivate(app.buttons["15 px circle"].firstMatch)
         #endif
-        attachEditor(in: app, name: "picker-settings")
+        attachEditor(in: app, name: "picker-settings-\(theme)")
         workspaceActivate(picker)
         expectSelected(picker, false)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)

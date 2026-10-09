@@ -716,7 +716,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     command(CommandId::NewToolbar),
                     command(CommandId::ManageToolbars),
                 ],
-                if CommandId::Drawings.available_on(self.state.platform) { vec![command(CommandId::Drawings)] } else { Vec::new() },
+                [CommandId::Drawings, CommandId::NextDrawing, CommandId::PreviousDrawing].into_iter().filter(|id| id.available_on(self.state.platform)).map(command).collect(),
             ],
         };
         if let Some(workspace) = &self.managed_workspace {
@@ -2290,7 +2290,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             enabled,
             disabled_reason: (!enabled).then(|| self.disabled_reason_unchecked(id)),
             selected,
-            bindings: retained.map_or_else(|| self.state.settings.command_keys(id), |command| command.bindings.clone()),
+            bindings: retained.map_or_else(|| self.state.settings.command_keys(id).iter().map(|key| key.native_binding(self.state.platform)).collect(), |command| command.bindings.clone()),
             shortcut: retained.map_or_else(|| self.state.settings.action_shortcut_localized(&UiAction::Invoke { command: id }, self.state.platform, &self.state.localization), |command| command.shortcut.clone()),
         }
     }
@@ -5757,7 +5757,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.state.platform,
                     &self.state.localization,
                 );
-                command.bindings = self.state.settings.command_keys(command.id);
+                command.bindings = self.state.settings.command_keys(command.id).iter().map(|key| key.native_binding(self.state.platform)).collect();
                 command.shortcut = self.state.settings.action_shortcut_localized(
                     &UiAction::Invoke {
                         command: command.id,

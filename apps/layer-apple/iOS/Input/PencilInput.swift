@@ -2,8 +2,32 @@ import UIKit
 
 extension CanvasView: UIPointerInteractionDelegate {
     func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
-        // Rust renders the selected cursor, including the None hover fallback.
-        store.handCursor ? .system() : .hidden()
+        switch store.navigationCursor {
+        case "pan": .system()
+        case "zoom": UIPointerStyle(shape: NavigationPointer.zoomIn)
+        case "zoom_out": UIPointerStyle(shape: NavigationPointer.zoomOut)
+        case "rotate": UIPointerStyle(shape: NavigationPointer.rotate)
+        default: .hidden()
+        }
+    }
+}
+
+@MainActor private enum NavigationPointer {
+    static let zoomIn = lens(plus: true)
+    static let zoomOut = lens(plus: false)
+    static let rotate: UIPointerShape = {
+        let path = UIBezierPath(rect: CGRect(x: -1, y: -9, width: 2, height: 18))
+        path.append(UIBezierPath(rect: CGRect(x: -9, y: -1, width: 18, height: 2)))
+        return .path(path)
+    }()
+    private static func lens(plus: Bool) -> UIPointerShape {
+        let path = UIBezierPath(ovalIn: CGRect(x: -9, y: -9, width: 18, height: 18))
+        path.append(UIBezierPath(ovalIn: CGRect(x: -7, y: -7, width: 14, height: 14)).reversing())
+        let handle = UIBezierPath(rect: CGRect(x: 8, y: -1.5, width: 8, height: 3))
+        handle.apply(CGAffineTransform(rotationAngle: .pi / 4)); path.append(handle)
+        path.append(UIBezierPath(rect: CGRect(x: -4, y: -1, width: 8, height: 2)))
+        if plus { path.append(UIBezierPath(rect: CGRect(x: -1, y: -4, width: 2, height: 8))) }
+        return .path(path)
     }
 }
 
@@ -66,19 +90,22 @@ extension CanvasView {
     @objc func pinched(_ recognizer: UIPinchGestureRecognizer) {
         let scale = recognizer.scale
         recognizer.scale = 1
-        guard contacts.isEmpty, [.began, .changed, .ended].contains(recognizer.state) else { return }
-        let point = recognizer.location(in: self)
-        store.native?.gesture(x: Float(point.x * contentScaleFactor), y: Float(point.y * contentScaleFactor),
-            scale: Float(scale), rotation: 0)
-        wake()
+        indirectGesture(recognizer, scale: Float(scale), rotation: 0)
     }
     @objc func rotated(_ recognizer: UIRotationGestureRecognizer) {
         let rotation = recognizer.rotation
         recognizer.rotation = 0
+        indirectGesture(recognizer, scale: 1, rotation: Float(rotation))
+    }
+    private func indirectGesture(_ recognizer: UIGestureRecognizer, scale: Float, rotation: Float) {
+        let key = ObjectIdentifier(recognizer)
+        defer { if [.ended, .cancelled, .failed].contains(recognizer.state) { indirectGestures.remove(key) } }
         guard contacts.isEmpty, [.began, .changed, .ended].contains(recognizer.state) else { return }
+        let began = indirectGestures.isEmpty
+        indirectGestures.insert(key)
         let point = recognizer.location(in: self)
         store.native?.gesture(x: Float(point.x * contentScaleFactor), y: Float(point.y * contentScaleFactor),
-            scale: 1, rotation: Float(rotation))
+            scale: scale, rotation: rotation, began: began)
         wake()
     }
     func route(_ touches: Set<UITouch>, event: UIEvent?, phase: Double) {
@@ -209,7 +236,7 @@ extension CanvasView {
         cancelPickerHold()
         finishEstimates()
         ignoredContacts.formUnion(contacts.keys)
-        contacts.removeAll()
+        contacts.removeAll(); indirectGestures.removeAll()
         modifiers = []
     }
     private func send(_ contact: PencilContact, records: [Double], predicted: Bool) {
@@ -249,10 +276,6 @@ extension CanvasView {
                 guard isFirstResponder, window?.isKeyWindow == true,
                     window?.rootViewController?.presentedViewController == nil,
                     !NativeTextContext.composing else { continue }
-            }
-            if AppleKeyName.name(key) == "tab" && key.modifierFlags.contains(.control) {
-                if pressed { store.drawingTabs.adjacent(!key.modifierFlags.contains(.shift)) }
-                continue
             }
             modifiers = key.modifierFlags
             sendKey(AppleKeyName.name(key), pressed: pressed, flags: modifiers)

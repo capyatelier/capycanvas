@@ -194,7 +194,7 @@ int32_t capy_apple_pointer_updates(CapyApple *app, uint64_t id, uint32_t tool, u
    Magnification is a multiplicative factor; rotation is in radians. */
 int32_t capy_apple_scroll(CapyApple *app, float x, float y, float dx, float dy,
                           float scale, uint32_t zoom, uint32_t horizontal);
-int32_t capy_apple_gesture(CapyApple *app, float x, float y, float scale, float rotation);
+int32_t capy_apple_gesture(CapyApple *app, float x, float y, float scale, float rotation, uint32_t began);
 /* Returns 1 if more frames are needed, 0 when idle, -1 on error. Optional costs
    receives 5 nanosecond durations: paint, acquire, viewport, present, poll. */
 int32_t capy_apple_frame(CapyApple *app, uint64_t now_ns, uint64_t presentation_ns,

@@ -37,10 +37,12 @@ import UniformTypeIdentifiers
             }
             closeTitles = titles; closeCaptions = captions
         }
-        if let command = store.state["requests"].array.first(where: { $0["kind"]["type"].string == "drawings" }), request != command["id"].uint {
-            request = command["id"].uint; presented = true
-            store.dispatch(["type": "complete_request", "id": command["id"].uint, "error": NSNull()])
-        }
+        guard let command = store.state["requests"].array.first(where: { ["drawings", "adjacent_drawing"].contains($0["kind"]["type"].string) }) else { request = nil; return }
+        guard request != command["id"].uint else { return }
+        request = command["id"].uint
+        store.dispatch(["type": "complete_request", "id": command["id"].uint, "error": NSNull()])
+        if command["kind"]["type"].string == "drawings" { presented = true }
+        else { adjacent(command["kind"]["forward"].bool) }
     }
     func select(_ id: UInt64, completion: @escaping (Bool) -> Void = { _ in }) {
         guard let store, !busy, !store.projectFiles.busy else { completion(false); return }

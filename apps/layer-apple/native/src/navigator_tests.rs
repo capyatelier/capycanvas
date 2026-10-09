@@ -158,6 +158,47 @@ fn live_navigator_uses_current_document_camera_and_display_scale_without_bitmaps
 }
 
 #[test]
+fn native_gesture_recalls_one_beginning_and_invalid_beginnings_preserve_it() {
+    fn same_view(actual: &layer_ui::Camera, expected: &layer_ui::Camera) {
+        assert!((actual.zoom - expected.zoom).abs() < 1e-5);
+        assert!((actual.rotation - expected.rotation).abs() < 1e-5);
+        assert_eq!(actual.flipped, expected.flipped);
+        for axis in 0..2 {
+            assert!((actual.translation[axis] - expected.translation[axis]).abs() < 0.002);
+        }
+    }
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        app.invoke("zoom_in");
+        app.invoke("rotate_right");
+        app.invoke("flip_horizontal");
+        let camera = || unsafe { &*app.0 }.host.session.state().camera.clone();
+        let checkpoint = unsafe { &*app.0 }.host.session.engine().checkpoint();
+        let before = camera();
+        let [x, y] = before.work_area_center();
+        for (began, scale, rotation) in [(1, 1.1, 0.07), (0, 1.2, 0.10), (0, 0.8, -0.05)] {
+            assert_eq!(unsafe { capy_apple_gesture(app.0, x + 31., y - 17., scale, rotation, began) }, 0);
+        }
+        let completed = camera();
+        assert!((completed.zoom - before.zoom).abs() > 0.001);
+        assert!((completed.rotation - before.rotation).abs() > 0.001);
+        for (x, scale, rotation) in [(f32::NAN, 1., 0.), (x, 0., 0.), (x, 1., f32::INFINITY)] {
+            assert_eq!(unsafe { capy_apple_gesture(app.0, x, y, scale, rotation, 1) }, -1);
+            let error = unsafe { capy_apple_error(app.0) };
+            assert!(!error.is_null());
+            assert_eq!(unsafe { CStr::from_ptr(error) }.to_str().unwrap(), "Invalid native gesture");
+            assert_eq!(camera(), completed);
+        }
+        app.invoke("previous_view");
+        same_view(&camera(), &before);
+        app.invoke("previous_view");
+        same_view(&camera(), &completed);
+        assert_eq!(unsafe { &*app.0 }.host.session.engine().checkpoint(), checkpoint);
+        assert!(unsafe { &*app.0 }.host.session.engine().backend().0.is_none());
+    }
+}
+
+#[test]
 fn navigator_geometry_and_gestures_preserve_document_pixels_and_history() {
     for platform in [0, 1] {
         let app = App::new(platform);
@@ -223,7 +264,7 @@ fn navigator_geometry_and_gestures_preserve_document_pixels_and_history() {
         for (scale, rotation) in [(1.25, 0.2), (0.8, -0.2)] {
             let before = camera();
             assert_eq!(
-                unsafe { capy_apple_gesture(app.0, x, y, scale, rotation) },
+                unsafe { capy_apple_gesture(app.0, x, y, scale, rotation, 1) },
                 0
             );
             assert_ne!(camera(), before);

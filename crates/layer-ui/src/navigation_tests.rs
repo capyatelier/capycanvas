@@ -451,7 +451,7 @@ mod navigation_controls {
 
     #[test]
     fn tool_button_double_click_uses_the_displayed_navigation_variant() {
-        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Mac, Platform::Ios] {
             for command in [CommandId::Hand, CommandId::Zoom, CommandId::RotateView] {
                 let control = ToolbarControl::Command { command: CommandId::Hand };
                 let (mut s, panel, ids) = group_fixture(platform, &[control]);
@@ -681,6 +681,94 @@ mod navigation_controls {
             assert_eq!(s.engine.document(), &document);
             assert_eq!(s.engine.checkpoint(), checkpoint);
             same_view(&s.state.camera, &camera);
+        }
+    }
+
+    #[test]
+    fn drawing_cycle_native_bindings_publish_apple_control_tab_and_keep_custom_keys() {
+        fn published(s: &UiSession<Recorder>, command: CommandId, menu: ApplicationMenu,
+            bindings: serde_json::Value, shortcut: &str) {
+            let state = s.command(command);
+            let json = serde_json::to_value(&state).unwrap();
+            assert_eq!(json["bindings"], bindings, "{:?} {command:?}", s.state().platform);
+            assert_eq!(json["shortcut"], shortcut);
+            let menu = s.application_menu(menu);
+            let item = find_item(&menu.sections, state.label.as_ref()).expect("the application menu contains the command");
+            let json = serde_json::to_value(item).unwrap();
+            assert_eq!(json["bindings"], bindings);
+            assert_eq!(json["hint"], shortcut);
+        }
+        for platform in [Platform::Mac, Platform::Ios] {
+            let mut s = session(platform);
+            for (command, shift, page, shortcut) in [
+                (CommandId::NextDrawing, false, "pagedown", "⌃+Tab / ⌘+Page Down / Alt+Page Down"),
+                (CommandId::PreviousDrawing, true, "pageup", "⌃+Shift+Tab / ⌘+Page Up / Alt+Page Up"),
+            ] {
+                published(&s, command, ApplicationMenu::Window, serde_json::json!([
+                    {"key":"tab","command":false,"shift":shift,"alt":false,"control":true},
+                    {"key":page,"command":true,"shift":false,"alt":false},
+                    {"key":page,"command":false,"shift":false,"alt":true}
+                ]), shortcut);
+                assert_eq!(serde_json::to_value(s.state().settings.action_keys(&UiAction::Invoke { command }, platform)).unwrap(), serde_json::json!([
+                    {"key":"tab","command":true,"shift":shift,"alt":false},
+                    {"key":page,"command":true,"shift":false,"alt":false},
+                    {"key":page,"command":false,"shift":false,"alt":true}
+                ]));
+            }
+            let mut settings = s.state().settings.clone();
+            for (command, key) in [(CommandId::NextDrawing, "f6"), (CommandId::PreviousDrawing, "f7")] {
+                settings.shortcuts.insert(command.shortcut_id(), vec![KeyChord::new(key, Modifiers::default())]);
+            }
+            s.apply_settings(settings).unwrap();
+            for (command, key, label) in [(CommandId::NextDrawing, "f6", "F6"), (CommandId::PreviousDrawing, "f7", "F7")] {
+                let keys = serde_json::json!([{"key":key,"command":false,"shift":false,"alt":false}]);
+                published(&s, command, ApplicationMenu::Window, keys.clone(), label);
+                assert_eq!(serde_json::to_value(&s.state().settings.shortcuts[&command.shortcut_id()]).unwrap(), keys);
+            }
+            let mut settings = s.state().settings.clone();
+            for command in [CommandId::NextDrawing, CommandId::PreviousDrawing] {
+                settings.shortcuts.insert(command.shortcut_id(), Vec::new());
+            }
+            s.apply_settings(settings).unwrap();
+            for command in [CommandId::NextDrawing, CommandId::PreviousDrawing] {
+                published(&s, command, ApplicationMenu::Window, serde_json::json!([]), "");
+            }
+            published(&s, CommandId::Undo, ApplicationMenu::Edit,
+                serde_json::json!([{"key":"z","command":true,"shift":false,"alt":false}]), "⌘+Z");
+        }
+    }
+
+    #[test]
+    fn drawing_cycle_native_bindings_keep_non_apple_json_and_browser_filtering() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
+            let s = session(platform);
+            let menu = s.application_menu(ApplicationMenu::Window);
+            for (command, shift, page, shortcut) in [
+                (CommandId::NextDrawing, false, "pagedown", "Ctrl+Tab / Ctrl+Page Down / Alt+Page Down"),
+                (CommandId::PreviousDrawing, true, "pageup", "Ctrl+Shift+Tab / Ctrl+Page Up / Alt+Page Up"),
+            ] {
+                let bindings = serde_json::json!([
+                    {"key":"tab","command":true,"shift":shift,"alt":false},
+                    {"key":page,"command":true,"shift":false,"alt":false},
+                    {"key":page,"command":false,"shift":false,"alt":true}
+                ]);
+                let state = s.command(command);
+                assert_eq!(serde_json::to_value(&state).unwrap()["bindings"], bindings, "{platform:?} {command:?}");
+                let item = find_item(&menu.sections, state.label.as_ref()).expect("the Window menu contains drawing cycle commands");
+                let menu_json = serde_json::to_value(item).unwrap();
+                if platform == Platform::Web {
+                    assert_eq!(menu_json["bindings"], serde_json::json!([{"key":page,"command":false,"shift":false,"alt":true}]));
+                    let label = if shift { "Alt+Page Up" } else { "Alt+Page Down" };
+                    assert_eq!(state.shortcut, label);
+                    assert_eq!(menu_json["hint"], label);
+                } else {
+                    assert_eq!(menu_json["bindings"], bindings);
+                    assert_eq!(state.shortcut, shortcut);
+                    assert_eq!(menu_json["hint"], shortcut);
+                }
+            }
+            assert_eq!(serde_json::to_value(s.command(CommandId::Undo)).unwrap()["bindings"],
+                serde_json::json!([{"key":"z","command":true,"shift":false,"alt":false}]));
         }
     }
 }

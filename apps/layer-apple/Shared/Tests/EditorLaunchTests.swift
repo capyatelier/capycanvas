@@ -78,6 +78,7 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testToolbarComponents() { checkToolbarComponents(in: editorCaptureApplication()) }
     @MainActor func testColorPicker() { checkColorPicker(in: editorCaptureApplication()) }
+    @MainActor func testColorPickerDark() { checkColorPicker(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testLiveColorTab() { checkLiveColorTab(in: editorCaptureApplication(), theme: "light") }
     @MainActor func testLiveColorTabDark() { checkLiveColorTab(in: editorCaptureApplication(), theme: "dark") }
     @MainActor func testTonalSelection() { checkTonalSelection(in: editorCaptureApplication()) }
@@ -125,6 +126,10 @@ final class EditorLaunchTests: XCTestCase {
         #endif
     }
     @MainActor func testZoomReadout() { checkZoomReadout(in: ignoringSavedWindows(editorCaptureApplication())) }
+    @MainActor func testCanvasNavigationControls() throws { try checkCanvasNavigationControls(in: ignoringSavedWindows(editorCaptureApplication()), theme: "light") }
+    @MainActor func testCanvasNavigationControlsDark() throws { try checkCanvasNavigationControls(in: ignoringSavedWindows(editorCaptureApplication()), theme: "dark") }
+    @MainActor func testNavigationDrawingCycle() throws { try checkNavigationDrawingCycle(in: ignoringSavedWindows(editorCaptureApplication()), theme: "light") }
+    @MainActor func testNavigationDrawingCycleDark() throws { try checkNavigationDrawingCycle(in: ignoringSavedWindows(editorCaptureApplication()), theme: "dark") }
 
     @MainActor func testShortcutSettingsPage() { checkShortcutSettingsPage(in: ignoringSavedWindows(editorCaptureApplication())) }
 

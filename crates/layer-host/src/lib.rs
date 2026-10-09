@@ -31,7 +31,6 @@ struct SnapshotKey {
     logical: [f32; 2],
     chrome_hidden: bool,
     keep_zen_button: bool,
-    pan_cursor: bool,
     navigation_cursor: Option<layer_ui::NavigationMode>,
     gpu_ready: bool,
     startup: layer_render_wgpu::StartupProgress,
@@ -64,8 +63,6 @@ pub struct NativeHost {
     pub dirty: bool,
     pub chrome_hidden: bool,
     keep_zen_button: bool,
-    pan_cursor: bool,
-    navigation_cursor: Option<layer_ui::NavigationMode>,
     pub error: Option<String>,
     pub sequence: u64,
     pub startup: layer_render_wgpu::StartupProgress,
@@ -170,8 +167,6 @@ impl NativeHost {
             dirty: true,
             chrome_hidden: false,
             keep_zen_button: false,
-            pan_cursor: false,
-            navigation_cursor: None,
             error: None,
             sequence: 0,
             proof: Default::default(),
@@ -372,7 +367,7 @@ impl NativeHost {
     pub fn input(&mut self, input: UiInput) -> Result<layer_ui::InputReply, String> {
         if self.document_close_prepared {
             return Ok(layer_ui::InputReply {change:layer_ui::UiChange {revision:self.session.state().revision,..Default::default()},
-                handled:true,chrome_hidden:self.chrome_hidden,keep_zen_button:self.keep_zen_button,pan_cursor:self.pan_cursor,navigation_cursor:self.navigation_cursor,..Default::default()});
+                handled:true,chrome_hidden:self.chrome_hidden,keep_zen_button:self.keep_zen_button,pan_cursor:self.session.navigation_mode()==Some(layer_ui::NavigationMode::Pan),navigation_cursor:self.session.navigation_mode(),..Default::default()});
         }
         if matches!(input, UiInput::Blur) {
             self.header_drag = None;
@@ -381,8 +376,6 @@ impl NativeHost {
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;
         self.keep_zen_button = reply.keep_zen_button;
-        self.pan_cursor = reply.pan_cursor;
-        self.navigation_cursor = reply.navigation_cursor;
         self.apply_change(previous, reply.change);
         if reply.cancel_paint {
             self.cancel_pen()?;
@@ -405,7 +398,7 @@ impl NativeHost {
         self.apply_change(previous, change);
         Ok(())
     }
-    pub fn gesture(&mut self, anchor: [f32; 2], scale: f32, rotation: f32) -> Result<(), String> {
+    pub fn gesture(&mut self, anchor: [f32; 2], scale: f32, rotation: f32, began: bool) -> Result<(), String> {
         if !anchor
             .into_iter()
             .chain([scale, rotation])
@@ -416,6 +409,7 @@ impl NativeHost {
         }
         if self.document_close_prepared { return Ok(()); }
         let previous = self.session.state().revision;
+        if began { self.session.begin_view_gesture(); }
         let change = self.session.gesture(anchor, anchor, scale, rotation)?;
         self.apply_change(previous, change);
         Ok(())
@@ -1785,7 +1779,7 @@ mod tests {
         );
         assert_ne!(patch["camera"], json!(before));
         let zoom = app.session.state().camera.zoom;
-        app.gesture(anchor, 1.5, 0.2).unwrap();
+        app.gesture(anchor, 1.5, 0.2, true).unwrap();
         assert!((app.session.state().camera.zoom - zoom * 1.5).abs() < 0.0001);
         assert!(app.take_value().unwrap().get("state").is_none());
         let camera = json!(app.session.state().camera);
@@ -1793,7 +1787,7 @@ mod tests {
             app.scroll(anchor, [f32::NAN, 0.], 2., false, false)
                 .is_err()
         );
-        assert!(app.gesture(anchor, 0., 0.).is_err());
+        assert!(app.gesture(anchor, 0., 0., true).is_err());
         assert_eq!(json!(app.session.state().camera), camera);
         app.dispatch(UiAction::SetBrushSize { value: 42. }).unwrap();
         app.scroll(anchor, [0., 1.], 2., false, false).unwrap();
@@ -1941,6 +1935,68 @@ mod tests {
         );
     }
     #[test]
+    fn navigation_cursor_snapshots_follow_tool_commands_without_pointer_input() {
+        use layer_ui::{CommandId, Modifiers, Platform};
+        for platform in [Platform::Mac, Platform::Ios, Platform::Android, Platform::Windows] {
+            let mut host = NativeHost::new(platform).unwrap();
+            host.resize(1200, 900, 1.).unwrap();
+            host.take_value().unwrap();
+            for (command, cursor) in [(CommandId::Hand, Some("pan")), (CommandId::Zoom, Some("zoom")),
+                (CommandId::RotateView, Some("rotate")), (CommandId::Brush, None)]
+            {
+                host.dispatch(UiAction::Invoke { command }).unwrap();
+                assert!(host.session.command(command).selected, "{platform:?} {command:?}");
+                let snapshot = host.take_value().unwrap();
+                assert_eq!(snapshot["navigation_cursor"], json!(cursor), "{platform:?} {command:?}");
+                assert_eq!(snapshot["pan_cursor"], cursor == Some("pan"), "{platform:?} {command:?}");
+                assert!(host.take_value().is_none(), "{platform:?} {command:?}");
+            }
+            host.dispatch(UiAction::Invoke { command: CommandId::Zoom }).unwrap();
+            assert_eq!(host.take_value().unwrap()["navigation_cursor"], "zoom");
+            let alt_key = |pressed| UiInput::Key { key: "Alt_L".into(), pressed, repeat: false,
+                modifiers: Modifiers { alt: !pressed, ..Modifiers::default() }, editing: false, divider: None };
+            for (input, cursor) in [(alt_key(true), "zoom_out"), (alt_key(false), "zoom"),
+                (alt_key(true), "zoom_out"), (UiInput::Blur, "zoom")]
+            {
+                host.input(input).unwrap();
+                let snapshot = host.take_value().expect("changed cursor must publish without a frame");
+                assert!(snapshot["state"].is_object(), "the native owner must receive the cursor with a full publication");
+                assert_eq!(snapshot["navigation_cursor"], cursor, "{platform:?}");
+                assert_eq!(snapshot["pan_cursor"], false, "{platform:?}");
+                assert!(host.take_value().is_none(), "{platform:?} {cursor}");
+            }
+        }
+    }
+
+    #[test]
+    fn navigation_cursor_snapshots_follow_the_adopted_document_without_input() {
+        use layer_ui::{CommandId, Modifiers, Platform};
+        for platform in [Platform::Mac, Platform::Ios, Platform::Android, Platform::Windows] {
+            for (command, cursor) in [(CommandId::Hand, Some("pan")), (CommandId::Zoom, Some("zoom")),
+                (CommandId::RotateView, Some("rotate")), (CommandId::Brush, None)]
+            {
+                let mut host = NativeHost::new(platform).unwrap();
+                host.resize(1200, 900, 1.).unwrap();
+                host.take_value().unwrap();
+                let reply = host.input(UiInput::Key { key: " ".into(), pressed: true, repeat: false,
+                    modifiers: Modifiers::default(), editing: false, divider: None }).unwrap();
+                assert_eq!(reply.navigation_cursor, Some(layer_ui::NavigationMode::Pan));
+                assert_eq!(host.take_value().unwrap()["navigation_cursor"], "pan");
+                let mut adopted = NativeHost::new(platform).unwrap();
+                adopted.resize(1200, 900, 1.).unwrap();
+                adopted.dispatch(UiAction::Invoke { command }).unwrap();
+                assert!(adopted.session.command(command).selected, "{platform:?} {command:?}");
+                host.session = adopted.session;
+                host.document_adopted();
+                let snapshot = host.take_value().unwrap();
+                assert_eq!(snapshot["navigation_cursor"], json!(cursor), "{platform:?} {command:?}");
+                assert_eq!(snapshot["pan_cursor"], cursor == Some("pan"), "{platform:?} {command:?}");
+                assert!(host.take_value().is_none(), "{platform:?} {command:?}");
+            }
+        }
+    }
+
+    #[test]
     fn snapshots_skip_unchanged_input_but_publish_state_and_chrome() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2560, 1600, 2.0).unwrap();
@@ -1965,8 +2021,9 @@ mod tests {
         assert!(app.take_value().is_none());
         app.chrome_hidden = true;
         assert_eq!(app.take_value().unwrap()["chrome_hidden"], true);
+        app.input(UiInput::Key { key: " ".into(), pressed: true, repeat: false,
+            modifiers: layer_ui::Modifiers::default(), editing: false, divider: None }).unwrap();
         app.keep_zen_button = true;
-        app.pan_cursor = true;
         let snapshot = app.take_value().unwrap();
         assert_eq!(snapshot["keep_zen_button"], true);
         assert_eq!(snapshot["pan_cursor"], true);

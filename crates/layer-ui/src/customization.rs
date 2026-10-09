@@ -649,7 +649,7 @@ pub struct ContextMenuItem {
     pub action: Option<UiAction>,
     pub enabled: bool,
     pub hint: String,
-    pub bindings: Vec<KeyChord>,
+    pub bindings: Vec<NativeKeyBinding>,
     pub sections: Vec<Vec<ContextMenuItem>>,
 }
 impl ContextMenuItem {
@@ -698,13 +698,12 @@ impl ContextMenu {
                     let action=if let UiAction::ChooseToolVariant {variant,..}=action {
                         &UiAction::Invoke {command:variant.command()}
                     } else {action};
-                    item.bindings = settings.action_keys(action, platform);
-                    let shortcut = item
-                        .bindings
-                        .iter()
+                    let keys = settings.action_keys(action, platform);
+                    let shortcut = keys.iter()
                         .map(|key| key.localized_label(platform, localization))
                         .collect::<Vec<_>>()
                         .join(" / ");
+                    item.bindings = keys.iter().map(|key| key.native_binding(platform)).collect();
                     if !shortcut.is_empty() && item.hint != shortcut {
                         item.hint = if item.hint.is_empty() {
                             shortcut

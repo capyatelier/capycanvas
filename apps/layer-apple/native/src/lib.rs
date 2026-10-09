@@ -553,11 +553,12 @@ pub unsafe extern "C" fn capy_apple_gesture(
     y: f32,
     scale: f32,
     rotation: f32,
+    began: u32,
 ) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else {
         return -1;
     };
-    app.perform(|a| a.host.gesture([x, y], scale, rotation))
+    app.perform(|a| a.host.gesture([x, y], scale, rotation, began != 0))
         .map_or(-1, |_| 0)
 }
 

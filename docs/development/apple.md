@@ -247,6 +247,24 @@ while editing color/numeric drafts, renaming with marked text, drawing, dragging
 using open dialogs, and activating parked drawings in both themes. Run
 `tests/persistence.swift` for cross-scene delivery after a failed write.
 
+### Navigation input
+
+Native cursors read the shared `navigation_cursor` snapshot, including command,
+modifier and restored-document changes. Toolbar and header double activation use
+the shared control metadata and action; Swift retains only native click timing.
+Drawing-cycle shortcuts come from the shared command catalog and settings.
+Apple menu bindings project the shared primary Tab chord to physical Control-Tab;
+ordinary primary chords use Command. Saved shortcuts retain their shared schema,
+and native menus and custom popups consume the same published bindings.
+
+AppKit magnify/rotate phases and UIKit pinch/rotation recognizers form one group
+while they overlap. The first accepted event begins the shared view gesture;
+remaining deltas retain that starting view for Previous view. Contact exclusion
+and interruption remain in the native adapters. The input fixtures check
+separate, overlapping, cancelled and initially blocked groups with two-way view
+recall and unchanged artwork history. Supplied recognizer events do not establish
+physical trackpad or Pencil sensor behavior.
+
 ### Swift fixtures
 
 The fixtures in `apps/layer-apple/tests` run the production Swift sources on the
@@ -266,6 +284,10 @@ never alongside a UI test batch.
 
 `tests/drawing-tabs.swift` checks independent drawing history, save destinations,
 recovery, close cancellation, and closing a tab before opening several files.
+Shared Next/Previous drawing requests complete before switching documents, so a
+parked request cannot replay on reactivation. The fixture checks repeated cycles,
+custom and disabled shortcuts, restored defaults and Hand navigation aliases on
+both Apple policies and themes.
 It exercises an unreadable session through new checkpoints, Retry, Later and
 close while verifying that the failed copy remains unchanged. It also checks the
 memory-only owner used when storage locations are unavailable: checkpoint and close callbacks complete

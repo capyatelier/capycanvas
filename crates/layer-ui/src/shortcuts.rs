@@ -54,7 +54,23 @@ pub struct KeyChord {
     #[serde(default)]
     pub alt: bool,
 }
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NativeKeyBinding {
+    #[serde(flatten)]
+    pub chord: KeyChord,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub control: bool,
+}
 impl KeyChord {
+    fn apple_control(&self, platform: Platform) -> bool {
+        platform.apple() && self.command && self.key == "tab"
+    }
+    pub fn native_binding(&self, platform: Platform) -> NativeKeyBinding {
+        let control = self.apple_control(platform);
+        let mut chord = self.clone();
+        chord.command &= !control;
+        NativeKeyBinding { chord, control }
+    }
     pub fn new(key: &str, modifiers: Modifiers) -> Self {
         let key = key.to_lowercase();
         let key = match key.as_str() {
@@ -224,7 +240,7 @@ impl KeyChord {
     pub fn localized_label_parts(&self, platform: Platform, l: &Localizer) -> Vec<String> {
         let mut parts = Vec::new();
         if self.command {
-            parts.push(if platform.apple() { "⌘".to_string() } else { l.text(MessageId::SHORTCUT_CTRL).to_string() });
+            parts.push(if self.apple_control(platform) { "⌃".to_string() } else if platform.apple() { "⌘".to_string() } else { l.text(MessageId::SHORTCUT_CTRL).to_string() });
         }
         if self.alt {
             parts.push(l.text(MessageId::SHORTCUT_ALT).to_string());
@@ -1341,7 +1357,7 @@ mod tests {
         );
         assert_eq!(
             menu.sections[0][0].sections[0][0].bindings,
-            [key("i", true, true)]
+            [key("i", true, true).native_binding(Platform::Android)]
         );
     }
 }

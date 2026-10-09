@@ -186,7 +186,7 @@ pub use shortcut_page::{
     ShortcutContextChoice, ShortcutEmpty, ShortcutPageView, ShortcutShow, ShortcutShowChoice, TriggerRow,
 };
 pub use shortcuts::{
-    BindingScope, GAMEPAD_BUTTONS, GESTURE_TRIGGERS, GestureTrigger, HoldKey, KeyChord, MODIFIER_CAPTURE, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
+    BindingScope, GAMEPAD_BUTTONS, GESTURE_TRIGGERS, GestureTrigger, HoldKey, KeyChord, NativeKeyBinding, MODIFIER_CAPTURE, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
     TextEditMenuItem, text_edit_menu, text_edit_menu_localized,
 };
 pub use theme::{
@@ -1226,7 +1226,7 @@ pub struct CommandState {
     pub selected: bool,
     pub shortcut: String,
     pub tooltip: String,
-    pub bindings: Vec<KeyChord>,
+    pub bindings: Vec<NativeKeyBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

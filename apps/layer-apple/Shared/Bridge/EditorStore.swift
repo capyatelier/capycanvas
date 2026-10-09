@@ -55,9 +55,8 @@ import Darwin
     var interruptInput: (() -> Void)?
     var focusWindow: (() -> Void)?
     var focusCanvas: (() -> Void)?
-    var panCursor = false
     var cursorChanged: (() -> Void)?
-    var handCursor: Bool { panCursor || state["layer_tools"]["tool"].string == "hand" }
+    var navigationCursor: String { snapshot["navigation_cursor"].string }
     var systemSceneID: String?
     let sessionIdentity: String
     private(set) var native: NativeOwner?
@@ -162,10 +161,10 @@ import Darwin
                 NSLog("Capy Canvas renderer diagnostic: %@", Self.diagnostic(next["error"].string))
             }
             let hadRenderer = snapshot["gpu_ready"].bool
-            let documentEpoch = state["document_file"]["epoch"].uint, hand = handCursor
+            let documentEpoch = state["document_file"]["epoch"].uint, cursor = navigationCursor
             switch ui.receive(next) {
             case .full:
-                if hand != handCursor { cursorChanged?() }
+                if cursor != navigationCursor { cursorChanged?() }
                 // Replacing a document retires its GPU readbacks even when
                 // the new renderer is already ready in the same publication.
                 if hadRenderer != snapshot["gpu_ready"].bool || documentEpoch != state["document_file"]["epoch"].uint {
@@ -336,13 +335,7 @@ import Darwin
         }
         if value["type"] as? String == "key", value["pressed"] as? Bool == true,
            (value["modifiers"] as? [String: Any])?["command"] as? Bool == true { reportCommandFocus() }
-        native?.submit(1, JSON(value)) { [weak self] reply in
-            guard let pan = reply?["pan_cursor"], !pan.isNull else { return }
-            DispatchQueue.main.async {
-                guard let self, self.panCursor != pan.bool else { return }
-                self.panCursor = pan.bool; self.cursorChanged?()
-            }
-        }
+        native?.submit(1, JSON(value))
         wake?()
     }
     /// A captured chord is a complete input pair; closing its sheet cannot leave

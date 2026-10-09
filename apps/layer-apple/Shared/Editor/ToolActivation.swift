@@ -3,18 +3,19 @@ import SwiftUI
 import AppKit
 #endif
 
-@MainActor enum PickerActivation {
-    private static var last: (anchor: String, time: TimeInterval)?
-    static func activate(_ control: JSON, anchor: [String: Any], store: EditorStore, normally: () -> Void) {
+@MainActor enum ToolActivation {
+    private static var last: (store: ObjectIdentifier, anchor: String, time: TimeInterval)?
+    static func activate(_ control: JSON, anchor: [String: Any], doubleClick: Bool, store: EditorStore, normally: () -> Void) {
         let picker = control["kind"].string == "color_picker"
             || control["kind"].string == "command" && control["command"].string == "eyedropper"
-        guard picker, pointerActivation else { last = nil; normally(); return }
+        guard picker || doubleClick, pointerActivation else { last = nil; normally(); return }
         let key = JSON(anchor).stableKey, now = ProcessInfo.processInfo.systemUptime
-        if let last, last.anchor == key, now - last.time <= interval {
+        if let last, last.store == ObjectIdentifier(store), last.anchor == key, now - last.time <= interval {
             self.last = nil
-            store.dispatch(["type": "color_picker", "action": ["kind": "settings", "anchor": anchor]])
+            if picker { store.dispatch(["type": "color_picker", "action": ["kind": "settings", "anchor": anchor]]) }
+            else { store.dispatch(["type": "double_click_tool", "control": control.raw]) }
         } else {
-            last = (key, now)
+            last = (ObjectIdentifier(store), key, now)
             normally()
         }
     }

@@ -1210,7 +1210,7 @@ mod tests {
         let stamp = host.session.session_stamp();
         let revision = host.session.state().revision;
         let document = host.session.engine().document().clone();
-        let chrome = (host.chrome_hidden, host.keep_zen_button, host.pan_cursor);
+        let chrome = (host.chrome_hidden, host.keep_zen_button, host.session.navigation_mode() == Some(layer_ui::NavigationMode::Pan));
         let dirty = host.dirty;
         host.take_service_changes();
         for input in [
@@ -1227,7 +1227,7 @@ mod tests {
             assert_eq!((reply.chrome_hidden, reply.keep_zen_button, reply.pan_cursor), chrome);
         }
         host.scroll([32.,24.], [8.,4.], 1., true, false).unwrap();
-        host.gesture([32.,24.], 2., 0.5).unwrap();
+        host.gesture([32.,24.], 2., 0.5, true).unwrap();
         assert_eq!(host.session.session_stamp(), stamp);
         assert_eq!(host.session.engine().document(), &document);
         assert_eq!(host.dirty, dirty);

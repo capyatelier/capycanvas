@@ -53,7 +53,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn remember_view(&mut self) {
         self.navigation.previous = Some(ViewPosition::capture(&self.state.camera));
     }
-    pub(super) fn navigation_mode(&self) -> Option<NavigationMode> {
+    pub fn navigation_mode(&self) -> Option<NavigationMode> {
         if let Some(mode) = self.interaction.pointer.and_then(|p| p.navigation.map(|n| n.mode)) { return Some(mode); }
         self.interaction.navigation.as_ref().map(|(_, mode)| *mode)
             .or_else(|| self.layer_interaction.tool.navigation())

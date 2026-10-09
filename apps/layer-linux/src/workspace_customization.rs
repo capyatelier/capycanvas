@@ -1733,7 +1733,7 @@ impl Workspace {
                     if let Some(key) = item.bindings.first() {
                         entry.set_attribute_value(
                             "accel",
-                            Some(&native_accelerator(key).to_variant()),
+                            Some(&native_accelerator(&key.chord).to_variant()),
                         );
                     }
                     if let Some(dispatch) = item.action {

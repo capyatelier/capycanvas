@@ -863,9 +863,9 @@ final class NativeOwner: @unchecked Sendable {
             try publish()
         }
     }
-    func gesture(x: Float, y: Float, scale: Float, rotation: Float) {
+    func gesture(x: Float, y: Float, scale: Float, rotation: Float, began: Bool) {
         perform { [self] in
-            try check(capy_apple_gesture(handle, x, y, scale, rotation))
+            try check(capy_apple_gesture(handle, x, y, scale, rotation, began ? 1 : 0))
             try publish()
         }
     }

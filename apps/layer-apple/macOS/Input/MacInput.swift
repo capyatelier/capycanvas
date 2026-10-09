@@ -19,6 +19,7 @@ import QuartzCore
     private var nextContact: UInt64 = 0
     private var tools: [Int: UInt32] = [:]
     private var modifiers: NSEvent.ModifierFlags = []
+    private var gestures = Set<Bool>()
 
     init(view: MacCanvasView, store: EditorStore) { self.view = view; self.store = store }
     private func tablet(_ event: NSEvent) -> Bool {
@@ -137,7 +138,15 @@ import QuartzCore
     private static let hiddenCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
     func applyCursor() {
         guard canvasCursor else { return }
-        (store.handCursor ? NSCursor.openHand : Self.hiddenCursor).set()
+        let cursor: NSCursor
+        switch store.navigationCursor {
+        case "pan": cursor = .openHand
+        case "zoom": cursor = .zoomIn
+        case "zoom_out": cursor = .zoomOut
+        case "rotate": cursor = .crosshair
+        default: cursor = Self.hiddenCursor
+        }
+        cursor.set()
     }
     func leaveCanvasCursor() {
         guard canvasCursor, contact == nil else { return }
@@ -151,7 +160,7 @@ import QuartzCore
     func interrupt() {
         // Focus loss is an explicit shared interruption policy. Native hover
         // and proximity exit above are normal lift, never cancellation.
-        contact = nil; modifiers = []
+        contact = nil; modifiers = []; gestures.removeAll()
     }
     func scroll(_ event: NSEvent) {
         let point = position(event), unit: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 16
@@ -162,11 +171,15 @@ import QuartzCore
         view?.wake()
     }
     func gesture(_ event: NSEvent, rotate: Bool) {
-        guard contact == nil else { return }
+        defer { if !event.phase.intersection([.ended, .cancelled]).isEmpty { gestures.remove(rotate) } }
+        guard contact == nil, !event.phase.contains(.cancelled) else { return }
+        let phased = !event.phase.isEmpty
+        let began = phased && gestures.isEmpty
+        if phased { gestures.insert(rotate) }
         let point = position(event)
         store.native?.gesture(x: Float(point.x), y: Float(point.y),
             scale: rotate ? 1 : Float(max(0.01, 1 + event.magnification)),
-            rotation: rotate ? -event.rotation * .pi / 180 : 0)
+            rotation: rotate ? -event.rotation * .pi / 180 : 0, began: began)
         view?.wake()
     }
     func key(_ event: NSEvent, pressed: Bool) {

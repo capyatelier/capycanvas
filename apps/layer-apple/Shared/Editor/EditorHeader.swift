@@ -309,7 +309,7 @@ private struct HeaderItemControl: View {
                         .accessibilityLabel(description["label"].string)
                 } else {
                     tile(description["icon"].string) {
-                        PickerActivation.activate(control, anchor: ["kind": "header", "id": entry["id"].raw], store: store) {
+                        ToolActivation.activate(control, anchor: ["kind": "header", "id": entry["id"].raw], doubleClick: description["double_click"].bool, store: store) {
                             store.dispatch(["type":"activate_header_item", "id":entry["id"].raw])
                         }
                     }.overlay(alignment: .bottomTrailing) { if description["has_variants"].bool && !editing { ToolGroupMarker() } }

@@ -8,12 +8,16 @@ import SwiftUI
     var rowCount = 0
     var menuWidth: CGFloat = 340
     var clipboard = false
+    var navigation = false
     var clipboardEnabled = true
     var menu: AppleContextMenu {
         func leaf(_ name: String, enabled: Bool = true) -> [String: Any] {
             let bindings: [[String: Any]]
             switch name {
             case "Direct": bindings = [["key": "z", "command": true, "shift": true]]
+            case "Undo": bindings = [["key": "z", "command": true]]
+            case "Next drawing": bindings = [["key": "tab", "command": false, "control": true]]
+            case "Previous drawing": bindings = [["key": "tab", "command": false, "control": true, "shift": true]]
             case "Nested": bindings = [["key": "n", "command": true, "alt": true]]
             case "Disabled child": bindings = [["key": "x", "command": true, "alt": true]]
             case "Copy": bindings = [["key": "insert", "command": true]]
@@ -23,6 +27,11 @@ import SwiftUI
             }
             return ["label": name, "enabled": enabled, "selected": name == selected, "action": ["id": name],
                 "bindings": bindings]
+        }
+        if navigation {
+            return AppleContextMenu(JSON(["sections": [["Undo", "Next drawing", "Previous drawing"].map { leaf($0) }]])) {
+                self.actions.append($0["id"].string)
+            }
         }
         if clipboard {
             return AppleContextMenu(JSON(["sections": [["Copy", "Paste", "Cut"].map {
@@ -148,6 +157,48 @@ private struct MenuFixtureView: View {
         try require(!fixture.presented && fixture.actions.last == "Nested" && fixture.actions.count == 9,
             "A nested action's shortcut must work before its submenu is opened")
         print("PASS: shared popup keyboard focus, submenu return, disabled rows, action dismissal and Escape")
+        fixture.navigation = true; fixture.selected = "Undo"
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            fixture.presented = true; try await drain(0.3)
+            var previous = fixture.actions.count
+            try await send("\t", 48)
+            try require(fixture.presented && fixture.actions.count == previous,
+                "Plain Tab moves menu focus without invoking a projected Control-Tab action")
+            try await send("\r", 36)
+            try require(!fixture.presented && fixture.actions.count == previous + 1 && fixture.actions.last == "Next drawing",
+                "Plain Tab advances from Undo to Next drawing")
+            fixture.presented = true; try await drain(0.3)
+            previous = fixture.actions.count
+            try await shortcut("\t", 48, .shift)
+            try require(fixture.presented && fixture.actions.count == previous,
+                "Plain Shift-Tab moves focus without invoking projected Control-Shift-Tab")
+            try await send("\r", 36)
+            try require(!fixture.presented && fixture.actions.count == previous + 1 && fixture.actions.last == "Previous drawing",
+                "Plain Shift-Tab wraps focus from Undo to Previous drawing")
+            for (text, code, flags, action): (String, UInt16, NSEvent.ModifierFlags, String) in [
+                ("\t", 48, .control, "Next drawing"),
+                ("\t", 48, [.control, .shift], "Previous drawing"),
+                ("z", 6, .command, "Undo"),
+                ("z", 6, .control, "Undo")
+            ] {
+                fixture.presented = true; try await drain(0.3)
+                previous = fixture.actions.count
+                try await shortcut(text, code, flags)
+                try require(!fixture.presented && fixture.actions.count == previous + 1 && fixture.actions.last == action,
+                    "Native \(action) shortcut dispatches exactly once in \(appearance.rawValue)")
+            }
+            let next = menuShortcut(JSON(["key": "tab", "command": false, "control": true]))
+            let previousShortcut = menuShortcut(JSON(["key": "tab", "command": false, "control": true, "shift": true]))
+            let undo = menuShortcut(JSON(["key": "z", "command": true]))
+            try require(next?.key == .tab && next?.modifiers == .control,
+                "Next drawing advertises physical Control-Tab")
+            try require(previousShortcut?.key == .tab && previousShortcut?.modifiers == [.control, .shift],
+                "Previous drawing advertises physical Control-Shift-Tab")
+            try require(undo?.key == KeyEquivalent("z") && undo?.modifiers == .command,
+                "Undo retains its physical Command-Z equivalent")
+            print("PASS: \(appearance.rawValue) popup Tab focus, projected drawing shortcuts and Command-Z")
+        }
         try await checkWindowFit()
         try await checkClipboardKeys()
     }

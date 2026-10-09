@@ -9,13 +9,17 @@ private final class NavigationEvent: NSEvent {
     var flags: NSEvent.ModifierFlags = []
     var delta = CGPoint.zero
     var precise = true
+    var eventPhase: NSEvent.Phase = .changed
+    var magnificationDelta: CGFloat = 0.25
+    var rotationDelta: Float = 30
+    override var phase: NSEvent.Phase { eventPhase }
     override var locationInWindow: CGPoint { point }
     override var modifierFlags: NSEvent.ModifierFlags { flags }
     override var scrollingDeltaX: CGFloat { delta.x }
     override var scrollingDeltaY: CGFloat { delta.y }
     override var hasPreciseScrollingDeltas: Bool { precise }
-    override var magnification: CGFloat { 0.25 }
-    override var rotation: Float { 30 }
+    override var magnification: CGFloat { magnificationDelta }
+    override var rotation: Float { rotationDelta }
 }
 
 /// Standalone tablet values exercise the driver path that has no mouseDown.
@@ -202,10 +206,13 @@ private final class TabletEvent: NSEvent {
                 try require(window.isKeyWindow, "The owned canvas must have native focus before a contact")
             }
             let camera = store.state["camera"], scale = window.backingScaleFactor
-            let surface = CGPoint(x: camera["translation"][0].number + point.x * camera["zoom"].number,
-                y: camera["translation"][1].number + point.y * camera["zoom"].number)
+            let angle = camera["rotation"].number, zoom = camera["zoom"].number
+            let x = point.x * (camera["flipped"][0].bool ? -zoom : zoom)
+            let y = point.y * (camera["flipped"][1].bool ? -zoom : zoom)
+            let surface = CGPoint(x: camera["translation"][0].number + cos(angle) * x - sin(angle) * y,
+                y: camera["translation"][1].number + sin(angle) * x + cos(angle) * y)
             let local = CGPoint(x: surface.x / scale, y: surface.y / scale)
-            try require(canvas.bounds.contains(local), "The document point must be inside the real canvas")
+            try require(canvas.bounds.contains(local), "The document point \(point) must be inside the real canvas: local=\(local), bounds=\(canvas.bounds), camera=\(camera.stableKey), host=\(host.bounds), window=\(window.frame)")
             try require(host.hitTest(canvas.convert(local, to: host.superview)) === canvas,
                 "Visible editor controls must not cover this drawing point")
             nextEvent += 1
@@ -358,10 +365,10 @@ private final class TabletEvent: NSEvent {
             tablet.point = canvas.convert(CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY), to: nil)
             tablet.nativeType = button == 1 ? .rightMouseDown : .otherMouseDown
             if button == 1 { canvas.rightMouseDown(with: tablet) } else { canvas.otherMouseDown(with: tablet) }
-            try await wait("Held \(trigger)") { store.panCursor }
+            try await wait("Held \(trigger)") { store.navigationCursor == "pan" }
             tablet.nativeType = button == 1 ? .rightMouseUp : .otherMouseUp
             if button == 1 { canvas.rightMouseUp(with: tablet) } else { canvas.otherMouseUp(with: tablet) }
-            try await wait("Released \(trigger)") { !store.panCursor }
+            try await wait("Released \(trigger)") { store.navigationCursor != "pan" }
             try require(store.state["layer_tools"]["tool"].string == before, "Panning with \(trigger) keeps the tool")
             try await invoke("settings")
             try await action(["type": "preferences", "action": ["type": "reset_trigger", "trigger": trigger]])
@@ -465,6 +472,25 @@ private final class TabletEvent: NSEvent {
                     store.state["camera"][$0].stableKey == before[$0].stableKey
                 }
             }
+            func recalledCamera(_ before: JSON) -> Bool {
+                near(store.state["camera"]["zoom"].number, before["zoom"].number)
+                    && near(store.state["camera"]["rotation"].number, before["rotation"].number)
+                    && store.state["camera"]["flipped"].stableKey == before["flipped"].stableKey
+                    && (0..<2).allSatisfy { near(store.state["camera"]["translation"][$0].number, before["translation"][$0].number) }
+            }
+            func gesture(_ rotate: Bool, phase: NSEvent.Phase, delta: Double = 0) async throws {
+                event.eventPhase = phase
+                event.magnificationDelta = rotate ? 0 : CGFloat(delta)
+                event.rotationDelta = rotate ? Float(delta) : 0
+                if rotate { canvas.rotate(with: event) } else { canvas.magnify(with: event) }
+                try await flush()
+            }
+            func recall(_ before: JSON, completed: JSON) async throws {
+                try await invoke("previous_view"); try await flush()
+                try require(recalledCamera(before), "Previous View must recall the beginning of the entire native gesture")
+                try await invoke("previous_view"); try await flush()
+                try require(recalledCamera(completed), "Previous View must return to the completed native gesture")
+            }
             func middle(_ type: NSEvent.EventType, at point: CGPoint) async throws {
                 nextEvent += 1
                 guard let mouse = NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil),
@@ -535,6 +561,7 @@ private final class TabletEvent: NSEvent {
                 && near(store.state["camera"]["rotation"].number, before["rotation"].number),
                 "Control-scroll must zoom without rotating")
             before = store.state["camera"]
+            event.eventPhase = []
             event.flags = []; canvas.magnify(with: event); try await flush()
             try require(near(store.state["camera"]["zoom"].number, before["zoom"].number * 1.25),
                 "Pinch must apply incremental magnification")
@@ -551,10 +578,73 @@ private final class TabletEvent: NSEvent {
                 && near(store.state["camera"]["translation"][0].number, anchor.x + cos(angle) * dx - sin(angle) * dy)
                 && near(store.state["camera"]["translation"][1].number, anchor.y + sin(angle) * dx + cos(angle) * dy),
                 "Rotation must preserve its anchor and native direction")
+            for theme in ["light", "dark"] {
+                try await action(["type": "set_theme", "theme": theme])
+                for mode in ["pinch", "rotation", "combined"] {
+                    let beginning = store.state["camera"]
+                    if mode != "rotation" {
+                        try await gesture(false, phase: .began)
+                        try await gesture(false, phase: .changed, delta: 0.25)
+                    }
+                    if mode != "pinch" {
+                        try await gesture(true, phase: .began)
+                        try await gesture(true, phase: .changed, delta: 20)
+                    }
+                    if mode != "rotation" {
+                        try await gesture(false, phase: .changed, delta: 0.10)
+                        try await gesture(false, phase: .ended)
+                    }
+                    if mode != "pinch" {
+                        try await gesture(true, phase: .changed, delta: 10)
+                        try await gesture(true, phase: .ended)
+                    }
+                    let completed = store.state["camera"]
+                    try require(!recalledCamera(beginning), "The supplied \(mode) gesture must move the view")
+                    try await recall(beginning, completed: completed)
+                }
+                for interruption in ["cancel", "blur"] {
+                    try await gesture(false, phase: .began)
+                    try await gesture(false, phase: .changed, delta: 0.10)
+                    if interruption == "cancel" { try await gesture(false, phase: .cancelled) }
+                    else { store.input(["type": "blur"]); try await flush() }
+                    let resumed = store.state["camera"]
+                    try await gesture(true, phase: .began)
+                    try await gesture(true, phase: .changed, delta: 10)
+                    try await gesture(true, phase: .changed, delta: 5)
+                    try await gesture(true, phase: .ended)
+                    try await recall(resumed, completed: store.state["camera"])
+                }
+                try await tool("select")
+                try await invoke("fit_canvas"); try await invoke("zoom_out")
+                let earlierRecall = store.state["camera"]
+                try await invoke("fit_canvas")
+                let rejectedBegin = store.state["camera"]
+                try require(!recalledCamera(earlierRecall), "The old recall view must differ from the first accepted gesture view")
+                try await send(.leftMouseDown, CGPoint(x: 64, y: 64))
+                try await gesture(false, phase: .began)
+                try await gesture(true, phase: .began)
+                try require(sameCamera(rejectedBegin), "Rejected gesture beginnings must preserve the captured contact view")
+                try await send(.leftMouseUp, CGPoint(x: 64, y: 64)); try await flush()
+                try require(try await pixels() == painted, "Releasing the stationary selection contact must preserve every pixel")
+                let firstAccepted = store.state["camera"]
+                try require(recalledCamera(rejectedBegin), "The released contact must leave the gesture's starting view unchanged")
+                try await gesture(false, phase: .changed, delta: 0.10)
+                try await gesture(true, phase: .changed, delta: 10)
+                try await gesture(false, phase: .ended)
+                try await gesture(true, phase: .changed, delta: 5)
+                try await gesture(true, phase: .ended)
+                try await recall(firstAccepted, completed: store.state["camera"])
+                try require(try await pixels() == painted, "Gesture recall must preserve every artwork pixel in \(theme)")
+            }
             try await invoke("fit_canvas")
             before = store.state["camera"]
             try await send(.leftMouseDown, lasso[0]); try await send(.leftMouseDragged, lasso[1])
-            canvas.scrollWheel(with: event); canvas.magnify(with: event); canvas.rotate(with: event)
+            canvas.scrollWheel(with: event)
+            for rotating in [false, true] {
+                try await gesture(rotating, phase: .began)
+                try await gesture(rotating, phase: .changed, delta: rotating ? 15 : 0.25)
+                try await gesture(rotating, phase: .ended)
+            }
             try await flush()
             try require(sameCamera(before), "Navigation cannot move the camera during a captured primary contact")
             store.input(["type":"blur"]); try await flush()
@@ -571,6 +661,12 @@ private final class TabletEvent: NSEvent {
             // release wheel/trackpad admission, not just the next stroke.
             canvas.scrollWheel(with: event); try await flush()
             try require(!sameCamera(before), "Fresh navigation must work after an interrupted contact")
+            let resumedGesture = store.state["camera"]
+            try await gesture(false, phase: .began)
+            try await gesture(false, phase: .changed, delta: 0.10)
+            try await gesture(false, phase: .changed, delta: 0.05)
+            try await gesture(false, phase: .ended)
+            try await recall(resumedGesture, completed: store.state["camera"])
             let navigated = try await pixels()
             try require(navigated == painted, "Navigation and cancelled contact must preserve every artwork pixel")
             try await invoke("undo")

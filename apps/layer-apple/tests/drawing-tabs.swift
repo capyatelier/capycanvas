@@ -3,6 +3,7 @@ import QuartzCore
 
 @main struct DrawingTabChecks {
     @MainActor static func main() async throws {
+        _ = NSApplication.shared
         try require(ProcessInfo.processInfo.environment["CAPY_STORAGE_DIR"] != nil && StorageLocations.installation != nil,
             "The fixture must configure its private process storage before temporary-file operations")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-tabs-\(UUID())")
@@ -61,7 +62,7 @@ import QuartzCore
         }
         for platform: UInt32 in [0, 1] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root.appendingPathComponent("owner-\(platform)")), managedWorkspaces: false)
-            let native = store.native!, surface = attachSurface(store, CGSize(width: 256, height: 192))
+            let native = store.native!, surface = attachSurface(store, CGSize(width: 960, height: 720))
             defer { native.detach(); withExtendedLifetime(surface) {} }
             func wait(_ name: String, _ ready: () -> Bool) async throws {
                 try await CapyTest.wait(name, seconds: 60, failure: { (store.recovery.error ?? store.failure ?? store.projectFiles.error).map { "\(name): \($0)" } },
@@ -123,6 +124,77 @@ import QuartzCore
             try await invoke("add_layer"); try await invoke("add_layer")
             save = b; try await invoke("save_document_as")
             let secondLayers = store.state["layers"].stableKey
+            func settledDrawing(_ id: UInt64, _ name: String) async throws {
+                try await wait(name) {
+                    store.drawingTabs.selected == id && !store.drawingTabs.busy
+                        && !store.projectFiles.busy && store.state["requests"].array.isEmpty
+                        && store.snapshot["shaders_ready"].bool
+                }
+                precondition(store.state["layers"].stableKey == (id == 1 ? firstLayers : secondLayers))
+            }
+            func cycle(_ command: String, to id: UInt64) async throws {
+                try await store.apply(["type": "invoke", "command": command])
+                try await settledDrawing(id, command)
+            }
+            func key(_ name: String, to id: UInt64, command: Bool = false, shift: Bool = false, alt: Bool = false) async throws {
+                for pressed in [true, false] {
+                    store.input(["type": "key", "key": name, "pressed": pressed, "repeat": false,
+                        "modifiers": ["command": command, "shift": shift, "alt": alt]])
+                }
+                await withCheckedContinuation { done in
+                    native.submit(2, JSON(["type": "catalog"])) { _ in DispatchQueue.main.async { done.resume() } }
+                }
+                try await settledDrawing(id, "\(name) drawing cycling")
+            }
+            func restoreSettings(_ settings: [String: Any]) async throws {
+                try await store.apply(["type": "restore_settings", "settings": settings])
+                try await wait("shortcut settings") { store.state["requests"].array.isEmpty }
+            }
+            for theme in ["light", "dark"] {
+                try await store.apply(["type": "set_theme", "theme": theme])
+                try await wait("cycling theme") { store.state["requests"].array.isEmpty }
+                let original = store.state["settings"].object
+                for _ in 0..<2 {
+                    try await cycle("next_drawing", to: 1)
+                    try await cycle("previous_drawing", to: 2)
+                }
+                var settings = original
+                var shortcuts = settings["shortcuts"] as? [String: Any] ?? [:]
+                for (id, name) in [("command.NextDrawing", "f6"), ("command.PreviousDrawing", "f7")] {
+                    shortcuts[id] = [["key": name, "command": false, "shift": false, "alt": false]]
+                }
+                settings["shortcuts"] = shortcuts
+                try await restoreSettings(settings)
+                precondition(store.state["settings"]["shortcuts"]["command.NextDrawing"][0]["key"].string == "f6")
+                precondition(store.state["settings"]["shortcuts"]["command.PreviousDrawing"][0]["key"].string == "f7")
+                try await key("tab", to: 2, command: true)
+                try await key("tab", to: 2, command: true, shift: true)
+                try await key("f6", to: 1)
+                try await key("f7", to: 2)
+                shortcuts["command.NextDrawing"] = [] as [[String: Any]]
+                shortcuts["command.PreviousDrawing"] = [] as [[String: Any]]
+                settings["shortcuts"] = shortcuts
+                try await restoreSettings(settings)
+                try await key("f6", to: 2)
+                try await key("f7", to: 2)
+                try await restoreSettings(original)
+                try await key("tab", to: 1, command: true)
+                try await key("tab", to: 2, command: true, shift: true)
+                for alternate in [false, true] {
+                    try await invoke("hand")
+                    try await key("pagedown", to: 1, command: !alternate, alt: alternate)
+                    try await invoke("hand")
+                    try await key("pageup", to: 2, command: !alternate, alt: alternate)
+                }
+                try await invoke("hand")
+                let camera = store.state["camera"]
+                try await key("pagedown", to: 2)
+                try require(store.state["camera"]["translation"].stableKey != camera["translation"].stableKey,
+                    "Plain PageDown must move the Hand camera: before=\(camera.stableKey), after=\(store.state["camera"].stableKey), surface=\(surface.bounds)")
+                precondition(store.state["camera"]["zoom"].stableKey == camera["zoom"].stableKey)
+                try await invoke("fit_canvas")
+                print("Apple \(platform) \(theme): shared adjacent requests, custom/disabled/restored shortcuts and Hand page aliases passed")
+            }
             try await select(1)
             precondition(store.state["layers"].stableKey == firstLayers)
             try await invoke("add_layer"); try await invoke("save_document")

@@ -127,6 +127,7 @@ func menuShortcut(_ binding: JSON) -> KeyboardShortcut? {
     guard let key else { return nil }
     var flags: EventModifiers = []
     if binding["command"].bool { flags.insert(.command) }
+    if binding["control"].bool { flags.insert(.control) }
     if binding["shift"].bool { flags.insert(.shift) }
     if binding["alt"].bool { flags.insert(.option) }
     return KeyboardShortcut(key, modifiers: flags)

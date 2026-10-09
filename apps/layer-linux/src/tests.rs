@@ -7043,7 +7043,7 @@ fn native_menu_sections() {
                         section
                             .item_attribute_value(i as i32, "accel", None)
                             .and_then(|v| v.get::<String>()),
-                        item.bindings.first().map(native_accelerator)
+                        item.bindings.first().map(|key| native_accelerator(&key.chord))
                     );
                     assert!(
                         section

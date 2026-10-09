@@ -111,7 +111,7 @@ struct EditorActionMenu: View {
     private func key(_ key: String, command: Bool, shift: Bool, alt: Bool) {
         if let item = model.actions.first(where: { item in
             item.enabled && item.bindings.contains { binding in
-                binding["key"].string == key.lowercased() && binding["command"].bool == command
+                binding["key"].string == key.lowercased() && (binding["command"].bool || binding["control"].bool) == command
                     && binding["shift"].bool == shift && binding["alt"].bool == alt
             }
         }) { dismiss(); item.action?(); return }

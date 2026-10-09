@@ -89,8 +89,7 @@ impl NativeHost {
             logical: self.logical,
             chrome_hidden: self.chrome_hidden,
             keep_zen_button: self.keep_zen_button,
-            pan_cursor: self.pan_cursor,
-            navigation_cursor: self.navigation_cursor,
+            navigation_cursor: self.session.navigation_mode(),
             gpu_ready: self.session.engine().backend().0.is_some(),
             startup: self.shader_progress(),
             error: self.error.clone(),
@@ -324,8 +323,8 @@ impl NativeHost {
         let gpu_ready = self.session.engine().backend().0.is_some();
         map.serialize_entry("gpu_ready", &gpu_ready)?;
         map.serialize_entry("keep_zen_button", &self.keep_zen_button)?;
-        map.serialize_entry("pan_cursor", &self.pan_cursor)?;
-        map.serialize_entry("navigation_cursor", &self.navigation_cursor)?;
+        map.serialize_entry("pan_cursor", &(self.session.navigation_mode() == Some(layer_ui::NavigationMode::Pan)))?;
+        map.serialize_entry("navigation_cursor", &self.session.navigation_mode())?;
         let progress = self.shader_progress();
         map.serialize_entry("canvas_ready", &(gpu_ready && progress.canvas_ready))?;
         map.serialize_entry("brush_ready", &(gpu_ready && progress.brush_ready))?;
