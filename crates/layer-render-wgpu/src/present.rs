@@ -47,7 +47,7 @@ impl OverviewPlacement {
 
 pub struct ViewportPresenter {
     timing: Option<crate::frame_timing::GpuFrameTimer>,
-    pipeline: [wgpu::RenderPipeline; 3],
+    pipeline: [crate::Deferred<wgpu::RenderPipeline>; 3],
     layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
     proof_buffer: wgpu::Buffer,
@@ -74,7 +74,7 @@ pub struct ViewportPresenter {
     encode_srgb: bool,
     corner_radius: f32,
     picker: crate::present_picker::Picker,
-    cursor_pipeline: wgpu::RenderPipeline,
+    cursor_pipeline: crate::Deferred<wgpu::RenderPipeline>,
     cursor_icons: wgpu::BindGroup,
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
@@ -93,7 +93,7 @@ pub struct ViewportPresenter {
     pipeline_layout: wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
     color: SdrSurfaceColor,
-    overview_pipeline: Option<wgpu::RenderPipeline>,
+    overview_pipeline: Option<crate::Deferred<wgpu::RenderPipeline>>,
     navigator_view: Option<wgpu::TextureView>,
     overview_buffer: Option<wgpu::Buffer>,
     overviews: Vec<[f32; 24]>,
@@ -350,6 +350,24 @@ impl ViewportPresenter {
     /// Shares the renderer's optional startup cache with presentation shaders.
     pub fn for_renderer(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
         Self::with_device(&renderer.device, &renderer.queue, format, SdrSurfaceColor::Srgb)
+    }
+
+    pub async fn prepare(&mut self, renderer: &WgpuRasterizer) -> Result<(), GpuRasterError> {
+        let backdrop = self.backdrop.get_or_insert_with(|| crate::backdrop_blur::BackdropBlur::new(&renderer.device, self.format));
+        crate::Deferred::prepare_all(self.pipeline.iter().chain([&self.cursor_pipeline]).chain(backdrop.pipelines()))
+            .await.map_err(GpuRasterError::Effect)?;
+        crate::Deferred::prepare_all(renderer.scene_pipelines.scale_pipelines())
+            .await.map_err(GpuRasterError::Effect)?;
+        Ok(())
+    }
+
+    pub fn pipelines_ready(&self, renderer: &WgpuRasterizer) -> bool {
+        let Some(startup) = &renderer.startup else { return true; };
+        let mut ready = startup.compiler.require(self.pipeline.iter().chain([&self.cursor_pipeline]), crate::startup::DOCUMENT);
+        ready &= startup.compiler.require(self.overview_pipeline.iter().chain(self.picker.pipeline.iter()), crate::startup::BRUSH);
+        if let Some(backdrop) = &self.backdrop { ready &= startup.compiler.require(backdrop.pipelines(), crate::startup::DOCUMENT); }
+        startup.compiler.start();
+        ready
     }
 
     /// The host configures its surface with the matching, advertised color space.
@@ -719,7 +737,7 @@ impl ViewportPresenter {
     }
 
     pub fn set_color_picker(&mut self, renderer: &WgpuRasterizer, overlay: Option<layer_render::ColorPickerOverlay>) {
-        self.picker.set(overlay, renderer.device(), &self.shader, &self.pipeline_layout, self.format);
+        self.picker.set(overlay, &renderer.device, &self.shader, &self.pipeline_layout, self.format);
     }
 
     pub fn set_cursor(&mut self, device: &wgpu::Device, segments: &[CursorSegment], scale: f32) {
@@ -1263,21 +1281,27 @@ impl ViewportPresenter {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn surface_pipeline(
-    device: &wgpu::Device,
-    label: &str,
+    device: &crate::PipelineDevice,
+    label: &'static str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    entries: [&str; 2],
+    entries: [&'static str; 2],
     instance: Option<wgpu::VertexBufferLayout<'_>>,
     format: wgpu::TextureFormat,
     blend: Option<wgpu::BlendState>,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+) -> crate::Deferred<wgpu::RenderPipeline> {
+    let (device, layout, shader) = (device.for_recipe(), layout.clone(), shader.clone());
+    let instance = instance.map(|v| (v.array_stride, v.step_mode, v.attributes.to_vec()));
+    crate::Deferred::pipeline(move |mode| {
+        let instance = instance.as_ref().map(|(array_stride, step_mode, attributes)| wgpu::VertexBufferLayout {
+            array_stride: *array_stride, step_mode: *step_mode, attributes,
+        });
+        mode.render(&device, &wgpu::RenderPipelineDescriptor {
         label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState { module: shader, entry_point: Some(entries[0]), compilation_options: Default::default(), buffers: &[instance] },
+        layout: Some(&layout),
+        vertex: wgpu::VertexState { module: &shader, entry_point: Some(entries[0]), compilation_options: Default::default(), buffers: &[instance] },
         fragment: Some(wgpu::FragmentState {
-            module: shader,
+            module: &shader,
             entry_point: Some(entries[1]),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
@@ -1287,7 +1311,7 @@ pub(crate) fn surface_pipeline(
         multisample: Default::default(),
         multiview_mask: None,
         cache: None,
-    })
+    }) })
 }
 
 #[cfg(test)]

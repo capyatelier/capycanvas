@@ -2680,10 +2680,22 @@ class AndroidInteractionTest {
                 tap(bounds("canvas-bar-segment-transform-mode-2").center)
                 waitFor("$device Distort for a corner drag", 5_000) { chosen("transform-mode") == "Distort" }
                 settle()
+                val readyStarted = SystemClock.elapsedRealtimeNanos()
+                waitFor("$device Distort resources ready", 120_000) { snapshot().optBoolean("brush_ready") }
+                instrumentation.sendStatus(0, android.os.Bundle().apply {
+                    putString("stream", "Distort required readiness device=$device ms=${(SystemClock.elapsedRealtimeNanos()-readyStarted)/1_000_000.0}\n")
+                })
                 val quad = canvasBar()!!.opt("anchor").toString()
                 val start = corner()
-                drag(start, start + Offset(36 * density, 28 * density))
-                waitFor("$device Distort corner drag reshapes the transform", 5_000) { canvasBar()?.opt("anchor")?.toString() != quad }
+                val end = start + Offset(36 * density, 28 * density)
+                drag(start, end)
+                host.awaitMain("$device Distort corner drag reshapes the transform", 5_000, {
+                    obj("tool_type" to device, "start" to start.toString(), "end" to end.toString(),
+                        "anchor_before" to quad, "canvas_bar" to canvasBar(), "camera" to state().opt("camera"),
+                        "brush" to state().opt("brush"), "brush_ready" to snapshot().opt("brush_ready"),
+                        "shaders_ready" to snapshot().opt("shaders_ready"), "filter_load" to state().opt("filter_load"),
+                        "host_failure" to host.failure?.toString(), "action_error" to host.actionError?.toString()).toString()
+                }) { canvasBar()?.opt("anchor")?.toString() != quad }
                 waitFor("$device bar returns after the corner drag", 3_000) { shown("canvas-action-bar") }
                 assertEquals("Distort", chosen("transform-mode"))
                 settle()

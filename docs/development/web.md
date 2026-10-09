@@ -39,6 +39,24 @@ DOM; `gpu.js` writes the help shown when WebGPU cannot start;
 `documents.js` connects project requests to browser file access and downloads;
 `workspace-worker.js` and `workspace-store.js` keep the workspace in IndexedDB.
 Rust owns editor behavior; JavaScript owns browser events, controls and services.
+Runtime canvas failures show the browser's message and expandable, copyable
+failure details. The report captures the adapter, browser, canvas and transform
+state, tracked renderer storage, main Wasm heap size and the last 16 GPU events
+before retiring the renderer. Rust panic events retain the cause and source
+location even when the browser exception only says `unreachable`.
+Worker events identify their owner and Wasm heap;
+device loss and out-of-memory errors retire that worker and fail its requests
+immediately. Validation errors remain diagnostic events. A failure while
+suspending the renderer is reported alongside the original error. Tracked storage
+is not total GPU or browser memory, and a terminated browser process cannot
+produce this in-page report.
+WebGPU pipelines use asynchronous preparation on every browser. A recipe shares
+one preparation result among its callers; command encoding cannot start a
+blocking compilation or replace a pending compilation. Snapshot jobs prepare
+their required kernels before encoding tiles, and share immutable transform
+recipes across jobs on the same device. Canvas edits wait in the shared ordered
+input queue while their dependencies prepare.
+
 The session runs on the browser event loop without shared memory. File decoding,
 encoding and color work run in `raster-worker.js` through the shared
 `package::transfer` descriptor and bounded transferable payloads. The descriptor
@@ -131,8 +149,13 @@ Pure unit tests need no browser or GPU:
 
 ```bash
 node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs
-node --test apps/layer-web/{numeric,histogram,raster-worker-client,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
+node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
 ```
+
+`test.mjs --gpu-failure-lifecycle` injects an out-of-memory event on the actual
+canvas device and checks expanded details, copying and restarting in both themes.
+A late event from the retired device must leave the replacement canvas usable.
+This checks error handling; it does not reproduce memory exhaustion.
 
 `test.mjs --wheel-navigation` checks wheel navigation with held middle/right
 mouse buttons, Ctrl/Shift precedence, cursor anchoring, release, view lock,
@@ -358,6 +381,10 @@ LAYER_TEST_ARTIFACTS=artifacts/web-android \
 - `--staged-startup` holds shader validation and checks that controls, paper and
   painting become usable in order; `--filter-previews` checks preview pixels and
   cache lifecycle.
+- `--pipeline-readiness` holds compilation during Fill followed by Deselect,
+  checks pixels and undo history, then applies a cold transform and commits
+  another by switching tools. It instruments both page and worker devices before
+  startup and requires zero blocking pipeline creation calls.
 - Use `chrome://inspect/#devices` in desktop Chrome for interactive inspection.
   Desktop headless results do not establish tablet performance.
 

@@ -218,9 +218,28 @@ class AndroidRasterTest {
         if(result.getBoolean("preserved"))runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.drawingTabs.selectRestored(selected)}}
         compose.runOnUiThread {host.documentChanged()}
     }
-    private fun saveTask(name: String): Pair<Long,Int> = native { handle ->
-        val (id,file)=request(handle,"save_document_as")
-        Native.projectTask(handle,id,obj("uri" to android.net.Uri.fromFile(File(files,name)).toString(),"name" to name).toString(),file.getLong("epoch"),file.getLong("revision")) to id
+    private fun saveTask(name: String): Pair<Long,Int> {
+        native { Native.dispatch(it,obj("type" to "invoke","command" to "save_document_as").toString()) }
+        var job: Pair<Long,Int>? = null
+        try {
+            compose.waitUntil(120_000) { tick(); native { handle ->
+                val snapshot=state(handle)
+                val request=snapshot.array("requests").objects().firstOrNull { it.getJSONObject("kind").optString("type") == "document" }
+                if (request == null) false else {
+                    val id=request.getInt("id"); val file=snapshot.getJSONObject("document_file")
+                    job=Native.projectTask(handle,id,obj("uri" to android.net.Uri.fromFile(File(files,name)).toString(),"name" to name).toString(),file.getLong("epoch"),file.getLong("revision")) to id
+                    true
+                }
+            } }
+        } catch (failure: Throwable) {
+            native { handle ->
+                val snapshot=state(handle)
+                throw AssertionError("$name save request missing: ${obj("document_file" to snapshot.opt("document_file"),
+                    "requests" to snapshot.opt("requests"), "brush" to snapshot.opt("brush"), "canvas_bar" to snapshot.opt("canvas_bar"),
+                    "save_command" to snapshot.array("commands").objects().firstOrNull { it.getString("id") == "save_document_as" })}",failure)
+            }
+        }
+        return checkNotNull(job)
     }
     private fun finishSave(job: Pair<Long,Int>, name: String): ByteArray {
         val file=File(files,name)
@@ -2044,14 +2063,21 @@ class AndroidRasterTest {
                 settings("number-$angleLabel").performTextReplacement("30")
                 settings("number-$angleLabel").performImeAction(); refresh()
                 if (settingsDrawer) toggleSettingsDrawer()
-                press("apply_transform")
+                if (theme == "dark") invoke("pencil")
+                else press("apply_transform")
                 compose.waitUntil(120_000) { tick(); native { state(it).isNull("canvas_bar") } }
+                if (theme == "dark") {
+                    assertEquals("Pencil accepts the rotation and becomes active", "pencil", published().getJSONObject("brush").getString("tool"))
+                }
                 val rotated = manifest(save("$theme-rotated-paint.capy"))
                 assertMaterial(rotated)
                 assertNotEquals("$theme: rotation commits new paint pixels", backing(retained), backing(rotated))
                 assertEquals("$theme: placed images keep their sources", identity, rotated.objectImageIdentity())
                 invoke("undo")
                 assertEquals("$theme: one undo restores the paint", backing(retained), backing(manifest(save("$theme-rotation-undone.capy"))))
+                invoke("redo")
+                assertEquals("$theme: redo restores the accepted rotation", backing(rotated), backing(manifest(save("$theme-rotation-redone.capy"))))
+                invoke("undo")
                 invoke("move")
                 key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, true)
                 key(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, true, 1)

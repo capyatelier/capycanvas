@@ -19,6 +19,7 @@ mod artwork_transfer;
 mod raster_worker;
 mod scopes;
 mod workspaces;
+mod gpu_diagnostics;
 
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -327,7 +328,6 @@ impl WebApp {
         self.session.cursor_input(event);
     }
     pub fn create(canvas: web_sys::HtmlCanvasElement, saved: Option<String>, preferred_tags: JsValue) -> Result<WebApp, JsValue> {
-        console_error_panic_hook::set_once();
         let tags: Vec<String> = serde_wasm_bindgen::from_value(preferred_tags).map_err(js)?;
         let localization = layer_ui::launch_localization(saved.as_deref().unwrap_or(""), &tags.iter().map(String::as_str).collect::<Vec<_>>());
         let mut session = UiSession::blank_localized(
@@ -455,9 +455,14 @@ impl WebApp {
     pub fn gpu_failure(&self) -> Option<String> {
         self.gpu_owner()?.lock().ok()?.clone()
     }
+    pub fn gpu_diagnostics(&self) -> Result<JsValue, JsValue> {
+        serialize(&serde_json::json!({"version": env!("CARGO_PKG_VERSION"),
+            "adapter": self.session.engine().backend().0.as_ref().map(|gpu| gpu_diagnostics::adapter_info(gpu.adapter(), gpu.device())),
+            "session": self.session.rendering_diagnostics()}))
+    }
     pub fn suspend_gpu(&mut self) -> Result<JsValue, JsValue> {
         if let Some(context) = self.document_gpu.take() { context.device.destroy(); }
-        let change = self.session.suspend_renderer().map_err(js)?;
+        let change = self.session.suspend_renderer().map_err(js);
         if let Some(gpu) = self.session.renderer_mut().0.take() {
             // Dropping WebGPU handles leaves release to JavaScript GC. Retire
             // the failed device explicitly before recovery allocates another
@@ -470,7 +475,7 @@ impl WebApp {
         // Retained DOM navigators keep their registration and geometry through
         // device replacement; only resources owned by the retired GPU expire.
         for slot in self.overviews.values_mut() { slot.gpu = None; }
-        serialize(&change)
+        serialize(&change?)
     }
     pub fn attach_gpu(&mut self, gpu: WebGpu) -> Result<(), JsValue> {
         if self.gpu_ready() {
@@ -506,18 +511,16 @@ impl WebGpu {
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|error| gpu_error("renderer", error))?;
-        let (adapter, device, queue) = request_device(&instance, Some(&surface)).await?;
+        let lost = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (adapter, device, queue) = request_device(&instance, Some(&surface), Some(lost.clone())).await?;
         let config = surface
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| gpu_error("renderer", "WebGPU canvas format unavailable"))?;
-        let lost = std::sync::Arc::new(std::sync::Mutex::new(None));
         let failure = lost.clone();
         device.set_device_lost_callback(move |reason, message| {
+            gpu_diagnostics::report("canvas", "device_lost", format!("{reason:?}: {message}"));
             *failure.lock().unwrap() = Some(format!("Canvas GPU stopped ({reason:?}): {message}"));
         });
-        device.on_uncaptured_error(std::sync::Arc::new(|error| {
-            web_sys::console::error_1(&js(error))
-        }));
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color)
             .map_err(|error| gpu_error("renderer", error))?;
@@ -527,10 +530,7 @@ impl WebGpu {
         let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
         let presenter_color = renderer.document_color();
         raster_worker::install(&mut renderer);
-        if let Some(error) = validation.pop().await {
-            return Err(gpu_error("renderer", error));
-        }
-        Ok(Self {
+        let gpu = Self {
             renderer,
             surface: WebSurface {
                 instance,
@@ -544,7 +544,18 @@ impl WebGpu {
                 blank_presented: false,
                 lost,
             },
-        })
+        }.prepare().await?;
+        if let Some(error) = validation.pop().await {
+            return Err(gpu_error("renderer", error));
+        }
+        Ok(gpu)
+    }
+}
+
+impl WebGpu {
+    async fn prepare(mut self) -> Result<Self, JsValue> {
+        self.surface.presenter.prepare(&self.renderer).await.map_err(|error| gpu_error("renderer", error))?;
+        Ok(self)
     }
 }
 
@@ -1193,6 +1204,9 @@ impl WebApp {
             layer_render_wgpu::BackdropBlurStyle { levels: glass.blur.levels, offset: glass.blur.offset },
             backdrop_hold,
         );
+        if !surface.presenter.pipelines_ready(gpu) {
+            return serialize(&layer_ui::UiChange { canvas_wake: true, ..change });
+        }
         if !surface.presenter.needs_present(gpu, view, surround) {
             return serialize(&change);
         }
@@ -1245,7 +1259,8 @@ impl WebApp {
     }
 }
 
-async fn request_device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>)
+async fn request_device(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>,
+    failure: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>)
     -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), JsValue> {
         let options = wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::None,
@@ -1273,6 +1288,17 @@ async fn request_device(instance: &wgpu::Instance, surface: Option<&wgpu::Surfac
             })
             .await
             .map_err(|error| gpu_error("device", error))?;
+        let role = if surface.is_some() { "canvas" } else { "worker" };
+        gpu_diagnostics::report(role, "device_created", gpu_diagnostics::adapter_info(&adapter, &device));
+        device.on_uncaptured_error(std::sync::Arc::new(move |error| {
+            let kind = match error { wgpu::Error::OutOfMemory { .. } => "out_of_memory",
+                wgpu::Error::Validation { .. } => "validation", _ => "internal" };
+            gpu_diagnostics::report(role, kind, &error);
+            if matches!(error, wgpu::Error::OutOfMemory { .. }) && let Some(failure) = &failure {
+                *failure.lock().unwrap() = Some(error.to_string());
+            }
+            web_sys::console::error_1(&js(error));
+        }));
         Ok((adapter, device, queue))
 }
 

@@ -568,3 +568,5 @@ common-screen-proof-white = Con el brillo actual de la pantalla, los tonos más 
 native-highlight-clipped-colors = Resaltar estos colores
 native-screen-details = Detalles de la pantalla
 native-color-inspection-hdr-help = RGB lineal del documento y luminancia Y. Línea discontinua: blanco de referencia (0 EV). Los valores cero y negativos se cuentan por separado. Incluye el papel visible; excluye los píxeles transparentes y las superposiciones de visualización.
+common-failure-details = Detalles del error
+common-copy-failure-details = Copiar detalles del error

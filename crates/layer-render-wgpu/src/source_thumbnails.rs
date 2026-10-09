@@ -43,9 +43,9 @@ struct Prepared {
 
 pub(super) struct SourceThumbnails {
     layout: wgpu::BindGroupLayout,
-    horizontal: wgpu::ComputePipeline,
-    vertical: wgpu::ComputePipeline,
-    display: wgpu::RenderPipeline,
+    horizontal: Deferred<wgpu::ComputePipeline>,
+    vertical: Deferred<wgpu::ComputePipeline>,
+    display: Deferred<wgpu::RenderPipeline>,
     display_layout: wgpu::BindGroupLayout,
     display_parameters: wgpu::Buffer,
     parameters: wgpu::Buffer,
@@ -97,14 +97,7 @@ impl SourceThumbnails {
             source: wgpu::ShaderSource::Wgsl(include_str!("source_thumbnails.wgsl").into()),
         });
         let pipeline = |entry| {
-            d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
+            Deferred::compute_module(d, entry, &pipeline_layout, &shader, entry)
         };
         let display_layout = crate::bindings::layout(d, "photo overview display", &[
             crate::bindings::buffer(
@@ -181,6 +174,13 @@ impl SourceThumbnails {
     }
     /// Prepare at most `tile_limit` original or painted tiles. Submit or drop
     /// the encoder before preparing another batch.
+    fn pipelines_ready(&self, r: &WgpuRasterizer) -> bool {
+        let Some(startup) = &r.startup else { return true; };
+        let ready = startup.compiler.require([&self.horizontal, &self.vertical], startup::VALIDATION)
+            & startup.compiler.require([&self.display], startup::VALIDATION);
+        startup.compiler.start();
+        ready
+    }
     pub fn prepare(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -188,6 +188,7 @@ impl SourceThumbnails {
         encoder: &mut crate::submission::CommandEncoder,
         mut tile_limit: usize,
     ) -> Result<bool, GpuRasterError> {
+        if !self.pipelines_ready(r) { return Ok(false); }
         let base = r.tiled_sources[&layer].clone();
         // The layer's finite local backing, including original pixels beyond
         // the canvas. Placement changes only the display pass.

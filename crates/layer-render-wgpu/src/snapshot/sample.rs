@@ -4,8 +4,8 @@ use layer_core::{ArtworkSample, ArtworkSampleRequest, ArtworkSource};
 
 pub(crate) struct SamplePipeline {
     layout: wgpu::BindGroupLayout,
-    measure: wgpu::ComputePipeline,
-    accumulate: wgpu::ComputePipeline,
+    measure: Deferred<wgpu::ComputePipeline>,
+    accumulate: Deferred<wgpu::ComputePipeline>,
 }
 impl SamplePipeline {
     fn new(device: &PipelineDevice) -> Arc<Self> {
@@ -21,10 +21,7 @@ impl SamplePipeline {
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("artwork sample"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
             });
-            let pipeline = |entry| device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("artwork sample"), layout: Some(&pipeline_layout), module: &shader,
-                entry_point: Some(entry), compilation_options: Default::default(), cache: None,
-            });
+            let pipeline = |entry| Deferred::compute_module(device, "artwork sample", &pipeline_layout, &shader, entry);
             Arc::new(Self { layout, measure: pipeline("measure"), accumulate: pipeline("accumulate") })
         }).clone()
     }
@@ -108,6 +105,7 @@ impl SnapshotGpu {
         let (mut snapshot, output) = self.artwork_capture(&request.query, control.clone()).await?;
         snapshot.prepare_effect_analysis_async(output).await?;
         let pipeline = SamplePipeline::new(&self.device);
+        Deferred::prepare_all([&pipeline.measure, &pipeline.accumulate]).await?;
         let summary = snapshot.with_region_gpu([origin[0], origin[1], size[0], size[1]], 64,
             |r, packet, region, encoder| {
                 let (texture, _) = create_color_target(&r.device, size, "artwork sample footprint");

@@ -290,6 +290,24 @@ impl WebApp {
                 slot.canvas.set_height(height);
                 surface.configure(gpu.device(), config);
             }
+            presenter.set_overviews(
+                gpu,
+                &[layer_render_wgpu::OverviewPlacement {
+                    bounds: [
+                        g.image.x * scale,
+                        g.image.y * scale,
+                        g.image.width * scale,
+                        g.image.height * scale,
+                    ],
+                    clip: None,
+                    work_area: g.work_area.map(|p| p.map(|v| v * scale)),
+                    outline_linear: [fg[0], fg[1], fg[2]],
+                    background_linear: [bg[0], bg[1], bg[2]],
+                    scale,
+                    opacity: 1.,
+                }],
+            );
+            if !presenter.pipelines_ready(gpu) { retry = true; continue; }
             let target = match surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(target)
                 | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,
@@ -312,23 +330,6 @@ impl WebApp {
                     return Err(js("Navigator WebGPU surface validation failed"));
                 }
             };
-            presenter.set_overviews(
-                gpu,
-                &[layer_render_wgpu::OverviewPlacement {
-                    bounds: [
-                        g.image.x * scale,
-                        g.image.y * scale,
-                        g.image.width * scale,
-                        g.image.height * scale,
-                    ],
-                    clip: None,
-                    work_area: g.work_area.map(|p| p.map(|v| v * scale)),
-                    outline_linear: [fg[0], fg[1], fg[2]],
-                    background_linear: [bg[0], bg[1], bg[2]],
-                    scale,
-                    opacity: 1.,
-                }],
-            );
             presenter.present_overviews(
                 gpu,
                 &target.texture.create_view(&Default::default()),

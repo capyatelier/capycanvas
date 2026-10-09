@@ -467,6 +467,29 @@ fn turning_a_photo_waits_for_its_exact_move_then_lands_in_one_undo_step() {
 }
 
 #[test]
+fn tool_switch_accepts_exact_photo_layer_remap_before_activating() {
+    let (mut s, paint) = photo_session();
+    let before = s.engine.document().clone();
+    invoke(&mut s, CommandId::ScaleRotate);
+    invoke(&mut s, CommandId::TransformFlipHorizontal);
+    s.dispatch(UiAction::Invoke { command: CommandId::Pencil }).unwrap();
+    assert!(s.content_bounds.baking());
+    assert!(!s.command(CommandId::Pencil).selected);
+    let Some(layer_render::SnapshotRequest::Remap(plan)) = s.engine.backend().snapshot_requests.last().cloned() else { panic!("an exact layer remap") };
+    assert_eq!(plan.targets().collect::<Vec<_>>(), [SourceTarget::Paint(paint)]);
+    let results = plan.run(&plan.scene.artwork, &Default::default(), &Default::default()).unwrap();
+    s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::Remap(results)));
+    s.frame(10, 10).unwrap();
+    assert!(!s.content_bounds.busy());
+    assert!(!s.operation.active());
+    assert!(s.command(CommandId::Pencil).selected);
+    assert_eq!(s.engine.document().composition().size, before.composition().size);
+    assert!(!s.engine.document().artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.same_owner(&before.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image));
+    invoke(&mut s, CommandId::Undo);
+    assert_live_artwork_eq(s.engine.document(), &before);
+}
+
+#[test]
 fn a_changed_drawing_cancels_a_photo_move_without_editing() {
     let (mut s, _) = photo_session();
     invoke(&mut s, CommandId::RotateImageLeft);

@@ -21,6 +21,8 @@ pipeline recipes deduplicate the work. Visible previews and requested document
 dependencies take priority over brush warmup. Region tools and unused filter
 programs retain recipes.
 Custom brush settings still request any variants that have not been prepared.
+Native paint requires tile decoding before document readiness, including drawings
+without imported images: restoration and Undo consume that same decoder.
 
 The existing native compiler thread and browser task runner share
 `shader_admission.rs`: visible optional previews wait for 200 ms without input;

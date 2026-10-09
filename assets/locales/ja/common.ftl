@@ -383,3 +383,5 @@ common-screen-proof-white = 現在の画面の明るさでは、最も明るい�
 native-highlight-clipped-colors = これらの色を強調表示
 native-screen-details = 画面の詳細
 native-color-inspection-hdr-help = ドキュメントのリニアRGBと輝度Y。破線は基準白（0 EV）を示します。ゼロと負の値は別々に集計します。表示中の用紙を含み、透明な画素と画面上のオーバーレイは含みません。
+common-failure-details = エラーの詳細
+common-copy-failure-details = エラーの詳細をコピー

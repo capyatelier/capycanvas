@@ -484,9 +484,12 @@ const WINDOW_BYTES: u64 = 48;
 
 /// Rasterizes a mesh's source positions for one window of destination pages,
 /// with a one-pixel border so the transform pass can difference neighbors.
-pub(crate) struct Positions {
+pub(crate) struct Pipelines {
     pub pipeline: Deferred<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
+}
+pub(crate) struct Positions {
+    pub(crate) pipelines: Arc<Pipelines>,
     window: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     target: Option<(wgpu::Texture, wgpu::TextureView)>,
     buffers: MeshBuffers,
@@ -545,23 +548,12 @@ impl Positions {
                 },
             )
         });
-        Self {
-            pipeline,
-            layout,
-            window: None,
-            target: None,
-            buffers: MeshBuffers::default(),
-        }
+        Self::from_pipelines(Arc::new(Pipelines { pipeline, layout }))
     }
-    pub fn fork(&self) -> Self {
-        Self {
-            pipeline: self.pipeline.clone(),
-            layout: self.layout.clone(),
-            window: None,
-            target: None,
-            buffers: MeshBuffers::default(),
-        }
+    pub(super) fn from_pipelines(pipelines: Arc<Pipelines>) -> Self {
+        Self { pipelines, window: None, target: None, buffers: MeshBuffers::default() }
     }
+    pub fn fork(&self) -> Self { Self::from_pipelines(self.pipelines.clone()) }
     /// Positions drawn with the transforms' pipeline.
     pub fn sharing(transforms: &PaintTransforms) -> Self {
         transforms.0[0].positions.fork()
@@ -636,14 +628,14 @@ impl Positions {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let binding = crate::bindings::group(&r.device, "mesh position window", &self.layout, [buffer.as_entire_binding()]);
+            let binding = crate::bindings::group(&r.device, "mesh position window", &self.pipelines.layout, [buffer.as_entire_binding()]);
             (buffer, binding)
         });
         r.uploads.write(encoder, buffer, &window)?;
         let uncovered = wgpu::Color { r: pixel_transform::UNCOVERED, g: pixel_transform::UNCOVERED, b: 0., a: 0. };
         let mut pass = encoder.color_pass("mesh source positions", view, wgpu::LoadOp::Clear(uncovered));
         if !triangles.is_empty() {
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.pipelines.pipeline);
             pass.set_bind_group(0, binding, &[]);
             self.buffers.draw(&mut pass, triangles);
         }

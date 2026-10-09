@@ -7,12 +7,7 @@ pub(crate) struct Pipelines {
     texture: wgpu::TextureView,
     layout: wgpu::BindGroupLayout,
     pipelines: Vec<Deferred<wgpu::ComputePipeline>>,
-    #[cfg(target_arch = "wasm32")]
-    ready: std::cell::OnceCell<
-        futures_util::future::Shared<
-            futures_util::future::LocalBoxFuture<'static, Result<(), String>>,
-        >,
-    >,
+
 }
 impl Pipelines {
     pub(crate) fn new(device: &PipelineDevice, label: &'static str, source: &'static str, names: &'static [&'static str]) -> Self {
@@ -53,38 +48,16 @@ impl Pipelines {
             entries:names,texture,dummy:buffer(device,16,label),
             layout,
             pipelines,
-            #[cfg(target_arch = "wasm32")]
-            ready: Default::default(),
         }
     }
 
     pub(crate) async fn prepare(&self) -> Result<(), String> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            use futures_util::FutureExt;
-            self.ready
-                .get_or_init(|| {
-                    let pipelines = self.pipelines.clone();
-                    async move {
-                        for pipeline in pipelines {
-                            pipeline.compile_async().await?;
-                        }
-                        Ok(())
-                    }
-                    .boxed_local()
-                    .shared()
-                })
-                .clone()
-                .await
+        for pipelines in self.pipelines.chunks(4) {
+            Deferred::prepare_all(pipelines).await?;
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            for pipeline in &self.pipelines {
-                pipeline.compile();
-            }
-            Ok(())
-        }
+        Ok(())
     }
+
     #[expect(clippy::too_many_arguments, reason = "Analysis dispatch keeps independent input buffers, output, texture and workgroups explicit")]
     pub(crate) fn encode(
         &self,

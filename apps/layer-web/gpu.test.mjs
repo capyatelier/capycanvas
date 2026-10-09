@@ -304,3 +304,47 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     console.log(`GPU startup: ${mode}, usable UI, no invisible painting and ${mode === "pending" ? "preserved session" : "reload recovery"} passed`);
   }
 }
+
+export async function checkGpuFailureLifecycle({call,evaluate,settle,errors}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function check(){if(${condition})resolve();else if(performance.now()>end)reject(Error('GPU failure lifecycle timeout: '+${JSON.stringify(condition)}+' '+document.querySelector('#gpu-notice')?.textContent));else setTimeout(check,30)}check()})`);
+  const click=async selector=>{
+    const point=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+    await settle();
+  };
+  await evaluate(`(()=>{
+    window.gpuFailureTest={devices:[],copied:null,originals:{},clipboardWrite:navigator.clipboard.writeText};
+    for(const method of ['createCommandEncoder','createComputePipelineAsync','createRenderPipelineAsync']){
+      const original=gpuFailureTest.originals[method]=GPUDevice.prototype[method];
+      GPUDevice.prototype[method]=function(...args){if(method==='createCommandEncoder')gpuFailureTest.current=this;if(!gpuFailureTest.devices.includes(this))gpuFailureTest.devices.push(this);return original.apply(this,args)};
+    }
+    navigator.clipboard.writeText=async text=>{gpuFailureTest.copied=text};
+  })()`);
+  try {
+    await evaluate('layerApp.restartGpu()');
+    await wait('window.layerApp?.app.brush_ready()&&gpuFailureTest.current&&document.body.dataset.gpu==="ready"');
+    for(const theme of ['light','dark']){
+      await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}});gpuFailureTest.old=gpuFailureTest.current;gpuFailureTest.old.dispatchEvent(new GPUUncapturedErrorEvent('uncapturederror',{error:new GPUOutOfMemoryError('capy-test: current device memory failure')}))`);
+      await wait(`document.body.dataset.gpu==='unavailable'&&!document.querySelector('#gpu-notice').hidden`);
+      assert.equal(await evaluate('layerApp.app.gpu_ready()'),false,'Current device memory failure retires its canvas');
+      const report=await evaluate(`JSON.parse(document.querySelector('#gpu-notice details pre').textContent)`);
+      assert.match(report.error,/memory/i,'Failure details preserve the original GPU error');
+      assert.ok(report.events.some(event=>event.kind==='out_of_memory'),'Failure details retain the actual uncaptured GPU event');
+      await click('#gpu-notice details summary');
+      assert.equal(await evaluate(`document.querySelector('#gpu-notice details').open`),true,'Failure details expand through the UI');
+      await click('#gpu-notice details button');
+      assert.deepEqual(await evaluate('JSON.parse(gpuFailureTest.copied)'),report,'Copy Failure Details publishes the complete report');
+      const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/ui/gpu-failure';await mkdir(directory,{recursive:true});
+      const screenshot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${theme}.png`,Buffer.from(screenshot.data,'base64'));
+      await click('#gpu-notice > button');
+      await wait(`document.body.dataset.gpu==='ready'&&layerApp.app.brush_ready()&&gpuFailureTest.current!==gpuFailureTest.old`);
+      await evaluate(`gpuFailureTest.old.dispatchEvent(new GPUUncapturedErrorEvent('uncapturederror',{error:new GPUOutOfMemoryError('capy-test: retired device memory failure')}))`);
+      await new Promise(resolve=>setTimeout(resolve,1600));
+      assert.equal(await evaluate(`document.body.dataset.gpu`),'ready','A retired device event cannot stop its replacement');
+      assert.equal(await evaluate('layerApp.app.gpu_ready()&&layerApp.app.brush_ready()'),true,'Replacement canvas remains ready after the failure poll');
+      assert.equal(await evaluate(`document.querySelector('#gpu-notice').hidden`),true,'Retired events leave the recovered canvas visible');
+      for(const error of errors.splice(0))assert.match(error,/memory/i,'Only injected memory failures are reported');
+      console.log(`GPU failure lifecycle ${theme}: original error, expanded/copyable details, UI restart and retired-device isolation passed`);
+    }
+  } finally {await evaluate(`for(const [method,original] of Object.entries(gpuFailureTest.originals))GPUDevice.prototype[method]=original;navigator.clipboard.writeText=gpuFailureTest.clipboardWrite`);}
+}

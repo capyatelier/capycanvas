@@ -383,3 +383,5 @@ common-screen-proof-white = 현재 화면 밝기에서는 가장 밝은 색조�
 native-highlight-clipped-colors = 이 색상 강조 표시
 native-screen-details = 화면 세부 정보
 native-color-inspection-hdr-help = 문서의 선형 RGB 및 휘도 Y. 점선: 기준 흰색(0 EV). 0과 음수 값은 따로 집계합니다. 보이는 용지를 포함하며, 투명한 픽셀과 화면 오버레이는 제외합니다.
+common-failure-details = 오류 세부 정보
+common-copy-failure-details = 오류 세부 정보 복사

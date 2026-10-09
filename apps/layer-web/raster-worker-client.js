@@ -1,6 +1,6 @@
 // One compression worker and one file worker keep archive I/O independent of ink.
 // GPU objects remain in the owning Wasm instance; only bounded byte blocks move.
-export function createRasterWorker() {
+export function createRasterWorker(reportGpu=()=>{}) {
   const owners = new Map();
   let next = 0, idleAnalysis;
   const outputs=new Map(),reads=new Set();
@@ -11,12 +11,20 @@ export function createRasterWorker() {
     let closed=false;
     let idleTimer;
     const fail = error => {
+      if(closed)return;
       closed=true;
       if(idleAnalysis===state)idleAnalysis=null;
       for (const job of pending.values()) { clearTimeout(job.timer); job.reject(error); }
       clearTimeout(idleTimer); pending.clear(); worker.terminate(); owners.delete(kind);
     };
     worker.onmessage = ({data}) => {
+      if(closed)return;
+      if(data.gpu_event){
+        const event={...data.gpu_event,worker:kind,operations:[...pending.values()].map(job=>job.operation)};
+        try{reportGpu(event);}catch{}
+        if(['device_lost','out_of_memory'].includes(event.kind))fail(new Error(`Raster worker GPU stopped: ${event.message}`));
+        return;
+      }
       const job = pending.get(data.id);
       if (!job) return;
       pending.delete(data.id); clearTimeout(job.timer);state.retire=!!data.retire;
@@ -24,13 +32,11 @@ export function createRasterWorker() {
       else if (data.error) job.reject(new Error(data.error)); else job.resolve(data.result);
       // Wasm heaps cannot shrink. Release an oversized idle file arena after
       // its transferred result is owned by the editor and no OPFS job is live.
-      if((kind==="files"||kind==="checkpoint") && data.retire && !pending.size)idleTimer=setTimeout(()=>{
-        if(!pending.size){worker.terminate();owners.delete(kind);}
-      },5000);
+      if((kind==="files"||kind==="checkpoint") && data.retire && !pending.size)state.park();
     };
     worker.onerror = event => { event.preventDefault(); fail(new Error(event.message || "Raster worker stopped")); };
     worker.onmessageerror = () => fail(new Error("Invalid raster worker response"));
-    const state = {worker,pending,fail,retire:false,get closed(){return closed;},active(){clearTimeout(idleTimer);},park(){idleTimer=setTimeout(()=>fail(new DOMException("Analysis idle","AbortError")),5000);}}; owners.set(kind,state); return state;
+    const state = {worker,pending,fail,retire:false,get closed(){return closed;},active(){clearTimeout(idleTimer);},park(){idleTimer=setTimeout(()=>fail(new DOMException("Raster worker idle","AbortError")),5000);}}; owners.set(kind,state); return state;
   }
   function send(state,request,cancelled) {
     return new Promise((resolve,reject)=>{
@@ -40,7 +46,7 @@ export function createRasterWorker() {
       const timer=setTimeout(()=>state.fail(new Error("Raster worker timed out")),request.operation==="encode"?30000:180000);
       const poll=cancelled?setInterval(()=>{if(cancelled())state.fail(new DOMException("Image operation cancelled","AbortError"));},50):null;
       const finish=callback=>value=>{clearInterval(poll);callback(value);};
-      state.pending.set(id,{resolve:finish(resolve),reject:finish(reject),timer});
+      state.pending.set(id,{resolve:finish(resolve),reject:finish(reject),timer,operation:request.operation});
       try{state.worker.postMessage({id,request},(request.buffers||[]).map(bytes=>bytes.buffer));}
       catch(error){clearInterval(poll);clearTimeout(timer);state.pending.delete(id);reject(error);}
     });

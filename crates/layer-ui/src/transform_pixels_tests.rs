@@ -1,5 +1,30 @@
 use layer_core::authored::{CoverageHandle, OccurrenceHandle, PaintHandle, PortableId, RecordChange, SourceTarget};
 
+#[test]
+fn fill_then_deselect_before_a_frame_keeps_raster_work_and_history_ordered() {
+    let mut s = session(Platform::Gtk);
+    s.frame(1, 1).unwrap();
+    invoke(&mut s, CommandId::SelectAll);
+    let selection = s.engine.document().working.selection.clone().unwrap();
+    invoke(&mut s, CommandId::FillSelection);
+    assert!(s.engine.raster_backing_pending());
+    invoke(&mut s, CommandId::Deselect);
+    assert_eq!(s.engine.document().working.selection.as_ref(), Some(&selection));
+    assert_eq!(s.deferred_edits.len(), 1);
+    s.frame(2, 2).unwrap();
+    assert!(!s.engine.raster_backing_pending());
+    assert!(s.engine.document().working.selection.is_none());
+    assert!(s.deferred_edits.is_empty());
+    assert_eq!(s.engine.backend().pending_operations.len(), 1);
+    let target = s.engine.document().working.target.unwrap();
+    let filled = s.engine.document().scene().raster(target).unwrap().clone();
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().working.selection.as_ref(), Some(&selection));
+    assert_eq!(s.engine.document().scene().raster(target), Some(&filled));
+    invoke(&mut s, CommandId::Undo);
+    assert_ne!(s.engine.document().scene().raster(target), Some(&filled));
+}
+
 pub(super) fn raw_revision(color: layer_core::color::DocumentColor, planes: &[layer_core::raster::RasterPlane], seed: u8) -> layer_core::raster::RasterRevision {
     use layer_core::raster::{RasterData, RasterTile, TileBlob, TileKey, TILE_SIZE};
     layer_core::raster::RasterRevision::backed(RasterData {
@@ -348,4 +373,208 @@ fn source_less_move_click_keeps_canvas_domain_and_existing_redo() {
     assert!(s.engine.can_redo());
     assert!(s.engine.redo().unwrap());
     assert_eq!(s.engine.document().artwork.occurrences.get(bake_owner(s.engine.document())).unwrap().name.as_ref(), "redoable");
+}
+
+#[test]
+fn rotated_backed_layer_tool_switches_accept_once_before_activating() {
+    for pending in [false, true] {
+        for command in [CommandId::Pencil, CommandId::Brush, CommandId::Eraser, CommandId::Hand, CommandId::RectangleSelect] {
+            let mut s = bake_session(true);
+            invoke(&mut s, CommandId::Pencil);
+            let mut workspace = s.state.workspace.clone();
+            let panel = workspace.layout.add_toolbar(None, "Switch", &[ToolbarControl::Command { command }]).unwrap();
+            let tile = workspace.layout.panel(panel).unwrap().tiles()[0].id;
+            s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) }).unwrap();
+            let before = s.engine.document().clone();
+            invoke(&mut s, CommandId::ScaleRotate);
+            if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 16., 8.]); }
+            invoke(&mut s, CommandId::TransformRotateRight);
+            if pending {
+                invoke(&mut s, CommandId::ApplyTransform);
+            }
+            assert!(!s.command(CommandId::Pencil).selected);
+            s.dispatch(UiAction::ActivateTile { panel, tile }).unwrap();
+            assert!(s.operation.transforming());
+            assert!(s.content_bounds.baking());
+            assert!(!s.command(command).selected, "{command:?}, pending={pending}");
+            assert_eq!(s.engine.backend().snapshot_requests.len(), 1);
+            assert_live_artwork_eq(s.engine.document(), &before);
+            assert!(!s.engine.can_undo());
+            let output = completed_bake(&frozen_plan(&s));
+            let mut expected = before.clone();
+            expected.apply(output.clone()).unwrap();
+            bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
+            assert!(!s.operation.active());
+            assert!(s.command(command).selected, "{command:?}, pending={pending}");
+            assert_live_artwork_eq(s.engine.document(), &expected);
+            assert!(s.engine.undo().unwrap());
+            assert_live_artwork_eq(s.engine.document(), &before);
+            assert!(!s.engine.can_undo());
+        }
+    }
+}
+
+#[test]
+fn cancelling_pending_backed_layer_bake_closes_its_preview() {
+    let mut s = bake_session(true);
+    let before = s.engine.document().clone();
+    start_bake(&mut s).unwrap();
+    let output = completed_bake(&frozen_plan(&s));
+    invoke(&mut s, CommandId::CancelTransform);
+    assert!(!s.content_bounds.busy());
+    assert!(!s.operation.active(), "Cancel ended the bake but retained the transform");
+    bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
+    assert_live_artwork_eq(s.engine.document(), &before);
+}
+
+#[test]
+fn tool_switches_cancel_unstarted_transform_bounds_and_accept_selection_coverage() {
+    for command in [CommandId::Pencil, CommandId::Eraser, CommandId::Hand, CommandId::RectangleSelect] {
+        let mut s = filled_selection_session();
+        s.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate }).unwrap();
+        assert!(s.content_bounds.busy());
+        let before = s.engine.document().clone();
+        invoke(&mut s, command);
+        assert!(!s.content_bounds.busy());
+        s.engine.backend_mut().bounds_reply = Some(Ok(layer_core::Rect { min: Point { x: 100., y: 100. }, max: Point { x: 300., y: 300. } }));
+        s.frame(10, 10).unwrap();
+        assert!(!s.operation.active());
+        assert!(s.command(command).selected);
+        assert_live_artwork_eq(s.engine.document(), &before);
+
+        let mut s = distorted_pixel_selection();
+        let before = s.engine.document().clone();
+        invoke(&mut s, CommandId::ApplyTransform);
+        s.frame(4, 4).unwrap();
+        let reply = resampled_reply(&mut s);
+        invoke(&mut s, command);
+        assert!(s.operation.active());
+        assert!(s.region_tools.applying_transform());
+        assert!(!s.command(command).selected);
+        s.renderer_mut().region_reply = Some(reply);
+        s.frame(5, 5).unwrap();
+        assert!(!s.operation.active());
+        assert!(s.command(command).selected);
+        assert!(s.engine.document().artwork != before.artwork);
+    }
+}
+
+#[test]
+fn pending_transform_activates_only_the_last_requested_tool() {
+    let mut s = bake_session(true);
+    start_bake(&mut s).unwrap();
+    let output = completed_bake(&frozen_plan(&s));
+    for command in [CommandId::Pencil, CommandId::Eraser, CommandId::Brush] {
+        invoke(&mut s, command);
+        assert!(!s.command(command).selected);
+    }
+    assert_eq!(s.engine.backend().snapshot_requests.len(), 1);
+    bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
+    assert!(s.command(CommandId::Brush).selected);
+    assert!(s.operation.next_tool.is_none());
+}
+
+#[test]
+fn abandoned_or_failed_transform_never_activates_its_requested_tool() {
+    for reason in 0..7 {
+        let mut s = bake_session(true);
+        let before = s.engine.document().clone();
+        start_bake(&mut s).unwrap();
+        let output = completed_bake(&frozen_plan(&s));
+        invoke(&mut s, CommandId::Eraser);
+        match reason {
+            0 => { invoke(&mut s, CommandId::CancelTransform); }
+            1 => { key(&mut s, "Escape", true, false, false); }
+            2 => { invoke(&mut s, CommandId::ResetTransform); }
+            3 => { s.replace_renderer(Recorder { tiled_sources: true, ..Default::default() }).unwrap(); }
+            4 => { s.state.document_file.epoch += 1; }
+            5 => { s.suspend_renderer().unwrap(); }
+            _ => {}
+        }
+        let reply = if reason == 6 { Err(layer_render::BackendError("GPU worker failed")) }
+            else { Ok(layer_render::SnapshotResult::TransformPixels(output)) };
+        bake_reply(&mut s, reply);
+        assert!(s.operation.next_tool.is_none(), "reason={reason}");
+        assert!(!s.command(CommandId::Eraser).selected, "reason={reason}");
+        assert_live_artwork_eq(s.engine.document(), &before);
+        assert!(!s.engine.can_undo());
+    }
+}
+
+#[test]
+fn temporary_pan_leaves_transform_open_and_keyboard_tool_choice_accepts_it() {
+    let mut s = bake_session(true);
+    invoke(&mut s, CommandId::ScaleRotate);
+    s.set_transform_control("transform_width", 2.).unwrap();
+    let before = s.engine.document().clone();
+    let camera = s.state.camera.clone();
+    key(&mut s, " ", true, false, false);
+    for (phase, position) in [(ContactPhase::Down, [300., 300.]), (ContactPhase::Move, [350., 310.]), (ContactPhase::Up, [350., 310.])] {
+        assert!(!pointer(&mut s, 42, phase, position, PointerButton::Primary).paint);
+    }
+    key(&mut s, " ", false, false, false);
+    assert_ne!(s.state.camera, camera);
+    assert!(s.operation.transforming());
+    assert!(s.engine.backend().snapshot_requests.is_empty());
+    assert_live_artwork_eq(s.engine.document(), &before);
+    key(&mut s, "b", true, false, false);
+    key(&mut s, "b", false, false, false);
+    assert!(s.content_bounds.baking());
+    let output = completed_bake(&frozen_plan(&s));
+    bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
+    assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Paint);
+    assert!(s.engine.can_undo());
+}
+
+#[test]
+fn undo_during_pending_bake_preserves_history_and_discards_changed_result() {
+    let mut s = bake_session(true);
+    let before = s.engine.document().clone();
+    rename_bake(&mut s);
+    start_bake(&mut s).unwrap();
+    let output = completed_bake(&frozen_plan(&s));
+    invoke(&mut s, CommandId::Undo);
+    bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
+    assert!(!s.content_bounds.busy());
+    assert!(!s.operation.active());
+    assert_live_artwork_eq(s.engine.document(), &before);
+    assert!(s.engine.can_redo());
+    invoke(&mut s, CommandId::Redo);
+    assert_eq!(s.engine.document().artwork.occurrences.get(bake_owner(s.engine.document())).unwrap().name.as_ref(), "redoable");
+}
+
+#[test]
+fn pending_layer_bake_does_not_submit_a_second_apply() {
+    let mut s = bake_session(true);
+    start_bake(&mut s).unwrap();
+    let requests = s.engine.backend().snapshot_requests.len();
+    let output = completed_bake(&frozen_plan(&s));
+    s.engine.backend_mut().snapshot_wait = true;
+    assert!(!s.command(CommandId::ApplyTransform).enabled);
+    assert_eq!(s.command(CommandId::ApplyTransform).disabled_reason.as_deref(), Some("Applying the transform"));
+    let repeat = s.dispatch(UiAction::Invoke { command: CommandId::ApplyTransform });
+    assert_eq!(s.engine.backend().snapshot_requests.len(), requests, "Repeated Apply submitted another snapshot; result={repeat:?}");
+    assert!(repeat.is_err(), "Apply remained enabled while the layer bake was pending");
+    bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
+    assert!(!s.content_bounds.busy(), "The original accepted result must finish despite the busy snapshot slot");
+    assert!(!s.operation.active());
+    assert!(s.engine.can_undo());
+}
+
+#[test]
+fn editing_pending_layer_bake_supersedes_its_frozen_pixels() {
+    for command in [CommandId::ResetTransform, CommandId::TransformRotateRight] {
+        let mut s = bake_session(true);
+        start_bake(&mut s).unwrap();
+        let output = completed_bake(&frozen_plan(&s));
+        let before = s.engine.document().clone();
+        s.frame(3, 3).unwrap();
+        let preview = preview_map(&mut s);
+        invoke(&mut s, command);
+        s.frame(4, 4).unwrap();
+        assert_ne!(preview_map(&mut s), preview);
+        bake_reply(&mut s, Ok(layer_render::SnapshotResult::TransformPixels(output)));
+        assert!(s.engine.document().artwork == before.artwork, "{command:?} changed the preview, but completion committed the superseded bake");
+        assert!(s.operation.active());
+    }
 }

@@ -4,9 +4,9 @@ use wgpu::util::DeviceExt;
 
 pub(crate) struct LevelsPipeline {
     layout:wgpu::BindGroupLayout,
-    measure:wgpu::ComputePipeline,
-    count:wgpu::ComputePipeline,
-    fold:wgpu::ComputePipeline,
+    measure: Deferred<wgpu::ComputePipeline>,
+    count: Deferred<wgpu::ComputePipeline>,
+    fold: Deferred<wgpu::ComputePipeline>,
 }
 impl LevelsPipeline {
     fn new(device:&PipelineDevice)->Arc<Self> {
@@ -19,7 +19,7 @@ impl LevelsPipeline {
             ]);
             let shader=device.create_shader_module(wgpu::ShaderModuleDescriptor {label:Some("Levels statistics"),source:wgpu::ShaderSource::Wgsl(include_str!("levels.wgsl").into())});
             let pipeline_layout=device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {label:Some("Levels statistics"),bind_group_layouts:&[Some(&layout)],immediate_size:0});
-            let pipeline=|entry|device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {label:Some(entry),layout:Some(&pipeline_layout),module:&shader,entry_point:Some(entry),compilation_options:Default::default(),cache:None});
+            let pipeline = |entry| Deferred::compute_module(device, "Levels distribution", &pipeline_layout, &shader, entry);
             Arc::new(Self {layout,measure:pipeline("measure"),count:pipeline("count"),fold:pipeline("fold")})
         }).clone()
     }
@@ -31,6 +31,7 @@ impl SnapshotGpu {
         }
         let (mut snapshot,output)=self.artwork_capture(&query,control.clone()).await?;
         let pipeline=LevelsPipeline::new(&self.device);
+        Deferred::prepare_all([&pipeline.measure, &pipeline.count, &pipeline.fold]).await?;
         let initial:Vec<u8>=[u32::MAX,u32::MAX,u32::MAX,0,0,0,0,0].into_iter().chain(std::iter::repeat_n(0,12288)).flat_map(u32::to_le_bytes).collect();
         let summary=self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("Levels exact summary"),contents:&initial,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC});
         let shards=self.device.create_buffer(&wgpu::BufferDescriptor {label:Some("Levels quantile shards"),size:16*12288*4,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false});

@@ -971,8 +971,8 @@ Startup prepares the canvas, then the open document, then the selected brush and
 eraser; unused brushes and filters compile on first use
 ([shader readiness](shared-shader-readiness.md)). Required
 dependencies are ready before drawing uses them, so pipeline creation never lands
-in a small stroke update. A contact that begins before its brush is ready stays
-suppressed until release.
+in a small stroke update. A contact that begins before its brush is ready follows
+the shared input admission policy.
 Changing paint color or HDR intensity leaves brush readiness intact when the
 tip, texture assets and shader pass requirements stay the same.
 
@@ -983,9 +983,11 @@ Interactive brush readiness still prepares those kernels before accepting paint.
 On Web, GPU initialization waits for the workspace (at most 1 s), and pipelines
 are created through the asynchronous WebGPU APIs, a few at a time: synchronous
 creation blocks Chrome's GPU process and display callbacks even when JavaScript
-yields between jobs. An edit that needs a pipeline whose asynchronous compile is
-still in flight creates it synchronously and drops the asynchronous result
-(`node apps/layer-web/test.mjs --headless --pipeline-takeover`).
+yields between jobs. Each recipe shares one asynchronous preparation result;
+encoding requires that result to be ready. Edits wait in the existing ordered
+input queue, and snapshot jobs prepare their dependencies before encoding.
+The Web `--pipeline-readiness` journey checks this contract on page and worker
+devices; see the [Web testing guide](../development/web.md#tests).
 
 For brush-specific passes, continue with [Brushes](brushes.md). For performance
 work, use the [measurement guide](../development/testing.md#performance).

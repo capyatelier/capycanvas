@@ -7,9 +7,9 @@ const SHARDS: u64 = 64;
 
 pub(crate) struct StatisticsPipeline {
     layout: wgpu::BindGroupLayout,
-    count: wgpu::ComputePipeline,
-    fold: wgpu::ComputePipeline,
-    resolve: wgpu::ComputePipeline,
+    count: Deferred<wgpu::ComputePipeline>,
+    fold: Deferred<wgpu::ComputePipeline>,
+    resolve: Deferred<wgpu::ComputePipeline>,
 }
 impl StatisticsPipeline {
     fn new(device: &PipelineDevice) -> Arc<Self> {
@@ -27,10 +27,7 @@ impl StatisticsPipeline {
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("artwork statistics"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
             });
-            let pipeline = |entry| device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("artwork statistics"), layout: Some(&pipeline_layout), module: &shader,
-                entry_point: Some(entry), compilation_options: Default::default(), cache: None,
-            });
+            let pipeline = |entry| Deferred::compute_module(device, "artwork statistics", &pipeline_layout, &shader, entry);
             Arc::new(Self { layout, count: pipeline("count"), fold: pipeline("fold"), resolve:pipeline("resolve") })
         }).clone()
     }
@@ -53,6 +50,7 @@ impl SnapshotGpu {
                 };
             }
         let pipeline = StatisticsPipeline::new(&self.device);
+        Deferred::prepare_all([&pipeline.count, &pipeline.fold, &pipeline.resolve]).await?;
         let buffer = |label, size| self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label), size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,

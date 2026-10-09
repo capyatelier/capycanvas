@@ -12,7 +12,22 @@ pub(crate) use sampling::input_level;
 use snapshot::TileSnapshot;
 
 pub(super) struct PaintTransforms([ImageTransformState; 2]);
+pub(super) struct Recipes {
+    passes: [Arc<pixel_transform::Kernels>; 3],
+    positions: Arc<mesh::Pipelines>,
+}
 impl PaintTransforms {
+    pub fn recipes(&self) -> Arc<Recipes> {
+        let state = &self.0[0];
+        Arc::new(Recipes { passes: [&state.color, &state.scalar, &state.visibility].map(|p| p.kernels.clone()),
+            positions: state.positions.pipelines.clone() })
+    }
+    pub fn from_recipes(recipes: &Recipes) -> Self {
+        let [color, scalar, visibility] = recipes.passes.each_ref().map(|p| PixelTransform::from_kernels(p.clone()));
+        let primary = ImageTransformState::with_passes(color, scalar, visibility, mesh::Positions::from_pipelines(recipes.positions.clone()));
+        let companion = primary.fork();
+        Self([primary, companion])
+    }
     pub(super) fn placement_pass(&self, scalar: bool) -> PixelTransform {
         if scalar { self.0[0].scalar.placement_pass() } else { self.0[0].color.placement_pass() }
     }
@@ -31,10 +46,10 @@ impl PaintTransforms {
     /// Drag previews draw into the display with these once they are ready;
     /// they never delay input.
     pub fn display_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 1] {
-        [self.0[0].color.display.as_ref().expect("color transform")]
+        [self.0[0].color.kernels.display.as_ref().expect("color transform")]
     }
     pub fn placement_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 2] {
-        [&self.0[0].color.placement_pipeline, &self.0[0].scalar.placement_pipeline]
+        [&self.0[0].color.kernels.placement_pipeline, &self.0[0].scalar.kernels.placement_pipeline]
     }
     pub fn begin_frame(&mut self) {
         for t in &mut self.0 {
@@ -475,17 +490,17 @@ impl ImageTransformState {
     }
     pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
         [
-            &self.color.pipeline,
-            &self.scalar.pipeline,
-            &self.visibility.pipeline,
+            &self.color.kernels.pipeline,
+            &self.scalar.kernels.pipeline,
+            &self.visibility.kernels.pipeline,
         ]
     }
     pub fn mesh_pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
         [
-            &self.color.mesh_pipeline,
-            &self.scalar.mesh_pipeline,
-            &self.visibility.mesh_pipeline,
-            &self.positions.pipeline,
+            &self.color.kernels.mesh_pipeline,
+            &self.scalar.kernels.mesh_pipeline,
+            &self.visibility.kernels.mesh_pipeline,
+            &self.positions.pipelines.pipeline,
         ]
     }
     pub fn begin_frame(&mut self) {

@@ -342,3 +342,5 @@ common-screen-proof-white = Con la luminosità attuale dello schermo, i toni pi�
 native-highlight-clipped-colors = Evidenzia questi colori
 native-screen-details = Dettagli dello schermo
 native-color-inspection-hdr-help = RGB lineare del documento e luminanza Y. Linea tratteggiata: bianco di riferimento (0 EV). I valori zero e negativi vengono conteggiati separatamente. Include la carta visibile; esclude i pixel trasparenti e le sovrapposizioni dello schermo.
+common-failure-details = Dettagli dell’errore
+common-copy-failure-details = Copia dettagli dell’errore

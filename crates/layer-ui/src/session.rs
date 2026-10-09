@@ -2463,7 +2463,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::PlacementOriginalSize => false,
             CommandId::ApplyTransform => {
-                idle && self.operation.active() && !self.region_tools.applying_transform()
+                idle && self.operation.active() && !self.region_tools.applying_transform() && !self.content_bounds.baking()
             }
             CommandId::CancelTransform => idle && (self.operation.active() || self.content_bounds.busy()),
             CommandId::ResetTransform => idle && self.operation.active(),
@@ -2769,6 +2769,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_transition && !continuing_effect_gesture && !action.is_host_report() {
             return Err("A workspace change is in progress".into());
         }
+        let transforming = self.operation.active() || self.objects.placing();
+        if self.accept_transform_for_tool(&action)? {
+            return Ok(self.changed(regions::BRUSH | regions::COMMANDS, true));
+        }
         use regions::*;
         let model_revision = self.workspace_model_revision;
         let content_revision = self.workspace_content_revision;
@@ -2791,7 +2795,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         );
         let revision = self.engine.document().revision;
-        let transforming = self.operation.active();
         let was_expanded = self.state.customization.has_drawer();
         let was_filter_drawer = self.filter_drawer_open();
         let was_zen = self.state.workspace.zen_mode;
@@ -3981,7 +3984,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.refresh_commands() {
             changed |= COMMANDS;
         }
-        let change = self.changed(changed, wake || transforming != self.operation.active());
+        let change = self.changed(changed, wake || transforming != (self.operation.active() || self.objects.placing()));
         // Preserve legacy region notifications, but let incremental consumers
         // distinguish ordinary motion from tear-off and every other UI change.
         // An unrelated action/measurement advances model_revision independently.
@@ -8965,6 +8968,7 @@ mod tests {
                 value: 80.,
             })
             .unwrap();
+            let accepts = matches!(&action, UiAction::Invoke { command: CommandId::Pen });
             assert!(s.dispatch(action).unwrap().canvas_wake);
             s.frame(5, 5).unwrap();
             assert!(!s.operation.active());
@@ -8975,6 +8979,14 @@ mod tests {
                     .iter()
                     .all(|c| !c.id.starts_with("transform_"))
             );
+            if accepts {
+                assert_ne!(s.engine.document().working.selection, original.working.selection);
+                assert!(s.engine.can_undo());
+                invoke(&mut s, CommandId::Undo);
+                s.frame(5, 5).unwrap();
+                assert_live_artwork_eq(s.engine.document(), &original);
+                assert_eq!(s.engine.document().working.selection, original.working.selection);
+            }
         }
         invoke(&mut s, CommandId::ScaleRotate);
         s.frame(6, 6).unwrap();
@@ -11370,6 +11382,7 @@ mod tests {
         let mut s = session(Platform::Gtk);
         assert!(key(&mut s, "e", true, true, false).handled, "Ctrl+E is Merge Down");
         key(&mut s, "e", false, true, false);
+        s.frame(1, 1).unwrap();
         assert_ne!(s.state.brush.tool, Tool::Eraser);
         assert!(!key(&mut s, "e", true, false, true).handled);
         key(&mut s, "e", false, false, true);

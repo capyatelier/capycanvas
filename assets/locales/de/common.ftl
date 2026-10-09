@@ -566,3 +566,5 @@ common-screen-proof-white = Bei der aktuellen Bildschirmhelligkeit sehen die hel
 native-highlight-clipped-colors = Diese Farben hervorheben
 native-screen-details = Bildschirmdetails
 native-color-inspection-hdr-help = Lineares Dokument-RGB und Leuchtdichte Y. Gestrichelte Linie: Referenzweiß (0 EV). Nullwerte und negative Werte werden getrennt gezählt. Einschließlich sichtbarem Papier; ohne transparente Pixel und Anzeigeüberlagerungen.
+common-failure-details = Fehlerdetails
+common-copy-failure-details = Fehlerdetails kopieren

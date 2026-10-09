@@ -643,3 +643,5 @@ common-screen-proof-white = Pada kecerahan layar saat ini, rona paling terang ta
 native-highlight-clipped-colors = Soroti warna ini
 native-screen-details = Detail layar
 native-color-inspection-hdr-help = RGB dokumen linear dan luminans Y. Garis putus-putus: putih acuan (0 EV). Nilai nol dan negatif dihitung secara terpisah. Mencakup kertas terlihat; mengecualikan piksel transparan dan hamparan tampilan.
+common-failure-details = Detail kesalahan
+common-copy-failure-details = Salin detail kesalahan

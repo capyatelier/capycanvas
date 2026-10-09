@@ -172,6 +172,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         let remap = self.content_bounds.remap.take().unwrap();
+        let next_tool = self.operation.next_tool.take();
         let result = result.and_then(|result| {
             let layer_render::SnapshotResult::Remap(results) = result else { return Err(l.text(MessageId::COMMANDS_CANVAS_CHANGE_DRAWING_CHANGED).to_string()); };
             match remap.completion {
@@ -188,12 +189,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             self.refresh_document();
-            Ok(())
+            self.activate_transform_tool(next_tool)
         });
-        if let Err(message) = result { self.notify(message); }
+        let changed = match result { Ok(changed) => changed, Err(message) => { self.notify(message); 0 } };
         self.refresh_tools();
         self.refresh_commands();
-        regions::DOCUMENT | regions::COMMANDS | regions::HOST
+        changed | regions::DOCUMENT | regions::COMMANDS | regions::HOST
     }
 
     /// Keep the image where it was on screen after the canvas moves through
@@ -416,6 +417,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         let bake = self.content_bounds.bake.take().unwrap();
+        let next_tool = self.operation.next_tool.take();
         if self.operation.transforming() { let _ = self.cancel_transform(); }
         let result = result.and_then(|result| {
             let layer_render::SnapshotResult::TransformPixels(edit) = result else { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_UNEXPECTED_RESULT).to_string()); };
@@ -424,12 +426,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.source_edit_candidates(&edit, Default::default())?;
             self.engine.apply_edit(edit).map_err(error)?;
             self.refresh_document();
-            Ok(())
+            self.activate_transform_tool(next_tool)
         });
-        if let Err(message) = result { self.notify(message); }
+        let changed = match result { Ok(changed) => changed, Err(message) => { self.notify(message); 0 } };
         self.refresh_tools();
         self.refresh_commands();
-        regions::DOCUMENT | regions::BRUSH | regions::COMMANDS | regions::HOST
+        changed | regions::DOCUMENT | regions::BRUSH | regions::COMMANDS | regions::HOST
     }
 
     pub(super) fn poll_content_bounds(&mut self) -> u32 {

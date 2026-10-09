@@ -1154,7 +1154,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::RepairSourceProfile | C::RasterizeSource if document.working.target.is_some_and(layer_core::SourceTarget::is_coverage) => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
             C::RepairSourceProfile | C::RasterizeSource => l.text(MessageId::COMMANDS_SELECT_AN_UNLOCKED_PHOTO_OR_IMAGE),
             C::RasterizeLayer | C::ConvertToObject => self.conversion_refusal(command).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
-            C::ApplyTransform if self.region_tools.applying_transform() => l.text(MessageId::COMMANDS_APPLYING_THE_TRANSFORM),
+            C::ApplyTransform if self.region_tools.applying_transform() || self.content_bounds.baking() => l.text(MessageId::COMMANDS_APPLYING_THE_TRANSFORM),
             C::TransformPerspective if self.operation.transforming() => l.text(MessageId::COMMANDS_CHOOSE_DISTORT_FIRST),
             C::ApplyTransform
             | C::CancelTransform

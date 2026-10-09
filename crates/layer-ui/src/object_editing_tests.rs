@@ -560,6 +560,31 @@ fn placement_refuses_row_and_direct_property_actions_without_changing_the_docume
 }
 
 #[test]
+fn tool_switch_accepts_placed_object_batch_in_one_history_step() {
+    for command in [CommandId::Pencil, CommandId::Hand] {
+        let mut s = session();
+        let before = live(&s.engine.document().artwork);
+        let checkpoint = s.engine.checkpoint();
+        let source = rgba8_source([200, 100], |x, _| [x as u8, 0, 0, 255]);
+        s.place_layer_sources(vec![("First".into(), std::sync::Arc::unwrap_or_clone(source.clone())),
+            ("Second".into(), std::sync::Arc::unwrap_or_clone(source))], Some(Point { x: 300., y: 300. }), None).unwrap();
+        assert!(s.objects.placing());
+        assert_eq!(selected(&s).len(), 2);
+        drag(&mut s, [250., 320.], [260., 320.]);
+        let placed: Vec<_> = selected(&s).into_iter().map(|object| (object, affine(&s, object))).collect();
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        s.dispatch(UiAction::Invoke { command }).unwrap();
+        assert!(!s.objects.placing());
+        assert!(s.command(command).selected);
+        assert_eq!(s.engine.document().artwork.objects.iter().count(), 2);
+        for (object, expected) in placed { near(affine(&s, object), expected); }
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(live(&s.engine.document().artwork), before);
+        assert!(!s.engine.can_undo());
+    }
+}
+
+#[test]
 fn touch_lands_on_unselected_images_and_object_layers_join_snap_candidates() {
     let (mut s, layer, [front, _]) = fixture();
     let surface = |s: &UiSession<Recorder>, p: [f32; 2]| { let q = crate::session::test_support::on_surface(s, Point { x: p[0], y: p[1] }); [q.x, q.y] };

@@ -385,6 +385,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     pub fn raster_backing_pending(&self) -> bool {
         self.pending_frame.is_some() || self.backend.has_pending_submission()
+            || self.batches.iter().any(|batch| matches!(batch.kind, DabBatchKind::RasterOperation(_)))
     }
 
     pub fn has_active_stroke(&self) -> bool {

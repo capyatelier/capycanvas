@@ -228,6 +228,7 @@ mod move_pixels_checks {
         let mut s = filled_selection_session();
         let selection = s.engine.document().working.selection.clone();
         s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: 1, replace: false } }).unwrap();
+        s.frame(2, 2).unwrap();
         s.dispatch(UiAction::Layer { action: LayerAction::Select { id: 1, mask: false } }).unwrap();
         s.layer_edit(canvas_bar_selection_edit(s.engine.document(), selection)).unwrap();
         invoke(&mut s, CommandId::Move);

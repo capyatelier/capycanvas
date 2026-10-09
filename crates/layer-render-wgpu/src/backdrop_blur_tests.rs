@@ -107,7 +107,7 @@ fn camera_motion_moves_the_cached_blur_between_refreshes() {
 #[test]
 fn region_list_changes_repaint_only_added_and_removed_glass() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut blur = BackdropBlur::new(r.device(), FORMAT);
+    let mut blur = BackdropBlur::new(&r.device, FORMAT);
     let frame = |blur: &mut BackdropBlur| {
         let mut encoder = r.device().create_command_encoder(&Default::default());
         let mut repaint = Vec::new();

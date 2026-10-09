@@ -160,6 +160,7 @@ mod selection_pixel_checks {
         s.dispatch(UiAction::Layer { action: LayerAction::ColorMode { id: crate::session::occurrence_token(id), epoch: s.state.document_file.epoch, mode: layer_core::color::LayerColorMode::Grayscale } }).unwrap();
         submitted(&mut s);
         assert_eq!(paint(s.engine.document(),id).color_mode, layer_core::color::LayerColorMode::Grayscale);
+        submitted(&mut s);
         let edited = s.engine.document().scene().occurrence(id).unwrap().clone();
         let edited_paint=paint(s.engine.document(),id).clone();
         assert!(!edited_paint.operations.is_empty() || !edited_paint.raster.is_empty());
@@ -176,6 +177,7 @@ mod selection_pixel_checks {
         assert_eq!(settings[rasterize + 1], "Discard Paint Edits");
 
         invoke(&mut s, CommandId::DiscardPaintEdits);
+        submitted(&mut s);
         let reverted = s.engine.document().scene().occurrence(id).unwrap().clone();
         let expected=edited.clone();
         let mut expected_paint=edited_paint.clone();expected_paint.raster=Default::default();expected_paint.operations=Arc::default();
@@ -345,6 +347,7 @@ mod selection_pixel_checks {
             assert!(mask.enabled && !mask.inverted);
             assert!(s.engine.document().working.selection.is_none(), "the mask consumes the selection");
             invoke(&mut s, CommandId::Undo);
+            submitted(&mut s);
             assert_live_artwork_eq(s.engine.document(),&before);
             assert_eq!(s.engine.document().working.selection, before.working.selection);
         }
@@ -450,6 +453,7 @@ mod selection_pixel_checks {
         assert_eq!(s.engine.document().rulers().count(), 1, "painting tools leave guides alone");
         assert_ne!(pixels(&s), untouched, "Delete clears the selected pixels");
         invoke(&mut s, CommandId::Undo);
+        submitted(&mut s);
         assert_eq!(pixels(&s), untouched);
 
         assert!(!press(&mut s, "Delete", true).handled, "a focused text field keeps Delete");

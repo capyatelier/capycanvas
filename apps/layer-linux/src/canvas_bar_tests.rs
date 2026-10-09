@@ -192,7 +192,7 @@ fn native_canvas_bar_input() {
     let selected = |w: &Workspace, id: CommandId| state(w).commands.iter().any(|c| c.id == id && c.selected);
     assert!(selected(&w, CommandId::TransformBicubic), "Distort resamples with Bicubic");
     let press = |native: &mut RemoteInput, widget: &gtk::Widget| {
-        native.click(center(&w, widget));
+        native.click(screen_point(widget, &w.window, [0.5, 0.5]));
     };
     let from_more = |native: &mut RemoteInput, labels: &[&str]| {
         press(native, &bar_widget(&w, "canvas-bar-more"));
@@ -221,7 +221,7 @@ fn native_canvas_bar_input() {
         "Reset returns to Free and the starting box",
     );
     assert_eq!(revision(), before, "distorting and resetting never commit");
-    let inside = [(anchor[0] + anchor[2]) * 0.5, (anchor[1] + anchor[3]) * 0.5];
+    let inside = [anchor[0] + (anchor[2] - anchor[0]) * 0.35, anchor[1] + (anchor[3] - anchor[1]) * 0.4];
     native.perform(json!([
         {"point": inside}, {"down": true}, {"wait_ms": 40},
         {"point": [inside[0] + 40., inside[1] + 20.]}

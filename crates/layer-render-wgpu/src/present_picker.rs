@@ -4,7 +4,7 @@ use layer_render::ColorPickerOverlay;
 
 #[derive(Default)]
 pub(super) struct Picker {
-    pipeline: Option<wgpu::RenderPipeline>,
+    pub(super) pipeline: Option<crate::Deferred<wgpu::RenderPipeline>>,
     buffer: Option<wgpu::Buffer>,
     data: Option<[f32; 16]>,
     dirty: bool,
@@ -15,7 +15,7 @@ impl Picker {
     pub fn set(
         &mut self,
         overlay: Option<ColorPickerOverlay>,
-        device: &wgpu::Device,
+        device: &crate::PipelineDevice,
         shader: &wgpu::ShaderModule,
         layout: &wgpu::PipelineLayout,
         format: wgpu::TextureFormat,

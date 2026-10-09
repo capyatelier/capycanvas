@@ -1151,6 +1151,7 @@ fn mode_bars_hide_when_the_bar_is_turned_off() {
     invoke(&mut s, CommandId::MaskSelection);
     assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::LayerMask));
     invoke(&mut s, CommandId::ShowCanvasActionBar);
+    s.frame(2, 2).unwrap();
     assert!(s.state.canvas_bar.is_none());
 }
 

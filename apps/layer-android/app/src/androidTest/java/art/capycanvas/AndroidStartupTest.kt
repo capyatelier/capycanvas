@@ -26,12 +26,25 @@ class AndroidStartupTest {
                 return value
             }
             fun waitFor(condition: (JSONObject) -> Boolean): JSONObject {
-                val deadline = SystemClock.uptimeMillis() + 30_000
+                val started = SystemClock.uptimeMillis()
+                val deadline = started + 30_000
+                var last: JSONObject? = null
+                var lastReadiness = ""
                 while (SystemClock.uptimeMillis() < deadline) {
-                    snapshot()?.let { if (condition(it)) return it }
+                    snapshot()?.let {
+                        last = it
+                        val readiness = obj("gpu_ready" to it.opt("gpu_ready"), "canvas_ready" to it.opt("canvas_ready"),
+                            "brush_ready" to it.opt("brush_ready"), "shaders_ready" to it.opt("shaders_ready"),
+                            "filter_load" to it.optJSONObject("state")?.opt("filter_load"), "error" to it.opt("error")).toString()
+                        if (readiness != lastReadiness) {
+                            instrumentation.sendStatus(0, android.os.Bundle().apply { putString("stream", "Startup wait elapsed_ms=${SystemClock.uptimeMillis()-started} $readiness\n") })
+                            lastReadiness = readiness
+                        }
+                        if (condition(it)) return it
+                    }
                     SystemClock.sleep(10)
                 }
-                throw AssertionError("Startup did not become ready")
+                throw AssertionError("Startup did not become ready; readiness=$lastReadiness; brush=${last?.optJSONObject("state")?.opt("brush")}; camera=${last?.optJSONObject("state")?.opt("camera")}")
             }
             fun workspaceReady(): Boolean {
                 var ready = false

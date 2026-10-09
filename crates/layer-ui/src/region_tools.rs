@@ -322,11 +322,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                         return Ok(0);
                     }
                     Purpose::Transform => {
-                        let Err(cause) = self.apply_transform_selection(result.pixels) else {
-                            return Ok(0);
+                        return match self.apply_transform_selection(result.pixels) {
+                            Ok(changed) => Ok(changed),
+                            Err(cause) => { self.set_host_error(Some(cause)); Ok(regions::HOST) },
                         };
-                        self.set_host_error(Some(cause));
-                        return Ok(regions::HOST);
                     }
                     Purpose::Region { operation, .. } if operation.is_some() && result.pixels.bounds() == [0; 4] => {
                         return Ok(0);

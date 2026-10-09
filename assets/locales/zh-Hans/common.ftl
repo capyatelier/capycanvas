@@ -383,3 +383,5 @@ common-screen-proof-white = 在当前屏幕亮度下，最亮的色调看起来�
 native-highlight-clipped-colors = 高亮显示这些颜色
 native-screen-details = 屏幕详情
 native-color-inspection-hdr-help = 文档的线性 RGB 和亮度 Y。虚线：参考白（0 EV）。零值和负值单独统计。包含可见纸张；不包含透明像素和显示叠加层。
+common-failure-details = 故障详情
+common-copy-failure-details = 复制故障详情

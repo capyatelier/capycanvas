@@ -559,3 +559,5 @@ common-screen-proof-white = При текущей яркости экрана с
 native-highlight-clipped-colors = Подсветить эти цвета
 native-screen-details = Сведения об экране
 native-color-inspection-hdr-help = Линейный RGB документа и яркость Y. Пунктирная линия: эталонный белый (0 EV). Нулевые и отрицательные значения учитываются отдельно. Включает видимую бумагу; исключает прозрачные пиксели и экранные наложения.
+common-failure-details = Сведения об ошибке
+common-copy-failure-details = Копировать сведения об ошибке

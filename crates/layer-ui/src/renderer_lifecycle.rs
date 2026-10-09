@@ -43,6 +43,19 @@ impl ThumbnailRequests {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn rendering_diagnostics(&self) -> serde_json::Value {
+        let telemetry = self.engine.backend().telemetry();
+        serde_json::json!({"canvas": self.engine.document().composition().size,
+            "color": self.engine.document().composition().color,
+            "revision": self.engine.document().revision, "epoch": self.state.document_file.epoch,
+            "tool": self.layer_interaction.tool, "transform_open": self.operation.transforming(),
+            "transform_pixels_pending": self.content_bounds.baking(),
+            "transform_selection_pending": self.region_tools.applying_transform(),
+            "transform_tool_requested": self.operation.next_tool.is_some(),
+            "raster_backing_pending": self.engine.raster_backing_pending(),
+            "suspended": self.rendering_suspended, "tracked_renderer_bytes": telemetry.resident_bytes,
+            "submitted_frames": telemetry.submissions})
+    }
     /// The host has no modal work and must wait for this boundary before normal
     /// parking. Failed renderers remain navigable/saveable/closeable.
     pub(super) fn document_park_interaction_idle(&self)->bool {
@@ -58,6 +71,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn discard_render_requests(&mut self) {
+        self.operation.next_tool = None;
         self.cancel_content_bounds();
         self.content_bounds = Default::default();
         self.resubmit_conversion();

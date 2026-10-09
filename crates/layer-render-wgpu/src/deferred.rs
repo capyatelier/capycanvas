@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// promise. Descriptor borrows end before the owned future is returned.
 #[derive(Clone, Copy)]
 pub(super) enum CompileMode {
+    #[cfg(not(target_arch = "wasm32"))]
     Immediate,
     #[cfg(target_arch = "wasm32")]
     Async,
@@ -30,6 +31,7 @@ impl CompileMode {
         desc: &wgpu::RenderPipelineDescriptor<'_>,
     ) -> Compilation<wgpu::RenderPipeline> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Immediate => Compilation::Ready(device.create_render_pipeline(desc)),
             #[cfg(target_arch = "wasm32")]
             Self::Async => {
@@ -43,6 +45,7 @@ impl CompileMode {
         desc: &wgpu::ComputePipelineDescriptor<'_>,
     ) -> Compilation<wgpu::ComputePipeline> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Immediate => Compilation::Ready(device.create_compute_pipeline(desc)),
             #[cfg(target_arch = "wasm32")]
             Self::Async => {
@@ -53,16 +56,16 @@ impl CompileMode {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-type Factory<T> = Box<dyn FnMut(CompileMode) -> Compilation<T> + Send>;
+type Factory<T> = Box<dyn FnOnce(CompileMode) -> Compilation<T> + Send>;
 #[cfg(target_arch = "wasm32")]
-type Factory<T> = Box<dyn FnMut(CompileMode) -> Compilation<T>>;
+type Factory<T> = Box<dyn FnOnce(CompileMode) -> Compilation<T>>;
 
 struct Inner<T> {
     value: OnceLock<T>,
     #[cfg(target_arch = "wasm32")]
     validating: std::cell::Cell<bool>,
     #[cfg(target_arch = "wasm32")]
-    failure: OnceLock<String>,
+    preparation: std::cell::OnceCell<futures_util::future::Shared<futures_util::future::LocalBoxFuture<'static, Result<(), String>>>>,
     #[cfg(target_arch = "wasm32")]
     async_pipeline: bool,
     factory: Mutex<Option<Factory<T>>>,
@@ -77,21 +80,18 @@ impl<T> Clone for Deferred<T> {
 impl<T> Deferred<T> {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(factory: impl FnOnce() -> T + Send + 'static) -> Self {
-        let mut factory = Some(factory);
-        Self::boxed(Box::new(move |_| Compilation::Ready(factory.take().expect("recipe runs once")())), false)
+        Self::boxed(Box::new(move |_| Compilation::Ready(factory())), false)
     }
     #[cfg(target_arch = "wasm32")]
     pub fn new(factory: impl FnOnce() -> T + 'static) -> Self {
-        let mut factory = Some(factory);
-        Self::boxed(Box::new(move |_| Compilation::Ready(factory.take().expect("recipe runs once")())), false)
+        Self::boxed(Box::new(move |_| Compilation::Ready(factory())), false)
     }
-    /// The recipe can run twice; see [`Deferred::compile`].
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn pipeline(factory: impl Fn(CompileMode) -> Compilation<T> + Send + 'static) -> Self {
+    pub fn pipeline(factory: impl FnOnce(CompileMode) -> Compilation<T> + Send + 'static) -> Self {
         Self::boxed(Box::new(factory), true)
     }
     #[cfg(target_arch = "wasm32")]
-    pub fn pipeline(factory: impl Fn(CompileMode) -> Compilation<T> + 'static) -> Self {
+    pub fn pipeline(factory: impl FnOnce(CompileMode) -> Compilation<T> + 'static) -> Self {
         Self::boxed(Box::new(factory), true)
     }
     fn boxed(factory: Factory<T>, _async_pipeline: bool) -> Self {
@@ -100,7 +100,7 @@ impl<T> Deferred<T> {
             #[cfg(target_arch = "wasm32")]
             validating: std::cell::Cell::new(false),
             #[cfg(target_arch = "wasm32")]
-            failure: OnceLock::new(),
+            preparation: Default::default(),
             #[cfg(target_arch = "wasm32")]
             async_pipeline: _async_pipeline,
             factory: Mutex::new(Some(factory)),
@@ -111,16 +111,15 @@ impl<T> Deferred<T> {
     pub fn async_pipeline(&self) -> bool {
         self.0.async_pipeline
     }
-    /// Returns the value, compiling it now if no compilation has published one.
-    /// Natively this waits for a compilation already running on another thread.
-    /// The browser cannot wait for an asynchronous one, so this compiles the
-    /// recipe again and the asynchronous result is dropped when it arrives.
     pub fn compile(&self) -> &T {
         self.0.value.get_or_init(|| {
-            let mut factory = self.0.factory.lock().unwrap();
-            let value = factory.as_mut().expect("pipeline recipe")(CompileMode::Immediate).immediate();
-            *factory = None;
-            value
+            #[cfg(target_arch = "wasm32")]
+            assert!(!self.0.async_pipeline, "Pipeline used before preparation");
+            #[cfg(target_arch = "wasm32")]
+            let mode = CompileMode::Async;
+            #[cfg(not(target_arch = "wasm32"))]
+            let mode = CompileMode::Immediate;
+            self.0.factory.lock().unwrap().take().expect("resource recipe")(mode).immediate()
         })
     }
     /// Start inside the caller's error scopes, then await without borrowing the
@@ -135,37 +134,31 @@ impl<T> Deferred<T> {
         if self.0.value.get().is_some() {
             return Box::pin(async { Ok(()) });
         }
-        if let Some(error) = self.0.failure.get() {
-            return Box::pin(std::future::ready(Err(error.clone())));
-        }
-        let compilation =
-            self.0.factory.lock().unwrap().as_mut().expect("pipeline recipe")(CompileMode::Async);
-        let this = self.clone();
-        let publish = move |value| {
-            let _ = this.0.value.set(value);
-            this.0.factory.lock().unwrap().take();
-        };
-        match compilation {
-            Compilation::Ready(value) => {
-                publish(value);
-                Box::pin(async { Ok(()) })
-            }
-            Compilation::Pending(future) => {
-                let this = self.clone();
-                Box::pin(async move {
-                    match future.await {
-                        Ok(value) => {
-                            publish(value);
-                            Ok(())
-                        }
-                        Err(error) => {
-                            let _ = this.0.failure.set(error.clone());
-                            Err(error)
-                        }
-                    }
-                })
-            }
-        }
+        use futures_util::FutureExt;
+        Box::pin(self.0.preparation.get_or_init(|| {
+            let compilation = self.0.factory.lock().unwrap().take().expect("resource recipe")(CompileMode::Async);
+            let owner = Arc::downgrade(&self.0);
+            async move {
+                let value = match compilation {
+                    Compilation::Ready(value) => value,
+                    Compilation::Pending(future) => future.await?,
+                };
+                if let Some(owner) = owner.upgrade() { let _ = owner.value.set(value); }
+                Ok(())
+            }.boxed_local().shared()
+        }).clone())
+    }
+    pub async fn prepare(&self) -> Result<(), String> where T: 'static {
+        #[cfg(target_arch = "wasm32")]
+        { self.compile_async().await }
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.compile(); Ok(()) }
+    }
+    pub async fn prepare_all<'a>(pipelines: impl IntoIterator<Item = &'a Self>) -> Result<(), String> where T: 'static {
+        #[cfg(target_arch = "wasm32")]
+        { futures_util::future::try_join_all(pipelines.into_iter().map(Self::prepare)).await.map(|_| ()) }
+        #[cfg(not(target_arch = "wasm32"))]
+        { for pipeline in pipelines { pipeline.prepare().await?; } Ok(()) }
     }
     pub fn ready(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
@@ -200,6 +193,11 @@ impl Deferred<wgpu::ShaderModule> {
     }
 }
 impl Deferred<wgpu::ComputePipeline> {
+    pub fn compute_module(device: &super::PipelineDevice, label: &'static str, layout: &wgpu::PipelineLayout,
+        module: &wgpu::ShaderModule, entry: &'static str) -> Self {
+        let module = module.clone();
+        Self::compute(device, label, layout, &Deferred::new(move || module), entry)
+    }
     pub fn compute(
         device: &super::PipelineDevice,
         label: &'static str,

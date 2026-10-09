@@ -140,6 +140,7 @@ mod merge_checks {
         invoke(&mut s, CommandId::StampVisible);
         assert_eq!(s.engine.document().scene().order().len(), layers + 1);
         assert_eq!(named(&s)[0], "Visible");
+        s.frame(2, 2).unwrap();
         s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
         let group = s.engine.document().working.occurrence.unwrap();
         assert!(s.command(CommandId::MergeGroup).enabled);

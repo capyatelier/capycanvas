@@ -74,7 +74,7 @@ import { checkColorMixing } from "./color-mixing-journey.test.mjs";
 import { checkPassThrough } from "./pass-through-journey.test.mjs";
 import { checkBlending } from "./blending-journey.test.mjs";
 import { checkScreenStatus } from "./screen-status-journey.test.mjs";
-import { checkPipelineTakeover } from "./pipeline-takeover.test.mjs";
+import { checkPipelineReadiness } from "./pipeline-readiness.test.mjs";
 import { checkPhotoEdit } from "./photo-edit-journey.test.mjs";
 import { checkCanvasSize } from "./canvas-size-journey.test.mjs";
 import { checkCrop } from "./crop-journey.test.mjs";
@@ -93,7 +93,7 @@ import { checkAdjustments, checkCurves } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity, checkLiveLanguage } from "./preferences.test.mjs";
 import {checkLiveHistogramLanguage,checkLiveWorkspaceLanguage,checkLiveDeliveryLanguage,checkLiveProofLanguage,checkLiveColorFormLanguage,checkLiveToolbarLanguage,checkLiveEffectLanguage,checkLiveToolLanguage} from "./localization-journey.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
-import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
+import { checkGpuStartup, checkGpuCompatibility, checkGpuFailureLifecycle } from "./gpu.test.mjs";
 import { checkStagedStartup } from "./startup.test.mjs";
 import { checkMediumTiles } from "./tiles.test.mjs";
 import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager, checkToolPicker } from "./customization.test.mjs";
@@ -119,7 +119,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.some(x=>['--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients'].includes(x))?300000:process.argv.some(x=>["--enclose-fill","--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--image-rows","--image-layers","--package-view","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.some(x=>['--drawing-tabs-recovery','--scopes','--tonal-controls','--gradients'].includes(x))?300000:process.argv.some(x=>["--enclose-fill","--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--filter-previews","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--image-object-fixture","--image-rows","--image-layers","--package-view","--export-metadata","--filter-investigation","--pipeline-readiness","--blending"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -194,6 +194,7 @@ try {
     'window.__statusBattery=Object.assign(new EventTarget(),{level:.72,charging:true});Object.defineProperty(navigator,"getBattery",{configurable:true,value:async()=>window.__statusBattery});'});
   if (process.argv.includes("--title-bar-overflow")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
     `window.__overflowEvents=[];for(const type of ['pointerdown','pointerup','click'])window.addEventListener(type,e=>{const value={type,id:e.pointerId,pointer:e.pointerType,target:e.target.tagName,source:e.target.closest('details')?.id};__overflowEvents.push(value);setTimeout(()=>{value.prevented=e.defaultPrevented},0);},true)`});
+  if(process.argv.some(flag=>['--pipeline-readiness','--drawing-tabs-recovery'].includes(flag)))await call('Page.addScriptToEvaluateOnNewDocument',{source:'Error.stackTraceLimit=100'});
   await call("Page.navigate", {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
   });
@@ -221,7 +222,7 @@ try {
       await checkUiUpdates({evaluate});
       await checkSettingsUpdates({evaluate,settle});
     }, checkErrors],
-    [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({cdp,call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--session-restart-performance"), () => measureSessionRestart({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--drawing-tabs"), () => checkDrawingTabs({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--portable-photo"), () => checkPortablePhoto({call,evaluate,settle}), checkRasterErrors],
@@ -236,7 +237,7 @@ try {
     [process.argv.includes("--canvas-bar"), () => checkCanvasBar({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--screen-status"), () => checkScreenStatus({call,evaluate,settle}), checkErrors],
-    [process.argv.includes("--pipeline-takeover"), () => checkPipelineTakeover({evaluate,settle}), checkErrors],
+    [process.argv.includes("--pipeline-readiness"), () => checkPipelineReadiness({cdp,call,evaluate,settle}), checkErrors],
     [(process.argv.includes("--zoom-readout") || process.argv.includes("--zoom-controls")), () => checkZoomReadout({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--blend-menu"), () => checkBlendMenu({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--color-mixing"), () => checkColorMixing({call,evaluate,settle}), checkErrors],
@@ -357,6 +358,7 @@ try {
     [process.argv.includes("--workspace"), () => checkWorkspace({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--tool-picker"), () => checkToolPicker({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--customization"), () => checkCustomization({ call, evaluate, settle, canvasPixels }), checkErrors],
+    [process.argv.includes("--gpu-failure-lifecycle"), () => checkGpuFailureLifecycle({call,evaluate,settle,errors}), checkErrors],
     [process.argv.includes("--gpu-compatibility"), async () => {
       assert.ok(packageHost, "Use --package --gpu-compatibility to test the built distribution");
       await checkGpuCompatibility({ call, evaluate, settle, url: packageHost.url, errors });

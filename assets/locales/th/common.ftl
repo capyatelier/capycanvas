@@ -335,3 +335,5 @@ common-screen-proof-white = ที่ความสว่างหน้าจ�
 native-highlight-clipped-colors = เน้นสีเหล่านี้
 native-screen-details = รายละเอียดหน้าจอ
 native-color-inspection-hdr-help = RGB เชิงเส้นของเอกสารและความส่องสว่าง Y เส้นประแสดงสีขาวอ้างอิง (0 EV) ค่าศูนย์และค่าลบจะนับแยกกัน รวมกระดาษที่มองเห็น ไม่รวมพิกเซลโปร่งใสและสิ่งซ้อนทับบนจอ
+common-failure-details = รายละเอียดข้อผิดพลาด
+common-copy-failure-details = คัดลอกรายละเอียดข้อผิดพลาด

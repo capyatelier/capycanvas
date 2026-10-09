@@ -73,6 +73,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Tool cursor hover, with and without brush size | 60 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
 | G-Pen 1024 px, Android with idle brush preparation | 60 | **Meets these strokes.** Pending: 75.57–75.87 fresh updates/s, fresh completion-gap p99 22.64–24.01 ms; fully warm: 75.00–76.19/s, p99 22.50–24.20 ms | [Idle brush preparation](#idle-brush-preparation), Perceptual, 100 × 60 px radii |
 | G-Pen 1024 px, Web while brush warmup is paused | 60 | **Unqualified; CPU proxy below target.** After the in-flight compile: 17.58–22.30 frame calls/s, interval p99 84.6–148.1 ms; fully warm: 21.36–23.31/s. Presentation unmeasured | [Idle brush preparation](#idle-brush-preparation) |
+| G-Pen 1024 px, Web asynchronous GPU preparation | 60 | **Unqualified; CPU proxy below target.** 16.63–21.77 frame calls/s, interval p99 96.4–132.7 ms; input-to-submission p95 29.1–46.7 ms. GPU completion and presentation unmeasured | [GPU preparation](#gpu-preparation) |
 | Pan during private session checkpoints | 60 | Unqualified: renderer 60.00–60.12 submissions/s, interval p99 18.70–18.92 ms; screen presentation and thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px during private session checkpoints | 60 | Unqualified: 77.6–79.0 fresh completed updates/s, completion gap p99 23.36–24.07 ms; thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px, repeated short contacts during checkpoints | 60 | Diagnostic only: 11.02–14.27 MiB process writes per 50 contacts; observed head age max 3.52–4.37 s. Paused motion has no qualified frame rate | [Session checkpoints](#session-checkpoints) |
@@ -1676,3 +1677,33 @@ Provenance, fixtures and their hashes, per-contact records, Stats traces and the
 pre-M1 harness are under `artifacts/object-ga-m2/perf/`. Earlier builds' rows
 remain there. The early gate's failing build and records remain under
 `artifacts/object-ga-early-gate/`.
+
+## GPU preparation
+
+Measured on TCL TAB 11 Gen 2 on 2026-10-08 with asynchronous WebGPU preparation
+based on `067f5cbb7`, optimized `dev-perf` Wasm SHA256
+`658380486f41e11637fbfea891978b0cb7b3d3c697afd7837eedc64300d30af9`.
+The fixture uses the Perceptual 4248 × 2832 reference photo at Fit, G-Pen 1024 px,
+normal Navigator and default glass. Three five-second CDP strokes follow a
+1.5-second priming stroke and Undo. Optional compilation is still pending;
+`--startup-pending` waits for the selected brush instead of the full catalog.
+
+CPU frame-call rates are 16.63, 21.77 and 20.58/s, with frame-interval p99
+132.7, 96.4 and 96.6 ms. Input-to-submission p95 is 46.7, 29.1 and 31.4 ms.
+These proxies do not establish fresh GPU completion or presentation, and miss
+the 60 Hz target. Shader/driver cache state and thermal status are unmeasured.
+The observations are retained under
+`artifacts/transform-root-cause/startup-after/pen/`.
+
+The startup/recovery check on 2026-10-09 uses `a742be2a7` plus asynchronous
+preparation changes, Wasm SHA256
+`38fa3ff549ccfaef8813c69b809dcd1034ef84672ea586ff8732362150c11b02`, on a
+2048 × 1536 painted drawing. Initial paper appears at 9.33 s and the selected
+brush becomes ready at 42.26 s. A subsequent automatic reload restores usable
+paint and history at 44.70 s. Cold worker Apply takes about 39 s. All 281
+observed page/worker pipeline calls are asynchronous, with no runtime errors.
+Thermal status is zero before and after; browser/driver caches are uncontrolled.
+This establishes completion and preparation ordering, not a controlled startup
+comparison or input-to-display latency. Shader compilation remains a substantial
+first-use delay. Records are under
+`artifacts/transform-root-cause/native-restore-fixed/`.

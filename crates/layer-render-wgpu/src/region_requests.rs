@@ -189,7 +189,7 @@ impl RegionRequests {
             let mut ready = true;
             if let layer_render::RegionSource::TransformedSelection { map, .. } = &request.source {
                 if map.mesh.is_some() {
-                    ready &= startup.compiler.require([&self.positions(r).pipeline], startup::BRUSH);
+                    ready &= startup.compiler.require([&self.positions(r).pipelines.pipeline], startup::BRUSH);
                 }
                 ready &= startup.compiler.require([&r.selection_clip.resample], startup::BRUSH);
                 ready &= self.refiner.as_ref().unwrap().prepare_bounds(&startup.compiler);

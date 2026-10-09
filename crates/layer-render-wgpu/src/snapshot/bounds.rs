@@ -139,6 +139,7 @@ impl SnapshotGpu {
         let device = snapshot.renderer.device.clone();
         let queue = snapshot.renderer.queue.clone();
         let pipeline = crate::thumbnails::BoundsPipeline::new(&device);
+        pipeline.measure.prepare().await?;
         let output = crate::thumbnails::BoundsPipeline::buffer(&device);
         let mut pending = 0;
         let mut b = [u32::MAX, u32::MAX, 0, 0];

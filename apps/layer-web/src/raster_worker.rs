@@ -419,7 +419,10 @@ pub(super) async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Resu
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
     let instance = wgpu::Instance::new(descriptor);
-    let (adapter, device, queue) = request_device(&instance, None).await?;
+    let (adapter, device, queue) = request_device(&instance, None, None).await?;
+    device.set_device_lost_callback(|reason, message| {
+        gpu_diagnostics::report("worker", "device_lost", format!("{reason:?}: {message}"));
+    });
     let mut renderer = WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color).map_err(js)?;
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| Box::pin(async move { encode_tiles(&bytes, descriptors) })));
     let gpu=renderer.snapshot_gpu();

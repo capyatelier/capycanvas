@@ -138,6 +138,14 @@ implement the same dependency ordering.
 Requested thumbnail readback prepares before idle catalog warmup, after the
 document and current brush dependencies.
 
+WebGPU pipeline preparation is asynchronous and shared per recipe and device.
+New and resumed canvases await only their presentation and constant-fill dependencies;
+document and brush preparation follow through the existing compiler queue.
+Snapshot workers prepare the kernels for a capture before encoding its tiles.
+Encoding cannot replace a pending Web compilation with a blocking one. Native
+compiler and snapshot workers retain their background execution. Unencoded
+raster edits also hold later document edits in the ordered input queue.
+
 Use the [testing and performance guide](development/testing.md) to measure frame
 cost and input-to-display latency on the target device.
 

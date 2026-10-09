@@ -15,13 +15,52 @@ function fixture() {
     reply(result,extra={}){this.onmessage({data:{id:this.messages.at(-1).id,result,...extra}});}
     error(){this.onerror({preventDefault(){},message:'worker failed'});}
   };
-  const run=createRasterWorker();
-  return {run,workers,async flush(){for(let i=0;i<4;i++)await Promise.resolve();},
+  const events=[],run=createRasterWorker(event=>events.push(event));
+  return {run,workers,events,async flush(){for(let i=0;i<4;i++)await Promise.resolve();},
     async advance(delay){const end=now+delay;while(true){const ready=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];if(!ready)break;const [id,t]=ready;now=t.at;if(!t.interval)timers.delete(id);t.callback();if(t.interval&&timers.has(id))t.at+=t.interval;await this.flush();}now=end;},
     close(){for(const [k,v]of Object.entries(original))globalThis[k]=v;}};
 }
 async function withFixture(body){const f=fixture();try{await body(f);}finally{f.close();}}
 const request=(operation='snapshot',extra={})=>({operation,metadata:'{}',buffers:[],...extra});
+
+for(const kind of ['device_lost','out_of_memory'])test(`${kind} reports the worker cause and rejects immediately without retiring a parallel output`,()=>withFixture(async f=>{
+  const output=f.run(request('output-begin'));f.workers[0].reply('output');await output;
+  const pending=f.run(request()),worker=f.workers[1];
+  const rejected=assert.rejects(pending,/Raster worker GPU stopped: allocation failure/);
+  worker.onmessage({data:{gpu_event:{role:'worker',kind,message:'allocation failure',wasm_bytes:1000}}});
+  await rejected;
+  assert.equal(worker.terminated,true);
+  assert.equal(f.workers[0].terminated,false);
+  assert.deepEqual(f.events[0],{role:'worker',kind,message:'allocation failure',wasm_bytes:1000,worker:'analysis:3',operations:['snapshot']});
+  worker.reply('late');
+  const retry=f.run(request());f.workers[2].reply('recovered');assert.equal(await retry,'recovered');
+}));
+
+test('validation events retain diagnostics while an otherwise successful worker continues',()=>withFixture(async f=>{
+  const pending=f.run(request()),worker=f.workers[0];
+  worker.onmessage({data:{gpu_event:{role:'worker',kind:'validation',message:'shader details'}}});
+  assert.equal(worker.terminated,false);assert.equal(f.events.length,1);
+  worker.reply('result');assert.equal(await pending,'result');
+}));
+
+test('a late failure cannot detach a replacement worker with the same role',()=>withFixture(async f=>{
+  const first=f.run(request('encode')),old=f.workers[0];
+  const rejected=assert.rejects(first,/worker failed/);old.error();await rejected;
+  const next=f.run(request('encode')),current=f.workers[1];
+  old.error();current.reply('next');assert.equal(await next,'next');
+  const last=f.run(request('encode'));assert.equal(f.workers.length,2);
+  current.reply('last');assert.equal(await last,'last');
+}));
+
+test('idle retirement ignores late errors after the file worker is replaced',()=>withFixture(async f=>{
+  const first=f.run(request('fingerprint')),old=f.workers[0];
+  old.reply('first',{retire:true});await first;await f.advance(5000);
+  assert.equal(old.terminated,true);
+  const next=f.run(request('fingerprint')),current=f.workers[1];
+  old.error();current.reply('next');assert.equal(await next,'next');
+  const last=f.run(request('fingerprint'));assert.equal(f.workers.length,2);
+  current.reply('last');assert.equal(await last,'last');
+}));
 
 test('successful idle analysis worker is reused and expires after five seconds',()=>withFixture(async f=>{
   const first=f.run(request());f.workers[0].reply('first');assert.equal(await first,'first');assert.equal(f.workers[0].terminated,false);

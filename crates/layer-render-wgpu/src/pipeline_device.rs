@@ -134,6 +134,7 @@ impl PipelineDevice {
         let _trace = crate::performance_trace::Span::new(c"capy.allocate_binding");
         self.device.create_bind_group(descriptor)
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn create_render_pipeline(
         &self,
         descriptor: &wgpu::RenderPipelineDescriptor<'_>,
@@ -151,6 +152,7 @@ impl PipelineDevice {
         }
         self.device.create_render_pipeline(descriptor)
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn create_compute_pipeline(
         &self,
         descriptor: &wgpu::ComputePipelineDescriptor<'_>,

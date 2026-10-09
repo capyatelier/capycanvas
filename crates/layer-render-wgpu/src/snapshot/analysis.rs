@@ -4,6 +4,7 @@ use layer_core::{ArtworkQuery, ArtworkSource};
 
 impl SnapshotRenderer {
     pub(super) async fn prepare_effect_analysis_async(&mut self, output: scene::Output) -> Result<(), String> {
+        self.prepare_scene_pipelines().await.map_err(|e| e.to_string())?;
         self.check_cancelled().map_err(|e| e.to_string())?;
         let scene = self.scene.view().with_scope(&self.scope).with_offset(self.offset);
         let contributors = if matches!(self.scope,SceneScope::Raw(_)) {Vec::new()} else {match output {

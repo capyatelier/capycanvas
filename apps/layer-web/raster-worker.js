@@ -11,7 +11,10 @@ async function execute({id,request}) {
     // These operations only touch IndexedDB. Recovery discovery must not
     // download/instantiate the image codec before listing a few keys.
     if (!request.operation.startsWith('restart-store-'))
-      instance=await (ready ??= init());
+      instance=await (ready ??= init().then(instance=>{
+        wasm.configure_gpu_diagnostics(event=>self.postMessage({gpu_event:{...event,wasm_bytes:instance.memory.buffer.byteLength}}));
+        return instance;
+      }));
     let result;
     switch(request.operation) {
       case "fingerprint": {

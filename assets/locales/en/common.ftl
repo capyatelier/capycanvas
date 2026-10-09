@@ -565,3 +565,5 @@ common-screen-proof-white = At your current screen brightness, the lightest tone
 native-highlight-clipped-colors = Highlight these colors
 native-screen-details = Screen details
 native-color-inspection-hdr-help = Linear document RGB and luminance Y. Dashed line: reference white (0 EV). Zero and negative values are counted separately. Includes visible paper; excludes transparent pixels and display overlays.
+common-failure-details = Failure details
+common-copy-failure-details = Copy failure details

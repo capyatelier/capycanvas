@@ -35,7 +35,7 @@ export async function checkFilterPreviews({call,evaluate,settle}) {
   })()`);
   await wait(`layerApp.state().commands.find(c=>c.id==='placement_original_size').enabled`);
   await evaluate(`window.showOpenFilePicker=previewPicker;delete window.previewPicker;layerApp.dispatch({type:'invoke',command:'apply_transform'})`);
-  await wait(`layerApp.state().layer_tools.editing_layer.label==='Preview checker'&&!layerApp.state().commands.find(c=>c.id==='placement_original_size').enabled`);
+  await wait(`layerApp.state().layer_tools.editing_layer.object&&layerApp.state().layer_tools.editing_layer.label==='Preview checker'&&layerApp.state().canvas_bar?.context.kind==='transform'&&!layerApp.state().canvas_bar.completion.length`);
   await wait('layerApp.app.brush_ready()');
   await capture('web-preview-import');
   const imported=await histogram();

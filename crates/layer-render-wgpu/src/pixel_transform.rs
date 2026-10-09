@@ -85,24 +85,26 @@ pub(super) enum Part {
 /// A cached source binding's selection, source views and mesh positions.
 type SourceKey = (wgpu::Buffer, Vec<wgpu::TextureView>, Option<wgpu::TextureView>);
 
-pub struct PixelTransform {
-    placement: bool,
+pub(super) struct Kernels {
     scalar: bool,
-    visibility: bool,
-    pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
-    pub(super) mesh_pipeline: Deferred<wgpu::RenderPipeline>,
-    pub(super) placement_pipeline: Deferred<wgpu::ComputePipeline>,
-    /// Color transforms drawn straight into a display level.
-    pub(super) display: Option<Deferred<wgpu::ComputePipeline>>,
+    pub pipeline: Deferred<wgpu::RenderPipeline>,
+    pub mesh_pipeline: Deferred<wgpu::RenderPipeline>,
+    pub placement_pipeline: Deferred<wgpu::ComputePipeline>,
+    pub display: Option<Deferred<wgpu::ComputePipeline>>,
     display_layout: wgpu::BindGroupLayout,
-    display_target: crate::bindings::CachedBinding<wgpu::TextureView>,
     layout: wgpu::BindGroupLayout,
     source_layout: wgpu::BindGroupLayout,
     empty_selection: wgpu::Buffer,
+    stride: u32,
+}
+
+pub struct PixelTransform {
+    pub(super) kernels: std::sync::Arc<Kernels>,
+    placement: bool,
+    display_target: crate::bindings::CachedBinding<wgpu::TextureView>,
     bindings: std::collections::HashMap<SourceKey, (u64, wgpu::BindGroup)>,
     binding_frame: u64,
     uniforms: Option<(wgpu::Buffer, wgpu::BindGroup)>,
-    stride: u32,
     capacity: u64,
     records: Vec<u8>,
     next_record: u64,
@@ -174,57 +176,22 @@ impl PixelTransform {
             let layout = pipeline_layout(&[Some(&layout), Some(&source_layout), Some(&display_layout)]);
             Deferred::compute(device, "transform display level", &layout, shader, "display_main")
         });
-        Self {
-            placement: false,
-            scalar,
-            visibility,
-            pipeline: pipeline(false),
-            mesh_pipeline: pipeline(true),
-            placement_pipeline,
-            display,
-            display_layout,
-            display_target: Default::default(),
-            layout,
-            source_layout,
+        Self::from_kernels(std::sync::Arc::new(Kernels {
+            scalar, pipeline: pipeline(false), mesh_pipeline: pipeline(true),
+            placement_pipeline, display, display_layout, layout, source_layout,
             empty_selection: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("transform selects entire layer"),
-                size: 48,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
+                label: Some("transform selects entire layer"), size: 48,
+                usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
             }),
-            bindings: Default::default(),
-            binding_frame: 0,
-            uniforms: None,
-            stride: (RECORD_BYTES as u32)
-                .next_multiple_of(device.limits().min_uniform_buffer_offset_alignment),
-            capacity: 0,
-            records: Vec::new(),
-            next_record: 0,
-        }
+            stride: (RECORD_BYTES as u32).next_multiple_of(device.limits().min_uniform_buffer_offset_alignment),
+        }))
     }
-    /// Transactions share shader recipes. Their records remain independent.
+    pub(super) fn from_kernels(kernels: std::sync::Arc<Kernels>) -> Self {
+        Self { kernels, placement: false, display_target: Default::default(), bindings: Default::default(),
+            binding_frame: 0, uniforms: None, capacity: 0, records: Vec::new(), next_record: 0 }
+    }
     pub(super) fn fork(&self) -> Self {
-        Self {
-            placement: self.placement,
-            scalar: self.scalar,
-            visibility: self.visibility,
-            pipeline: self.pipeline.clone(),
-            mesh_pipeline: self.mesh_pipeline.clone(),
-            placement_pipeline: self.placement_pipeline.clone(),
-            display: self.display.clone(),
-            display_layout: self.display_layout.clone(),
-            display_target: Default::default(),
-            layout: self.layout.clone(),
-            source_layout: self.source_layout.clone(),
-            empty_selection: self.empty_selection.clone(),
-            bindings: Default::default(),
-            binding_frame: 0,
-            uniforms: None,
-            stride: self.stride,
-            capacity: 0,
-            records: Vec::new(),
-            next_record: 0,
-        }
+        Self { placement: self.placement, ..Self::from_kernels(self.kernels.clone()) }
     }
     pub(super) fn placement_pass(&self) -> Self {
         let mut pass = self.fork();
@@ -260,7 +227,7 @@ impl PixelTransform {
         }) {
             return Err("Invalid transform selection");
         }
-        let selection = selection.unwrap_or(&self.empty_selection);
+        let selection = selection.unwrap_or(&self.kernels.empty_selection);
         let key = (
             selection.clone(),
             tiles.iter().map(|t| t.view.clone()).collect::<Vec<_>>(),
@@ -278,7 +245,7 @@ impl PixelTransform {
             let binding = crate::bindings::group(
                 device,
                 "transform sources and selection",
-                &self.source_layout,
+                &self.kernels.source_layout,
                 views.map(wgpu::BindingResource::TextureView).chain([selection.as_entire_binding()]),
             );
             if self.bindings.len() >= BINDING_CAPACITY {
@@ -308,13 +275,13 @@ impl PixelTransform {
     ) {
         let allowed: std::collections::HashSet<_> = views.iter().copied().collect();
         self.bindings.retain(|(buffer, bound, _), _| {
-            (*buffer == self.empty_selection || selection.is_some_and(|s| s == buffer))
+            (*buffer == self.kernels.empty_selection || selection.is_some_and(|s| s == buffer))
                 && bound.iter().all(|v| allowed.contains(v))
         });
     }
     /// Size the records for `jobs` drawn in one frame ahead of that frame.
     pub(super) fn reserve(&mut self, device: &wgpu::Device, jobs: u64) {
-        let end = jobs * u64::from(self.stride);
+        let end = jobs * u64::from(self.kernels.stride);
         if end > self.capacity {
             self.capacity = end
                 .next_power_of_two()
@@ -327,7 +294,7 @@ impl PixelTransform {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let binding = crate::bindings::group(device, "transform records", &self.layout, [
+            let binding = crate::bindings::group(device, "transform records", &self.kernels.layout, [
                 wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: 0, size: wgpu::BufferSize::new(RECORD_BYTES), }),
             ]);
             self.uniforms = Some((buffer, binding));
@@ -351,7 +318,7 @@ impl PixelTransform {
     ) -> Result<u32, &'static str> {
         let rows = inverse_rows(transform)?;
         let identity = transform.is_identity();
-        let stride = u64::from(self.stride);
+        let stride = u64::from(self.kernels.stride);
         let bytes = jobs.len() as u64 * stride;
         let end = self.next_record + bytes;
         if end > device.limits().max_buffer_size.min(u64::from(u32::MAX)) {
@@ -416,9 +383,9 @@ impl PixelTransform {
             attachment,
             if clear { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
         );
-        pass.set_pipeline(if mesh { &self.mesh_pipeline } else { &self.pipeline });
+        pass.set_pipeline(if mesh { &self.kernels.mesh_pipeline } else { &self.kernels.pipeline });
         for draw in draws {
-            pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[offset + draw.job as u32 * self.stride]);
+            pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[offset + draw.job as u32 * self.kernels.stride]);
             pass.set_bind_group(1, &draw.source.binding, &[]);
             let [x, y, w, h] = draw.scissor;
             pass.set_scissor_rect(x, y, w, h);
@@ -428,15 +395,15 @@ impl PixelTransform {
     pub(super) fn placement_draw(&self, device: &wgpu::Device, target: &wgpu::TextureView,
         source: TransformSource, offset: u32) -> PlacementDraw {
         let output = self.display_target.get(target.clone(), || device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("placed pixels destination"), layout: &self.display_layout,
-            entries: &[wgpu::BindGroupEntry { binding: u32::from(self.scalar), resource: wgpu::BindingResource::TextureView(target) }],
+            label: Some("placed pixels destination"), layout: &self.kernels.display_layout,
+            entries: &[wgpu::BindGroupEntry { binding: u32::from(self.kernels.scalar), resource: wgpu::BindingResource::TextureView(target) }],
         }));
         PlacementDraw { records: self.uniforms.as_ref().unwrap().1.clone(), source, target: output.clone(), offset,
             size: [target.texture().width(), target.texture().height()] }
     }
 
     pub(super) fn encode_placement<'a>(&'a self, pass: &mut wgpu::ComputePass<'a>, draw: &'a PlacementDraw) {
-        pass.set_pipeline(&self.placement_pipeline);
+        pass.set_pipeline(&self.kernels.placement_pipeline);
         pass.set_bind_group(0, &draw.records, &[draw.offset]);
         pass.set_bind_group(1, &draw.source.binding, &[]);
         pass.set_bind_group(2, &draw.target, &[]);
@@ -455,7 +422,7 @@ impl PixelTransform {
         draws: &[BatchDraw<'_>],
     ) {
         let target = self.display_target.get(level.clone(), || {
-            crate::bindings::group(device, "transform display level", &self.display_layout, [
+            crate::bindings::group(device, "transform display level", &self.kernels.display_layout, [
                 wgpu::BindingResource::TextureView(level),
             ])
         });
@@ -463,11 +430,11 @@ impl PixelTransform {
             label: Some("transform into display level"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(self.display.as_ref().expect("color transform"));
+        pass.set_pipeline(self.kernels.display.as_ref().expect("color transform"));
         pass.set_bind_group(2, &target, &[]);
         let texels = 16 / side;
         for draw in draws {
-            pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[offset + draw.job as u32 * self.stride]);
+            pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[offset + draw.job as u32 * self.kernels.stride]);
             pass.set_bind_group(1, &draw.source.binding, &[]);
             let [_, _, w, h] = draw.scissor;
             pass.dispatch_workgroups(w.div_ceil(texels), h.div_ceil(texels), 1);

@@ -559,3 +559,5 @@ common-screen-proof-white = Với độ sáng màn hình hiện tại, các sắ
 native-highlight-clipped-colors = Đánh dấu các màu này
 native-screen-details = Chi tiết màn hình
 native-color-inspection-hdr-help = RGB tuyến tính của tài liệu và độ chói Y. Đường đứt nét: màu trắng tham chiếu (0 EV). Giá trị bằng không và giá trị âm được đếm riêng. Bao gồm giấy hiển thị; bỏ qua pixel trong suốt và các lớp phủ giao diện.
+common-failure-details = Chi tiết lỗi
+common-copy-failure-details = Sao chép chi tiết lỗi

@@ -36,9 +36,10 @@ impl Thumbnails {
 impl WgpuRasterizer {
     pub fn ui_readback_ready(&self) -> bool {
         if let Some(startup) = &self.startup {
-            startup.compiler.pipeline(&self.pipelines.export, startup::VALIDATION);
+            let pipeline = self.ui_preview_pipeline.as_ref().unwrap_or(&self.pipelines.export);
+            startup.compiler.pipeline(pipeline, startup::VALIDATION);
             startup.compiler.start();
-            return self.pipelines.export.ready();
+            return pipeline.ready();
         }
         true
     }
@@ -68,7 +69,18 @@ impl WgpuRasterizer {
             ));
         }
         self.ui_preview_space = space;
-        self.ui_preview_pipeline = None;
+        self.ui_preview_pipeline = (space != layer_core::color::RgbSpace::Srgb).then(|| {
+            let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("managed UI image conversion"),
+                source: wgpu::ShaderSource::Wgsl(format!("{}\n{}",
+                    view_color::shader(self.device.working_space(), space), include_str!("export.wgsl")).into()),
+            });
+            let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("managed UI image layout"),
+                bind_group_layouts: &[Some(&self.texture_layout)], immediate_size: 0,
+            });
+            fullscreen_pipeline(&self.device, &layout, &shader, "fragment_main", None, EXPORT_FORMAT, "managed UI image")
+        });
         self.thumbnails = Thumbnails::new();
         Ok(())
     }
@@ -193,40 +205,7 @@ impl WgpuRasterizer {
         let pipeline = if self.ui_preview_space == layer_core::color::RgbSpace::Srgb {
             &*self.pipelines.export
         } else {
-            self.ui_preview_pipeline.get_or_insert_with(|| {
-                let shader = self
-                    .device
-                    .create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("managed UI image conversion"),
-                        source: wgpu::ShaderSource::Wgsl(
-                            format!(
-                                "{}\n{}",
-                                view_color::shader(
-                                    self.device.working_space(),
-                                    self.ui_preview_space
-                                ),
-                                include_str!("export.wgsl")
-                            )
-                            .into(),
-                        ),
-                    });
-                let layout = self
-                    .device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("managed UI image layout"),
-                        bind_group_layouts: &[Some(&self.texture_layout)],
-                        immediate_size: 0,
-                    });
-                fullscreen_pipeline(
-                    &self.device,
-                    &layout,
-                    &shader,
-                    "fragment_main",
-                    None,
-                    EXPORT_FORMAT,
-                    "managed UI image",
-                )
-            })
+            self.ui_preview_pipeline.as_ref().unwrap()
         };
         target.encode(&mut encoder, pipeline, source);
         self.uploads.finish(&encoder);
@@ -321,7 +300,7 @@ struct PreviewPipeline {
     records: wgpu::BindGroupLayout,
     write_bounds: wgpu::BindGroupLayout,
     read_bounds: wgpu::BindGroupLayout,
-    draw: wgpu::RenderPipeline,
+    draw: Deferred<wgpu::RenderPipeline>,
     prepared: std::collections::VecDeque<PreparedPreview>,
     capture: artwork::Capture,
     generators: Option<scene::Scene>,
@@ -524,6 +503,12 @@ impl PreviewPipeline {
     fn prepare(&mut self, r: &mut WgpuRasterizer, target: ThumbnailTarget,
         encoder: &mut crate::submission::CommandEncoder, mut limit: usize,
     ) -> Result<bool, GpuRasterError> {
+        if let Some(startup) = &r.startup {
+            let ready = startup.compiler.require([&self.draw], startup::VALIDATION)
+                & startup.compiler.require([&self.bounds.measure], startup::VALIDATION);
+            startup.compiler.start();
+            if !ready { return Ok(false); }
+        }
         let revision = (r.artwork_revision, r.selection_paint_revision);
         let rendition = r.ui_rendition_parameters();
         self.prepared.retain(|p| p.revision == revision && p.rendition == rendition
@@ -662,7 +647,7 @@ fn object_grid(extent: [u32; 2]) -> display_mips::Plan {
 pub(super) struct BoundsPipeline {
     pub records: wgpu::BindGroupLayout,
     pub write: wgpu::BindGroupLayout,
-    pub measure: wgpu::ComputePipeline,
+    pub measure: Deferred<wgpu::ComputePipeline>,
     empty_selection: wgpu::Buffer,
     sampler: wgpu::Sampler,
 }
@@ -695,10 +680,7 @@ impl BoundsPipeline {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("content bounds reduction"), bind_group_layouts: &[Some(&write), Some(&records)], immediate_size: 0,
         });
-        let measure = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("content bounds reduction"), layout: Some(&layout), module: &shader,
-            entry_point: Some("measure"), compilation_options: Default::default(), cache: None,
-        });
+        let measure = Deferred::compute_module(device, "content bounds reduction", &layout, &shader, "measure");
         let empty_selection = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("bounds without selection"), contents: &[0; 48], usage: wgpu::BufferUsages::STORAGE,
         });

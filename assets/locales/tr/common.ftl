@@ -559,3 +559,5 @@ common-screen-proof-white = Geçerli ekran parlaklığında en açık tonlar ayn
 native-highlight-clipped-colors = Bu renkleri vurgula
 native-screen-details = Ekran ayrıntıları
 native-color-inspection-hdr-help = Doğrusal belge RGB'si ve parlaklık Y. Kesikli çizgi: referans beyaz (0 EV). Sıfır ve negatif değerler ayrı sayılır. Görünür kâğıt dâhildir; saydam pikseller ve ekran kaplamaları hariçtir.
+common-failure-details = Hata ayrıntıları
+common-copy-failure-details = Hata ayrıntılarını kopyala

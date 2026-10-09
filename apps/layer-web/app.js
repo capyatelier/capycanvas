@@ -1,5 +1,5 @@
 import { brushSizeGrid } from "./brush-sizes.js";
-import init, { WebApp, WebGpu, configure_raster_worker, automatic_tab_names } from "./pkg/layer_web.js";
+import init, { WebApp, WebGpu, configure_raster_worker, configure_gpu_diagnostics, automatic_tab_names } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
 import { createPaintPairIcon } from './color-controls.js';
 import { configureColorEditor, refreshColorEditors } from './color-editor.js';
@@ -9,6 +9,7 @@ import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
 import { createCommandBar } from "./command-bar.js";
 import { showGpuNotice } from "./gpu.js";
+import { createGpuDiagnostics, gpuErrorText, gpuReportDetails, suspendGpuForReport } from './gpu-diagnostics.js';
 import { createCustomization } from "./customization.js";
 import { createCanvasBar } from "./canvas-bar.js";
 import { createNotice } from "./notice.js";
@@ -80,6 +81,8 @@ installTooltips();
 installPenScrolling();
 let startupNotice;
 let firstCanvasRendered = false;
+const gpuDiagnostics=createGpuDiagnostics();
+let wasmMemory;
 let servicingRequests = false;
 const settingsKey = "layer.preferences.v1";
 let workspaceManager;
@@ -1781,11 +1784,13 @@ try {
   setWorkspaceWake(() => workspaceManager?.wake());
   const [wasmModule] = await Promise.all([modulePromise, loadIcons()]);
   workspaceStore.initialize(wasmModule);
-  await init({module_or_path: wasmModule});
+  const wasmInstance=await init({module_or_path: wasmModule});
+  wasmMemory=wasmInstance.memory;
+  configure_gpu_diagnostics(event=>gpuDiagnostics.record(event));
   performance.mark("capy.startup.wasm");
   // Let the browser start the worker while the main thread builds controls.
   await new Promise(resolve => setTimeout(resolve, 0));
-  const fileWorker = createRasterWorker(),documentStorage=createDocumentStorage();
+  const fileWorker = createRasterWorker(event=>gpuDiagnostics.record(event)),documentStorage=createDocumentStorage();
   const rasterWorker = async request=>{
     try{return await(request.operation.startsWith('tab-')?documentStorage(request):fileWorker(request));}
     finally{if(request.operation==='image-decode'||request.operation==='nearest-coordinates')wake();}
@@ -1918,10 +1923,17 @@ function stopGpu(error) {
   // Neither case may hold the new renderer’s compilation lane or stop it.
   compilerEpoch++;compilerScheduled=false;
   gpuReady=false;pending.length=0;
-  applyChange(app.suspend_gpu());
+  const report=gpuDiagnostics.capture(error,()=>({
+    ...app.gpu_diagnostics(),user_agent:navigator.userAgent,device_memory_gib:navigator.deviceMemory??null,
+    main_wasm_bytes:wasmMemory?.buffer.byteLength??null,
+    navigation:performance.getEntriesByType('navigation')[0]?.type??null,
+  }));
+  suspendGpuForReport(report,()=>applyChange(app.suspend_gpu()));
   if(startupNotice)startupNotice.hidden=true;
   const notice=$("gpu-notice");notice.hidden=false;
-  notice.replaceChildren(element("p","",String(error)),button(bootstrap.restart_canvas,()=>restartGpu()));
+  notice.replaceChildren(element("p","",report.recovery_error?bootstrap.canvas_recovery_failed:bootstrap.canvas_stopped),
+    element('p','',gpuErrorText(error)),button(bootstrap.restart_canvas,()=>restartGpu()),
+    gpuReportDetails({report,diagnostics:gpuDiagnostics,copy:bootstrap,element,button,clipboard:navigator.clipboard}));
   document.body.dataset.gpu="unavailable";
 }
 setInterval(()=>{if(gpuReady){const error=app.gpu_failure();if(error)stopGpu(error);}},1000);
@@ -1946,7 +1958,10 @@ async function resumeDocumentCanvas() {
     try{
       await app.await_document_backing();
       if(!documentGpuCurrent(owner))return;
-      gpuReady=app.resume_document_gpu();
+      const gpu=await gpuOperation(()=>app.resume_document_gpu());
+      if(!documentGpuCurrent(owner)){gpu?.free();return;}
+      if(gpu)app.attach_gpu(gpu);
+      gpuReady=app.gpu_ready();
     }catch(error){if(documentGpuCurrent(owner))stopGpu(error);return;}
   }
   if(!gpuReady)await startGpu();

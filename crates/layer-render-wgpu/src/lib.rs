@@ -915,7 +915,7 @@ pub struct WgpuRasterizer {
     thumbnails: thumbnails::Thumbnails,
     ui_preview_space: layer_core::color::RgbSpace,
     ui_rendition: Option<layer_core::color::hdr::SdrRendition>,
-    ui_preview_pipeline: Option<wgpu::RenderPipeline>,
+    ui_preview_pipeline: Option<Deferred<wgpu::RenderPipeline>>,
     display_pipelines: Option<display_mips::Pipelines>,
     scale_display: Option<scene::scale::Cache>,
     display_backup: Option<scene::scale::DisplayBackup>,
@@ -3311,7 +3311,8 @@ impl CanvasRenderer for WgpuRasterizer {
         self.device.limits().max_texture_dimension_2d
     }
     fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>) -> bool {
-        self.raster_restore_ready(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet)
+        self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
+            && self.raster_restore_ready(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet)
     }
     fn has_pending_submission(&self) -> bool { self.settling.is_some() }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
@@ -5786,18 +5787,9 @@ fn fullscreen_pipeline(
     blend: Option<wgpu::BlendState>,
     format: wgpu::TextureFormat,
     label: &'static str,
-) -> wgpu::RenderPipeline {
-    fullscreen_pipeline_recipe(
-        CompileMode::Immediate,
-        device,
-        layout,
-        shader,
-        fragment_entry,
-        blend,
-        format,
-        label,
-    )
-    .immediate()
+) -> Deferred<wgpu::RenderPipeline> {
+    let (device, layout, shader) = (device.for_recipe(), layout.clone(), shader.clone());
+    Deferred::pipeline(move |mode| fullscreen_pipeline_recipe(mode, &device, &layout, &shader, fragment_entry, blend, format, label))
 }
 
 fn style_bytes(style: &StyleGpu) -> &[u8] {

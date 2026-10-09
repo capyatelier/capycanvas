@@ -35,9 +35,9 @@ impl WebApp {
     pub fn session_record_destination(&mut self,location:JsValue,fingerprint:JsValue)->Result<(),JsValue> {
         self.session.record_destination_fingerprint(&serde_wasm_bindgen::from_value(location).map_err(js)?,serde_wasm_bindgen::from_value(fingerprint).map_err(js)?).map_err(js)
     }
-    pub fn resume_document_gpu(&mut self) -> Result<bool, JsValue> {
+    pub fn resume_document_gpu(&mut self) -> Result<js_sys::Promise, JsValue> {
         let Some(context) = self.document_gpu.as_ref() else {
-            return Ok(false);
+            return Ok(js_sys::Promise::resolve(&JsValue::NULL));
         };
         let surface = self.surface.as_ref().ok_or_else(|| js("Canvas surface unavailable"))?;
         if surface.lost.lock().unwrap().is_some() {
@@ -53,9 +53,10 @@ impl WebApp {
         raster_worker::install(&mut renderer);
         let mut surface = self.surface.take().unwrap();
         surface.blank_presented = false;
-        self.attach_gpu(WebGpu { renderer, surface })?;
         self.document_gpu = None;
-        Ok(true)
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            Ok(WebGpu { renderer, surface }.prepare().await?.into())
+        }))
     }
     pub fn recovery_document_for(&self, id: u64) -> Result<JsValue, JsValue> {
         serialize(&self.document_session(id)?.recovery_document())

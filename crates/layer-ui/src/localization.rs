@@ -101,6 +101,8 @@ pub struct BootstrapView {
     pub preparing_document: Arc<str>,
     pub loading_filters: Arc<str>,
     pub painting_unavailable_save: Arc<str>,
+    pub failure_details: Arc<str>,
+    pub copy_failure_details: Arc<str>,
 }
 
 pub fn bootstrap_view(l: &Localizer) -> BootstrapView {
@@ -137,6 +139,8 @@ pub fn bootstrap_view(l: &Localizer) -> BootstrapView {
         preparing_document: l.text(MessageId::COMMON_PREPARING_DOCUMENT),
         loading_filters: l.text(MessageId::COMMON_LOADING_FILTERS),
         painting_unavailable_save: l.text(MessageId::COMMON_PAINTING_UNAVAILABLE_SAVE),
+        failure_details: l.text(MessageId::COMMON_FAILURE_DETAILS),
+        copy_failure_details: l.text(MessageId::COMMON_COPY_FAILURE_DETAILS),
     }
 }
 

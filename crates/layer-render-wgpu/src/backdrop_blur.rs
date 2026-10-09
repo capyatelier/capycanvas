@@ -99,10 +99,10 @@ pub(crate) struct BackdropBlur {
     format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    down: wgpu::RenderPipeline,
-    up: wgpu::RenderPipeline,
-    fill: wgpu::RenderPipeline,
-    region: wgpu::RenderPipeline,
+    down: crate::Deferred<wgpu::RenderPipeline>,
+    up: crate::Deferred<wgpu::RenderPipeline>,
+    fill: crate::Deferred<wgpu::RenderPipeline>,
+    region: crate::Deferred<wgpu::RenderPipeline>,
     uniforms: wgpu::Buffer,
     cache: Option<(wgpu::Texture, wgpu::BindGroup)>,
     levels: Vec<(wgpu::Texture, wgpu::BindGroup)>,
@@ -125,7 +125,8 @@ pub(crate) struct BackdropBlur {
 }
 
 impl BackdropBlur {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub fn pipelines(&self) -> [&crate::Deferred<wgpu::RenderPipeline>; 4] { [&self.down, &self.up, &self.fill, &self.region] }
+    pub fn new(device: &crate::PipelineDevice, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("backdrop blur"),
             source: wgpu::ShaderSource::Wgsl(include_str!("backdrop_blur.wgsl").into()),
@@ -150,32 +151,9 @@ impl BackdropBlur {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = |label, vertex, fragment, buffers: &[Option<wgpu::VertexBufferLayout>], blend| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(vertex),
-                    compilation_options: Default::default(),
-                    buffers,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fragment),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+        let pipeline = |label, vertex, fragment, buffers: &[Option<wgpu::VertexBufferLayout<'_>>], blend| {
+            crate::present::surface_pipeline(device, label, &pipeline_layout, &shader, [vertex, fragment],
+                buffers.first().cloned().flatten(), format, blend)
         };
         let down = pipeline("backdrop blur down", "fullscreen", "down", &[], None);
         let up = pipeline("backdrop blur up", "fullscreen", "up", &[], None);

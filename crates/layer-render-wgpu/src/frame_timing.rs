@@ -37,10 +37,10 @@ pub struct GpuFrameTimingStats {
 // is part of the measured span, and must be calibrated by the caller.
 enum TimestampMarker {
     Encoder,
-    Pass { pipeline: wgpu::ComputePipeline, bind_group: wgpu::BindGroup },
+    Pass { pipeline: crate::Deferred<wgpu::ComputePipeline>, bind_group: wgpu::BindGroup },
 }
 impl TimestampMarker {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, _invalid: Arc<AtomicU64>) -> Self {
         if device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
             return Self::Encoder;
         }
@@ -48,24 +48,37 @@ impl TimestampMarker {
             label: Some("timestamp marker"),
             source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var<storage, read_write> marker: u32; @compute @workgroup_size(1) fn main() { marker = marker + 1u; }".into()),
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("timestamp marker"),
-            layout: None,
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
+        let layout = crate::bindings::layout(device, "timestamp marker", &[crate::bindings::buffer(
+            0, wgpu::ShaderStages::COMPUTE, wgpu::BufferBindingType::Storage { read_only: false }, false,
+            std::num::NonZeroU64::new(4),
+        )]);
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("timestamp marker"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
         });
+        let pipeline = crate::Deferred::compute_module(&crate::PipelineDevice::from(device.clone()),
+            "timestamp marker", &pipeline_layout, &module, "main");
+        #[cfg(target_arch = "wasm32")]
+        {
+            let prepare = pipeline.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if prepare.prepare().await.is_err() { _invalid.fetch_add(1, Ordering::Relaxed); }
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        pipeline.compile();
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("timestamp marker"),
             size: 4,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let bind_group = crate::bindings::group(device, "timestamp marker", &pipeline.get_bind_group_layout(0), [
+        let bind_group = crate::bindings::group(device, "timestamp marker", &layout, [
             buffer.as_entire_binding(),
         ]);
         Self::Pass { pipeline, bind_group }
+    }
+    fn ready(&self) -> bool {
+        match self { Self::Encoder => true, Self::Pass { pipeline, .. } => pipeline.ready() }
     }
     pub fn write(&self, encoder: &mut wgpu::CommandEncoder, query: &wgpu::QuerySet, index: u32) {
         let Self::Pass { pipeline, bind_group } = self else {
@@ -141,13 +154,15 @@ impl GpuFrameTimer {
         } else {
             Vec::new()
         };
+        let invalid = Arc::default();
+        let marker = (period > 0.).then(|| TimestampMarker::new(device, Arc::clone(&invalid)));
         Self {
             slots,
             active: None,
             period,
-            marker: (period > 0.).then(|| TimestampMarker::new(device)),
+            marker,
             ready: Arc::new(Mutex::new(VecDeque::with_capacity(256))),
-            invalid: Arc::default(),
+            invalid,
             omitted: Arc::default(),
             requested: 0,
             skipped: 0,
@@ -181,7 +196,7 @@ impl GpuFrameTimer {
 
     fn reserve(&mut self, frame: u64) -> bool {
         self.requested += 1;
-        let slot = if self.active.is_none() {
+        let slot = if self.active.is_none() && self.marker.as_ref().is_some_and(TimestampMarker::ready) {
             self.slots
                 .iter()
                 .enumerate()

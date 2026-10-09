@@ -1,8 +1,11 @@
 import {readPackage,authoredIdentity,packageResourceIdentity} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
+import {tracePipelineCalls} from './pipeline-trace.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 
-export async function checkDrawingTabRecovery({call,evaluate,settle}) {
+export async function checkDrawingTabRecovery({cdp,call,evaluate,settle}) {
+  const trace=await tracePipelineCalls(cdp);
+  try {
   const wait=async condition=>{
     const deadline=Date.now()+250000;
     for(;;)try{return await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+240000;function check(){if(${condition})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status')?.textContent));else setTimeout(check,30);}check();})`);}
@@ -22,6 +25,49 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
   const snapshot=()=>evaluate(`(()=>{const state=layerApp.state(),stamp=layerApp.app.session_stamp_for(layerApp.app.document_tabs(0).selected);return JSON.parse(JSON.stringify({layers:state.layers.map(({label,selected,editing,mask_selected})=>({label,selected,editing,mask_selected})),camera:stamp.state.camera,modified:state.document_file.modified,location:state.document_file.location?.name??null,checkpoint:stamp.checkpoint,selection:state.layer_tools.has_selection,undo:state.commands.find(command=>command.id==='undo')?.enabled,redo:state.commands.find(command=>command.id==='redo')?.enabled},(_,v)=>typeof v==='bigint'?Number(v):v));})()`);
   const leaveWarning=()=>evaluate(`(()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;})()`);
   const restart=async()=>{await evaluate('layerApp.documents.autosave()');const old=await evaluate('performance.timeOrigin');await call('Page.reload');await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()`);await ready();};
+  await ready();
+  const native=await create();await invoke('pencil');await ready();
+  const nativePoint=(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
+  const nativePixel=async()=>{
+    const click=label=>evaluate(`(()=>{const button=[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent===${JSON.stringify(label)});if(!button)throw Error(${JSON.stringify(label)});button.click()})()`);
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);await click('Preview Output');
+    await wait(`!!document.querySelector('canvas[aria-label="Output preview"]')&&![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Preview Output').disabled`);
+    const pixel=await evaluate(`(()=>{const c=document.querySelector('canvas[aria-label="Output preview"]'),tab=layerApp.state().tabs.find(tab=>tab.active);return Array.from(c.getContext('2d').getImageData(Math.floor(48*c.width/tab.width),Math.floor(48*c.height/tab.height),1,1).data)})()`);
+    await click('Cancel');await settle();return pixel;
+  };
+  const nativePixelsMatch=async(predicate,message)=>{
+    const deadline=Date.now()+30000;let pixel;
+    do{pixel=await nativePixel();if(predicate(pixel))return pixel;await new Promise(resolve=>setTimeout(resolve,30))}while(Date.now()<deadline);
+    assert.fail(`${message}: ${pixel}; ${await evaluate('JSON.stringify({revision:String(layerApp.state().document_file.revision),undo:layerApp.state().commands.find(c=>c.id==="undo").enabled,redo:layerApp.state().commands.find(c=>c.id==="redo").enabled})')}`);
+  };
+  const nativeBlank=await nativePixel();
+  for(const [type,x] of [['mousePressed',24],['mouseMoved',48],['mouseReleased',72]]){
+    await call('Input.dispatchMouseEvent',{type,...await nativePoint(x,48),button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,pointerType:'pen',force:type==='mouseReleased'?0:0.7});await settle();
+  }
+  await ready();const nativePaint=await nativePixelsMatch(pixel=>pixel[3]>0&&pixel.some((value,index)=>Math.abs(value-nativeBlank[index])>10),'Owned native pen stroke deposits pixels');
+  assert.equal(await evaluate('layerApp.state().layers.some(layer=>layer.object)'),false,'Cold restore fixture contains only native paint');
+  const decoder=await call('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{
+    const original=GPUDevice.prototype.createRenderPipelineAsync,releases=[];
+    window.nativeRestoreHold={held:false,released:false,release(){this.released=true;for(const release of releases.splice(0))release()},restore(){GPUDevice.prototype.createRenderPipelineAsync=original}};
+    GPUDevice.prototype.createRenderPipelineAsync=function(descriptor){
+      const result=original.call(this,descriptor);
+      if(descriptor.label!=='decode source tile')return result;
+      return result.then(pipeline=>nativeRestoreHold.released?pipeline:new Promise(resolve=>{nativeRestoreHold.held=true;releases.push(()=>resolve(pipeline))}));
+    };
+  })()`});
+  try {
+    await evaluate('layerApp.documents.autosave()');const old=await evaluate('performance.timeOrigin');await call('Page.reload',{ignoreCache:true});
+    await wait(`performance.timeOrigin!==${old}&&window.nativeRestoreHold?.held&&window.layerApp`);
+    assert.equal(await evaluate('layerApp.app.brush_ready()'),false,'Native paint restoration waits for its actual decoder pipeline');
+    await evaluate('nativeRestoreHold.release();nativeRestoreHold.restore()');
+    await ready();assert.equal((await tabs()).selected,native,'Cold native paint restore preserves the drawing');
+    await nativePixelsMatch(pixel=>pixel.every((value,index)=>Math.abs(value-nativePaint[index])<=2),'Cold restore preserves native pixels');
+    await invoke('undo');await ready();await nativePixelsMatch(pixel=>pixel.every((value,index)=>Math.abs(value-nativeBlank[index])<=2),'Undo removes the restored native stroke');
+    await invoke('redo');await ready();await nativePixelsMatch(pixel=>pixel.every((value,index)=>Math.abs(value-nativePaint[index])<=2),'Redo restores the same native samples');
+  } finally {await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:decoder.identifier});await evaluate('window.nativeRestoreHold?.release();window.nativeRestoreHold?.restore()');}
+  await evaluate(`layerApp.documents.close(BigInt(${native}));undefined`);await wait(`!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes')`);
+  await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes').click()`);await ready();
+  console.log('PASS cold native-only paint restore: held genuine decoder readiness, pixels and Undo/Redo');
   const origin=await evaluate('location.origin'),persistence=setting=>call('Browser.setPermission',{permission:{name:'persistent-storage'},setting,origin},null);
   const counter=await call('Page.addScriptToEvaluateOnNewDocument',{source:'window.persistRequests=0;{const persist=StorageManager.prototype.persist;StorageManager.prototype.persist=function(){persistRequests++;return persist.call(this);};}'});
   try {
@@ -198,7 +244,9 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
     assert.equal(await evaluate('layerApp.state().layers.length===liveStartupLayers&&layerApp.state().document_file.modified'),true,'Startup edits remain present and unsaved');
     assert.deepEqual(resumed.tabs.filter(tab=>[third,second].includes(tab.id)).map(tab=>tab.id),[third,second],'Restored drawings retain their original relative order');
   } finally {await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:injection.identifier});}
-  console.log('PASS seamless restart in both themes: clean/dirty tabs, order, active drawing, camera, undo/redo, save checkpoint, cancelled close and durable discard');
+  await trace.check('Fresh renderer resume and drawing recovery');
+  console.log('PASS seamless restart in both themes: clean/dirty tabs, order, active drawing, camera, undo/redo, save checkpoint, cancelled close and durable discard; zero immediate page/worker pipelines');
+  } finally {await trace.close().catch(error=>console.error('Recovery pipeline trace cleanup:',error));}
 }
 
 export async function checkDrawingTabs({call,evaluate,settle}) {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
 
-const DOCUMENT: u8 = 2;
+pub(super) const DOCUMENT: u8 = 2;
 pub(super) const BRUSH: u8 = 3;
 pub(super) const VALIDATION: u8 = 4;
 pub(super) const OTHER: u8 = 5;
@@ -94,12 +94,21 @@ impl ShaderDocument {
     }
 }
 #[derive(Default)]
-struct Requirements {
-    render: Vec<Deferred<wgpu::RenderPipeline>>,
-    compute: Vec<Deferred<wgpu::ComputePipeline>>,
+pub(super) struct Requirements {
+    pub render: Vec<Deferred<wgpu::RenderPipeline>>,
+    pub compute: Vec<Deferred<wgpu::ComputePipeline>>,
 }
 impl Requirements {
-    fn ready(&self) -> bool {
+    pub async fn prepare(&self) -> Result<(), String> {
+        for pipelines in self.render.chunks(4) {
+            Deferred::prepare_all(pipelines.iter()).await?;
+        }
+        for pipelines in self.compute.chunks(4) {
+            Deferred::prepare_all(pipelines.iter()).await?;
+        }
+        Ok(())
+    }
+    pub fn ready(&self) -> bool {
         self.render.iter().all(Deferred::ready) && self.compute.iter().all(Deferred::ready)
     }
     fn enqueue(&self, compiler: &Compiler, priority: u8) {
@@ -182,8 +191,8 @@ pub(super) struct Startup {
     document_key: Option<ShaderDocument>,
     brush: Option<ShaderBrushKey>,
     transform: bool,
-    document: Requirements,
-    current: Requirements,
+    pub(super) document: Requirements,
+    pub(super) current: Requirements,
     effects: Option<mpsc::Receiver<Result<effects::Effects, String>>>,
     effects_ready: bool,
     pub(super) host_catalog_pending: bool,
@@ -338,13 +347,11 @@ impl WgpuRasterizer {
             required.compute.push(self.pipelines.watercolor_compute.1.clone());
             required.compute.extend(self.transforms.as_ref().unwrap().placement_pipelines().into_iter().cloned());
             if self.native_edit.is_some() {
-                required.compute.push(self.scene_pipelines.scale.reduce.clone());
-                required.compute.push(self.scene_pipelines.scale.reduce_phased.clone());
-                required.compute.push(self.scene_pipelines.scale.reduce_pair.clone());
-                required.compute.push(self.scene_pipelines.scale.compose.clone());
-                required.compute.push(self.scene_pipelines.resample.area.clone());
+                let mip = self.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
+                required.compute.extend([mip.reduce.clone(), mip.fused_reduce.clone()]);
+                required.compute.extend(self.scene_pipelines.scale_pipelines().into_iter().cloned());
             }
-            if shader.key.source {
+            if self.native_edit.is_some() || shader.key.source {
                 required.render.push(self.scene_pipelines.source.pipeline.clone());
             }
             if shader.key.objects {
@@ -447,9 +454,6 @@ impl WgpuRasterizer {
         // Live transforms do not change document revision or brush settings.
         // They still need their own shaders before an interactive frame runs.
         if transform {
-            let mip = self.display_pipelines
-                .get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
-            current.compute.extend([mip.reduce.clone(), mip.fused_reduce.clone()]);
             current.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
             current.compute.extend(self.transforms.as_ref().unwrap().display_pipelines().into_iter().cloned());
             current.render.extend(self.scene_pipelines.resample.mesh.iter().cloned());
@@ -765,6 +769,7 @@ mod gpu_tests {
         renderer.prepare_startup(&document, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("Native brush compilation timed out"));
+        assert!(renderer.scene_pipelines.source.pipeline.ready(), "native paint restore and Undo require decoded tiles before painting is ready");
         let mut recolored = brush.clone();
         recolored.color_rgba_linear = [8., 0.25, 0.5, 1.];
         assert!(!renderer.startup_needs_update(&document, &recolored, false));

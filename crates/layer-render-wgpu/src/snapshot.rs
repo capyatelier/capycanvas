@@ -93,6 +93,7 @@ pub struct SnapshotGpu {
     #[cfg(target_arch = "wasm32")]
     analysis_backing_waiter: Option<crate::effect_analysis::BackingWaiter>,
     scene_pipelines: scene::Pipelines,
+    transforms: Arc<paint_transform::Recipes>,
     adapter: wgpu::Adapter,
     device: PipelineDevice,
     queue: wgpu::Queue,
@@ -114,6 +115,7 @@ impl WgpuRasterizer {
             #[cfg(target_arch = "wasm32")]
             analysis_backing_waiter: self.analysis_backing_waiter.clone(),
             scene_pipelines: self.scene_pipelines.clone(),
+            transforms: self.transforms.as_ref().unwrap().recipes(),
             #[cfg(target_arch = "wasm32")]
             encoder: self.browser_raster_encoder(),
             #[cfg(target_arch = "wasm32")]
@@ -185,6 +187,8 @@ pub struct SnapshotRenderer {
     local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
     gpu_local_tone: Option<Arc<crate::local_tone::GpuToneGuide>>,
     renderer: WgpuRasterizer,
+    pipelines_ready: bool,
+    scene_pipelines_ready: bool,
     backing: HashMap<SourceTarget, Arc<RasterData>>,
     resident: HashMap<SourceTarget, RasterData>,
     extent: [u32; 2],
@@ -198,6 +202,67 @@ pub struct SnapshotRenderer {
     control: CaptureControl,
 }
 impl SnapshotRenderer {
+    async fn prepare_pipelines(&mut self) -> Result<(), GpuRasterError> {
+        if self.pipelines_ready { return Ok(()); }
+        self.control.check()?;
+        let r = &mut self.renderer;
+        let mut required = startup::Requirements::default();
+        required.render.push(r.scene_pipelines.source.pipeline.clone());
+        required.render.push(r.layer_masks.initialize.clone());
+        required.compute.extend(r.selection_clip.pipelines().into_iter().cloned());
+        if let Some(plan) = &self.raw_plan {
+            required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines().into_iter().cloned());
+            required.compute.extend(r.native_edit.as_ref().unwrap().required_pipelines(r.document_color().depth).cloned());
+            if plan.geometry.placement.mesh.is_some() {
+                required.render.push(r.transforms.as_ref().unwrap().mesh_pipelines()[3].clone());
+            }
+        }
+        required.prepare().await.map_err(GpuRasterError::Effect)?;
+        self.control.check()?;
+        self.pipelines_ready = true;
+        Ok(())
+    }
+
+    async fn prepare_scene_pipelines(&mut self) -> Result<(), GpuRasterError> {
+        self.prepare_pipelines().await?;
+        if self.scene_pipelines_ready { return Ok(()); }
+        let r = &mut self.renderer;
+        let view = self.scene.view().with_scope(&self.scope).with_offset(self.offset);
+        let mut required = startup::Requirements::default();
+        required.render.extend(r.scene_pipelines.pipeline.iter().cloned());
+        required.compute.push(r.scene_pipelines.constant.2.clone());
+        required.compute.extend(r.scene_pipelines.scale_pipelines().into_iter().cloned());
+        required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines().into_iter().cloned());
+        if r.device.portable_blend() { required.compute.extend(r.portable_blend.pipelines.iter().cloned()); }
+        if self.backing.values().any(|data| data.watercolor.is_some()) {
+            required.compute.push(r.pipelines.watercolor_compute.1.clone());
+        }
+        if view.order().iter().any(|&h| view.object_layer(h).is_some()) {
+            required.compute.extend(r.scene_pipelines.objects.pipelines().into_iter().cloned());
+        }
+        let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
+        let prepared = (|| {
+            if !matches!(self.scope, SceneScope::Raw(_)) {
+                for (layers, execution) in scene::startup_effect_chains(view) {
+                    scene.effects.prepare(r, view, &layers, execution, self.time, 0, self.blend_space)?;
+                }
+            }
+            Ok::<_, GpuRasterError>(())
+        })();
+        #[cfg(target_arch = "wasm32")]
+        let compiled = scene.effects.compile_async();
+        #[cfg(not(target_arch = "wasm32"))]
+        scene.effects.compile();
+        r.scene = Some(scene);
+        prepared?;
+        #[cfg(target_arch = "wasm32")]
+        compiled.await.map_err(GpuRasterError::Effect)?;
+        required.prepare().await.map_err(GpuRasterError::Effect)?;
+        self.control.check()?;
+        self.scene_pipelines_ready = true;
+        Ok(())
+    }
+
     fn construct(scene: Arc<SceneSnapshot>, scope: SceneScope, control: CaptureControl, gpu: &SnapshotGpu) -> Result<Self, GpuRasterError> {
         control.check()?;
         let time = scene.context.elapsed;
@@ -219,6 +284,7 @@ impl SnapshotRenderer {
         let mut renderer = WgpuRasterizer::native_capture_on_gpu(gpu.adapter.clone(), gpu.device.clone(), gpu.queue.clone(), color)?;
         if gpu.device.working_space() == color.space && gpu.device.hdr() == color.depth.is_float() {
             renderer.scene_pipelines = gpu.scene_pipelines.clone(); renderer.scene = None;
+            renderer.transforms = Some(paint_transform::PaintTransforms::from_recipes(&gpu.transforms));
         }
         #[cfg(target_arch = "wasm32")]
         if let Some(encoder) = gpu.encoder.clone() { renderer.set_browser_raster_encoder(encoder); }
@@ -244,7 +310,7 @@ impl SnapshotRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         let output_metadata = layer_color::photo::DeliveryMetadata {resolution: composition.resolution, photo: (*scene.artwork.metadata).clone(), policy: Default::default()};
         Ok(Self {scene, scope, offset: Default::default(), raw_plan: None, analysis_ready: Default::default(), sdr_rendition, local_tone: None, gpu_local_tone: None,
-            renderer, backing, resident: HashMap::new(), extent,
+            renderer, pipelines_ready: false, scene_pipelines_ready: false, backing, resident: HashMap::new(), extent,
             #[cfg(not(target_arch = "wasm32"))] output_extent: extent,
             #[cfg(not(target_arch = "wasm32"))] output_metadata,
             blend_space, time, planned_pixel_bytes: PLANNED_PIXEL_BYTES, control})
@@ -425,6 +491,7 @@ impl SnapshotRenderer {
             (SceneScope::Raw(target),scene::Output::Artwork(None))=>scene::Output::Source(*target),
             (SceneScope::RawObjects(handle),scene::Output::Artwork(None))=>scene::Output::Objects(*handle),_=>output,
         };
+        self.prepare_scene_pipelines().await?;
         let mut consume=Some(consume);
         self.with_region_gpu([x, y, width, height], reserved_bytes, |r, packet, region, encoder| {
             let (target, _) = create_color_target(&r.device, [width, height], "snapshot region");
@@ -440,6 +507,7 @@ impl SnapshotRenderer {
         &mut self, region: [u32; 4], reserved_bytes: u64,
         mut consume: impl FnMut(&mut WgpuRasterizer, FramePacket<'_>, PixelRect, &mut submission::CommandEncoder) -> Result<T, GpuRasterError>,
     ) -> Result<T, GpuRasterError> {
+        self.prepare_pipelines().await?;
         loop {
             let result={
                 let (r, packet, region, mut encoder)=self.prepare_region_gpu(region,reserved_bytes)?;
@@ -630,6 +698,7 @@ impl SnapshotRenderer {
         selection:Option<&Arc<layer_core::Selection>>,
         mut consume:impl FnMut(&mut WgpuRasterizer,&wgpu::TextureView,PixelRect,&mut submission::CommandEncoder)->Result<(),GpuRasterError>,
     )->Result<(),GpuRasterError> {
+        self.prepare_pipelines().await?;
         self.prepare_effect_analysis_async(output).await.map_err(GpuRasterError::Effect)?;
         let extent=self.extent;let control=self.control.clone();
         for y in (0..extent[1]).step_by(1024) {for x in (0..extent[0]).step_by(1024) {
@@ -808,6 +877,8 @@ impl SnapshotRenderer {
         [x, y, width, height]: [u32; 4],
     ) -> Result<SelectionCoverage, GpuRasterError> {
         self.check_cancelled()?;
+        Deferred::prepare_all(self.renderer.selection_clip.pipelines())
+            .await.map_err(GpuRasterError::Effect)?;
         let region = PixelRect::new(
             x,
             y,

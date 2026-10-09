@@ -159,6 +159,7 @@ struct Transaction {
 #[derive(Default)]
 pub(super) struct Operation {
     current: Option<Transaction>,
+    pub next_tool: Option<Box<UiAction>>,
     /// An open crop is a canvas operation too, so idle checks wait on it.
     pub crop: Option<super::crop::CropSession>,
     pub crop_options: super::crop::CropOptions,
@@ -289,6 +290,30 @@ fn source_frame(doc: &Document, target: OccurrenceHandle) -> Rect {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn accept_transform_for_tool(&mut self, action: &UiAction) -> Result<bool, String> {
+        if !super::held_actions::selects_tool(action) || self.interaction.applying_hold
+            || matches!(action, UiAction::Invoke { command: CommandId::ScaleRotate }
+                | UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::Transform } })
+            || !(self.operation.transforming() || self.objects.placing()) {
+            return Ok(false);
+        }
+        if let UiAction::Invoke { command } = action
+            && let Some(reason) = self.command_disabled_reason(*command) { return Err(reason); }
+        if let UiAction::SelectBrush { id } = action { super::preset(*id)?; }
+        if self.objects.placing() {
+            self.finish_object_placement(true)?;
+        } else if !self.content_bounds.baking() && !self.region_tools.applying_transform() {
+            self.finish_transform(true)?;
+        }
+        if self.operation.transforming() {
+            self.operation.next_tool = Some(Box::new(action.clone()));
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    pub(super) fn activate_transform_tool(&mut self, action: Option<Box<UiAction>>) -> Result<u32, String> {
+        action.map_or(Ok(0), |action| self.dispatch(*action).map(|change| change.regions))
+    }
     pub(super) fn transform_roots(&self) -> Vec<OccurrenceHandle> {
         let doc = self.engine.document();
         let roots = doc.layer_roots(self.selected_layers());
@@ -461,7 +486,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn finish_transform(&mut self, apply: bool) -> Result<(), String> {
         self.require_idle()?;
-        if !apply && self.cancel_content_bounds() { return Ok(()); }
+        if apply && self.content_bounds.baking() {
+            return Err(self.localization().text(MessageId::COMMANDS_APPLYING_THE_TRANSFORM).to_string());
+        }
         if self.cropping() {
             return self.finish_crop(apply);
         }
@@ -526,13 +553,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn apply_transform_selection(
         &mut self,
         pixels: std::sync::Arc<layer_core::SelectionPixels>,
-    ) -> Result<(), String> {
+    ) -> Result<u32, String> {
+        let next_tool = self.operation.next_tool.take();
         self.engine.commit_transform(Some(pixels)).map_err(error)?;
         self.cancel_transform()?;
-        Ok(())
+        self.activate_transform_tool(next_tool)
     }
     pub(super) fn cancel_transform(&mut self) -> Result<bool, String> {
-        if self.cancel_content_bounds() || self.cancel_conversion() { return Ok(true); }
+        self.operation.next_tool = None;
+        let cancelled = self.cancel_content_bounds() | self.cancel_conversion();
         if self.cropping() {
             self.finish_crop(false)?;
             return Ok(true);
@@ -546,7 +575,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.operation.nudging = None;
         let Some(transaction) = self.operation.current.take() else {
-            return Ok(false);
+            return Ok(cancelled);
         };
         if transaction.outline.is_some() {
             self.sync_selection_overlay();
@@ -590,7 +619,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn preview_transform(&mut self) -> Result<(), String> {
         let moves_only = self.localization().text(MessageId::COMMANDS_TRANSFORM_GROUPS_MOVE_ONLY);
-        let Some(t) = &mut self.operation.current else {
+        let Some(t) = &self.operation.current else {
             return Ok(());
         };
         let transform = ImageTransform {
@@ -599,9 +628,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             source_from_owner: None,
             source_base: None,
         };
-        if transform != t.transform && self.region_tools.applying_transform() {
-            self.region_tools.cancel();
+        if transform != t.transform {
+            self.operation.next_tool = None;
+            if self.region_tools.applying_transform() { self.region_tools.cancel(); }
+            if self.content_bounds.baking() { self.cancel_content_bounds(); }
         }
+        let t = self.operation.current.as_mut().unwrap();
         t.transform = transform;
         let moving = t.drag.is_some();
         t.moving = moving;

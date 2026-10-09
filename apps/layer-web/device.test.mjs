@@ -30,7 +30,7 @@ import {checkDeviceImagePlacement} from "./image-placement-device.test.mjs";
 import {checkCanvasBar} from "./canvas-bar-journey.test.mjs";
 import {checkNotices} from "./notice-journey.test.mjs";
 import {checkZoomReadout} from "./zoom-readout-journey.test.mjs";
-import {checkPipelineTakeover} from "./pipeline-takeover.test.mjs";
+import {checkPipelineReadiness} from "./pipeline-readiness.test.mjs";
 import {checkPhotoEdit} from "./photo-edit-journey.test.mjs";
 import {checkCanvasSize} from "./canvas-size-journey.test.mjs";
 import {checkCrop} from "./crop-journey.test.mjs";
@@ -117,7 +117,7 @@ try {
       await checkPenRendering({call,evaluate,settle});
       await checkPrediction({call,evaluate,settle});
     }, checkErrors],
-    [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({cdp,call,evaluate,settle}), checkErrors],
     [process.argv.includes("--drawing-tabs"), () => checkDrawingTabs({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--hdr-performance"), () => measureHdr({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--hdr"), () => checkHdr({call,evaluate,settle}), checkErrors],
@@ -166,7 +166,7 @@ try {
     [process.argv.includes("--image-placement"), () => checkDeviceImagePlacement({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle,device:true}), checkErrors],
     [(process.argv.includes("--zoom-readout") || process.argv.includes("--zoom-controls")), () => checkZoomReadout({call,evaluate,settle,device:true}), checkErrors],
-    [process.argv.includes("--pipeline-takeover"), () => checkPipelineTakeover({evaluate,settle}), checkErrors],
+    [process.argv.includes("--pipeline-readiness"), () => checkPipelineReadiness({cdp,call,evaluate,settle}), checkErrors],
     [process.argv.includes("--photo-edit"), () => checkPhotoEdit({call,evaluate,settle,device:true}), checkErrors],
     [process.argv.includes("--canvas-size"), () => checkCanvasSize({call,evaluate,settle,device:true}), checkErrors],
     [process.argv.includes("--crop"), () => checkCrop({call,evaluate,settle,device:true}), checkErrors],

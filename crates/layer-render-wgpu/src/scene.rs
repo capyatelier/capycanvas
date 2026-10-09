@@ -2215,6 +2215,9 @@ impl Scene {
 }
 
 impl Pipelines {
+    pub fn scale_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 5] {
+        [&self.scale.reduce, &self.scale.reduce_phased, &self.scale.reduce_pair, &self.scale.compose, &self.resample.area]
+    }
     pub fn effects(&self, r: &WgpuRasterizer) -> effects::Effects {
         effects::Effects::new(r, &self.uniforms)
     }

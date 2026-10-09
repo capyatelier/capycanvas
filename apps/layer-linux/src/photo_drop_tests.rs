@@ -839,5 +839,37 @@ fn native_photo_transform_reference_pivot_snap_and_nudge() {
     super::new_photo::capture_ui(&w, &output, "transform-again-controls.png");
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"transform-again-controls"}])); }
     invoke(&w, CommandId::CancelTransform); ready(&w);
+    invoke(&w, CommandId::ScaleRotate); ready(&w);
+    let preview = geometry();
+    let checkpoint = ui_session(&w).engine().checkpoint();
+    let camera = state(&w).camera;
+    w.area.grab_focus(); pump(30);
+    let pan = super::canvas_bar_tests::canvas_point(&w, [100., 90.]);
+    native.perform(json!([
+        {"key":0x20,"down":true},{"point":pan},{"down":true},{"wait_ms":40},
+        {"point":[pan[0]+50.,pan[1]+25.]},{"down":false},{"key":0x20,"down":false}
+    ]));
+    assert_ne!(state(&w).camera, camera, "Space pans the canvas while Transform stays open");
+    assert_eq!(geometry(), preview, "temporary pan does not accept or alter the transform");
+    assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+    assert!(state(&w).commands.iter().any(|command| command.id == CommandId::ScaleRotate && command.selected));
+    invoke(&w, CommandId::FitCanvas); ready(&w);
+    let original_pixels = ui_session(&w).engine().backend().document_pixels(7101).unwrap().bytes;
+    type_number(&mut native, "transform_angle", "30");
+    assert_ne!(geometry(), preview, "rotation changes the preview");
+    invoke(&w, CommandId::Pencil); ready(&w);
+    until(|| state(&w).commands.iter().any(|command| command.id == CommandId::Pencil && command.selected)
+        && !state(&w).commands.iter().any(|command| command.id == CommandId::ScaleRotate && command.selected),
+        "choosing Pencil accepts the rotated pixels before activating Pencil");
+    let accepted_pixels = ui_session(&w).engine().backend().document_pixels(7102).unwrap().bytes;
+    assert_ne!(accepted_pixels, original_pixels, "Pencil commits the rotated artwork");
+    super::new_photo::capture_ui(&w, &output, "transform-pencil-accepted.png");
+    invoke(&w, CommandId::Undo); ready(&w);
+    assert_eq!(ui_session(&w).engine().backend().document_pixels(7103).unwrap().bytes, original_pixels,
+        "one Undo restores the pixels from before choosing Pencil");
+    assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint, "tool switching accepts exactly one edit");
+    invoke(&w, CommandId::Redo); ready(&w);
+    assert_eq!(ui_session(&w).engine().backend().document_pixels(7104).unwrap().bytes, accepted_pixels,
+        "Redo restores the accepted rotated pixels");
     native.finish(); w.window.destroy(); pump(100);
 }

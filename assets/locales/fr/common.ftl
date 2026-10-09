@@ -568,3 +568,5 @@ common-screen-proof-white = À la luminosité actuelle de l’écran, les tons l
 native-highlight-clipped-colors = Mettre ces couleurs en évidence
 native-screen-details = Détails de l’écran
 native-color-inspection-hdr-help = RGB linéaire du document et luminance Y. Ligne en tirets : blanc de référence (0 EV). Les valeurs nulles et négatives sont comptées séparément. Inclut le papier visible ; exclut les pixels transparents et les superpositions d’affichage.
+common-failure-details = Détails de l’erreur
+common-copy-failure-details = Copier les détails de l’erreur
