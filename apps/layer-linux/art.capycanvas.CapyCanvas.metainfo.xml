@@ -165,6 +165,19 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.0.12" date="2026-10-09">
+      <description>
+        <p>This beta release improves copying and pasting, canvas navigation and drawing recovery.</p>
+        <ul>
+          <li>Copy and paste selected areas, layers and masks, or paste an image into a new drawing.</li>
+          <li>Imported and pasted images get their own Object layers, keeping original pixels until you choose Rasterize Layer.</li>
+          <li>Zoom, Hand and Rotate controls and drawing shortcuts follow the same rules across platforms.</li>
+          <li>Recovered drawings stay visible while the canvas starts, and startup failures show recovery controls.</li>
+          <li>The web app starts correctly in Safari with the updated brush shaders.</li>
+        </ul>
+        <p>This beta changes the Object-layer format. Drawings using the earlier Object-layer format cannot be edited in this version. Before updating, export flattened PNG copies and keep your original drawing files.</p>
+      </description>
+    </release>
     <release version="1.0.11" date="2026-10-07">
       <description>
         <p>This maintenance release improves Android downloads and delivery of test builds.</p>
