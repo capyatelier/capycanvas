@@ -58,6 +58,8 @@ export async function servePackage() {
     } };
 }
 
+const settleDocument = evaluate => evaluate("window.layerApp ? layerApp.documents.startRecovery().then(()=>layerApp.documents.autosave()) : Promise.resolve()");
+
 async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
   const waitFor = (condition) => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>10000)reject(Error('Fullscreen check timed out'));else setTimeout(check,25)}check()})`);
   const toggle = async () => {
@@ -116,6 +118,7 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
   }
   // An unavailable Fullscreen API must not break startup or the Settings button.
   const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: "Object.defineProperty(document,'fullscreenEnabled',{value:false,configurable:true})" });
+  await settleDocument(evaluate);
   const previous = await evaluate("performance.timeOrigin");
   await call("Page.reload");
   for (;;) try { await waitFor(`performance.timeOrigin !== ${previous} && document.body?.dataset.gpu === 'ready'`); break; }
@@ -124,6 +127,7 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
   await evaluate("document.querySelector('#header [data-command=settings]').click()");
   assert.equal(await evaluate("document.querySelector('#settings').open"), true);
   await evaluate("layerApp.dispatch({type:'close_settings'})");
+  await settleDocument(evaluate);
   await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
   console.log("Fullscreen: geometry, real enter/exit, external exit, failure recovery, settings and GPU ink passed");
 }
@@ -189,6 +193,8 @@ async function checkPointerIds({ call, evaluate, settle, canvasPixels }) {
 }
 
 export async function checkPwa({ call, evaluate, settle, canvasPixels, host, storageOnly = false }) {
+  const settledDocument = () => settleDocument(evaluate);
+  await settledDocument();
   if (!storageOnly) {
   await checkPenRendering({call, evaluate, settle});
   await checkPointerIds({ call, evaluate, settle, canvasPixels });
@@ -248,13 +254,22 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
     throw new Error(await evaluate("document.querySelector('#status')?.textContent || 'Packaged app did not load'"));
   };
   const navigate = async (url) => {
+    await settledDocument();
     const previous = await evaluate("performance.timeOrigin");
-    await call("Page.navigate", { url }); await ready(previous); await settle();
+    await call("Page.navigate", { url }); await ready(previous); await settledDocument(); await settle();
   };
   const reload = async () => {
+    await settledDocument();
     const previous = await evaluate("performance.timeOrigin");
     // Ordinary reload: a hard reload can bypass the worker in Chrome.
-    await call("Page.reload"); await ready(previous);
+    await call("Page.reload"); await ready(previous); await settledDocument();
+  };
+  const historyPixels = async command => {
+    const revision = await evaluate("String(layerApp.state().document_file.revision)");
+    await evaluate(`layerApp.dispatch({type:'invoke',command:'${command}'})`);
+    await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(String(layerApp.state().document_file.revision)!==${JSON.stringify(revision)})resolve();else if(performance.now()-start>10000)reject(Error('History did not complete'));else setTimeout(check,25)}check()})`);
+    await settle();
+    return canvasPixels();
   };
   const offline = async (value) => {
     host.state.online = !value;
@@ -322,7 +337,13 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host, sto
       await call("Input.dispatchMouseEvent", { type: "mouseMoved", x, y: 450, button: "left", buttons: 1 });
     await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: 900, y: 450, button: "left", buttons: 0, clickCount: 1 });
     await settle();
-    assert.ok((await canvasPixels()).white < before.white - 50, "Real GPU ink must render after an offline cold reload");
+    const painted = await canvasPixels();
+    assert.ok(painted.white < before.white - 50, "Real GPU ink must render after an offline cold reload");
+    const undone = await historyPixels("undo");
+    assert.ok(undone.white > painted.white + 50, "Offline ink can be undone");
+    const redone = await historyPixels("redo");
+    assert.ok(redone.white < undone.white - 50, "Offline ink can be redone");
+    assert.ok((await historyPixels("undo")).white > redone.white + 50, "Offline ink can be removed before another reload");
     await evaluate("layerApp.dispatch({type:'set_theme',theme:'dark'})");
     await settle();
     assert.ok(await evaluate("Promise.all([...document.querySelectorAll('.brush-preview')].map(i=>i.decode())).then(()=>true)"));

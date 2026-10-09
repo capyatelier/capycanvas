@@ -2164,8 +2164,10 @@ class AndroidRasterTest {
             var node: android.view.accessibility.AccessibilityNodeInfo? = null
             while (node == null && SystemClock.uptimeMillis() < deadline) {
                 node = systemNode {
-                    val matches = it.text?.toString()?.contains(name, ignoreCase = true) == true || it.contentDescription?.toString()?.contains(name, ignoreCase = true) == true ||
-                        (name == "Open" && it.text?.toString()?.equals("Select", ignoreCase = true) == true)
+                    val labels = listOfNotNull(it.text?.toString(), it.contentDescription?.toString())
+                    val matches = if (name == "Open") labels.any { label ->
+                        label.equals("Open", ignoreCase = true) || label.equals("Select", ignoreCase = true) || label.matches(Regex("(?i)Open \\(\\d+\\)"))
+                    } else labels.any { label -> label.contains(name, ignoreCase = true) }
                     matches && (name.startsWith("capy-placement-") || it.isClickable || it.parent?.isClickable == true || it.parent?.parent?.isClickable == true)
                 }
                 if (node == null) SystemClock.sleep(100)
@@ -2184,6 +2186,10 @@ class AndroidRasterTest {
                 assertTrue("DocumentsUI action $name", target.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
             }
             SystemClock.sleep(200)
+        }
+        fun pickerSelected(name: String): Boolean {
+            val item = systemNode { it.contentDescription?.toString()?.startsWith(name) == true || it.text?.toString() == name }
+            return generateSequence(item) { it.parent }.take(3).any { it.isSelected || it.isChecked }
         }
         action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)))
         val newTask = native { h -> val (id, file) = request(h, "new_document"); Native.projectTask(h, id, "null", file.getLong("epoch"), file.getLong("revision")) }
@@ -2220,6 +2226,8 @@ class AndroidRasterTest {
             systemClick("Recent")
             systemClick("$prefix-0.$suffix", long = true)
             systemClick("$prefix-1.$suffix")
+            assertTrue("First DocumentsUI image selected", pickerSelected("$prefix-0.$suffix"))
+            assertTrue("Second DocumentsUI image selected", pickerSelected("$prefix-1.$suffix"))
             systemClick("Open")
             compose.waitUntil(30_000) { count() == before + 2 && !host.documents.images.working }
             press("cancel_transform"); assertEquals(before, count())
@@ -2283,7 +2291,7 @@ class AndroidRasterTest {
             val row = compose.onNodeWithTag("layer-row-$group").fetchSemanticsNode().boundsInWindow
             val windowOrigin = IntArray(2); scenario.onActivity { it.window.decorView.getLocationOnScreen(windowOrigin) }
             dragTo(row.center + androidx.compose.ui.geometry.Offset(windowOrigin[0].toFloat(), windowOrigin[1].toFloat()))
-            compose.waitUntil(30_000) { count() == before + 2 && !host.documents.images.working }
+            compose.waitUntil(30_000) { count() == before + 1 && !host.documents.images.working }
             press("apply_transform")
             DocumentController.nativeFileJobsForTest = true
             val nested = manifest(save("external-group-drop.capy"))

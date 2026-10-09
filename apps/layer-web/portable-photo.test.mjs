@@ -31,7 +31,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
     await writeFile(`${directory}/${name}`,new Uint8Array(result.bytes));
     return result;
   };
-  const state=()=>evaluate(`JSON.parse(JSON.stringify({file:layerApp.state().document_file,layers:layerApp.state().layers,history:layerApp.state().history},(_,v)=>typeof v==='bigint'?Number(v):v))`);
+  const state=()=>evaluate(`(()=>{const {export_uri,...file}=layerApp.state().document_file;return JSON.parse(JSON.stringify({file,layers:layerApp.state().layers,history:layerApp.state().history},(_,v)=>typeof v==='bigint'?Number(v):v))})()`);
   const results={browser:await evaluate('navigator.userAgent'),imports:[],exports:[]};
   await evaluate(`window.portablePhoto={files:new Map(),open:window.showOpenFilePicker,save:window.showSaveFilePicker};
     portablePhoto.dismiss=setInterval(()=>[...document.querySelectorAll('dialog[open] button')].find(b=>['Keep for Later','Discard Changes'].includes(b.textContent))?.click(),50);
@@ -82,6 +82,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
       const mime=`image/${range}`;
       assert.deepEqual(file.options.types[0].accept,{[mime]:[range==='jpeg'?'.jpg':'.avif']});
       assert.ok(file.options.suggestedName.endsWith(range==='jpeg'?'.jpg':'.avif'));
+      assert.ok(await evaluate('layerApp.state().document_file.export_uri'), 'Delivery records the export destination');
       assert.deepEqual(await histogram(),master);
       assert.deepEqual(await state(),before,'Delivery leaves master/document history unchanged');
       // Avoid quantizing premultiplied wide-gamut pixels before color conversion.

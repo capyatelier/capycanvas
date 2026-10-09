@@ -69,6 +69,43 @@ pub(super) fn mask_values(r: &WgpuRasterizer, target: SourceTarget) -> std::coll
 }
 
 #[test]
+fn reduced_selection_standby_prepares_its_pipelines_without_encoding_on_the_frame() {
+    let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut r = crate::test_support::staged_renderer(&reference, Default::default());
+    r.native_edit = None;
+    let extent = [512; 2];
+    let mut document = paint_document(extent, "Selection standby");
+    let selection = Selection::polygon(vec![Point { x: 24., y: 24. }, Point { x: 224., y: 24. },
+        Point { x: 224., y: 192. }, Point { x: 24., y: 192. }]).unwrap();
+    document.working.selection = Some(selection.clone());
+    let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+    r.prepare_startup(&document, &brush, false).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    crate::test_support::wait_startup(&mut r, deadline, |p| p.complete, format_args!("Selection startup timed out"));
+    r.submit(packet(document.scene(), extent)).unwrap();
+    r.submit(FramePacket { dabs: &[dab([1., 0., 0., 1.])], dab_batches: &[batch(target(&document))],
+        ..packet(document.scene(), extent) }).unwrap();
+    r.shader_idle(false, false);
+    assert!(!r.scene_pipelines.source.pipeline.ready());
+    let mut transforms = r.transforms.take().unwrap();
+    assert!(!transforms.display_pipelines()[0].ready());
+    let bytes = transforms.storage_bytes();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap();
+    assert_eq!(transforms.storage_bytes(), bytes, "Cold standby dependencies must finish before capture or reduction");
+    assert!(!r.scene_pipelines.source.pipeline.ready());
+    r.shader_idle(true, false);
+    crate::test_support::wait_startup(&mut r, deadline, |p| p.complete, format_args!("Standby compilation timed out"));
+    assert!(r.scene_pipelines.source.pipeline.ready());
+    assert!(transforms.display_pipelines()[0].ready());
+    transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap();
+    assert!(transforms.storage_bytes() > bytes);
+    r.transforms = Some(transforms);
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+}
+
+#[test]
 fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pixels() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [128; 2];

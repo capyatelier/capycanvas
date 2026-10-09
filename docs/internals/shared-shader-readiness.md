@@ -32,6 +32,11 @@ keep optional work parked. Native workers sleep on their existing condition
 variable; browsers use a host timer. An in-flight driver call cannot be
 interrupted; admission happens between jobs.
 
+Selected-pixel standby uses the same optional admission. It requests source
+decoding, selection and reduction pipelines before capturing pixels; a frame
+skips standby until those handles are ready. Selecting pixels on a reduced view
+does not compile pipelines on the render owner or block the current canvas.
+
 The browser admits one optional pipeline per task; required pipeline batches
 remain bounded to four. Requested brush masks publish when their generation jobs
 finish. Brush readiness includes their upload. Startup completion describes

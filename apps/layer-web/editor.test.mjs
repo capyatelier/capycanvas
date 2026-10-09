@@ -121,7 +121,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   await evaluate('(()=>{const effect=layerApp.state().adjustments.find(a=>a.id.includes("domain_warp"));if(!effect)throw Error("Domain Warp missing");layerApp.dispatch(effect.action);})()');
   await settle();
   await invoke("save_document_as");
-  await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
+  await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified && !layerApp.documents.busy()');
   assert.equal(await evaluate('layerApp.state().document_file.modified'),false);
   assert.ok(await evaluate('[...editorFiles.entries()].some(([name,bytes])=>name.endsWith(".capy")&&bytes.length>100)'));
   await invoke("export_document");

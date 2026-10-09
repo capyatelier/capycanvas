@@ -40,6 +40,7 @@ class AndroidSessionRestartTest {
                 arguments.getString("theme","light")!!.let {host.drain(obj("type" to "set_theme","theme" to it))}
                 host.drain(obj("type" to "invoke","command" to "add_layer"))
                 val first = tabs().getLong("selected")
+                val firstLayers = state().array("layers").length()
                 val file = File(device.root,"saved.capy")
                 val location = obj("uri" to Uri.fromFile(file).toString(),"name" to file.name)
                 val task = native {h ->val(id,owner)=documentRequest(h,"save_document_as");
@@ -53,7 +54,7 @@ class AndroidSessionRestartTest {
                 host.drain(obj("type" to "invoke","command" to "add_layer"));host.drain(obj("type" to "invoke","command" to "add_layer"))
                 host.drain(obj("type" to "invoke","command" to "zoom_in"))
                 assertTrue(flush())
-                File(device.root,"expected.json").writeText(obj("first" to first,"second" to tabs().getLong("selected"),
+                File(device.root,"expected.json").writeText(obj("first" to first,"first_layers" to firstLayers,"second" to tabs().getLong("selected"),
                     "layers" to state().array("layers").length(),"zoom" to state().getJSONObject("camera").getDouble("zoom"),"location" to location,"recovered" to !background).toString())
                 val manifest = device.recovery.walkTopDown().first {it.name == "session.json"}
                 if(background) {
@@ -95,8 +96,21 @@ class AndroidSessionRestartTest {
                 assertFalse(state().getJSONObject("document_file").getBoolean("modified"))
                 assertEquals(expected.getBoolean("recovered"),state().getJSONObject("document_file").getBoolean("recovered"))
                 assertEquals(jsonValue(expected.getJSONObject("location")),jsonValue(state().getJSONObject("document_file").getJSONObject("location")))
-                host.drain(obj("type" to "invoke","command" to "undo"));assertTrue(state().getJSONObject("document_file").getBoolean("modified"))
-                host.drain(obj("type" to "invoke","command" to "redo"));assertFalse(state().getJSONObject("document_file").getBoolean("modified"))
+                assertEquals(expected.getInt("first_layers"),state().array("layers").length())
+                host.drain(obj("type" to "invoke","command" to "undo"))
+                host.awaitMain("saved drawing Undo",30_000) {
+                    host.snapshot?.optJSONObject("state")?.let {
+                        it.array("layers").length()==expected.getInt("first_layers")-1 && it.getJSONObject("document_file").getBoolean("modified")
+                    }==true
+                }
+                assertEquals(expected.getInt("first_layers")-1,state().array("layers").length())
+                host.drain(obj("type" to "invoke","command" to "redo"))
+                host.awaitMain("saved drawing Redo",30_000) {
+                    host.snapshot?.optJSONObject("state")?.let {
+                        it.array("layers").length()==expected.getInt("first_layers") && !it.getJSONObject("document_file").getBoolean("modified")
+                    }==true
+                }
+                assertEquals(expected.getInt("first_layers"),state().array("layers").length())
             }
         } finally {scenario.close()}
     }

@@ -10,7 +10,7 @@ export async function checkExportMetadata({call,evaluate,settle}) {
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
   const set=(label,value)=>evaluate(`(()=>{const n=document.querySelector('dialog[open] [aria-label="'+${JSON.stringify(label)}+'"]');n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const shown=label=>evaluate(`(()=>{const n=document.querySelector('dialog[open] [aria-label="'+${JSON.stringify(label)}+'"]');return !!n&&!n.closest('label').hidden})()`);
-  const idle=()=>wait('!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
+  const idle=()=>wait('!layerApp.state().document_file.busy&&!layerApp.documents.busy()&&layerApp.app.brush_ready()');
   const open=async name=>{
     const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');
     await evaluate(`exportMetadata.openName=${JSON.stringify(name)}`);await invoke('open_document');

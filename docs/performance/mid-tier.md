@@ -27,7 +27,8 @@ The latest G-Pen comparisons use clean `192601dac` and the authored-model
 candidate built on that revision (BUILD29/32). The cutover landed as `b3f6f8e51`;
 the intervening footer/preview UI changes do not change the measured renderer.
 Earlier operation rows and 83/BUILD15 effect and transform probes apply only
-to their named binaries. No current selected-transform measurements exist here.
+to their named binaries. The [selected-pixel preview diagnostic](#selected-pixel-previews)
+does not qualify current selected-transform presentation.
 
 Overall M3 performance qualification remains pending. Matched release offscreen
 runs on the desktop RTX PRO 6000 compare frozen `192601dac` with the authored
@@ -70,7 +71,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Pixel transform handle drag: Free, Uniform, Skew or Rotate | 90 | Free: screen 59.2/s; renderer 182.1 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |
 | Pixel transform: Distort or Perspective | 90 | Distort: screen 59.2/s; renderer 168.2 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |
 | Pixel transform: Warp | 90 | screen 59.0/s; renderer 72.5 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |
-| Selection transform, full canvas | 90 | Renderer 217 submissions/s (handle and Distort); worst frame after release 16.4–27.1 ms | `6fcc6fba`, 2026-09-27 |
+| Selection transform, full canvas | 90 | Diagnostic only: handle 60.03–192.68 renderer submissions/s; Distort 101.67–191.57/s on a filled 24 MP canvas. Presentation and reference-photo qualification remain open | [Selected-pixel previews](#selected-pixel-previews), 2026-10-09 |
 | Move tool layer drag | 90 | | |
 | Object Layer placement, Move and Scale/Rotate | 90 | Current Object-layer simplification unmeasured on the reference tablet | [Qualification gap](known-gaps.md) |
 | Marquee, Lasso or Polygon drag | 90 | | |
@@ -103,6 +104,23 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | List scrolling: layers, brushes, filters | 90 | | |
 | Menu open and close | 90 | | |
 | G-Pen 1536 px stroke with a pending language change | 90 | **Not met.** 56.80 fresh updates/s (52.40–56.99), completion-gap p99 32.08–34.97 ms | Language-change diagnostic below; synthetic owner replay, no scanout qualification |
+
+## Selected-pixel previews
+
+The 2026-10-09 diagnostic uses Wacom MovinkPad 11 at thermal status 0 before
+and after three warmed 5 s gestures per mode, a 6000 × 4000 selected fill,
+and the optional standby shader-readiness gate. Source is `43427c897` plus
+`paint_transform.rs` SHA-256 `310a381396804f1f058b81cd521e3f02815d0eb0c64bbd0cb53b2db4e7a5ded3`;
+benchmark APK SHA-256 `0a345b3e0bf4b591e2e2c4730e8172d011ab18c233c4e921d3a83b7f1bf788e3`.
+Handle submissions are 60.03, 192.35 and 192.68/s; Distort submissions are
+101.67, 191.57 and 189.87/s. `gpu_completed_hz` also counts retained Navigator
+updates. UI FrameMetrics reports only bar recompositions here (4.5–5.3/s), not
+presented canvas frames. This scenario does not load the supplied reference
+photo, and the panel reports 60 Hz. These observations establish no 90 Hz target;
+the reference-photo and presented-frame measurements remain unqualified.
+Raw results are under `artifacts/release/v1.0.12/android-checks/selection-run1..3/`.
+
+## Layer thumbnail selection
 
 Layer thumbnail selection uses the Wacom MovinkPad 11 at thermal status 0,
 a benchmark APK with release Rust based on `8f73b600d` plus isolated Android
