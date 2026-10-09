@@ -55,7 +55,13 @@ def refuse_newer(track, code):
         raise ValueError("A newer testing build exists; refusing to replace it")
 
 
+def validate_notes(notes):
+    if len(notes) > 500:
+        raise ValueError("Google Play release notes cannot exceed 500 Unicode characters")
+
+
 def upload(play, version, bundle, notes):
+    validate_notes(notes)
     code = str(version_code(version))
     data = bundle.read_bytes()
     digest = hashlib.sha256(data).hexdigest()

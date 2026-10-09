@@ -177,6 +177,19 @@ class AndroidUploadTests(unittest.TestCase):
     def upload(self, play):
         android_publish.upload(play, VERSION, self.bundle, "Release notes\nSecond paragraph")
 
+    def test_oversized_notes_are_refused_before_upload_or_edit(self):
+        play = self.play()
+        with self.assertRaisesRegex(ValueError, "500 Unicode characters"):
+            android_publish.upload(play, VERSION, self.bundle, "🎨" * 501)
+        self.assertEqual(play.calls, [])
+
+    def test_unicode_notes_at_limit_are_preserved(self):
+        play = self.play()
+        notes = "🎨" * 500
+        android_publish.upload(play, VERSION, self.bundle, notes)
+        track = next(body for method, path, body in play.calls if method == "PUT")
+        self.assertEqual(track["releases"][0]["releaseNotes"], [{"language": "en-US", "text": notes}])
+
     def test_upload_drafts_exact_bundle_and_keeps_completed_internal_release(self):
         completed = dict(RELEASE, versionCodes=["1000010"])
         stale = dict(RELEASE, status="draft", versionCodes=["1000009"])

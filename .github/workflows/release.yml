@@ -28,11 +28,15 @@ jobs:
             echo 'notes<<NOTES'
             python3 - "$version" <<'PY'
           import sys, xml.etree.ElementTree as ET
+          sys.path.insert(0, "tools/build")
+          from android_publish import validate_notes
           notes = ET.parse("apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml").find(f"releases/release[@version='{sys.argv[1]}']/description")
           if notes is None:
               sys.exit(f"Describe the {sys.argv[1]} release in the AppStream metainfo")
           text = lambda element: " ".join("".join(element.itertext()).split())
-          print("\n\n".join(text(block) if block.tag == "p" else "\n".join(f"- {text(item)}" for item in block) for block in notes))
+          notes = "\n\n".join(text(block) if block.tag == "p" else "\n".join(f"- {text(item)}" for item in block) for block in notes)
+          validate_notes(notes)
+          print(notes)
           PY
             echo NOTES
           } >> "$GITHUB_OUTPUT"

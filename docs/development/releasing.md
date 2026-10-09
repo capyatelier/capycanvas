@@ -60,8 +60,12 @@ python3 apps/layer-apple/scripts/project.py
 ```
 
 Add the matching `<release>` with notes in words a painter knows to
-`apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml`. Commit these files
-together. Fetch and rebase onto `origin/main`, rerun checks, and land the tested
+`apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml`. The workflow shares
+these notes with Google Play, which allows
+[500 Unicode characters per language](https://support.google.com/googleplay/android-developer/answer/9859348).
+Keep any compatibility warning within that limit; validation runs before platform
+jobs and before a direct Play upload. Commit these files together. Fetch and
+rebase onto `origin/main`, rerun checks, and land the tested
 commit on `origin/main` under the [commit guide](../COMMIT_GUIDE.md).
 Set these variables to that version and commit, not a later moving `main`:
 
