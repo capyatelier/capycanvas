@@ -159,7 +159,7 @@ impl Compiler {
             queue.admission.finished(priority);
             queue.busy = None;
             if let Err(error) = &result {
-                queue.error = Some(error.clone());
+                queue.error.get_or_insert_with(|| error.clone());
             }
             result.map_err(GpuRasterError::Effect)
         })

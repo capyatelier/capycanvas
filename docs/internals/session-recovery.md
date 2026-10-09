@@ -17,6 +17,13 @@ preserve the failed copies. Recovery never substitutes an empty drawing for a
 failed restore. Retrying a failed drawing appends it without replacing work begun
 since launch.
 
+On Apple, an invalid drawing list preserves its entire directory before a fresh
+session is created. Missing membership does not authorize deletion of drawing
+heads. A temporary read or permission failure stays retryable in place. Known
+per-drawing failures are recorded separately from authored data, so the next
+restart can show the original cause. Dismissing a warning changes its visibility,
+not its stored drawing or recovery status.
+
 ## Capture and completeness
 
 [`SessionCapture`](../../crates/layer-ui/src/session_recovery.rs) freezes the
@@ -180,6 +187,12 @@ after its membership replacement became visible; a subsequent synchronization
 error is reported while the accepted close completes. Republishing identical
 membership retries directory synchronization.
 
+Apple retains the expected prior membership across live adoption until the
+restore acknowledgement is durable. The next restore or checkpoint finishes
+that publication before reading membership again. If editing began during
+restoration, incoming drawings append with noncolliding runtime identities;
+already live drawings keep their durable keys.
+
 Web stores resources and checkpoint heads in IndexedDB transactions. Browser
 transaction failure leaves the previous committed state. Original project files
 are separate from private session storage and are never overwritten by recovery.
@@ -203,6 +216,10 @@ not. Completed tombstones are skipped without lock claims, rewrites or directory
 synchronization. GTK checks reachability across every window manifest and
 fails closed when any manifest is unreadable.
 
+Apple performs this sweep after a committed checkpoint, outside the startup
+path. Cleanup failure is a warning about retired files; the acknowledged drawing
+remains saved and later edits can checkpoint again.
+
 ## Scheduling, restart and close
 
 Hosts coalesce changes on a two-second schedule and skip unchanged session stamps.
@@ -212,6 +229,9 @@ camera-only changes are included. Unchanged resource payloads are reused. Each
 drawing has one accepted checkpoint operation; a completion acknowledges its
 captured state, never later edits. Slow storage or a large operation can extend
 the unprotected interval beyond the scheduling delay.
+Committed cleanup warnings do not acknowledge edits that arrived during the
+write. A waiting flush repeats until its current stamp is durable, or reports
+failure at its deadline; autosave schedules the remaining edits independently.
 
 Orderly exit waits asynchronously for accepted edits to become durable before
 marking a clean exit. Storage failure keeps the window open. Backgrounding requests

@@ -7,6 +7,7 @@ import SwiftUI
     @Published var formName = ""
     @Published var formDescription = ""
     @Published var formChoice = ""
+    @Published private var dismissedError: String?
     private(set) weak var store: EditorStore?
     private var promptKey = ""
     private var focusKey = ""
@@ -21,6 +22,8 @@ import SwiftUI
     var switcherBusy: Bool { view["switcher_busy"].bool }
     var readOnly: Bool { view["owner_lost"].bool || view["closing"].bool || view["closed"].bool }
     var error: String? { view["error"].isNull ? nil : view["error"].string }
+    var visibleError: String? { error == dismissedError ? nil : error }
+    func dismissError() { dismissedError = error }
     var presented: Bool { !view["page"].isNull || !view["prompt"].isNull }
     var page: String { view["page"].string }
     var hasUnsavedChanges: Bool { !ready || busy || view["dirty"].bool || view["saving"].bool }
@@ -47,6 +50,7 @@ import SwiftUI
     func receiveLanguage(_ next: JSON) { view = next }
     func tick() { send(["type": "tick"]) }
     @discardableResult func send(_ input: [String: Any]) -> Int {
+        if input["type"] as? String == "retry" { dismissedError = nil }
         sent += 1
         let number = sent
         guard let native = store?.native else { return number }
@@ -104,6 +108,7 @@ import SwiftUI
     private func receive(_ number: Int, _ reply: JSON?, _ failure: String?) {
         guard let reply, !reply["view"].isNull else {
             if let failure, view["error"].isNull { view = view.replacing("error", with: JSON(failure)) }
+            settle(number, transportFailed: failure != nil)
             return
         }
         if reply["wake"].bool { store?.wake?() }
@@ -112,6 +117,7 @@ import SwiftUI
     }
     private func present(_ next: JSON) {
         let wasReady = view["ready"].bool, revision = view["switcher_revision"].uint
+        if view["error"].string != next["error"].string { dismissedError = nil }
         view = next
         let key = next["prompt"].isNull ? "" : next["prompt_action"].stableKey + next["prompt"].stableKey
         if key != promptKey {
@@ -128,8 +134,8 @@ import SwiftUI
             NotificationCenter.default.post(name: Self.preferencesChanged, object: self)
         }
     }
-    private func settle(_ number: Int) {
-        let closed = view["closed"].bool, failed = !view["busy"].bool && !view["error"].isNull
+    private func settle(_ number: Int, transportFailed: Bool = false) {
+        let closed = view["closed"].bool, failed = transportFailed || !view["busy"].bool && !view["error"].isNull
         let stored = view["ready"].bool && !view["busy"].bool && !view["dirty"].bool && !view["saving"].bool
         func take<T>(_ waiters: inout [(Int, T)], when done: Bool) -> [T] {
             guard done else { return [] }
@@ -137,8 +143,8 @@ import SwiftUI
             waiters.removeAll { $0.0 <= number }
             return due
         }
-        take(&closeWaiters, when: closed || failed && view["closing"].bool).forEach { $0(closed) }
-        take(&detachWaiters, when: closed).forEach { $0() }
+        take(&closeWaiters, when: closed || failed).forEach { $0(closed) }
+        take(&detachWaiters, when: closed || transportFailed).forEach { $0() }
         take(&flushWaiters, when: closed || failed || stored).forEach { $0(closed || !failed) }
     }
     private func focus(_ target: JSON) {

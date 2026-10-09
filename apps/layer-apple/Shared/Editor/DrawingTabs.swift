@@ -48,7 +48,7 @@ import UniformTypeIdentifiers
         busy = true
         store.recovery.flush { [weak self] saved in
             guard let self else { completion(false); return }
-            guard saved else { busy = false; store.projectFiles.error = "Could not preserve the current drawing for recovery"; completion(false); return }
+            guard saved else { busy = false; store.projectFiles.error = store.recovery.failure ?? "Could not preserve the current drawing for recovery"; completion(false); return }
             store.native?.switchDocument(id) { [weak self] error in DispatchQueue.main.async {
                 guard let self else { completion(false); return }
                 self.busy = false; if let error { store.projectFiles.error = error }

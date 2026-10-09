@@ -157,13 +157,27 @@ private final class State: @unchecked Sendable {
             let unsupported = Data(#"{"version":999}"#.utf8)
             try AtomicJSONFile.write(unsupported, to: settingsFile)
             let invalidState = State()
-            let invalid = try NativeOwner(platform: platform, persistence: persistence,
+            let invalid = try NativeOwner(platform: platform, persistence: EditorPersistence(root: root),
                 receive: { invalidState.receive($0, $1) })
             precondition(flush(invalid))
             precondition(invalidState.read().2 == nil && invalidState.read().1["error"].isNull,
                 "Settings from another version must restore without a storage error")
             let preserved = try Data(contentsOf: settingsFile)
             precondition(preserved == unsupported, "Defaults must not overwrite an unsupported saved version")
+
+            let corrupt = Data(repeating: 0xff, count: AtomicJSONFile.maximumBytes + 1)
+            try corrupt.write(to: settingsFile)
+            let corruptState = State()
+            let corruptOwner = try NativeOwner(platform: platform, persistence: EditorPersistence(root: root),
+                receive: { corruptState.receive($0, $1) })
+            precondition(flush(corruptOwner), "An optional settings read warning must not block orderly persistence flush")
+            precondition(corruptState.read().2 == nil && !corruptState.read().1["error"].string.isEmpty,
+                "Settings read failure must remain visible without invalidating the native owner")
+            precondition(corruptState.read().0["state"]["settings"].stableKey == invalidState.read().0["state"]["settings"].stableKey,
+                "An unreadable settings file must launch with complete shared defaults")
+            let retained = try Data(contentsOf: settingsFile)
+            precondition(retained == corrupt, "Default launch and successful flush must preserve unreadable settings bytes")
+            print("PASS optional settings warning platform \(platform): defaults, visible cause, orderly flush and unchanged corrupt bytes")
         }
         print("Native owner persistence passed on both platform configurations: restore ordering, settings-only storage, concurrent settings, durable acknowledgments and failed-save retry")
     }

@@ -6,7 +6,7 @@ struct NativeReorderInput: UIViewRepresentable {
     func makeUIView(context: Context) -> ReorderInputView { ReorderInputView() }
     func updateUIView(_ view: ReorderInputView, context: Context) { view.model = model; view.validate() }
     static func dismantleUIView(_ view: ReorderInputView, coordinator: ()) {
-        let model = view.model; view.model = nil; view.detach(); model?.nativeInputDetached()
+        view.detach(); view.model = nil
     }
 }
 
@@ -56,14 +56,16 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     }
     override func layoutSubviews() { super.layoutSubviews(); validate() }
     func detach() {
-        cancel(); attached?.removeGestureRecognizer(pan); attached?.removeGestureRecognizer(press)
+        guard attached != nil else { return }
+        cancel(detaching: true); attached?.removeGestureRecognizer(pan); attached?.removeGestureRecognizer(press)
         attached?.removeGestureRecognizer(secondary); attached = nil
     }
     func validate() { updateViewport() }
-    private func cancel() {
+    private func cancel(detaching: Bool = false) {
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
-        model?.cancel(); touch = nil; link?.invalidate(); link = nil
+        if detaching { model?.nativeInputDetached() } else { model?.cancel() }
+        touch = nil; link?.invalidate(); link = nil
         pan.isEnabled = false; press.isEnabled = false
         pan.isEnabled = true; press.isEnabled = true
     }

@@ -209,12 +209,8 @@ import UIKit
         submitExternalOpen()
     }
     func submitExternalOpen() {
-        // File launch can precede the first snapshot, workspace restoration and
-        // Metal attachment. First-frame catalog validation can still start after
-        // attachment, so wait for full startup before submitting the request.
-        // Publications resume this one pending request.
         guard externalOpen?.submitted == false, let store,
-            store.workspaces?.ready != false, !store.recovery.restoring, store.snapshot["shaders_ready"].bool,
+            store.workspaces?.ready != false, !store.recovery.restoring, store.snapshot["canvas_ready"].bool,
             store.command("open_document")["enabled"].bool else { return }
         externalOpen?.submitted = true
         // Admission and command dispatch share the serial owner. A New/Open
@@ -525,7 +521,7 @@ import UIKit
     private func openItem(_ item: PhotoItem) {
         store?.recovery.flush { [weak self] saved in
             guard let self else { return }
-            guard saved else { fail("Could not preserve the current drawing for recovery"); return }
+            guard saved else { fail(store?.recovery.failure ?? "Could not preserve the current drawing for recovery"); return }
             task(.open) { [weak self] task in
                 guard let self else { return }
                 let id = requestID; loadingPhoto = true
@@ -547,7 +543,7 @@ import UIKit
         // Preserve the outgoing drawing's checkpoint before it becomes inactive.
         store?.recovery.flush { [weak self] saved in
             guard let self else { return }
-            guard saved else { fail("Could not preserve the current drawing for recovery"); return }
+            guard saved else { fail(store?.recovery.failure ?? "Could not preserve the current drawing for recovery"); return }
             beginOpen(url, options: options)
         }
     }
@@ -760,15 +756,6 @@ struct ProjectFilesModifier: ViewModifier {
     @Environment(\.capyCommonCopy) private var common
     func body(content: Content) -> some View {
         content.allowsHitTesting(!files.blocksEditor)
-            .overlay(alignment: .bottom) {
-                if files.busy && files.activeOperationVisible {
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text(files.cancelling ? "Cancelling…" : files.copyProgress ?? "Working with document…")
-                        Button(common["cancel"].string) { files.cancel() }.disabled(files.cancelling)
-                    }.padding(10).modifier(EditorPopupSurface(shape: Capsule())).padding(12)
-                }
-            }
             .alert(files.error == nil ? "Save changes to “\(files.title)” before continuing?" : "Document",
                 isPresented: Binding(get: { files.confirming || files.error != nil }, set: { if !$0 { files.dismissAlert() } })) {
                 if files.error != nil { Button("OK", role: .cancel) { files.error = nil } }
@@ -831,8 +818,21 @@ struct ProjectFilesModifier: ViewModifier {
             #endif
     }
 }
-private extension ProjectFiles {
-    var activeOperationVisible: Bool { (!copying || copyProgress != nil) && !confirming && picker == nil && !creating && pendingProfile == nil && packageSummary == nil && colorEditor == nil && exportEditor == nil }
+struct ProjectProgressNotice: View {
+    @ObservedObject var files: ProjectFiles
+    @Environment(\.capyCommonCopy) private var common
+    let copy: JSON
+    var body: some View {
+        if files.busy && files.activeOperationVisible {
+            EditorNotice(message: files.copyProgress ?? copy["loading"].string, working: true) {
+                Button(common["cancel"].string) { files.cancel() }.disabled(files.cancelling)
+            }
+        }
+    }
+}
+
+extension ProjectFiles {
+    fileprivate var activeOperationVisible: Bool { (!copying || copyProgress != nil) && !confirming && picker == nil && !creating && pendingProfile == nil && packageSummary == nil && colorEditor == nil && exportEditor == nil }
 }
 
 #if os(iOS)

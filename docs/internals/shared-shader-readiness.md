@@ -5,6 +5,11 @@
 Every host uses the same demand-driven dependency tracking and input admission
 policy in `layer-render-wgpu`.
 
+Compiler failures retain the first reported cause, including a native worker's
+panic payload. Dry-material labels identify the target, shader entry, operation
+and contact flags, so a driver rejection can be traced to its actual recipe.
+Recipes for one dry target share its two coverage-layout pipeline layouts.
+
 ## Order
 
 Startup prepares paper/presentation, the actual document, then the selected

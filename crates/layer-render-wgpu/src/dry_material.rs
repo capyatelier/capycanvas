@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) type Job = (wgpu::BindGroup, wgpu::BindGroup, [u32; 2], bool, u32, bool);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Target { Exact, InPlace, Tracked, Display, DisplayTracked }
 
 fn shader_destination(target: Target) -> String {
@@ -150,33 +150,33 @@ impl Pipelines {
             }
             crate::bindings::layout(device, "dry material outputs", &entries)
         });
-        let make_kernels = |flags: u32| {
-            std::array::from_fn(|index| {
-                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layouts: [_; 2] = std::array::from_fn(|coverage| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("dry material pages"),
                     bind_group_layouts: &[
-                        Some(&layouts[index % 2]),
+                        Some(&layouts[coverage]),
                         Some(shared.target),
                         Some(shared.material),
                         Some(shared.advanced_texture),
                     ],
                     immediate_size: 0,
-                });
-                let (device, shader) = (device.clone(), shader.clone());
+                })
+        });
+        let make_kernels = |flags: u32| {
+            std::array::from_fn(|index| {
+                let layout = pipeline_layouts[index % 2].clone();
+                let entry = if matches!(target, Target::Display | Target::DisplayTracked) { "compute_display_color" }
+                    else if index % 2 == 0 { "compute_color" } else { "compute_coverage" };
+                let label = format!("dry material {target:?} {entry} operation={} contact={flags:#x}", OPERATIONS[index / 2] as u32);
+                let (device, shader) = (device.for_recipe(), shader.clone());
                 Deferred::pipeline(move |mode| {
                     mode.compute(
                         &device,
                         &wgpu::ComputePipelineDescriptor {
-                            label: Some("dry material pages"),
+                            label: Some(&label),
                             layout: Some(&layout),
                             module: &shader,
-                            entry_point: Some(if matches!(target,Target::Display|Target::DisplayTracked) {
-                                "compute_display_color"
-                            } else if index % 2 == 0 {
-                                "compute_color"
-                            } else {
-                                "compute_coverage"
-                            }),
+                            entry_point: Some(entry),
                             compilation_options: wgpu::PipelineCompilationOptions {
                                 constants: &[
                                     ("MATERIAL_OPERATION", OPERATIONS[index / 2] as u32 as f64),

@@ -20,10 +20,38 @@ fn open(app: &App, path: &Path, adopt: bool) -> SessionJob {
     let scene = CString::new(path.file_name().unwrap().to_str().unwrap()).unwrap();
     SessionJob(unsafe { capy_apple_session_open(app.0, sessions.as_ptr(), scene.as_ptr(), adopt, false) })
 }
+fn stored_files(path: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn visit(root: &Path, path: &Path, files: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() { visit(root, &entry.path(), files); }
+            else if entry.file_name() != ".lock" {
+                files.insert(entry.path().strip_prefix(root).unwrap().to_owned(), std::fs::read(entry.path()).unwrap());
+            }
+        }
+    }
+    let mut files = Default::default();
+    visit(path, path, &mut files);
+    files
+}
+fn assert_stored_files_preserved(root: &Path, files: &std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>) {
+    fn contains(path: &Path, files: &std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>) -> bool {
+        if files.iter().all(|(relative, bytes)| std::fs::read(path.join(relative)).is_ok_and(|found| found == *bytes)) { return true; }
+        std::fs::read_dir(path).unwrap().any(|entry| {
+            let entry = entry.unwrap();
+            entry.file_type().unwrap().is_dir() && contains(&entry.path(), files)
+        })
+    }
+    assert!(!files.is_empty());
+    assert!(contains(root, files), "The complete original session files must remain byte-for-byte intact");
+}
 fn launch(platform: u32, path: &Path) -> App {
     launch_observed(platform, path, None, false)
 }
 fn launch_observed(platform: u32, path: &Path, observe: Option<SessionDestinationObserver>, adopt: bool) -> App {
+    launch_report(platform, path, observe, adopt).0
+}
+fn launch_report(platform: u32, path: &Path, observe: Option<SessionDestinationObserver>, adopt: bool) -> (App, Option<String>) {
     let app = App::new(platform);
     unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
     app.draw_until_idle();
@@ -37,7 +65,7 @@ fn launch_observed(platform: u32, path: &Path, observe: Option<SessionDestinatio
     assert_eq!(unsafe { capy_session_restore_finished(task.0) }, 0);
     assert!(layer_ui::SessionManifest::read(&index).unwrap().is_none_or(|manifest| manifest.restoring.is_empty()));
     app.draw_until_idle();
-    app
+    (app, task.error())
 }
 unsafe extern "C" fn observe_original(uri: *const std::ffi::c_char) -> *mut CapySessionDestination {
     let uri = unsafe { CStr::from_ptr(uri) }.to_str().unwrap();
@@ -89,7 +117,7 @@ fn apple_saved_session_checks_original_before_clean_close() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
-fn checkpoint(app: &App, exclusion: u64, clean: bool) {
+fn checkpoint(app: &App, exclusion: u64, clean: bool) -> SessionJob {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while unsafe { capy_apple_prepare_recovery(app.0, 2_000_000_000) } == 1 {
         assert!(std::time::Instant::now() < deadline);
@@ -98,6 +126,8 @@ fn checkpoint(app: &App, exclusion: u64, clean: bool) {
     let task = SessionJob(unsafe { capy_apple_session_capture(app.0, exclusion, clean) });
     assert!(!task.0.is_null(), "{:?}", unsafe { &*app.0 }.error);
     task.run();
+    assert!(unsafe { capy_session_committed(task.0) });
+    task
 }
 
 fn presented_pixel(app: &App) -> [u8; 4] {
@@ -249,7 +279,8 @@ fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and
             let incompatible_head = serde_json::to_vec(&head).unwrap();
             std::fs::write(&metadata_path, &incompatible).unwrap();
             std::fs::write(&head_path, &incompatible_head).unwrap();
-            let app = launch(platform, &path);
+            let (app, initial_failure) = launch_report(platform, &path, None, false);
+            assert!(initial_failure.as_ref().is_some_and(|error| error.contains("view_origin")));
             let failed = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
             assert_eq!(failed.blocked.len(), 1);
             assert_eq!(failed.drawings.iter().find(|row| failed.blocked.contains(&row.id)).unwrap().key, drawing.key);
@@ -261,7 +292,8 @@ fn apple_unreadable_sessions_preserve_copies_and_allow_editing_checkpointing_and
             assert_eq!(std::fs::read(&metadata_path).unwrap(), incompatible);
             assert_eq!(std::fs::read(&head_path).unwrap(), incompatible_head);
             drop(app);
-            let app = launch(platform, &path);
+            let (app, restarted_failure) = launch_report(platform, &path, None, false);
+            assert_eq!(restarted_failure, initial_failure, "A known drawing failure must not become an unexplained interrupted restart");
             assert_saved_document(unsafe { &*app.0 }.host.session.engine().document(), &live);
             checkpoint(&app, 0, false);
             let sessions = CString::new(path.parent().unwrap().to_str().unwrap()).unwrap();
@@ -451,12 +483,13 @@ fn apple_session_restart_preserves_pixels_history_selection_and_close_membership
     }
 }
 #[test]
-fn apple_session_stale_startup_never_overwrites_new_input() {
-    for platform in [0, 1] {
+fn apple_session_stale_startup_appends_without_overwriting_new_input() {
+    for (platform, interrupted_publication) in [0, 1].into_iter().flat_map(|platform| [false, true].map(|failure| (platform, failure))) {
         let path = std::env::temp_dir().join(format!("capy-apple-session-stale-{}", layer_core::PortableId::random()));
         let app = launch(platform, &path);
         app.invoke("add_layer");
         app.draw_until_idle();
+        let saved = unsafe { &*app.0 }.host.session.engine().document().clone();
         checkpoint(&app, 0, false);
         drop(app);
         let app = App::new(platform);
@@ -465,12 +498,42 @@ fn apple_session_stale_startup_never_overwrites_new_input() {
         let task = open(&app, &path, false);
         assert!(!task.0.is_null());
         app.invoke("add_layer");
+        app.stroke(); app.draw_until_idle();
+        let selected = unsafe { &*app.0 }.window.documents.selected();
+        let pixels = app.pixels();
         let current = unsafe { &*app.0 }.host.session.engine().document().clone();
         task.run();
-        assert_eq!(unsafe { capy_apple_session_adopt(app.0, task.0) }, -1);
+        assert_eq!(unsafe { capy_apple_session_adopt(app.0, task.0) }, 0, "{:?}", unsafe { &*app.0 }.error);
+        if interrupted_publication {
+            let index = path.join("window.json");
+            let held = path.join("held-window.json");
+            std::fs::rename(&index, &held).unwrap();
+            std::fs::create_dir(&index).unwrap();
+            assert_eq!(unsafe { capy_session_restore_finished(task.0) }, -1);
+            assert!(task.error().is_some());
+            std::fs::remove_dir(&index).unwrap();
+            std::fs::rename(&held, &index).unwrap();
+        } else {
+            assert_eq!(unsafe { capy_session_restore_finished(task.0) }, 0, "{:?}", task.error());
+        }
+        assert_eq!(unsafe { &*app.0 }.window.documents.selected(), selected);
+        assert_eq!(unsafe { &*app.0 }.window.documents.order().len(), 2);
         assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &current);
-        assert!(path.join("window.json").is_file());
+        assert_eq!(app.pixels(), pixels);
+        assert!(unsafe { &*app.0 }.host.session.engine().can_undo());
+        checkpoint(&app, 0, true);
+        let restored_id = *unsafe { &*app.0 }.window.documents.order().iter().find(|id| **id != selected).unwrap();
+        super::document_tabs::switch(&app, restored_id, false);
+        assert_saved_document(unsafe { &*app.0 }.host.session.engine().document(), &saved);
+        super::document_tabs::switch(&app, selected, false);
+        checkpoint(&app, 0, true);
         drop((task, app));
+        let reopened = launch(platform, &path);
+        assert_eq!(unsafe { &*reopened.0 }.window.documents.selected(), selected);
+        assert_eq!(unsafe { &*reopened.0 }.window.documents.order().len(), 2);
+        assert_eq!(reopened.pixels(), pixels);
+        assert!(unsafe { &*reopened.0 }.host.session.engine().can_undo());
+        drop(reopened);
         std::fs::remove_dir_all(path).unwrap();
     }
 }
@@ -551,4 +614,175 @@ fn apple_new_window_adopts_the_newest_unlocked_session_with_drawings() {
     assert!(sessions.join("busy/window.json").is_file() && sessions.join("adopted/window.json").is_file());
     drop((fresh, restored, busy));
     std::fs::remove_dir_all(sessions).unwrap();
+}
+
+#[test]
+fn apple_scene_adoption_preserves_own_unindexed_drawing_heads() {
+    for platform in [0, 1] {
+        for missing in [false, true] {
+            let sessions = std::env::temp_dir().join(format!("capy-apple-unindexed-{}", layer_core::PortableId::random()));
+            let own = sessions.join("own");
+            let app = launch(platform, &own);
+            app.stroke(); app.draw_until_idle(); checkpoint(&app, 0, false);
+            drop(app);
+            if missing { std::fs::remove_file(own.join("window.json")).unwrap(); }
+            else { std::fs::write(own.join("window.json"), serde_json::to_vec(&layer_ui::SessionManifest::default()).unwrap()).unwrap(); }
+            let preserved = stored_files(&own);
+            let other = launch(platform, &sessions.join("other"));
+            other.invoke("add_layer"); other.draw_until_idle(); checkpoint(&other, 0, true);
+            drop(other);
+            let app = launch_observed(platform, &own, None, true);
+            assert_stored_files_preserved(&sessions, &preserved);
+            app.invoke("add_layer"); app.draw_until_idle(); checkpoint(&app, 0, true);
+            assert_stored_files_preserved(&sessions, &preserved);
+            drop(app);
+            let reopened = launch(platform, &own);
+            checkpoint(&reopened, 0, true);
+            assert_stored_files_preserved(&sessions, &preserved);
+            drop(reopened);
+            std::fs::remove_dir_all(sessions).unwrap();
+        }
+    }
+}
+
+#[test]
+fn apple_invalid_window_membership_preserves_all_files_and_allows_new_checkpoints() {
+    for platform in [0, 1] {
+        for corruption in ["truncated", "active", "duplicate", "missing"] {
+            let sessions = std::env::temp_dir().join(format!("capy-apple-invalid-membership-{}", layer_core::PortableId::random()));
+            let path = sessions.join("own");
+            let app = launch(platform, &path);
+            app.stroke(); app.draw_until_idle(); checkpoint(&app, 0, true);
+            drop(app);
+            let index = path.join("window.json");
+            let mut manifest: Value = serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
+            match corruption {
+                "active" => manifest["active"] = json!(999),
+                "duplicate" => {
+                    let duplicate = manifest["drawings"][0].clone();
+                    manifest["drawings"].as_array_mut().unwrap().push(duplicate);
+                }
+                "missing" => { manifest.as_object_mut().unwrap().remove("drawings"); }
+                _ => {},
+            }
+            let bytes = if corruption == "truncated" { b"{\"generation\":".to_vec() } else { serde_json::to_vec(&manifest).unwrap() };
+            std::fs::write(&index, bytes).unwrap();
+            let preserved = stored_files(&path);
+            let fresh = launch_observed(platform, &path, None, true);
+            assert_stored_files_preserved(&sessions, &preserved);
+            assert!(!unsafe { &*fresh.0 }.host.session.engine().can_undo());
+            fresh.stroke(); fresh.draw_until_idle();
+            let pixels = fresh.pixels();
+            checkpoint(&fresh, 0, true);
+            assert_stored_files_preserved(&sessions, &preserved);
+            drop(fresh);
+            let reopened = launch(platform, &path);
+            assert_eq!(reopened.pixels(), pixels);
+            assert!(unsafe { &*reopened.0 }.host.session.engine().can_undo());
+            checkpoint(&reopened, 0, true);
+            assert_stored_files_preserved(&sessions, &preserved);
+            drop(reopened);
+            std::fs::remove_dir_all(sessions).unwrap();
+        }
+    }
+}
+
+#[test]
+fn apple_recovery_reports_each_known_failure_separately_from_interrupted_attempts() {
+    for platform in [0, 1] {
+        let sessions = std::env::temp_dir().join(format!("capy-apple-restore-reasons-{}", layer_core::PortableId::random()));
+        let path = sessions.join("known");
+        for (key, bytes) in [("invalid-json", b"not json".as_slice()), ("missing-head-field", b"{}".as_slice())] {
+            std::fs::create_dir_all(path.join(key)).unwrap();
+            std::fs::write(path.join(key).join("head.json"), bytes).unwrap();
+        }
+        let drawings = vec![layer_ui::SessionDrawing { id: 1, key: "invalid-json".into() },
+            layer_ui::SessionDrawing { id: 2, key: "missing-head-field".into() }];
+        layer_ui::SessionManifest::default().stage(drawings, 1).unwrap().publish(&path.join("window.json")).unwrap();
+        let (app, failure) = launch_report(platform, &path, None, false);
+        let failure = failure.unwrap();
+        assert!(failure.contains("expected ident"), "Missing first drawing's exact decode error: {failure}");
+        assert!(failure.contains("missing field"), "Missing second drawing's exact decode error: {failure}");
+        assert!(failure.contains("invalid-json") && failure.contains("missing-head-field"), "Failure details must identify both preserved drawings: {failure}");
+        checkpoint(&app, 0, true);
+        drop(app);
+        let (app, reopened_failure) = launch_report(platform, &path, None, false);
+        assert_eq!(reopened_failure.as_deref(), Some(failure.as_str()));
+        drop(app);
+        let interrupted = sessions.join("interrupted");
+        std::fs::create_dir_all(&interrupted).unwrap();
+        let manifest = layer_ui::SessionManifest::default().stage(vec![layer_ui::SessionDrawing { id: 1, key: "interrupted-drawing".into() }], 1).unwrap().begin_restore(1).unwrap();
+        manifest.publish(&interrupted.join("window.json")).unwrap();
+        let (app, interrupted_failure) = launch_report(platform, &interrupted, None, false);
+        assert!(interrupted_failure.unwrap().to_ascii_lowercase().contains("interrupted"));
+        drop(app);
+        std::fs::remove_dir_all(sessions).unwrap();
+    }
+}
+
+#[test]
+fn apple_restored_window_reserves_failed_ids_before_creating_another_drawing() {
+    for platform in [0, 1] {
+        let path = std::env::temp_dir().join(format!("capy-apple-reserved-restore-{}", layer_core::PortableId::random()));
+        let app = launch(platform, &path);
+        app.stroke(); app.draw_until_idle(); checkpoint(&app, 0, true);
+        drop(app);
+        let index = path.join("window.json");
+        let original = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
+        let failed = original.drawings[0].id + 1;
+        let damaged = path.join("failed-drawing");
+        std::fs::create_dir_all(&damaged).unwrap();
+        let head = damaged.join("head.json");
+        std::fs::write(&head, b"{}").unwrap();
+        original.stage(vec![layer_ui::SessionDrawing { id: failed, key: "failed-drawing".into() }], original.active).unwrap().publish(&index).unwrap();
+        let app = launch(platform, &path);
+        app.invoke("new_document");
+        let project = ProjectJob::new(&app, true);
+        assert_eq!(project.create([96, 64]), 0);
+        assert_eq!(unsafe { capy_apple_project_adopt(app.0, project.0, c"Untitled".as_ptr(), c"".as_ptr()) }, 0);
+        app.draw_until_idle();
+        assert_ne!(unsafe { &*app.0 }.window.documents.selected(), failed);
+        checkpoint(&app, 0, true);
+        assert_eq!(std::fs::read(&head).unwrap(), b"{}");
+        let saved = layer_ui::SessionManifest::read(&index).unwrap().unwrap();
+        assert!(saved.blocked.contains(&failed));
+        assert_eq!(saved.drawings.len(), 3);
+        drop((project, app));
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
+fn apple_unrelated_cleanup_failure_does_not_block_restoration_or_new_checkpoints() {
+    for platform in [0, 1] {
+        let path = std::env::temp_dir().join(format!("capy-apple-cleanup-warning-{}", layer_core::PortableId::random()));
+        let app = launch(platform, &path);
+        app.stroke(); app.draw_until_idle();
+        let pixels = app.pixels();
+        checkpoint(&app, 0, true);
+        drop(app);
+        let orphan = path.join("unreferenced-copy");
+        std::fs::create_dir_all(orphan.join("resources")).unwrap();
+        std::fs::create_dir_all(orphan.join("generations")).unwrap();
+        std::fs::write(orphan.join(".lock"), b"").unwrap();
+        std::fs::write(orphan.join(".retiring"), b"invalid").unwrap();
+        let preserved = stored_files(&orphan);
+        let (app, warning) = launch_report(platform, &path, None, false);
+        assert_eq!(warning, None);
+        assert_eq!(app.pixels(), pixels);
+        for _ in 0..2 {
+            app.invoke("add_layer"); app.draw_until_idle();
+            let task = checkpoint(&app, 0, true);
+            let warning = task.error();
+            assert!(warning.as_ref().is_some_and(|warning| warning.contains("Invalid drawing retirement intent")), "{warning:?}");
+            assert_stored_files_preserved(&path, &preserved);
+        }
+        let document = unsafe { &*app.0 }.host.session.engine().document().clone();
+        drop(app);
+        let app = launch(platform, &path);
+        assert_saved_document(unsafe { &*app.0 }.host.session.engine().document(), &document);
+        assert_stored_files_preserved(&path, &preserved);
+        drop(app);
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }

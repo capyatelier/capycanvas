@@ -1,7 +1,7 @@
 use super::*;
-use layer_core::package::session_store::{SessionLease, SessionStore, collect_unreferenced_stores, sync_directory};
+use layer_core::package::session_store::{SessionLease, SessionStore, collect_unreferenced_stores, preserve_directory, restore_error, set_restore_error, sync_directory};
 use layer_host::open::OpenEnvironment;
-use layer_ui::session_recovery::{SessionCapture, SessionDrawing, SessionManifest, SessionRestore};
+use layer_ui::session_recovery::{SessionCapture, SessionDrawing, SessionManifest, SessionReadError, SessionRestore};
 use std::{collections::BTreeMap, path::{Component, Path, PathBuf}, sync::{Arc, Mutex, atomic::AtomicBool}};
 
 pub(crate) struct WindowDisk {
@@ -10,7 +10,30 @@ pub(crate) struct WindowDisk {
     stores: BTreeMap<u64, SessionStore>,
     metadata: BTreeMap<u64, Vec<u8>>,
     manifest: SessionManifest,
+    unpublished: Option<SessionManifest>,
     published_sequence: u64,
+}
+impl WindowDisk {
+    fn finish_restore(&mut self) -> Result<(), String> {
+        let Some(previous) = &self.unpublished else { return Ok(()); };
+        let path = self.path.join("window.json");
+        let stored = SessionManifest::read(&path)?.unwrap_or_default();
+        if stored != *previous && stored != self.manifest { return Err("The saved editing session changed unexpectedly".into()); }
+        let mut next = self.manifest.clone();
+        for attempt in next.restoring.clone() { next = next.finish_restore(attempt, true)?; }
+        match next.publish_checked(&path) {
+            Ok(()) => {
+                for drawing in &next.drawings {
+                    if !next.blocked.contains(&drawing.id) { let _ = set_restore_error(&self.path.join(&drawing.key), None); }
+                }
+                self.manifest = next; self.unpublished = None; Ok(())
+            }
+            Err(error) => {
+                if error.published { self.manifest = next.clone(); self.unpublished = Some(next); }
+                Err(error.error)
+            }
+        }
+    }
 }
 pub struct CapySessionTask(Mutex<SessionJob>);
 pub struct CapySessionDestination(layer_ui::DestinationFingerprint);
@@ -20,23 +43,32 @@ struct SessionOpen {
     scene: String,
     adopt: bool,
 }
-fn has_drawings(directory: &Path) -> Result<bool, String> {
+fn has_drawings(directory: &Path) -> Result<bool, SessionReadError> {
     Ok(SessionManifest::read(&directory.join("window.json"))?.is_some_and(|manifest| !manifest.drawings.is_empty()))
 }
 /// The scene's own session or, when it has no drawings and `adopt` is set, the
 /// newest unlocked session that has drawings, renamed to the scene.
-fn claim(open: SessionOpen) -> Result<(PathBuf, SessionLease), String> {
+fn claim(open: SessionOpen) -> Result<(PathBuf, SessionLease, Option<String>), String> {
     let mut parts = Path::new(&open.scene).components();
     if !matches!((parts.next(), parts.next()), (Some(Component::Normal(_)), None)) {
         return Err("Invalid editing session".into());
     }
     let own = open.sessions.join(&open.scene);
     let lease = SessionLease::claim(&own)?.ok_or("This editing session is already open")?;
-    if !open.adopt || has_drawings(&own)? { return Ok((own, lease)); }
+    match has_drawings(&own) {
+        Err(SessionReadError::Invalid(error)) => {
+            let preserved = preserve_directory(&own)?;
+            let owner = SessionLease::claim(&own)?.ok_or("This editing session is already open")?;
+            return Ok((own, owner, Some(format!("Could not read the saved drawing list: {error}\nOriginal files preserved at {}", preserved.display()))));
+        }
+        Err(error) => return Err(error.to_string()),
+        Ok(drawings) if !open.adopt || drawings => return Ok((own, lease, None)),
+        _ => {}
+    }
     let mut candidates = Vec::new();
     for entry in std::fs::read_dir(&open.sessions).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
-        if path != own && let Ok(modified) = std::fs::metadata(path.join("window.json")).and_then(|metadata| metadata.modified()) {
+        if path != own && !entry_name_is_preserved(&path) && let Ok(modified) = std::fs::metadata(path.join("window.json")).and_then(|metadata| metadata.modified()) {
             candidates.push((modified, path));
         }
     }
@@ -44,12 +76,19 @@ fn claim(open: SessionOpen) -> Result<(PathBuf, SessionLease), String> {
     for (_, candidate) in candidates {
         if !has_drawings(&candidate).unwrap_or(false) { continue; }
         let Ok(Some(adopted)) = SessionLease::claim(&candidate) else { continue };
-        std::fs::remove_dir_all(&own).map_err(|e| e.to_string())?;
+        preserve_directory(&own)?;
         std::fs::rename(&candidate, &own).map_err(|e| e.to_string())?;
         sync_directory(&open.sessions)?;
-        return Ok((own, adopted));
+        return Ok((own, adopted, None));
     }
-    Ok((own, lease))
+    Ok((own, lease, None))
+}
+fn entry_name_is_preserved(path: &Path) -> bool { path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("preserved-")) }
+fn record_failure(path: &Path, error: String) -> String {
+    match set_restore_error(path, Some(&error)) {
+        Ok(()) => error,
+        Err(diagnostic) => format!("{error}\nCould not record the restore failure: {diagnostic}"),
+    }
 }
 struct SessionJob {
     open: Option<SessionOpen>,
@@ -61,7 +100,6 @@ struct SessionJob {
     clean_exit: bool,
     retry: bool,
     append: bool,
-    live: Vec<u64>,
     stamp: layer_ui::SessionStamp,
     retired: Vec<Box<layer_render_wgpu::WgpuRasterizer>>,
     error: Option<CString>,
@@ -71,7 +109,6 @@ struct SessionJob {
     sequence: u64,
     exclusion: u64,
     committed: bool,
-    restore_attempts: Vec<layer_ui::SessionRestoreAttempt>,
 }
 impl SessionJob {
     fn manifest_path(&self) -> Result<PathBuf, String> {
@@ -81,17 +118,17 @@ impl SessionJob {
     fn load(&mut self, observe: Option<SessionDestinationObserver>) -> Result<(), String> {
         let open = self.open.take().ok_or("Session storage is unavailable")?;
         if self.disk.is_none() {
-            let (path, owner) = claim(open)?;
-            self.disk = Some(Arc::new(Mutex::new(WindowDisk { path, _owner: owner, stores: BTreeMap::new(), metadata: BTreeMap::new(), manifest: SessionManifest::default(), published_sequence: 0 })));
+            let (path, owner, warning) = claim(open)?;
+            self.warning = warning.and_then(|text| CString::new(text.replace('\0', " ")).ok());
+            self.disk = Some(Arc::new(Mutex::new(WindowDisk { path, _owner: owner, stores: BTreeMap::new(), metadata: BTreeMap::new(), manifest: SessionManifest::default(), unpublished: None, published_sequence: 0 })));
         }
+        self.disk.as_ref().unwrap().lock().unwrap_or_else(|e| e.into_inner()).finish_restore()?;
         let manifest_path = self.manifest_path()?;
         let Some(mut manifest) = SessionManifest::read(&manifest_path)? else { return Ok(()) };
-        if !manifest.restoring.is_empty() {
+        let interrupted: Vec<_> = manifest.restoring.iter().map(|attempt| attempt.id).collect();
+        if !interrupted.is_empty() {
             manifest = manifest.recover_interrupted()?;
             manifest.publish(&manifest_path)?;
-        }
-        if !manifest.blocked.is_empty() {
-            self.warning = CString::new("A drawing interrupted the previous restart. Its saved session has been preserved.").ok();
         }
         let recovered = !manifest.clean_exit;
         self.active = manifest.active;
@@ -100,13 +137,22 @@ impl SessionJob {
         let mut disk = disk.lock().unwrap_or_else(|e| e.into_inner());
         disk.manifest = manifest.clone();
         let cancel = AtomicBool::new(false);
-        collect_unreferenced_stores(&disk.path, &manifest.drawings.iter().map(|drawing| drawing.key.clone()).collect(), &cancel)?;
         let mut drawings = manifest.drawings.clone();
         if self.append { drawings.retain(|drawing| manifest.blocked.contains(&drawing.id)); }
         drawings.sort_by_key(|drawing| drawing.id != manifest.active);
         let mut restored = Vec::with_capacity(drawings.len());
+        let mut failures = BTreeMap::new();
         for drawing in drawings {
-            if manifest.blocked.contains(&drawing.id) && !self.retry { continue; }
+            let path = disk.path.join(&drawing.key);
+            if manifest.blocked.contains(&drawing.id) && !self.retry {
+                let error = match restore_error(&path).unwrap_or_else(|error| Some(format!("Could not read the saved failure: {error}"))) {
+                    Some(error) if interrupted.contains(&drawing.id) => format!("Restore was interrupted. Previous failure: {error}"),
+                    Some(error) => error,
+                    None => "A drawing interrupted the previous restart. Its saved session has been preserved.".into(),
+                };
+                failures.insert(drawing.key, error);
+                continue;
+            }
             manifest = if self.retry { manifest.retry_restore(drawing.id)? } else { manifest.begin_restore(drawing.id)? };
             manifest.publish(&manifest_path)?;
             let result = (|| -> Result<_, String> {
@@ -124,10 +170,11 @@ impl SessionJob {
             match result {
                 Ok(restore) => restored.push(restore),
                 Err(error) => {
+                    let error = record_failure(&path, error);
                     let attempt = *manifest.restoring.iter().find(|attempt| attempt.id == drawing.id).unwrap();
                     manifest = manifest.finish_restore(attempt, false)?;
                     manifest.publish(&manifest_path)?;
-                    self.warning = CString::new(error.replace('\0', " ")).ok();
+                    failures.insert(drawing.key, error);
                 }
             }
         }
@@ -155,10 +202,12 @@ impl SessionJob {
             match result {
                 Ok(candidate) => self.candidates.push((id, candidate)),
                 Err(error) => {
+                    let key = manifest.drawings.iter().find(|drawing| drawing.id == id).unwrap().key.clone();
+                    let error = record_failure(&disk.path.join(&key), error);
                     let attempt = *manifest.restoring.iter().find(|attempt| attempt.id == id).unwrap();
                     manifest = manifest.finish_restore(attempt, false)?;
                     manifest.publish(&manifest_path)?;
-                    self.warning = CString::new(error.replace('\0', " ")).ok();
+                    failures.insert(key, error);
                 }
             }
         }
@@ -167,16 +216,12 @@ impl SessionJob {
             if !self.candidates.iter().any(|(id, _)| *id == self.active) {
                 self.active = self.candidates.first().map_or(0, |(id, _)| *id);
             }
-            for (id, candidate) in &mut self.candidates {
-                if *id != self.active { candidate.park_document()?; drop(candidate.renderer_mut().0.take()); }
-            }
-            if !self.restored { manifest = manifest.reserve_live_identities(&self.live)?; disk.stores.clear(); }
         }
-        if manifest.blocked.is_empty() { self.warning = None; }
+        let warnings: Vec<_> = failures.into_iter().map(|(key, error)| format!("Drawing {key}: {error}")).collect();
+        self.warning = if warnings.is_empty() { None } else { CString::new(warnings.join("\n\n").replace('\0', " ")).ok() };
         manifest = manifest.reconcile(manifest.drawings.clone(), manifest.active, false)?;
         self.candidates.sort_by_key(|(id, _)| manifest.drawings.iter().position(|drawing| drawing.id == *id).unwrap());
         manifest.publish(&manifest_path)?;
-        self.restore_attempts = manifest.restoring.clone();
         disk.manifest = manifest.clone();
         Ok(())
     }
@@ -184,6 +229,7 @@ impl SessionJob {
         let captures = self.captures.take().ok_or("The editing session was already written")?;
         let disk = self.disk.as_ref().ok_or("The editing session is unavailable")?;
         let mut disk = disk.lock().unwrap_or_else(|e| e.into_inner());
+        disk.finish_restore()?;
         if self.sequence <= disk.published_sequence { return Err("A newer editing session was already saved".into()); }
         match SessionManifest::read(&disk.path.join("window.json"))? {
             Some(manifest) if manifest.generation >= disk.manifest.generation => disk.manifest = manifest,
@@ -243,13 +289,19 @@ impl SessionJob {
         disk.published_sequence = self.sequence;
         self.committed = true;
         if self.exclusion != 0 && self.exclusion != u64::MAX { return Ok(()); }
-        let removed: Vec<_> = disk.stores.keys().copied().filter(|id| !manifest.drawings.iter().any(|d| d.id == *id)).collect();
-        for id in removed {
-            disk.stores.get_mut(&id).unwrap().retire()?;
-            disk.stores.remove(&id);
-            disk.metadata.remove(&id);
+        let cleanup = (|| -> Result<(), String> {
+            let removed: Vec<_> = disk.stores.keys().copied().filter(|id| !manifest.drawings.iter().any(|d| d.id == *id)).collect();
+            for id in removed {
+                disk.stores.get_mut(&id).unwrap().retire()?;
+                disk.stores.remove(&id);
+                disk.metadata.remove(&id);
+            }
+            collect_unreferenced_stores(&disk.path, &manifest.drawings.iter().map(|drawing| drawing.key.clone()).collect(), &cancel)?;
+            Ok(())
+        })();
+        if let Err(error) = cleanup {
+            self.warning = CString::new(format!("Could not clean retired recovery files: {error}").replace('\0', " ")).ok();
         }
-        collect_unreferenced_stores(&disk.path, &manifest.drawings.iter().map(|drawing| drawing.key.clone()).collect(), &cancel)?;
         Ok(())
     }
 }
@@ -269,8 +321,8 @@ pub unsafe extern "C" fn capy_apple_session_open(app: *mut CapyApple, sessions: 
             a.window.documents.admission(&a.host.session.retained_document_tiles()), a.host.renderer_options(a.metal.cache.clone()))?;
         Ok(Box::into_raw(Box::new(CapySessionTask(Mutex::new(SessionJob {
             open: Some(open), disk: if retry { a.session_disk.clone() } else { None }, environment: Some(environment), captures: None,
-            candidates: Vec::new(), active: 0, clean_exit: false, retry, stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: 0, exclusion: 0, committed: false, restore_attempts: Vec::new(),
-            warning: None, append: retry && a.session_disk.is_some(), live: a.window.documents.order().to_vec(),
+            candidates: Vec::new(), active: 0, clean_exit: false, retry, stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: 0, exclusion: 0, committed: false,
+            warning: None, append: retry && a.session_disk.is_some(),
         })))))
     }).unwrap_or(std::ptr::null_mut())
 }
@@ -288,8 +340,8 @@ pub unsafe extern "C" fn capy_apple_session_capture(app: *mut CapyApple, exclusi
         let captures = order.into_iter().map(|id| Ok((id, a.window.session(&a.host, id)?.capture_session()?))).collect::<Result<Vec<_>,String>>()?;
         Ok(Box::into_raw(Box::new(CapySessionTask(Mutex::new(SessionJob {
             open: None, disk: Some(disk), environment: None, captures: Some(captures), candidates: Vec::new(), active, clean_exit, retry: false,
-            stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: a.session_capture_sequence, exclusion, committed: false, restore_attempts: Vec::new(),
-            warning: None, append: false, live: Vec::new(),
+            stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: a.session_capture_sequence, exclusion, committed: false,
+            warning: None, append: false,
         })))))
     }).unwrap_or(std::ptr::null_mut())
 }
@@ -305,11 +357,14 @@ pub unsafe extern "C" fn capy_session_work(task: *mut CapySessionTask, observe: 
         match result {
             Ok(Ok(())) => 0,
             error => {
-                let message = match error { Ok(Err(e)) => e, _ => "Editing session storage failed".into() };
+                let message = match error { Ok(Err(e)) => e, Err(payload) => panic_diagnostic(payload), Ok(Ok(())) => unreachable!() };
                 job.error = CString::new(message.replace('\0', " ")).ok(); -1
             }
         }
-    }).unwrap_or(-1)
+    }).unwrap_or_else(|error| {
+        task.0.lock().unwrap_or_else(|e| e.into_inner()).error = CString::new(error.replace('\0', " ")).ok();
+        -1
+    })
 }
 /// # Safety
 /// File worker only. The borrowed descriptor is exclusively readable at offset
@@ -335,15 +390,23 @@ pub unsafe extern "C" fn capy_apple_session_adopt(app: *mut CapyApple, task: *mu
     let (Some(a), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_ref() }) else { return -1; };
     a.perform(|a| {
         let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
-        if job.error.is_some() { return Err("The saved editing session could not be restored".into()); }
-        let manifest = job.disk.as_ref().ok_or("The editing session is unavailable")?
-            .lock().unwrap_or_else(|e| e.into_inner()).manifest.clone();
-        if (!job.restored && manifest.blocked.iter().any(|id| a.window.documents.order().contains(id)))
-            || (job.append && job.candidates.iter().any(|(id, _)| a.window.documents.order().contains(id))) {
-            return Err(layer_ui::DocumentTransportRefusal::SnapshotChanged.message(a.host.session.localization()).to_string());
-        }
+        if job.adopted { return Ok(()); }
+        if let Some(error) = &job.error { return Err(error.to_string_lossy().into_owned()); }
+        let disk = job.disk.clone().ok_or("The editing session is unavailable")?;
+        let original = disk.lock().unwrap_or_else(|e| e.into_inner()).manifest.clone();
+        let replace = !job.append && a.window.documents.order().len() == 1
+            && a.host.session.can_replace_startup_session(&job.stamp);
+        let live: Vec<_> = a.window.documents.order().iter().copied().filter(|id| !job.append
+            || !original.drawings.iter().any(|drawing| drawing.id == *id)
+            || original.blocked.contains(id) || job.candidates.iter().any(|(candidate, _)| candidate == id)).collect();
+        let manifest = if replace && job.restored { original.clone() }
+            else { original.reserve_live_identities(&live)? };
+        let mapping: BTreeMap<_, _> = original.drawings.iter().zip(&manifest.drawings).map(|(old, new)| (old.id, new.id)).collect();
+        for (id, _) in &mut job.candidates { *id = mapping[id]; }
+        let reserved: Vec<_> = manifest.drawings.iter().map(|drawing| drawing.id).collect();
+        a.window.documents.reserve_identities(&reserved)?;
         if job.restored {
-            if job.append {
+            if !replace {
                 let (_, retired) = a.window.append_restored_sessions(&mut a.host, &mut job.candidates, Box::new)?;
                 job.retired = retired;
             } else {
@@ -354,9 +417,15 @@ pub unsafe extern "C" fn capy_apple_session_adopt(app: *mut CapyApple, task: *mu
             a.document_retired();
             a.metal.document_changed();
         }
-        let reserved: Vec<_> = manifest.drawings.iter().map(|drawing| drawing.id).collect();
         a.window.documents.reserve_identities(&reserved)?;
-        a.session_disk = job.disk.clone();
+        {
+            let mut disk = disk.lock().unwrap_or_else(|e| e.into_inner());
+            disk.stores = std::mem::take(&mut disk.stores).into_iter().map(|(id, store)| (mapping.get(&id).copied().unwrap_or(id), store)).collect();
+            disk.metadata = std::mem::take(&mut disk.metadata).into_iter().map(|(id, value)| (mapping.get(&id).copied().unwrap_or(id), value)).collect();
+            disk.unpublished = (manifest != original || !manifest.restoring.is_empty()).then_some(original);
+            disk.manifest = manifest;
+        }
+        a.session_disk = Some(disk);
         job.adopted = true;
         a.host.invalidate_snapshot();
         Ok(())
@@ -371,12 +440,7 @@ pub unsafe extern "C" fn capy_session_restore_finished(task: *mut CapySessionTas
     let result = (|| -> Result<(),String> {
         if !job.adopted { return Err("The editing session was not adopted".into()); }
         let mut disk = job.disk.as_ref().ok_or("The editing session is unavailable")?.lock().unwrap_or_else(|e| e.into_inner());
-        if !disk.manifest.restoring.is_empty() {
-            let mut manifest = disk.manifest.clone();
-            for attempt in job.restore_attempts.clone() { manifest = manifest.finish_restore(attempt, true)?; }
-            manifest.publish(&disk.path.join("window.json"))?;
-            disk.manifest = manifest;
-        }
+        disk.finish_restore()?;
         Ok(())
     })();
     match result { Ok(()) => 0, Err(error) => { job.error = CString::new(error.replace('\0', " ")).ok(); -1 } }

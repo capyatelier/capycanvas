@@ -228,7 +228,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionFree(_: JNIEnv, _: JCla
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_sessionManifestRead(mut env: JNIEnv, _: JClass, path: JString) -> jni::sys::jstring {
-    let result = read(&mut env, &path).and_then(|path| SessionManifest::read(Path::new(&path)))
+    let result = read(&mut env, &path).and_then(|path| SessionManifest::read(Path::new(&path)).map_err(error))
         .and_then(|manifest| serde_json::to_string(&manifest).map_err(error));
     crate::android::string(&mut env, result)
 }

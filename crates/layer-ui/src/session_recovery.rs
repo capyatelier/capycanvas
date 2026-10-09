@@ -379,11 +379,11 @@ impl SessionManifest {
         let mut next=self.clone();next.blocked.retain(|blocked|*blocked!=id);next.begin_restore(id)
     }
     #[cfg(not(target_arch="wasm32"))]
-    pub fn read(path:&std::path::Path)->Result<Option<Self>,String> {
+    pub fn read(path:&std::path::Path)->Result<Option<Self>,SessionReadError> {
         use std::io::Read;
-        let file=match std::fs::File::open(path) {Ok(file)=>file,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
-        let mut bytes=Vec::new();file.take(MAX_MANIFEST_BYTES as u64+1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
-        Self::parse(&bytes).map(Some)
+        let file=match std::fs::File::open(path) {Ok(file)=>file,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(SessionReadError::Io(e))};
+        let mut bytes=Vec::new();file.take(MAX_MANIFEST_BYTES as u64+1).read_to_end(&mut bytes).map_err(SessionReadError::Io)?;
+        Self::parse(&bytes).map(Some).map_err(SessionReadError::Invalid)
     }
     #[cfg(not(target_arch="wasm32"))]
     pub fn publish(&self,path:&std::path::Path)->Result<(),String> {
@@ -394,7 +394,7 @@ impl SessionManifest {
         use layer_core::package::session_store::{AtomicReplaceError,atomic_replace_checked,sync_directory};
         let unpublished=|error:String|AtomicReplaceError{published:false,error};
         self.validate().map_err(unpublished)?;
-        if let Some(previous)=Self::read(path).map_err(unpublished)? {
+        if let Some(previous)=Self::read(path).map_err(|error|unpublished(error.to_string()))? {
             if previous==*self {
                 let parent=path.parent().ok_or_else(||unpublished("Session has no parent directory".into()))?;
                 return sync_directory(parent).map_err(|error|AtomicReplaceError{published:true,error});
@@ -406,6 +406,18 @@ impl SessionManifest {
         atomic_replace_checked(path,&bytes)
     }
 }
+
+#[cfg(not(target_arch="wasm32"))]
+#[derive(Debug)]
+pub enum SessionReadError { Io(std::io::Error), Invalid(String) }
+#[cfg(not(target_arch="wasm32"))]
+impl std::fmt::Display for SessionReadError {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
+        match self {Self::Io(error)=>error.fmt(f),Self::Invalid(error)=>error.fmt(f)}
+    }
+}
+#[cfg(not(target_arch="wasm32"))]
+impl From<SessionReadError> for String {fn from(error:SessionReadError)->Self {error.to_string()}}
 
 #[derive(Deserialize)]
 #[serde(tag="type",rename_all="snake_case")]

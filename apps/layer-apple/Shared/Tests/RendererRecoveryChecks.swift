@@ -2,6 +2,34 @@ import XCTest
 import CoreGraphics
 
 extension XCTestCase {
+    @MainActor func checkRendererDiagnosticPrecedence(in app: XCUIApplication, theme: String = "light") {
+        let rejected = "issue10_invalid_action"
+        app.launchEnvironment["CAPY_GPU_RECOVERY_TEST"] = "1"
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"\#(rejected)"}]"#
+        app.launch()
+        let status = app.staticTexts["renderer-test-status"]
+        expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Renderer ready", "Renderer ready"), evaluatedWith: status)
+        waitForExpectations(timeout: 30)
+        let detail = app.descendants(matching: .any)["canvas-error-detail"].firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 10))
+        func report() -> String { [detail.label, detail.value as? String ?? ""].joined(separator: "\n") }
+        XCTAssertTrue(report().contains(rejected), report())
+        workspaceActivate(app.buttons["Validate test failure"])
+        expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Renderer stopped", "Renderer stopped"), evaluatedWith: status)
+        waitForExpectations(timeout: 30)
+        expectation(for: NSPredicate { _, _ in
+            report().range(of: "validation", options: .caseInsensitive) != nil && !report().contains(rejected)
+        }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        let diagnostic = XCTAttachment(string: report())
+        diagnostic.name = "renderer-cause-over-rejected-action-" + theme
+        diagnostic.lifetime = .keepAlways; add(diagnostic)
+        workspaceActivate(app.buttons["Restart Canvas"])
+        expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Renderer ready", "Renderer ready"), evaluatedWith: status)
+        waitForExpectations(timeout: 30)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func checkRendererRecovery(in app: XCUIApplication, theme: String = "light") {
         app.launchEnvironment["CAPY_GPU_RECOVERY_TEST"] = "1"
         app.launchEnvironment["CAPY_CAPTURE_PROBE"] = "1"

@@ -18,6 +18,7 @@ struct EditorView<Canvas: View>: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         ZStack(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
             canvas().ignoresSafeArea().modifier(PhotoDropTarget(store: store))
             if !store.canvasSubmitted {
                 palette["bg"].ignoresSafeArea().allowsHitTesting(false)
@@ -60,27 +61,8 @@ struct EditorView<Canvas: View>: View {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(12).placed(store.snapshot["layout"]["work_area"])
-            if store.failure != nil || !store.snapshot["error"].isNull {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(store.bootstrap[store.snapshot["gpu_ready"].bool ? "action_failed" : "canvas_init_failed"].string)
-                        .font(.headline).accessibilityIdentifier("Canvas error")
-                    ScrollView {
-                        Text(store.canvasDiagnostic)
-                            .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityIdentifier("canvas-error-detail")
-                    }.frame(maxHeight: 180)
-                    if !store.snapshot["gpu_ready"].bool {
-                        HStack {
-                            Button(store.bootstrap["restart_canvas"].string) { store.restartCanvas() }.disabled(store.restartingCanvas).accessibilityIdentifier("Restart Canvas")
-                            Button(store.command("save_document_as")["label"].string) { store.invoke("save_document_as") }
-                                .disabled(!store.command("save_document_as")["enabled"].bool)
-                        }
-                    } else {
-                        Button(store.bootstrap["ok"].string) { store.failure = nil }
-                    }
-                }.padding(24).frame(maxWidth: 500).background(palette["panel"], in: RoundedRectangle(cornerRadius: 12))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            }.modifier(RecoveryInteraction(recovery: store.recovery))
+                .modifier(OptionalWorkspaceInteraction(store: store))
             #if DEBUG
             if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
                 PersistenceProbe(store: store)
@@ -92,7 +74,7 @@ struct EditorView<Canvas: View>: View {
                     Text(store.snapshot["gpu_ready"].bool && store.snapshot["brush_ready"].bool ? "Renderer ready" : "Renderer stopped")
                         .accessibilityIdentifier("renderer-test-status")
                 }.padding(6).background(palette["panel"])
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             #endif
         }
@@ -127,7 +109,7 @@ struct EditorView<Canvas: View>: View {
         .modifier(ProjectFilesModifier(files: store.projectFiles))
         .modifier(DrawingTabsPresentation(store: store, tabs: store.drawingTabs))
         .modifier(ProofPresentation(model: store.proof))
-        .modifier(RecoveryPresentation(recovery: store.recovery))
+        .modifier(RecoveryPresentation(store: store, recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
         .modifier(SizeDialogs(store: store))
         .modifier(PaletteFiles(controller: store.palettes))
@@ -184,6 +166,14 @@ struct EditorView<Canvas: View>: View {
     }
 }
 
+private struct OptionalWorkspaceInteraction: ViewModifier {
+    @ObservedObject var store: EditorStore
+    func body(content: Content) -> some View {
+        if let workspaces = store.workspaces { content.modifier(WorkspaceInteraction(workspaces: workspaces)) }
+        else { content }
+    }
+}
+
 private struct OptionalWorkspaceManager: ViewModifier {
     @ObservedObject var store: EditorStore
     func body(content: Content) -> some View {
@@ -197,11 +187,11 @@ private struct StorageAlert: ViewModifier {
     @ObservedObject var store: EditorStore
     var active = true
     func body(content: Content) -> some View {
-        content.alert("Settings and Workspace", isPresented: Binding(
+        content.alert(store.bootstrap["recovery"]["attention"].string, isPresented: Binding(
             get: { active && store.storageFailure != nil },
             set: { if !$0 && active { store.storageFailure = nil } })) {
-            if store.canRetryStorage { Button("Retry Save") { store.native?.retryPersistence() } }
-            Button("OK") { store.storageFailure = nil }
+            if store.canRetryStorage { Button(store.bootstrap["recovery"]["retry"].string) { store.native?.retryPersistence() } }
+            Button(store.bootstrap["common"]["ok"].string) { store.storageFailure = nil }
         } message: { Text(store.storageFailure ?? "") }
     }
 }

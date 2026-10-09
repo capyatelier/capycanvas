@@ -277,6 +277,32 @@ new work can checkpoint. The recovery banner's Later button dismisses its error;
 it does not discard the stored drawing. Retry opens repaired copies beside the
 current drawings. Superseded pre-release records are preserved without conversion.
 
+`tests/startup-owner.swift` exercises a failed native launch through queued
+catalog, surface and frame calls, verifies the original cause and an idle frame
+driver, and presses native Restart while artwork recovery is pending. Its
+light/dark warning journeys press Retry and Later with a damaged private copy.
+Editing gates cover the canvas and editor controls; recovery notices remain
+interactive. Dismissing a notice retains its diagnostic and saved bytes.
+Renderer, workspace, document progress and recovery notices share one bounded
+stack, so an error cannot cover another operation's Cancel or Retry button.
+The fixture checks simultaneous action bounds and cancellation in both themes.
+An unreadable settings file reports its original error while shared defaults
+remain usable; that read warning does not prevent a successful drawing flush.
+Workspace transport failures settle pending lifecycle callbacks independently
+of the last published busy state. Retry also repeats controller initialization.
+
+`tests/reorder-lifecycle-publication.swift` mounts, removes and remounts the
+actual native input view. Initial attachment has no model cancellation; removal
+defers publication until SwiftUI releases its view update, and a new contact
+invalidates older pending cleanup. Input interruption still cancels immediately.
+
+The iPad startup stress journeys take private session roots through
+`CAPY_UI_DRAWING_STORAGE_LIGHT` and `CAPY_UI_DRAWING_STORAGE_DARK`, seeded with
+a painted session from the current native workload harness. The malformed-copy
+journeys use separate roots named by `CAPY_UI_MALFORMED_STORAGE_LIGHT` and
+`CAPY_UI_MALFORMED_STORAGE_DARK`. Seed only the test app's container, never a
+user installation. These opt-in journeys skip when their seed is absent.
+
 Fixtures for a single Swift file compile directly, for example:
 
 ```sh

@@ -63,6 +63,30 @@ impl Drop for OwnerLock {
 }
 
 pub struct SessionLease { _owner: OwnerLock }
+pub fn preserve_directory(path: &Path) -> Result<PathBuf, String> {
+    let parent = path.parent().ok_or("Session has no parent directory")?;
+    let preserved = parent.join(format!("preserved-{}", PortableId::random()));
+    fs::rename(path, &preserved).map_err(|e| e.to_string())?;
+    sync_directory(parent)?;
+    Ok(preserved)
+}
+pub fn restore_error(root: &Path) -> Result<Option<String>, String> {
+    let file = match File::open(root.join("restore-error.txt")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut text = String::new();
+    file.take(65_536).read_to_string(&mut text).map_err(|e| e.to_string())?;
+    Ok(Some(text))
+}
+pub fn set_restore_error(root: &Path, error: Option<&str>) -> Result<(), String> {
+    let path = root.join("restore-error.txt");
+    match error {
+        Some(error) => atomic_replace(&path, error.as_bytes()),
+        None => remove_file(&path),
+    }
+}
 impl SessionLease {
     pub fn claim(root: &Path) -> Result<Option<Self>, String> {
         create_directory(root)?;

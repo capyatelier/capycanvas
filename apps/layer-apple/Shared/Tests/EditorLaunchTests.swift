@@ -12,6 +12,10 @@ final class EditorLaunchTests: XCTestCase {
         try checkNativeDrawingTabs(in: editorCaptureApplication())
     }
 
+    @MainActor func testNativeDrawingTabsDark() throws {
+        try checkNativeDrawingTabs(in: editorCaptureApplication(), theme: "dark")
+    }
+
     @MainActor func testNativeHDRColor() throws {
         try checkNativeHDRColor(in: editorCaptureApplication())
     }
@@ -40,6 +44,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testBlendAndLiquify() { checkBlendAndLiquify(in: editorCaptureApplication()) }
 
     @MainActor func testPaintingBrushes() { checkPaintingBrushes(in: editorCaptureApplication()) }
+    @MainActor func testPenBrushOrder() { checkPenBrushOrder(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testPenBrushOrderDark() { checkPenBrushOrder(in: editorCaptureApplication(), theme: "dark") }
 
     @MainActor func testMaskTransforms() { checkMaskTransforms(in: editorCaptureApplication()) }
 
@@ -160,6 +166,8 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testRendererRecovery() { checkRendererRecovery(in: editorTestApplication()) }
     @MainActor func testRendererRecoveryDark() { checkRendererRecovery(in: editorTestApplication(), theme: "dark") }
+    @MainActor func testRendererDiagnosticPrecedence() { checkRendererDiagnosticPrecedence(in: editorTestApplication()) }
+    @MainActor func testRendererDiagnosticPrecedenceDark() { checkRendererDiagnosticPrecedence(in: editorTestApplication(), theme: "dark") }
 
     @MainActor func testTitleBarSystemStatus() { checkTitleBarSystemStatus(in: ignoringSavedWindows(editorTestApplication())) }
 
@@ -242,7 +250,14 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testNewDrawingAndExportCancellation() throws {
         let app = ignoringSavedWindows(editorTestApplication())
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"new_document"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"new_document"}]"#
+        app.launch()
+        checkNewDrawingAndExportCancellation(in: app)
+    }
+
+    @MainActor func testNewDrawingAndExportCancellationDark() throws {
+        let app = ignoringSavedWindows(editorTestApplication())
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"},{"type":"invoke","command":"new_document"}]"#
         app.launch()
         checkNewDrawingAndExportCancellation(in: app)
     }

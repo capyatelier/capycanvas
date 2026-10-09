@@ -1,6 +1,118 @@
 import XCTest
 
 extension EditorLaunchTests {
+    @MainActor func testNativeDrawingLifecycleStress() throws { try checkNativeDrawingLifecycleStress(theme: "light") }
+    @MainActor func testNativeDrawingLifecycleStressDark() throws { try checkNativeDrawingLifecycleStress(theme: "dark") }
+
+    @MainActor private func waitForStartupCanvas(_ app: XCUIApplication) {
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 60)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
+    @MainActor private func checkNativeDrawingLifecycleStress(theme: String) throws {
+        guard let storage = ProcessInfo.processInfo.environment["CAPY_UI_DRAWING_STORAGE_" + theme.uppercased()] else {
+            throw XCTSkip("Seed an owned Release G-Pen session into private app storage before this test")
+        }
+        XCTAssertTrue(storage.hasPrefix("capy-test-drawing-"))
+        let app = editorTestApplication()
+        app.launchEnvironment["CAPY_STORAGE_DIR"] = storage
+        app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
+        let panels = ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "stats", "navigator", "properties", "adjustments", "layers"]
+        let actions: [[String: Any]] = [["type": "set_theme", "theme": theme]] + panels.map {
+            ["type": "customize", "action": ["type": "set_panel_visible", "panel": $0, "visible": false]]
+        }
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch(); waitForStartupCanvas(app)
+        let ready = app.staticTexts["recovery-status"]
+        expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
+        waitForExpectations(timeout: 60)
+        attachEditor(in: app, name: "startup-release-ink-before-controls-\(theme)")
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        let camera = app.buttons["camera-status"]
+        XCTAssertTrue(camera.waitForExistence(timeout: 10))
+        let originalCamera = camera.label
+        canvas.pinch(withScale: 1.4, velocity: 1)
+        expectation(for: NSPredicate { _, _ in camera.label != originalCamera }, evaluatedWith: camera)
+        waitForExpectations(timeout: 15)
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        let sample = CGPoint(x: 0.3, y: 0.35)
+        let painted = editorPixels(in: app, at: sample, size: 768)
+        attachEditor(in: app, name: "startup-release-ink-restored-\(theme)")
+        XCTAssertTrue(stride(from: 0, to: painted.count, by: 4).contains { Int(painted[$0 + 2]) > Int(painted[$0]) + 20 })
+        editorMenu(in: app, menu: "Edit", id: "undo", label: "Undo")
+        let undone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.editorPixels(in: app, at: sample, size: 768) != painted }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [undone], timeout: 15), .completed)
+        let previous = editorPixels(in: app, at: sample, size: 768)
+        editorMenu(in: app, menu: "Edit", id: "redo", label: "Redo")
+        let redone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.editorPixels(in: app, at: sample, size: 768) == painted }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [redone], timeout: 15), .completed)
+        let scene = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-")).firstMatch
+        let sceneID = scene.identifier
+        XCTAssertFalse(sceneID.isEmpty)
+        for cycle in 1...10 {
+            XCUIDevice.shared.press(.home)
+            let background = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                [.runningBackground, .runningBackgroundSuspended].contains(app.state)
+            }, object: app)
+            XCTAssertEqual(XCTWaiter.wait(for: [background], timeout: 15), .completed)
+            app.activate(); waitForStartupCanvas(app)
+            XCTAssertEqual(scene.identifier, sceneID)
+            XCTAssertEqual(editorPixels(in: app, at: sample, size: 768), painted, "Lifecycle cycle \(cycle) must preserve the real stroke")
+        }
+        editorMenu(in: app, menu: "Edit", id: "undo", label: "Undo")
+        let undoneAfterCycles = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.editorPixels(in: app, at: sample, size: 768) == previous }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [undoneAfterCycles], timeout: 15), .completed)
+        editorMenu(in: app, menu: "Edit", id: "redo", label: "Redo")
+        expectation(for: NSPredicate(format: "label == %@ OR value == %@", "Recovery ready", "Recovery ready"), evaluatedWith: ready)
+        waitForExpectations(timeout: 60)
+        let preserved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.editorPixels(in: app, at: sample, size: 768) == painted }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [preserved], timeout: 15), .completed)
+        attachEditor(in: app, name: "startup-native-ten-lifecycle-cycles-\(theme)")
+    }
+
+    @MainActor func testMalformedRecoveryStillAllowsNewDrawing() throws { try checkMalformedRecoveryStillAllowsNewDrawing(theme: "light") }
+    @MainActor func testMalformedRecoveryStillAllowsNewDrawingDark() throws { try checkMalformedRecoveryStillAllowsNewDrawing(theme: "dark") }
+
+    @MainActor private func checkMalformedRecoveryStillAllowsNewDrawing(theme: String) throws {
+        guard let storage = ProcessInfo.processInfo.environment["CAPY_UI_MALFORMED_STORAGE_" + theme.uppercased()] else {
+            throw XCTSkip("Seed an unreadable head into private app storage before this test")
+        }
+        XCTAssertTrue(storage.hasPrefix("capy-test-malformed-"))
+        let app = editorTestApplication()
+        app.launchEnvironment["CAPY_STORAGE_DIR"] = storage
+        app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        app.launch()
+        let retry = app.buttons["recovery-retry"], later = app.buttons["recovery-later"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 60)); XCTAssertTrue(later.isHittable)
+        waitForStartupCanvas(app)
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: retry)
+        waitForExpectations(timeout: 60)
+        workspaceActivate(retry)
+        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: retry)
+        waitForExpectations(timeout: 60)
+        XCTAssertTrue(later.isHittable)
+        editorMenu(in: app, menu: "File", id: "new_document", label: "New drawing")
+        let create = app.buttons["new-document-create"]
+        XCTAssertTrue(create.waitForExistence(timeout: 10)); workspaceActivate(create)
+        XCTAssertTrue(create.waitForNonExistence(timeout: 20)); waitForStartupCanvas(app)
+        let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
+        let count = rows.count
+        workspaceActivate(app.buttons["layer-New layer"])
+        expectation(for: NSPredicate { _, _ in rows.count == count + 1 }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(later.isHittable)
+        workspaceActivate(later)
+        XCTAssertTrue(later.waitForNonExistence(timeout: 10))
+        XCUIDevice.shared.press(.home); app.activate(); waitForStartupCanvas(app)
+        XCTAssertEqual(rows.count, count + 1)
+        attachEditor(in: app, name: "malformed-recovery-new-drawing-usable-" + theme)
+    }
+}
+
+extension EditorLaunchTests {
     @MainActor func testSettingsTextSelectionShortcut() {
         checkSettingsTextState(in: editorCaptureApplication())
     }
@@ -23,7 +135,7 @@ extension EditorLaunchTests {
         waitForExpectations(timeout: 30)
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
         let viewport = workspaceViewport(in: app), originalFrame = viewport.frame
-        let status = app.staticTexts["camera-status"]
+        let status = app.buttons["camera-status"]
         func camera() -> (zoom: Int, rotation: Int) {
             let parts = status.label.components(separatedBy: " · ")
             guard parts.count == 2,

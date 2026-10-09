@@ -6,7 +6,7 @@ struct NativeReorderInput: NSViewRepresentable {
     func makeNSView(context: Context) -> ReorderInputView { ReorderInputView() }
     func updateNSView(_ view: ReorderInputView, context: Context) { view.model = model; view.validate() }
     static func dismantleNSView(_ view: ReorderInputView, coordinator: ()) {
-        let model = view.model; view.model = nil; view.detach(); model?.nativeInputDetached()
+        view.detach(); view.model = nil
     }
 }
 
@@ -58,15 +58,17 @@ final class ReorderInputView: NSView, NSGestureRecognizerDelegate {
     }
     override func layout() { super.layout(); attach(); updateViewport() }
     func detach() {
-        cancel(); for gesture in [pan!, press!, secondary!] { attached?.removeGestureRecognizer(gesture) }; attached = nil
+        guard attached != nil else { return }
+        cancel(detaching: true); for gesture in [pan!, press!, secondary!] { attached?.removeGestureRecognizer(gesture) }; attached = nil
     }
     func validate() {
         attach(); updateViewport()
     }
-    private func cancel() {
+    private func cancel(detaching: Bool = false) {
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
-        model?.cancel(); timer?.invalidate(); timer = nil; downEvent = nil
+        if detaching { model?.nativeInputDetached() } else { model?.cancel() }
+        timer?.invalidate(); timer = nil; downEvent = nil
         pan.isEnabled = false; press.isEnabled = false; pan.isEnabled = true; press.isEnabled = true
     }
     private func scrollAt(_ point: CGPoint) -> NSScrollView? {

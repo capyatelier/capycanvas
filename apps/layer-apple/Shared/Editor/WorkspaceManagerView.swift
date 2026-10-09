@@ -3,30 +3,42 @@ import SwiftUI
 struct WorkspaceManagerPresentation: ViewModifier {
     @ObservedObject var workspaces: WorkspaceController
     func body(content: Content) -> some View {
-        content.allowsHitTesting(workspaces.ready && !workspaces.busy && !workspaces.readOnly)
-            .overlay(alignment: .bottom) {
-                if !workspaces.presented && (workspaces.error != nil || workspaces.readOnly || !workspaces.ready) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let error = workspaces.error { Text(error).textSelection(.enabled) }
-                        else if workspaces.view["owner_lost"].bool { Text("Workspace ownership needs recovery.") }
-                        else if workspaces.readOnly { Text("Saving workspace…") }
-                        else { HStack { ProgressView().controlSize(.small); Text("Opening workspace…") } }
-                        if workspaces.error != nil || workspaces.view["owner_lost"].bool {
-                            HStack {
-                                Button("Retry") { workspaces.send(["type": "retry"]) }
-                                if workspaces.ready {
-                                    Button("Save as New Workspace…") { workspaces.form(["type": "save_as_new"]) }
-                                }
-                            }
-                        }
-                    }.padding(14).frame(maxWidth: 580, alignment: .leading)
-                        .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 12))).padding(12)
-                }
-            }
+        content
             .sheet(isPresented: Binding(get: { workspaces.presented }, set: { if !$0 { workspaces.dismiss() } })) {
                 WorkspaceManagerView(workspaces: workspaces)
                     .modifier(EditorPopupPresentation())
             }
+    }
+}
+
+struct WorkspaceStartupNotice: View {
+    @ObservedObject var workspaces: WorkspaceController
+    @Environment(\.capyCommonCopy) private var common
+    @Environment(\.capyNativeCopy) private var copy
+    var body: some View {
+        if !workspaces.presented && (workspaces.visibleError != nil || workspaces.error == nil && (workspaces.readOnly || !workspaces.ready)) {
+            EditorNotice(message: workspaces.visibleError
+                ?? (workspaces.view["owner_lost"].bool ? "Workspace ownership needs recovery."
+                    : workspaces.readOnly ? "Saving workspace…" : "Opening workspace…"),
+                working: workspaces.busy || workspaces.error == nil && !workspaces.ready) {
+                if workspaces.error != nil || workspaces.view["owner_lost"].bool {
+                    Button(copy["header"]["retry"].string) { workspaces.send(["type": "retry"]) }.disabled(workspaces.busy)
+                    if workspaces.ready {
+                        Button(copy["header"]["save_as_new_workspace"].string) { workspaces.form(["type": "save_as_new"]) }.disabled(workspaces.busy)
+                    }
+                }
+                if workspaces.error != nil && workspaces.ready && !workspaces.readOnly {
+                    Button(common["ok"].string) { workspaces.dismissError() }
+                }
+            }
+        }
+    }
+}
+
+struct WorkspaceInteraction: ViewModifier {
+    @ObservedObject var workspaces: WorkspaceController
+    func body(content: Content) -> some View {
+        content.allowsHitTesting(workspaces.ready && !workspaces.busy && !workspaces.readOnly)
     }
 }
 

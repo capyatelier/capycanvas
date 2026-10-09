@@ -34,7 +34,10 @@ import Darwin
         #endif
         return "Capy Canvas \(version) (\(build))\n\(ProcessInfo.processInfo.operatingSystemVersionString)\n\(machine)"
     }()
-    var canvasDiagnostic: String { Self.diagnostic(failure ?? snapshot["error"].string) }
+    var canvasDiagnostic: String {
+        let renderer = snapshot["error"].string
+        return Self.diagnostic(renderer.isEmpty ? failure ?? "" : renderer)
+    }
     private static func diagnostic(_ error: String) -> String { "\(error)\n\n\(diagnosticEnvironment)" }
     @Published var canvasSubmitted = false
     @Published private(set) var restartingCanvas = false
@@ -115,12 +118,6 @@ import Darwin
             }
             native?.languageInputBusy = { [weak self] in self?.workspace.languageInputBusy == true }
             native?.scopesReceived = { [weak self] update in DispatchQueue.main.async { self?.scopes.receive(update) } }
-            native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
-                DispatchQueue.main.async {
-                    self?.catalog = result ?? JSON()
-                    self?.canvasBar.delay = (result?["canvas_bar_reappear_ms"].number ?? 0) / 1000
-                }
-            }
             if usesWorkspaceLibrary, let locations = storage.locations {
                 workspaces = WorkspaceController(store: self, directory: locations.workspaces, scene: scene)
             }
@@ -135,8 +132,10 @@ import Darwin
     private func receive(_ next: JSON?, _ error: String?) {
         if next?["display_poll"].bool == true { observeDisplayHeadroom?(); return }
         if let error {
-            if failure != error { NSLog("Capy Canvas native diagnostic: %@", Self.diagnostic(error)) }
+            let changed = failure != error
+            if changed { NSLog("Capy Canvas native diagnostic: %@", Self.diagnostic(error)) }
             failure = error
+            if next == nil { if changed { wake?() }; return }
         }
         if let next {
             if !next["bootstrap"].isNull {
@@ -366,10 +365,6 @@ import Darwin
         guard let native else { completion(); return }
         native.headerAction(JSON(value)) { DispatchQueue.main.async { completion() } }
         wake?()
-    }
-    func numeric(_ control: JSON, value: Double, operation: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
-        do { completion(try resolveNumber(control, value: value, operation: operation)) }
-        catch { failure = error.localizedDescription }
     }
     func resolveNumber(_ control: JSON, value: Double, operation: [String: Any]) throws -> JSON {
         let request = try JSON(["language": interfaceLanguage, "request": ["control": control.raw, "value": value, "operation": operation]]).encoded()

@@ -153,6 +153,20 @@ extension XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
+    @MainActor func checkPenBrushOrder(in app: XCUIApplication, theme: String) {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"}]"#
+        app.launch(); capturePaintEditor(in: app)
+        selectPaintPreset("Pen", group: "Pen", preset: "G-Pen", in: app)
+        let presets = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "brush-"))
+        let order = presets.allElementsBoundByIndex.map(\.label)
+        XCTAssertEqual(Array(order.prefix(3)), ["G-Pen", "Rough G-Pen", "Blotty Ink"])
+        selectPaintPreset("Pen", group: "Pen", preset: "Blotty Ink", in: app)
+        XCTAssertTrue(presets.matching(NSPredicate(format: "label == %@", "Blotty Ink")).firstMatch.isSelected)
+        XCTAssertEqual(presets.allElementsBoundByIndex.map(\.label), order)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachEditor(in: app, name: "pen-brush-order-" + theme)
+    }
+
     @MainActor func checkPaintingBrushes(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"set_color","rgba":[0.2,0.45,0.8,1]}]"#
         app.launch(); capturePaintEditor(in: app)

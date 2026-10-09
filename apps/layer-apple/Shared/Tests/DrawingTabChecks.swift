@@ -5,9 +5,9 @@ extension XCTestCase {
         app.buttons.matching(NSPredicate(format: "identifier == %@ OR (identifier BEGINSWITH %@ AND selected == YES)", "document-title", "drawing-tab-")).firstMatch
     }
 
-    @MainActor func checkNativeDrawingTabs(in app: XCUIApplication) throws {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"insert_tools","panel":"commands","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"drawings"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}}]"#
-        app.launch(); capturePaintEditor(in: app)
+    @MainActor func checkNativeDrawingTabs(in app: XCUIApplication, theme: String = "light") throws {
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"customize","action":{"type":"insert_tools","panel":"commands","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"drawings"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}}]"#
+        app.launch(); capturePaintEditor(in: app, theme: theme)
         func command(_ label: String) {
             workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", label)).firstMatch)
         }

@@ -22,7 +22,7 @@ private final class SessionJob: @unchecked Sendable {
     init(_ handle: OpaquePointer, failure: String) { self.handle = handle; self.failure = failure }
     deinit { let handle = handle; NativeProjectTask.io.async { capy_session_free(handle) } }
     func work() -> String? {
-        guard capy_session_work(handle, { uri in
+        let result = capy_session_work(handle, { uri in
             guard let uri, let url = URL(string: String(cString: uri)), url.isFileURL else { return nil }
             var observed: OpaquePointer?
             do {
@@ -36,8 +36,11 @@ private final class SessionJob: @unchecked Sendable {
                 capy_session_destination_free(observed)
                 return nil
             }
-        }) < 0 else { return nil }
-        guard let text = capy_session_error(handle) else { return failure }
+        })
+        return result < 0 ? diagnostic ?? failure : nil
+    }
+    var diagnostic: String? {
+        guard let text = capy_session_error(handle) else { return nil }
         defer { capy_apple_string_free(text) }
         return String(cString: text)
     }
@@ -65,6 +68,10 @@ final class NativeOwner: @unchecked Sendable {
     var languageInputBusy: (@MainActor @Sendable () -> Bool)?
     var scopesReceived: (@Sendable (ScopeUpdate) -> Void)?
     private var handle: OpaquePointer?
+    private let platform: UInt32
+    private var launchConfiguration = ""
+    private var launchFailure: String?
+    private var workspaceStart: JSON?
     private var layer: CAMetalLayer?
     private var surfaceSize: (width: UInt32, height: UInt32, scale: Float)?
     private var gpuHealth: DispatchSourceTimer?
@@ -104,7 +111,7 @@ final class NativeOwner: @unchecked Sendable {
     private var gpuSamples = [CapyGpuFrameSample](repeating: CapyGpuFrameSample(), count: 8)
     private var lastTraceState: UInt64?
     private let persistence: EditorPersistence
-    private let shaderCache = StorageLocations.installation?.shaders
+    private let shaderCache: URL?
     private let managedWorkspaces: Bool
     private let observerID = UUID()
     private var settingsRequests = Set<UInt64>()
@@ -115,6 +122,7 @@ final class NativeOwner: @unchecked Sendable {
     private var latestSettings: EditorPersistence.SettingsChange?
     private var appliedSettingsRevision: UInt64 = 0
     private var storageError: String?
+    private var preparationError: String?
     private var lastStorageStatus: Data?
     #if DEBUG
     private var initialActions: [JSON] = []
@@ -137,6 +145,7 @@ final class NativeOwner: @unchecked Sendable {
         let preferredLanguages = Locale.preferredLanguages
         self.queue = queue; self.receive = receive
         self.persistence = persistence; self.managedWorkspaces = managedWorkspaces
+        self.platform = platform; shaderCache = persistence.locations?.shaders
         launchSessionPending = persistence.locations != nil
         #if DEBUG
         initialActions = fixtureActions
@@ -151,19 +160,15 @@ final class NativeOwner: @unchecked Sendable {
         queue.async { [self] in
             do {
                 let saved = loaded.value().settings.map { String(decoding: $0, as: UTF8.self) } ?? ""
-                let launch = try JSON(["saved": saved, "preferred_languages": preferredLanguages]).encoded()
-                var bootstrap: UnsafeMutablePointer<CChar>?
-                var launchError: UnsafeMutablePointer<CChar>?
-                handle = launch.withCString { capy_apple_launch(platform, $0, &bootstrap, &launchError) }
-                defer { if let launchError { capy_apple_string_free(launchError) } }
-                if let bootstrap {
-                    defer { capy_apple_string_free(bootstrap) }
-                    let view = try JSON.decode(String(cString: bootstrap))
-                    receive(JSON(["bootstrap": view.raw]), nil)
-                }
-                guard handle != nil else { throw HostFailure(message: launchError.map { String(cString: $0) } ?? "Native session initialization failed") }
-                restore()
-            } catch { receive(nil, error.localizedDescription) }
+                launchConfiguration = try JSON(["saved": saved, "preferred_languages": preferredLanguages]).encoded()
+                try launch()
+                try publish()
+                storageError = loaded.value().error
+                reportStorage()
+            } catch {
+                if handle == nil { launchFailure = error.localizedDescription }
+                receive(nil, error.localizedDescription)
+            }
         }
         persistence.load(observer: observerID, changed: { [weak self] change in
             self?.perform { [weak self] in
@@ -172,6 +177,24 @@ final class NativeOwner: @unchecked Sendable {
                 try applySharedSettings(); try publish()
             }
         }) { value in loaded.set(value); queue.resume() }
+    }
+    private func launch() throws {
+        var bootstrap: UnsafeMutablePointer<CChar>?
+        var error: UnsafeMutablePointer<CChar>?
+        handle = launchConfiguration.withCString { capy_apple_launch(platform, $0, &bootstrap, &error) }
+        defer { if let error { capy_apple_string_free(error) } }
+        if let bootstrap {
+            defer { capy_apple_string_free(bootstrap) }
+            let view = try JSON.decode(String(cString: bootstrap))
+            let catalog = handle == nil ? nil : try request(2, JSON(["type": "catalog"]))
+            receive(JSON(["bootstrap": view.raw, "catalog": catalog?.raw ?? NSNull()]), nil)
+        }
+        guard handle != nil else {
+            launchFailure = error.map { String(cString: $0) } ?? "Native session initialization failed"
+            throw HostFailure(message: launchFailure!)
+        }
+        launchFailure = nil
+        if let workspaceStart { _ = try request(6, workspaceStart) }
     }
     deinit {
         gpuHealth?.cancel()
@@ -185,10 +208,10 @@ final class NativeOwner: @unchecked Sendable {
         }
     }
     private func check(_ result: Int32) throws {
-        if result < 0 { throw HostFailure(message: capy_apple_error(handle).map(String.init(cString:)) ?? "Native operation failed") }
+        if result < 0 { throw HostFailure(message: launchFailure ?? capy_apple_error(handle).map(String.init(cString:)) ?? "Native operation failed") }
     }
     private func request(_ kind: UInt32, _ value: JSON = JSON()) throws -> JSON? {
-        guard let handle else { throw HostFailure(message: "Native session is unavailable") }
+        guard let handle else { throw HostFailure(message: launchFailure ?? "Native session is unavailable") }
         if kind == 0 && value["type"].string == "preferences" && value["action"]["id"].string == "language" {
             requestedLanguagePreference = nil
         }
@@ -291,18 +314,14 @@ final class NativeOwner: @unchecked Sendable {
     /// requests run on the Rust storage worker.
     func workspace(_ value: JSON, completion: @escaping @Sendable (JSON?, String?) -> Void) {
         queue.async { [self] in
+            if value["type"].string == "start" { workspaceStart = value }
             do {
+                if value["type"].string == "retry", let workspaceStart { _ = try request(6, workspaceStart) }
                 let reply = try request(6, value)
-                try publish(); completion(reply, nil)
+                do { try publish() } catch { receive(nil, error.localizedDescription) }
+                completion(reply, nil)
             } catch { completion(nil, error.localizedDescription) }
         }
-    }
-    private func restore() {
-        storageError = nil
-        do {
-            try publish()
-        } catch { receive(nil, error.localizedDescription) }
-        reportStorage()
     }
     private func persist(_ snapshot: JSON) throws {
         guard !snapshot["state"].isNull else { return }
@@ -417,16 +436,17 @@ final class NativeOwner: @unchecked Sendable {
             NativeProjectTask.io.async { [self] in
                 if let failure = task.work() { queue.async { [self] in launchSessionPending = false; completion(failure, false) }; return }
                 queue.async { [self] in
-                    launchSessionPending = false
-                    do {
-                        try check(capy_apple_session_adopt(handle, task.handle)); try publish()
-                        NativeProjectTask.io.async {
-                            _ = capy_session_restore_finished(task.handle)
-                            let text = capy_session_error(task.handle)
-                            defer { if let text { capy_apple_string_free(text) } }
-                            completion(text.map { String(cString: $0) }, true)
+                    do { try check(capy_apple_session_adopt(handle, task.handle)) }
+                    catch { launchSessionPending = false; completion(error.localizedDescription, false); return }
+                    do { try publish() } catch { receive(nil, error.localizedDescription) }
+                    NativeProjectTask.io.async { [self] in
+                        _ = capy_session_restore_finished(task.handle)
+                        let failure = task.diagnostic
+                        queue.async { [self] in
+                            launchSessionPending = false
+                            completion(failure, true)
                         }
-                    } catch { completion(error.localizedDescription, false) }
+                    }
                 }
             }
         }
@@ -449,7 +469,7 @@ final class NativeOwner: @unchecked Sendable {
                 completion(capy_apple_error(handle).map(String.init(cString:)) ?? documentDeliveryCopy["change_in_progress"].string, false); return
             }
             let task = SessionJob(pointer, failure: documentDeliveryCopy["change_in_progress"].string)
-            NativeProjectTask.io.async { let failure = task.work(); completion(failure, capy_session_committed(task.handle)) }
+            NativeProjectTask.io.async { let failure = task.work(); completion(failure ?? task.diagnostic, capy_session_committed(task.handle)) }
         }
         queue.async(execute: poll)
     }
@@ -593,7 +613,7 @@ final class NativeOwner: @unchecked Sendable {
         _ = try request(0, JSON(["type": "restore_saved_settings", "saved": String(decoding: change.data, as: UTF8.self)]))
     }
     private func reportStorage() {
-        let status = JSON(["pending": settingsWrites, "error": storageError as Any? ?? NSNull(),
+        let status = JSON(["pending": settingsWrites, "error": (preparationError ?? storageError) as Any? ?? NSNull(),
             "can_retry": failedSettingsWrite])
         guard let data = try? JSONSerialization.data(withJSONObject: status.raw, options: [.sortedKeys]), data != lastStorageStatus else { return }
         lastStorageStatus = data
@@ -609,11 +629,17 @@ final class NativeOwner: @unchecked Sendable {
         let deadline = DispatchTime.now() + .seconds(10)
         @Sendable func poll() {
             let result = persistence.locations == nil ? 0 : capy_apple_prepare_recovery(handle, FrameTrace.now())
+            preparationError = nil
+            if result < 0 {
+                do { try check(result) } catch { preparationError = error.localizedDescription }
+            }
             do { try publish() } catch { receive(nil, error.localizedDescription) }
             if result == 1 && DispatchTime.now() < deadline {
                 queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll); return
             }
-            persistence.flush { [self] in queue.async { [self] in completion(result == 0 && storageError == nil) } }
+            if result == 1 { preparationError = documentDeliveryCopy["change_in_progress"].string }
+            reportStorage()
+            persistence.flush { [self] in queue.async { [self] in completion(result == 0 && !failedSettingsWrite) } }
         }
         queue.async(execute: poll)
     }
@@ -626,7 +652,7 @@ final class NativeOwner: @unchecked Sendable {
         queue.async { [self] in
             do {
                 let result = try request(kind, value)
-                try publish()
+                do { try publish() } catch { receive(nil, error.localizedDescription) }
                 completion?(result)
             } catch {
                 receive(nil, error.localizedDescription)
@@ -665,8 +691,8 @@ final class NativeOwner: @unchecked Sendable {
             defer { withExtendedLifetime(previous) {}; try? publish() }
             self.layer = lease.value
             surfaceSize = (width, height, scale)
-            startGpuHealthChecks()
             try attachCurrentLayer()
+            startGpuHealthChecks()
             #if DEBUG
             surfaceSized = true
             #endif
@@ -674,6 +700,7 @@ final class NativeOwner: @unchecked Sendable {
         }
     }
     private func attachCurrentLayer() throws {
+        guard handle != nil else { throw HostFailure(message: launchFailure ?? "Native session is unavailable") }
         guard let layer, let size = surfaceSize else { throw HostFailure(message: "The canvas has no presentation surface") }
         let surface = Unmanaged.passUnretained(layer).toOpaque()
         if let shaderCache {
@@ -712,9 +739,11 @@ final class NativeOwner: @unchecked Sendable {
     func restartCanvas(_ completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
             do {
+                if handle == nil { try launch() }
                 try check(capy_apple_suspend_renderer(handle))
                 try publish()
                 try attachCurrentLayer()
+                startGpuHealthChecks()
                 try publish(); completion(nil)
             } catch {
                 try? publish(); completion(error.localizedDescription)
@@ -879,6 +908,7 @@ final class NativeOwner: @unchecked Sendable {
         let observation = trace.flatMap { $0.isRecording ? $0 : nil }
         queue.async { [self] in
             var costs = [UInt64](repeating: 0, count: 5)
+            guard handle != nil else { completion(false, 0, costs); return }
             let start = observation == nil ? 0 : FrameTrace.now()
             (layer as? ObservedMetalLayer)?.observation = observation.map { ($0, now) }
             defer {

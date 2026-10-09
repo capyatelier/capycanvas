@@ -3,6 +3,8 @@ import QuartzCore
 
 @main struct DrawingTabChecks {
     @MainActor static func main() async throws {
+        try require(ProcessInfo.processInfo.environment["CAPY_STORAGE_DIR"] != nil && StorageLocations.installation != nil,
+            "The fixture must configure its private process storage before temporary-file operations")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capy-tabs-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -40,15 +42,15 @@ import QuartzCore
             try await CapyTest.wait("Unreadable session", seconds: 60, step: { await frame(native) }) {
                 !store.recovery.restoring && store.recovery.restoreError != nil
             }
-            precondition(store.recovery.canContinue)
+            precondition(store.recovery.visibleError != nil)
             try await store.apply(["type": "invoke", "command": "add_layer"])
             let saved = await withCheckedContinuation { done in store.recovery.flush { done.resume(returning: $0) } }
             precondition(saved && store.recovery.restoreError != nil)
             store.recovery.retry(); store.recovery.retry()
             try await CapyTest.wait("Retry unreadable session", seconds: 60, step: { await frame(native) }) { !store.recovery.restoring }
-            precondition(store.recovery.canContinue)
+            precondition(store.recovery.visibleError != nil)
             store.recovery.later()
-            precondition(store.recovery.restoreError == nil)
+            precondition(store.recovery.visibleError == nil && store.recovery.restoreError != nil)
             let closed = await withCheckedContinuation { done in store.recovery.close { done.resume(returning: $0) } }
             precondition(closed && store.recovery.error == nil)
             let directories = try FileManager.default.contentsOfDirectory(at: native.sessions!, includingPropertiesForKeys: nil)

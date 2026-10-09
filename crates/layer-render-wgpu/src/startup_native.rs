@@ -93,9 +93,11 @@ impl Compiler {
                         _ => c"capy.compile.other",
                     });
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.work))
-                        .unwrap_or_else(|_| Err("Shader compilation failed".into()));
+                        .unwrap_or_else(|payload| Err(payload.downcast_ref::<String>().cloned()
+                            .or_else(|| payload.downcast_ref::<&str>().map(|message| (*message).to_owned()))
+                            .unwrap_or_else(|| "Shader compilation panicked without a message".into())));
                     if let Err(error) = result {
-                        *worker.error.lock().unwrap() = Some(error);
+                        worker.error.lock().unwrap().get_or_insert(error);
                     }
                     worker.queue.lock().unwrap().admission.finished(job.priority);
                     worker.pending.fetch_sub(1, Ordering::Release);
@@ -163,6 +165,47 @@ impl Drop for Compiler {
 mod tests {
     use super::*;
     use std::{sync::mpsc, time::Duration};
+
+    fn finish_jobs(compiler: &Compiler) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while compiler.pending() != 0 {
+            assert!(std::time::Instant::now() < deadline, "shader jobs did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn compiler_preserves_static_and_owned_panic_diagnostics() {
+        for owned in [false, true] {
+            let compiler = Compiler::new().unwrap();
+            compiler.enqueue(DOCUMENT, move || {
+                if owned { std::panic::panic_any(String::from("dry required owned diagnostic")); }
+                panic!("dry required static diagnostic");
+            });
+            compiler.start();
+            finish_jobs(&compiler);
+            let error = compiler.check().unwrap_err().to_string();
+            assert!(error.contains(if owned { "dry required owned diagnostic" } else { "dry required static diagnostic" }),
+                "compiler lost its panic cause: {error}");
+            drop(compiler);
+            finish_shader_compiler_shutdown();
+        }
+    }
+
+    #[test]
+    fn compiler_keeps_the_first_failure_when_later_jobs_also_fail() {
+        let compiler = Compiler::new().unwrap();
+        for message in ["first required shader cause", "later required shader cause"] {
+            compiler.enqueue(DOCUMENT, move || Err(message.into()));
+        }
+        compiler.start();
+        finish_jobs(&compiler);
+        let error = compiler.check().unwrap_err().to_string();
+        assert!(error.contains("first required shader cause") && !error.contains("later required shader cause"),
+            "compiler replaced the original cause: {error}");
+        drop(compiler);
+        finish_shader_compiler_shutdown();
+    }
 
     #[test]
     fn input_admission_resumes_without_polling_and_promoted_dependencies_run_once() {
