@@ -936,7 +936,7 @@ impl ShortcutPage {
                 sheet.dialog.close();
             }
         }
-        if let Some(alert) = self.import.borrow_mut().take() {
+        if let Some(alert) = self.import.take() {
             alert.close();
         }
     }

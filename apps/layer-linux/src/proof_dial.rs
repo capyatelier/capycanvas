@@ -294,7 +294,7 @@ struct ReadoutCache {
     text: String,
     node: gtk::gsk::RenderNode,
 }
-type Changed = Box<dyn Fn(ContactPhase, SdrRendition)>;
+type Changed = Rc<dyn Fn(ContactPhase, SdrRendition)>;
 pub(crate) struct ProofDial {
     localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     pub root: DialLayout,
@@ -308,7 +308,7 @@ pub(crate) struct ProofDial {
     origin: Cell<[f64; 2]>,
     double: Cell<bool>,
     updating: Cell<bool>,
-    changed: RefCell<Vec<Changed>>,
+    changed: RefCell<Rc<Vec<Changed>>>,
     icons: [gtk::Image; 4],
     readouts: RefCell<[Option<ReadoutCache>; 4]>,
     marker: RefCell<Option<(f32, bool, gtk::gsk::RenderNode)>>,
@@ -481,7 +481,7 @@ impl ProofDial {
         self.refresh();
     }
     pub fn connect_changed(&self, f: impl Fn(ContactPhase, SdrRendition) + 'static) {
-        self.changed.borrow_mut().push(Box::new(f));
+        Rc::make_mut(&mut self.changed.borrow_mut()).push(Rc::new(f));
     }
     fn refresh(&self) {
         self.updating.set(true);
@@ -501,7 +501,8 @@ impl ProofDial {
         self.updating.set(false);
     }
     fn emit(&self, phase: ContactPhase) {
-        for f in self.changed.borrow().iter() {
+        let callbacks = self.changed.borrow().clone();
+        for f in callbacks.iter() {
             f(phase, self.recipe.get());
         }
     }

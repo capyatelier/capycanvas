@@ -273,7 +273,6 @@ impl CommandBar {
                     if let Some(focus) = w
                         .command_bar
                         .previous_focus
-                        .borrow_mut()
                         .take()
                         .and_then(|f| f.upgrade())
                     {
@@ -322,7 +321,6 @@ impl CommandBar {
             if was_open && w.window.visible_dialog().is_none() {
                 if let Some(focus) = self
                     .previous_focus
-                    .borrow_mut()
                     .take()
                     .and_then(|f| f.upgrade())
                     .filter(|f| f.is_mapped())

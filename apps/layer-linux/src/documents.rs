@@ -84,7 +84,7 @@ impl Documents {
         }
     }
     fn cancel_drag(&self) {
-        if let Some(drag) = self.drag.borrow_mut().take() {
+        if let Some(drag) = self.drag.take() {
             Self::reset_button(&drag.button);
             if let Some(slide) = drag.slide {
                 slide.view.restore();

@@ -50,6 +50,11 @@ immediately. Validation errors remain diagnostic events. A failure while
 suspending the renderer is reported alongside the original error. Tracked storage
 is not total GPU or browser memory, and a terminated browser process cannot
 produce this in-page report.
+Diagnostics and raster transport invoke owned function snapshots, allowing a
+callback to reconfigure its successor synchronously. The `--callback-boundaries`
+journey checks both paths in both themes, including saved package output and
+cancellable preview requests whose cancellation callbacks remain valid until
+the worker promise settles.
 WebGPU pipelines use asynchronous preparation on every browser. A recipe shares
 one preparation result among its callers; command encoding cannot start a
 blocking compilation or replace a pending compilation. Snapshot jobs prepare

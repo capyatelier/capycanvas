@@ -90,7 +90,7 @@ impl NativeTabSlide {
     }
 
     pub fn restore(self) {
-        if let Some(tick) = self.tick.borrow_mut().take() {
+        if let Some(tick) = self.tick.take() {
             tick.remove();
         }
         for tab in self.tabs {

@@ -44,7 +44,7 @@ pub(super) async fn choose(dialog: &adw::Dialog, parent: &adw::ApplicationWindow
     let waker: Rc<RefCell<Option<Waker>>> = Rc::new(RefCell::new(None));
     let handler = dialog.connect_closed({
         let closed = closed.clone(); let waker = waker.clone();
-        move |_| { closed.set(true); if let Some(waker) = waker.borrow_mut().take() { waker.wake(); } }
+        move |_| { closed.set(true); if let Some(waker) = waker.take() { waker.wake(); } }
     });
     let _guard = Guard(dialog.clone(), Some(handler));
     dialog.present(Some(parent));

@@ -37,14 +37,9 @@ pub(super) fn call(
 }
 
 pub(super) fn request(request:&JsValue)->Result<js_sys::Promise,JsValue> {
-    WORKER
-        .with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .ok_or_else(|| js("Raster worker unavailable"))?
-                .call1(&JsValue::NULL, request)
-        })?
-        .dyn_into()
+    let worker = WORKER.with(|slot| slot.borrow().clone())
+        .ok_or_else(|| js("Raster worker unavailable"))?;
+    worker.call1(&JsValue::NULL, request)?.dyn_into()
 }
 
 /// The callback stays alive until the isolated output worker has settled.
@@ -58,9 +53,7 @@ pub(super) async fn call_cancellable(
     js_sys::Reflect::set(&request, &js("metadata"), &js(metadata))?;
     js_sys::Reflect::set(&request, &js("buffers"), buffers)?;
     js_sys::Reflect::set(&request, &js("cancelled"), cancelled.as_ref())?;
-    let promise = WORKER.with(|slot| slot.borrow().as_ref()
-        .ok_or_else(|| js("Raster worker unavailable"))?.call1(&JsValue::NULL, &request))?;
-    let result = JsFuture::from(promise.dyn_into::<js_sys::Promise>()?).await;
+    let result = JsFuture::from(self::request(&request)?).await;
     drop(cancelled);
     result
 }

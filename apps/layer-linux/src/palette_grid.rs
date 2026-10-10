@@ -167,8 +167,8 @@ impl PaletteGrid {
     pub fn reconcile(&self, children: Vec<gtk::Widget>) {
         self.clear_reorder();
         let retained: std::collections::HashSet<_> = children.iter().collect();
-        for child in self.imp().children.borrow().iter() {
-            if !retained.contains(child) {
+        for child in self.imp().children.take() {
+            if !retained.contains(&child) {
                 child.unparent();
             }
         }

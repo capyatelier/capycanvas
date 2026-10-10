@@ -410,6 +410,11 @@ pub(crate) enum Field {
     Extra(crate::tool_extra::ExtraField),
     Action(gtk::Button),
 }
+struct OptionField {
+    schema: ToolOption,
+    field: Field,
+    row: gtk::Widget,
+}
 impl Field {
     pub(crate) fn update(&self, option: &ToolOption, localization: &std::sync::Arc<layer_ui::Localizer>) {
         match (self, option) {
@@ -553,17 +558,14 @@ pub(super) struct Component {
     pub root: ComponentBody,
     pub button: gtk::Button,
     pub control: ToolbarControl,
-    localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
     context: Cell<Option<ToolbarContext>>,
     contact_context: Cell<Option<ToolbarContext>>,
     updating: Cell<bool>,
     slider: Option<gtk::Scale>,
-    preview: RefCell<Option<BrushPreview>>,
+    preview: RefCell<Option<Rc<BrushPreview>>>,
     outside: RefCell<Option<(gtk::Window, gtk::EventControllerLegacy)>>,
-    bookmarks: RefCell<Vec<SliderBookmark>>,
     value: Cell<f32>,
-    schema: RefCell<Vec<ToolOption>>,
-    fields: RefCell<Vec<Field>>,
+    fields: RefCell<Vec<OptionField>>,
 }
 impl Component {
     pub fn new(w: &Rc<Workspace>, panel: Panel, tile: &ToolbarTile, choice: &ToolChoice) -> Rc<Self> {
@@ -628,16 +630,13 @@ impl Component {
             root,
             button,
             control: tile.control,
-            localization: RefCell::new(w.localization()),
             context: Cell::new(None),
             contact_context: Cell::new(None),
             updating: Cell::new(false),
             slider,
             preview: RefCell::default(),
             outside: RefCell::default(),
-            bookmarks: RefCell::default(),
             value: Cell::new(0.),
-            schema: RefCell::default(),
             fields: RefCell::default(),
         });
         let id = tile.id;
@@ -710,7 +709,6 @@ impl Component {
     }
 
     pub fn refresh(self: &Rc<Self>, w: &Rc<Workspace>, state: &ToolbarComponentView) {
-        *self.localization.borrow_mut() = w.localization();
         self.updating.set(true);
         let context = state.context;
         let changed_context = self.context.replace(Some(context)) != Some(context);
@@ -726,7 +724,6 @@ impl Component {
                 return;
             };
             self.value.set(field.value);
-            self.bookmarks.replace(state.bookmarks.clone());
             self.root.imp().bookmarks.replace(state.bookmarks.clone());
             if let Some(gpu) = w.gpu.borrow().as_ref() {
                 self.root
@@ -747,63 +744,46 @@ impl Component {
                 .update_property(&[gtk::accessible::Property::ValueText(&value.text)]);
         } else {
             let options = &state.options;
-            let same = !changed_context
-                && self.schema.borrow().len() == options.len()
-                && self
-                    .schema
-                    .borrow()
-                    .iter()
-                    .zip(options)
-                    .all(|(a, b)| a.same_schema(b));
+            let mut fields = self.fields.take();
+            let same = !changed_context && fields.len() == options.len()
+                && fields.iter().zip(options).all(|(field, option)| field.schema.same_schema(option));
             if !same {
-                // A band's bounds can add/remove numeric fields while its list
-                // is open. Retain each compatible editor instead of rebuilding
-                // the entire form and closing its native popover or contact.
-                let fields = std::mem::take(&mut *self.fields.borrow_mut());
-                let rows: Vec<_> = self.root.imp().children.borrow_mut().drain(1..).collect();
-                let mut old: Vec<_> = self.schema.borrow().iter().cloned().zip(fields).zip(rows)
-                    .map(|((schema,field),row)| Some((schema,field,row))).collect();
-                let mut rows = Vec::new();
-                let mut fields = Vec::new();
+                self.root.imp().children.borrow_mut().truncate(1);
+                let mut old: Vec<_> = fields.drain(..).map(Some).collect();
                 for option in options {
                     let retained = (!changed_context).then(|| old.iter_mut().find(|item| {
-                        item.as_ref().is_some_and(|(schema,_,_)| schema.same_schema(option))
+                        item.as_ref().is_some_and(|field| field.schema.same_schema(option))
                     }).and_then(Option::take)).flatten();
-                    let (field,row) = if let Some((_,field,row)) = retained { (field,row) }
-                    else {
-                        self.add_option(w, option, context);
-                        (self.fields.borrow_mut().pop().unwrap(), self.root.imp().children.borrow_mut().pop().unwrap())
-                    };
-                    rows.push(row);fields.push(field);
+                    fields.push(retained.unwrap_or_else(|| self.build_option(w, option, context)));
                 }
-                for (_,field,row) in old.into_iter().flatten() {
-                    match field {
+                for field in old.into_iter().flatten() {
+                    match field.field {
                         Field::Numeric(number) => number.cancel_edit(),
                         Field::Range(range) => range.retire(),
                         _ => (),
                     }
-                    row.unparent();
+                    field.row.unparent();
                 }
-                let mut previous = self.root.imp().children.borrow().first().cloned();
-                for row in &rows {
-                    row.insert_after(&self.root,previous.as_ref());
-                    previous=Some(row.clone());
+                let mut children = self.root.imp().children.borrow().clone();
+                for field in &fields {
+                    field.row.insert_after(&self.root, children.last());
+                    children.push(field.row.clone());
                 }
-                self.fields.replace(fields);
-                self.root.imp().children.borrow_mut().extend(rows);
+                self.root.imp().children.replace(children);
                 self.root.update_option_axis();
                 self.root.queue_allocate();
             }
-            for (field, option) in self.fields.borrow().iter().zip(options) {
-                field.update(option, &w.localization());
+            for (field, option) in fields.iter_mut().zip(options) {
+                field.field.update(option, &w.localization());
+                field.schema.clone_from(option);
             }
-            self.schema.borrow_mut().clone_from(options);
+            self.fields.replace(fields);
         }
         self.updating.set(false);
     }
 
     fn close_preview(&self) {
-        if let Some(preview) = self.preview.borrow_mut().take() {
+        if let Some(preview) = self.preview.take() {
             preview.popover.popdown();
             preview.popover.unparent();
         }
@@ -888,8 +868,10 @@ impl Component {
             area.set_draw_func(glib::clone!(
                 #[weak(rename_to=component)]
                 self,
+                #[weak]
+                w,
                 move |area, cr, _, _| {
-                    let Ok(layout) = component.preview_layout(stamp.extent) else {
+                    let Ok(layout) = component.preview_layout(stamp.extent, &w.localization()) else {
                         return;
                     };
                     let b = layout.stamp;
@@ -954,35 +936,35 @@ impl Component {
                     });
                 }
             ));
-            self.preview.replace(Some(BrushPreview {
+            self.preview.replace(Some(Rc::new(BrushPreview {
                 popover,
                 area,
                 label,
                 bookmark,
                 selected: Cell::new(None),
-            }));
+            })));
         }
         self.update_preview(&w.localization());
-        if let Some(preview) = self.preview.borrow().as_ref() {
+        let preview = self.preview.borrow().clone();
+        if let Some(preview) = preview {
             preview.popover.popup();
             preview.popover.present();
         }
     }
-    fn preview_layout(&self, extent: f32) -> Result<SliderPreviewLayout, String> {
+    fn preview_layout(&self, extent: f32, localization: &layer_ui::Localizer) -> Result<SliderPreviewLayout, String> {
         slider_preview_layout(
             self.control,
             self.root.imp().style.get(),
             self.value.get(),
             self.root.width().max(self.root.height()) as f32,
             extent,
-         &self.localization.borrow())
+         localization)
     }
     fn update_preview(&self, localization: &layer_ui::Localizer) {
-        let preview = self.preview.borrow();
-        let Some(preview) = preview.as_ref() else {
+        let Some(preview) = self.preview.borrow().clone() else {
             return;
         };
-        let Ok(layout) = self.preview_layout(1.) else {
+        let Ok(layout) = self.preview_layout(1., localization) else {
             return;
         };
         preview.area.set_content_width(layout.side as i32);
@@ -997,7 +979,7 @@ impl Component {
         preview
             .bookmark
             .set_size_request(button.width as i32, button.height as i32);
-        let selected = self.bookmarks.borrow().iter().any(|b| b.selected);
+        let selected = self.root.imp().bookmarks.borrow().iter().any(|b| b.selected);
         if preview.selected.replace(Some(selected)) != Some(selected) {
             preview
                 .bookmark
@@ -1099,13 +1081,15 @@ impl Component {
                 origin.set([x, y]);
                 moved.set(false);
                 component.contact_context.set(component.context.get());
-                component.pick_slider([x, y], true);
+                component.pick_slider([x, y], true, &w.localization());
                 component.show_preview(&w);
             }
         ));
         gesture.connect_drag_update(glib::clone!(
             #[weak(rename_to=component)]
             self,
+            #[weak]
+            w,
             #[strong]
             origin,
             #[strong]
@@ -1115,7 +1099,7 @@ impl Component {
                     return;
                 }
                 moved.set(true);
-                component.pick_slider([origin.get()[0] + x, origin.get()[1] + y], false);
+                component.pick_slider([origin.get()[0] + x, origin.get()[1] + y], false, &w.localization());
             }
         ));
         gesture.connect_drag_end(glib::clone!(
@@ -1151,7 +1135,7 @@ impl Component {
             move |_| component.show_preview(&w)
         ));
     }
-    fn pick_slider(&self, point: [f64; 2], snap: bool) {
+    fn pick_slider(&self, point: [f64; 2], snap: bool, localization: &layer_ui::Localizer) {
         let scale = self.slider.as_ref().unwrap();
         let vertical = self.root.imp().vertical.get();
         let range = scale.range_rect();
@@ -1174,11 +1158,11 @@ impl Component {
         let position = ((p - half) / length).clamp(0., 1.);
         let position = if vertical { 1. - position } else { position };
         let values: Vec<_> = if snap {
-            self.bookmarks.borrow().iter().map(|m| m.value).collect()
+            self.root.imp().bookmarks.borrow().iter().map(|m| m.value).collect()
         } else {
             Vec::new()
         };
-        let value = slider_bookmark_value(self.control, &values, position, length, &self.localization.borrow());
+        let value = slider_bookmark_value(self.control, &values, position, length, localization);
         if let Ok(value) = value {
             let number = self
                 .control
@@ -1191,12 +1175,12 @@ impl Component {
         }
     }
 
-    fn add_option(
+    fn build_option(
         self: &Rc<Self>,
         w: &Rc<Workspace>,
         option: &ToolOption,
         context: ToolbarContext,
-    ) {
+    ) -> OptionField {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         row.add_css_class("panel-control-row");
         row.add_css_class("customizable-target");
@@ -1340,8 +1324,7 @@ impl Component {
                 Field::Action(button)
             }
         };
-        self.root.append(&row);
-        self.fields.borrow_mut().push(field);
+        OptionField { schema: option.clone(), field, row: row.upcast() }
     }
 }
 

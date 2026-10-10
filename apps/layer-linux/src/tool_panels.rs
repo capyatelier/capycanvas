@@ -339,8 +339,8 @@ impl ToolSettings {
         }
         let controls = &state.tool_settings;
         self.updating.set(true);
-        let mut fields = self.fields.borrow_mut();
-        let mut actions = self.actions.borrow_mut();
+        let mut fields = self.fields.take();
+        let mut actions = self.actions.take();
         let same_schema = same && !context_changed && fields.len() == controls.len()
             && fields.iter().zip(controls).all(|((old, _), next)| {
                 old.id == next.id
@@ -540,6 +540,8 @@ impl ToolSettings {
                 }
             }
         }
+        self.fields.replace(fields);
+        self.actions.replace(actions);
         self.updating.set(false);
     }
 }

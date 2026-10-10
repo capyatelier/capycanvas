@@ -1062,7 +1062,10 @@ impl Workspace {
         }
         self.workspaces.set_localization(self, localization.clone());
         self.documents.set_localization(&localization);
-        self.localization_callbacks.borrow_mut().retain(|callback| callback(&localization));
+        let mut callbacks = self.localization_callbacks.take();
+        callbacks.retain(|callback| callback(&localization));
+        callbacks.append(&mut self.localization_callbacks.borrow_mut());
+        self.localization_callbacks.replace(callbacks);
         self.reset_workspace_publication();
         self.refresh(regions::ALL);
         crate::text_language::update(&self.window, &localization);
@@ -1950,7 +1953,7 @@ impl Workspace {
         }
         if matches!(input, UiInput::Blur) {
             self.color_panel.set_resizing(false);
-            if let Some(mut drag) = self.workspace_drag.borrow_mut().take() {
+            if let Some(mut drag) = self.workspace_drag.take() {
                 self.reset_drag_recognizers(&drag);
                 if drag.context {
                     self.dismiss_context();

@@ -1,6 +1,54 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
+export async function checkCallbackBoundaries({call,evaluate,settle,errors}) {
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+60000;function check(){if(${condition})resolve();else if(performance.now()>end)reject(Error('Callback boundary timeout: '+${JSON.stringify(condition)}+' '+document.body.innerText.slice(-1200)));else setTimeout(check,30)}check()})`);
+  const click=label=>evaluate(`(()=>{const button=[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent===${JSON.stringify(label)});if(!button)throw Error('Missing '+${JSON.stringify(label)});button.click()})()`);
+  await evaluate(`(async()=>{
+    const wasm=await import('./pkg/layer_web.js');
+    const {createRasterWorker}=await import('./raster-worker-client.js');
+    window.callbackBoundaries={wasm,transport:createRasterWorker(),diagnostics:[],requests:[],saved:null,outputs:[],picker:window.showSaveFilePicker};
+    window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){for(const token of callbackBoundaries.outputs.splice(0))await callbackBoundaries.transport({operation:'output-close',metadata:token,buffers:[]});callbackBoundaries.saved=Array.from(bytes.slice(0,4))},async abort(){}}}});
+  })()`);
+  try {
+    for(const theme of ['light','dark']) {
+      await evaluate(`(()=>{
+        layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}});
+        const test=callbackBoundaries;test.diagnostics=[];test.requests=[];test.completions=[];test.saved=null;
+        const replacement=event=>{test.wasm.configure_gpu_diagnostics(replacement);test.diagnostics.push({callback:'replacement',kind:event.kind,message:event.message})};
+        test.wasm.configure_gpu_diagnostics(event=>{test.wasm.configure_gpu_diagnostics(replacement);test.diagnostics.push({callback:'first',kind:event.kind,message:event.message})});
+        const device=layerApp.canvas.getContext('webgpu').getConfiguration().device;
+        for(const message of ['capy-test: first diagnostic','capy-test: replacement diagnostic'])device.dispatchEvent(new GPUUncapturedErrorEvent('uncapturederror',{error:new GPUValidationError(message)}));
+        const worker=request=>{test.wasm.configure_raster_worker(worker);test.requests.push({operation:request.operation,cancellable:typeof request.cancelled==='function'});return test.transport(request).then(value=>{if(request.operation==='write')test.outputs.push(value.token);if(typeof request.cancelled==='function')test.completions.push({operation:request.operation,cancelled:request.cancelled()});return value})};
+        test.wasm.configure_raster_worker(worker);
+      })()`);
+      const diagnostics=await evaluate('callbackBoundaries.diagnostics');
+      assert.deepEqual(diagnostics.map(({callback,kind})=>({callback,kind})),[{callback:'first',kind:'validation'},{callback:'replacement',kind:'validation'}]);
+      for(const [index,message] of ['first','replacement'].entries())assert.match(diagnostics[index].message,new RegExp(`capy-test: ${message} diagnostic`));
+      await settle();
+      assert.equal(errors.length,2,'Both injected validation diagnostics reach the browser console');
+      for(const error of errors.splice(0))assert.match(error,/capy-test: (first|replacement) diagnostic/,'Only injected diagnostics are expected');
+      await evaluate("layerApp.dispatch({type:'invoke',command:'save_document_as'})");
+      await wait("callbackBoundaries.saved!==null&&!layerApp.documents.busy()&&layerApp.state().commands.find(command=>command.id==='export_document').enabled");
+      assert.deepEqual(await evaluate('callbackBoundaries.saved'),[80,75,3,4],'Reconfigured worker returns a real saved package');
+      await evaluate("layerApp.dispatch({type:'invoke',command:'export_document'})");
+      await wait("!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Preview Output'&&!button.disabled)");
+      await click('Preview Output');
+      await wait("!!document.querySelector('canvas[aria-label=\"Output preview\"]')");
+      const requests=await evaluate('callbackBoundaries.requests');
+      assert.ok(requests.some(request=>request.operation==='write'&&!request.cancellable),'Save reconfigures the ordinary worker callback');
+      for(const operation of ['output-begin','output-encode'])assert.ok(requests.some(request=>request.operation===operation&&request.cancellable),`${operation} reconfigures the cancellable worker callback`);
+      const completions=await evaluate('callbackBoundaries.completions');
+      for(const operation of ['output-begin','output-encode'])assert.ok(completions.some(completion=>completion.operation===operation&&!completion.cancelled),`${operation} retains its cancellation callback until the transport promise completes`);
+      const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/callback-boundaries';await mkdir(directory,{recursive:true});
+      const screenshot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/web-${theme}.png`,Buffer.from(screenshot.data,'base64'));
+      await click('Cancel');await settle();
+      assert.equal(await evaluate('document.body.dataset.gpu'),'ready');
+      console.log(`Callback boundaries ${theme}: diagnostics replacement, package save and cancellable export preview passed`);
+    }
+  } finally {await evaluate('window.showSaveFilePicker=callbackBoundaries.picker');}
+}
+
 // API exceptions escaping the actual Wasm initialization future (not a mock app).
 export async function checkGpuCompatibility({ call, evaluate, settle, url, errors }) {
   const waitFor = async condition => {

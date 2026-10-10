@@ -11,6 +11,8 @@ mod color_picker_tests;
 mod accent_preferences_tests;
 #[path = "palette_tests.rs"]
 mod palette_tests;
+#[path = "callback_boundary_tests.rs"]
+mod callback_boundary_tests;
 
 fn wait_for_drawer_close(w: &Workspace) {
     let deadline = Instant::now() + Duration::from_secs(2);

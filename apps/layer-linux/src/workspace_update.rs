@@ -45,7 +45,7 @@ impl Workspace {
         *self.publication.pending.borrow_mut() = Some(update);
         if ended {
             // Completion/cancellation cannot be overtaken by a queued frame.
-            if let Some(tick) = self.publication.tick.borrow_mut().take() {
+            if let Some(tick) = self.publication.tick.take() {
                 tick.remove();
             }
             self.present_workspace();

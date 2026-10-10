@@ -574,8 +574,9 @@ impl NumberControl {
                 }
             ));
             spin.connect_output(glib::clone!(#[weak] control, #[upgrade_or] glib::Propagation::Proceed, move |spin| {
-                if let Some(text) = control.imp().presented_text.borrow().as_deref() {
-                    spin.set_text(text);
+                let text = control.imp().presented_text.borrow().clone();
+                if let Some(text) = text {
+                    spin.set_text(&text);
                     glib::Propagation::Stop
                 } else { glib::Propagation::Proceed }
             }));
@@ -701,7 +702,8 @@ impl NumberControl {
                     if !control.has_css_class("number-inline") {
                         entry.set_width_chars(value.edit.chars().count().clamp(3, 10) as i32);
                     }
-                    entry.set_text(imp.presented_text.borrow().as_deref().unwrap_or(&value.edit));
+                    let text = imp.presented_text.borrow().clone();
+                    entry.set_text(text.as_deref().unwrap_or(&value.edit));
                     imp.stack.get().unwrap().set_visible_child_name("entry");
                     entry.grab_focus();
                     entry.select_region(0, -1);

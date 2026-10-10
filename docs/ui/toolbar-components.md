@@ -130,6 +130,8 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   editor supplies parsing and keyboard behavior. Slider input resolves the shared
   value and releases component-state borrows before changing the GTK scale;
   its synchronous value-change signal can dispatch an edit and refresh the component.
+  Options retain each schema, editor and row together. Refresh owns these records
+  while updating widgets, and previews use owned handles across native callbacks.
 - Web `toolbar-components.js`, Android `ToolbarComponents.kt` and Apple
   `ToolbarComponents.swift` render the same owned component projection in ordinary
   toolbars and retained drawers. `toolbar_transport.rs` exposes stateless fitting,

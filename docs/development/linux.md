@@ -88,6 +88,10 @@ the shared session and schedules frames against Wayland presentation timing,
 subsurface beneath the GTK controls ([design record](../history/wayland-subsurface-feasibility.md)),
 and `files.rs` supplies native dialogs and project/photo transport.
 
+GTK setters and host callbacks can synchronously dispatch an edit and refresh
+widgets. Release `RefCell` guards before those calls by taking owned values or
+cloning handles; keep each collection borrow inside the state operation.
+
 Queued frames retain immutable typed scene snapshots and shared source roots.
 Save, recovery, export, clipboard and color/source comparisons enqueue a capture
 barrier beside those roots. File workers wait for the preceding successful GPU
@@ -199,6 +203,13 @@ Shared context menus use nested native popovers so legitimate repeated submenu
 labels do not become toolkit page identities. `native_localized_nested_menus`
 checks the actual Edit and Layer → Organize actions in every shipped language
 and both themes, including identical Turkish captions.
+
+`native_localization_callback_registration` checks subscriptions added during
+language publication. Existing subscribers keep their order; new subscribers
+receive the current language immediately and join later publications.
+`native_proof_dial_callback_registration` checks the same registration boundary
+for Proof dial input in both themes. Dial emission retains an immutable callback
+snapshot without copying the list on ordinary motion.
 
 `native_preferences_text_menu_live_language` checks localized text-edit actions,
 native selection and deferred publication while the Preferences menu is open.

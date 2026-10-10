@@ -19,7 +19,8 @@ pub(super) fn report(role: &str, kind: &str, message: impl std::fmt::Display) {
     let event = serde_json::json!({"role": role, "kind": kind, "message": message});
     if let Ok(event) = serialize(&event) {
         REPORT.with(|slot| {
-            if let Some(report) = slot.borrow().as_ref() { let _ = report.call1(&JsValue::NULL, &event); }
+            let report = slot.borrow().clone();
+            if let Some(report) = report { let _ = report.call1(&JsValue::NULL, &event); }
         });
     }
 }
