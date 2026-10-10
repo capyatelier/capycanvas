@@ -8391,7 +8391,7 @@ fn native_panel_slider_input() {
         assert!(bar.y() - bottom <= 4., "hit area reaches the label's bottom");
         assert_eq!(size.height(), 36);
         assert_eq!(bar.x(), 36.);
-        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 80.);
+        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 72.);
         let value = find_css(size.upcast_ref(), "number-value").unwrap().compute_bounds(&size).unwrap();
         assert!((value.y() + value.height() / 2. - size.height() as f32 / 2.).abs() <= 1.);
         assert_eq!(opacity.compute_bounds(&panel).unwrap().y() - size.compute_bounds(&panel).unwrap().y() - size.height() as f32, 2.);
@@ -8693,7 +8693,7 @@ fn native_number_controls() {
     assert!(find_css(size.upcast_ref(), "number-step").is_none());
     assert_eq!(bar.height(), 16.0);
     assert_eq!(bar.x(), 36.0);
-    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 80.0);
+    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 72.0);
     assert_eq!(scale.range_rect().width(), scale.width());
     let (start, end) = scale.slider_range();
     assert_eq!(start, end, "compact slider reserves no thumb width");
@@ -8755,7 +8755,7 @@ fn native_number_controls() {
                 editor.set_text(draft);
                 pump(30);
                 let bounds = editor.compute_bounds(field).unwrap();
-                assert!(bounds.width() <= 72., "panel editor stays within its reserved space: {bounds:?}");
+                assert!(bounds.width() <= 64., "panel editor stays within its reserved space: {bounds:?}");
                 assert!(bounds.x() >= track.x() + track.width() + 8., "editor keeps an 8px gap from the slider hit area: {bounds:?}, {track:?}");
                 assert_eq!(slider.compute_bounds(field).unwrap(), track, "editing keeps the slider's bounds fixed");
                 assert_eq!(field.height(), 36, "editing preserves the compact row height");

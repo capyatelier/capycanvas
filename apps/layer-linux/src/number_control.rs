@@ -693,7 +693,7 @@ impl NumberControl {
             stack.add_named(&display, Some("value"));
             if panel {
                 entry.set_width_chars(1);
-                let editor = adw::Clamp::builder().maximum_size(72).tightening_threshold(72).child(&entry).build();
+                let editor = adw::Clamp::builder().maximum_size(64).tightening_threshold(64).child(&entry).build();
                 stack.add_named(&editor, Some("entry"));
             } else { stack.add_named(&entry, Some("entry")); }
             if inline {
