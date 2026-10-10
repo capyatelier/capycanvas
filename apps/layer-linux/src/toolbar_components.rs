@@ -183,29 +183,35 @@ mod imp {
                 let sizes: Vec<_> = children[1..]
                     .iter()
                     .map(|w| {
-                        if w.has_css_class("option-segments") {
+                        if w.has_css_class("option-segments") || w.has_css_class("option-labeled-segments") {
                             let row = w.downcast_ref::<gtk::Box>().unwrap();
-                            let tile = self.style.get().size();
+                            let labeled = row.has_css_class("option-labeled-segments");
+                            let bar = if labeled { row.last_child().and_downcast::<gtk::Box>().unwrap() } else { row.clone() };
+                            let tile = layer_ui::tool_choice_style(labeled, self.style.get()).size();
                             let mut count = 0.;
-                            let mut child = row.first_child();
+                            let mut child = bar.first_child();
                             while let Some(button) = child {
                                 count += 1.;
                                 child = button.next_sibling();
                             }
                             // Keep connected choices together; narrow side bars
                             // stack them, wide toolboxes can retain the row.
-                            let stacked = self.vertical.get() && (width as f32) < tile[0] * count;
-                            row.set_orientation(if stacked {
+                            let stacked = !labeled && self.vertical.get() && (width as f32) < tile[0] * count;
+                            bar.set_orientation(if stacked {
                                 gtk::Orientation::Vertical
                             } else {
                                 gtk::Orientation::Horizontal
                             });
-                            if self.vertical.get() {
+                            if labeled {
+                                let caption = row.first_child().unwrap();
+                                [caption.measure(gtk::Orientation::Horizontal, -1).1 as f32 + row.spacing() as f32 + tile[0] * count,
+                                    (caption.measure(gtk::Orientation::Vertical, -1).1 as f32).max(tile[1])]
+                            } else if self.vertical.get() {
                                 [width as f32, tile[1] * if stacked { count } else { 1. }]
                             } else {
                                 [tile[0] * count, tile[1]]
                             }
-                        } else if !w.has_css_class("option-range") && (w.has_css_class("option-action") || self.vertical.get()) {
+                        } else if !w.has_css_class("option-range") && !w.has_css_class("option-check") && (w.has_css_class("option-action") || self.vertical.get()) {
                             self.style.get().size()
                         } else {
                             [
@@ -344,7 +350,7 @@ impl ComponentBody {
             let mut child = row.first_child();
             while let Some(w) = child {
                 if w.has_css_class("option-label") {
-                    w.set_visible(text);
+                    w.set_visible(text || row.has_css_class("option-labeled-segments"));
                 }
                 if w.has_css_class("option-icon") {
                     w.set_visible(!vertical && !text);
@@ -409,6 +415,7 @@ pub(crate) enum Field {
     Segments(Vec<gtk::ToggleButton>),
     Extra(crate::tool_extra::ExtraField),
     Action(gtk::Button),
+    Check(gtk::CheckButton),
 }
 struct OptionField {
     schema: ToolOption,
@@ -451,7 +458,13 @@ impl Field {
                     text.set_text(&selected.label);
                 }
             }
-            (Field::Segments(buttons), ToolOption::Choice { items, .. }) => {
+            (Field::Segments(buttons), ToolOption::Choice { label, items, .. }) => {
+                if let Some(bar) = buttons.first().and_then(|button|button.parent()) {
+                    bar.update_property(&[gtk::accessible::Property::Label(label)]);
+                    if let Some(row) = bar.parent()
+                        && row.has_css_class("option-labeled-segments")
+                        && let Some(caption) = row.first_child().and_downcast::<gtk::Label>() { caption.set_label(label); }
+                }
                 for (button, item) in buttons.iter().zip(items) {
                     button.set_tooltip_text(Some(&item.label));
                     button.update_property(&[gtk::accessible::Property::Label(&item.label)]);
@@ -459,6 +472,12 @@ impl Field {
                 }
             }
             (Field::Menu(button, ..), ToolOption::Action { state, .. }) => show_availability(button.upcast_ref(), state),
+            (Field::Check(check), ToolOption::Action { state, .. }) => {
+                show_availability(check.upcast_ref(), state);
+                check.set_label(Some(&state.label));
+                check.update_property(&[gtk::accessible::Property::Label(&state.label)]);
+                check.set_active(state.selected);
+            }
             (Field::Action(b), ToolOption::Action { state, .. }) => {
                 show_availability(b.upcast_ref(), state);
                 b.update_property(&[gtk::accessible::Property::Label(&state.label)]);
@@ -1253,7 +1272,7 @@ impl Component {
                 row.append(&number);
                 Field::Numeric(number)
             }
-            ToolOption::Choice { segmented: true, labeled:true, .. } | ToolOption::Choice { segmented: true, columns: Some(_), .. } => {
+            ToolOption::Choice { segmented: true, columns: Some(_), .. } => {
                 let field = crate::tool_extra::ExtraField::new(w, option, context);
                 row.append(&field.root);
                 Field::Extra(field)
@@ -1262,19 +1281,35 @@ impl Component {
                 id,
                 label,
                 segmented: true,
+                labeled,
                 items,
                 ..
             } => {
-                row.add_css_class("option-segments");
-                row.set_spacing(0);
-                row.set_homogeneous(true);
-                row.set_widget_name(&format!("toolbar-segments-{id}"));
-                let buttons = segment_buttons(&row, label, items, false, send.clone());
+                let bar = if *labeled {
+                    row.add_css_class("option-labeled-segments");
+                    let caption = gtk::Label::new(Some(label));
+                    caption.add_css_class("option-label");
+                    row.append(&caption);
+                    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    row.append(&bar);
+                    bar
+                } else { row.clone() };
+                bar.add_css_class("option-segments");
+                bar.set_spacing(0);
+                bar.set_homogeneous(true);
+                if *labeled { bar.set_halign(gtk::Align::End); bar.set_valign(gtk::Align::Center); }
+                bar.set_widget_name(&format!("toolbar-segments-{id}"));
+                let buttons = segment_buttons(&bar, label, items, false, send.clone());
                 for (index, button) in buttons.iter().enumerate() {
                     button.add_css_class("tile-button");
-                    button.set_hexpand(true);
-                    button.set_vexpand(true);
+                    button.set_hexpand(!*labeled);
+                    button.set_vexpand(!*labeled);
+                    if *labeled {
+                        let size = layer_ui::tool_choice_style(*labeled, self.root.imp().style.get()).size();
+                        button.set_size_request(size[0] as i32, size[1] as i32);
+                    }
                     button.set_widget_name(&format!("toolbar-segment-{id}-{index}"));
+                    button.child().and_downcast::<gtk::Image>().unwrap().set_pixel_size(16);
                 }
                 Field::Segments(buttons)
             }
@@ -1311,6 +1346,16 @@ impl Component {
                 });
                 row.append(&choice);
                 Field::Choice(choice)
+            }
+            ToolOption::Action { state, checkable: true } if state.icon.is_none() => {
+                row.add_css_class("option-check");
+                let check = gtk::CheckButton::with_label(&state.label);
+                check.set_valign(gtk::Align::Center);
+                check.set_widget_name(&format!("toolbar-action-{:?}", state.id));
+                let command = state.id;
+                check.connect_toggled(move |_| send(UiAction::Invoke { command }));
+                row.append(&check);
+                Field::Check(check)
             }
             ToolOption::Action { state, checkable } => {
                 row.add_css_class("option-action");

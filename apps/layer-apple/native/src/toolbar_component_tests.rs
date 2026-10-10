@@ -48,6 +48,9 @@ fn apple_toolbar_queries_match_the_shared_transport_without_a_session() {
         json!({"type":"slider_layout","width":44,"height":176,"axis":"vertical"}),
         json!({"type":"slider_spec","control":{"kind":"brush_size_slider"}}),
         json!({"type":"style","style":"medium"}),
+        json!({"type":"choice_style","labeled":true}),
+        json!({"type":"choice_style","labeled":true,"style":"large"}),
+        json!({"type":"choice_style","labeled":false,"style":"large"}),
         json!({"type":"slider_preview","control":{"kind":"brush_opacity_slider"},"style":"medium","value":0.5,"length":176,"extent":64}),
     ] {
         let expected = layer_ui::toolbar_ui(serde_json::from_value(request.clone()).unwrap(), unsafe { (*prepared.0).host.session.localization() }).unwrap();

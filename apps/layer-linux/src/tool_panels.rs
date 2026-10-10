@@ -465,18 +465,14 @@ impl ToolSettings {
                     ));
                     button.upcast()
                 } else if action.checkable {
-                    let check = gtk::CheckButton::new();
+                    let check = crate::panel_controls::check(&command.label);
                     if action.command == layer_ui::CommandId::SelectionBrushPressure { check.set_size_request(-1,44); }
                     let source_choice = action.group().is_some();
                     if source_choice {
                         if let Some(first) = &source_group { check.set_group(Some(first)); }
                         else { source_group = Some(check.clone()); }
                     }
-                    let label = gtk::Label::new(Some(&command.label));
                     check.set_tooltip_text(Some(&command.label));
-                    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                    label.set_xalign(0.);
-                    check.set_child(Some(&label));
                     let updating = self.updating.clone();
                     let id = action.command;
                     check.connect_toggled(glib::clone!(
@@ -520,7 +516,7 @@ impl ToolSettings {
             if let Some(command) = state.commands.iter().find(|c| c.id == action.command) {
                 if *label != command.label {
                     if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
-                        if let Some(child) = check.child().and_downcast::<gtk::Label>() { child.set_text(&command.label); }
+                        check.set_label(Some(&command.label));
                     } else if let Some(button) = widget.downcast_ref::<gtk::Button>() {
                         if !action.group().is_some_and(ToolActionGroup::segmented) {
                             if let Some(child) = button.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { child.set_text(&command.label); }

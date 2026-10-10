@@ -49,6 +49,11 @@ pub enum ToolbarUiRequest {
     Style {
         style: TileStyle,
     },
+    ChoiceStyle {
+        labeled: bool,
+        #[serde(default)]
+        style: TileStyle,
+    },
     AutomaticTabNames {
         available: f32,
         widths: Vec<[f32; 2]>,
@@ -132,6 +137,9 @@ pub fn toolbar_ui(request: ToolbarUiRequest, localizer: &Localizer) -> Result<se
         ToolbarUiRequest::Style { style } => {
             json!({"size":style.size(), "gap":style.gap(), "icon":style.icon_size(), "labeled":style.label_lines()>0})
         }
+        ToolbarUiRequest::ChoiceStyle { labeled, style } => toolbar_ui(
+            ToolbarUiRequest::Style {style: tool_choice_style(labeled, style)}, localizer
+        )?,
         ToolbarUiRequest::AutomaticTabNames { available, widths } => {
             json!(TabStyle::automatic_names(available, &widths))
         }
@@ -173,4 +181,27 @@ fn automatic_tab_names_are_a_stateless_toolbar_query() {
     assert_eq!(request(192.), serde_json::json!([true, false, false]));
     assert_eq!(request(246.), serde_json::json!([true, true, false]));
     assert_eq!(request(400.), serde_json::json!([true, true, true]));
+}
+
+#[test]
+fn labeled_choices_keep_compact_icons_and_unlabeled_choices_keep_the_workspace_style() {
+    let localizer = Localizer::shared(UiLanguage::English);
+    let query = |labeled, style| toolbar_ui(serde_json::from_value(serde_json::json!({
+        "type":"choice_style", "labeled":labeled, "style":style,
+    })).unwrap(), &localizer).unwrap();
+    let compact = serde_json::json!({"size":[36.,36.],"gap":2.,"icon":16,"labeled":false});
+    for (style, size, gap, icon, labeled) in [
+        (TileStyle::Small, [36.,36.], 2., 16, false),
+        (TileStyle::Medium, [54.,54.], 2., 24, false),
+        (TileStyle::Large, [72.,72.], 4., 32, false),
+        (TileStyle::MediumLabeled, [108.,54.], 2., 16, true),
+        (TileStyle::Labeled, [108.,72.], 4., 16, true),
+    ] {
+        assert_eq!(query(true, style), compact);
+        assert_eq!(query(false, style), serde_json::json!({"size":size,"gap":gap,"icon":icon,"labeled":labeled}));
+    }
+    for labeled in [false, true] {
+        let request = serde_json::from_value(serde_json::json!({"type":"choice_style","labeled":labeled})).unwrap();
+        assert_eq!(toolbar_ui(request, &localizer).unwrap(), compact);
+    }
 }

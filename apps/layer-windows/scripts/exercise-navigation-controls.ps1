@@ -32,9 +32,9 @@ function Canvas-Point{
 }
 function Reset-Zoom{
  Invoke-Id 'canvas-view-info'
- Wait-Until {Zoom-Item 'zoom-actual_pixels'} 'Zoom menu did not open for reset'
- $item=Zoom-Item 'zoom-actual_pixels'
- $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ $hit=@{item=$null}
+ Wait-Until {$hit.item=Zoom-Item 'zoom-actual_pixels';$hit.item -and !$hit.item.Current.IsOffscreen -and $hit.item.Current.IsEnabled} 'Zoom menu did not open for reset'
+ $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {[Math]::Abs((Model).state.camera.zoom-1) -lt .001 -and !(Zoom-Item 'zoom-actual_pixels')} 'Actual Pixels did not reset zoom'
 }
 function Canvas-Tap([string]$Device){
@@ -77,7 +77,7 @@ try{
   Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).Count -gt 0} 'Tool panel did not open'
  }
  if(!@((Model).layout.groups|Where-Object active -eq 'tool_settings').Count){Invoke-Id 'panel-tab-tool_settings'}
- foreach($id in 'zoom-click','zoom-drag','zoom-direction'){
+ foreach($id in 'zoom-click','zoom-drag'){
   $spec=Choice $id
   if(!$spec.labeled){throw "Zoom choice $id is missing its shared label"}
   $bar=Control "tool-choice-$id" -Arranged
@@ -91,12 +91,19 @@ try{
    $button=Control "tool-choice-$id-$i" -Arranged
    $label=$spec.items[$i].label
    if($button.Current.Name -ne $label){throw "Zoom segment $id/$i has the wrong accessible label"}
-   $text=$button.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$label))
-   if(!$text -or $text.Current.IsOffscreen){throw "Zoom segment $id/$i does not display its text"}
+   $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+   $bounds=$button.Current.BoundingRectangle
+   if([Math]::Abs($bounds.Width/$scale-36) -gt 1 -or [Math]::Abs($bounds.Height/$scale-36) -gt 1){throw "Zoom segment $id/$i is not a Small square"}
+   $glyph=Control ('icon-'+$spec.items[$i].icon) -Within $button -Arranged
+   $image=$glyph.Current.BoundingRectangle
+   if([Math]::Abs($image.Width/$scale-16) -gt 1 -or [Math]::Abs($image.Height/$scale-16) -gt 1){throw "Zoom segment $id/$i has the wrong icon size"}
+   if($i -and [Math]::Abs($bounds.Left-$previous.Right) -gt 1){throw "Zoom bar $id is not contiguous"}
+   $previous=$bounds
+
    Pick $id $i
   }
  }
- Pick 'zoom-click' 0;Pick 'zoom-drag' 2
+ Pick 'zoom-click' 0;Pick 'zoom-drag' 3
  foreach($device in 'mouse','pen','touch'){
   Reset-Zoom
   $before=(Model).state.camera.zoom;Canvas-Tap $device
@@ -105,19 +112,23 @@ try{
  Pick 'zoom-click' 1
  $before=(Model).state.camera.zoom;Canvas-Tap 'mouse'
  Wait-Until {(Model).state.camera.zoom -lt $before} 'Zoom Out did not zoom out'
- Pick 'zoom-click' 0;Pick 'zoom-drag' 0;Pick 'zoom-direction' 0
+ Pick 'zoom-click' 0;Pick 'zoom-drag' 0
  Reset-Zoom
  $before=(Model).state.camera.zoom;Drag 80 0
  Wait-Until {(Model).state.camera.zoom -gt $before} 'Horizontal smooth drag did not zoom in'
- Pick 'zoom-direction' 1
+ Pick 'zoom-drag' 1
  Reset-Zoom
  $before=(Model).state.camera.zoom;Drag 0 -80
  Wait-Until {(Model).state.camera.zoom -gt $before} 'Vertical smooth drag did not zoom in'
- Pick 'zoom-drag' 1
+ Pick 'zoom-drag' 2
  Reset-Zoom
  $before=(Model).state.camera.zoom;Drag 120 100
  Wait-Until {[Math]::Abs((Model).state.camera.zoom-$before) -gt .001} 'Area drag did not zoom'
  $center=Control 'tool-action-center_zoom_clicks' -Arranged
+ $images=$center.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Image))
+ if($images.Count){throw 'Iconless Center on click checkbox contains an image'}
+ $command=@((Model).state.commands|Where-Object id -eq 'center_zoom_clicks')[0]
+ if($center.Current.Name -ne $command.label){throw 'Center on click checkbox has the wrong accessible label'}
  $center.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
  Wait-Until {(Model).state.settings.zoom_tool.center_clicked_point} 'Center clicked point did not reach shared settings'
  Capture "zoom-settings-$Theme" -WithModel -Composed

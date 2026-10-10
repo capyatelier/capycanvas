@@ -632,4 +632,4 @@ command-restore-view = 還原儲存的檢視
 command-next-drawing = 下一幅畫
 command-previous-drawing = 上一幅畫
 
-command-center-zoom-clicks = 將點擊位置置中
+command-center-zoom-clicks = 點擊時置中

@@ -95,7 +95,7 @@ export function createCanvasBar({ app, workspace, element, button, icon, dispatc
       field.button.dataset.command = option.Action.state.id;
       if (item.accent) field.button.classList.add("suggested-action");
     } else if (option.Choice) {
-      field = choiceField({ element, button, icon, openPopup, closePopup }, option.Choice, send, { labels: true });
+      field = choiceField({ app, element, button, icon, openPopup, closePopup }, option.Choice, send, { labels: true });
     } else field = { row: element("div", "toolbar-option"), update() {} };
     for (const node of field.row.querySelectorAll("button")) node.tabIndex = -1;
     field.row.classList.add(completion ? "canvas-action-bar-completion" : "canvas-action-bar-item");

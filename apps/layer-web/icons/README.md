@@ -46,6 +46,12 @@ icon box, thumbnail spacing and row dimensions.
 
 Draw new icons on a 16×16 viewBox. A few older icons use 24×24, and the capybara
 marks keep their own square viewBoxes.
+Zoom Click uses matched `zoom-in` and `zoom-out` magnifiers with plus and minus
+marks inside the lens. Drag uses `zoom-scrub-horizontal` and
+`zoom-scrub-vertical` magnifiers with opposing arrows along the drag axis,
+`zoom-area` with a dashed marquee, and `zoom-no-drag` with the drag marker
+crossed out. These original drawings share the 1.5px contour weight; the crossed
+marker leaves the magnifier intact because clicks still zoom.
 The `tool-group` corner marker uses 1px rounded corners and 60% opacity within
 its 16px box, keeping the triangle quieter than the tool icon. Its painted
 right and bottom edges sit 6px inside that box so the marker clears the tile's

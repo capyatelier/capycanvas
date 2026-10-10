@@ -23,12 +23,28 @@ fn check_choice_items(s: &mut UiSession<Recorder>, id: &str) {
 #[test]
 fn language_refresh_retains_toolbar_editor_schema_and_action_context() {
     let mut s = session(Platform::Gtk);
-    for command in [CommandId::Pen, CommandId::Fill, CommandId::RectangleSelect] {
+    for command in [CommandId::Pen, CommandId::Fill, CommandId::RectangleSelect, CommandId::Zoom] {
         s.dispatch(UiAction::Invoke { command }).unwrap();
         let context = s.state().toolbar_context();
         let initial = s.state().tool_options();
         for language in UiLanguage::ALL {
             s.set_localization(Localizer::shared(language));
+            if command == CommandId::Zoom {
+                let help = s.state().localization.text(MessageId::ZOOM_TOOL_CENTER_ON_CLICK_TOOLTIP);
+                assert!(!help.is_empty());
+                for keymap in ["capy", "photoshop"] {
+                    crate::keymaps::select(&mut s.state.settings, keymap).unwrap();
+                    s.refresh_shortcuts(true);
+                    let center = s.state().commands.iter().find(|entry|entry.id == CommandId::CenterZoomClicks).unwrap();
+                    assert_eq!(center.label, s.state().localization.text(MessageId::COMMAND_CENTER_ZOOM_CLICKS));
+                    assert!(center.tooltip.starts_with(help.as_ref()));
+                    assert_ne!(center.label.as_ref(), help.as_ref());
+                    if language == UiLanguage::English {
+                        assert_eq!(center.label.as_ref(), "Center on click");
+                        assert_eq!(help.as_ref(), "Move the clicked point to the center of the view when you click to zoom in or out.");
+                    }
+                }
+            }
             let updated = s.state().tool_options();
             assert_eq!(initial.len(), updated.len());
             assert!(initial.iter().zip(&updated).all(|(before, after)| before.same_schema(after)));

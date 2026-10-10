@@ -36,14 +36,14 @@ pub struct ZoomToolSettings {
 pub enum ZoomToolAction {
     Click { out: bool },
     Drag { value: ZoomDrag },
-    Direction { value: ZoomDirection },
+    Smooth { direction: ZoomDirection },
 }
 impl ZoomToolSettings {
     pub(crate) fn apply(&mut self, action: ZoomToolAction) {
         match action {
             ZoomToolAction::Click { out } => self.zoom_out = out,
             ZoomToolAction::Drag { value } => self.drag = value,
-            ZoomToolAction::Direction { value } => self.direction = value,
+            ZoomToolAction::Smooth { direction } => { self.drag = ZoomDrag::Smooth; self.direction = direction; }
         }
     }
     pub(crate) fn controls(self, localizer: &Localizer) -> Vec<ToolOption> {
@@ -56,17 +56,14 @@ impl ZoomToolSettings {
         };
         vec![
             choice("zoom-click", MessageId::ZOOM_TOOL_CLICK, &[
-                (MessageId::ZOOM_TOOL_IN, ZoomToolAction::Click {out:false}, !self.zoom_out, "plus"),
-                (MessageId::ZOOM_TOOL_OUT, ZoomToolAction::Click {out:true}, self.zoom_out, "minus"),
+                (MessageId::ZOOM_TOOL_IN, ZoomToolAction::Click {out:false}, !self.zoom_out, "zoom-in"),
+                (MessageId::ZOOM_TOOL_OUT, ZoomToolAction::Click {out:true}, self.zoom_out, "zoom-out"),
             ]),
             choice("zoom-drag", MessageId::ZOOM_TOOL_DRAG, &[
-                (MessageId::ZOOM_TOOL_SMOOTH, ZoomToolAction::Drag {value:ZoomDrag::Smooth}, self.drag==ZoomDrag::Smooth, "plus"),
-                (MessageId::ZOOM_TOOL_AREA, ZoomToolAction::Drag {value:ZoomDrag::Area}, self.drag==ZoomDrag::Area, "select"),
-                (MessageId::ZOOM_TOOL_CLICK_ONLY, ZoomToolAction::Drag {value:ZoomDrag::ClickOnly}, self.drag==ZoomDrag::ClickOnly, "search"),
-            ]),
-            choice("zoom-direction", MessageId::ZOOM_TOOL_DIRECTION, &[
-                (MessageId::ZOOM_TOOL_LEFT_RIGHT, ZoomToolAction::Direction {value:ZoomDirection::Horizontal}, self.direction==ZoomDirection::Horizontal, "plus"),
-                (MessageId::ZOOM_TOOL_UP_DOWN, ZoomToolAction::Direction {value:ZoomDirection::Vertical}, self.direction==ZoomDirection::Vertical, "plus"),
+                (MessageId::ZOOM_TOOL_LEFT_RIGHT, ZoomToolAction::Smooth {direction:ZoomDirection::Horizontal}, self.drag==ZoomDrag::Smooth && self.direction==ZoomDirection::Horizontal, "zoom-scrub-horizontal"),
+                (MessageId::ZOOM_TOOL_UP_DOWN, ZoomToolAction::Smooth {direction:ZoomDirection::Vertical}, self.drag==ZoomDrag::Smooth && self.direction==ZoomDirection::Vertical, "zoom-scrub-vertical"),
+                (MessageId::ZOOM_TOOL_AREA, ZoomToolAction::Drag {value:ZoomDrag::Area}, self.drag==ZoomDrag::Area, "zoom-area"),
+                (MessageId::ZOOM_TOOL_CLICK_ONLY, ZoomToolAction::Drag {value:ZoomDrag::ClickOnly}, self.drag==ZoomDrag::ClickOnly, "zoom-no-drag"),
             ]),
         ]
     }

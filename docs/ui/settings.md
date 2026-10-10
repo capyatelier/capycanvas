@@ -109,10 +109,13 @@ is which.
 
 ## Zoom and canvas navigation
 
-Zoom Tool Settings contain the labeled Click, Drag and Direction radio bars and
-Center clicked point checkbox. Their shared `ZoomToolSettings` are saved in the
-application preferences and apply across drawings, workspaces and temporary Zoom
-use. Click centering affects tool clicks; wheel and pinch keep their anchors.
+Zoom Tool Settings contain the labeled Click and Drag radio bars and the
+Center on click text checkbox. Click chooses In or Out. Drag combines smooth
+Left/right and Up/down zoom, Area zoom and Click only in one four-choice bar.
+Rightward or upward smooth dragging zooms in. Their shared `ZoomToolSettings` are
+saved in the application preferences and apply across drawings, workspaces and
+temporary Zoom use. Center on click moves the clicked point to the center of the
+view during click zoom. Wheel, pinch and smooth dragging keep their anchors.
 
 Canvas preferences contain Mouse wheel (Pan/Zoom), Rotate with two fingers,
 and the existing pan and zoom speeds. The rotation switch applies to touch and

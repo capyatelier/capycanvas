@@ -1,6 +1,7 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyPopups=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
@@ -37,13 +38,15 @@ function Switch-Workspace([string]$Name,[string]$Id){
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
+    [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4));$env:CAPY_TRACE_UI='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned toolbar review $($review.Id): $run"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Toolbar review did not start' 90
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));Focus-Review
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 
@@ -146,6 +149,44 @@ try {
     Write-Output 'PASS: Photo Tool Options gradient button and editor'
 
     [CapyRowPointer]::Dispose()
+    Invoke (Tool-Tile 'zoom')
+    Wait-Until {(Model).state.layer_tools.tool -eq 'zoom'} 'Zoom did not activate for Tool Options'
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    foreach($id in 'zoom-click','zoom-drag'){
+        $spec=@((Model).state.tool_extra|ForEach-Object {$_.Choice}|Where-Object id -eq $id)[0]
+        $previous=$null
+        for($i=0;$i -lt $spec.items.Count;$i++){
+            $button=Control "toolbar-segment-$id-$i";$bounds=Box "toolbar-segment-$id-$i"
+            if($button.Current.Name -ne $spec.items[$i].label){throw "Tool Options $id/$i accessible label differs from shared copy"}
+            if([Math]::Abs($bounds.Width/$scale-36) -gt 1 -or [Math]::Abs($bounds.Height/$scale-36) -gt 1){throw "Tool Options $id/$i is not a Small square"}
+            $glyph=Control ('icon-'+$spec.items[$i].icon) -Within $button;$image=$glyph.Current.BoundingRectangle
+            if([Math]::Abs($image.Width/$scale-16) -gt 1 -or [Math]::Abs($image.Height/$scale-16) -gt 1){throw "Tool Options $id/$i has the wrong icon size"}
+            if($previous -and [Math]::Abs($bounds.Left-$previous.Right) -gt 1){throw "Tool Options $id is not a contiguous bar"}
+            $previous=$bounds
+        }
+    }
+    $center=Control 'toolbar-action-center_zoom_clicks'
+    if($center.Current.ControlType -ne [System.Windows.Automation.ControlType]::CheckBox){throw 'Iconless Tool Options action is not a native checkbox'}
+    $center.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {(Model).state.settings.zoom_tool.center_clicked_point} 'Tool Options checkbox did not reach shared settings'
+    Capture "photo-zoom-options-$Theme" -WithModel -Composed
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 744 -Height 760
+    Invoke "toolbar-more-$($options.id)"
+    Wait-Until {$null -ne (Model).state.customization.drawer} 'Narrow Tool Options overflow did not open its drawer'
+    $drawer=Control 'tool-drawer'
+    foreach($id in 'zoom-click','zoom-drag'){
+        $spec=@((Model).state.tool_extra|ForEach-Object {$_.Choice}|Where-Object id -eq $id)[0]
+        for($i=0;$i -lt $spec.items.Count;$i++){
+            $button=Control "tool-choice-$id-$i" -Within $drawer
+            if($button.Current.Name -ne $spec.items[$i].label){throw 'Overflow drawer lost its shared option label'}
+            $glyph=Control ('icon-'+$spec.items[$i].icon) -Within $button
+        }
+    }
+    Capture "photo-zoom-overflow-$Theme" -WithModel -Composed
+    $target=(Control 'tool-choice-zoom-click-0' -Within $drawer).Current.BoundingRectangle
+    [CapyRowPointer]::Hover([int]($target.X+$target.Width/2),[int]($target.Y+$target.Height/2))
+    [CapyRowPointer]::Key(0x1B)
+    Wait-Until {!((Model).state.customization.drawer)} 'Zoom overflow drawer did not close'
     $null=$review.CloseMainWindow();$lastDecision=$null
     Wait-Until {
         $review.Refresh();if($review.HasExited){return $true}

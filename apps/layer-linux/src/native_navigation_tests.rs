@@ -431,16 +431,74 @@ pub(super) fn pass_through(document: &mut layer_core::Document) {
     refresh(document);
 }
 
+fn assert_zoom_icon_bar(w: &Rc<Workspace>, root: &gtk::Widget, id: &str) -> gtk::Widget {
+    assert_eq!(state(w).tool_extra.iter().filter(|option| matches!(option, layer_ui::ToolOption::Choice {..})).count(), 2, "Zoom exposes Click and combined Drag choices only");
+    assert!(find_named(root,"tool-choice-bar-zoom-direction").is_none() && find_named(root,"toolbar-segments-zoom-direction").is_none());
+    let expected_icons: &[&str] = match id {
+        "zoom-click" => &["zoom-in","zoom-out"],
+        "zoom-drag" => &["zoom-scrub-horizontal","zoom-scrub-vertical","zoom-area","zoom-no-drag"],
+        _ => unreachable!(),
+    };
+    let group = find_named(root, &format!("tool-choice-bar-{id}"))
+        .or_else(|| find_named(root, &format!("toolbar-segments-{id}"))).expect("Zoom icon bar");
+    assert!(group.is_mapped(), "{id} visible");
+    assert!(group.has_css_class("linked") && group.has_css_class("selection-modes"), "{id} uses Lasso segment style");
+    let option = state(w).tool_extra.into_iter().find(|option| matches!(option, layer_ui::ToolOption::Choice {id: choice, ..} if *choice == id)).unwrap();
+    let layer_ui::ToolOption::Choice {label, items, ..} = option else {unreachable!()};
+    let caption = group.parent().unwrap().first_child().and_downcast::<gtk::Label>().expect("choice caption sits before icon bar");
+    assert!(caption.is_mapped(), "labeled choices retain their left caption");
+    assert_eq!(caption.text().as_str(), label.as_ref());
+    assert!(!caption.layout().is_ellipsized());
+    let buttons: Vec<_> = widgets(&group).filter_map(|widget| widget.downcast::<gtk::ToggleButton>().ok()).collect();
+    assert_eq!(buttons.len(), items.len());
+    assert_eq!(items.iter().map(|item| item.icon).collect::<Vec<_>>(), expected_icons, "choices use distinct Zoom icons");
+    let tile = layer_ui::TILE_SIZE as i32;
+    assert_eq!([group.width(), group.height()], [buttons.len() as i32 * tile, tile], "{id} is one row of small square tiles");
+    let parent = group.parent().unwrap();
+    let bounds = group.compute_bounds(&parent).unwrap();
+    assert!((bounds.x() + bounds.width() - parent.width() as f32).abs() <= 1., "{id} bar aligns to its row's right edge");
+    let actual = group.compute_bounds(root).unwrap();
+    assert!(actual.x()>=0. && actual.y()>=0. && actual.x()+actual.width()<=root.width() as f32+1. && actual.y()+actual.height()<=root.height() as f32+1., "{id} fits actual panel/component bounds: {actual:?}, root {}×{}",root.width(),root.height());
+    assert_eq!(buttons.iter().filter(|button| button.is_active()).count(), 1, "{id} is mutually exclusive");
+    for (button, item) in buttons.iter().zip(items) {
+        assert!(button.is_mapped());
+        assert_eq!([button.width(), button.height()], [tile, tile], "{id} item is one small square tile");
+        assert_eq!(button.tooltip_text().as_deref(), Some(item.label.as_ref()));
+        let expected = std::ffi::CString::new(item.label.as_ref()).unwrap();
+        let difference = unsafe { gtk::ffi::gtk_test_accessible_check_property(button.as_ptr().cast(), gtk::ffi::GTK_ACCESSIBLE_PROPERTY_LABEL, expected.as_ptr()) };
+        let difference: Option<glib::GString> = unsafe { glib::translate::from_glib_full(difference) };
+        assert_eq!(difference, None);
+        assert!(widgets(button.upcast_ref()).all(|widget| !widget.is::<gtk::Label>()), "choices contain icons only");
+        let icon = descendant::<gtk::Image>(button).unwrap();
+        assert_eq!(crate::icons::name(&icon).as_deref(), Some(format!("layer-{}-symbolic", item.icon).as_str()));
+        let bounds = button.compute_bounds(&group).unwrap();
+        assert!(bounds.x() >= 0. && bounds.y() >= 0. && bounds.x() + bounds.width() <= group.width() as f32 + 1. && bounds.y() + bounds.height() <= group.height() as f32 + 1., "{id} control fits bar");
+    }
+    group
+}
+
+fn assert_zoom_center_copy(w: &Rc<Workspace>, check: &gtk::CheckButton) {
+    let command = ui_session(w).command(CommandId::CenterZoomClicks);
+    if w.localization().language()==UiLanguage::English {
+        assert_eq!(command.label.as_ref(),"Center on click");
+        assert_eq!(command.tooltip,"Move the clicked point to the center of the view when you click to zoom in or out.");
+    }
+    assert_eq!(check.label().as_deref(),Some(command.label.as_ref()));
+    assert_eq!(check.tooltip_text().as_deref(),Some(command.tooltip.as_str()));
+    assert!(descendant::<gtk::Image>(check).is_none(),"Center is a text checkbox");
+}
+
 #[test]
 #[ignore = "private Wayland display, hardware GPU and native pointer input"]
 fn native_zoom_settings_and_canvas_preferences() {
+    unsafe { std::env::set_var("GTK_A11Y", "test"); }
     let app = native_test_app("art.capycanvas.ZoomSettings");
     let w = fixture_workspace(&app);
     w.window.maximize();
     w.window.present();
     pump(1200);
     let workspace = tool_settings_workspace(&w, &[CommandId::Hand, CommandId::Zoom], true, true);
-    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace.clone()) });
     pump(200);
     let mut input = RemoteInput::new().settle_ms(120);
     input.ready();
@@ -448,27 +506,31 @@ fn native_zoom_settings_and_canvas_preferences() {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         w.dispatch(UiAction::Invoke { command: CommandId::Zoom });
         pump(200);
-        let select = |id: &str, index| {
-            let group = named::<adw::ToggleGroup>(&w.panel_widget(Panel::ToolSettings), &format!("tool-choice-bar-{id}"));
-            let row = group.parent().unwrap();
-            assert!(row.first_child().unwrap().is::<gtk::Label>(), "choice label sits before native segments");
-            group.set_active(index);
+        w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace.clone()) });
+        pump(200);
+        let select = |input: &mut RemoteInput, id: &str, index| {
+            let panel = w.panel_widget(Panel::ToolSettings);
+            assert_zoom_icon_bar(&w, &panel, id);
+            let button = named::<gtk::ToggleButton>(&panel, &format!("tool-choice-{id}-{index}"));
+            input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));
             until(|| crate::preferences::load().unwrap().is_some_and(|saved| saved.zoom_tool == state(&w).settings.zoom_tool), "Zoom choice is persisted by native preferences");
+            assert!(button.is_active());
+            assert_zoom_icon_bar(&w, &panel, id);
         };
-        for (id, count) in [("zoom-click", 2), ("zoom-drag", 3), ("zoom-direction", 2)] {
-            let group = named::<adw::ToggleGroup>(&w.panel_widget(Panel::ToolSettings), &format!("tool-choice-bar-{id}"));
-            assert_eq!(group.n_toggles(), count);
-            let labels: Vec<_> = widgets(group.upcast_ref()).filter_map(|widget| widget.downcast::<gtk::Label>().ok()).filter(|label| label.is_visible() && !label.text().is_empty()).collect();
-            assert_eq!(labels.len(), count as usize, "each choice has a visible label");
-            for label in labels {
-                assert!(!label.layout().is_ellipsized(), "{id} choice is readable: {}", label.text());
-                let bounds = label.compute_bounds(&group).unwrap();
-                assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= group.width() as f32 + 1., "{id} label fits its segments: {}", label.text());
+        for id in ["zoom-click", "zoom-drag"] {
+            assert_zoom_icon_bar(&w, &w.panel_widget(Panel::ToolSettings), id);
+        }
+        for previous in [2,3] {
+            for direction in [0,1] {
+                select(&mut input,"zoom-drag",previous);
+                assert_eq!(state(&w).settings.zoom_tool.drag, if previous==2 {layer_ui::ZoomDrag::Area} else {layer_ui::ZoomDrag::ClickOnly});
+                select(&mut input,"zoom-drag",direction);
+                assert_eq!(state(&w).settings.zoom_tool.drag,layer_ui::ZoomDrag::Smooth,"either axis restores Smooth atomically");
+                assert_eq!(state(&w).settings.zoom_tool.direction,if direction==0 {layer_ui::ZoomDirection::Horizontal} else {layer_ui::ZoomDirection::Vertical});
             }
         }
-        select("zoom-click", 0);
-        select("zoom-drag", 0);
-        select("zoom-direction", 0);
+        select(&mut input, "zoom-click", 0);
+        select(&mut input, "zoom-drag", 0);
         assert_eq!(state(&w).settings.zoom_tool.drag, layer_ui::ZoomDrag::Smooth);
         let point = screen_point(w.area.upcast_ref(), &w.window, [0.55, 0.55]);
         let drag = |input: &mut RemoteInput, offset: [f32; 2]| input.perform(serde_json::json!([
@@ -480,13 +542,13 @@ fn native_zoom_settings_and_canvas_preferences() {
         let before = state(&w).camera.zoom;
         drag(&mut input, [64., 0.]);
         assert!(state(&w).camera.zoom > before, "horizontal smooth drag zooms in");
-        select("zoom-direction", 1);
+        select(&mut input, "zoom-drag", 1);
         assert_eq!(state(&w).settings.zoom_tool.direction, layer_ui::ZoomDirection::Vertical);
         w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
         let before = state(&w).camera.zoom;
         drag(&mut input, [0., -64.]);
         assert!(state(&w).camera.zoom > before, "vertical upward smooth drag zooms in");
-        select("zoom-drag", 1);
+        select(&mut input, "zoom-drag", 2);
         w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
         let before = state(&w).camera;
         input.perform(serde_json::json!([{ "point": point }, { "down": true }, { "point": [point[0] + 96., point[1] + 72.] }]));
@@ -494,27 +556,28 @@ fn native_zoom_settings_and_canvas_preferences() {
         let mut overlay = Vec::new();
         ui_session(&w).append_layer_overlay(&mut overlay);
         assert_eq!(overlay.len(), 4, "area preview has four edges");
-        let dir = artifact_dir("../../artifacts/navigation-controls/gtk");
+        let dir = artifact_dir("../../artifacts/navigation-controls/postrebase/gtk");
         capture_reference(&w, &format!("{dir}/zoom-area-{theme:?}.png"), 1.);
         input.perform(serde_json::json!([{ "down": false }]));
         assert!(state(&w).camera.zoom > before.zoom, "release fits the selected area");
         overlay.clear();
         ui_session(&w).append_layer_overlay(&mut overlay);
         assert!(overlay.is_empty());
-        select("zoom-drag", 2);
+        select(&mut input, "zoom-drag", 3);
         w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
         let before = state(&w).camera.zoom;
         input.perform(serde_json::json!([{ "point": point }, { "down": true }, { "point": [point[0] + 64., point[1]] }]));
         assert_eq!(state(&w).camera.zoom, before, "click-only ignores drag movement");
         input.perform(serde_json::json!([{ "down": false }]));
-        select("zoom-click", 1);
+        select(&mut input, "zoom-click", 1);
         assert!(state(&w).settings.zoom_tool.zoom_out);
         let before = state(&w).camera.zoom;
         input.click(point);
         assert!(state(&w).camera.zoom < before, "Out changes the click direction");
-        select("zoom-click", 0);
+        select(&mut input, "zoom-click", 0);
         let center = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-CenterZoomClicks");
-        center.set_active(true);
+        assert_zoom_center_copy(&w,&center);
+        input.click(screen_point(center.upcast_ref(),&w.window,[0.1,0.5]));
         pump(100);
         assert!(state(&w).settings.zoom_tool.center_clicked_point);
         until(|| crate::preferences::load().unwrap().is_some_and(|saved| saved.zoom_tool == state(&w).settings.zoom_tool), "Center clicked point is persisted by native preferences");
@@ -555,8 +618,86 @@ fn native_zoom_settings_and_canvas_preferences() {
         assert_eq!(state(&w).camera.zoom, before.zoom, "Shift keeps wheel panning with Zoom preference");
         assert!(state(&w).camera.translation[0] < before.translation[0]);
         w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::WheelBehavior, value: PreferenceValue::Choice(0) } });
-        select("zoom-drag", 0);
-        select("zoom-direction", 0);
+        select(&mut input, "zoom-drag", 0);
+        for preset in [WorkspacePreset::Photographer, WorkspacePreset::Illustrator] {
+            let mut bar_workspace = WorkspaceState { layout: preset.layout(Platform::Gtk), ..WorkspaceState::default() };
+            bar_workspace.layout.set_panel_visible(Panel::ToolSettings, true).unwrap();
+            if preset == WorkspacePreset::Illustrator {
+                bar_workspace.layout.insert_tools(Panel::Commands, None, &[ToolbarControl::TOOL_OPTIONS]).unwrap();
+                bar_workspace.layout.move_panel([1600., 1000.], Panel::Commands, DockTarget::Edge {edge: Edge::Top, outer:true}).unwrap();
+            }
+            let options = bar_workspace.layout.panel(Panel::Commands).unwrap().tiles().iter().find(|tile| tile.control.options_style().is_some()).unwrap().id;
+            w.dispatch(UiAction::RestoreWorkspace {workspace: Box::new(bar_workspace)});
+            for style in [TileStyle::Small, TileStyle::Medium] {
+                w.dispatch(UiAction::Customize {action: CustomizationAction::SetTileStyle {panel:Panel::Commands, style}});
+                w.dispatch(UiAction::Customize {action:CustomizationAction::SetToolOptionsStyle {panel:Panel::Commands,tile:options,style:ToolOptionsStyle {text:style!=TileStyle::Small,sliders:true}}});
+                w.dispatch(UiAction::Invoke {command:CommandId::Zoom});
+                pump(250);
+                let more = named::<gtk::Widget>(w.surface.upcast_ref(), &format!("tile-{options}"));
+                let component = more.parent().unwrap().parent().unwrap();
+                for id in ["zoom-click", "zoom-drag"] {
+                    let group = assert_zoom_icon_bar(&w, &component, id);
+                    assert!(group.height() <= style.size()[1] as i32, "icon choices fit toolbar lane");
+                    let bounds = group.compute_bounds(&component).unwrap();
+                    assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= component.width() as f32 + 1., "{preset:?} {style:?} choices fit Tool Options");
+                }
+                let out = named::<gtk::ToggleButton>(&component, "toolbar-segment-zoom-click-1");
+                input.click(screen_point(out.upcast_ref(), &w.window, [0.5,0.5]));
+                assert!(state(&w).settings.zoom_tool.zoom_out);
+                until(|| crate::preferences::load().unwrap().is_some_and(|saved| saved.zoom_tool == state(&w).settings.zoom_tool), "inline choice persists");
+                let center = named::<gtk::CheckButton>(&component, "toolbar-action-CenterZoomClicks");
+                assert!(center.is_mapped(), "Center checkbox is visible beside choices");
+                assert_zoom_center_copy(&w,&center);
+                let previous = state(&w).settings.zoom_tool.center_clicked_point;
+                input.click(screen_point(center.upcast_ref(), &w.window, [0.1,0.5]));
+                assert_eq!(state(&w).settings.zoom_tool.center_clicked_point, !previous);
+                until(|| crate::preferences::load().unwrap().is_some_and(|saved| saved.zoom_tool == state(&w).settings.zoom_tool), "inline Center action persists");
+                capture_reference(&w, &format!("{dir}/options-{preset:?}-{style:?}-{theme:?}.png"),1.);
+                w.dispatch(UiAction::Invoke {command:CommandId::Lasso});
+                pump(150);
+                let lasso = named::<gtk::Widget>(&component, &format!("toolbar-segments-{}", ToolActionGroup::SelectionMode.id()));
+                assert!(lasso.is_mapped() && lasso.has_css_class("linked") && lasso.has_css_class("selection-modes"), "Zoom choices share Lasso linked segment classes");
+                w.dispatch(UiAction::Invoke {command:CommandId::Zoom});
+            }
+            w.dispatch(UiAction::Customize {action:CustomizationAction::SetTileStyle {panel:Panel::Commands,style:TileStyle::Small}});
+            w.dispatch(UiAction::MovePanel {panel:Panel::Commands,target:DockTarget::Edge {edge:Edge::Left,outer:true},viewport:[1600.,1000.]});
+            pump(200);
+            let more = named::<gtk::Widget>(w.surface.upcast_ref(), &format!("tile-{options}"));
+            let component = more.parent().unwrap().parent().unwrap();
+            assert!(!named::<gtk::Widget>(&component,"toolbar-segments-zoom-click").is_mapped(), "complete labeled row moves into narrow overflow");
+            assert!(more.is_mapped(), "narrow overflow button stays available");
+            input.click(screen_point(&more,&w.window,[0.5,0.5]));
+            pump(200);
+            let drawer = named::<gtk::Widget>(w.surface.upcast_ref(),"drawer-panel-ToolSettings");
+            for id in ["zoom-click","zoom-drag"] {assert_zoom_icon_bar(&w,&drawer,id);}
+            let direction = named::<gtk::ToggleButton>(&drawer,"tool-choice-zoom-drag-1");
+            input.click(screen_point(direction.upcast_ref(),&w.window,[0.5,0.5]));
+            assert_eq!(state(&w).settings.zoom_tool.direction,layer_ui::ZoomDirection::Vertical);
+            until(|| crate::preferences::load().unwrap().is_some_and(|saved|saved.zoom_tool==state(&w).settings.zoom_tool),"overflow choice persists");
+            capture_reference(&w,&format!("{dir}/overflow-{preset:?}-{theme:?}.png"),1.);
+            input.click(screen_point(&more,&w.window,[0.5,0.5]));
+            pump(100);
+        }
+        w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace.clone())});
+        w.dispatch(UiAction::Invoke {command:CommandId::Zoom});
+        let language = UiLanguage::German;
+        let choice = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate==language).unwrap() as u32;
+        w.dispatch(UiAction::Preferences {action:PreferenceAction::Edit {id:PreferenceId::Language,value:PreferenceValue::Choice(choice)}});
+        until(|| w.localization().language()==language,"localized Zoom controls published");
+        pump(200);
+        let panel = w.panel_widget(Panel::ToolSettings);
+        for id in ["zoom-click","zoom-drag"] {
+            let group = assert_zoom_icon_bar(&w,&panel,id);
+            let bounds = group.compute_bounds(&panel).unwrap();
+            assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=panel.width() as f32+1.,"localized icon bars fit narrow Tool Settings");
+        }
+        let center = named::<gtk::CheckButton>(&panel,"tool-action-CenterZoomClicks");
+        assert!(center.is_mapped());
+        assert_zoom_center_copy(&w,&center);
+        assert!(widgets(center.upcast_ref()).filter_map(|widget|widget.downcast::<gtk::Label>().ok()).all(|label|!label.layout().is_ellipsized()),"localized Center text remains readable");
+        capture_reference(&w,&format!("{dir}/localized-{}-{theme:?}.png",language.tag()),1.);
+        w.dispatch(UiAction::Preferences {action:PreferenceAction::Edit {id:PreferenceId::Language,value:PreferenceValue::Choice(1)}});
+        until(|| w.localization().language()==UiLanguage::English,"English restored");
     }
     input.finish();
     w.window.destroy();

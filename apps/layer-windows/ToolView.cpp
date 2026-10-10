@@ -209,7 +209,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             auto entry=value.GetObject();
             if(auto gradient=object(entry,L"Gradient");gradient.Size()){result.Append(object(object(gradient,L"gradient"),L"destination"));continue;}
             auto choice=object(entry,L"Choice");
-            result.Append(O({{L"id",S(str(choice,L"id"))},{L"columns",N(num(choice,L"columns"))},
+            result.Append(O({{L"id",S(str(choice,L"id"))},{L"labeled",B(flag(choice,L"labeled"))},{L"columns",N(num(choice,L"columns"))},
                 {L"beside",S(str(choice,L"beside"))},{L"items",S(itemSchema(array(choice,L"items")))}}));
         }return result;
     }
@@ -291,12 +291,15 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 if(!str(spec,L"beside").empty())continue;
                 auto bar=segmented(true,items.Size());AutomationProperties::SetName(bar,str(spec,L"label"));
                 bool labeled=flag(spec,L"labeled");
+                auto choiceStyle=toolbarUi(data->localization.get(),O({{L"type",S(L"choice_style")},{L"labeled",B(labeled)},{L"style",S(L"small")}})).GetObject();
+                auto choiceSize=array(choiceStyle,L"size");
                 auto caption=label(data,str(spec,L"label"));
                 if(labeled){
+                    bar.HorizontalAlignment(HorizontalAlignment::Right);bar.Width(choiceSize.GetNumberAt(0)*items.Size());bar.Height(choiceSize.GetNumberAt(1));bar.Margin({0,0,0,0});
                     Grid row;row.ColumnSpacing(8);
-                    ColumnDefinition title;title.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(title);
-                    ColumnDefinition control;control.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(control);
-                    caption.MinWidth(64);caption.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(caption);
+                    ColumnDefinition title;title.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(title);
+                    ColumnDefinition control;control.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(control);
+                    caption.TextWrapping(TextWrapping::Wrap);bar.VerticalAlignment(VerticalAlignment::Center);caption.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(caption);
                     Grid::SetColumn(bar,1);row.Children().Append(bar);root.Children().Append(row);
                 }
                 AutomationProperties::SetAutomationId(bar,L"tool-choice-"+specId);
@@ -306,13 +309,18 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     auto item=items.GetObjectAt(i);auto action=object(item,L"action");
                     auto pick=segment(str(item,L"icon"),str(item,L"label"),str(item,L"label"),L"tool-choice-"+specId+L"-"+to_hstring(i),true,i,
                         [weak,action,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)self->data->dispatch(action);});
-                    if(labeled)pick.Content(label(data,str(item,L"label")));
+                    if(labeled){
+                        auto glyph=icon(str(item,L"icon"),data->theme(),num(choiceStyle,L"icon"));AutomationProperties::SetAutomationId(glyph,L"icon-"+str(item,L"icon"));pick.Content(glyph);
+                        pick.Width(choiceSize.GetNumberAt(0));pick.Height(choiceSize.GetNumberAt(1));
+                        double first=i==0?6:0,last=i+1==items.Size()?6:0;pick.CornerRadius({first,last,last,first});
+                    }
                     Grid::SetColumn(pick,int(i));bar.Children().Append(pick);
-                    fields.emplace_back([weak,pick,specId,i,labeled]{if(auto self=weak.lock()){
+                    fields.emplace_back([weak,pick,specId,i,labeled,choiceStyle,shownTheme=data->theme() ]() mutable{if(auto self=weak.lock()){
                         J current;for(auto option:array(self->data->state,L"tool_extra"))if(str(object(option.GetObject(),L"Choice"),L"id")==specId)current=object(option.GetObject(),L"Choice");
                         auto items=array(current,L"items");bool chosen=i<items.Size()&&flag(items.GetObjectAt(i),L"selected");
                         pick.Background(chosen?selected(self->data):self->data->brush(L"input"));
-                        if(i<items.Size()){auto title=str(items.GetObjectAt(i),L"label");AutomationProperties::SetName(pick,title);tooltip(pick,title);if(labeled)pick.Content(label(self->data,title));}
+                        if(i<items.Size()){auto title=str(items.GetObjectAt(i),L"label");AutomationProperties::SetName(pick,title);tooltip(pick,title);}
+                        if(labeled&&shownTheme!=self->data->theme()){shownTheme=self->data->theme();auto glyph=icon(str(items.GetObjectAt(i),L"icon"),shownTheme,num(choiceStyle,L"icon"));AutomationProperties::SetAutomationId(glyph,L"icon-"+str(items.GetObjectAt(i),L"icon"));pick.Content(glyph);}
                         AutomationProperties::SetItemStatus(pick,chosen?self->data->caption(L"search",L"selected"):hstring());
                     }});
                 }
@@ -412,22 +420,22 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                         tooltip(radio,str(command,L"tooltip"));
                     }});
                 }else if(flag(item,L"checkable")){
-                    CheckBox check;auto text=toolLabel(data,command,false);text.Margin({6,0,0,0});check.Content(text);
+                    CheckBox check;FrameworkElement text{nullptr};if(str(command,L"icon").empty())text=label(data,str(command,L"label"),false);else text=toolLabel(data,command,false);text.Margin({6,0,0,0});check.Content(text);
                     check.MinWidth(0);check.MinHeight(selectionTool?44:32);check.Padding({0,0,0,0});check.HorizontalAlignment(HorizontalAlignment::Stretch);
                     check.VerticalContentAlignment(VerticalAlignment::Center);
                     AutomationProperties::SetName(check,str(command,L"label"));AutomationProperties::SetAutomationId(check,L"tool-action-"+id);
                     check.Click([invoke](auto&&,auto&&){invoke();});root.Children().Append(check);
                     fields.emplace_back([weak,id,check]{if(auto self=weak.lock()){
                         auto command=find(array(self->data->state,L"commands"),L"id",id);
-                        check.Content().as<Grid>().Children().GetAt(1).as<TextBlock>().Text(str(command,L"label"));AutomationProperties::SetName(check,str(command,L"label"));
+                        if(auto text=check.Content().try_as<TextBlock>())text.Text(str(command,L"label"));else check.Content().as<Grid>().Children().GetAt(1).as<TextBlock>().Text(str(command,L"label"));AutomationProperties::SetName(check,str(command,L"label"));
                         check.IsEnabled(flag(command,L"enabled"));check.IsChecked(flag(command,L"selected"));
                         tooltip(check,str(command,L"tooltip"));
                     }});
                 }else{
                     auto pick=button(data,str(command,L"label"),invoke);pick.Height(selectionTool?44:36);pick.HorizontalAlignment(HorizontalAlignment::Stretch);
-                    pick.Content(toolLabel(data,command));AutomationProperties::SetAutomationId(pick,L"tool-action-"+id);root.Children().Append(pick);
+                    if(str(command,L"icon").empty())pick.Content(label(data,str(command,L"label")));else pick.Content(toolLabel(data,command));AutomationProperties::SetAutomationId(pick,L"tool-action-"+id);root.Children().Append(pick);
                     fields.emplace_back([weak,id,pick]{if(auto self=weak.lock()){
-                        auto command=find(array(self->data->state,L"commands"),L"id",id);pick.Content().as<Grid>().Children().GetAt(1).as<TextBlock>().Text(str(command,L"label"));AutomationProperties::SetName(pick,str(command,L"label"));pick.IsEnabled(flag(command,L"enabled"));
+                        auto command=find(array(self->data->state,L"commands"),L"id",id);if(auto text=pick.Content().try_as<TextBlock>())text.Text(str(command,L"label"));else pick.Content().as<Grid>().Children().GetAt(1).as<TextBlock>().Text(str(command,L"label"));AutomationProperties::SetName(pick,str(command,L"label"));pick.IsEnabled(flag(command,L"enabled"));
                         tooltip(pick,str(command,L"tooltip"));
                     }});
                 }

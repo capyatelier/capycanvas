@@ -5,7 +5,7 @@ import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-editor.js';
 import { wheelPainter, wheelPicker, hueStopCache, wheelHit, rgba } from './color-wheel.js';
 import { createRangeControl } from './range-control.js';
-import { choiceField } from './toolbar-components.js';
+import { actionField, choiceField } from './toolbar-components.js';
 import {gradientEditor} from './gradient.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
@@ -109,7 +109,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         for (const option of s.tool_extra) {
           if(option.Gradient){gradient=gradientEditor({app,element,button,icon,dispatch});root.append(gradient.node);continue;}
           const spec=option.Choice;
-          const field=choiceField({element,button,icon},spec,dispatch),bar=field.row;
+          const field=choiceField({app,element,button,icon},spec,dispatch),bar=field.row;
           bar.dataset.toolChoiceBar=spec.id;
           [...bar.children].forEach((node,index)=>node.dataset.toolChoiceTone=String(index));
           choices.push([spec.id,field]);
@@ -135,9 +135,11 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
           numbers.push([field.id,node]);
         }
         for (const spec of s.tool_actions) {
-          const node=button("",()=>dispatch({type:"invoke",command:spec.command}),"tool-setting-action");
+          const command = s.commands.find(c=>c.id===spec.command);
+          const field = spec.checkable && !command.icon ? actionField({element,button,icon},{state:command,checkable:spec.checkable},dispatch) : null;
+          const node=field?.row??button("",()=>dispatch({type:"invoke",command:spec.command}),"tool-setting-action");
           node.dataset.toolAction=spec.command;
-          (selectionModes.has(spec.command) ? modes : root).append(node); actions.push([spec,node]);
+          (selectionModes.has(spec.command) ? modes : root).append(node); actions.push([spec,node,field]);
         }
         if(!compact && s.tool_actions.some(spec=>selectionModes.has(spec.command))) root.append(selectionUi.menuButton(()=>copy.tool_controls.selection_menu,"selection"));
         contentChanged("tool_settings");
@@ -146,8 +148,9 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       if(range) {range.relabel(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id)),copy.tool_controls.range_hint);range.update(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id).value));}
       for(const [id,field] of choices)field.update(s.tool_extra.find(o=>o.Choice?.id===id));
       if(gradient)gradient.update(s.tool_extra.find(o=>o.Gradient).Gradient);
-      for (const [spec,node] of actions) {
+      for (const [spec,node,field] of actions) {
         const c=s.commands.find(c=>c.id===spec.command);
+        if (field) { field.update({Action:{state:c,checkable:spec.checkable}}); continue; }
         if(!node.firstChild) {
           node.append(icon(c.icon));
           if (!selectionModes.has(spec.command)) node.append(element("span","",c.label));

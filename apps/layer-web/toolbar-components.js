@@ -7,42 +7,55 @@ const semantic = ({label, tooltip, disabled_reason, ...value}) => value;
 const fieldSemantic = ({group, ...value}) => semantic(value);
 
 export function actionField({ element, button, icon }, spec, send, { label, ariaDisabled = false, explain } = {}) {
-  const row = element('div', 'toolbar-option toolbar-action'); row.dataset.toolbarField = '';
-  const b = button('', () => {
+  const check = spec.checkable && !spec.state.icon;
+  const row = element(check ? 'label' : 'div', `toolbar-option ${check ? 'toolbar-check' : 'toolbar-action'}`); row.dataset.toolbarField = '';
+  const invoke = () => {
     if (b.getAttribute('aria-disabled') !== 'true') send({ type: 'invoke', command: spec.state.id });
-    else explain?.(b);
-  });
-  b.append(icon(spec.state.icon || 'settings'));
-  if (label) b.append(element('span', 'toolbar-action-label', label));
+    else { if (check) b.checked = spec.state.selected; explain?.(b); }
+  };
+  const b = check ? element('input') : button('', invoke);
+  if (check) { b.type = 'checkbox'; b.addEventListener('change', invoke); }
+  else if (spec.state.icon) b.append(icon(spec.state.icon));
   row.append(b);
+  const caption = check || label != null || !spec.state.icon ? element('span', 'toolbar-action-label', label ?? spec.state.label) : null;
+  if (caption) (check ? row : b).append(caption);
   let tooltip, disabled, pressed;
   function update(option) {
+    spec = option.Action;
     const state = option.Action.state;
+    if (caption) caption.textContent = label ?? state.label;
     b.setAttribute('aria-label', label ?? state.label);
     if (disabled !== !state.enabled) {
       disabled = !state.enabled;
       if (ariaDisabled) b.setAttribute('aria-disabled', String(disabled)); else b.disabled = disabled;
     }
-    if (spec.checkable && pressed !== state.selected) b.setAttribute('aria-pressed', String(pressed = state.selected));
+    if (check) b.checked = state.selected;
+    else if (spec.checkable && pressed !== state.selected) b.setAttribute('aria-pressed', String(pressed = state.selected));
     const text = state.enabled ? state.tooltip : state.disabled_reason ?? state.tooltip;
-    if (tooltip !== text) b.title = tooltip = text;
+    if (tooltip !== text) row.title = b.title = tooltip = text;
   }
   update({ Action: spec });
-  return { row, button: b, action: true, update };
+  return { row, button: b, action: true, intrinsic: check, update };
 }
 
-export function choiceField({ element, button, icon, openPopup, closePopup }, spec, send, { labels = false } = {}) {
+export function choiceField({ app, element, button, icon, openPopup, closePopup }, spec, send, { labels = false } = {}) {
   const row = element('div', `toolbar-option ${spec.labeled ? 'toolbar-labeled-choice' : spec.segmented ? 'toolbar-segments selection-modes' : 'toolbar-choice'}`);
   const group = spec.labeled ? element('div', 'toolbar-segments selection-modes') : row;
   const label = spec.labeled ? element('span', 'toolbar-option-label', spec.label) : null;
   if (label) row.append(label, group);
+  if (spec.labeled) {
+    const metrics = app.toolbar_ui({ type: 'choice_style', labeled: true });
+    row.style.setProperty('--choice-width', `${metrics.size[0]}px`);
+    row.style.setProperty('--choice-height', `${metrics.size[1]}px`);
+    row.style.setProperty('--choice-icon', `${metrics.icon}px`);
+  }
   row.dataset.toolbarField = ''; row.dataset.toolbarChoice = spec.id;
   if (spec.columns) { row.classList.add('choice-grid'); row.style.setProperty('--choice-columns', spec.columns); row.title = spec.label; }
   let selected = spec.items.findIndex(i => i.selected), entries = [];
   const captions = [];
   const buttons = spec.segmented ? spec.items.map((item, i) => {
-    const b = button('', () => send(spec.items[i].action)); if (!spec.labeled) b.append(icon(item.icon));
-    if ((labels || spec.labeled) && !spec.columns) b.append(captions[i] = element('span', 'toolbar-segment-label', item.label));
+    const b = button('', () => send(spec.items[i].action)); b.append(icon(item.icon));
+    if (labels && !spec.labeled && !spec.columns) b.append(captions[i] = element('span', 'toolbar-segment-label', item.label));
     b.title = item.label; b.setAttribute('aria-label', item.label); b.dataset.toolbarSegment = `${spec.id}-${i}`; group.append(b); return b;
   }) : [];
   const b = spec.segmented ? null : button('', () => {
@@ -292,7 +305,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     return { row, update(option) { const next=option.Numeric??option; if(copyChanged||field.label!==next.label){field=next;number.relabel(next.label);if(editor?.isConnected)editor.relabel(next.label);label.textContent=faceLabel.textContent=next.label;label.title=face.title=next.label;face.setAttribute('aria-label',next.label);} update(next.value); }, orient, dispose: () => number.cancelEditing(), number };
   }
   function choice(spec, context) {
-    const field = choiceField({ element, button, icon, openPopup, closePopup }, spec, action => send(context, action));
+    const field = choiceField({ app, element, button, icon, openPopup, closePopup }, spec, action => send(context, action));
     return { ...field, orient() {
       field.row.classList.toggle('labeled', style.labeled); field.row.classList.toggle('stacked', vertical && extent[0] < style.size[0] * field.segmented);
     } };

@@ -180,12 +180,12 @@ import kotlinx.coroutines.withContext
         actions.filter { it.getString("command") !in modes }.forEach { action ->
             val id = action.getString("command")
             commands[id]?.let { command ->
-                if (action.optBoolean("checkable")) Row(Modifier.fillMaxWidth().testTag("tool-action-$id")
+                if (action.optBoolean("checkable")) HoverTip(command.getString("tooltip"), Modifier.fillMaxWidth()) { Row(Modifier.fillMaxWidth().testTag("tool-action-$id")
                     .toggleable(command.getBoolean("selected"), enabled = command.getBoolean("enabled"), role = Role.Checkbox) { host.invoke(id) },
                     verticalAlignment = Alignment.CenterVertically) {
                     EditorCheck(command.optBoolean("selected"), command.getString("label"), Modifier.clearAndSetSemantics {}, enabled = command.getBoolean("enabled")) { host.invoke(id) }
                     Text(command.getString("label"))
-                } else TextButton({ host.invoke(id) }, Modifier.testTag("tool-action-$id"), enabled = command.getBoolean("enabled")) {
+                } } else TextButton({ host.invoke(id) }, Modifier.testTag("tool-action-$id"), enabled = command.getBoolean("enabled")) {
                     SharedIcon(command.getString("icon"), null)
                     Spacer(Modifier.width(6.dp))
                     Text(command.getString("label"))

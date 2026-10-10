@@ -2315,8 +2315,16 @@ class AndroidInteractionTest {
             action(obj("type" to "select_panel_tab", "group" to group("tool_settings").getLong("id"), "panel" to "tool_settings"))
             tool = pointer
             waitFor("Zoom choices are visible") { shown("tool-segment-zoom-drag-0") }
-            for (label in listOf("Click", "Drag", "Direction", "In", "Out", "Smooth", "Area", "Click only", "Left/right", "Up/down"))
-                assertNotNull("Zoom shows $label", textBounds(label))
+            for (label in listOf("Click", "Drag")) assertNotNull("Zoom shows $label", textBounds(label))
+            onMain {
+                for (label in listOf("In", "Out", "Left/right", "Up/down", "Area", "Click only"))
+                    assertNotNull("Zoom icon retains $label", owner.find { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)?.contains(label) == true })
+            }
+            for ((id, count) in listOf("zoom-click" to 2, "zoom-drag" to 4)) for (index in 0 until count) {
+                val segment = bounds("tool-segment-$id-$index")
+                assertEquals("Zoom segment width", 36 * density, segment.width, 1f)
+                assertEquals("Zoom segment height", 36 * density, segment.height, 1f)
+            }
             command("reset_view")
             val work = camera().getJSONArray("work_area")
             val origin = IntArray(2); onMain { surface.getLocationInWindow(origin) }
@@ -2326,22 +2334,23 @@ class AndroidInteractionTest {
             val beforeOut = zoom(); tap(center); waitFor("Out click zooms out") { zoom() < beforeOut }
             choose("zoom-click", 0); assertFalse(settings().getBoolean("zoom_out"))
             val beforeIn = zoom(); tap(center); waitFor("In click zooms in") { zoom() > beforeIn }
-            choose("zoom-drag", 0); assertEquals("smooth", settings().getString("drag"))
             for (direction in 0..1) {
-                choose("zoom-direction", direction)
+                choose("zoom-drag", 2)
+                choose("zoom-drag", direction)
+                assertEquals("smooth", settings().getString("drag"))
                 assertEquals(if (direction == 0) "horizontal" else "vertical", settings().getString("direction"))
                 command("reset_view"); val before = zoom()
                 drag(center, center + if (direction == 0) Offset(48 * density, 0f) else Offset(0f, -48 * density))
                 waitFor("Smooth direction $direction increases magnification") { zoom() > before }
             }
-            choose("zoom-drag", 1); assertEquals("area", settings().getString("drag"))
+            choose("zoom-drag", 2); assertEquals("area", settings().getString("drag"))
             command("reset_view"); val beforeArea = zoom()
             event(MotionEvent.ACTION_DOWN, center - Offset(40 * density, 30 * density))
             event(MotionEvent.ACTION_MOVE, center + Offset(40 * density, 30 * density)); settle()
             assertEquals("Area waits for release", beforeArea, zoom(), .00001)
             captureCanvasBar("area-$theme-$pointer", "navigation-controls")
             event(MotionEvent.ACTION_UP); waitFor("Area fits on release") { zoom() > beforeArea }
-            choose("zoom-drag", 2); assertEquals("click_only", settings().getString("drag"))
+            choose("zoom-drag", 3); assertEquals("click_only", settings().getString("drag"))
             command("reset_view"); val beforeDrag = zoom()
             drag(center, center + Offset(50 * density, 40 * density))
             assertEquals("Click Only ignores a drag", beforeDrag, zoom(), .00001)
@@ -2356,7 +2365,64 @@ class AndroidInteractionTest {
             println("PASS Zoom choices theme=$theme pointer=$pointer")
         }
         tool = MotionEvent.TOOL_TYPE_MOUSE
-        choose("zoom-drag", 0); choose("zoom-direction", 0); choose("zoom-click", 0)
+        choose("zoom-drag", 0); choose("zoom-click", 0)
+    }
+
+    @Test fun zoomOptionsIconsAndCheckboxAcrossLayouts() {
+        switchToolbarWorkspace("photographer")
+        command("zoom")
+        val options = toolbarComponent("tool_options")
+        customize(obj("type" to "set_tile_style", "panel" to options.first, "style" to "small"))
+        customize(obj("type" to "set_tool_options_style", "panel" to options.first, "tile" to options.second,
+            "style" to obj("text" to false, "sliders" to false)))
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            waitFor("inline Zoom choices") { shown("toolbar-segment-zoom-drag-3") && shown("toolbar-action-center_zoom_clicks") }
+            for ((id, count) in listOf("zoom-click" to 2, "zoom-drag" to 4)) for (index in 0 until count) {
+                val segment = bounds("toolbar-segment-$id-$index")
+                assertEquals("Inline icon width", 36 * density, segment.width, 1f)
+                assertEquals("Inline icon height", 36 * density, segment.height, 1f)
+            }
+            for (label in listOf("Click", "Drag")) assertNotNull("Caption survives text=false", textBounds(label))
+            val center = state().array("commands").objects().first { it.getString("id") == "center_zoom_clicks" }
+            assertTrue("Center is iconless", center.isNull("icon"))
+            assertNotNull("Center keeps visible text", textBounds(center.getString("label")))
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            val before = state().getJSONObject("settings").getJSONObject("zoom_tool").getBoolean("center_clicked_point")
+            tap(bounds("toolbar-action-center_zoom_clicks").center)
+            waitFor("Inline checkbox changes Center") { state().getJSONObject("settings").getJSONObject("zoom_tool").getBoolean("center_clicked_point") != before }
+            settle(); captureToolbar("zoom-inline-$theme")
+            tap(bounds("toolbar-action-center_zoom_clicks").center)
+            tap(bounds("toolbar-more-${options.second}").center)
+            waitFor("Zoom drawer") { shown("tool-drawer") && shown("tool-segment-zoom-drag-3") }
+            settle(); captureToolbar("zoom-drawer-$theme")
+            customize(obj("type" to "close_expanded"))
+            command("lasso")
+            waitFor("Lasso selection controls") { shown("toolbar-segment-selection-mode-1") }
+            tool = if (theme == "light") MotionEvent.TOOL_TYPE_FINGER else MotionEvent.TOOL_TYPE_STYLUS
+            tap(bounds("toolbar-segment-selection-mode-1").center)
+            waitFor("Lasso adds to selection") { state().array("commands").objects().first { it.getString("id") == "selection_add" }.getBoolean("selected") }
+            settle(); captureToolbar("lasso-inline-$theme")
+            command("zoom")
+        }
+        val narrow = JSONObject(state().getJSONObject("workspace").toString()).apply {
+            getJSONObject("layout").apply {
+                put("bands", JSONArray(listOf(obj("id" to 10000, "edge" to "left", "extent" to 96,
+                    "root" to tabs(10001, options.first, style = "icon")))))
+                put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("column_stacks", JSONArray())
+                put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("next_id", maxOf(10002, getInt("next_id")))
+            }
+        }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "restore_workspace", "workspace" to narrow))
+            action(obj("type" to "set_theme", "theme" to theme)); command("zoom")
+            waitFor("Narrow Zoom uses whole-control overflow") { shown("toolbar-more-${options.second}") && !shown("toolbar-segment-zoom-drag-0") }
+            tool = MotionEvent.TOOL_TYPE_FINGER
+            tap(bounds("toolbar-more-${options.second}").center)
+            waitFor("Overflow contains all four Drag icons") { shown("tool-drawer") && shown("tool-segment-zoom-drag-3") }
+            settle(); captureToolbar("zoom-narrow-$theme")
+            customize(obj("type" to "close_expanded"))
+        }
     }
 
     @Test fun navigationToolButtonsDoubleClickWithoutResettingCanvasClicks() {

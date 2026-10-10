@@ -18,6 +18,10 @@ impl Default for ToolOptionsStyle {
     }
 }
 
+pub fn tool_choice_style(labeled: bool, style: TileStyle) -> TileStyle {
+    if labeled { TileStyle::Small } else { style }
+}
+
 impl ToolbarControl {
     pub const TOOL_OPTIONS: Self = Self::ToolOptions {
         style: ToolOptionsStyle {
@@ -190,7 +194,7 @@ impl ToolOption {
                     state: b,
                     checkable: y,
                 },
-            ) => a.id == b.id && x == y,
+            ) => a.id == b.id && x == y && a.icon.is_some() == b.icon.is_some(),
             _ => false,
         }
     }

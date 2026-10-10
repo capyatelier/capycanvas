@@ -487,6 +487,7 @@ impl ToolMemory {
         Some(if active { brush.preset } else { remembered })
     }
     pub(crate) fn tooltip_label(&self, command: CommandId, label: &str, brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: &Localizer) -> String {
+        if command == CommandId::CenterZoomClicks { return localizer.text(MessageId::ZOOM_TOOL_CENTER_ON_CLICK_TOOLTIP).to_string(); }
         let Some(preset) = self.command_preset_in(command, brush, canvas_tool) else { return label.to_string(); };
         let medium = group(preset).localized_label(localizer);
         if medium.as_ref() == label { label.to_string() } else { format!("{medium} · {label}") }

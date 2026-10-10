@@ -633,4 +633,4 @@ command-restore-view = Kaydedilen görünümü geri yükle
 command-next-drawing = Sonraki çizim
 command-previous-drawing = Önceki çizim
 
-command-center-zoom-clicks = Tıklanan noktayı ortala
+command-center-zoom-clicks = Tıklayınca ortala

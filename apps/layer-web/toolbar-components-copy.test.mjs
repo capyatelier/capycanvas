@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeElement} from './fake-dom.mjs';
-import {choiceField,createToolbarComponent} from './toolbar-components.js';
+import {actionField,choiceField,createToolbarComponent} from './toolbar-components.js';
 import {refreshCopy} from './localization.js';
 
 class Element extends FakeElement {
@@ -37,7 +37,7 @@ function harness(t,standalone=false){
   let language='en',stamps=0,layouts=0,expressions=0;const actions=[],numeric={kind:'slider',min:0,max:100,soft_min:0,soft_max:100,scale:1,step:1,digits:0};
   const formatted=value=>({value,text:String(value),edit:String(value),fill:value/100});
   const app={native_caption:request=>{assert.equal(request.type,'numeric_error');assert.equal(request.reason.reason,'invalid_expression');return`${language}:invalid`;},catalog:()=>({native_copy:{tool_controls:Object.fromEntries(['more_options','remove_bookmark','bookmark_value'].map(key=>[key,`${language}:${key}`]))}}),numeric_labels:label=>({edit:`${language}:edit:${label}`,decrease:'-',increase:'+'}),number_input:request=>formatted(request.value),toolbar_stamp:()=>{stamps++;return{size:1,alpha:[255],extent:[1,1]};},toolbar_ui:request=>{
-    if(request.type==='options_layout'){layouts++;return{more:{},fields:language==='en'?request.sizes.map(()=>({width:100,height:30})):request.sizes.map(()=>null)};}if(request.type==='style')return{size:[100,30],labeled:true,gap:4};if(request.type==='numeric_info')return{samples:['0','100'],icon:'size'};if(request.type==='number'){if(request.request.operation.type==='expression'){expressions++;throw{numeric_error:{reason:'invalid_expression'},message:`${language}:invalid`};};return formatted(request.request.value);}if(request.type==='slider_preview')return{side:100,radius:4,caption:{},bookmark:{},icon:16,text:'5 px',viewport:{x:0,y:0,width:100,height:100},opacity:1,stamp:{x:0,y:0,width:100,height:100}};
+    if(request.type==='choice_style'){assert.equal(request.labeled,true);return{size:[36,36],icon:16};}if(request.type==='options_layout'){layouts++;return{more:{},fields:language==='en'?request.sizes.map(()=>({width:100,height:30})):request.sizes.map(()=>null)};}if(request.type==='style')return{size:[100,30],labeled:true,gap:4};if(request.type==='numeric_info')return{samples:['0','100'],icon:'size'};if(request.type==='number'){if(request.request.operation.type==='expression'){expressions++;throw{numeric_error:{reason:'invalid_expression'},message:`${language}:invalid`};};return formatted(request.request.value);}if(request.type==='slider_preview')return{side:100,radius:4,caption:{},bookmark:{},icon:16,text:'5 px',viewport:{x:0,y:0,width:100,height:100},opacity:1,stamp:{x:0,y:0,width:100,height:100}};
     throw Error(request.type);
   }};
   const element=(tag,cls,text)=>{const node=doc.createElement(tag);node.className=cls??'';if(text!=null)node.textContent=text;return node;},button=(text,action,cls)=>{const node=element('button',cls,text);node.addEventListener('click',action);return node;},icon=name=>element('svg',name);
@@ -69,10 +69,20 @@ test('toolbar bookmark preview keeps its native popup and stamp while captions f
 
 test('labeled segmented choices retain radio controls and publish captions and actions',t=>{
   const h=harness(t),element=(tag,cls,text)=>{const n=h.doc.createElement(tag);n.className=cls??'';if(text!=null)n.textContent=text;return n;},button=(text,action)=>{const n=element('button','',text);n.addEventListener('click',action);return n;};
-  const spec=language=>({id:'navigation-direction',label:`${language}:Direction`,labeled:true,segmented:true,items:['Horizontal','Vertical'].map((name,i)=>({label:`${language}:${name}`,icon:'zoom-in',selected:i===0,action:{type:'zoom_tool',action:{kind:'direction',value:i?'vertical':'horizontal'}}}))});
-  const field=choiceField({element,button,icon:()=>{throw Error('labeled radio must use text');}},spec('en'),action=>h.actions.push(action)),group=field.row.querySelector('.toolbar-segments'),label=field.row.querySelector('.toolbar-option-label'),radios=group.querySelectorAll('button');
-  assert.equal(label.textContent,'en:Direction');assert.equal(group.getAttribute('role'),'radiogroup');assert.deepEqual(radios.map(n=>n.textContent),['en:Horizontal','en:Vertical']);radios[1].focus();
+  const spec=language=>({id:'zoom-drag',label:`${language}:Drag`,labeled:true,segmented:true,items:['Left/right','Up/down','Area','Click only'].map((name,i)=>({label:`${language}:${name}`,icon:['zoom-scrub-horizontal','zoom-scrub-vertical','zoom-area','zoom-no-drag'][i],selected:i===0,action:{type:'zoom_tool',action:i<2?{kind:'smooth',direction:i?'vertical':'horizontal'}:{kind:'drag',value:i===2?'area':'click_only'}}}))});
+  const field=choiceField({app:h.app,element,button,icon:name=>element('svg',name)},spec('en'),action=>h.actions.push(action)),group=field.row.querySelector('.toolbar-segments'),label=field.row.querySelector('.toolbar-option-label'),radios=group.querySelectorAll('button'),icons=radios.map(n=>n.querySelector('svg'));
+  assert.equal(label.textContent,'en:Drag');assert.equal(group.getAttribute('role'),'radiogroup');assert.deepEqual(radios.map(n=>n.textContent),['','','','']);assert.deepEqual(radios.map(n=>n.querySelector('svg').className),['zoom-scrub-horizontal','zoom-scrub-vertical','zoom-area','zoom-no-drag']);assert.deepEqual(radios.map(n=>n.title),['en:Left/right','en:Up/down','en:Area','en:Click only']);radios[1].focus();
   const translated=spec('fr');translated.items[0].selected=false;translated.items[1].selected=true;field.update({Choice:translated});
-  assert.equal(field.row.querySelector('.toolbar-option-label'),label);assert.deepEqual(group.querySelectorAll('button'),radios);assert.equal(h.doc.activeElement,radios[1]);assert.equal(group.getAttribute('aria-label'),'fr:Direction');assert.equal(label.textContent,'fr:Direction');assert.deepEqual(radios.map(n=>n.getAttribute('aria-checked')),['false','true']);assert.deepEqual(radios.map(n=>n.textContent),['fr:Horizontal','fr:Vertical']);assert.deepEqual(h.actions,[]);
-  radios[1].click();assert.deepEqual(h.actions,[{type:'zoom_tool',action:{kind:'direction',value:'vertical'}}]);
+  assert.equal(field.row.querySelector('.toolbar-option-label'),label);assert.deepEqual(group.querySelectorAll('button'),radios);assert.deepEqual(radios.map(n=>n.querySelector('svg')),icons);assert.equal(h.doc.activeElement,radios[1]);assert.equal(group.getAttribute('aria-label'),'fr:Drag');assert.equal(label.textContent,'fr:Drag');assert.deepEqual(radios.map(n=>n.getAttribute('aria-checked')),['false','true','false','false']);assert.deepEqual(radios.map(n=>n.textContent),['','','','']);assert.deepEqual(radios.map(n=>n.title),['fr:Left/right','fr:Up/down','fr:Area','fr:Click only']);assert.deepEqual(radios.map(n=>n.getAttribute('aria-label')),['fr:Left/right','fr:Up/down','fr:Area','fr:Click only']);assert.deepEqual(h.actions,[]);
+  radios[1].click();assert.deepEqual(h.actions,[{type:'zoom_tool',action:{kind:'smooth',direction:'vertical'}}]);
+});
+
+
+test('iconless checkable actions retain a native checkbox and publish copy and selection',t=>{
+  const h=harness(t),element=(tag,cls,text)=>{const n=h.doc.createElement(tag);n.className=cls??'';if(text!=null)n.textContent=text;return n;},button=(text,action)=>{const n=element('button','',text);n.addEventListener('click',action);return n;};
+  const spec=(language,selected)=>({checkable:true,state:{id:'center_zoom_clicks',icon:null,label:`${language}:Center on click`,tooltip:`${language}:Center help`,enabled:true,selected}});
+  const field=actionField({element,button,icon:()=>{throw Error('iconless checkbox must not request an icon');}},spec('en',false),action=>h.actions.push(action)),input=field.row.querySelector('input'),label=field.row.tagName==='label'?field.row:field.row.querySelector('label');
+  assert.ok(input,'native checkbox exists');assert.equal(input.type,'checkbox');assert.ok(label.contains(input));assert.equal(input.checked,false);input.focus();
+  field.update({Action:spec('fr',true)});assert.equal(field.row.querySelector('input'),input);assert.equal(field.row.tagName==='label'?field.row:field.row.querySelector('label'),label);assert.equal(h.doc.activeElement,input);assert.equal(input.checked,true);assert.equal(input.getAttribute('aria-label'),'fr:Center on click');assert.ok(label.textContent.includes('fr:Center on click'));assert.deepEqual(h.actions,[]);
+  input.checked=false;input.dispatch('change');assert.deepEqual(h.actions,[{type:'invoke',command:'center_zoom_clicks'}]);
 });

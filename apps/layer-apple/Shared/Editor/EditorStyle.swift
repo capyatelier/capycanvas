@@ -202,6 +202,27 @@ struct HeaderButtonStyle: ButtonStyle {
     }
 }
 
+@MainActor struct ToolCommandToggle: View {
+    static let intrinsicSize: CGSize = {
+        #if os(macOS)
+        return NSButton(checkboxWithTitle: "", target: nil, action: nil).fittingSize
+        #else
+        return UISwitch().intrinsicContentSize
+        #endif
+    }()
+    let command: JSON
+    let action: () -> Void
+    var body: some View {
+        Toggle(command["label"].string, isOn: Binding(get: { command["selected"].bool }, set: { _ in action() }))
+            #if os(macOS)
+            .toggleStyle(.checkbox)
+            #else
+            .toggleStyle(.switch).controlSize(.mini)
+            #endif
+            .lineLimit(1).fixedSize().frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct ToolActionControl: View {
     let command: JSON
     let checkable: Bool
@@ -217,25 +238,31 @@ struct ToolActionControl: View {
         return (text as NSString).size(withAttributes: [.font: font]).width
     }
     var body: some View {
-        Button(action: action) {
-            let words = command["label"].string.split(whereSeparator: \.isWhitespace).map(String.init)
-            HStack(spacing: 6) {
-                SharedIcon(name: command["icon"].string)
-                ToolActionWords(widths: words.map(textWidth), spacing: textWidth(" ")) {
-                    ForEach(words.indices, id: \.self) { index in
-                        Text(words[index]).font(.system(size: textSize, weight: .bold)).fixedSize()
+        Group {
+            if checkable && command["icon"].string.isEmpty {
+                ToolCommandToggle(command: command, action: action)
+            } else {
+                Button(action: action) {
+                    let words = command["label"].string.split(whereSeparator: \.isWhitespace).map(String.init)
+                    HStack(spacing: 6) {
+                        if !command["icon"].string.isEmpty { SharedIcon(name: command["icon"].string) }
+                        ToolActionWords(widths: words.map(textWidth), spacing: textWidth(" ")) {
+                            ForEach(words.indices, id: \.self) { index in
+                                Text(words[index]).font(.system(size: textSize, weight: .bold)).fixedSize()
+                            }
+                        }
                     }
-                }
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 24, alignment: .leading)
+                        .padding(.horizontal, 17).padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                }.buttonStyle(EditorControlButtonStyle(selected: selected))
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityValue(checkable ? (selected ? "On" : "Off") : "")
             }
-                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 24, alignment: .leading)
-                .padding(.horizontal, 17).padding(.vertical, 5)
-                .contentShape(Rectangle())
-        }.buttonStyle(EditorControlButtonStyle(selected: selected))
+        }
             .disabled(!command["enabled"].bool).opacity(command["enabled"].bool ? 1 : 0.36)
             .help(command["tooltip"].string)
             .accessibilityLabel(command["label"].string)
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            .accessibilityValue(checkable ? (selected ? "On" : "Off") : "")
             .accessibilityIdentifier("tool-action-" + command["id"].string)
     }
 }

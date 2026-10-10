@@ -636,4 +636,4 @@ command-restore-view = Restore saved view
 command-next-drawing = Next drawing
 command-previous-drawing = Previous drawing
 
-command-center-zoom-clicks = Center clicked point
+command-center-zoom-clicks = Center on click

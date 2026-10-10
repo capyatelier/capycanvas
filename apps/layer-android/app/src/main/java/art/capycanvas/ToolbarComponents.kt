@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -145,10 +146,10 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
                 option.has("Range") -> option.getJSONObject("Range").let { listOf(it.getString("id"), it.array("bounds").objects().map { f -> f.getJSONObject("numeric").toString() }) }
                 option.has("Numeric") -> option.getJSONObject("Numeric").let { listOf(it.getString("id"), it.getString("label"), it.getJSONObject("numeric").toString()) }
                 option.has("Choice") -> option.getJSONObject("Choice").let { listOf(it.getBoolean("segmented"), it.optBoolean("labeled"), it.array("items").length(), it.optInt("columns"), it.optString("beside")) }
-                else -> "action"
+                else -> option.getJSONObject("Action").getJSONObject("state").let { listOf(it.getString("label"), it.opt("icon")) }
             } }.toString()
-            val sizes = remember(measureKey, preferences.toString(), style, vertical, width, textStyle, density) {
-                options.map { toolOptionSize(it, vertical, width, tileWidth, tileHeight, preferences, ::textWidth, language = host.languageTag) }
+            val sizes = remember(measureKey, preferences.toString(), style, vertical, width, textStyle, density, host.languageTag) {
+                options.map { toolOptionSize(it, vertical, width, tileWidth, tileHeight, preferences, ::textWidth, language = host.languageTag, style = style) }
             }
             val layoutKey = sizes.toString()
             val layout = remember(width, height, vertical, layoutKey, style) { toolbarUi(host.languageTag, obj("type" to "options_layout", "width" to width, "height" to height,
@@ -180,11 +181,12 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
 }
 
 internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float, tileWidth: Float, tileHeight: Float,
-    preferences: JSONObject, textWidth: (String) -> Float, caption: String? = null, language: String = ""): List<Float> = when {
+    preferences: JSONObject, textWidth: (String) -> Float, caption: String? = null, language: String = "", style: String = "small"): List<Float> = when {
     option.has("Gradient") -> listOf(if(vertical) width else 120f,24f)
     option.has("Range") -> listOf(if (preferences.getBoolean("sliders")) 280f else 100f, 28f)
     option.has("Choice") && option.getJSONObject("Choice").optBoolean("labeled") -> option.getJSONObject("Choice").let {
-        listOf(maxOf(64f, textWidth(it.getString("label"))) + 8f + it.array("items").objects().sumOf { item -> (textWidth(item.getString("label")) + 12f).toDouble() }.toFloat(), 32f)
+        val geometry = toolbarUi(language, obj("type" to "choice_style", "labeled" to true, "style" to style))
+        listOf(textWidth(it.getString("label")) + 8f + geometry.array("size").getDouble(0).toFloat() * it.array("items").length(), geometry.array("size").getDouble(1).toFloat())
     }
     option.has("Choice") && option.getJSONObject("Choice").optInt("columns") > 0 -> option.getJSONObject("Choice").let {
         val columns = it.getInt("columns")
@@ -196,6 +198,8 @@ internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float,
         else if (vertical) listOf(width, tileHeight * if (width < tileWidth * items.size) items.size else 1)
         else listOf(tileWidth * items.size, 24f)
     }
+    option.has("Action") && option.getJSONObject("Action").optBoolean("checkable") && option.getJSONObject("Action").getJSONObject("state").isNull("icon") ->
+        listOf(textWidth(option.getJSONObject("Action").getJSONObject("state").getString("label")) + 24f, tileHeight)
     option.has("Action") && caption != null -> listOf(if (caption.isEmpty()) tileHeight else captionedWidth(caption, textWidth), tileHeight)
     vertical || option.has("Action") -> listOf(tileWidth, tileHeight)
     option.has("Choice") && caption != null -> listOf(ChoicePadding * 2 + 16f + 12f + CaptionGap * 2 +
@@ -231,7 +235,7 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
         option.has("Numeric") -> ToolbarNumber(option.getJSONObject("Numeric"), vertical, style, labeled, preferences, edit)
         option.has("Choice") -> option.getJSONObject("Choice").let { choice ->
             ToolbarChoice(choice, vertical, labeled, caption == null && width < tileWidth * choice.array("items").length(),
-                iconSize, edit, prefix = prefix, height = if (caption != null) 32f else 24f, captions = caption != null, menu = choiceMenu, menuCopy = choiceCopy)
+                iconSize, edit, prefix = prefix, height = if (caption != null) 32f else 24f, captions = caption != null, menu = choiceMenu, menuCopy = choiceCopy, style = style)
         }
         else -> option.getJSONObject("Action").let { action ->
             ToolOptionAction(action.getJSONObject("state"), action.optBoolean("checkable"), iconSize, caption, accent, prefix) {
@@ -247,6 +251,17 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
     val colors = LocalPalette.current
     val id = command.getString("id")
     val enabled = command.getBoolean("enabled")
+    if (checkable && command.isNull("icon")) {
+        HoverTip(command.getString("tooltip"), Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxSize().testTag("$prefix-action-$id")
+                .toggleable(command.getBoolean("selected"), enabled = enabled, role = Role.Checkbox) { invoke(id) },
+                verticalAlignment = Alignment.CenterVertically) {
+                EditorCheck(command.getBoolean("selected"), command.getString("label"), Modifier.clearAndSetSemantics {}, enabled = enabled) { invoke(id) }
+                Text(command.getString("label"), maxLines = 1, softWrap = false)
+            }
+        }
+        return
+    }
     var reveal by remember { mutableIntStateOf(0) }
     val reason = command.optString("disabled_reason").takeIf { caption != null && !enabled && !command.isNull("disabled_reason") }
     val explained = reason != null
@@ -360,13 +375,17 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
 @Composable internal fun ToolbarChoice(choice: JSONObject, vertical: Boolean, labeled: Boolean, stacked: Boolean,
     iconSize: Int, edit: (JSONObject) -> Unit, prefix: String = "toolbar", height: Float = 24f, captions: Boolean = false,
     menu: ((String, (JSONObject?) -> Unit) -> Unit)? = null,
-    menuCopy: (suspend (String) -> JSONObject?)? = null, textOnly: Boolean = false) {
+    menuCopy: (suspend (String) -> JSONObject?)? = null, style: String = "small") {
     if (choice.optBoolean("labeled")) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(choice.getString("label"), Modifier.widthIn(min = 64.dp, max = 96.dp))
-            Box(Modifier.weight(1f)) {
-                ToolbarChoice(JSONObject(choice.toString()).put("labeled", false), false, true, false, iconSize, edit,
-                    prefix, height, captions = true, menu = menu, menuCopy = menuCopy, textOnly = true)
+        val host = LocalCanvasHost.current
+        val geometry = remember(style, host.languageTag) { toolbarUi(host.languageTag, obj("type" to "choice_style", "labeled" to true, "style" to style)) }
+        val size = geometry.array("size")
+        Row(Modifier.fillMaxWidth().height(size.getDouble(1).toFloat().dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(choice.getString("label"), Modifier.weight(1f), maxLines = 2, softWrap = true)
+            Box(Modifier.width((size.getDouble(0).toFloat() * choice.array("items").length()).dp)) {
+                ToolbarChoice(JSONObject(choice.toString()).put("labeled", false), false, false, false, geometry.getInt("icon"), edit,
+                    prefix, size.getDouble(1).toFloat(), menu = menu, menuCopy = menuCopy, style = style)
             }
         }
         return
@@ -402,11 +421,11 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
         val segment: @Composable (JSONObject, Int, Modifier) -> Unit = { item, index, modifier ->
             HoverTip(item.getString("label"), modifier) {
             Row(Modifier.fillMaxSize().testTag(if(prefix=="tool" && id=="selection-mode") "tool-action-${item.getJSONObject("action").getString("command")}" else "$prefix-segment-$id-$index").background(if (item.getBoolean("selected")) colors.active else colors.input)
-                .then(if (captions && !textOnly) Modifier.focusProperties { canFocus = false } else Modifier)
+                .then(if (captions) Modifier.focusProperties { canFocus = false } else Modifier)
                 .selectable(item.getBoolean("selected"), role = Role.RadioButton) { edit(item.getJSONObject("action")) },
                 horizontalArrangement = Arrangement.spacedBy(CaptionGap.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-                if (!textOnly) SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical || prefix == "tool") iconSize.dp else 16.dp))
-                if (captions) Text(item.getString("label"), maxLines = if (textOnly) 2 else 1, softWrap = textOnly)
+                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical || prefix == "tool") iconSize.dp else 16.dp))
+                if (captions) Text(item.getString("label"), maxLines = 1, softWrap = false)
             }
             }
         }

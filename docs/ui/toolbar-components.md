@@ -108,12 +108,18 @@ atomic; child fields are never independent drop destinations.
 
 Segmented choices retain connected icon buttons (for example New/Add/Subtract/
 Intersect selection); list choices such as selection source remain dropdowns.
-Choices with `labeled` use text segments with the shared label at the left,
-including Zoom Click, Drag and Direction. They keep their measured natural size
-and enter overflow as a whole. Panel captions wrap to fit narrow docks.
+Choices with `labeled` put the shared label beside the bar, including Zoom Click
+and Drag. Hosts right-align the joined icon bar in its row; each segment
+is one small tile square (36×36 logical pixels), in panels, Tool Options and
+drawers. Tooltips and accessibility labels retain each option's full name. The
+toolbar measures the label beside these segments and enters overflow as a whole.
+Panel captions wrap to fit narrow docks.
+Iconless checkable actions use a text checkbox, including Center on click.
+The checkbox keeps its caption in Tool Options and moves into overflow
+as a complete control when the lane is too narrow.
 Grid choices can name a setting through `beside`; the settings panel places the
 compact chooser next to that setting's numeric group under the choice label.
-Horizontal bars keep one tile of width per choice but match the dropdown's 24px
+Unlabeled horizontal bars keep one tile of width per choice but match the dropdown's 24px
 height, control corner radius (a capsule at that height) and 16px icons.
 The bar stacks on narrow side toolbars and moves into overflow as a whole.
 
@@ -140,6 +146,10 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
   toolbars and retained drawers. `toolbar_transport.rs` exposes stateless fitting,
   numeric metadata and formatting queries to Wasm, JNI and `capy_apple_toolbar_ui`;
   pointer timing/capture and font measurement stay native.
+  The `choice_style` query resolves labeled choices to the shared Small tile
+  metrics, independently of the surrounding toolbar style. GTK calls the same
+  `tool_choice_style` helper directly. Captions and checkbox text retain native
+  font measurement; Rust fits each complete field into the lane.
   Editors retain their original context token, and measurements are cached across
   value-only updates. The standalone slider uses the same shared cap/track geometry.
 - `toolbar_preview.rs` owns bookmark validation, hit policy, and stamp geometry.
@@ -156,7 +166,7 @@ Press, hold, then drag the slider’s empty leading cap or the options More butt
 reorder the component. A quick cap drag never reorders. Holding a track remains
 a numeric interaction. Disabled controls retain a draggable cap wrapper. Holding
 empty Tool Options space with touch or pen opens its display menu; mouse uses
-secondary click. Vertical options use icons except choices that request labeled text segments.
+secondary click. Vertical options use icons; labeled choices retain their left caption.
 
 Compact top/bottom options prefer sixteen tiles of length (side options eight),
 then shrink to the available edge.

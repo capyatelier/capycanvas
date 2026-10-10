@@ -1322,6 +1322,11 @@ body[data-theme="light"] #header { text-shadow:none; }
 .curve-plot > canvas { position:absolute; inset:0; width:100%; height:100%; opacity:.6; pointer-events:none; }
 
 .toolbar-labeled-choice { gap: 8px; }
-.toolbar-labeled-choice > .toolbar-option-label { min-width: 0; flex: 0 0 4.5em; white-space: normal; }
-.toolbar-labeled-choice > .toolbar-segments { display: flex; flex: 1; min-width: 0; border-radius: var(--control-radius); }
-.toolbar-labeled-choice > .toolbar-segments > button { padding: 4px 2px; white-space: normal; }
+.toolbar-labeled-choice > .toolbar-option-label { min-width: 0; white-space: normal; }
+.toolbar-labeled-choice > .toolbar-segments { display: flex; flex: none; width: max-content; height: var(--choice-height); margin-left: auto; border: 0; border-radius: var(--control-radius); }
+.toolbar-labeled-choice > .toolbar-segments > button { flex: none; width: var(--choice-width); height: var(--choice-height); padding: 0; }
+.toolbar-labeled-choice > .toolbar-segments svg { width: var(--choice-icon); height: var(--choice-icon); }
+.tool-settings-control > .toolbar-labeled-choice { width: 100%; }
+.tool-settings-control > .toolbar-labeled-choice > .toolbar-option-label { flex: 1; }
+.toolbar-check { gap: 6px; width: max-content; max-width: 100%; white-space: normal; }
+.toolbar-check > input { flex: none; margin: 0; }

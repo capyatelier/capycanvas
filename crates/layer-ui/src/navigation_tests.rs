@@ -98,9 +98,9 @@ mod navigation_controls {
             let checkpoint = s.engine.checkpoint();
             let at = [340., 420.];
             let point = anchor(&s, at);
-            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Direction {value:ZoomDirection::Vertical}}).unwrap();
+            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Smooth {direction:ZoomDirection::Vertical}}).unwrap();
             pointer(&mut s, ContactPhase::Down, at);
-            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Direction {value:ZoomDirection::Horizontal}}).unwrap();
+            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Smooth {direction:ZoomDirection::Horizontal}}).unwrap();
             pointer(&mut s, ContactPhase::Move, [at[0]+90., at[1]]);
             assert_eq!(s.state.camera.zoom, 1.);
             pointer(&mut s, ContactPhase::Move, [at[0]+90., at[1]-60.]);
@@ -277,20 +277,63 @@ mod navigation_controls {
         let defaults = Settings::restore(r#"{"zoom_tool":{"drag":"invalid"},"wheel_zoom":true}"#);
         assert_eq!(defaults.zoom_tool, ZoomToolSettings::default());
         assert!(defaults.wheel_zoom);
-        let canonical = settings.zoom_tool.controls(&Localizer::shared(UiLanguage::English));
-        for language in UiLanguage::ALL {
-            let controls = settings.zoom_tool.controls(&Localizer::shared(language));
-            for (actual, expected) in controls.iter().zip(&canonical) {
-                assert!(actual.same_schema(expected));
-                let ToolOption::Choice {labeled, items, label,..} = actual else {panic!("zoom choice")};
-                assert!(*labeled && !label.is_empty());
-                assert_eq!(items.iter().filter(|item|item.selected).count(), 1);
-                assert!(items.iter().all(|item| !item.label.is_empty()));
+        for drag in [ZoomDrag::Smooth, ZoomDrag::Area, ZoomDrag::ClickOnly] {
+            for direction in [ZoomDirection::Horizontal, ZoomDirection::Vertical] {
+                for zoom_out in [false, true] {
+                    let zoom = ZoomToolSettings {drag,direction,zoom_out,..settings.zoom_tool};
+                    let canonical = zoom.controls(&Localizer::shared(UiLanguage::English));
+                    for language in UiLanguage::ALL {
+                        let controls = zoom.controls(&Localizer::shared(language));
+                        assert_eq!(controls.len(), 2);
+                        for (index, (actual, expected)) in controls.iter().zip(&canonical).enumerate() {
+                            assert!(actual.same_schema(expected));
+                            let ToolOption::Choice {id,labeled,segmented,items,label,..} = actual else {panic!("zoom choice")};
+                            assert!(*labeled && *segmented && !label.is_empty());
+                            let (expected_id, icons, actions, selected): (_, &[&str], Vec<_>, _) = if index == 0 {
+                                ("zoom-click", &["zoom-in","zoom-out"], vec![
+                                    ZoomToolAction::Click {out:false}, ZoomToolAction::Click {out:true}], usize::from(zoom_out))
+                            } else {
+                                ("zoom-drag", &["zoom-scrub-horizontal","zoom-scrub-vertical","zoom-area","zoom-no-drag"], vec![
+                                    ZoomToolAction::Smooth {direction:ZoomDirection::Horizontal},
+                                    ZoomToolAction::Smooth {direction:ZoomDirection::Vertical},
+                                    ZoomToolAction::Drag {value:ZoomDrag::Area},
+                                    ZoomToolAction::Drag {value:ZoomDrag::ClickOnly}], match drag {
+                                        ZoomDrag::Smooth => usize::from(direction == ZoomDirection::Vertical),
+                                        ZoomDrag::Area => 2, ZoomDrag::ClickOnly => 3,
+                                    })
+                            };
+                            assert_eq!(*id, expected_id);
+                            assert_eq!(items.len(), icons.len());
+                            assert_eq!(items.iter().filter(|item|item.selected).count(), 1);
+                            assert_eq!(items.iter().map(|item|item.icon).collect::<std::collections::HashSet<_>>().len(), items.len());
+                            for (item_index, ((item, icon), action)) in items.iter().zip(icons).zip(actions).enumerate() {
+                                assert!(item.enabled && !item.label.is_empty());
+                                assert_eq!(item.icon, *icon);
+                                assert!(crate::icon_ships(item.icon));
+                                assert_eq!(item.action, UiAction::ZoomTool {action});
+                                assert_eq!(item.selected, item_index == selected);
+                            }
+                        }
+                    }
+                }
             }
         }
         for platform in Platform::ALL {
             let mut s = session(platform);
             invoke(&mut s, CommandId::Zoom);
+            for drag in [ZoomDrag::Smooth, ZoomDrag::Area, ZoomDrag::ClickOnly] {
+                for direction in [ZoomDirection::Horizontal, ZoomDirection::Vertical] {
+                    s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Smooth {direction}}).unwrap();
+                    s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Drag {value:drag}}).unwrap();
+                    let options = s.state.tool_options();
+                    assert_eq!(s.state.tool_extra.len(), 2);
+                    assert!(options.iter().any(|option| matches!(option,
+                        ToolOption::Action {state,checkable:true} if state.id == CommandId::CenterZoomClicks && state.icon.is_none())));
+                    for extra in &s.state.tool_extra {
+                        assert!(options.iter().any(|option|option == extra), "Zoom settings belong in Tool Options on {platform:?}");
+                    }
+                }
+            }
             let context = s.state.toolbar_context();
             let action = UiAction::ZoomTool {action:ZoomToolAction::Drag {value:ZoomDrag::Area}};
             s.dispatch(UiAction::ToolbarEdit {context, action:Box::new(action.clone())}).unwrap();
@@ -312,7 +355,7 @@ mod navigation_controls {
             let actions = [
                 UiAction::ZoomTool {action:ZoomToolAction::Click {out:true}},
                 UiAction::ZoomTool {action:ZoomToolAction::Drag {value:ZoomDrag::Area}},
-                UiAction::ZoomTool {action:ZoomToolAction::Direction {value:ZoomDirection::Vertical}},
+                UiAction::ZoomTool {action:ZoomToolAction::Smooth {direction:ZoomDirection::Vertical}},
                 UiAction::Invoke {command:CommandId::CenterZoomClicks},
             ];
             for action in actions {
@@ -325,8 +368,23 @@ mod navigation_controls {
                 assert_eq!(saved, &s.state.settings);
                 assert_eq!(s.engine.checkpoint(), checkpoint);
             }
-            assert_eq!(s.state.settings.zoom_tool, ZoomToolSettings {zoom_out:true,drag:ZoomDrag::Area,
+            assert_eq!(s.state.settings.zoom_tool, ZoomToolSettings {zoom_out:true,drag:ZoomDrag::Smooth,
                 direction:ZoomDirection::Vertical,center_clicked_point:true});
+            for drag in [ZoomDrag::Area, ZoomDrag::ClickOnly] {
+                for direction in [ZoomDirection::Horizontal, ZoomDirection::Vertical] {
+                    s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Drag {value:drag}}).unwrap();
+                    let before = s.state.settings.zoom_tool;
+                    let change = s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Smooth {direction}}).unwrap();
+                    assert_ne!(change.regions & regions::HOST, 0);
+                    assert_eq!(s.state.settings.zoom_tool, ZoomToolSettings {drag:ZoomDrag::Smooth,direction,..before});
+                    assert_eq!(Settings::restore(&serde_json::to_string(&s.state.settings).unwrap()), s.state.settings);
+                    let saved = s.state.requests.iter().rev().find_map(|request| match &request.kind {
+                        HostRequestKind::SaveSettings {settings} => Some(settings.as_ref()), _ => None,
+                    }).unwrap();
+                    assert_eq!(saved, &s.state.settings);
+                    assert_eq!(s.engine.checkpoint(), checkpoint);
+                }
+            }
         }
     }
 

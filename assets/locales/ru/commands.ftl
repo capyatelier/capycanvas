@@ -639,4 +639,4 @@ command-restore-view = Восстановить сохранённый вид
 command-next-drawing = Следующий рисунок
 command-previous-drawing = Предыдущий рисунок
 
-command-center-zoom-clicks = Центрировать точку щелчка
+command-center-zoom-clicks = Центрировать при щелчке

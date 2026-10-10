@@ -1216,4 +1216,4 @@ command-restore-view = Pulihkan tampilan tersimpan
 command-next-drawing = Gambar berikutnya
 command-previous-drawing = Gambar sebelumnya
 
-command-center-zoom-clicks = Pusatkan titik yang diklik
+command-center-zoom-clicks = Pusatkan saat mengeklik

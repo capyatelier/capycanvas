@@ -684,27 +684,30 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 row.Children().Append(pick);buttons.push_back(pick);
             }
             bool labeled=flag(choice,L"labeled");
+            auto choiceStyle=toolbarUi(data->localization.get(),O({{L"type",S(L"choice_style")},{L"labeled",B(labeled)},{L"style",S(tileStyle)}})).GetObject();
+            auto choiceSize=array(choiceStyle,L"size");
             auto choiceCaption=label(data,str(choice,L"label"));
             if(labeled){
+                row.HorizontalAlignment(HorizontalAlignment::Right);row.Width(choiceSize.GetNumberAt(0)*items.Size());row.Height(choiceSize.GetNumberAt(1));
                 Grid form;form.ColumnSpacing(8);
                 ColumnDefinition title;title.Width({1,GridUnitType::Auto});form.ColumnDefinitions().Append(title);
                 ColumnDefinition choiceColumn;choiceColumn.Width({1,GridUnitType::Star});form.ColumnDefinitions().Append(choiceColumn);
-                choiceCaption.MinWidth(64);choiceCaption.VerticalAlignment(VerticalAlignment::Center);form.Children().Append(choiceCaption);
+                choiceCaption.VerticalAlignment(VerticalAlignment::Center);form.Children().Append(choiceCaption);
                 Grid::SetColumn(row,1);form.Children().Append(row);result.row=form;result.intrinsic=true;
-                result.natural=[data=data,choice,items]{double width=std::max(64.,textWidth(data,str(choice,L"label")))+8;
-                    for(auto item:items)width+=textWidth(data,str(item.GetObject(),L"label"))+12;
-                    return winrt::Windows::Foundation::Size{float(width),32};};
+                result.natural=[data=data,choiceCaption,items,choiceSize]{return winrt::Windows::Foundation::Size{
+                    float(textWidth(data,choiceCaption.Text())+8+items.Size()*choiceSize.GetNumberAt(0)),float(choiceSize.GetNumberAt(1))};};
             }else{result.row=row;result.segmented=int(items.Size());}
-            result.update=[row,buttons,choiceCaption,labeled,data=data](J const& option){
-                auto spec=object(option,L"Choice");AutomationProperties::SetName(row,str(spec,L"label"));choiceCaption.Text(str(spec,L"label"));
+            result.update=[weak,row,buttons,choiceCaption,labeled,data=data](J const& option){
+                auto spec=object(option,L"Choice");AutomationProperties::SetName(row,str(spec,L"label"));
+                if(choiceCaption.Text()!=str(spec,L"label")){choiceCaption.Text(str(spec,L"label"));if(auto self=weak.lock())self->measured=false;}
                 auto current=array(spec,L"items");
                 for(uint32_t i=0;i<std::min<uint32_t>(current.Size(),uint32_t(buttons.size()));++i){
-                    if(labeled)buttons[i].Content(label(data,str(current.GetObjectAt(i),L"label")));
+
                     bool chosen=flag(current.GetObjectAt(i),L"selected");
                     buttons[i].Background(chosen?selected(data):clear());AutomationProperties::SetName(buttons[i],str(current.GetObjectAt(i),L"label"));tooltip(buttons[i],str(current.GetObjectAt(i),L"label"));AutomationProperties::SetItemStatus(buttons[i],chosen?data->caption(L"search",L"selected"):L"");
                 }
             };
-            result.orient=[weak,row,buttons,glyphs,labeled]{
+            result.orient=[weak,row,buttons,glyphs,labeled,choiceSize,choiceStyle]{
                 auto self=weak.lock();if(!self)return;
                 double tileW=array(self->style,L"size").GetNumberAt(0);
                 bool stacked=!labeled&&self->vertical&&self->width<tileW*double(buttons.size());
@@ -714,7 +717,9 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                     else{ColumnDefinition cell;cell.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(cell);Grid::SetColumn(buttons[i],int(i));Grid::SetRow(buttons[i],0);}
                     double first=i==0?6:0,last=i+1==buttons.size()?6:0;
                     buttons[i].CornerRadius(stacked?CornerRadius{first,first,last,last}:CornerRadius{first,last,last,first});
-                    if(!labeled)buttons[i].Content(icon(glyphs[i],self->data->theme(),self->vertical?self->iconSize:16));
+                    auto glyph=icon(glyphs[i],self->data->theme(),labeled?num(choiceStyle,L"icon"):self->vertical?self->iconSize:16);
+                    if(labeled){AutomationProperties::SetAutomationId(glyph,L"icon-"+glyphs[i]);buttons[i].Width(choiceSize.GetNumberAt(0));buttons[i].Height(choiceSize.GetNumberAt(1));}
+                    buttons[i].Content(glyph);
                 }
             };
             return result;
@@ -771,15 +776,30 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     Field actionField(J const& action){
         auto weak=weak_from_this();
         auto state=object(action,L"state");auto command=str(state,L"id");bool checkable=flag(action,L"checkable");
+        if(checkable&&str(state,L"icon").empty()){
+            CheckBox check;check.MinWidth(0);check.MinHeight(0);check.Padding({0,0,0,0});auto checkboxLabel=label(data,str(state,L"label"),false);checkboxLabel.Margin({6,0,0,0});check.Content(checkboxLabel);
+            AutomationProperties::SetAutomationId(check,L"toolbar-action-"+command);
+            check.Click([weak,command](auto&&,auto&&){if(auto self=weak.lock())self->send(O({{L"type",S(L"invoke")},{L"command",S(command)}}));});
+            auto host=explainable(check);Field result;result.row=host;result.action=true;result.intrinsic=true;
+            auto choiceStyle=toolbarUi(data->localization.get(),O({{L"type",S(L"choice_style")},{L"labeled",B(true)},{L"style",S(tileStyle)}})).GetObject();
+            result.natural=[data=data,check,choiceStyle]{return winrt::Windows::Foundation::Size{float(textWidth(data,check.Content().as<TextBlock>().Text())+32),float(array(choiceStyle,L"size").GetNumberAt(1))};};
+            result.update=[weak,host,check,data=data](J const& option){
+                auto current=object(object(option,L"Action"),L"state");bool enabled=flag(current,L"enabled");
+                auto checkboxText=check.Content().as<TextBlock>();if(checkboxText.Text()!=str(current,L"label")){checkboxText.Text(str(current,L"label"));if(auto self=weak.lock())self->measured=false;}AutomationProperties::SetName(check,str(current,L"label"));
+                check.IsChecked(flag(current,L"selected"));explain(host,check,enabled,str(current,L"tooltip"),str(current,L"disabled_reason"));
+            };return result;
+        }
         auto pick=button(data,str(state,L"label"),[weak,command]{
             if(auto self=weak.lock())self->send(O({{L"type",S(L"invoke")},{L"command",S(command)}}));
         });
-        auto glyph=str(state,L"icon");pick.Content(icon(glyph.empty()?L"settings":glyph,data->theme(),iconSize));
+        auto glyph=str(state,L"icon");if(glyph.empty())pick.Content(label(data,str(state,L"label")));else pick.Content(icon(glyph,data->theme(),iconSize));
         AutomationProperties::SetAutomationId(pick,L"toolbar-action-"+command);
         auto host=explainable(pick);
-        Field result;result.row=host;result.action=true;
-        result.update=[host,pick,checkable,data=data](J const& option){
+        Field result;result.row=host;result.action=true;result.intrinsic=glyph.empty();
+        if(result.intrinsic)result.natural=[data=data,pick,metrics=style]{return winrt::Windows::Foundation::Size{float(textWidth(data,pick.Content().as<TextBlock>().Text())+12),float(array(metrics,L"size").GetNumberAt(1))};};
+        result.update=[weak,host,pick,checkable,data=data](J const& option){
             auto current=object(object(option,L"Action"),L"state");bool enabled=flag(current,L"enabled");
+            if(auto title=pick.Content().try_as<TextBlock>();title&&title.Text()!=str(current,L"label")){title.Text(str(current,L"label"));if(auto self=weak.lock())self->measured=false;}
             AutomationProperties::SetName(pick,str(current,L"label"));explain(host,pick,enabled,str(current,L"tooltip"),str(current,L"disabled_reason"));pick.Opacity(enabled?1:.36);
             bool chosen=checkable&&flag(current,L"selected");
             pick.Background(chosen?selected(data):clear());AutomationProperties::SetItemStatus(pick,chosen?data->caption(L"search",L"selected"):L"");

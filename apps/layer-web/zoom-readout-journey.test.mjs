@@ -422,18 +422,19 @@ export async function checkZoomToolSettings({call,evaluate,settle}) {
   const artwork=()=>evaluate('({paint:layerApp.state().layers.map(l=>[String(l.id),String(l.paint_revision)]),undo:layerApp.state().commands.find(c=>c.id==="undo").enabled})');
   const mouse=async(type,p,buttons=1)=>{await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons,clickCount:1});await settle();};
   const click=async selector=>{await new Promise(resolve=>setTimeout(resolve,250));const p=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)}+JSON.stringify({tool:layerApp.state().layer_tools.tool,extra:layerApp.state().tool_extra,choices:[...document.querySelectorAll("[data-toolbar-choice]")].map(n=>n.dataset.toolbarChoice),settings:layerApp.state().settings.zoom_tool}));const r=n.getBoundingClientRect();if(!r.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);await mouse('mousePressed',p);await mouse('mouseReleased',p,0);};
-  const choose=async(id,index)=>click(`[data-toolbar-choice="${id}"] [data-toolbar-segment="${id}-${index}"]`);
+  const choose=async(id,index)=>click(`.tool-settings-control [data-toolbar-choice="${id}"] [data-toolbar-segment="${id}-${index}"]`);
   const original=await evaluate('layerApp.state().settings');
   for(const theme of ['light','dark']) {
     await send({type:'set_theme',theme});await invoke('reset_view');await invoke('pen');await click('.tile-button button[data-command="zoom"]');
     const controls=await evaluate(`['hand','zoom'].map(id=>{const n=document.querySelector('.tile-button button[data-command="'+id+'"]');return n?.closest('[data-tile]')?.dataset.tile})`);
     assert.ok(controls.every(Boolean),'Hand/Rotate and Zoom each have a toolbar button');assert.equal(new Set(controls).size,2,'Zoom has a separate toolbar tile beside Hand/Rotate');
 
-    for(const [id,labels] of [['zoom-click',['In','Out']],['zoom-drag',['Smooth','Area','Click only']],['zoom-direction',['Left/right','Up/down']]]) {
-      assert.deepEqual(await evaluate(`[...document.querySelector('[data-toolbar-choice="${id}"]').querySelectorAll('[role=radio]')].map(n=>n.textContent)`),labels);
+    for(const [id,labels] of [['zoom-click',['In','Out']],['zoom-drag',['Left/right','Up/down','Area','Click only']]]) {
+      assert.deepEqual(await evaluate(`[...document.querySelector('[data-toolbar-choice="${id}"]').querySelectorAll('[role=radio]')].map(n=>n.title)`),labels);
       assert.equal(await evaluate(`document.querySelector('[data-toolbar-choice="${id}"] [role=radiogroup]')!=null`),true);
     }
-    await choose('zoom-click',0);await choose('zoom-drag',0);await choose('zoom-direction',0);
+    assert.equal(await evaluate(`document.querySelector('[data-toolbar-choice="zoom-direction"]')==null`),true,'direction is part of the Drag choices');
+    await choose('zoom-click',0);await choose('zoom-drag',0);
     const settingsShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/zoom-settings-${theme}.png`,Buffer.from(settingsShot.data,'base64'));
     await click('[data-tool-action="center_zoom_clicks"]');
     assert.equal(await evaluate('layerApp.state().settings.zoom_tool.center_clicked_point'),true);
@@ -444,12 +445,12 @@ export async function checkZoomToolSettings({call,evaluate,settle}) {
     const physical=await evaluate(`(()=>{const r=layerApp.canvas.getBoundingClientRect();return[(${point.x}-r.x)*layerApp.canvas.width/r.width,(${point.y}-r.y)*layerApp.canvas.height/r.height]})()`);
     for(let axis=0;axis<2;axis++)assert.ok(Math.abs((physical[axis]-before.t[axis])/before.zoom-(physical[axis]-after.t[axis])/after.zoom)<.01,'click retains cursor anchor');
     before=await camera();await mouse('mousePressed',point);await mouse('mouseMoved',{x:point.x+40,y:point.y});await mouse('mouseReleased',{x:point.x+40,y:point.y},0);assert.ok((await camera()).zoom>before.zoom,'horizontal Smooth drag increases magnification');
-    await choose('zoom-direction',1);await send({type:'customize',action:{type:'close_expanded'}});before=await camera();await mouse('mousePressed',point);await mouse('mouseMoved',{x:point.x,y:point.y-40});await mouse('mouseReleased',{x:point.x,y:point.y-40},0);assert.ok((await camera()).zoom>before.zoom,'vertical Smooth drag upwards increases magnification');
-    await choose('zoom-drag',1);await send({type:'customize',action:{type:'close_expanded'}});
+    await choose('zoom-drag',1);await send({type:'customize',action:{type:'close_expanded'}});before=await camera();await mouse('mousePressed',point);await mouse('mouseMoved',{x:point.x,y:point.y-40});await mouse('mouseReleased',{x:point.x,y:point.y-40},0);assert.ok((await camera()).zoom>before.zoom,'vertical Smooth drag upwards increases magnification');
+    await choose('zoom-drag',2);await send({type:'customize',action:{type:'close_expanded'}});
     before=await camera();const end={x:point.x+100,y:point.y+80};await mouse('mousePressed',point);await mouse('mouseMoved',end);assert.deepEqual(await camera(),before,'Area defers camera change');
     const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/zoom-area-${theme}.png`,Buffer.from(shot.data,'base64'));
     await mouse('mouseReleased',end,0);after=await camera();assert.ok(after.zoom>before.zoom,'Area release fits chosen rectangle');await mouse('mouseMoved',point,0);assert.deepEqual(await camera(),after,'released area contact ends');
-    await choose('zoom-click',1);await choose('zoom-drag',2);await choose('zoom-direction',1);await send({type:'customize',action:{type:'close_expanded'}});
+    await choose('zoom-click',1);await choose('zoom-drag',3);await send({type:'customize',action:{type:'close_expanded'}});
     before=await camera();await mouse('mousePressed',point);await mouse('mouseMoved',end);assert.deepEqual(await camera(),before,'Click only ignores motion');await mouse('mouseReleased',end,0);assert.deepEqual(await camera(),before,'Click only ignores moved contact release');await mouse('mousePressed',point);await mouse('mouseReleased',point,0);assert.ok((await camera()).zoom<before.zoom,'Out click decreases magnification');assert.deepEqual(await artwork(),kept,'Zoom settings and navigation preserve painting history');
     const settings=await evaluate('layerApp.state().settings.zoom_tool');assert.deepEqual(settings,{zoom_out:true,drag:'click_only',direction:'vertical',center_clicked_point:false});
     await invoke('settings');await click('[data-settings-page="canvas"]');
@@ -465,5 +466,37 @@ export async function checkZoomToolSettings({call,evaluate,settle}) {
     assert.deepEqual(await evaluate('layerApp.state().settings.zoom_tool'),settings,'Zoom preferences survive reload');assert.equal(await evaluate('layerApp.state().settings.wheel_zoom'),true);assert.equal(await evaluate('layerApp.state().settings.rotate_with_two_fingers'),false);
     await send({type:'restore_settings',settings:original});
   }
-  console.log('PASS: separate Zoom toolbar button, labeled radio settings, anchoring, Area release, Click only, paint history, recognized trackpad rotation preference and preference reload in light/dark');
+  const startingWorkspace=await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
+  const switchWorkspace=async name=>{await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'switch',id:${JSON.stringify(name)}}));null`);await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+20000;function check(){const w=JSON.parse(layerApp.app.workspace_view());if(w.id===${JSON.stringify(name)}&&w.ready&&!w.busy)resolve();else if(performance.now()>end)reject(Error('workspace'));else setTimeout(check,30)}check()})`);await settle();};
+  const geometry=async(name,scope,{visible=true}={})=>{
+    const actual=await evaluate(`(()=>{const root=document.querySelector(${JSON.stringify(scope)}),bounds=n=>{const r=n.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}},rows=[...root.querySelectorAll('[data-toolbar-choice]')];return{centerLabel:layerApp.state().commands.find(c=>c.id==='center_zoom_clicks').label,root:bounds(root),rows:rows.map(row=>({id:row.dataset.toolbarChoice,hidden:row.hidden,label:row.querySelector('.toolbar-option-label')?.textContent,labelBounds:bounds(row.querySelector('.toolbar-option-label')),bounds:bounds(row),group:bounds(row.querySelector('[role=radiogroup]')),buttons:[...row.querySelectorAll('[role=radio]')].map(n=>({title:n.title,text:n.textContent,bounds:bounds(n),icon:bounds(n.querySelector('svg'))}))})),checkboxes:[...root.querySelectorAll('input[type=checkbox]')].map(n=>({checked:n.checked,label:n.getAttribute('aria-label'),bounds:bounds(n)}))}})()`);
+    await writeFile(`${directory}/${name}.json`,JSON.stringify(actual,null,2));
+    assert.deepEqual(actual.rows.map(row=>row.id),['zoom-click','zoom-drag'],name+' has exactly two labeled bars');
+    for(const row of actual.rows){assert.ok(row.label,name+' keeps label');if(visible!==null)assert.equal(row.hidden,!visible,name+' field visibility');if(row.hidden)continue;for(const button of row.buttons){assert.equal(button.text,'',name+' icon-only radio');assert.ok(Math.abs(button.bounds.width-36)<.1&&Math.abs(button.bounds.height-36)<.1,name+' 36px radio: '+JSON.stringify(button));assert.ok(Math.abs(button.icon.width-16)<.1&&Math.abs(button.icon.height-16)<.1,name+' 16px icon');}assert.ok(row.labelBounds.right<=row.group.x,name+' label precedes bar');}
+    if(visible&&scope.includes('tool-settings-control'))assert.ok(Math.abs(actual.rows[0].group.right-actual.rows[1].group.right)<.1,name+' bars align right');
+    if(visible===true)assert.ok(actual.checkboxes.some(n=>n.label===actual.centerLabel&&n.bounds.width>0),name+' native Center checkbox');
+    const screenshot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(screenshot.data,'base64'));return actual;
+  };
+  for(const theme of ['light','dark'])for(const name of ['illustrator','photographer']){
+    await switchWorkspace('builtin:workspace:'+name);await send({type:'set_theme',theme});const fixture=await evaluate('layerApp.state().workspace');
+    const configured=structuredClone(fixture),commands=configured.layout.panels.find(p=>p.id==='commands');commands.content.tiles=[{id:commands.content.tiles[0].id,control:{kind:'tool_options',style:{text:true,sliders:true}}}];
+    await send({type:'restore_workspace',workspace:configured});await send({type:'move_panel',panel:'commands',target:{kind:'edge',edge:'top',outer:true}});await send({type:'customize',action:{type:'set_tile_style',panel:'commands',style:'small'}});await invoke('zoom');
+    await geometry(`${name}-${theme}-options`,'.toolbar-controls[data-panel="commands"] [data-toolbar-component="tool_options"]');
+    if(name==='illustrator')await geometry(`${name}-${theme}-panel`,'.tool-settings-control');
+    const noText=await evaluate('layerApp.state().workspace');noText.layout.panels.find(p=>p.id==='commands').content.tiles[0].control.style.text=false;await send({type:'restore_workspace',workspace:noText});await send({type:'customize',action:{type:'set_tile_style',panel:'commands',style:'small'}});
+    await geometry(`${name}-${theme}-no-text`,'.toolbar-controls[data-panel="commands"] [data-toolbar-component="tool_options"]');
+    await invoke('lasso');const lasso=await evaluate(`(()=>{const n=document.querySelector('.toolbar-controls[data-panel="commands"] [data-toolbar-choice="selection-mode"]');return{hidden:n.hidden,height:n.getBoundingClientRect().height,count:n.querySelectorAll('[role=radio]').length}})()`);assert.deepEqual(lasso,{hidden:false,height:24,count:4},'Lasso selection modes keep existing toolbar geometry');await click('.toolbar-controls[data-panel="commands"] [data-toolbar-segment="selection-mode-1"]');assert.equal(await evaluate('layerApp.state().commands.find(c=>c.id==="selection_add").selected'),true,'Lasso native mode selection remains active');await click('.toolbar-controls[data-panel="commands"] [data-toolbar-segment="selection-mode-0"]');await invoke('zoom');
+    await call('Emulation.setDeviceMetricsOverride',{width:500,height:1000,deviceScaleFactor:1,mobile:false});await settle();await new Promise(resolve=>setTimeout(resolve,400));
+    const narrow=await geometry(`${name}-${theme}-narrow`,'.toolbar-controls[data-panel="commands"] [data-toolbar-component="tool_options"]',{visible:null});
+    assert.ok(narrow.rows.some(row=>row.hidden)||narrow.checkboxes.some(node=>!node.bounds.width),'narrow options use overflow');
+    await click('.toolbar-controls[data-panel="commands"] .toolbar-more');await new Promise(resolve=>setTimeout(resolve,400));await geometry(`${name}-${theme}-narrow-drawer`,'.content-drawer[data-drawer="tool"] .tool-settings-control');await send({type:'customize',action:{type:'close_expanded'}});
+    await call('Emulation.clearDeviceMetricsOverride');await settle();
+    await send({type:'move_panel',panel:'commands',target:{kind:'edge',edge:'left',outer:true}});
+    await geometry(`${name}-${theme}-vertical`,'.toolbar-controls[data-panel="commands"] [data-toolbar-component="tool_options"]',{visible:false});
+    await click('.toolbar-controls[data-panel="commands"] .toolbar-more');await new Promise(resolve=>setTimeout(resolve,400));
+    await geometry(`${name}-${theme}-drawer`,'.content-drawer[data-drawer="tool"] .tool-settings-control');await send({type:'customize',action:{type:'close_expanded'}});
+    await send({type:'restore_workspace',workspace:fixture});
+  }
+  await switchWorkspace(startingWorkspace);
+  console.log('PASS: separate Zoom toolbar button, icon radio settings, Paint/Photo options and overflow geometry, Lasso controls, anchoring, Area release, Click only, paint history, recognized trackpad rotation preference and preference reload in light/dark');
 }
