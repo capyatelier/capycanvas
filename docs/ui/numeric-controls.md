@@ -17,12 +17,12 @@ Every host shares the same numeric policy and editable values.
   Android uses 48 dp settings targets; GTK and web use 32-pixel settings tracks.
 - Titles stay on one line with ellipsis (desktop/web hover shows the full name).
   Values align right and center against the full title/description block.
-  GTK stacked panel sliders sit just below the text, within a 34-pixel control. The
-  4-pixel track has a symmetric 16-pixel hit area reaching the visible bottom
-  of the label. Its left inset is 36 pixels; its fixed 72-pixel right inset
-  reserves room for ordinary values and units. Panels have no step buttons.
+  GTK stacked panel sliders sit just below the text, within a 36-pixel control.
+  The 4-pixel track has a symmetric 16-pixel hit area starting just below the
+  visible bottom of the label. Its left inset is 36 pixels; its fixed 76-pixel
+  right inset reserves room for ordinary values and units. Panels have no step buttons.
   Double-clicking a tool setting's label restores the shared tool default.
-  Adjacent Tool Settings controls have a 6-pixel gap below that hit area.
+  Adjacent Tool Settings controls have a 2-pixel gap below that hit area.
   Other hosts retain a 24-pixel value row above a matching 24-pixel track/button
   row with minus and plus at its ends and no visible thumb (dp on Android).
   There is a 6-pixel gap between each step button and the bar.

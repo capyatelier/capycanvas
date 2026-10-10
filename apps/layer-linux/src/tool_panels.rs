@@ -300,7 +300,7 @@ impl ToolSettings {
         self.extra.set_margin_top(if compact {0} else {inset});
         self.extra.set_margin_bottom(if compact {4} else {inset});
         self.form.set_margin_top(if compact {0} else {inset});
-        self.form.set_spacing(if compact {2} else {6});
+        self.form.set_spacing(2);
         self.mode_container.set_visible(state.layer_tools.tool.selection_tool().is_some());
         self.selection_actions.set_visible(!compact && state.layer_tools.tool.selection_tool().is_some());
         if !self.selection_bound.replace(true) {

@@ -171,25 +171,28 @@ and 33.33 ms. Dropped reports remained zero and thermal status remained 0.
 
 ## GTK panel slider diagnostic
 
-Measured 2026-10-09 with the compact GTK panel sliders based on `ee4805dfe`,
+Measured 2026-10-09 with the adjusted GTK panel sliders based on `a90388f25`,
 in a release build on NVIDIA RTX PRO 6000 Blackwell Max-Q/Vulkan 615.71.09.
 The private Mutter display is 1600 × 1000 at a requested 120 Hz, with a
 2048 × 1536 empty drawing. `native_panel_slider_motion` uses native mouse
 input at requested 4 ms intervals, warms each field, and records three
-five-second scrubs each of brush size, opacity and flow in both themes.
+five-second scrubs each of brush size, opacity and flow in both themes. Each
+scrub traverses twelve legs over 60% of the track, requesting enough distinct
+pointer positions to exercise 120 Hz presentation on these short tracks.
 Only GTK presentations whose numeric value changed are counted.
 
 | Theme / field | Moving presentations/s | Interval p99 |
 | --- | --- | --- |
-| Light / Size | 55.75–55.95 | 33.306–33.414 ms |
-| Light / Opacity | 55.75–56.13 | 33.360–33.494 ms |
-| Light / Flow | 55.64–56.04 | 33.363–33.407 ms |
-| Dark / Size | 55.65–55.95 | 33.339–33.474 ms |
-| Dark / Opacity | 55.64–55.75 | 33.353–33.471 ms |
-| Dark / Flow | 55.45–55.55 | 33.358–33.511 ms |
+| Light / Size | 116.25–117.65 | 16.647–16.780 ms |
+| Light / Opacity | 117.24–117.63 | 16.667–16.692 ms |
+| Light / Flow | 116.65–117.64 | 16.670–16.705 ms |
+| Dark / Size | 117.04–118.03 | 16.665–16.682 ms |
+| Dark / Opacity | 117.24–117.83 | 16.680–16.711 ms |
+| Dark / Flow | 116.85–117.24 | 16.667–16.694 ms |
 
-Every workstation run falls below the 120 Hz goal.
-These are workstation diagnostics with a small drawing and no paired baseline.
+The earlier four-leg diagnostic is limited by pointer-position changes and
+does not measure rendering capacity. These are workstation diagnostics with a
+small drawing and no paired baseline using the twelve-leg workload.
 They do not qualify any reference-tablet target or establish a before/after
 comparison. Raw records are in `artifacts/ui/panel-sliders/`.
 

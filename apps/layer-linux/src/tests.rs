@@ -8375,9 +8375,10 @@ fn native_panel_slider_input() {
         let bottom = text.y() + (title.layout_offsets().1 + ink.y() + ink.height()) as f32;
         assert!(bar.y() >= bottom - 1., "slider starts below the visible label: {bar:?}, text bottom {bottom}");
         assert!(bar.y() - bottom <= 4., "hit area reaches the label's bottom");
-        assert_eq!(size.height(), 34);
+        assert_eq!(size.height(), 36);
         assert_eq!(bar.x(), 36.);
-        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 72.);
+        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 76.);
+        assert_eq!(opacity.compute_bounds(&panel).unwrap().y() - size.compute_bounds(&panel).unwrap().y() - size.height() as f32, 2.);
         assert!(find_css(size.upcast_ref(), "number-step").is_none());
         for edge in [1. / scale.height() as f32, 1. - 1. / scale.height() as f32] {
             w.dispatch(UiAction::SetToolSetting { id: "size".into(), value: 32. });
@@ -8445,7 +8446,7 @@ fn native_panel_slider_motion() {
                 }
             }));
             let events: Vec<_> = (0..1250).map(|step| {
-                let phase = (step as f32 / 1250. * 4.) % 2.;
+                let phase = (step as f32 / 1250. * 12.) % 2.;
                 contact("mouse", "move", point(if phase < 1. { 0.2 + 0.6 * phase } else { 0.8 - 0.6 * (phase - 1.) }))
             }).collect();
             input.perform(serde_json::Value::Array(events));
@@ -8549,7 +8550,7 @@ fn native_number_controls() {
         );
     }
     assert!(
-        narrow.height() <= 34,
+        narrow.height() <= 36,
         "compact row height: {}",
         narrow.height()
     );
@@ -8558,7 +8559,7 @@ fn native_number_controls() {
     assert!(find_css(size.upcast_ref(), "number-step").is_none());
     assert_eq!(bar.height(), 16.0);
     assert_eq!(bar.x(), 36.0);
-    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 72.0);
+    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 76.0);
     assert_eq!(scale.range_rect().width(), scale.width());
     let (start, end) = scale.slider_range();
     assert_eq!(start, end, "compact slider reserves no thumb width");
