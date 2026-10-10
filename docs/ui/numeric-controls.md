@@ -21,19 +21,20 @@ Every host shares the same numeric policy and editable values.
   Values align right and center against the full title/description block.
   Stacked panel sliders sit just below the text, within a 36-pixel control.
   The 4-pixel track has a symmetric 16-pixel hit area starting just below the
-  visible bottom of the label. Its left inset is 36 pixels; its fixed 88-pixel
-  right inset reserves room for ordinary values and units. Panels have no step
-  buttons.
+  visible bottom of the label. Its left inset is 36 pixels; its fixed right
+  inset reserves room for ordinary values and units: 84 pixels on GTK and
+  88 pixels on the other hosts. Panels have no step buttons.
   The value and its text editor center vertically across the label and slider.
-  The panel editor is capped at 80 pixels, keeping at least an 8-pixel gap from
-  the slider hit area. Long expressions scroll within the field.
+  The panel editor is capped at 76 pixels on GTK and 80 pixels on the other
+  hosts, keeping at least an 8-pixel gap from the slider hit area. Long
+  expressions scroll within the field.
   Double-clicking a tool setting or property label restores its shared default.
   Adjacent Tool Settings and Properties controls have a 2-pixel gap below that
   hit area.
   Ordinary size, export and preview dialogs and brush value popovers use this
   same presentation. Layers opacity, toolbar tiles, view readouts, Curves point
   coordinates, tonal ranges and color controls keep their specialized layouts.
-  GTK, Web, Android, Windows, macOS and iPadOS share this panel geometry
+  GTK, Web, Android, Windows, macOS and iPadOS share this panel presentation
   (logical pixels, dp on Android). Preferences retain step buttons and larger
   targets.
   Panel fill is a theme-aware grey halfway between
