@@ -187,6 +187,17 @@ state and tester availability separately. An uploaded build or membership in an
 internal group does not confirm external distribution. TestFlight beta review
 and production App Store submission are separate actions.
 
+With authorized API-key access, the same steps can use App Store Connect's API:
+set the shared notes as
+[`betaBuildLocalizations.whatsNew`](https://developer.apple.com/documentation/appstoreconnectapi/post-v1-betabuildlocalizations),
+submit a
+[`betaAppReviewSubmission`](https://developer.apple.com/documentation/appstoreconnectapi/post-v1-betaappreviewsubmissions),
+and [attach the existing beta group](https://developer.apple.com/documentation/appstoreconnectapi/post-v1-builds-_id_-relationships-betagroups).
+Read the exact build with `buildBetaDetail` and `betaGroups` included to verify
+its state and group membership. `WAITING_FOR_BETA_REVIEW` means review is pending;
+`IN_BETA_TESTING` means beta distribution is enabled. Preserve existing groups
+and testers.
+
 For Windows, CI produces the MSIX but does not submit it to Microsoft Store.
 The Store is currently awaiting setup; retain the package without submitting it.
 When Store submission is requested and the account is ready, upload it through
@@ -325,6 +336,14 @@ the saved AAB and reuses an identical existing upload. Both upload and promotion
 refuse to cancel changes already in review. Retry APK download with
 `android_apk.py download`; retry internal rollout with the promotion workflow
 below. A code change still needs a new version.
+
+After a failed Play commit, inspect current bundles and tracks before retrying
+the upload with the saved AAB. For an Android-only CI retry, commit that original
+AAB to Play first: the upload script then refuses a rebuilt AAB with a different hash.
+Use `gh run rerun <run-id> --repo capyatelier/capycanvas --job <android-job-id>`.
+Preserve and hash-check the failed attempt's `android-bundle` before removing
+that specific Actions artifact to allow the retry to save an artifact with the
+same name. Keep successful Apple jobs out of the retry.
 
 After testing the final internal build, check closed-track setup and review state.
 When promotion is needed and no changes are in review, run **Promote Android
