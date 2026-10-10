@@ -352,6 +352,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await measurePlacedPhotos({call,evaluate,settle,invoke,save,baseline,loadingMs});
     }
     if(captures){
+      await invoke('pencil');await stroke();
       await call('Emulation.setDeviceMetricsOverride',{width:640,height:480,deviceScaleFactor:1,mobile:false});
       await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','tool_settings'].includes(id)}})`);
       await settle();await invoke('fit_canvas');await invoke('zoom_out');
@@ -362,6 +363,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
         assert.equal(await evaluate(`document.querySelectorAll('[data-tool-choice-bar="transform-reference"] [data-tool-choice-tone]').length`),9,'Position presents every shared reference anchor');
         for(const anchor of [0,8,4]) {
           await click(`[data-tool-choice-bar="transform-reference"] [data-tool-choice-tone="${anchor}"]`);
+          await wait(`document.querySelector('[data-tool-choice-bar="transform-reference"] [data-tool-choice-tone="${anchor}"]').getAttribute('aria-pressed')==='true'`);
           assert.equal(await evaluate(`document.querySelector('[data-tool-choice-bar="transform-reference"] [data-tool-choice-tone="${anchor}"]').getAttribute('aria-pressed')`),'true','Native anchor activation publishes selected shared state');
         }
         assert.equal((await command('transform_again')).enabled,false,'Again is unavailable during an active transform');

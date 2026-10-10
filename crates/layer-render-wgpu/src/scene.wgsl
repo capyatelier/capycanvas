@@ -87,9 +87,6 @@ fn scene_image_bilinear(world:vec2<f32>)->vec4<f32> {
     return mix(mix(scene_image_texel(base),scene_image_texel(base+vec2(1,0)),t.x),
         mix(scene_image_texel(base+vec2(0,1)),scene_image_texel(base+vec2(1,1)),t.x),t.y);
 }
-// The same transparent-edge bilinear kernel and minification grid as
-// pixel_transform.wgsl, fused with ordinary source-over composition when the
-// source occupies one image.
 fn scene_image(v:Vertex)->vec4<f32> {
     let world=(v.position.xy-settings.rect.xy)+settings.color.xy;
     let m=settings.operation_linear;

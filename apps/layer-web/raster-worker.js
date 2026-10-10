@@ -1,9 +1,9 @@
 import init, * as wasm from "./pkg/layer_web.js";
 import {createRestartStore,verifyRestartCheckpoint} from "./restart-store.js";
 const restart=createRestartStore();
-let ready;
+let ready,module;
 let pending = Promise.resolve();
-self.onmessage = ({data}) => { pending = pending.then(() => execute(data)); };
+self.onmessage = ({data}) => { if(data.module)module=data.module;pending = pending.then(() => execute(data)); };
 async function execute({id,request}) {
   let instance;
   const retire=()=>outputs.size===0 && (instance?.memory.buffer.byteLength || 0)>256*1024*1024;
@@ -11,7 +11,7 @@ async function execute({id,request}) {
     // These operations only touch IndexedDB. Recovery discovery must not
     // download/instantiate the image codec before listing a few keys.
     if (!request.operation.startsWith('restart-store-'))
-      instance=await (ready ??= init().then(instance=>{
+      instance=await (ready ??= init({module_or_path:module}).then(instance=>{
         wasm.configure_gpu_diagnostics(event=>self.postMessage({gpu_event:{...event,wasm_bytes:instance.memory.buffer.byteLength}}));
         return instance;
       }));

@@ -84,6 +84,8 @@ pub use startup::{StartupProgress, ShaderDocument};
 pub use startup::finish_shader_compiler_shutdown;
 #[cfg(not(target_arch = "wasm32"))]
 pub use startup::ShaderActivity;
+#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+pub use startup::enqueue_compiler_failure;
 mod effect_validation;
 mod effects;
 mod gradient;
@@ -1595,7 +1597,7 @@ impl WgpuRasterizer {
         let (Some(startup), Some(transforms)) = (&self.startup, &self.transforms) else {
             return true;
         };
-        startup.compiler.require(transforms.mesh_pipelines(), startup::BRUSH)
+        startup.compiler.require(&transforms.mesh_pipelines(), startup::BRUSH)
             & startup.compiler.require(self.scene_pipelines.resample.mesh.iter(), startup::BRUSH)
     }
 
@@ -3310,8 +3312,15 @@ impl CanvasRenderer for WgpuRasterizer {
     fn max_document_dimension(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
     }
-    fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>) -> bool {
-        self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
+    fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
+        let mut required = startup::Requirements::default();
+        self.transforms.as_ref().unwrap().require_frame(self, packet, preview, &mut required);
+        let transforms_ready = required.render.is_empty() || self.startup.as_ref().is_none_or(|startup| {
+            let ready = startup.compiler.require(&required.render, startup::BRUSH);
+            startup.compiler.start();
+            ready
+        });
+        transforms_ready && self.startup.as_ref().is_none_or(|s| s.document.ready() && s.current.ready())
             && self.raster_restore_ready(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet)
     }
     fn has_pending_submission(&self) -> bool { self.settling.is_some() }

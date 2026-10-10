@@ -71,6 +71,7 @@ struct Frame {
     extent: [u32; 2],
     scene: Arc<SceneSnapshot>,
     inspect_mask: Option<OccurrenceHandle>,
+    transform_preview: Option<layer_render::TransformPreview>,
     selection_overlays: Arc<layer_core::authored::SelectionOverlays>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
@@ -135,7 +136,6 @@ enum Command {
     PrepareColor(Box<color::Request>),
     AdoptColor(u64),
     DiscardColor(u64, mpsc::Sender<()>),
-    TransformPreview(Option<layer_render::TransformPreview>),
     MovingLayer(Option<OccurrenceHandle>),
     MovingPixels(Option<(SourceTarget, layer_core::Selection)>),
     Retouch(Option<layer_render::RetouchPreparation>),
@@ -747,10 +747,7 @@ impl CanvasRenderer for RenderWorker {
         &mut self,
         preview: Option<&layer_render::TransformPreview>,
     ) -> Result<(), Self::Error> {
-        if self.transform_preview.as_ref() != preview {
-            self.send(Command::TransformPreview(preview.cloned()))?;
-            self.transform_preview = preview.cloned();
-        }
+        self.transform_preview = preview.cloned();
         Ok(())
     }
     fn prepare_moving_layer(&mut self, layer: Option<OccurrenceHandle>) {
@@ -1028,6 +1025,7 @@ impl CanvasRenderer for RenderWorker {
             extent: packet.document_extent,
             scene: Arc::new(packet.scene.snapshot(self.evaluation_context())),
             inspect_mask: packet.inspect_mask,
+            transform_preview: self.transform_preview.clone(),
             selection_overlays: self.selection_overlays.clone(),
             pending_rasters: packet.scene.targets().filter_map(|target| packet.scene.raster(target))
                 .filter(|r| packet.commit_rasters && r.try_data().is_none()).cloned().collect(),
@@ -1188,6 +1186,7 @@ impl Worker {
                 self.update_hdr_view()?;
                 self.report_display(reply)?;
             }
+            let mut report_startup = None;
             if let Some((generation, document, brush, transform, mode)) = &startup_input
                 && (*mode == StartupMode::Unpresented || self.paper_ready.load(Ordering::Acquire))
             {
@@ -1199,12 +1198,15 @@ impl Worker {
                         .prepare_startup(document, brush, *transform)
                         .map_err(error)?;
                 }
-                let progress = self.renderer.poll_startup().map_err(error)?;
+                report_startup = Some(*generation);
+            }
+            let progress = self.renderer.poll_startup().map_err(error)?;
+            if let Some(generation) = report_startup {
                 if progress != startup_progress {
                     startup_progress = progress;
                     reply
                         .send(Reply::Startup(
-                            *generation,
+                            generation,
                             progress,
                             self.renderer.brush_sources(),
                         ))
@@ -1224,7 +1226,8 @@ impl Worker {
             while startup_progress.canvas_ready && self.renderer.can_submit()
                 && pending_frames.front().is_some_and(|f| f.dabs.is_empty() || startup_progress.brush_ready)
             {
-                if !self.renderer.raster_dependencies_ready(pending_frames.front().unwrap().packet()) { break; }
+                let frame = pending_frames.front().unwrap();
+                if !self.renderer.raster_dependencies_ready(frame.packet(), frame.transform_preview.as_ref()) { break; }
                 let mut frame = pending_frames.pop_front().unwrap();
                 #[cfg(test)]
                 timing.begin(frame.queued_ns);
@@ -1424,10 +1427,6 @@ impl Worker {
                 }
                 #[cfg(test)]
                 Command::FailNextFrame => fail_next_frame = true,
-                Command::TransformPreview(preview) => self
-                    .renderer
-                    .set_transform_preview(preview.as_ref())
-                    .map_err(error)?,
                 Command::MovingLayer(layer) => self.renderer.prepare_moving_layer(layer),
                 Command::MovingPixels(pixels) => self.renderer.prepare_moving_pixels(pixels),
                 Command::Retouch(retouch) => self.renderer.prepare_retouch(retouch.as_ref()),
@@ -1541,7 +1540,7 @@ impl Worker {
                         self.inject_validation_failure();
                     }
                     if !self.renderer.can_submit() || !pending_frames.is_empty()
-                        || !self.renderer.raster_dependencies_ready(frame.packet()) || self.backdrop_submitted
+                        || !self.renderer.raster_dependencies_ready(frame.packet(), frame.transform_preview.as_ref()) || self.backdrop_submitted
                         && (!startup_progress.canvas_ready
                             || (!frame.dabs.is_empty() && !startup_progress.brush_ready))
                     {
@@ -1827,6 +1826,7 @@ impl Worker {
                 .map_err(error)?;
             self.backdrop_submitted = true;
         } else {
+            self.renderer.set_transform_preview(frame.transform_preview.as_ref()).map_err(error)?;
             self.renderer.submit(frame.packet()).map_err(error)?;
             if self.renderer.has_pending_submission() { frame.pending_rasters.clear(); }
             #[cfg(test)]

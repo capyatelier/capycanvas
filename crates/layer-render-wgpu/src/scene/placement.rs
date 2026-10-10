@@ -55,7 +55,7 @@ impl Scene {
     fn placed_plane_jobs(
         &mut self, r: &WgpuRasterizer, transform: layer_core::ImageTransform,
         bounds: PixelRect, tile: [u32; 2], background: f32, scalar: bool, offset: [i64; 2],
-        mut source: impl FnMut(&mut Self, [u32; 2]) -> Result<(ColorInput, Option<usize>), GpuRasterError>,
+        mut source: impl FnMut(&mut Self, [u32; 2]) -> Result<(Option<ColorInput>, Option<usize>), GpuRasterError>,
     ) -> Result<usize, GpuRasterError> {
         let exact = pixel_transform::exact_taps(&transform);
         let taps = if self.placement_display { exact.min(pixel_transform::PREVIEW_TAPS) } else { exact };
@@ -84,11 +84,10 @@ impl Scene {
             let mut leases = Vec::with_capacity(piece.sources.len());
             for c in piece.sources {
                 let first = self.jobs.len();
-                let (ColorInput { view, lease }, page) = source(self, c)?;
+                let (input, page) = source(self, c)?;
                 if first < self.jobs.len() {self.source_jobs.push(first..self.jobs.len());}
-                sources.push((c, view));
+                if let Some(ColorInput { view, lease }) = input { sources.push((c, view)); leases.extend(lease); }
                 scratch.extend(page);
-                leases.extend(lease);
             }
             self.jobs.push(Job::Placement(Box::new(PlacementJob {
                 scalar,
@@ -113,21 +112,15 @@ impl Scene {
 
     pub(crate) fn capture_raw_tile(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, coordinate: [u32; 2],
-        plan: &layer_core::TransformPixelsPlan, encoder: &mut crate::submission::CommandEncoder,
+        plan: &layer_core::TransformPixelsPlan, planes: &[layer_core::raster::RasterPlane], encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(Vec<(layer_core::raster::RasterPlane, layer_core::raster::RasterTile)>, crate::raster::NativeCapture), GpuRasterError> {
         use layer_core::raster::{RasterPlane, RasterTile};
         let target = plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target);
         let geometry = &plan.geometry;
-        let scope = plan.scope;
         self.clear_material_pages();
         self.placement_display = false;
         let owner = packet.scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
         let extent = packet.scene.target_extent(target);
-        let planes: &[RasterPlane] = match scope {
-            layer_core::TransformPixelsScope::Mask => &[RasterPlane::Mask],
-            layer_core::TransformPixelsScope::Paint { linked_mask: true } => &[RasterPlane::Color, RasterPlane::WatercolorWetness, RasterPlane::Mask],
-            layer_core::TransformPixelsScope::Paint { linked_mask: false } => &[RasterPlane::Color, RasterPlane::WatercolorWetness],
-        };
         let mut inputs = Vec::new();
         let mut tiles = Vec::new();
         for &plane in planes {
@@ -160,14 +153,9 @@ impl Scene {
         let stored = r.paint_layers.iter().find(|stored| stored.id == target);
         let mask = scene.source_owner(target).and_then(|owner| scene.mask(owner));
         let background = if plane == RasterPlane::Mask { mask.unwrap().1.default_coverage } else { 0. };
+        let source = if plane == RasterPlane::Mask { SourceTarget::Coverage(mask.unwrap().0.source) } else { target };
         let scene_view = scene;
         self.placed_plane_jobs(r, transform, bounds, tile, background, plane != RasterPlane::Color, offset, |scene, c| {
-            if plane == RasterPlane::Mask {
-                let (use_, source) = mask.unwrap();
-                let mut use_ = use_.clone(); use_.inverted = false;
-                let page = scene.mask_tile(r, &use_, source, [0; 2], c);
-                return Ok((ColorInput { view: scene.pool[page].view.clone(), lease: None }, Some(page)));
-            }
             if plane == RasterPlane::Color {
                 let preview = r.preview_layer_id == Some(target) && !r.preview_damage.intersect(page_rect(c)).is_empty();
                 let inputs = scene.color_inputs(r, scene_view, target, stored, c, preview)?;
@@ -177,27 +165,28 @@ impl Scene {
                         for input in [base, flow] {
                             scene.draw(r, page, input.view, None, [0., 0., 256., 256.], [1., 1., 0., 0.], true, Convert::None);
                         }
-                        Ok((ColorInput { view: scene.pool[page].view.clone(), lease: None }, Some(page)))
+                        Ok((Some(ColorInput { view: scene.pool[page].view.clone(), lease: None }), Some(page)))
                     }
-                    [Some(input), None] | [None, Some(input)] => Ok((input, None)),
-                    [None, None] => Ok((ColorInput { view: r.empty_view.clone(), lease: None }, None)),
+                    [Some(input), None] | [None, Some(input)] => Ok((Some(input), None)),
+                    [None, None] => Ok((None, None)),
                 };
             }
-            let view = stored.and_then(|stored| match plane {
+            let view = if plane == RasterPlane::Mask { r.layer_masks.pages.get(&(source, c)).map(|page| &page.view) }
+            else { stored.and_then(|stored| match plane {
                 RasterPlane::WatercolorWetness => r.preview_watercolor_wetness_pages.iter()
                     .find(|p| r.preview_layer_id == Some(target) && p.coordinate == c && !r.preview_damage.intersect(page_rect(c)).is_empty())
                     .or_else(|| stored.watercolor_wetness_pages.iter().find(|p| p.coordinate == c)).map(|p| &p.active().view),
                 _ => None,
-            });
-            if let Some(view) = view { return Ok((ColorInput { view: view.clone(), lease: None }, None)); }
-            if let Some(blob) = r.native_plane_tile(target, plane, c)? {
+            }) };
+            if let Some(view) = view { return Ok((Some(ColorInput { view: view.clone(), lease: None }), None)); }
+            if let Some(blob) = r.native_plane_tile(source, plane, c)? {
                 let space = r.document_color().space;
                 let (tile, pending) = r.source_tiles.borrow_mut().plan_raster(r, &blob, space, space)?;
                 if let Some(pending) = pending { scene.enqueue_source_decode(pending); }
                 let lease = r.source_tiles.borrow().lease(&tile.view);
-                return Ok((ColorInput { view: tile.view, lease }, None));
+                return Ok((Some(ColorInput { view: tile.view, lease }), None));
             }
-            Ok((ColorInput { view: r.empty_scalar_view.clone(), lease: None }, None))
+            Ok((None, None))
         })
     }
 
@@ -216,7 +205,7 @@ impl Scene {
         let plane = |this: &mut Self, flow: bool| this.placed_plane_jobs(r, Default::default(), bounds, tile, 0., false, offset, |this, c| {
             let preview = r.preview_layer_id == Some(target) && !r.preview_damage.intersect(page_rect(c)).is_empty();
             let [color, overlay] = this.color_inputs(r, scene, target, stored, c, preview)?;
-            Ok((if flow { overlay } else { color }.unwrap_or_else(|| ColorInput { view: r.empty_view.clone(), lease: None }), None))
+            Ok((if flow { overlay } else { color }, None))
         });
         let color = plane(self, false)?;
         let flow = flows.then(|| plane(self, true)).transpose()?;

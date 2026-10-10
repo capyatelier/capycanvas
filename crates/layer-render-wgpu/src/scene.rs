@@ -406,7 +406,7 @@ impl Scene {
             scale_commands: None,
             native_reverse: false,
             placement: std::array::from_fn(|i| r.transforms.as_ref().map_or_else(
-                || pixel_transform::PixelTransform::staged(device, i == 1).placement_pass(),
+                || pixel_transform::PixelTransform::staged(device, i == 1),
                 |passes| passes.placement_pass(i == 1),
             )),
             material_coordinates: create_target_bind_group(device, &r.target_layout, &coordinates, &r.unclipped),

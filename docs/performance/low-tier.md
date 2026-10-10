@@ -96,12 +96,12 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Brush-cursor hover | 60 | | |
 | Placed-photo translation | 60 | Navigator closed: screen 59.3 presents/s, p99 16.9 ms; renderer 122.9 completed updates/s | Earlier direct-presentation comparison below, `photo-translate-drag` |
 | Placed-photo corner resize | 60 | Navigator open: screen 59.4 presents/s, p99 ≤17.0 ms; renderer 104.2 fresh completed updates/s | Current drag comparison below |
-| Pixel transform corner resize: Free | 60 | Navigator open: screen 59.5 presents/s, p99 ≤16.88 ms; renderer 149.7 fresh completed updates/s | Reduction-encoder cleanup verification below |
+| Pixel transform corner resize: Free | 60 | Navigator open: 60.022 presented frames/s, p99 16.87–16.89 ms | [Navigator-open transform qualification](#navigator-open-transform-qualification), 2026-10-10 |
 | Pixel transform: Uniform, Skew or Rotate | 60 | | |
-| Pixel transform translation | 60 | Navigator closed: screen 59.5 presents/s, p99 16.7 ms; renderer 175.1 completed updates/s | Earlier direct-presentation comparison below, `photo-pixels-translate-drag` |
-| Pixel transform: Distort | 60 | Navigator open: screen 59.4 presents/s, p99 ≤16.89 ms; renderer 133.4 fresh completed updates/s | Reduction-encoder cleanup verification below |
+| Pixel transform translation | 60 | Navigator open: 60.022–60.023 presented frames/s, p99 16.70–16.87 ms | [Navigator-open transform qualification](#navigator-open-transform-qualification), 2026-10-10 |
+| Pixel transform: Distort | 60 | Navigator open: steady 60.023 presented frames/s, p99 16.88–16.91 ms; first contact below target | [Navigator-open transform qualification](#navigator-open-transform-qualification), 2026-10-10 |
 | Pixel transform: Perspective | 60 | | |
-| Pixel transform: Warp | 60 | Navigator open: screen 59.5 presents/s, p99 ≤16.9 ms; renderer 66.7 fresh completed updates/s | Current drag comparison below |
+| Pixel transform: Warp | 60 | **Not met.** Navigator open: steady 55.94–56.78 presented frames/s, p99 33.35–33.38 ms; first contact 47.09/s | [Navigator-open transform qualification](#navigator-open-transform-qualification), 2026-10-10 |
 | Crop corner drag | 60 | Navigator closed: screen 59.2 presents/s, p99 16.7 ms; renderer 130.1 completed updates/s | Earlier direct-presentation comparison below, `crop-handle-drag` |
 | Pixel resize after placing the photo at 45% size | 60 | Navigator closed: screen 58.6 presents/s, p99 16.8 ms; renderer 224.6 completed updates/s | Earlier direct-presentation comparison below, `scaled-photo-pixels-handle-drag` |
 | Selection translation, full canvas | 60 | Renderer 136–139 submissions/s; GPU interval p99 14.3–17.3 ms (6000 × 4000) | Canvas-bar `selection-handle-drag` and `selection-distort-drag`, 2026-09-27 |
@@ -151,6 +151,118 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
 | Menu open and close | 60 | Application menu heading switching unmeasured on reference hardware | [Menu interaction](../ui/window-bar.md); functional checks do not qualify presented frame rate |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
+
+## Split transform programs
+
+Measured 2026-10-09 PDT on the reference TCL, based on `ee4805dfe` with split
+transform programs, optimized arm64 Rust and benchmark APK SHA-256
+`c15ec9bfb7607041002b636939376c7bae8325589f0d19488061d61d53ffb6f2`.
+The 4248 × 2832 Sony photo is rasterized into a paint layer. Blending is
+Perceptual, the camera is at Fit, Navigator is closed, and thermal status is
+zero before and after. Each steady row has three five-second OS-injected contacts.
+Private Perfetto traces join SurfaceView buffer identities to SurfaceFlinger
+display completions during the actual contact window; renderer submissions and
+GPU completions are separate counters.
+
+| Motion | Actual presented frames/s | Presentation-gap p99 | GPU completed updates/s |
+| --- | ---: | ---: | ---: |
+| Free translation | 60.022–60.023 | 16.70–16.87 ms | 148.95–149.48 |
+| Distort, after first contact | 59.82–60.02 | 16.81–16.89 ms | 123.20–124.96 |
+| Warp, after first contact | 59.82–60.02 | 16.74–16.93 ms | 62.78–63.63 |
+
+These steady contacts meet the 60 Hz display-paced criteria. The first Distort
+contact reaches 50.35 presented frames/s with a 233.25 ms p99 gap; the first
+Warp contact reaches 55.17/s with a 33.39 ms p99 gap. Neither cold contact
+qualifies. Transform entry reaches published state in 487–526 ms and drains
+pending rendering in 511–554 ms. Free corner-resize setup failed before
+measurement because its primer did not change geometry; its earlier row is
+unchanged. These measurements do not qualify Web preview, selection transforms,
+or physical input-to-photon latency.
+
+Evidence: `artifacts/transform-root-cause/optimize/android-tcl/motion-summary.json`
+and its per-contact reports and traces. Renderer telemetry records zero overview
+views; these contacts qualify this layout only. The later raw-mask source
+correction changes snapshot capture, not these preview programs.
+
+### Navigator-open transform qualification
+
+Measured 2026-10-10 PDT on the reference TCL, with the same 4248 × 2832 photo,
+Perceptual blending, default Paint workspace and memory policy, Fit zoom
+0.194999978, two visible layers and Navigator explicitly open. Stats and renderer
+profiling are closed; thermal status is zero before and after. Presentation
+uses the SurfaceView/SurfaceFlinger clock join described above, with three
+five-second contacts per steady row.
+
+| Motion | Actual presented frames/s | Presentation-gap p99 | Result |
+| --- | ---: | ---: | --- |
+| Free translation | 60.022–60.023 | 16.70–16.87 ms | Meets |
+| Free corner resize | 60.022 | 16.87–16.89 ms | Meets |
+| Distort, after first contact | 60.023 | 16.88–16.91 ms | Meets |
+| Warp, after first contact | 55.94–56.78 | 33.35–33.38 ms | Misses |
+
+The first Distort contact reaches 55.78/s, p99 33.33 ms. The first Warp contact
+reaches 47.09/s, p99 266.62 ms. Neither is a qualifying contact. Warp's renderer
+owner takes 6.84–7.17 ms at p50, versus about 3.4 ms for Free and Distort;
+submit-to-completion spans include queue and polling and are not GPU timestamps.
+
+An extra affine/projective split within mesh source adapters was tried and
+removed: steady Warp remained 56.55–56.78/s with p99 33.34–33.38 ms. Photo,
+camera, geometry, layout and thermal conditions matched; available-memory-based
+admission budgets differed by approximately 2.3%. The result did not justify
+additional cached variants. The retained implementation has one mesh family.
+
+Free, Distort and retained Warp measurements use optimized APK SHA-256
+`bdb570ad9061c7abbd7da92e8bb4f4b21a006eb7a77028a856f14aa62f0381ea`,
+base `6354498396`. Resize uses experimental APK
+`142e571f3e46b9f279d8cd7c6d73abe8b53fe64521c9346d6cb1e31141f2f7db`,
+base `fededc259`, whose affine shader is unchanged by the discarded mesh split.
+The corrected benchmark waits for Reset's original bounds to publish before
+sampling its next corner. Earlier resize attempts used stale translated bounds
+and did not qualify. No coordinate offset or timing workaround was added.
+
+Evidence: `artifacts/transform-root-cause/optimize/android-tcl-rebased-final/performance/`
+and `android-tcl-mesh-qualified/performance/`, including their motion summaries,
+per-contact reports and raw traces; `android-tcl-mesh-qualified/warp-comparison.json`
+records the discarded split. These rows do not qualify Web motion or physical
+contact-to-photon latency.
+
+### Web Apply
+
+Measured 2026-10-10 PDT on TCL Chrome 154.0.8037.126, optimized `dev-perf` builds,
+comparing baseline `dfbdb6ff7` with `44e0bb5ba` plus transform specialization.
+The same saved 2048 × 1536 drawing has two authored Pencil tiles and no wetness;
+tile fingerprints, descriptors, byte counts and the 30° Linear transform match.
+Each build uses its own fresh origin and the same instrumentation. Driver shader
+caches are uncontrolled. First Apply immediately follows the first angle edit,
+so its wall time includes cold preview readiness and a fresh worker.
+
+| Work | Before | After |
+| --- | ---: | ---: |
+| First Apply, cold preview and worker | 65.925 s | 5.378 s |
+| Repeated Apply, same worker | 2.243 s | 0.890 s |
+| First worker pipeline preparation | 42.443 s | 1.155 s |
+| All worker mapped buffer calls / bytes | 340 / 25.82 MB | 19 / 1.32 MB |
+
+The complete 31-case matrix covers affine, projective and mesh mapping with
+Nearest, Linear, Bicubic and Lanczos, enlargement and shrinking, wet paint,
+linked masks, retained geometry and Pencil acceptance. All pass exact history
+and cancellation checks without blocking pipeline calls or GPU loss. The final
+12-case follow-up covers affine area arithmetic and compiled-module sharing.
+Free shrinking takes 2.126–3.822 s first and 1.013–1.062 s with its worker reused;
+Distort/Bicubic shrinking takes 4.165 / 1.925 s and Warp 3.815 / 1.700 s.
+Default-one masks retain full capture: mask-only Warp takes 5.837 / 4.600 s,
+with normal worker retirement before that repeat. These are Apply diagnostics
+on a 3 MP sparse drawing, not Web 12 MP moving-frame qualification or peak GPU
+memory measurements.
+
+Baseline Wasm SHA-256:
+`38fa3ff549ccfaef8813c69b809dcd1034ef84672ea586ff8732362150c11b02`.
+Final comparison Wasm SHA-256:
+`d2f86c1fb95c6f761b3ed6bd8b702c54d17791f2f18374b12301939d04684ddd`.
+Both use `dev-perf`; the candidate explicitly disables Cargo incremental builds,
+while the old build manifest does not record that override. Evidence resides in
+`artifacts/transform-root-cause/optimize/` with immutable builds, input witnesses,
+raw traces and per-case summaries.
 
 ## Idle brush preparation
 

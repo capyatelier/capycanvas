@@ -2783,6 +2783,17 @@ class AndroidInteractionTest {
             item.getJSONObject("option").optJSONObject("Choice")?.takeIf { it.getString("id") == id }
         }
         fun chosen(id: String) = choice(id)?.array("items")?.objects()?.firstOrNull { it.getBoolean("selected") }?.getString("label")
+        fun openChoice(id: String) {
+            val tag = "canvas-bar-choice-$id"
+            val onBar = shown(tag)
+            val label = choice(id)!!.getString("label")
+            tap(bounds(if (onBar) tag else "canvas-bar-more").center)
+            waitFor("$id menu opens", 5_000) { popupCount() == 1 }
+            if (!onBar) {
+                waitFor("$id in More", 5_000) { menuText(label) != null }
+                tap(menuText(label)!!.center)
+            }
+        }
         fun onDocument(x: Double, y: Double) = state().array("tabs").getJSONObject(0).let { documentPoint(it.getInt("width") * x, it.getInt("height") * y) }
         fun corner() = canvasBar()!!.getJSONArray("anchor").let { documentPoint(it.getDouble(2), it.getDouble(3)) }
         val devices = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)
@@ -2849,7 +2860,7 @@ class AndroidInteractionTest {
                 tap(bounds("canvas-bar-segment-transform-mode-0").center)
                 waitFor("$device back to Free", 5_000) { chosen("transform-mode") == "Free" && !shown("canvas-bar-action-transform_perspective") }
                 settle()
-                tap(bounds("canvas-bar-choice-transform-interpolation").center)
+                openChoice("transform-interpolation")
                 waitFor("$device interpolation menu", 5_000) { popupCount() == 1 && textBounds("Nearest") != null }
                 instrumentation.runOnMainSync { assertTrue("$device the interpolation menu leaves window focus with the canvas", owner.view.hasWindowFocus()) }
                 tap(textBounds("Nearest")!!.center)
@@ -2882,10 +2893,17 @@ class AndroidInteractionTest {
                 waitFor("$device reset before Warp", 5_000) { chosen("transform-mode") == "Free" }
                 settle()
                 tap(bounds("canvas-bar-segment-transform-mode-3").center)
-                waitFor("$device Warp shows its grid choice", 5_000) { chosen("transform-mode") == "Warp" && shown("canvas-bar-choice-transform-warp-grid") }
-                settle()
+                host.awaitMain("$device Warp grid ready", 120_000, {
+                    obj("canvas_bar" to canvasBar(), "brush_ready" to snapshot().opt("brush_ready"),
+                        "bar_visible" to host.canvasBarVisible, "host_failure" to host.failure?.toString(),
+                        "action_error" to host.actionError?.toString()).toString()
+                }) { chosen("transform-mode") == "Warp" && choice("transform-warp-grid") != null
+                    && snapshot().optBoolean("brush_ready") && host.canvasBarVisible && shown("canvas-action-bar")
+                    && tagged("canvas-bar-action-apply_transform")?.second?.let {
+                        it.layoutInfo.isPlaced && it.size.width > 0 && it.boundsInRoot.width >= it.size.width * .9f
+                    } == true }
                 val grid = chosen("transform-warp-grid")!!
-                tap(bounds("canvas-bar-choice-transform-warp-grid").center)
+                openChoice("transform-warp-grid")
                 waitFor("$device Grid menu lists its presets", 5_000) { popupCount() == 1 && listOf("3 × 3", "4 × 4", "5 × 5").all { textBounds(it) != null } }
                 tap(textBounds(grid)!!.center)
                 waitFor("$device Grid menu closes", 5_000) { popupCount() == 0 && chosen("transform-warp-grid") == grid }

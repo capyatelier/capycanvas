@@ -4,7 +4,7 @@ import {wheelPainter,wheelPicker,hueStopCache,wheelHit,rgba,json} from './color-
 
 let services = null, worker = null;
 const editors = new Set();
-const fieldWorker = request => (worker ??= createRasterWorker())(request);
+const fieldWorker = request => (worker ??= createRasterWorker(services.wasmModule))(request);
 
 export function configureColorEditor(next) { services = next; }
 export function refreshColorEditors() { for (const editor of [...editors]) editor(); }

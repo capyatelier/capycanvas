@@ -39,4 +39,5 @@ half = "2.7"
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 layer-core = { path = "../../crates/layer-core", features = ["test-support"] }
+layer-render-wgpu = { path = "../../crates/layer-render-wgpu", features = ["test-support"] }
 png = "0.17.16"

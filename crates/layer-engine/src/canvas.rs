@@ -1422,7 +1422,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             composite_all: self.composite_all,
             blend_space: self.editor.document().composition().blend,
         };
-        if !self.backend.raster_dependencies_ready(packet) {
+        if !self.backend.raster_dependencies_ready(packet, self.transform_preview.as_ref()) {
             self.pending_frame = Some(frame);
             return Ok(());
         }
@@ -2807,7 +2807,7 @@ mod tests {
             self.prepared_color = None;
             Ok(true)
         }
-        fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>) -> bool {
+        fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>, _preview: Option<&layer_render::TransformPreview>) -> bool {
             !self.restore_blocked
         }
         fn can_capture_raster(&self) -> bool {

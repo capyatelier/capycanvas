@@ -740,8 +740,7 @@ pub trait CanvasRenderer {
     }
     /// A restore may depend on an earlier asynchronous capture. Returning false
     /// retains this prepared frame for retry without consuming further input.
-    /// Failed dependencies return true so submit can report their concrete error.
-    fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>) -> bool {
+    fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>, _preview: Option<&TransformPreview>) -> bool {
         true
     }
     /// Work that later frames finish without new input, such as the

@@ -1381,7 +1381,7 @@ mod tests {
                 |progress| progress.canvas_ready, format_args!("native restoration dependencies"));
             let packet = layer_render::FramePacket { dab_batches: batch.as_slice(), ..packet };
             let deadline = Instant::now() + Duration::from_secs(30);
-            while !renderer.raster_dependencies_ready(packet) {
+            while !renderer.raster_dependencies_ready(packet, None) {
                 assert!(Instant::now() < deadline, "demanded bake dependencies must finish");
                 std::thread::yield_now();
             }

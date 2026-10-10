@@ -69,6 +69,7 @@ pub(super) struct PlacementDraw {
     pub target: wgpu::BindGroup,
     pub offset: u32,
     pub size: [u32; 2],
+    pipeline: Deferred<wgpu::ComputePipeline>,
 }
 
 /// Which of a layer's unmoved pixels an identity transform draws into a
@@ -85,22 +86,59 @@ pub(super) enum Part {
 /// A cached source binding's selection, source views and mesh positions.
 type SourceKey = (wgpu::Buffer, Vec<wgpu::TextureView>, Option<wgpu::TextureView>);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Mapping { Copy, Affine, Projective, Mesh }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Key { mapping: Mapping, filter: u8, area: bool }
+impl Key {
+    fn new(transform: &ImageTransform, taps: u32) -> Self {
+        if transform.is_identity() { return Self { mapping: Mapping::Copy, filter: 0, area: false }; }
+        Self {
+            mapping: if transform.placement.mesh.is_some() { Mapping::Mesh }
+                else if transform.as_affine().is_some() { Mapping::Affine } else { Mapping::Projective },
+            filter: transform.placement.interpolation as u8,
+            area: transform.placement.interpolation != Interpolation::Nearest && taps > 1,
+        }
+    }
+}
+
 pub(super) struct Kernels {
+    device: PipelineDevice,
     scalar: bool,
-    pub pipeline: Deferred<wgpu::RenderPipeline>,
-    pub mesh_pipeline: Deferred<wgpu::RenderPipeline>,
-    pub placement_pipeline: Deferred<wgpu::ComputePipeline>,
-    pub display: Option<Deferred<wgpu::ComputePipeline>>,
+    visibility: bool,
+    render: std::sync::Mutex<std::collections::HashMap<Key, Deferred<wgpu::RenderPipeline>>>,
+    compute: std::sync::Mutex<std::collections::HashMap<(Key, bool), Deferred<wgpu::ComputePipeline>>>,
+    render_layout: wgpu::PipelineLayout,
+    compute_layout: wgpu::PipelineLayout,
     display_layout: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
     source_layout: wgpu::BindGroupLayout,
     empty_selection: wgpu::Buffer,
     stride: u32,
 }
+impl Kernels {
+    fn render(&self, key: Key) -> Deferred<wgpu::RenderPipeline> {
+        self.render.lock().unwrap().entry(key).or_insert_with(|| {
+            let shader = shader(&self.device, key, self.scalar, self.visibility, None);
+            let (device, layout) = (self.device.for_recipe(), self.render_layout.clone());
+            let format = if self.scalar { device.scalar_format() } else { device.working_format() };
+            Deferred::pipeline(move |mode| super::fullscreen_pipeline_targets_with_constants_recipe(
+                mode, &device, &layout, &shader, "fragment_main",
+                &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                &[], "transform pixels"))
+        }).clone()
+    }
+    fn compute(&self, key: Key, display: bool) -> Deferred<wgpu::ComputePipeline> {
+        self.compute.lock().unwrap().entry((key, display)).or_insert_with(|| {
+            let shader = shader(&self.device, key, self.scalar, self.visibility, Some(display));
+            Deferred::compute(&self.device, if display { "transform display level" } else { "placed pixels" },
+                &self.compute_layout, &shader, if display { "display_main" } else { "placement_main" })
+        }).clone()
+    }
+}
 
 pub struct PixelTransform {
     pub(super) kernels: std::sync::Arc<Kernels>,
-    placement: bool,
     display_target: crate::bindings::CachedBinding<wgpu::TextureView>,
     bindings: std::collections::HashMap<SourceKey, (u64, wgpu::BindGroup)>,
     binding_frame: u64,
@@ -108,20 +146,18 @@ pub struct PixelTransform {
     capacity: u64,
     records: Vec<u8>,
     next_record: u64,
+    key: Key,
 }
 impl PixelTransform {
     pub(super) fn staged(device: &PipelineDevice, scalar: bool) -> Self {
-        Self::create(device, &shader(device), scalar, false)
+        Self::create(device, scalar, false)
     }
-    /// The color, scalar and visibility passes, sharing one shader.
     pub(super) fn passes(device: &PipelineDevice) -> [Self; 3] {
-        let shader = shader(device);
         [(false, false), (true, false), (true, true)]
-            .map(|(scalar, visibility)| Self::create(device, &shader, scalar, visibility))
+            .map(|(scalar, visibility)| Self::create(device, scalar, visibility))
     }
     fn create(
         device: &PipelineDevice,
-        shader: &Deferred<wgpu::ShaderModule>,
         scalar: bool,
         visibility: bool,
     ) -> Self {
@@ -160,25 +196,10 @@ impl PixelTransform {
             })
         };
         let render_layout = pipeline_layout(&[Some(&layout), Some(&source_layout)]);
-        let pipeline = |mesh| transform_pipeline(device, &render_layout, shader, [scalar, visibility, mesh]);
-        let placement_pipeline = {
-            let layout = pipeline_layout(&[Some(&layout), Some(&source_layout), Some(&display_layout)]);
-            let (device, shader) = (device.clone(), shader.clone());
-            Deferred::pipeline(move |mode| mode.compute(&device, &wgpu::ComputePipelineDescriptor {
-                label: Some("placed pixels"), layout: Some(&layout), module: &shader,
-                entry_point: Some(if scalar { "placement_scalar" } else { "placement_color" }),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("scalar", f64::from(scalar))], ..Default::default()
-                }, cache: None,
-            }))
-        };
-        let display = (!scalar && !visibility).then(|| {
-            let layout = pipeline_layout(&[Some(&layout), Some(&source_layout), Some(&display_layout)]);
-            Deferred::compute(device, "transform display level", &layout, shader, "display_main")
-        });
+        let compute_layout = pipeline_layout(&[Some(&layout), Some(&source_layout), Some(&display_layout)]);
         Self::from_kernels(std::sync::Arc::new(Kernels {
-            scalar, pipeline: pipeline(false), mesh_pipeline: pipeline(true),
-            placement_pipeline, display, display_layout, layout, source_layout,
+            device: device.for_recipe(), scalar, visibility, render: Default::default(), compute: Default::default(),
+            render_layout, compute_layout, display_layout, layout, source_layout,
             empty_selection: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("transform selects entire layer"), size: 48,
                 usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false,
@@ -187,16 +208,20 @@ impl PixelTransform {
         }))
     }
     pub(super) fn from_kernels(kernels: std::sync::Arc<Kernels>) -> Self {
-        Self { kernels, placement: false, display_target: Default::default(), bindings: Default::default(),
-            binding_frame: 0, uniforms: None, capacity: 0, records: Vec::new(), next_record: 0 }
+        Self { kernels, display_target: Default::default(), bindings: Default::default(),
+            binding_frame: 0, uniforms: None, capacity: 0, records: Vec::new(), next_record: 0, key: Key::new(&Default::default(), 1) }
     }
     pub(super) fn fork(&self) -> Self {
-        Self { placement: self.placement, ..Self::from_kernels(self.kernels.clone()) }
+        Self::from_kernels(self.kernels.clone())
     }
-    pub(super) fn placement_pass(&self) -> Self {
-        let mut pass = self.fork();
-        pass.placement = true;
-        pass
+    pub(super) fn render_pipeline(&self, transform: &ImageTransform, taps: u32) -> Deferred<wgpu::RenderPipeline> {
+        self.kernels.render(Key::new(transform, taps))
+    }
+    pub(super) fn placement_pipeline(&self, transform: &ImageTransform, taps: u32) -> Deferred<wgpu::ComputePipeline> {
+        self.kernels.compute(Key::new(transform, taps), false)
+    }
+    pub(super) fn display_pipeline(&self) -> Deferred<wgpu::ComputePipeline> {
+        self.kernels.compute(Key::new(&Default::default(), 1), true)
     }
 
     /// Inputs are consumed before another source-cache neighborhood is prepared.
@@ -317,6 +342,7 @@ impl PixelTransform {
         display: Option<(DisplayLevel, Part)>,
     ) -> Result<u32, &'static str> {
         let rows = inverse_rows(transform)?;
+        self.key = Key::new(transform, taps);
         let identity = transform.is_identity();
         let stride = u64::from(self.kernels.stride);
         let bytes = jobs.len() as u64 * stride;
@@ -336,13 +362,10 @@ impl PixelTransform {
                 rows,
                 taps,
                 job.origin.map(|v| v as f32),
-                filter_flags(transform.placement.interpolation)
-                    + 2. * f32::from(job.unmoved || identity)
-                    + 4. * f32::from(self.placement)
+                2. * f32::from(job.unmoved || identity)
                     + f32::from(part as u8)
                     + 256. * f32::from(transform.keep_source)
-                    + 1024. * f32::from(job.clear)
-                    + 2048. * f32::from(transform.placement.mesh.is_some()),
+                    + 1024. * f32::from(job.clear),
                 background,
                 display.map(|(level, _)| level),
                 job.texels.map(|v| v as f32),
@@ -374,16 +397,16 @@ impl PixelTransform {
         encoder: &mut crate::submission::CommandEncoder,
         attachment: &wgpu::TextureView,
         clear: bool,
-        mesh: bool,
         offset: u32,
         draws: &[BatchDraw<'_>],
     ) {
+        let pipeline = self.kernels.render(self.key);
         let mut pass = encoder.color_pass(
             "batched transform regions",
             attachment,
             if clear { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
         );
-        pass.set_pipeline(if mesh { &self.kernels.mesh_pipeline } else { &self.kernels.pipeline });
+        pass.set_pipeline(&pipeline);
         for draw in draws {
             pass.set_bind_group(0, &self.uniforms.as_ref().unwrap().1, &[offset + draw.job as u32 * self.kernels.stride]);
             pass.set_bind_group(1, &draw.source.binding, &[]);
@@ -399,11 +422,11 @@ impl PixelTransform {
             entries: &[wgpu::BindGroupEntry { binding: u32::from(self.kernels.scalar), resource: wgpu::BindingResource::TextureView(target) }],
         }));
         PlacementDraw { records: self.uniforms.as_ref().unwrap().1.clone(), source, target: output.clone(), offset,
-            size: [target.texture().width(), target.texture().height()] }
+            size: [target.texture().width(), target.texture().height()], pipeline: self.kernels.compute(self.key, false) }
     }
 
     pub(super) fn encode_placement<'a>(&'a self, pass: &mut wgpu::ComputePass<'a>, draw: &'a PlacementDraw) {
-        pass.set_pipeline(&self.kernels.placement_pipeline);
+        pass.set_pipeline(&draw.pipeline);
         pass.set_bind_group(0, &draw.records, &[draw.offset]);
         pass.set_bind_group(1, &draw.source.binding, &[]);
         pass.set_bind_group(2, &draw.target, &[]);
@@ -426,11 +449,12 @@ impl PixelTransform {
                 wgpu::BindingResource::TextureView(level),
             ])
         });
+        let pipeline = self.kernels.compute(self.key, true);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("transform into display level"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(self.kernels.display.as_ref().expect("color transform"));
+        pass.set_pipeline(&pipeline);
         pass.set_bind_group(2, &target, &[]);
         let texels = 16 / side;
         for draw in draws {
@@ -445,15 +469,6 @@ impl PixelTransform {
         self.capacity + 48
     }
 }
-fn filter_flags(interpolation: Interpolation) -> f32 {
-    match interpolation {
-        Interpolation::Nearest => 0.,
-        Interpolation::Linear => 1.,
-        Interpolation::Bicubic => 9.,
-        Interpolation::Lanczos => 129.,
-    }
-}
-
 /// The taps per axis an exact pass averages over a minified pixel: enough
 /// for the largest source step of an affine map, and the most allowed for
 /// a perspective or mesh, whose steps vary.
@@ -510,35 +525,69 @@ fn region_record(
     ]
 }
 
-fn shader(device: &PipelineDevice) -> Deferred<wgpu::ShaderModule> {
-    Deferred::wgsl(device, "transform pixels", super::compose_wgsl(&[
-        &crate::working_color::shader(device),
-        include_str!("pixel_transform.wgsl"),
-        &crate::texture_switch(1, TRANSFORM_SLOTS, "source_load"),
-        &include_str!("selection_clip.wgsl").replace("@group(1) @binding(1)", "@group(1) @binding(16)"),
-    ]))
+fn shader(device: &PipelineDevice, key: Key, scalar: bool, visibility: bool, compute: Option<bool>) -> Deferred<wgpu::ShaderModule> {
+    Deferred::wgsl(device, "transform pixels", shader_source(key, scalar, visibility, compute, device.working_space()))
 }
-
-fn transform_pipeline(
-    device: &PipelineDevice,
-    layout: &wgpu::PipelineLayout,
-    shader: &Deferred<wgpu::ShaderModule>,
-    [scalar, visibility, mesh]: [bool; 3],
-) -> Deferred<wgpu::RenderPipeline> {
-    let (device, layout, shader) = (device.clone(), layout.clone(), shader.clone());
-    Deferred::pipeline(move |mode| {
-        let format = if scalar { device.scalar_format() } else { device.working_format() };
-        super::fullscreen_pipeline_targets_with_constants_recipe(
-            mode,
-            &device,
-            &layout,
-            &shader,
-            "fragment_main",
-            &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-            &[("scalar", f64::from(scalar)), ("visibility", f64::from(visibility)), ("mesh", f64::from(mesh))],
-            "transform pixels",
-        )
-    })
+fn shader_source(key: Key, scalar: bool, visibility: bool, compute: Option<bool>, space: layer_core::color::RgbSpace) -> std::borrow::Cow<'static, str> {
+    let placement = compute == Some(false);
+    let prefix = format!("const scalar:bool={scalar};const visibility:bool={visibility};const placement:bool={placement};const MESH:bool={};const CLEAR=1024u;const UNMOVED=2u;\n", key.mapping == Mapping::Mesh);
+    let sources = crate::texture_switch(1, TRANSFORM_SLOTS, "source_load");
+    let selection = if placement {
+        "fn brush_selection_at(p:vec2<f32>)->f32{return 1.;}fn horizon_selection()->f32{return 1.;}".into()
+    } else {
+        format!("{}\nfn horizon_selection()->f32{{return select(0.,1.,brush_selection.info.y==0u || brush_selection.info.x!=0u);}}",
+            include_str!("selection_clip.wgsl").replace("@group(1) @binding(1)", "@group(1) @binding(16)"))
+    };
+    let mut parts = vec![prefix.as_str(), include_str!("pixel_transform/source.wgsl"), &sources, &selection];
+    let mut transformed = String::new();
+    if key.mapping != Mapping::Copy {
+        parts.push(if key.mapping == Mapping::Affine { include_str!("pixel_transform/affine.wgsl") }
+            else { include_str!("pixel_transform/projective.wgsl") });
+        if key.mapping == Mapping::Mesh {
+            parts.push(include_str!("pixel_transform/mesh.wgsl"));
+            if key.area { parts.push(include_str!("pixel_transform/mesh_step.wgsl")); }
+        }
+        parts.push(match key.filter {
+            0 => include_str!("pixel_transform/nearest.wgsl"), 1 => include_str!("pixel_transform/bilinear.wgsl"),
+            2 => include_str!("pixel_transform/bicubic.wgsl"), 3 => include_str!("pixel_transform/lanczos.wgsl"), _ => unreachable!(),
+        });
+        let filter = ["nearest", "bilinear", "bicubic", "lanczos"][key.filter as usize];
+        transformed.push_str(&format!("fn interpolate(s:vec2<f32>)->vec4<f32>{{return {filter}(s);}}\n"));
+        if key.area {
+            if key.filter != 1 { parts.push(include_str!("pixel_transform/bilinear.wgsl")); }
+            parts.push(include_str!("pixel_transform/area.wgsl"));
+        }
+        transformed.push_str("fn transformed(world:vec2<f32>)->vec4<f32>{\n");
+        if key.mapping == Mapping::Mesh {
+            transformed.push_str("let p=vec2<i32>(floor(world-transform.attachment.xy))+vec2(1);let s=mesh_position(p);if s.x<=UNCOVERED{return beyond_horizon();}\n");
+            transformed.push_str(if key.area { "return filtered(world,s,mesh_step(p,vec2(1,0),s),mesh_step(p,vec2(0,1),s));}" }
+                else { "return interpolate(s);}" });
+        } else {
+            transformed.push_str("let s=source_position(world);if s.z<=0.{return beyond_horizon();}\n");
+            if key.area {
+                transformed.push_str(if key.mapping == Mapping::Affine { "let dx=transform.x.xy;let dy=transform.y.xy;" }
+                    else { "let dx=(transform.x.xy-s.x*transform.w.xy)/s.z;let dy=(transform.y.xy-s.y*transform.w.xy)/s.z;" });
+                transformed.push_str("return filtered(world,s.xy,vec2(dx.x,dy.x),vec2(dx.y,dy.y));}");
+            } else { transformed.push_str("return interpolate(s.xy);}"); }
+        }
+    }
+    parts.push(&transformed);
+    if !placement { parts.push(include_str!("pixel_transform/remainder.wgsl")); }
+    let pixel = if key.mapping == Mapping::Copy { "fn layer_pixel(world:vec2<f32>)->vec4<f32>{return original(vec2<i32>(floor(world)));}" }
+        else if placement { "fn layer_pixel(world:vec2<f32>)->vec4<f32>{return transformed(world);}" }
+        else { "fn layer_pixel(world:vec2<f32>)->vec4<f32>{if (flags()&UNMOVED)!=0u{return original(vec2<i32>(floor(world)));}return over_remainder(world,transformed(world));}" };
+    parts.push(pixel);
+    let output;
+    let working_color = crate::working_color::source(space);
+    match compute {
+        None => parts.push(include_str!("pixel_transform/render.wgsl")),
+        Some(false) => {
+            output = include_str!("pixel_transform/placement.wgsl").replace("BINDING", if scalar { "1" } else { "0" }).replace("FORMAT", if scalar { "r32float" } else { "rgba32float" });
+            parts.push(&output);
+        }
+        Some(true) => {parts.push(include_str!("pixel_transform/display.wgsl")); parts.push(&working_color);}
+    }
+    super::compose_wgsl(&parts)
 }
 
 fn source_metadata(
@@ -562,4 +611,51 @@ fn valid_extent(origin: [i32; 2], extent: [u32; 2]) -> bool {
     origin.into_iter().zip(extent).all(|(o, n)| {
         n > 0 && i64::from(o).abs() <= 8_388_607 && (i64::from(o) + i64::from(n)).abs() <= 8_388_607
     })
+}
+
+#[cfg(test)]
+mod program_tests {
+    use super::*;
+    #[test]
+    fn all_transform_programs_validate_and_exclude_unused_algorithms() {
+        for mapping in [Mapping::Copy, Mapping::Affine, Mapping::Projective, Mapping::Mesh] {
+            for filter in 0..4 {
+                for area in [false, true] {
+                    if mapping == Mapping::Copy && (filter != 0 || area) || filter == 0 && area { continue; }
+                    let key = Key { mapping, filter, area };
+                    for (scalar, visibility) in [(false, false), (true, false), (true, true)] {
+                        for output in [None, Some(false), Some(true)] {
+                            if output == Some(true) && scalar { continue; }
+                            let source = shader_source(key, scalar, visibility, output, Default::default());
+                            let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{key:?}, {scalar}, {visibility}, {output:?}: {}", e.emit_to_string(&source)));
+                            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                                .validate(&module).unwrap_or_else(|e| panic!("{key:?}, {scalar}, {visibility}, {output:?}: {e:?}"));
+                            assert_eq!(source.contains("fn mesh_position("), mapping == Mapping::Mesh);
+                            assert_eq!(source.contains("fn filtered("), area);
+                            assert_eq!(source.contains("fn bicubic("), mapping != Mapping::Copy && filter == 2);
+                            assert_eq!(source.contains("fn lanczos("), mapping != Mapping::Copy && filter == 3);
+                            assert_eq!(source.contains("var<workgroup>"), output == Some(true));
+                            assert_eq!(source.contains("var<storage, read> brush_selection"), output != Some(false));
+                            assert_eq!(source.contains("s.x*transform.w.xy"), mapping == Mapping::Projective && area);
+                            assert!(module.overrides.is_empty());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn keys_follow_geometry_and_footprint_without_caching_numeric_parameters() {
+        let a = ImageTransform::affine(layer_core::Affine::around(layer_core::Point { x: 50., y: 50. }, [1.; 2], 0.3, layer_core::Point { x: 0., y: 0. }));
+        let b = ImageTransform::affine(layer_core::Affine::around(layer_core::Point { x: 70., y: 10. }, [1.; 2], 1.2, layer_core::Point { x: 31., y: -47. }));
+        assert_eq!(Key::new(&a, 1), Key::new(&b, 1));
+        assert!(!Key::new(&a, 1).area);
+        assert!(Key::new(&a, 2).area);
+        let mut nearest = a.clone(); nearest.placement.interpolation = Interpolation::Nearest;
+        assert_eq!(Key::new(&nearest, 1), Key::new(&nearest, EXACT_TAPS));
+        let mut copy = ImageTransform::default(); copy.placement.interpolation = Interpolation::Lanczos;
+        assert_eq!(Key::new(&copy, EXACT_TAPS), Key::new(&Default::default(), 1));
+        let mut projective = a.clone(); projective.source_from_owner = Some(Projective([1., 0., 0., 0., 1., 0., 0.001, 0., 1.]));
+        assert_eq!(Key::new(&projective, EXACT_TAPS).mapping, Mapping::Projective);
+    }
 }

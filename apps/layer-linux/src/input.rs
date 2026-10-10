@@ -965,6 +965,10 @@ impl Input {
     fn cancel(&self, workspace: &Rc<Workspace>) {
         self.picker_hold.cancel();
         let reply = workspace.interact(UiInput::Blur);
+        if reply.cancel_paint {
+            self.deferred_contacts.borrow_mut().clear();
+            self.sync_held(workspace);
+        }
         if reply.cancel_paint
             && let Some(event) = self.last.get()
         {

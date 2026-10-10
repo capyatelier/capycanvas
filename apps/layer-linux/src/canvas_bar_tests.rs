@@ -513,7 +513,7 @@ fn native_canvas_bar_finger_moves_a_transform() {
     until(|| transforming(&w) && shown(&w), "the transform bar appears");
     let mut native = remote_input();
     let anchor = anchor_in_window(&w);
-    let inside = [(anchor[0] + anchor[2]) * 0.5, (anchor[1] + anchor[3]) * 0.5];
+    let inside = [anchor[0] + (anchor[2] - anchor[0]) * 0.35, anchor[1] + (anchor[3] - anchor[1]) * 0.35];
     native.perform(json!([
         {"touch": "down", "point": inside}, {"wait_ms": 40},
         {"touch": "move", "point": [inside[0] + 15., inside[1] + 10.]}, {"wait_ms": 20},

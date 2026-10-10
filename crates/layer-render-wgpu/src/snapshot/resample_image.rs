@@ -78,7 +78,8 @@ impl SnapshotGpu {
         };
         let mut snapshot = SnapshotRenderer::construct(plan.scene.clone(), SceneScope::Raw(target), control.clone(), self).map_err(|e| e.to_string())?;
         snapshot.extent = extent;
-        snapshot.raw_plan = Some(plan.clone());
+        snapshot.set_raw_plan(plan.clone());
+        let planes = snapshot.raw_planes.clone();
         snapshot.renderer.ensure_document_metadata(extent, snapshot.scene.view().with_scope(&snapshot.scope)).map_err(|e| e.to_string())?;
         let interpretation = SourceInterpretation { channels: with_alpha(source.interpretation.channels), ..source.interpretation.clone() };
         let encoder = layer_color::WorkingEncoder::new(space, &interpretation, Default::default())?;
@@ -96,7 +97,7 @@ impl SnapshotGpu {
                 let (tiles, capture) = snapshot.with_region_gpu([region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
                     |r, packet, _, encoder| {
                         let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
-                        let result = scene.capture_raw_tile(r, packet, coordinate, &plan, encoder);
+                        let result = scene.capture_raw_tile(r, packet, coordinate, &plan, &planes, encoder);
                         r.scene = Some(scene);
                         result
                     }).await.map_err(|e| e.to_string())?;

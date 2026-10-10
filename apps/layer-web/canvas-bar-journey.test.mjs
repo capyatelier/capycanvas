@@ -142,7 +142,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       const transformBox=await anchor(),transformBar=await rect(bar);
       assert.ok(await beside(transformBar,transformBox),`${device}: the transform bar sits below the transform box`);
       const shown=await evaluate('barProbe.shown');
-      const during=await drag([at(0,0),at(20,10),at(40,20),at(60,30)],device,async()=>{
+      const during=await drag([at(-80,-50),at(-60,-40),at(-40,-30),at(-20,-20)],device,async()=>{
         await settle();
         return {hidden:!await evaluate(visible),boxes:(await glassBoxes()).length};
       });
@@ -195,7 +195,7 @@ export async function checkCanvasBar({call,evaluate,settle,device=false}) {
       await wait(`!!document.querySelector('.panel-context-menu:popover-open')`);
       const labels=await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open .menu-label')].map(n=>n.textContent)`);
       assert.ok(labels.includes((await state()).commands.find(c=>c.id==='show_canvas_action_bar').label),`${device}: More offers the bar toggle: ${labels}`);
-      const overflow=await evaluate(`[...document.querySelectorAll('${bar} .canvas-action-bar-item')].filter(n=>n.hidden).map(n=>n.querySelector('button').getAttribute('aria-label'))`);
+      const overflow=await evaluate(`(()=>{const items=layerApp.state().canvas_bar.items;return [...document.querySelectorAll('${bar} .canvas-action-bar-item')].flatMap((n,i)=>n.hidden?[items[i].menu?items[i].label:items[i].option.Action?.state.label??items[i].option.Choice?.label]:[])})()`);
       assert.ok(overflow.every(label=>labels.includes(label)),`${device}: More lists every overflowed item: ${overflow} in ${labels}`);
       assert.equal(await evaluate('layerApp.state().layer_tools.tool'),'transform',`${device}: opening More keeps the transform`);
       assert.equal(await evaluate('document.hasFocus()'),true,`${device}: the menu does not take window focus`);

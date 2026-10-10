@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRasterWorker} from './raster-worker-client.js';
 
-function fixture() {
+function fixture(module) {
   const original=Object.fromEntries(['Worker','setTimeout','clearTimeout','setInterval','clearInterval'].map(k=>[k,globalThis[k]]));
   let now=0,next=0;const timers=new Map(),workers=[];
   const schedule=(callback,delay,interval=false)=>{const id=++next;timers.set(id,{callback,at:now+delay,interval:interval?delay:0});return id;};
@@ -15,7 +15,7 @@ function fixture() {
     reply(result,extra={}){this.onmessage({data:{id:this.messages.at(-1).id,result,...extra}});}
     error(){this.onerror({preventDefault(){},message:'worker failed'});}
   };
-  const events=[],run=createRasterWorker(event=>events.push(event));
+  const events=[],run=createRasterWorker(module,event=>events.push(event));
   return {run,workers,events,async flush(){for(let i=0;i<4;i++)await Promise.resolve();},
     async advance(delay){const end=now+delay;while(true){const ready=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];if(!ready)break;const [id,t]=ready;now=t.at;if(!t.interval)timers.delete(id);t.callback();if(t.interval&&timers.has(id))t.at+=t.interval;await this.flush();}now=end;},
     close(){for(const [k,v]of Object.entries(original))globalThis[k]=v;}};
@@ -23,15 +23,27 @@ function fixture() {
 async function withFixture(body){const f=fixture();try{await body(f);}finally{f.close();}}
 const request=(operation='snapshot',extra={})=>({operation,metadata:'{}',buffers:[],...extra});
 
-for(const kind of ['device_lost','out_of_memory'])test(`${kind} reports the worker cause and rejects immediately without retiring a parallel output`,()=>withFixture(async f=>{
+test('each worker receives the shared compiled module once, including idle replacements',async()=>{
+  const module=new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0])),f=fixture(module);
+  try{
+    const first=f.run(request());assert.equal(f.workers[0].messages[0].module,module);f.workers[0].reply('first');await first;
+    const repeated=f.run(request());assert.equal(f.workers[0].messages[1].module,undefined);f.workers[0].reply('repeat');await repeated;
+    await f.advance(5000);
+    const next=f.run(request());assert.equal(f.workers[1].messages[0].module,module);f.workers[1].reply('next');await next;
+    const storage=f.run(request('restart-store-list'));assert.equal(f.workers[2].messages[0].module,module);f.workers[2].reply([]);await storage;
+  }finally{f.close();}
+});
+
+for(const kind of ['device_lost','out_of_memory','panic'])test(`${kind} reports the worker cause and rejects immediately without retiring a parallel output`,()=>withFixture(async f=>{
+  const role=kind==='panic'?'runtime':'worker',message=kind==='panic'?'Pipeline used before preparation':'allocation failure';
   const output=f.run(request('output-begin'));f.workers[0].reply('output');await output;
   const pending=f.run(request()),worker=f.workers[1];
-  const rejected=assert.rejects(pending,/Raster worker GPU stopped: allocation failure/);
-  worker.onmessage({data:{gpu_event:{role:'worker',kind,message:'allocation failure',wasm_bytes:1000}}});
+  const rejected=assert.rejects(pending,{message:`Raster worker ${kind==='panic'?'runtime':'GPU'} stopped: ${message}`});
+  worker.onmessage({data:{gpu_event:{role,kind,message,wasm_bytes:1000}}});
   await rejected;
   assert.equal(worker.terminated,true);
   assert.equal(f.workers[0].terminated,false);
-  assert.deepEqual(f.events[0],{role:'worker',kind,message:'allocation failure',wasm_bytes:1000,worker:'analysis:3',operations:['snapshot']});
+  assert.deepEqual(f.events[0],{role,kind,message,wasm_bytes:1000,worker:'analysis:3',operations:['snapshot']});
   worker.reply('late');
   const retry=f.run(request());f.workers[2].reply('recovered');assert.equal(await retry,'recovered');
 }));

@@ -64,6 +64,7 @@ fn canvas_bar_places_edits_and_hides_during_contacts_through_the_apple_abi() {
         assert_eq!(hold() % 2, 1, "a canvas contact hides a bar beside the object");
         contact(&app, [36., 34.], 3.);
         assert_eq!(hold() % 2, 0, "the bar may return when the contact ends");
+        app.draw_until_prepared(true);
 
         app.invoke("show_canvas_action_bar");
         let completion = app.state()["canvas_bar"].clone();

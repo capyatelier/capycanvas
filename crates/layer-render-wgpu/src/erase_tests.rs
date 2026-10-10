@@ -332,7 +332,7 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
     while outputs.iter().any(|(_, target)| document.target_raster(*target).unwrap().try_data().is_none()) {
         let packet = FramePacket { dab_batches: &batches, ..packet(document.scene(), EXTENT) };
-        if r.raster_dependencies_ready(packet) { r.submit(packet).unwrap(); }
+        if r.raster_dependencies_ready(packet, None) { r.submit(packet).unwrap(); }
         assert!(std::time::Instant::now() < deadline, "captured mask bakes did not settle");
         std::thread::yield_now();
     }

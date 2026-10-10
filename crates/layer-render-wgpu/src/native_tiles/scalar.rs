@@ -136,6 +136,10 @@ pub struct NativeScalarEncoder {
     parameter_stride: u32,
 }
 impl NativeScalarEncoder {
+    pub(crate) fn private_pipeline(&self, count: usize) -> crate::Deferred<wgpu::ComputePipeline> {
+        self.pipelines[count.min(self.tiles_per_dispatch) - 1].clone()
+    }
+
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
         Self::with_mode(device, false)
     }

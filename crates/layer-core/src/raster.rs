@@ -393,6 +393,9 @@ pub struct RasterData {
     pub watercolor: Option<RasterWatercolor>,
 }
 impl RasterData {
+    pub fn has_plane(&self, plane: RasterPlane) -> bool {
+        self.tiles.range(TileKey { plane, coordinate: [0; 2] }..=TileKey { plane, coordinate: [u32::MAX; 2] }).next().is_some()
+    }
     pub fn host_backed(&self) -> bool {
         self.tiles
             .values()

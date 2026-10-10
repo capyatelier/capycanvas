@@ -415,6 +415,8 @@ impl NativeHost {
         Ok(())
     }
     fn cancel_pen(&mut self) -> Result<(), String> {
+        self.deferred_contacts.clear();
+        self.session.set_input_held(false);
         if let Some(mut event) = self.last_pen.take() {
             event.phase = PenPhase::Cancel;
             self.sequence += 1;
@@ -1322,6 +1324,34 @@ mod tests {
         assert!(host.session.engine().can_undo());
     }
     #[test]
+    fn blurring_a_contact_held_for_shaders_discards_it_before_readiness() {
+        let mut document = layer_ui::new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let mut object = layer_core::authored::ImageObject::new(layer_core::color::source::rgba8_source([200, 150], |_, _| [200, 40, 30, 255]).into());
+        object.affine = layer_core::Affine64([1., 0., 0., 1., 100., 100.]);
+        let (layer, edit) = document.create_object_layer_edit("Photo", object, None, 0).unwrap();
+        document.apply(edit).unwrap();
+        let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.brush_ready { frame_step(&mut host, &clock, deadline); }
+        host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::AddMask { id: layer_ui::occurrence_token(layer), replace: false } }).unwrap();
+        assert!(!host.paint_ready());
+        let checkpoint = host.session.engine().checkpoint();
+        let at = layer_core::Affine(host.session.state().camera.document_to_surface()).map(Point { x: 140., y: 140. });
+        pointer(&mut host, 7, 1, 0, &[f64::from(at.x), f64::from(at.y), 0.5, 0., 0., 0., 0., clock.get() as f64, 1.], false).unwrap();
+        assert!(host.deferred_contacts.holding() && host.last_pen.is_none());
+        assert!(host.session.command_disabled_reason(layer_ui::CommandId::SaveDocumentAs).is_some());
+        assert!(host.input(UiInput::Blur).unwrap().cancel_paint);
+        assert!(host.deferred_contacts.is_empty());
+        assert!(host.session.command_disabled_reason(layer_ui::CommandId::SaveDocumentAs).is_none());
+        while !host.paint_ready() { frame_step(&mut host, &clock, deadline); }
+        for _ in 0..4 { frame_step(&mut host, &clock, deadline); }
+        assert!(!host.session.engine().has_active_stroke());
+        assert_eq!(host.session.engine().metrics().committed_strokes, 0);
+        assert_eq!(host.session.engine().checkpoint(), checkpoint);
+    }
+
+    #[test]
     fn input_held_for_shaders_keeps_saving_waiting_until_it_is_delivered_or_cancelled() {
         let mut document = layer_ui::new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let mut object = layer_core::authored::ImageObject::new(layer_core::color::source::rgba8_source([200, 150], |_, _| [200, 40, 30, 255]).into());
@@ -2066,6 +2096,9 @@ mod tests {
             .unwrap();
         let nearest = choice["sections"][0].as_array().unwrap().iter().find(|item| item["label"] == "Nearest").unwrap();
         app.dispatch(serde_json::from_value(nearest["action"].clone()).unwrap()).unwrap();
+        while !app.session.state().commands.iter().any(|c| c.id == CommandId::TransformNearest && c.selected) {
+            frame_step(&mut app, &clock, deadline);
+        }
         assert!(app.session.state().commands.iter().any(|c| c.id == CommandId::TransformNearest && c.selected));
     }
 
@@ -2216,8 +2249,9 @@ mod tests {
                 accepted = host.session.engine().transform_preview().map(|preview| preview.transform.placement.clone());
             }
         }
-        let selected = |command| host.session.state().commands.iter().any(|c| c.id == command && c.selected);
-        assert!(selected(layer_ui::CommandId::TransformWarp) && selected(layer_ui::CommandId::WarpGridThree), "Warp offers its grid");
+        let selected = |host: &NativeHost, command| host.session.state().commands.iter().any(|c| c.id == command && c.selected);
+        while !selected(&host, layer_ui::CommandId::TransformWarp) || !selected(&host, layer_ui::CommandId::WarpGridThree) { frame(&mut host); }
+        assert!(selected(&host, layer_ui::CommandId::TransformWarp) && selected(&host, layer_ui::CommandId::WarpGridThree), "Warp offers its grid");
         let bar = host.session.state().canvas_bar.clone().expect("Warp bar");
         assert!(bar.items.iter().any(|item| matches!(item.option, layer_ui::ToolOption::Choice { id: "transform-warp-grid", .. })));
         let bounds = host.session.engine().document().working.selection.as_ref().unwrap().bounds();

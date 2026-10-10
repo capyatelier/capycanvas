@@ -9,6 +9,8 @@ Compiler failures retain the first reported cause, including a native worker's
 panic payload. Dry-material labels identify the target, shader entry, operation
 and contact flags, so a driver rejection can be traced to its actual recipe.
 Recipes for one dry target share its two coverage-layout pipeline layouts.
+Hosts keep polling compiler failures after initial startup completes, including
+pipelines requested by a later transform frame.
 
 ## Order
 

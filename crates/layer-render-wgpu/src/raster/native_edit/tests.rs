@@ -588,6 +588,34 @@ fn prevalidated_publication_matches_independent_native_encoding_at_every_depth()
 }
 
 #[test]
+fn snapshot_capture_keeps_private_samples_and_allocates_only_its_batch() {
+    use crate::test_support::page_texture;
+    use layer_core::color::LayerColorMode;
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    r.snapshot_worker = true;
+    let transfer = r.prepare_native_transfer(r.document_color().space).unwrap();
+    r.native_edit = Some(NativeEdit::with_mode(&r, transfer, false));
+    let mut inputs = Vec::new();
+    for plane in [RasterPlane::Color, RasterPlane::WatercolorWetness, RasterPlane::Mask] {
+        let texture = page_texture(&r, if plane == RasterPlane::Color { wgpu::TextureFormat::Rgba32Float } else { wgpu::TextureFormat::R32Float });
+        set_pixel(&r, &texture, if plane == RasterPlane::Color { &[0.01234567, 0.2345678, 0.7890123, 1.] } else { &[0.1234567] });
+        inputs.push((texture, RasterTile::pending(plane.descriptor(r.document_color())), LayerColorMode::FullColor));
+    }
+    let before = inputs.iter().map(|(texture, _, _)| crate::layer_tests::page_bytes(&r, texture)).collect::<Vec<_>>();
+    let scratch = |r: &WgpuRasterizer| r.native_edit.as_ref().unwrap().colors.iter().chain(&r.native_edit.as_ref().unwrap().scalars).cloned().collect::<Vec<_>>();
+    assert!(scratch(&r).is_empty());
+    for repetition in 0..2 {
+        let mut commands = submission::CommandEncoder::new(&r.device, &Default::default());
+        let capture = r.encode_private_tiles(inputs.iter().map(|(texture, tile, mode)| (texture.clone(), RasterTile::pending(tile.descriptor()), *mode)).collect(), &mut commands).unwrap();
+        commands.submit(&r.queue);
+        capture.finish().unwrap();
+        for ((texture, _, _), expected) in inputs.iter().zip(&before) { assert_native_bytes(&crate::layer_tests::page_bytes(&r, texture), expected, "private snapshot samples"); }
+        assert_eq!(scratch(&r).len(), 3, "capture {repetition} needs one color and two scalar candidates");
+        assert!(r.native_edit.as_ref().unwrap().promoter.as_ref().unwrap().pipelines.iter().all(|p| !p.ready()), "private snapshots do not compile promotion");
+    }
+}
+
+#[test]
 fn prevalidated_late_invalid_color_or_scalar_rejects_siblings_without_canonical_adoption() {
     use crate::test_support::page_texture;
     use layer_core::color::LayerColorMode;

@@ -25,6 +25,17 @@ pub use platform::finish_shader_compiler_shutdown;
 #[cfg(not(target_arch = "wasm32"))]
 pub use platform::Activity as ShaderActivity;
 
+#[cfg(all(feature = "test-support", not(target_arch = "wasm32")))]
+pub fn enqueue_compiler_failure(renderer: &WgpuRasterizer, cause: &'static str) -> mpsc::Receiver<()> {
+    let startup = renderer.startup.as_ref().expect("staged renderer");
+    assert!(startup.finished, "startup must complete before the late failure");
+    let (recorded, result) = mpsc::channel();
+    startup.compiler.enqueue(BRUSH, move || Err(cause.into()));
+    startup.compiler.enqueue(BRUSH, move || { let _ = recorded.send(()); Ok(()) });
+    startup.compiler.start();
+    result
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StartupProgress {
     pub canvas_ready: bool,
@@ -109,7 +120,7 @@ impl Requirements {
         Ok(())
     }
     pub fn ready(&self) -> bool {
-        self.render.iter().all(Deferred::ready) && self.compute.iter().all(Deferred::ready)
+        self.render.iter().all(|p| p.ready()) && self.compute.iter().all(|p| p.ready())
     }
     fn enqueue(&self, compiler: &Compiler, priority: u8) {
         compiler.require(&self.render, priority);
@@ -339,7 +350,7 @@ impl WgpuRasterizer {
             if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
             required.compute.push(self.scene_pipelines.constant.2.clone());
             required.compute.push(self.pipelines.watercolor_compute.1.clone());
-            required.compute.extend(self.transforms.as_ref().unwrap().placement_pipelines().into_iter().cloned());
+            required.compute.extend(self.transforms.as_ref().unwrap().placement_pipelines());
             if self.native_edit.is_some() {
                 let mip = self.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&self.device));
                 required.compute.extend([mip.reduce.clone(), mip.fused_reduce.clone()]);
@@ -357,10 +368,10 @@ impl WgpuRasterizer {
                 required.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
             }
             if shader.key.mesh {
-                required.render.extend(self.transforms.as_ref().unwrap().mesh_pipelines().into_iter().cloned());
+                required.render.extend(self.transforms.as_ref().unwrap().mesh_pipelines());
             }
             if shader.key.transform {
-                required.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
+                required.render.extend(self.transforms.as_ref().unwrap().pipelines());
             }
             required.enqueue(&startup.compiler, DOCUMENT);
             startup.document = required;
@@ -448,8 +459,8 @@ impl WgpuRasterizer {
         // Live transforms do not change document revision or brush settings.
         // They still need their own shaders before an interactive frame runs.
         if transform {
-            current.render.extend(self.transforms.as_ref().unwrap().pipelines().into_iter().cloned());
-            current.compute.extend(self.transforms.as_ref().unwrap().display_pipelines().into_iter().cloned());
+            current.render.extend(self.transforms.as_ref().unwrap().pipelines());
+            current.compute.extend(self.transforms.as_ref().unwrap().display_pipelines());
             current.render.extend(self.scene_pipelines.resample.mesh.iter().cloned());
             current.compute.extend(self.selection_clip.pipelines().map(Clone::clone));
         }
@@ -670,15 +681,15 @@ mod gpu_tests {
             crate::test_support::wait_startup(&mut renderer,deadline,|progress|progress.canvas_ready,
                 format_args!("object-only startup timed out, ICC={icc}"));
             assert!(renderer.scene_pipelines.source.pipeline.ready());
-            assert!(renderer.scene_pipelines.objects.pipelines().into_iter().all(Deferred::ready));
-            assert!(renderer.moving_images.pipelines(&renderer.device).into_iter().all(Deferred::ready));
+            assert!(renderer.scene_pipelines.objects.pipelines().into_iter().all(|p| p.ready()));
+            assert!(renderer.moving_images.pipelines(&renderer.device).into_iter().all(|p| p.ready()));
             let mut encoder=crate::submission::CommandEncoder::new(&renderer.device,&Default::default());
             let source=document.artwork.objects.iter().next().unwrap().2.image.clone();
             let request=crate::object_image_mips::MovingRequest {id:source.id(),source:source.storage().clone(),level:1,nearest:false};
             let mut images=std::mem::take(&mut renderer.moving_images);
             let plan=images.plan(&renderer,std::slice::from_ref(&request),u64::MAX,&mut encoder);
             assert!(plan.is_ok());
-            assert!(images.pipelines(&renderer.device).into_iter().all(Deferred::ready),
+            assert!(images.pipelines(&renderer.device).into_iter().all(|p| p.ready()),
                 "first source context keeps the startup-prepared reduction recipes");
             renderer.moving_images=images;
             encoder.submit(&renderer.queue);
@@ -720,7 +731,7 @@ mod gpu_tests {
                 .scene_pipelines
                 .pipeline
                 .iter()
-                .all(Deferred::ready)
+                .all(|p| p.ready())
         );
         assert!(
             renderer
@@ -728,7 +739,7 @@ mod gpu_tests {
                 .as_ref()
                 .unwrap()
                 .required_pipelines(document.composition().color.depth)
-                .all(Deferred::ready)
+                .all(|p| p.ready())
         );
         for coverage in [false, true] {
             assert!(renderer.pipelines.dry_material
@@ -779,10 +790,10 @@ mod gpu_tests {
         let pipelines = renderer.retouch_pipelines();
         assert!(Arc::ptr_eq(&pipelines, &renderer.retouch_pipelines()));
         let (render, compute) = retouch.pipelines();
-        assert!(render.iter().all(Deferred::ready) && compute.iter().all(Deferred::ready));
+        assert!(render.iter().all(|p| p.ready()) && compute.iter().all(|p| p.ready()));
         drop(retouch);
         let (render, compute) = renderer.retouch_sources().pipelines();
-        assert!(render.iter().all(Deferred::ready) && compute.iter().all(Deferred::ready), "releasing retouch pixels retains its shaders");
+        assert!(render.iter().all(|p| p.ready()) && compute.iter().all(|p| p.ready()), "releasing retouch pixels retains its shaders");
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.regions.as_ref().is_none_or(|regions| regions.flood.pipelines().all(|p| !p.ready())),
             "unused region recipes must remain uncompiled");
@@ -792,21 +803,57 @@ mod gpu_tests {
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready,
             format_args!("Transform demand compilation timed out"));
         let transforms = renderer.transforms.as_ref().unwrap();
-        assert!(transforms.pipelines().into_iter().all(Deferred::ready)
-            && transforms.display_pipelines().into_iter().all(Deferred::ready),
+        assert!(transforms.pipelines().into_iter().all(|p| p.ready())
+            && transforms.display_pipelines().into_iter().all(|p| p.ready()),
             "a demanded transform must be ready before drawing");
         assert!(transforms.mesh_pipelines().into_iter().all(|p| !p.ready()),
             "ordinary transforms must not prepare unused warp meshes");
         let meshes: Vec<_> = transforms.mesh_pipelines().into_iter()
-            .chain(renderer.scene_pipelines.resample.mesh.iter()).cloned().collect();
+            .chain(renderer.scene_pipelines.resample.mesh.iter().cloned()).collect();
         assert!(!renderer.mesh_pipelines_ready(), "first warp use must request its cold dependencies");
-        crate::test_support::wait_startup(&mut renderer, deadline, |_| meshes.iter().all(Deferred::ready),
+        crate::test_support::wait_startup(&mut renderer, deadline, |_| meshes.iter().all(|p| p.ready()),
             format_args!("Warp mesh demand compilation timed out"));
         assert!(renderer.mesh_pipelines_ready(), "prepared warp dependencies must be reused");
         renderer.prepare_startup(&document, &brush, false).unwrap();
         assert!(renderer.poll_startup().unwrap().brush_ready, "cached dependencies resume immediately");
         renderer.prepare_startup(&document, &brush, true).unwrap();
         assert!(renderer.poll_startup().unwrap().brush_ready, "revisiting the transform must reuse its prepared dependencies");
+    }
+
+    #[test]
+    fn cold_preview_prepares_the_drawn_filter_without_unused_planes() {
+        let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut renderer = crate::test_support::staged_renderer(&reference, Default::default());
+        let document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        renderer.prepare_startup(&document, &brush, true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("Transform preparation timed out"));
+        let target = document.scene().targets().find(|target| matches!(target, SourceTarget::Paint(_))).unwrap();
+        let mut preview = layer_render::TransformPreview { transaction: 1, moving: true, target, selection: None,
+            transform: layer_core::ImageTransform { placement: layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Bicubic,
+                ..layer_core::LayerPlacement::from_affine(layer_core::Affine::translation(layer_core::Point { x: 0.25, y: 0.5 })) }, ..Default::default() } };
+        preview.moving = false;
+        let mut required = Requirements::default();
+        renderer.transforms.as_ref().unwrap().require_frame(&renderer, crate::test_support::packet(document.scene(), [128; 2]), Some(&preview), &mut required);
+        assert_eq!(required.render.len(), 1);
+        let exact = required.render[0].clone();
+        assert!(!exact.ready());
+        for moving in [true, false] {
+            preview.moving = moving;
+            assert!(!renderer.raster_dependencies_ready(crate::test_support::packet(document.scene(), [128; 2]), Some(&preview)));
+            while !renderer.raster_dependencies_ready(crate::test_support::packet(document.scene(), [128; 2]), Some(&preview)) {
+                renderer.poll_startup().unwrap();
+                assert!(std::time::Instant::now() < deadline, "Preview preparation timed out");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert_eq!(exact.ready(), !moving);
+            let mut required = Requirements::default();
+            renderer.transforms.as_ref().unwrap().require_frame(&renderer, crate::test_support::packet(document.scene(), [128; 2]), Some(&preview), &mut required);
+            assert_eq!(required.render.len(), 1);
+        }
+        preview.transform.placement.outer.0[2] += 12.;
+        assert!(renderer.raster_dependencies_ready(crate::test_support::packet(document.scene(), [128; 2]), Some(&preview)), "numeric edits reuse the prepared variant");
     }
 
     #[test]

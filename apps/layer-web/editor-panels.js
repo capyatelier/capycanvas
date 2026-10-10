@@ -9,11 +9,11 @@ import { actionField, choiceField } from './toolbar-components.js';
 import {gradientEditor} from './gradient.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
-export function createEditorPanels({ selectionUi, app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
+export function createEditorPanels({ selectionUi, app, wasmModule, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
   const copy=liveCopy(app,"catalog").native_copy;
   const updates = new Map(), navigators = new Set(), pendingPaints = new Set();
   let positioning = 0, nextNavigator = 1;
-  const fieldWorker = createRasterWorker();
+  const fieldWorker = createRasterWorker(wasmModule);
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   const color = action => dispatch({ type: "color", action });
   const control = (kind, readToolSet = null) => {

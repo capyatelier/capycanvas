@@ -23,6 +23,13 @@ export async function tracePipelineCalls(cdp) {
         globalThis.__pipelineTask=typeof task==='string'?task:task&&Object.keys(task)[0];
         globalThis.__capyPipelineTrace(JSON.stringify({realm,operation:request.operation,task:globalThis.__pipelineTask}));
       });
+      for(const method of ['instantiate','instantiateStreaming']){
+        const original=WebAssembly[method];
+        WebAssembly[method]=function(...args){
+          if(globalThis.__pipelineTask==='TransformPixels')globalThis.__capyPipelineTrace(JSON.stringify({realm,task:globalThis.__pipelineTask,initialization:method,module:args[0] instanceof WebAssembly.Module}));
+          return original.apply(this,args);
+        };
+      }
       if(navigator.gpu){
         const requestAdapter=navigator.gpu.requestAdapter;
         navigator.gpu.requestAdapter=async function(...args){
@@ -33,7 +40,7 @@ export async function tracePipelineCalls(cdp) {
             for(const method of ['createComputePipeline','createRenderPipeline','createComputePipelineAsync','createRenderPipelineAsync']){
               const original=device[method];
               device[method]=function(descriptor){
-                globalThis.__capyPipelineTrace(JSON.stringify({realm,method,label:descriptor.label,recipe:__pipelineTraceFingerprint(this,descriptor)}));
+                globalThis.__capyPipelineTrace(JSON.stringify({realm,task:globalThis.__pipelineTask,method,label:descriptor.label,recipe:__pipelineTraceFingerprint(this,descriptor)}));
                 const result=original.call(this,descriptor);
                 if(method.endsWith('Async')&&globalThis.__pipelineTask==='TransformPixels'&&globalThis.__holdTransform)return result.then(pipeline=>new Promise(resolve=>{
                   (globalThis.__transformReleases??=[]).push(()=>resolve(pipeline));
@@ -65,7 +72,7 @@ export async function tracePipelineCalls(cdp) {
       const record=JSON.parse(message.params.payload);
       if(record.installed&&record.realm==='worker')workers.add(message.sessionId);
       if(record.method)calls.push({...record,session:message.sessionId});
-      if(record.operation)jobs.push({...record,session:message.sessionId});
+      if(record.operation||record.initialization)jobs.push({...record,session:message.sessionId});
       if(record.held)held.add(message.sessionId);
     }
     if(message.method==='Target.detachedFromTarget'){detached.add(message.params.sessionId);debug('detached '+message.params.sessionId)}
@@ -93,7 +100,7 @@ export async function tracePipelineCalls(cdp) {
   await cdp.call('Target.setAutoAttach',{autoAttach:true,waitForDebuggerOnStart:true,flatten:true,filter:[{type:'worker'},{exclude:true}]});
   debug('auto-attach ready');
   return {
-    calls,
+    calls,jobs,
     async holdTransforms(){
       holdTransforms=true;held.clear();
       for(const session of liveWorkers)if(!detached.has(session))await cdp.call('Runtime.evaluate',{expression:'globalThis.__holdTransform=true'},session);

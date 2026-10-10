@@ -29,27 +29,57 @@ impl PaintTransforms {
         Self([primary, companion])
     }
     pub(super) fn placement_pass(&self, scalar: bool) -> PixelTransform {
-        if scalar { self.0[0].scalar.placement_pass() } else { self.0[0].color.placement_pass() }
+        if scalar { self.0[0].scalar.fork() } else { self.0[0].color.fork() }
     }
     pub fn new(device: &PipelineDevice) -> Self {
         let primary = ImageTransformState::new(device);
         let companion = primary.fork();
         Self([primary, companion])
     }
-    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
+    pub fn pipelines(&self) -> [Deferred<wgpu::RenderPipeline>; 3] {
         self.0[0].pipelines()
     }
     /// What warp meshes draw with, compiled when a mesh is first shown.
-    pub fn mesh_pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
+    pub fn mesh_pipelines(&self) -> [Deferred<wgpu::RenderPipeline>; 1] {
         self.0[0].mesh_pipelines()
     }
     /// Drag previews draw into the display with these once they are ready;
     /// they never delay input.
-    pub fn display_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 1] {
-        [self.0[0].color.kernels.display.as_ref().expect("color transform")]
+    pub fn display_pipelines(&self) -> [Deferred<wgpu::ComputePipeline>; 1] {
+        [self.0[0].color.display_pipeline()]
     }
-    pub fn placement_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 2] {
-        [&self.0[0].color.kernels.placement_pipeline, &self.0[0].scalar.kernels.placement_pipeline]
+    pub fn placement_pipelines(&self) -> [Deferred<wgpu::ComputePipeline>; 2] {
+        [self.placement_pipeline(false, &Default::default()), self.placement_pipeline(true, &Default::default())]
+    }
+    pub fn placement_pipeline(&self, scalar: bool, transform: &layer_core::ImageTransform) -> Deferred<wgpu::ComputePipeline> {
+        let state = &self.0[0];
+        let pass = if scalar { &state.scalar } else { &state.color };
+        pass.placement_pipeline(transform, pixel_transform::exact_taps(transform))
+    }
+    pub fn require_frame(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>, required: &mut startup::Requirements) {
+        let mut require = |target: SourceTarget, transform: &layer_core::ImageTransform, taps| {
+            let state = &self.0[0];
+            if target.is_coverage() { required.render.push(state.visibility.render_pipeline(transform, taps)); }
+            else {
+                required.render.push(state.color.render_pipeline(transform, taps));
+                let wet = r.paint_layers.iter().any(|layer| layer.id == target && !layer.watercolor_wetness_pages.is_empty())
+                    || r.native_backing(target).is_some_and(|data| data.has_plane(layer_core::raster::RasterPlane::WatercolorWetness))
+                    || packet.scene.raster(target).and_then(|raster| raster.try_data()).and_then(Result::ok).is_some_and(|data| data.has_plane(layer_core::raster::RasterPlane::WatercolorWetness));
+                if wet { required.render.push(state.scalar.render_pipeline(transform, taps)); }
+            }
+        };
+        for batch in packet.dab_batches {
+            if let DabBatchKind::RasterOperation(index) = batch.kind
+                && let Some(layer_core::RasterOperation {kind: layer_core::RasterOperationKind::Transform(transform), ..}) = packet.scene.operations(batch.target).and_then(|ops| ops.get(index as usize)) {
+                require(batch.target, transform, pixel_transform::exact_taps(transform));
+            }
+        }
+        if let Some(preview) = preview {
+            let companion = preview.companion(packet.scene);
+            for preview in std::iter::once(preview).chain(companion.as_ref()) {
+                require(preview.target, &preview.drawn(), preview_taps(preview));
+            }
+        }
     }
     pub fn begin_frame(&mut self) {
         for t in &mut self.0 {
@@ -127,7 +157,7 @@ impl PaintTransforms {
         if let Some(startup) = &r.startup {
             let mip = r.display_pipelines.get_or_insert_with(|| display_mips::Pipelines::new(&r.device));
             let ready = startup.compiler.require([&r.scene_pipelines.source.pipeline], startup::OTHER)
-                & startup.compiler.require(state.color.kernels.display.iter(), startup::OTHER)
+                & startup.compiler.require([&state.color.display_pipeline()], startup::OTHER)
                 & startup.compiler.require([&mip.reduce, &mip.fused_reduce], startup::OTHER)
                 & startup.compiler.require(r.selection_clip.pipelines(), startup::OTHER);
             if !ready { return Ok(()); }
@@ -496,20 +526,11 @@ impl ImageTransformState {
             mesh: None,
         }
     }
-    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 3] {
-        [
-            &self.color.kernels.pipeline,
-            &self.scalar.kernels.pipeline,
-            &self.visibility.kernels.pipeline,
-        ]
+    pub fn pipelines(&self) -> [Deferred<wgpu::RenderPipeline>; 3] {
+        [&self.color, &self.scalar, &self.visibility].map(|p| p.render_pipeline(&Default::default(), 1))
     }
-    pub fn mesh_pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 4] {
-        [
-            &self.color.kernels.mesh_pipeline,
-            &self.scalar.kernels.mesh_pipeline,
-            &self.visibility.kernels.mesh_pipeline,
-            &self.positions.pipelines.pipeline,
-        ]
+    pub fn mesh_pipelines(&self) -> [Deferred<wgpu::RenderPipeline>; 1] {
+        [self.positions.pipelines.pipeline.clone()]
     }
     pub fn begin_frame(&mut self) {
         self.color.begin_frame();
@@ -1014,7 +1035,7 @@ impl ImageTransformState {
                         }
                     })
                     .collect();
-                pass.encode_batch(encoder, &atlas.1, n == 0, meshed, offset, &draws);
+                pass.encode_batch(encoder, &atlas.1, n == 0, offset, &draws);
             }
             first += window.jobs.len();
             for (c, target) in &window.pages {

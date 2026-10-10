@@ -130,7 +130,7 @@ impl ColorCanvas {
             composite_all: true,
             blend_space: document.composition().blend,
         };
-        if !renderer.raster_dependencies_ready(packet) {
+        if !renderer.raster_dependencies_ready(packet, None) {
             return Ok(false);
         }
         renderer.submit(packet)?;

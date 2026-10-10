@@ -44,10 +44,10 @@ impl CanvasRenderer for AttachedRenderer {
     fn max_document_dimension(&self) -> u32 {
         self.0.as_deref().map_or(u32::MAX, CanvasRenderer::max_document_dimension)
     }
-    fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>) -> bool {
+    fn raster_dependencies_ready(&mut self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
         self.0
             .as_mut()
-            .is_none_or(|gpu| gpu.raster_dependencies_ready(packet))
+            .is_none_or(|gpu| gpu.raster_dependencies_ready(packet, preview))
     }
     fn can_capture_raster(&self) -> bool {
         self.0.as_ref().is_none_or(|gpu| gpu.can_capture_raster())

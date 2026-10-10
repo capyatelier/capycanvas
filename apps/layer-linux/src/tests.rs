@@ -2409,7 +2409,6 @@ fn native_operation_tool() {
     assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
     // Exercise the real canvas input/controller: moving inside the box, then
     // its lower-right handle. The opposite corner must not jump on resize.
-    native_pen_path(&w, &[[1000., 750.], [1100., 800.]]);
     let value = |id: &str| {
         state(&w)
             .tool_settings
@@ -2418,8 +2417,10 @@ fn native_operation_tool() {
             .unwrap()
             .value
     };
-    assert!((value("transform_x") - 100.).abs() < 0.1);
-    assert!((value("transform_y") - 50.).abs() < 0.1);
+    let reference = [value("transform_x"), value("transform_y")];
+    native_pen_path(&w, &[[900., 650.], [1000., 700.]]);
+    assert!((value("transform_x") - reference[0] - 100.).abs() < 0.1);
+    assert!((value("transform_y") - reference[1] - 50.).abs() < 0.1);
     native_pen_path(&w, &[[1450., 1050.], [1590., 1150.]]);
     assert!((value("transform_width") - 1.2).abs() < 0.01);
     assert!((value("transform_height") - 1.2).abs() < 0.01);
@@ -2550,7 +2551,7 @@ fn native_operation_tool() {
         command: CommandId::Undo,
     }); // transform + selection
     pump(200);
-    assert_eq!(document().artwork, original.artwork);
+    assert_live_artwork_eq(&document(), &original);
     assert_eq!(document().working.selection, original.working.selection);
     let c = sample([700., 750.]);
     assert!(c[2] > 0.6 && c[0] < 0.2, "restored ink: {c:?}");

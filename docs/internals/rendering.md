@@ -460,7 +460,7 @@ reduced first and converted after.
   (`BlendSpace::composite`);
 - drag frames that draw a moving layer into the display
   ([`display_resample.wgsl`](../../crates/layer-render-wgpu/src/display_resample.wgsl)
-  and `display_main` in `pixel_transform.wgsl`), which encode the layer's
+  and `display_main` in `pixel_transform/display.wgsl`), which encode the layer's
   resampled color when `DisplayLevel::encode` is set.
 
 **What holds the composite.** Group and clipping scratch tiles, retained display windows and their mips,
@@ -634,7 +634,7 @@ it.
 
 ### Resampling
 
-The [transform pass](../../crates/layer-render-wgpu/src/pixel_transform.wgsl)
+The [transform pass](../../crates/layer-render-wgpu/src/pixel_transform.rs)
 samples premultiplied linear pixels and their selection together. `Nearest`
 takes the pixel under the sample. `Linear` is bilinear. `Bicubic` is
 Catmull-Rom over 4 × 4 taps and `Lanczos` is Lanczos-3 over 6 × 6 taps with
@@ -648,6 +648,14 @@ still previews that Apply may keep, and exact capture use up to sixteen, derived
 from the map's Jacobian. A reduction to an eighth therefore averages every
 source pixel, as an area reduction would, instead of aliasing. A moving
 Bicubic or Lanczos preview draws bilinearly until it stops.
+
+Transform programs compose shared source-access, mapping, filter and output
+helpers. Each device caches only requested affine, projective or mesh variants
+and their selected filter; a tap cap of one omits area sampling. Identity copies
+omit mapping and filtering. Mesh/filter selection follows the effective geometry,
+including source adapters. Matrix values, dimensions and tap limits stay uniforms.
+Frame readiness receives the immutable preview and prepares its actual variants
+before submitting it. The same choice selects capture and command pipelines.
 
 Exact capture (export, snapshots and the artwork readback) evaluates image
 objects with their saved kernel through the uncapped object sampler. Layer reads
@@ -707,8 +715,24 @@ a source over a newly cleared transparent target renders directly into that
 target; only an existing backdrop needs the portable blend pass.
 
 Applying a whole-layer transform uses the same raw-plane sampler and native tile
-encoder. Its private snapshot retains Color, Wetness, WatercolorWetness and linked
-Mask separately; it never stores evaluated watercolor appearance as pigment.
+encoder. Its private snapshot captures Color, existing WatercolorWetness and
+linked Mask separately, preserving watercolor metadata without allocating absent
+wetness. Mask-only jobs omit color. Raw masks read authored scalar coverage
+directly, using their default coverage for absent pages, without scene composition.
+Preparation uses those same planes and only
+their publication variants. Immutable publication recipes share the device;
+scratch grows only to each capture batch, and validation status and results
+belong to each capture. Private outputs
+need no promotion back into their disposable source textures.
+Affine captures use source occupancy and the existing conservative filter
+footprints to skip output pages that equal zero. Imported bases and raster
+overrides both contribute; nonzero-default masks and other mappings retain full
+capture. Output domains and origins remain unchanged.
+Web raster workers receive the page's immutable compiled WebAssembly module in
+their first request, then instantiate it only when an operation needs Rust.
+Each worker retains its own memory and GPU device; retiring a worker does not
+require fetching and compiling the application again.
+
 The shared session publishes one replacement after every output tile succeeds.
 Cancellation, renderer replacement and failure discard that private result.
 A scalar-only mask bake uses that worker and preserves its owner, default

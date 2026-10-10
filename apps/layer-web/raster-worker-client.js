@@ -1,6 +1,4 @@
-// One compression worker and one file worker keep archive I/O independent of ink.
-// GPU objects remain in the owning Wasm instance; only bounded byte blocks move.
-export function createRasterWorker(reportGpu=()=>{}) {
+export function createRasterWorker(module,reportGpu=()=>{}) {
   const owners = new Map();
   let next = 0, idleAnalysis;
   const outputs=new Map(),reads=new Set();
@@ -22,7 +20,7 @@ export function createRasterWorker(reportGpu=()=>{}) {
       if(data.gpu_event){
         const event={...data.gpu_event,worker:kind,operations:[...pending.values()].map(job=>job.operation)};
         try{reportGpu(event);}catch{}
-        if(['device_lost','out_of_memory'].includes(event.kind))fail(new Error(`Raster worker GPU stopped: ${event.message}`));
+        if(['device_lost','out_of_memory','panic'].includes(event.kind))fail(new Error(`Raster worker ${event.kind==='panic'?'runtime':'GPU'} stopped: ${event.message}`));
         return;
       }
       const job = pending.get(data.id);
@@ -36,7 +34,7 @@ export function createRasterWorker(reportGpu=()=>{}) {
     };
     worker.onerror = event => { event.preventDefault(); fail(new Error(event.message || "Raster worker stopped")); };
     worker.onmessageerror = () => fail(new Error("Invalid raster worker response"));
-    const state = {worker,pending,fail,retire:false,get closed(){return closed;},active(){clearTimeout(idleTimer);},park(){idleTimer=setTimeout(()=>fail(new DOMException("Raster worker idle","AbortError")),5000);}}; owners.set(kind,state); return state;
+    const state = {worker,pending,fail,module,retire:false,get closed(){return closed;},active(){clearTimeout(idleTimer);},park(){idleTimer=setTimeout(()=>fail(new DOMException("Raster worker idle","AbortError")),5000);}}; owners.set(kind,state); return state;
   }
   function send(state,request,cancelled) {
     return new Promise((resolve,reject)=>{
@@ -47,7 +45,7 @@ export function createRasterWorker(reportGpu=()=>{}) {
       const poll=cancelled?setInterval(()=>{if(cancelled())state.fail(new DOMException("Image operation cancelled","AbortError"));},50):null;
       const finish=callback=>value=>{clearInterval(poll);callback(value);};
       state.pending.set(id,{resolve:finish(resolve),reject:finish(reject),timer,operation:request.operation});
-      try{state.worker.postMessage({id,request},(request.buffers||[]).map(bytes=>bytes.buffer));}
+      try{state.worker.postMessage({id,request,module:state.module},(request.buffers||[]).map(bytes=>bytes.buffer));state.module=undefined;}
       catch(error){clearInterval(poll);clearTimeout(timer);state.pending.delete(id);reject(error);}
     });
   }

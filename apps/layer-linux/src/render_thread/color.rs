@@ -204,7 +204,7 @@ impl Worker {
             composite_all: true,
             blend_space: document.composition().blend,
         };
-        while !renderer.raster_dependencies_ready(packet) {
+        while !renderer.raster_dependencies_ready(packet, None) {
             check()?;
             renderer
                 .device()

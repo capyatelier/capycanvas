@@ -182,6 +182,7 @@ pub struct SnapshotRenderer {
     scope: SceneScope,
     offset: layer_core::Point,
     raw_plan: Option<layer_core::TransformPixelsPlan>,
+    raw_planes: Vec<RasterPlane>,
     analysis_ready: std::collections::HashSet<OccurrenceHandle>,
     pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
@@ -202,20 +203,70 @@ pub struct SnapshotRenderer {
     control: CaptureControl,
 }
 impl SnapshotRenderer {
+    fn set_raw_plan(&mut self, plan: layer_core::TransformPixelsPlan) {
+        let target = plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target);
+        self.raw_planes = match plan.scope {
+            layer_core::TransformPixelsScope::Mask => vec![RasterPlane::Mask],
+            layer_core::TransformPixelsScope::Paint { linked_mask } => {
+                let mut planes = vec![RasterPlane::Color];
+                if self.backing[&target].has_plane(RasterPlane::WatercolorWetness) {
+                    planes.push(RasterPlane::WatercolorWetness);
+                }
+                if linked_mask { planes.push(RasterPlane::Mask); }
+                planes
+            }
+        };
+        self.raw_plan = Some(plan);
+    }
+    fn raw_coordinates(&self) -> Result<Vec<[u32; 2]>, GpuRasterError> {
+        let plan = self.raw_plan.as_ref().unwrap();
+        let view = self.scene.view();
+        let full = || page_coordinates(PixelRect::full(plan.extent)).collect();
+        let mut coordinates = std::collections::BTreeSet::new();
+        for &plane in &self.raw_planes {
+            let target = if plane == RasterPlane::Mask { plan.coverage.map(SourceTarget::Coverage).unwrap_or(plan.target) }
+                else { plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target) };
+            let transform = plan.plane_geometry(target);
+            if transform.as_affine().is_none() || plane == RasterPlane::Mask && view.coverage(match target {
+                SourceTarget::Coverage(handle) => handle, _ => unreachable!(),
+            }).is_some_and(|source| source.default_coverage != 0.) { return Ok(full()); }
+            let bounds = pixel_rect(plan.plane_domain(target), view.target_extent(target));
+            let data = &self.backing[&target];
+            let base = (plane == RasterPlane::Color).then(|| view.paint_base(target)).flatten();
+            let splitter = paint_transform::snapshot::Splitter::new(bounds, &transform, None, |coordinate| {
+                data.tiles.contains_key(&layer_core::raster::TileKey { plane, coordinate })
+                    || base.is_some_and(|base| source_access::paint_base_contains(base, coordinate))
+            })?.placed();
+            let mut pieces = Vec::new();
+            for coordinate in page_coordinates(PixelRect::full(plan.extent)) {
+                pieces.clear();
+                splitter.split(page_rect(coordinate).intersect(PixelRect::full(plan.extent)), &mut pieces)?;
+                if pieces.iter().any(|piece| !piece.sources.is_empty()) { coordinates.insert(coordinate); }
+            }
+        }
+        Ok(coordinates.into_iter().collect())
+    }
     async fn prepare_pipelines(&mut self) -> Result<(), GpuRasterError> {
         if self.pipelines_ready { return Ok(()); }
         self.control.check()?;
         let r = &mut self.renderer;
         let mut required = startup::Requirements::default();
         required.render.push(r.scene_pipelines.source.pipeline.clone());
-        required.render.push(r.layer_masks.initialize.clone());
-        required.compute.extend(r.selection_clip.pipelines().into_iter().cloned());
         if let Some(plan) = &self.raw_plan {
-            required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines().into_iter().cloned());
-            required.compute.extend(r.native_edit.as_ref().unwrap().required_pipelines(r.document_color().depth).cloned());
-            if plan.geometry.placement.mesh.is_some() {
-                required.render.push(r.transforms.as_ref().unwrap().mesh_pipelines()[3].clone());
+            for &plane in &self.raw_planes {
+                let target = if plane == RasterPlane::Mask { plan.coverage.map(SourceTarget::Coverage).unwrap_or(plan.target) }
+                    else { plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target) };
+                let transform = plan.plane_geometry(target);
+                required.compute.push(r.transforms.as_ref().unwrap().placement_pipeline(plane != RasterPlane::Color, &transform));
             }
+            required.compute.extend(r.native_edit.as_ref().unwrap().private_pipelines(r.document_color().depth,
+                self.scene.view().color_mode(plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target)), &self.raw_planes));
+            if plan.geometry.placement.mesh.is_some() {
+                required.render.push(r.transforms.as_ref().unwrap().mesh_pipelines()[0].clone());
+            }
+        } else {
+            required.render.push(r.layer_masks.initialize.clone());
+            required.compute.extend(r.selection_clip.pipelines().into_iter().cloned());
         }
         required.prepare().await.map_err(GpuRasterError::Effect)?;
         self.control.check()?;
@@ -232,7 +283,7 @@ impl SnapshotRenderer {
         required.render.extend(r.scene_pipelines.pipeline.iter().cloned());
         required.compute.push(r.scene_pipelines.constant.2.clone());
         required.compute.extend(r.scene_pipelines.scale_pipelines().into_iter().cloned());
-        required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines().into_iter().cloned());
+        required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines());
         if r.device.portable_blend() { required.compute.extend(r.portable_blend.pipelines.iter().cloned()); }
         if self.backing.values().any(|data| data.watercolor.is_some()) {
             required.compute.push(r.pipelines.watercolor_compute.1.clone());
@@ -309,7 +360,7 @@ impl SnapshotRenderer {
         let blend_space = composition.blend;
         #[cfg(not(target_arch = "wasm32"))]
         let output_metadata = layer_color::photo::DeliveryMetadata {resolution: composition.resolution, photo: (*scene.artwork.metadata).clone(), policy: Default::default()};
-        Ok(Self {scene, scope, offset: Default::default(), raw_plan: None, analysis_ready: Default::default(), sdr_rendition, local_tone: None, gpu_local_tone: None,
+        Ok(Self {scene, scope, offset: Default::default(), raw_plan: None, raw_planes: Vec::new(), analysis_ready: Default::default(), sdr_rendition, local_tone: None, gpu_local_tone: None,
             renderer, pipelines_ready: false, scene_pipelines_ready: false, backing, resident: HashMap::new(), extent,
             #[cfg(not(target_arch = "wasm32"))] output_extent: extent,
             #[cfg(not(target_arch = "wasm32"))] output_metadata,

@@ -1086,7 +1086,7 @@ fn selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
     occurrence_mut(&mut owner).visible =false;
     let packet=FramePacket {dab_batches:std::slice::from_ref(&batch),..packet(owner.scene(),EXTENT)};
     let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-    while !r.raster_dependencies_ready(packet) {
+    while !r.raster_dependencies_ready(packet, None) {
         assert!(std::time::Instant::now()<deadline,"selection bake dependencies did not settle");
         std::thread::yield_now();
     }

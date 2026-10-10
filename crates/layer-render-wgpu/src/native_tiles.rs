@@ -208,6 +208,14 @@ pub struct NativeTileEncoder {
     parameter_stride: u32,
 }
 impl NativeTileEncoder {
+    fn pipeline_index(&self, depth: SampleDepth, mode: layer_core::color::LayerColorMode, tracked: bool, count: usize) -> usize {
+        if mode == layer_core::color::LayerColorMode::FullColor {
+            (depth.bytes().ilog2() as usize * 2 + usize::from(tracked)) * self.tiles_per_dispatch + count - 1
+        } else { 6 * self.tiles_per_dispatch + usize::from(tracked) * self.gray_tiles_per_dispatch + count - 1 }
+    }
+    pub(crate) fn private_pipeline(&self, depth: SampleDepth, mode: layer_core::color::LayerColorMode) -> crate::Deferred<wgpu::ComputePipeline> {
+        self.pipelines[self.pipeline_index(depth, mode, false, 1)].clone()
+    }
     pub(crate) fn pipelines_for_depth(&self, depth: SampleDepth) -> impl Iterator<Item = &crate::Deferred<wgpu::ComputePipeline>> {
         let start = depth.bytes().ilog2() as usize * 2 * self.tiles_per_dispatch;
         self.pipelines[start..start + 2 * self.tiles_per_dispatch].iter().chain(self.pipelines[6 * self.tiles_per_dispatch..].iter())
@@ -484,9 +492,7 @@ impl NativeTileEncoder {
                 })
                 .count();
             let depth = match r.depth { SampleDepth::U8 => 0, SampleDepth::U16 => 1, SampleDepth::F16 => 2, SampleDepth::F32 => 3 };
-            let format = if r.mode == layer_core::color::LayerColorMode::FullColor {
-                (r.depth.bytes().ilog2() as usize * 2 + usize::from(tracked)) * self.tiles_per_dispatch + count - 1
-            } else {6 * self.tiles_per_dispatch + usize::from(tracked) * self.gray_tiles_per_dispatch + count - 1};
+            let format = self.pipeline_index(r.depth, r.mode, tracked, count);
             let tile_views: Vec<_> = requests[first..first + count]
                 .iter()
                 .map(|r| {

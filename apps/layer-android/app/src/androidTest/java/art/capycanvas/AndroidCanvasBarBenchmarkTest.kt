@@ -592,23 +592,66 @@ class AndroidCanvasBarBenchmarkTest {
                 if (group.getString("active") != panel) action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to panel))
             }
             val wiggle = { t: Double -> (60 * (cos(2 * PI * t) - 1)) to (40 * (cos(2 * PI * t) - 1)) }
-            fun primeTransform(fraction: Double = 1.0, mode: String? = null) {
-                val before = state().getJSONObject("canvas_bar").getJSONArray("anchor")
-                drag(anchorPoint(fraction), 600, wiggle)
-                if (materialWatercolor) File(output, "prime-$fraction.json").writeText(obj(
-                    "before" to before, "after" to state().optJSONObject("canvas_bar"),
-                    "notice" to state().optJSONObject("notice"), "camera" to state().getJSONObject("camera")).toString(2))
-                if (mode == null && (fraction == 1.0 || fraction == .4)) waitFor("priming gesture changes its geometry") {
-                    val after = state().getJSONObject("canvas_bar").getJSONArray("anchor")
-                    if (fraction == .4) kotlin.math.abs(after.getDouble(0) - before.getDouble(0)) > 100
-                    else kotlin.math.abs((after.getDouble(2) - after.getDouble(0)) - (before.getDouble(2) - before.getDouble(0))) > 100
-                }
+            fun resetTransform(anchor: JSONArray) {
                 invoke("reset_transform")
+                host.awaitMain("transform reset restores its bounds", 120_000, {
+                    obj("expected_anchor" to anchor, "canvas_bar" to state().opt("canvas_bar"),
+                        "brush_ready" to host.snapshot?.opt("brush_ready")).toString()
+                }) {
+                    val current = state().optJSONObject("canvas_bar")?.optJSONArray("anchor")
+                    host.snapshot?.optBoolean("brush_ready") == true && current != null
+                        && (0..3).all { kotlin.math.abs(current.getDouble(it) - anchor.getDouble(it)) < .01 }
+                }
+            }
+            fun primeTransform(fraction: Double = 1.0, mode: String? = null): JSONArray {
+                fun ready() = host.awaitMain("transform primer input ready", 120_000, {
+                    obj("canvas_bar" to state().opt("canvas_bar"), "brush_ready" to host.snapshot?.opt("brush_ready"),
+                        "notice" to state().opt("notice"), "action_error" to host.actionError?.toString()).toString()
+                }) {
+                    val kind = state().optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind")
+                    host.snapshot?.optBoolean("brush_ready") == true && (kind == "placement" && mode == null || kind == "transform"
+                        && state().array("commands").objects().any {
+                            (it.getString("id") == (mode ?: "transform_free") || mode == null && it.getString("id") == "transform_uniform") && it.getBoolean("selected")
+                        })
+                }
+                if (mode != null) invoke(mode)
+                ready()
+                val before = state().getJSONObject("canvas_bar").getJSONArray("anchor")
+                fun coordinate(id: String) = state().array("tool_settings").objects().first { it.getString("id") == id }.getDouble("value")
+                val reference = if (mode == "transform_distort") coordinate("transform_x") to coordinate("transform_y") else null
+                val start = anchorPoint(fraction)
+                try {
+                    drag(start, 600, wiggle)
+                    if (mode == null && (fraction == 1.0 || fraction == .4)) waitFor("priming gesture changes its geometry") {
+                        val after = state().getJSONObject("canvas_bar").getJSONArray("anchor")
+                        if (fraction == .4) kotlin.math.abs(after.getDouble(0) - before.getDouble(0)) > 100
+                        else kotlin.math.abs((after.getDouble(2) - after.getDouble(0)) - (before.getDouble(2) - before.getDouble(0))) > 100
+                    }
+                    else if (mode == "transform_distort") waitFor("Distort primer changes corner geometry") {
+                        kotlin.math.abs(coordinate("transform_x") - reference!!.first) + kotlin.math.abs(coordinate("transform_y") - reference.second) > 1
+                    }
+                    else if (mode == "transform_warp") waitFor("Warp primer deforms the grid") {
+                        val commands = state().array("commands").objects()
+                        host.snapshot?.optBoolean("brush_ready") == true
+                            && commands.any { it.getString("id") == "apply_transform" && it.getBoolean("enabled") }
+                            && commands.any { it.getString("id") == "warp_grid_five" && !it.getBoolean("enabled") }
+                    }
+                } catch (error: Throwable) {
+                    interactionSnapshot("prime-$fraction-failed", "canvas-action-bar")
+                    throw error
+                } finally {
+                    File(output, "prime-$fraction.json").writeText(obj("before" to before,
+                        "start_screen" to JSONArray(listOf(start.first + host.surfaceOrigin.x, start.second + host.surfaceOrigin.y)),
+                        "after" to state().optJSONObject("canvas_bar"), "brush_ready" to host.snapshot?.opt("brush_ready"),
+                        "notice" to state().optJSONObject("notice"), "camera" to state().getJSONObject("camera")).toString(2))
+                }
+                resetTransform(before)
                 if (mode != null) {
                     invoke(mode)
                     waitFor("$mode is selected") { state().getJSONArray("commands").objects().any { it.getString("id") == mode && it.getBoolean("selected") } }
                 }
-                SystemClock.sleep(800)
+                ready()
+                return before
             }
 
             if (wanted("ui")) {
@@ -1399,8 +1442,7 @@ class AndroidCanvasBarBenchmarkTest {
                     val label = args.getString("labels")!!
                     invoke("reset_transform")
                     val warp = label == "photo-retained-warp-drag"
-                    invoke(if (warp) "transform_warp" else "transform_distort")
-                    SystemClock.sleep(800)
+                    primeTransform(if (warp) 1.0 / 3 else 1.0, if (warp) "transform_warp" else "transform_distort")
                     repeat(translationRepeats) { index ->
                         measure(label) {
                             drag(if (warp) anchorPoint(1.0 / 3) else corner(), duration,
@@ -1442,9 +1484,9 @@ class AndroidCanvasBarBenchmarkTest {
                         invoke("rectangle_select"); invoke("select_all"); invoke("scale_rotate")
                         waitFor("photo transform bar") { state().optJSONObject("canvas_bar")?.getJSONObject("context")?.getString("kind") == "transform" }
                         SystemClock.sleep(1500)
-                        primeTransform(.4)
+                        val resetAnchor = primeTransform(.4)
                         measure("photo-pixels-translate-drag") { drag(anchorPoint(.4), duration, wiggle) }
-                        invoke("reset_transform")
+                        resetTransform(resetAnchor)
                         primeTransform()
                         measure("photo-pixels-handle-drag") { drag(corner(), duration, wiggle) }
                         invoke("reset_transform")

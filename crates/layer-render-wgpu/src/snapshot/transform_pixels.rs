@@ -3,8 +3,6 @@ use layer_core::raster::{RasterRevision, TileKey};
 
 impl SnapshotGpu {
     pub async fn transform_pixels(&self, plan: layer_core::TransformPixelsPlan, control: CaptureControl) -> Result<layer_core::Edit, String> {
-        let scalar = plan.scope == layer_core::TransformPixelsScope::Mask;
-        let linked_mask = matches!(plan.scope, layer_core::TransformPixelsScope::Paint { linked_mask: true });
         let target = plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target);
         let mut snapshot = SnapshotRenderer::construct(plan.scene.clone(), SceneScope::Raw(target), control.clone(), self).map_err(|e| e.to_string())?;
         if let Some(handle) = plan.coverage {
@@ -15,25 +13,26 @@ impl SnapshotGpu {
         let extent = plan.extent;
         snapshot.extent = extent;
         snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
-        snapshot.raw_plan = Some(plan.clone());
+        snapshot.set_raw_plan(plan.clone());
+        let planes = snapshot.raw_planes.clone();
         snapshot.renderer.ensure_document_metadata(extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).map_err(|e| e.to_string())?;
         let mut color = RasterData { watercolor: snapshot.backing[&target].watercolor, ..Default::default() };
         let mut mask = RasterData::default();
         let mut empty = std::collections::BTreeMap::new();
-        for plane in [RasterPlane::Color, RasterPlane::WatercolorWetness, RasterPlane::Mask] {
-            if plane == RasterPlane::Mask && ((!linked_mask && !scalar) || plan.coverage.and_then(|h| plan.scene.view().coverage(h)).map_or(0., |c| c.default_coverage) != 0.) { continue; }
-            let descriptor = plane.descriptor(snapshot.color());
+        for &plane in &planes {
+            if plane == RasterPlane::Mask && plan.coverage.and_then(|h| plan.scene.view().coverage(h)).map_or(0., |c| c.default_coverage) != 0. { continue; }
+            let descriptor = plane.descriptor_for(snapshot.color(), plan.scene.view().color_mode(target));
             let tile = layer_core::raster::TileBlob::encode(descriptor, &vec![0; descriptor.byte_len([PAGE_SIZE; 2]).unwrap()])?;
             empty.insert(plane, tile.content_digest()?);
         }
-        for coordinate in page_coordinates(PixelRect::full(extent)) {
+        for coordinate in snapshot.raw_coordinates().map_err(|e| e.to_string())? {
             control.check().map_err(|e| e.to_string())?;
             let region = page_rect(coordinate).intersect(PixelRect::full(extent));
             let (tiles, capture) = snapshot.with_region_gpu(
                 [region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
                 |r, packet, _, encoder| {
                     let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
-                    let result = scene.capture_raw_tile(r, packet, coordinate, &plan, encoder);
+                    let result = scene.capture_raw_tile(r, packet, coordinate, &plan, &planes, encoder);
                     r.scene = Some(scene);
                     result
                 }).await.map_err(|e| e.to_string())?;

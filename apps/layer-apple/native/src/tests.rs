@@ -1173,6 +1173,7 @@ impl App {
             assert!(std::time::Instant::now() < deadline, "Transform bounds did not finish");
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
+        self.draw_until_prepared(true);
     }
     fn draw_until_idle(&self) {
         self.draw_until_prepared(false);
@@ -1186,7 +1187,8 @@ impl App {
             if unsafe { &*self.0 }.host.startup.brush_ready
                 && !engine.backend().0.as_ref().unwrap().startup_needs_update(
                     engine.document(), engine.brush(), engine.transform_preview().is_some())
-                && (active_operation || session.require_document_idle().is_ok())
+                && (if active_operation { session.document_idle_reason() != Some(layer_ui::DocumentIdleReason::CanvasInteraction) }
+                    else { session.require_document_idle().is_ok() })
                 && !engine.has_pending_document_edits()
                 && !layer_render::CanvasRenderer::has_pending_work(engine.backend())
             {

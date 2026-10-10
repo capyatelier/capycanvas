@@ -120,7 +120,9 @@ fn read_only_capture_does_not_compile_paint_publication_pipelines() {
     let mut fill=EffectInstance::new(crate::tests::fixture("solid_color").program());
     fill.set("color",layer_core::EffectValue::Color(fill_color)).unwrap();
     insert_effect(&mut document,fill,1);
-    let mut capture = gpu().capture_scene(document.snapshot(),SceneScope::All,Default::default()).unwrap();
+    let mut private_gpu = gpu();
+    private_gpu.device.native_publication = Default::default();
+    let mut capture = private_gpu.capture_scene(document.snapshot(),SceneScope::All,Default::default()).unwrap();
     assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
     assert!(capture.read_region([0, 0, 33, 17]).unwrap().iter().all(|p| *p == color));
     assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
@@ -1243,4 +1245,107 @@ fn projective_layer_transforms_keep_linked_coverage_paired_with_paint_and_source
     assert_eq!(u16::from_le_bytes(mask_bytes[offset * 2..offset * 2 + 2].try_into().unwrap()), 16384);
     assert_eq!(document.scene().source_target(owner), Some(SourceTarget::Paint(paint)));
     assert_eq!(document.scene().mask(owner).unwrap().0.source, coverage);
+}
+
+#[test]
+fn sparse_transform_capture_keeps_filter_edges_and_watercolor_metadata_without_empty_planes() {
+    let mut document = Document::new(PortableId::random(), 1025, 769, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let paint = paint_id(&document);
+    let color = document.composition().color;
+    let mut data = RasterData { watercolor: Some(RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.2, edge_width: 2. }), ..Default::default() };
+    data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [1, 1] },
+        RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &[255, 0, 0, 255].repeat(65536)).unwrap()));
+    document.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(data.clone());
+    refresh(&mut document);
+    let maps = [Affine::translation(Point { x: 0.25, y: 0.25 }), Affine([0.55, 0.3, -0.2, 0.65, -180., -147.])];
+    for (affine, interpolation) in maps.into_iter().flat_map(|affine|
+        [layer_core::Interpolation::Nearest, layer_core::Interpolation::Linear, layer_core::Interpolation::Bicubic, layer_core::Interpolation::Lanczos].map(move |interpolation| (affine, interpolation))) {
+        let map = layer_core::LayerPlacement { interpolation, ..layer_core::LayerPlacement::from_affine(affine) };
+        let plan = document.layer_transform_plan(SourceTarget::Paint(paint), &map, None, Default::default()).unwrap();
+        let mut snapshot = gpu().capture_scene(plan.scene.clone(), SceneScope::Raw(plan.target), Default::default()).unwrap();
+        snapshot.set_raw_plan(plan.clone());
+        snapshot.extent = plan.extent;
+        snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
+        snapshot.renderer.ensure_document_metadata(plan.extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).unwrap();
+        assert_eq!(snapshot.raw_planes, [RasterPlane::Color]);
+        assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(color.depth, Default::default(), &snapshot.raw_planes).len(), 2);
+        let coordinates = snapshot.raw_coordinates().unwrap();
+        assert!(coordinates.len() < page_coordinates(PixelRect::full(plan.extent)).count() / 2, "{interpolation:?}: {coordinates:?}");
+        let mut transformed = document.clone();
+        transformed.apply(pollster::block_on(gpu().transform_pixels(plan.clone(), Default::default())).unwrap()).unwrap();
+        let output = transformed.target_raster(SourceTarget::Paint(paint)).unwrap().wait_data().unwrap();
+        assert_eq!(output.watercolor, data.watercolor);
+        assert!(output.tiles.keys().all(|key| key.plane == RasterPlane::Color));
+        for coordinate in page_coordinates(PixelRect::full(plan.extent)) {
+            let region = page_rect(coordinate).intersect(PixelRect::full(plan.extent));
+            let planes = snapshot.raw_planes.clone();
+            let (tiles, capture) = pollster::block_on(snapshot.with_region_gpu([region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
+                |r, packet, _, encoder| {
+                    let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
+                    let result = scene.capture_raw_tile(r, packet, coordinate, &plan, &planes, encoder);
+                    r.scene = Some(scene); result
+                })).unwrap();
+            capture.finish().unwrap();
+            let expected = tiles[0].1.wait_backing().unwrap().decode().unwrap();
+            let actual = output.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate }).map(|tile| tile.wait_backing().unwrap().decode().unwrap())
+                .unwrap_or_else(|| vec![0; expected.len()]);
+            assert!(actual == expected, "{interpolation:?}: {coordinate:?}, first difference {:?}", actual.iter().zip(&expected).position(|(a,b)| a != b));
+        }
+    }
+}
+
+#[test]
+fn default_one_masks_keep_zero_tiles_and_skip_no_authored_coverage() {
+    let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap().snapshot_gpu();
+    let mut document = Document::new(PortableId::random(), 769, 513, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let owner = paint_occurrence(&document);
+    let handle = document.artwork.coverage.next_handle();
+    let mut mask = layer_core::CoverageSnapshot::reveal_all(handle, [769, 513], [0; 2]);
+    let mut data = RasterData::default();
+    data.tiles.insert(TileKey { plane: RasterPlane::Mask, coordinate: [1, 1] },
+        RasterTile::backed(TileBlob::encode(document.composition().color.coverage_descriptor(), &vec![0; document.composition().color.coverage_descriptor().byte_len([PAGE_SIZE; 2]).unwrap()]).unwrap()));
+    mask.source.raster = RasterRevision::backed(data);
+    document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
+    document.artwork.occurrences.get_mut(owner).unwrap().mask = Some(mask.use_);
+    refresh(&mut document);
+    let map = layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Nearest, ..layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: 256., y: 0. })) };
+    let plan = document.layer_transform_plan(SourceTarget::Coverage(handle), &map, None, Default::default()).unwrap();
+    let mut snapshot = gpu.capture_scene(plan.scene.clone(), SceneScope::Raw(plan.target), Default::default()).unwrap();
+    snapshot.set_raw_plan(plan.clone());
+    snapshot.extent = plan.extent;
+    snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
+    snapshot.renderer.ensure_document_metadata(plan.extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).unwrap();
+    assert_eq!(snapshot.raw_planes, [RasterPlane::Mask]);
+    assert_eq!(snapshot.raw_coordinates().unwrap().len(), page_coordinates(PixelRect::full(plan.extent)).count());
+    assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(document.composition().color.depth, Default::default(), &snapshot.raw_planes).len(), 2);
+    for coordinate in [[0, 0], [2, 1]] {
+        let region = page_rect(coordinate).intersect(PixelRect::full(plan.extent));
+        let (tiles, capture) = pollster::block_on(snapshot.with_region_gpu([region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
+            |r, packet, _, encoder| {
+                let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
+                let result = scene.capture_raw_tile(r, packet, coordinate, &plan, &[RasterPlane::Mask], encoder);
+                r.scene = Some(scene); result
+            })).unwrap();
+        capture.finish().unwrap();
+        let bytes = tiles[0].1.wait_backing().unwrap().decode().unwrap();
+        assert!(bytes.iter().all(|&byte| byte == if coordinate == [0, 0] { 255 } else { 0 }), "default coverage and authored zeros stay distinct");
+        assert!(snapshot.renderer.scene_pipelines.pipeline.iter().all(|p| !p.ready()), "raw mask sampling never uses composition pipelines");
+    }
+    document.apply(pollster::block_on(gpu.transform_pixels(plan, Default::default())).unwrap()).unwrap();
+    let output = document.target_raster(SourceTarget::Coverage(handle)).unwrap().wait_data().unwrap();
+    assert!(output.tiles.values().any(|tile| tile.wait_backing().unwrap().decode().unwrap().iter().all(|&byte| byte == 0)));
+}
+
+#[test]
+fn native_publication_recipes_are_reused_across_compatible_captures() {
+    let mut gpu = gpu(); gpu.device.native_publication = Default::default();
+    let mut document = Document::new(PortableId::random(), 33, 17, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let first = gpu.capture_scene(document.snapshot(), SceneScope::All, Default::default()).unwrap();
+    let second = gpu.capture_scene(document.snapshot(), SceneScope::All, Default::default()).unwrap();
+    assert_eq!(gpu.device.native_publication.lock().unwrap().len(), 1);
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.space = RgbSpace::DisplayP3;
+    let third = gpu.capture_scene(document.snapshot(), SceneScope::All, Default::default()).unwrap();
+    assert_eq!(gpu.device.native_publication.lock().unwrap().len(), 1);
+    first.control.cancel();
+    assert!(!second.control.is_cancelled() && !third.control.is_cancelled());
 }

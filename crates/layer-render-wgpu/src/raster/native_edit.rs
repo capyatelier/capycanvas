@@ -11,6 +11,30 @@ use crate::native_tiles::{
 use layer_core::color::DocumentColor;
 mod validate;
 
+pub(crate) struct Recipes {
+    depth: layer_core::color::SampleDepth,
+    in_place: bool,
+    color: Arc<NativeTileEncoder>,
+    scalar: Arc<NativeScalarEncoder>,
+    promoter: Option<Arc<NativePromoter>>,
+    validator: Arc<validate::Validator>,
+}
+impl Recipes {
+    fn shared(device: &PipelineDevice, depth: layer_core::color::SampleDepth, in_place: bool) -> Arc<Self> {
+        let mut cache = device.native_publication.lock().unwrap();
+        if let Some(recipes) = cache.iter().find(|p| p.depth == depth && p.in_place == in_place) { return recipes.clone(); }
+        let device = device.for_recipe();
+        let recipes = Arc::new(Self { depth, in_place,
+            color: Arc::new(NativeTileEncoder::prevalidated(&device, in_place)),
+            scalar: Arc::new(if in_place { NativeScalarEncoder::validated_in_place(&device) } else { NativeScalarEncoder::with_device(&device) }),
+            promoter: (!in_place).then(|| Arc::new(NativePromoter::with_device(&device))),
+            validator: Arc::new(validate::Validator::new(&device, depth)),
+        });
+        cache.push(recipes.clone());
+        recipes
+    }
+}
+
 pub(crate) struct NativeEdit {
     pub(super) backing: BTreeMap<SourceTarget, Arc<RasterData>>,
     pub(crate) color_cache_bytes: u64,
@@ -22,10 +46,10 @@ pub(crate) struct NativeEdit {
     #[cfg(test)]
     pub image_pixel_bytes: Option<u64>,
     transfer: NativeTransfer,
-    color: NativeTileEncoder,
-    scalar: NativeScalarEncoder,
-    promoter: Option<NativePromoter>,
-    validator: validate::Validator,
+    color: Arc<NativeTileEncoder>,
+    scalar: Arc<NativeScalarEncoder>,
+    promoter: Option<Arc<NativePromoter>>,
+    validator: Arc<validate::Validator>,
     colors: Vec<wgpu::Texture>,
     scalars: Vec<wgpu::Texture>,
     preview_scalars: Option<(NativeEncodeStatus, Vec<wgpu::Buffer>)>,
@@ -39,35 +63,18 @@ impl NativeEdit {
         Self::with_mode(r, transfer, in_place)
     }
     fn with_mode(r: &WgpuRasterizer, transfer: NativeTransfer, in_place: bool) -> Self {
-        let scratch_count = if in_place { 0 } else { MAX_BATCH_TILES };
-        let texture = |format| {
-            r.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("bounded native commit scratch"),
-                size: wgpu::Extent3d {
-                    width: 256,
-                    height: 256,
-                    depth_or_array_layers: 1,
-                },
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                mip_level_count: 1,
-                sample_count: 1,
-                usage: wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            })
-        };
+        let scratch_count = if in_place || r.snapshot_worker { 0 } else { MAX_BATCH_TILES };
         let colors = (0..scratch_count)
-            .map(|_| texture(wgpu::TextureFormat::Rgba32Float))
+            .map(|_| Self::scratch_texture(&r.device, wgpu::TextureFormat::Rgba32Float))
             .collect();
         let scalars = (0..scratch_count)
-            .map(|_| texture(wgpu::TextureFormat::R32Float))
+            .map(|_| Self::scratch_texture(&r.device, wgpu::TextureFormat::R32Float))
             .collect();
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple"))]
         let display_complete_bytes = crate::display_memory::complete_budget(&r.device, 0);
         #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple")))]
         let display_complete_bytes = 0;
+        let recipes = Recipes::shared(&r.device, r.document_color().depth, in_place);
         Self {
             backing: BTreeMap::new(),
             color_cache_bytes: 256 * 1024 * 1024,
@@ -84,14 +91,27 @@ impl NativeEdit {
             colors,
             scalars,
             preview_scalars: None,
-            color: NativeTileEncoder::prevalidated(&r.device, in_place),
-            scalar: if in_place {
-                NativeScalarEncoder::validated_in_place(&r.device)
-            } else {
-                NativeScalarEncoder::with_device(&r.device)
-            },
-            promoter: (!in_place).then(|| NativePromoter::with_device(&r.device)),
-            validator: validate::Validator::new(&r.device, r.document_color().depth),
+            color: recipes.color.clone(), scalar: recipes.scalar.clone(),
+            promoter: recipes.promoter.clone(), validator: recipes.validator.clone(),
+        }
+    }
+    fn scratch_texture(device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("bounded native commit scratch"),
+            size: wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            mip_level_count: 1,
+            sample_count: 1,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    }
+    fn reserve_scratch(&mut self, device: &wgpu::Device, inputs: &[(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)]) {
+        if self.promoter.is_none() { return; }
+        for (format, textures) in [(wgpu::TextureFormat::Rgba32Float, &mut self.colors), (wgpu::TextureFormat::R32Float, &mut self.scalars)] {
+            let count = inputs.chunks(MAX_BATCH_TILES).map(|batch| batch.iter().filter(|(t, _, _)| t.format() == format).count()).max().unwrap_or(0);
+            textures.extend((textures.len()..count).map(|_| Self::scratch_texture(device, format)));
         }
     }
     #[cfg(test)]
@@ -109,10 +129,19 @@ impl NativeEdit {
             .chain(self.promoter.iter().flat_map(|p| p.pipelines.iter()))
             .chain(&self.validator.pipelines)
     }
+    pub(crate) fn private_pipelines(&self, depth: layer_core::color::SampleDepth, mode: layer_core::color::LayerColorMode, planes: &[RasterPlane]) -> Vec<Deferred<wgpu::ComputePipeline>> {
+        let mut pipelines = Vec::new();
+        if planes.contains(&RasterPlane::Color) {
+            pipelines.extend([self.color.private_pipeline(depth, mode), self.validator.pipelines[0].clone()]);
+        }
+        let scalar = planes.iter().filter(|&&p| p != RasterPlane::Color).count();
+        if scalar != 0 { pipelines.extend([self.scalar.private_pipeline(scalar), self.validator.pipelines[1].clone()]); }
+        pipelines
+    }
     pub fn storage_bytes(&self) -> u64 {
         self.promoter
             .as_ref()
-            .map_or(0, NativePromoter::storage_bytes)
+            .map_or(0, |p| p.storage_bytes())
             + self.color.storage_bytes()
             + self.scalar.storage_bytes()
             + self.colors.iter().map(texture_bytes).sum::<u64>()
@@ -425,7 +454,7 @@ impl WgpuRasterizer {
         self.native_capture_job(frame, inputs).map(Some)
     }
 
-    fn native_capture_job(&self, mut frame: NativeFrame, inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>) -> Result<NativeJob, GpuRasterError> {
+    fn native_capture_job(&mut self, mut frame: NativeFrame, inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>) -> Result<NativeJob, GpuRasterError> {
         let output_bytes: u64 = STATUS_BYTES
             + inputs
                 .iter()
@@ -451,6 +480,7 @@ impl WgpuRasterizer {
             queue: self.queue.clone(),
         });
         validate::Validator::validate(&inputs.iter().map(|(t, tile, _)| (t, tile.clone())).collect::<Vec<_>>())?;
+        self.native_edit.as_mut().unwrap().reserve_scratch(&self.device, &inputs);
         let changes=frame.canonical_pages.iter().map(|&(id,coordinate)|self.changed_cells.as_ref().and_then(|c|c.buffer(id,coordinate)).cloned()).collect();
         Ok(NativeJob { frame, inputs, views: Default::default(), changes, validated: 0, encoded: 0, started: false })
     }
@@ -539,6 +569,7 @@ impl WgpuRasterizer {
             let promotions = native
                 .promoter
                 .as_ref()
+                .filter(|_| !self.snapshot_worker)
                 .map(|promoter| {
                     promoter.prepare(&self.device, &promotions, status, views)
                 })

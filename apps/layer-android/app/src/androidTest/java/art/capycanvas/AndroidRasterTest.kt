@@ -171,10 +171,11 @@ class AndroidRasterTest {
         }
         return request.getInt("id") to state.getJSONObject("document_file")
     }
-    private fun point(phase: Int, dx: Double, dy: Double) {
+    private fun point(phase: Int, dx: Double, dy: Double, observe: ((Long, DoubleArray) -> Unit)? = null) {
         native { handle ->
         val viewport=host.snapshot!!.getJSONObject("state").getJSONObject("camera").getJSONArray("viewport")
         val bytes=doubleArrayOf(viewport.getDouble(0)*.50+dx,viewport.getDouble(1)*.5+dy,.65,0.0,0.0,0.0,0.0,System.nanoTime().toDouble(),phase.toDouble())
+        observe?.invoke(handle, bytes)
         Native.pointer(handle,71,0,0,bytes,bytes.size,false,false)
         val now=System.nanoTime(); Native.frame(handle,now,now+16_666_667)
     }
@@ -190,10 +191,10 @@ class AndroidRasterTest {
             }
         }
     }
-    private fun stroke(dy: Double) {
-        point(1,0.0,dy)
-        for(i in 1..6) {SystemClock.sleep(10);point(2,i*15.0,dy)}
-        point(3,90.0,dy);tick()
+    private fun stroke(dy: Double, observe: ((Long, DoubleArray) -> Unit)? = null) {
+        point(1,0.0,dy,observe)
+        for(i in 1..6) {SystemClock.sleep(10);point(2,i*15.0,dy,observe)}
+        point(3,90.0,dy,observe);tick()
     }
     private fun captureSession(directory: File) {
         val capture = selectedSessionCapture()
@@ -1880,7 +1881,10 @@ class AndroidRasterTest {
     }
 
     @Test fun imagePlacementBatchHistoryAndStaleRequests() {
-        fun invoke(command: String) { native { Native.dispatch(it,obj("type" to "invoke","command" to command).toString()) }; tick(); scenario.onActivity { host.documentChanged() } }
+        fun invoke(command: String) {
+            try { native { Native.dispatch(it,obj("type" to "invoke","command" to command).toString()) }; tick(); scenario.onActivity { host.documentChanged() } }
+            catch (error: Exception) { throw IllegalStateException("Invoke $command failed", error) }
+        }
         native { Native.dispatch(it,obj("type" to "preferences","action" to obj("type" to "edit","id" to "missing_profile","value" to 0)).toString()) }
         val newTask = native { h -> val (id, f) = request(h,"new_document"); Native.projectTask(h,id,"null",f.getLong("epoch"),f.getLong("revision")) }
         try { Native.projectWork(newTask,-1,2000,1500); native { Native.projectAdopt(it,newTask,"null") } } finally { Native.projectFree(newTask) }
@@ -2099,15 +2103,39 @@ class AndroidRasterTest {
                 invoke("undo"); assertEquals(ownerProperties(retained).toString(), ownerProperties(manifest(save("$theme-nudge-restored.capy"))).toString())
                 if (InstrumentationRegistry.getArguments().getString("imagePlacementPresentationOnly") == "true") continue
                 for ((mode, split) in listOf("transform_distort" to false, "transform_warp" to false, "transform_warp" to true)) {
-                    invoke("scale_rotate")
-                    compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar") != null }
-                    invoke(mode)
-                    if (split) invoke("warp_split_cross")
+                    fun selected(command: String) = published().array("commands").objects().any { it.getString("id") == command && it.getBoolean("selected") }
+                    fun transformDiagnostics() = obj("theme" to theme, "mode" to mode, "split" to split,
+                        "canvas_bar" to published().opt("canvas_bar"), "brush_ready" to host.snapshot?.opt("brush_ready"),
+                        "tool_settings" to published().opt("tool_settings"), "action_error" to host.actionError?.toString()).toString()
+                    fun ready(command: String? = null) = host.awaitMain("$theme: ${command ?: "transform"} ready", 120_000, ::transformDiagnostics, compose) {
+                        val bar = published().optJSONObject("canvas_bar")
+                        host.snapshot?.optBoolean("brush_ready") == true && bar?.optJSONObject("context")?.optString("kind") == "transform"
+                            && if (command != null) selected(command) else bar.array("items").objects().any {
+                                it.getJSONObject("option").optJSONObject("Choice")?.optString("id") == "transform-mode"
+                            }
+                    }
+                    invoke("scale_rotate"); ready()
+                    invoke(mode); ready(mode)
+                    if (split) {
+                        invoke("warp_split_cross")
+                        host.awaitMain("$theme: split armed", 30_000, ::transformDiagnostics, compose) { selected("warp_split_cross") }
+                        val bounds = published().getJSONObject("canvas_bar").getJSONArray("anchor")
+                        val at = (bounds.getDouble(0) + bounds.getDouble(2)) * .5 to (bounds.getDouble(1) + bounds.getDouble(3)) * .5
+                        dragDocument(at, at)
+                        host.awaitMain("$theme: split inserts lines before the node drag", 120_000, ::transformDiagnostics, compose) {
+                            !selected("warp_split_cross") && !selected("warp_grid_three") && host.snapshot?.optBoolean("brush_ready") == true
+                        }
+                    }
                     val hull = host.snapshot!!.getJSONObject("state").getJSONObject("canvas_bar").getJSONArray("anchor")
                     val zoom = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getDouble("zoom")
+                    val reference = if (mode == "transform_distort") setting("transform_x") to setting("transform_y") else null
                     val handle = if (mode == "transform_distort") hull.getDouble(2) to hull.getDouble(3) - 20.0 / zoom
-                        else (hull.getDouble(0) + hull.getDouble(2)) * .5 to (hull.getDouble(1) + hull.getDouble(3)) * .5 - 20.0 / zoom
+                        else hull.getDouble(0) + (hull.getDouble(2) - hull.getDouble(0)) / 3 to hull.getDouble(1) - 20.0 / zoom
                     motions.put(motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30, handle).put("theme", theme).put("mode", "$mode split=$split"))
+                    host.awaitMain("$theme: $mode drag changes geometry before Apply", 120_000, ::transformDiagnostics, compose) {
+                        if (reference == null) published().getJSONObject("canvas_bar").getJSONArray("anchor").getDouble(1) < hull.getDouble(1) - 10.0 / zoom
+                        else kotlin.math.abs(setting("transform_x") - reference.first) + kotlin.math.abs(setting("transform_y") - reference.second) > 1.0 / zoom
+                    }
                     press("apply_transform")
                     compose.waitUntil(120_000) { tick(); native { state(it).isNull("canvas_bar") } }
                     val committed = manifest(save("$theme-$mode-$split.capy"))
@@ -2119,13 +2147,64 @@ class AndroidRasterTest {
                     assertEquals(backing(committed), backing(reopened)); assertMaterial(reopened)
                     retained = reopened
                 }
+                val strokeEvents = org.json.JSONArray()
+                var strokeTool = "paint"
+                fun readyBrush(preset: Int, diameter: Double) = host.awaitMain("$theme: brush $preset ready on transformed ink", 60_000,
+                    { obj("brush_ready" to host.snapshot?.opt("brush_ready"), "brush" to published().opt("brush"),
+                        "layer_tool" to published().getJSONObject("layer_tools").opt("tool"),
+                        "drawing" to published().array("layers").objects().firstOrNull { it.optBoolean("drawing") },
+                        "failure" to host.failure, "action_error" to host.actionError?.toString()).toString() }, compose) {
+                    val current = published(); val brush = current.getJSONObject("brush")
+                    host.snapshot?.optBoolean("brush_ready") == true && current.isNull("canvas_bar")
+                        && brush.getInt("preset") == preset && kotlin.math.abs(brush.getDouble("diameter") - diameter) < .01
+                        && current.getJSONObject("layer_tools").getString("tool") == "paint"
+                        && current.array("layers").objects().any { row -> row.getLong("id") == ink.getLong("id")
+                            && row.getBoolean("drawing") && row.getBoolean("content_selected") && !row.getBoolean("mask_selected") }
+                }
+                fun strokeState(handle: Long, stage: String, sample: DoubleArray? = null) {
+                    val model = host.snapshot
+                    val current = model?.optJSONObject("state")
+                    val camera = current?.optJSONObject("camera")
+                    val drawing = current?.array("layers")?.objects()?.firstOrNull { it.optBoolean("drawing") }
+                    val document = current?.optJSONObject("document_file")
+                    val display = JSONObject(Native.displayStatus(handle))
+                    val position = sample?.let { org.json.JSONArray(listOf(it[0], it[1])) }
+                    val documentPoint = sample?.let { bytes -> camera?.let {
+                        val shift = it.getJSONArray("translation"); val zoom = it.getDouble("zoom")
+                        org.json.JSONArray(listOf((bytes[0] - shift.getDouble(0)) / zoom, (bytes[1] - shift.getDouble(1)) / zoom))
+                    } }
+                    strokeEvents.put(JSONObject(obj("stage" to stage, "tool" to strokeTool, "now_ns" to System.nanoTime(),
+                        "boot_ns" to SystemClock.elapsedRealtimeNanos(), "sample_ns" to sample?.get(7), "phase" to sample?.get(8),
+                        "surface_point" to position, "document_point" to documentPoint, "published_revision" to current?.opt("revision"),
+                        "published_brush_ready" to model?.opt("brush_ready"), "published_shaders_ready" to model?.opt("shaders_ready"), "published_canvas_ready" to model?.opt("canvas_ready"),
+                        "brush" to current?.opt("brush"), "camera" to camera,
+                        "document_file" to obj("epoch" to document?.opt("epoch"), "revision" to document?.opt("revision"), "busy" to document?.opt("busy")),
+                        "layer_tool" to current?.optJSONObject("layer_tools")?.opt("tool"),
+                        "drawing" to obj("id" to drawing?.opt("id"), "label" to drawing?.opt("label"), "content_selected" to drawing?.opt("content_selected"), "mask_selected" to drawing?.opt("mask_selected")),
+                        "notice" to host.notice?.toString(), "failure" to host.failure, "action_error" to host.actionError?.toString(),
+                        "display" to obj("pending_edits" to display.opt("pending_edits"), "pending_composition" to display.opt("pending_composition"),
+                            "submitted_frames" to display.opt("submitted_frames"), "completed_frames" to display.opt("completed_frames"))).toString()))
+                }
+                fun writeStrokeState() {
+                    File(activity.getExternalFilesDir(null), "validation/pixel-bake/$theme-post-transform-strokes.json")
+                        .apply { parentFile!!.mkdirs() }.writeText(obj("theme" to theme, "events" to strokeEvents).toString(2))
+                    File(activity.getExternalFilesDir(null), "validation/pixel-bake/motion-3mp.json").writeText(motions.toString(2))
+                }
+                val observeStroke: (Long, DoubleArray) -> Unit = { handle, sample -> strokeState(handle, "before-sample", sample) }
                 invoke("brush"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 80.0))
-                stroke(0.0)
+                readyBrush(1, 80.0)
+                stroke(0.0, observeStroke)
+                native { strokeState(it, "stroke-settled") }
                 val painted = manifest(save("$theme-transformed-painted.capy"))
+                native { strokeState(it, "paint-saved") }; writeStrokeState()
                 assertNotEquals("$theme: painting edits the transformed native planes", backing(retained), backing(painted))
                 invoke("liquify"); action(obj("type" to "select_brush", "id" to 37)); action(obj("type" to "set_brush_size", "value" to 180.0))
-                stroke(0.0)
+                readyBrush(37, 180.0)
+                strokeTool = "liquify"
+                stroke(0.0, observeStroke)
+                native { strokeState(it, "stroke-settled") }
                 val liquified = manifest(save("$theme-transformed-liquified.capy"))
+                native { strokeState(it, "liquify-saved") }; writeStrokeState()
                 assertNotEquals("$theme: Liquify edits the transformed native planes", backing(painted), backing(liquified))
                 invoke("undo"); assertEquals(backing(painted), backing(manifest(save("$theme-undo-liquify.capy"))))
                 invoke("undo"); assertEquals(backing(retained), backing(manifest(save("$theme-undo-paint.capy"))))

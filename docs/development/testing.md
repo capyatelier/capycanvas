@@ -19,10 +19,27 @@ This catches the dry-brush recipe mismatch; browser compiler failures still need
 checks in the actual browser. Native Metal and Chrome use different shader
 compilers from Safari.
 
+The renderer's `pixel_transform::program_tests` validates every generated transform
+program without a window or GPU and checks that unused mapping, filtering and
+display algorithms are absent. Independent GPU transform oracles qualify the
+sampling math and borders. Snapshot tests compare sparse capture with full-page
+capture and preserve default-one mask deviations. The cold default-one mask
+capture uses a fresh device and requires the scene-composition pipelines to
+remain unused; a warm native device can otherwise conceal missing preparation.
+GTK's `native_late_shader_failure_after_startup` completes startup, then queues
+a compiler failure and requires the render owner to return its recorded cause
+without another startup request. Run it on the private hardware test display.
+
 Pipeline preparation changes also run the Web `--pipeline-readiness` journey.
 It intercepts real GPU device calls on the page and in workers, requires zero
-blocking pipeline creation during startup and a cold painted transform, and
-holds asynchronous preparation to check ordered edits. Native pixel tests do not
+blocking pipeline creation during startup and cold painted and linked-mask
+transforms, and holds asynchronous preparation to check ordered edits. It injects
+a worker panic, checks its visible cause and unchanged artwork, then verifies
+retry on a fresh worker and exact linked color/coverage Undo/Redo. Worker-client tests also
+require runtime panics to reject pending requests and retire only the failed
+worker, preserving the recorded cause, and require each worker to receive the
+shared compiled module once, including replacements after idle retirement.
+Native pixel tests do not
 establish this browser contract. Web `--drawing-tabs-recovery` holds the decoder
 while restoring native paint without imported images, then checks restored
 pixels and Undo/Redo. This prevents optional preparation from hiding a missing
