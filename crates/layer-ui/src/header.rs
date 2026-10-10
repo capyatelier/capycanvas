@@ -518,6 +518,7 @@ pub struct HeaderNativeGeometry {
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct HeaderGeometry {
+    pub zen_button: Bounds,
     pub items: Vec<HeaderItemBounds>,
     pub zones: [Bounds; 3],
     pub overflow: [Option<Bounds>; 3],
@@ -532,6 +533,16 @@ pub struct HeaderBar {
 }
 
 impl HeaderGeometry {
+    fn place_zen_button(&mut self, layout: &HeaderLayout, insets: [f32; 2]) {
+        self.zen_button = layout.entries().find(|e| e.item == HeaderItem::Capy)
+            .and_then(|entry| self.items.iter().find(|item| item.id == entry.id))
+            .map_or(Bounds {
+                x: insets[0].max(0.) + layout.size.item_gap(),
+                y: layout.size.item_gap(),
+                width: layout.size.tile(),
+                height: layout.size.tile(),
+            }, |item| item.bounds);
+    }
     /// Pack neighboring items toward the edges and give the document the space
     /// between them, including in custom side zones. Controls and drag gutters
     /// stay outside this allocation; customization uses the original geometry.
@@ -727,6 +738,7 @@ impl HeaderLayout {
             && let Some(entry) = self.entries().find(|e| e.item == HeaderItem::DocumentTitle)
         {
             geometry.expand_document(entry.id, width, insets, self.size);
+            geometry.place_zen_button(self, insets);
         }
         geometry
     }
@@ -913,6 +925,7 @@ impl HeaderLayout {
         for i in 0..result.bars.len() {
             result.bars[i].bounds = result.bar_bounds(&result.bars[i]);
         }
+        result.place_zen_button(self, insets);
         result
     }
 }
@@ -1058,6 +1071,47 @@ pub fn header_drag_label(item: &str, localization: &Localizer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn zen_button_retains_header_bounds_and_fallback_clears_native_controls() {
+        for platform in Platform::ALL {
+            for preset in WorkspacePreset::ALL {
+                for (size, gap, tile) in [(HeaderSize::Small, 6., 36.), (HeaderSize::Medium, 8., 48.), (HeaderSize::Large, 10., 60.)] {
+                    let mut header = preset.layout(platform).header;
+                    header.size = size;
+                    let capy = header.entries().find(|e| e.item == HeaderItem::Capy).unwrap().id;
+                    for zone in HeaderZone::ALL {
+                        header.move_item(capy, zone, None).unwrap();
+                        for width in [640., 1600.] {
+                            for insets in [[0.; 2], [80., 120.]] {
+                                for documents in [1, 3] {
+                                    let geometry = header.resolve_documents(width, insets, &[], false, documents);
+                                    if let Some(item) = geometry.items.iter().find(|item| item.id == capy) {
+                                        assert_eq!(geometry.zen_button, item.bounds, "{platform:?}/{preset:?}/{size:?}/{zone:?}/{width}/{documents}");
+                                    } else {
+                                        assert_eq!(geometry.zen_button, Bounds { x: insets[0] + gap, y: gap, width: tile, height: tile });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for removed in [false, true] {
+                        let mut fallback = header.clone();
+                        if removed { fallback.remove(capy).unwrap(); }
+                        else {
+                            for _ in 0..20 { fallback.add(HeaderZone::Left, None, &[HeaderItem::Space]).unwrap(); }
+                            fallback.move_item(capy, HeaderZone::Left, None).unwrap();
+                        }
+                        let native = size.native_geometry(640., [80., 120.], removed);
+                        let geometry = fallback.resolve_documents(640., native.insets, &[], false, 3);
+                        assert!(geometry.items.iter().all(|item| item.id != capy));
+                        assert_eq!(geometry.zen_button, Bounds { x: native.insets[0] + gap, y: gap, width: tile, height: tile });
+                        assert!(geometry.zen_button.x >= native.controls[0].x + native.controls[0].width);
+                        assert!(geometry.zen_button.x + tile <= native.controls[1].x);
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn native_controls_keep_one_gap_at_each_header_boundary() {
         for (size, gap, height) in [(HeaderSize::Small, 6., 48.), (HeaderSize::Medium, 8., 64.), (HeaderSize::Large, 10., 80.)] {

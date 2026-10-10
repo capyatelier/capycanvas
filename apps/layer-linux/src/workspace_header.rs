@@ -135,6 +135,9 @@ impl Header {
     pub fn geometry_for_test(&self) -> HeaderGeometry {
         self.geometry.borrow().clone()
     }
+    pub fn zen_button_bounds(&self) -> Bounds {
+        self.geometry.borrow().zen_button
+    }
     #[cfg(test)]
     pub fn drag_for_test(&self) -> Option<HeaderDragPreview> {
         self.drag.borrow().as_ref().map(|d| d.preview.clone())

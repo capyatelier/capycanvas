@@ -114,7 +114,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     Bindings popupBindings;
     std::shared_ptr<ZoomReadout> zoom=std::make_shared<ZoomReadout>();
     Grid cameraSlot;
-    Button zenCapy{nullptr};Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
+    Button zenCapy{nullptr};J zenBounds;Border cameraSurface;std::function<void()> glassChanged;std::map<std::wstring,double> tabWidths;
     Impl(Dispatch send,J catalog,std::shared_ptr<CapyLocalization> localization,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):overviews(std::move(report)){
         data->input=std::move(input);gestures=std::make_shared<WorkspaceGestures>(data,root);
         data->document=std::move(document);
@@ -755,11 +755,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         bool keep=flag(snapshot,L"keep_zen_button");
         auto header=object(snapshot,L"header");auto size=find(array(header,L"sizes"),L"id",str(object(header,L"model"),L"size"));double tile=num(size,L"tile",36);
         auto command=find(array(data->state,L"commands"),L"id",L"zen_mode");
-        zenCapy.Width(tile);zenCapy.Height(tile);zenCapy.Background(headerSurface(data));zenCapy.CornerRadius({tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit});
+        zenCapy.Background(headerSurface(data));zenCapy.CornerRadius({tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit});
         zenCapy.Content(icon(str(command,L"icon",L"capy"),data->theme(),num(size,L"capy_icon")));
         AutomationProperties::SetName(zenCapy,str(command,L"label"));tooltip(zenCapy,str(command,L"tooltip"));
-        Canvas::SetLeft(zenCapy,titlebar[0]+6);Canvas::SetTop(zenCapy,6);
-        zenCapy.Visibility(keep?Visibility::Visible:Visibility::Collapsed);
+        if(zenBounds.Size())place(zenCapy,zenBounds);
+        zenCapy.Visibility(keep&&zenBounds.Size()?Visibility::Visible:Visibility::Collapsed);
         if(!zenCapySource){zenCapySource=true;gestures->Source(zenCapy,{},O({{L"kind",S(L"zen_mode")}}),false);}
     }
     bool zenCapySource=false;
@@ -815,6 +815,13 @@ bool WorkspaceView::CancelGesture(){
 }
 void WorkspaceView::SetWindowId(uint64_t id){impl->data->windowId=id;}
 void WorkspaceView::SetGlassChanged(std::function<void()> changed){impl->glassChanged=std::move(changed);}
+void WorkspaceView::SetZenButtonBounds(Json const& bounds){
+    if(impl->zenBounds.Stringify()==bounds.Stringify())return;
+    impl->zenBounds=bounds;
+    if(bounds.Size())place(impl->zenCapy,bounds);
+    impl->zenCapy.Visibility(bounds.Size()&&flag(impl->data->model,L"keep_zen_button")?Visibility::Visible:Visibility::Collapsed);
+    if(impl->glassChanged)impl->glassChanged();
+}
 void WorkspaceView::CanvasContact(bool active){impl->canvasBar->Contact(active);if(active){impl->notice->Hide();hideRevealedTooltip();}}
 JsonArray WorkspaceView::DrawerSources()const{return impl->data->drawerSources;}
 JsonArray WorkspaceView::Glass(UIElement const& reference,JsonArray& connections)const{return impl->glass(reference,connections);}

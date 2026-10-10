@@ -1456,7 +1456,7 @@ fn native_header_cancel_caption_input() {
     d.input.perform(serde_json::json!([{ "point": [6.,6.] }]));
     assert!(
         !d.w.header.root.can_target(),
-        "edge reveal is off by default"
+        "Edge contacts keep chrome hidden"
     );
     let zen_capy = d.w.zen_capy.clone().upcast::<gtk::Widget>();
     d.click(&zen_capy);

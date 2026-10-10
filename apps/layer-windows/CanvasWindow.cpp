@@ -400,7 +400,10 @@ bool CanvasWindow::StartPrepared(CapyLaunch* prepared) {
     auto model=catalogView;
     header=std::make_unique<HeaderView>(send,model,localization,
         [weak=weak_from_this()](bool open){if(auto self=weak.lock())self->Popup(open);},
-        [weak=weak_from_this()]{if(auto self=weak.lock())self->Resize();},
+        [weak=weak_from_this()]{if(auto self=weak.lock()){
+            if(self->header&&self->workspace)self->workspace->SetZenButtonBounds(self->header->ZenButtonBounds());
+            self->Resize();
+        }},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->Fullscreen();},
         [weak=weak_from_this()]{
             auto self=weak.lock();

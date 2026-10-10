@@ -5415,87 +5415,201 @@ fn native_settings_typography() {
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_zen_behaviors() {
+    fn rect(widget: &impl IsA<gtk::Widget>, w: &Workspace) -> [f32; 4] {
+        let r = widget.as_ref().compute_bounds(&w.surface).unwrap();
+        [r.x(), r.y(), r.width(), r.height()]
+    }
+    fn capy_rects(button: &gtk::Button, w: &Workspace) -> [[f32; 4]; 2] {
+        let image = button.child().and_downcast::<gtk::Image>().unwrap();
+        let [x, y, width, height] = rect(&image, w);
+        let pixels = image.pixel_size() as f32;
+        [rect(button, w), [x + (width - pixels) / 2., y + (height - pixels) / 2., pixels, pixels]]
+    }
+    fn cycle(w: &Rc<Workspace>, label: &str, show: bool) {
+        w.dispatch(UiAction::Preferences {
+            action: PreferenceAction::Edit { id: PreferenceId::ZenShowCapy, value: PreferenceValue::Bool(show) },
+        });
+        pump(80);
+        let layout = state(w).workspace.layout;
+        let camera = state(w).camera;
+        let geometry = w.header.geometry_for_test();
+        let target = geometry.zen_button;
+        let expected_button = [target.x, target.y, target.width, target.height];
+        let mut child = w.header.root.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if widget.is_mapped() && widget.width() > 0
+                && (widget.downcast_ref::<gtk::WindowControls>().is_some_and(|controls| !controls.is_empty()) || widget.widget_name() == "header-recovery")
+            {
+                let [x, y, width, height] = rect(&widget, w);
+                assert!(target.x + target.width <= x || x + width <= target.x
+                    || target.y + target.height <= y || y + height <= target.y,
+                    "{label}: Capy clears native/recovery control {:?}", [x, y, width, height]);
+            }
+        }
+        let normal = w.commands.borrow().iter().find(|(id, button)| {
+            *id == CommandId::ZenMode && button.is_mapped()
+        }).map(|(_, button)| button.clone());
+        let expected = normal.as_ref().map(|button| capy_rects(button, w));
+        if let Some(expected) = expected {
+            assert_eq!(expected[0], expected_button, "{label}: normal/shared button");
+        }
+        let frames = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let clock = w.surface.frame_clock().unwrap();
+        let signal = clock.connect_after_paint(glib::clone!(
+            #[strong] frames,
+            #[strong] normal,
+            #[weak] w,
+            move |_| {
+                if state(&w).workspace.zen_mode && w.zen_capy.is_visible() {
+                    frames.borrow_mut().push((true, capy_rects(&w.zen_capy, &w)));
+                } else if !state(&w).workspace.zen_mode && let Some(button) = normal.as_ref() {
+                    frames.borrow_mut().push((false, capy_rects(button, &w)));
+                }
+            }
+        ));
+        w.dispatch(UiAction::Invoke { command: CommandId::ZenMode });
+        w.chrome_event(ChromeEvent::Motion { position: [600., 450.] });
+        pump(250);
+        assert!(state(w).workspace.zen_mode, "{label}");
+        assert_eq!(w.zen_capy.is_visible(), show, "{label}");
+        assert!(!w.header.root.can_target(), "{label}");
+        for (slot, widget) in w.surface.imp().children.borrow().iter() {
+            if !matches!(slot, Slot::Canvas | Slot::CanvasBar | Slot::ZenCapy) && !widget.has_css_class("floating-panel") {
+                assert!(widget.has_css_class("zen-hidden") && !widget.can_target(), "{label}");
+            }
+        }
+        for position in [[600., 6.], [6., 450.], [w.surface.width() as f32 - 6., 450.]] {
+            assert!(!w.reveal_chrome_at(position[0], position[1]), "{label}: edge contact");
+        }
+        if show {
+            assert_eq!(capy_rects(&w.zen_capy, w)[0], expected_button, "{label}: shared Zen position");
+            click(&w.zen_capy);
+        } else {
+            for pressed in [true, false] {
+                w.interact(UiInput::Key {
+                    key: "Tab".into(), pressed, repeat: false, modifiers: Modifiers::default(), editing: false, divider: None,
+                });
+            }
+        }
+        pump(250);
+        clock.disconnect(signal);
+        let frames = frames.borrow();
+        if show {
+            assert!(frames.iter().any(|(zen, _)| *zen), "{label}: painted Zen frames");
+            if let Some(expected) = expected {
+                assert!(frames.iter().any(|(zen, _)| !*zen), "{label}: painted exit frames");
+                for (zen, actual) in frames.iter() {
+                    assert_eq!(*actual, expected, "{label}: painted frame zen={zen}");
+                }
+            } else {
+                for (_, actual) in frames.iter() {
+                    assert_eq!(actual[0], expected_button, "{label}: fallback frame");
+                }
+            }
+        }
+        assert!(!state(w).workspace.zen_mode, "{label}");
+        assert!(!w.zen_capy.is_visible(), "{label}");
+        assert_eq!(state(w).workspace.layout, layout, "{label}: unchanged layout");
+        assert_eq!(state(w).camera, camera, "{label}: unchanged camera");
+    }
     let app = native_test_app("art.capycanvas.ZenTest");
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let saved = state(&w).workspace.layout;
-    for theme in [Theme::Dark, Theme::Light] {
-        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        for size in layer_ui::HeaderSize::ALL {
-            w.dispatch(UiAction::Customize {
-                action: CustomizationAction::Header {
-                    action: layer_ui::HeaderAction::SetSize { size },
-                },
-            });
-            pump(250);
-            let zen = command(&w, CommandId::ZenMode);
-            let normal = zen.compute_bounds(&w.surface).unwrap();
-            let normal_icon = zen.child().and_downcast::<gtk::Image>().unwrap();
-            let normal_glyph = normal_icon.compute_bounds(&w.surface).unwrap();
-            let layout = state(&w).workspace.layout;
-            for show in [true, false] {
-                w.dispatch(UiAction::Preferences {
-                    action: PreferenceAction::Edit {
-                        id: PreferenceId::ZenShowCapy,
-                        value: PreferenceValue::Bool(show),
-                    },
-                });
-                click(&zen);
-                let reply = w.chrome_event(ChromeEvent::Motion { position: [600., 450.] });
+    let saved = state(&w).workspace;
+    for preset in layer_ui::WorkspacePreset::ALL {
+        for theme in [Theme::Dark, Theme::Light] {
+            for size in layer_ui::HeaderSize::ALL {
+                let mut workspace = saved.clone();
+                workspace.layout = preset.layout(Platform::Gtk);
+                workspace.layout.header.size = size;
+                w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+                w.dispatch(UiAction::SetTheme { theme: Some(theme) });
                 pump(250);
-                assert!(reply.chrome_hidden);
-                assert_eq!(w.zen_capy.is_visible(), show);
-                assert!(!w.header.root.can_target());
-                for (slot, widget) in w.surface.imp().children.borrow().iter() {
-                    if !matches!(slot, Slot::Canvas | Slot::CanvasBar) && !widget.has_css_class("floating-panel") {
-                        assert!(widget.has_css_class("zen-hidden") && !widget.can_target());
-                    }
+                for show in [true, false] {
+                    cycle(&w, &format!("{} {theme:?}/{size:?}/show={show}", preset.name()), show);
                 }
-                assert!(!w.reveal_chrome_at(600., 6.));
-                assert!(!w.header.root.can_target());
-                if show {
-                    let fallback = w.zen_capy.compute_bounds(&w.surface).unwrap();
-                    assert_eq!([fallback.width(), fallback.height()], [normal.width(), normal.height()]);
-                    let icon = w.zen_capy.child().and_downcast::<gtk::Image>().unwrap();
-                    let glyph = icon.compute_bounds(&w.surface).unwrap();
-                    assert_eq!(icon.pixel_size(), normal_icon.pixel_size());
-                    assert_eq!([glyph.width(), glyph.height()], [normal_glyph.width(), normal_glyph.height()]);
-                    click(&w.zen_capy);
-                } else {
-                    for pressed in [true, false] {
-                        w.interact(UiInput::Key {
-                            key: "Tab".into(), pressed, repeat: false,
-                            modifiers: Modifiers::default(), editing: false, divider: None,
-                        });
-                    }
-                }
-                assert!(!state(&w).workspace.zen_mode);
-                assert!(!w.zen_capy.is_visible());
-                assert_eq!(state(&w).workspace.layout, layout);
             }
         }
     }
-    w.dispatch(UiAction::Customize { action: CustomizationAction::Header { action: layer_ui::HeaderAction::SetSize { size: saved.header.size } } });
-    w.dispatch(UiAction::OpenSettings {
-        page: SettingsPage::Appearance,
+    glib::MainContext::default().block_on(w.documents.open(&w, (
+        new_drawing(128, 96, &w.localization()).unwrap(), None
+    ))).unwrap();
+    pump(250);
+    let settings = gtk::Settings::default().unwrap();
+    let decoration = settings.gtk_decoration_layout();
+    settings.set_gtk_decoration_layout(Some("close:minimize,maximize"));
+    for direction in [gtk::TextDirection::Ltr, gtk::TextDirection::Rtl] {
+        w.window.set_direction(direction);
+        for theme in [Theme::Dark, Theme::Light] {
+            w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            for size in layer_ui::HeaderSize::ALL {
+                for case in 0..6 {
+                    let mut workspace = saved.clone();
+                    workspace.layout = layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk);
+                    workspace.layout.header.size = size;
+                    let capy = workspace.layout.header.entries().find(|e| e.item == HeaderItem::Capy).unwrap().id;
+                    match case {
+                        0..=2 => { workspace.layout.header.move_item(capy, layer_ui::HeaderZone::ALL[case], None).unwrap(); }
+                        3 => { workspace.layout.header.remove(capy).unwrap(); }
+                        4 => {
+                            for zone in &mut workspace.layout.header.zones {
+                                zone.retain(|e| !matches!(e.item, HeaderItem::Capy | HeaderItem::Menu | HeaderItem::MenuLabels | HeaderItem::Workspaces));
+                            }
+                        }
+                        _ => {
+                            for _ in 0..30 { workspace.layout.header.add(layer_ui::HeaderZone::Left, Some(capy), &[HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Pencil } }]).unwrap(); }
+                        }
+                    }
+                    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+                    w.window.set_default_size(if case == 5 { 520 } else { 1200 }, 900);
+                    pump(250);
+                    if case == 4 { assert!(find_named(w.header.root.upcast_ref(), "header-recovery").unwrap().is_mapped()); }
+                    if case == 5 {
+                        assert!(w.header.geometry_for_test().hidden.iter().any(|ids| ids.contains(&capy)), "narrow Capy overflow");
+                    }
+                    cycle(&w, &format!("custom {direction:?}/{theme:?}/{size:?}/case={case}"), true);
+                }
+            }
+        }
+    }
+    w.window.set_direction(gtk::TextDirection::Ltr);
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::Edit { id: PreferenceId::ZenShowCapy, value: PreferenceValue::Bool(true) },
     });
+    let mut restored = saved.clone();
+    restored.layout = layer_ui::WorkspacePreset::Painter.layout(Platform::Gtk);
+    restored.layout.header.size = layer_ui::HeaderSize::Medium;
+    restored.zen_mode = true;
+    w.window.set_default_size(1200, 900);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(restored) });
+    for (width, size) in [(1200, layer_ui::HeaderSize::Medium), (640, layer_ui::HeaderSize::Large)] {
+        w.window.set_default_size(width, 900);
+        w.dispatch(UiAction::Customize { action: CustomizationAction::Header { action: layer_ui::HeaderAction::SetSize { size } } });
+        pump(250);
+        assert!(state(&w).workspace.zen_mode && w.zen_capy.is_visible());
+        assert!(!w.header.root.can_target());
+        let target = w.header.geometry_for_test().zen_button;
+        let zen = capy_rects(&w.zen_capy, &w);
+        assert_eq!(zen[0], [target.x, target.y, target.width, target.height], "restored Zen/hidden resize {width}/{size:?}");
+        assert_eq!(zen, capy_rects(&command(&w, CommandId::ZenMode), &w), "restored Zen/hidden resize glyph {width}/{size:?}");
+    }
+    let retained = capy_rects(&w.zen_capy, &w);
+    click(&w.zen_capy);
+    pump(250);
+    assert_eq!(capy_rects(&command(&w, CommandId::ZenMode), &w), retained, "resized restored Zen exits without moving");
+    settings.set_gtk_decoration_layout(decoration.as_deref());
+    w.window.set_direction(gtk::TextDirection::Ltr);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(saved) });
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Appearance });
     pump(250);
     assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-icon").is_some());
     assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-show-capy").is_some());
-    assert!(
-        find_named(
-            w.preferences.dialog.upcast_ref(),
-            "setting-zen-reveal-at-edges"
-        )
-        .is_none()
-    );
+    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-reveal-at-edges").is_none());
     w.dispatch(UiAction::CloseSettings);
-    pump(250);
     w.window.close();
     pump(100);
-    // Match application shutdown: a cold shader worker can still be using the
-    // graphics driver after the window closes and before this test process exits.
     layer_render_wgpu::finish_shader_compiler_shutdown();
 }
 
@@ -12123,7 +12237,7 @@ fn native_workspace_controls_docking_and_ink() {
         "Zen fade must not run the canvas frame loop"
     );
     for (slot, widget) in w.surface.imp().children.borrow().iter() {
-        if !matches!(slot, Slot::Canvas | Slot::CanvasBar) {
+        if !matches!(slot, Slot::Canvas | Slot::CanvasBar | Slot::ZenCapy) {
             assert_eq!(widget.can_target(), widget.has_css_class("floating-panel"));
         }
     }

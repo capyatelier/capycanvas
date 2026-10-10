@@ -17,6 +17,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.*
 import org.junit.Assert.*
+import kotlin.math.roundToInt
 
 /** Real Compose/native-view contacts on isolated workspaces and preferences. */
 class AndroidTitleBarTest {
@@ -84,6 +85,7 @@ class AndroidTitleBarTest {
     private fun key(code: Int, meta: Int = 0) { pressKey(code, meta); SystemClock.sleep(220) }
 
     private lateinit var fixture: JSONObject
+    private lateinit var startingWorkspace: JSONObject
     private fun snapshot() = host.snapshot!!
     private fun state() = snapshot().getJSONObject("state")
     private fun model() = snapshot().getJSONObject("header").getJSONObject("model")
@@ -105,7 +107,8 @@ class AndroidTitleBarTest {
     }
     @Before fun ready() {
         launch()
-        fixture = JSONObject(state().getJSONObject("workspace").toString())
+        startingWorkspace = JSONObject(state().getJSONObject("workspace").toString())
+        fixture = JSONObject(startingWorkspace.toString())
         fixture.put("zen_mode", false)
         fixture.getJSONObject("layout").apply {
             for (name in listOf("bands", "floating", "collapsed", "column_stacks", "column_scroll", "fit_tab_groups", "fit_height_groups")) put(name, JSONArray())
@@ -181,6 +184,131 @@ class AndroidTitleBarTest {
         action(obj("type" to "invoke", "command" to "customize_workspace_ui"))
         waitFor("inline editor") { editing() && node("header-editor") != null }
         SystemClock.sleep(200)
+    }
+
+    @Test fun zenCapyKeepsNativeButtonAndGlyphBoundsAcrossWorkspaces() {
+        fun rectEquals(label: String, expected: Rect, actual: Rect) {
+            for ((name, before, after) in listOf(
+                Triple("left", expected.left, actual.left), Triple("top", expected.top, actual.top),
+                Triple("width", expected.width, actual.width), Triple("height", expected.height, actual.height)))
+                assertEquals("$label $name", before, after, .6f)
+        }
+        fun glyph(tag: String): Rect {
+            var result: Rect? = null
+            instrumentation.runOnMainSync {
+                val owner = checkNotNull(node(tag)).second
+                result = owner.find { it.config.getOrNull(SemanticsProperties.Role) == androidx.compose.ui.semantics.Role.Image }?.boundsInRoot
+            }
+            return checkNotNull(result) { "Missing Capy image in $tag" }
+        }
+        for ((workspace, name) in listOf("illustrator" to "paint", "painter" to "sketch", "photographer" to "photo")) {
+            send(obj("type" to "switch", "id" to "builtin:workspace:$workspace"))
+            waitFor("native $name workspace") { view().optString("id") == "builtin:workspace:$workspace" && !view().optBoolean("busy") }
+            idle()
+            if (workspace == "illustrator") action(obj("type" to "restore_workspace", "workspace" to startingWorkspace))
+            val original = state().getJSONObject("workspace").toString()
+            for (theme in listOf("dark", "light")) for (size in listOf("small", "medium", "large"))
+                for (placement in listOf("default", "center", "right", "absent", "overflow")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                val workspaceState = JSONObject(original)
+                val header = workspaceState.getJSONObject("layout").getJSONObject("header")
+                header.put("size", size)
+                val zones = header.getJSONArray("zones")
+                val capy = zones.values().flatMap { (it as JSONArray).objects() }
+                    .first { it.getJSONObject("item").getString("kind") == "capy" }
+                val capyId = capy.getInt("id")
+                if (placement != "default") {
+                    for (zone in 0..2) zones.put(zone, JSONArray(zones.getJSONArray(zone).objects().filter { it.getInt("id") != capyId }))
+                    when (placement) {
+                        "center" -> zones.getJSONArray(1).put(capy)
+                        "right" -> zones.getJSONArray(2).put(capy)
+                        "overflow" -> {
+                            val spaces = JSONArray(List(80) { obj("id" to 1000 + it, "item" to obj("kind" to "space")) })
+                            spaces.put(capy); zones.put(1, spaces); header.put("next_id", 2000)
+                        }
+                    }
+                }
+                action(obj("type" to "restore_workspace", "workspace" to workspaceState))
+                idle()
+                val label = "$name/$theme/$size/$placement"
+                val tag = "header-control-$capyId"
+                val fallback = placement in listOf("absent", "overflow")
+                if (!fallback) waitFor("native Capy $label") { node(tag) != null }
+                if (fallback) assertNull("$placement has no visible header Capy", node(tag))
+                val tile = mapOf("small" to 36f, "medium" to 48f, "large" to 60f).getValue(size) * density
+                val gap = (if (size == "small") 6f else if (size == "medium") 8f else 10f) * density
+                val glyphSize = mapOf("small" to 31f, "medium" to 41f, "large" to 52f).getValue(size) * density
+                val root = bounds("workspace")
+                val normal = if (fallback) Rect(root.left + gap.roundToInt(), root.top + gap.roundToInt(),
+                    root.left + gap.roundToInt() + tile.roundToInt(), root.top + gap.roundToInt() + tile.roundToInt()) else bounds(tag)
+                val inset = ((tile.roundToInt() - glyphSize.roundToInt()) / 2f).roundToInt()
+                val normalGlyph = if (fallback) Rect(normal.left + inset, normal.top + inset,
+                    normal.left + inset + glyphSize.roundToInt(), normal.top + inset + glyphSize.roundToInt()) else glyph(tag)
+                val baseline = layout()
+                val camera = state().getJSONObject("camera").toString()
+                val headerArea = bounds("title-bar").translate(-host.surfaceOrigin)
+                action(obj("type" to "invoke", "command" to "zen_mode"))
+                waitFor("Zen $label") { snapshot().optBoolean("chrome_hidden") && node("zen-button") != null }
+                rectEquals("$label Capy", normal, bounds("zen-button"))
+                rectEquals("$label glyph", normalGlyph, glyph("zen-button"))
+                assertNull("$label retires native header input", node("title-bar"))
+                val zenGlass = bounds("zen-button").translate(-host.surfaceOrigin)
+                instrumentation.runOnMainSync {
+                    val boxes = host.glassBoxesForTest.map { Rect(it[0], it[1], it[0] + it[2], it[1] + it[3]) }.filter { it.overlaps(headerArea) }
+                    assertEquals("$label retains only Capy header glass", 1, boxes.size)
+                    rectEquals("$label Capy glass", zenGlass, boxes.single())
+                }
+                shot("zen-bounds-$name-$theme-$size-$placement")
+                tap("zen-button")
+                waitFor("Zen bounds restored") { !snapshot().optBoolean("chrome_hidden") }
+                if (fallback) assertNull("$placement stays absent after Zen", node(tag)) else {
+                    rectEquals("$label restored Capy", normal, bounds(tag))
+                    rectEquals("$label restored glyph", normalGlyph, glyph(tag))
+                }
+                assertEquals(baseline, layout())
+                assertEquals(camera, state().getJSONObject("camera").toString())
+            }
+        }
+        val restored = JSONObject(fixture.toString()).apply { put("zen_mode", true) }
+        restored.getJSONObject("layout").getJSONObject("header").put("size", "small")
+        val restoredRoot = bounds("workspace")
+        action(obj("type" to "restore_workspace", "workspace" to restored))
+        waitFor("restored Zen measures its new header size") {
+            val capy = node("zen-button")?.second
+            val image = capy?.find { it.config.getOrNull(SemanticsProperties.Role) == androidx.compose.ui.semantics.Role.Image }
+            capy?.boundsInRoot?.let { it.width == (36 * density).roundToInt().toFloat() &&
+                kotlin.math.abs(it.left - restoredRoot.left - (6 * density).roundToInt()) < .6f &&
+                kotlin.math.abs(it.top - restoredRoot.top - (6 * density).roundToInt()) < .6f } == true &&
+                image?.boundsInRoot?.width == (31 * density).roundToInt().toFloat()
+        }
+        val zen = bounds("zen-button")
+        val zenGlyph = glyph("zen-button")
+        val root = bounds("workspace")
+        assertEquals(root.left + (6 * density).roundToInt(), zen.left, .6f)
+        assertEquals(root.top + (6 * density).roundToInt(), zen.top, .6f)
+        assertEquals((31 * density).roundToInt().toFloat(), zenGlyph.width, .6f)
+        assertEquals((31 * density).roundToInt().toFloat(), zenGlyph.height, .6f)
+        assertNull(node("title-bar"))
+        tap("zen-button")
+        waitFor("restored Zen exits") { !snapshot().optBoolean("chrome_hidden") && node("header-control-1") != null }
+        rectEquals("restored Zen Capy", zen, bounds("header-control-1"))
+        rectEquals("restored Zen glyph", zenGlyph, glyph("header-control-1"))
+    }
+
+    @Test fun zenHeaderRetiresChromeAndLetsCanvasReceiveOldHeaderContacts() {
+        action(obj("type" to "invoke", "command" to "hand"))
+        val oldHeader = bounds("header-control-3").center
+        val camera = state().getJSONObject("camera").toString()
+        action(obj("type" to "invoke", "command" to "zen_mode"))
+        waitFor("Zen retires header controls") { snapshot().optBoolean("chrome_hidden") && node("title-bar") == null }
+        instrumentation.runOnMainSync { pressed = checkNotNull(node("workspace")).first }
+        event(MotionEvent.ACTION_DOWN, oldHeader)
+        event(MotionEvent.ACTION_MOVE, oldHeader + Offset(-60 * density, 30 * density))
+        event(MotionEvent.ACTION_UP)
+        host.drain()
+        waitFor("old header contact reaches the native Hand tool") { state().getJSONObject("camera").toString() != camera }
+        assertTrue(snapshot().optBoolean("chrome_hidden"))
+        tap("zen-button")
     }
 
     @Test fun zenCapyPreferencesKeepEveryHeaderSize() {

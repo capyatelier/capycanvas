@@ -15,6 +15,7 @@ public:
     ~HeaderView();
     winrt::Microsoft::UI::Xaml::Controls::Grid Root()const;
     void Apply(Json const& snapshot);
+    Json ZenButtonBounds()const;
     void SetInsets(float left,float right);
     void SetFullscreen(bool active);
     void SetBlocked(bool blocked);

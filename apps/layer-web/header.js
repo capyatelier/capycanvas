@@ -299,6 +299,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     return result;
   }
   function present(g, dragging=false) {
+    place(document.querySelector('#zen-capy'),g.zen_button);
     let focus;
     for(const [id,r] of records) {
       const b=g.items.find(i=>i.id===id)?.bounds;

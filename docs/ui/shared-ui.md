@@ -247,6 +247,17 @@ icon match the normal header button: shared `HeaderSize::tile` and
 these metrics from `HeaderSizeView`; Zen never substitutes a fixed button or
 icon size.
 
+`HeaderGeometry::zen_button` keeps the visible Capy's complete normal header
+rectangle, including customized placement, document-tab expansion and native
+window-control insets. If Capy is absent or overflowed, the shared rectangle
+uses the title bar's leading inset and 6/8/10px padding. Hosts retain and measure
+the header while hidden and use this rectangle for the standalone button;
+entering or leaving Zen never changes its position. GTK allocates both buttons
+on the same surface pixel grid. Windows excludes the Zen rectangle from native
+caption dragging so mouse, touch and pen contacts reach the button.
+Android and Apple keep their measurement owners alive while removing hidden
+controls and their input and glass registrations.
+
 **Button icon** offers Looking up (default), Facing forward, Bathing and
 Sleeping. Rust stores `Settings.zen_icon` and supplies each command's icon. The
 generic `ChoicePresentation::ImageTiles { columns: 4 }` uses the same choice

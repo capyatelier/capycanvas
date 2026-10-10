@@ -29,7 +29,8 @@ import SwiftUI
             && !entries.contains { ["capy", "menu", "menu_labels", "workspaces"].contains($0["item"]["kind"].string) }
     }
     private var needsStatus: Bool {
-        (editing || store.state["fullscreen"].bool) && entries.contains { ["clock", "battery"].contains($0["item"]["kind"].string) }
+        !store.snapshot["chrome_hidden"].bool && (editing || store.state["fullscreen"].bool)
+            && entries.contains { ["clock", "battery"].contains($0["item"]["kind"].string) }
     }
     private var metrics: [Any] {
         entries.map { entry in
@@ -61,7 +62,7 @@ import SwiftUI
             "request":["op":"geometry", "width":store.snapshot["layout"]["viewport"][0].number,
                 "insets":[store.headerLeadingInset + (recoveryMenu ? size["tile"].number + size["item_gap"].number : 0), 0], "metrics":metrics]])
     }
-    var body: some View {
+    private var controls: some View {
         ZStack(alignment: .topLeading) {
             Color.clear.frame(height: size["height"].number).contentShape(Rectangle())
                 .onTapGesture { header.selected = nil; focused = editing }
@@ -122,6 +123,11 @@ import SwiftUI
                 .editorPopover(isPresented: Binding(get: { !header.menu.isNull }, set: { if !$0 { header.closeMenu() } }), placement: .inward) {
                     WorkspaceMenu(store: store, menu: header.menu) { header.closeMenu() }
                 }.offset(x: header.menuAnchor.minX, y: header.menuAnchor.minY).allowsHitTesting(false)
+        }
+    }
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if !store.snapshot["chrome_hidden"].bool { controls }
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(NativeReorderInput(model: header))
             .onPreferenceChange(HeaderSources.self) { header.sources = $0 }

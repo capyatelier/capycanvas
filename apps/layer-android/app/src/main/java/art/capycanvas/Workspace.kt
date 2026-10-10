@@ -310,11 +310,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         }
         if (snapshot != null && state != null) {
             val hidden = snapshot.optBoolean("chrome_hidden")
-            if (!hidden) {
-                val shown = snapshot.objectOrNull("preferences") == null
-                // Settings hides the header without destroying its text/icon
-                // caches or interactive nodes. Unplaced content cannot draw or
-                // receive input; clear its accessibility subtree while hidden.
+            run {
+                val shown = !hidden && snapshot.objectOrNull("preferences") == null
                 Layout(content = { WorkspaceHeader(host, snapshot, header) },
                     modifier = Modifier.fillMaxSize().zIndex(300f)
                         .then(if (shown) Modifier else Modifier.clearAndSetSemantics {})) { children, constraints ->
@@ -325,7 +322,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
             if (snapshot.objectOrNull("preferences") == null && (hidden && snapshot.optBoolean("keep_zen_button"))) {
-                ZenButton(host, snapshot, dock)
+                header.geometry?.getJSONObject("zen_button")?.let { ZenButton(host, snapshot, dock, it) }
             }
             val layout = snapshot.getJSONObject("layout")
             if (!hidden) CollapsedColumns(host, snapshot, panels, dock)
@@ -491,7 +488,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     lineTo(left, radius); squircleTo(Offset(left + radius, radius), Offset(-radius, 0f), Offset(0f, -radius)); close()
 }
 
-@Composable private fun ZenButton(host: CanvasHost, snapshot: JSONObject, dock: DockInteraction) {
+@Composable private fun ZenButton(host: CanvasHost, snapshot: JSONObject, dock: DockInteraction, bounds: JSONObject) {
     val colors = LocalPalette.current
     val state = snapshot.getJSONObject("state")
     val header = snapshot.getJSONObject("header")
@@ -501,7 +498,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     val anchor = dock.anchorKey(target)
     DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor) } }
     IconTile(command.getString("icon"), command.getString("tooltip"),
-        modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button").chromeRegion(dock)
+        modifier = Modifier.offset(bounds.number("x").dp, bounds.number("y").dp).zIndex(1000f).testTag("zen-button").chromeRegion(dock)
             .glass(TileShape, colors.headerSurface)
             .onGloballyPositioned {
                 val bounds = it.boundsInRoot().translate(-dock.origin)

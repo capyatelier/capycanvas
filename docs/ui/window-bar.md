@@ -144,6 +144,9 @@ measurements, caption behavior and device timing, and paint the same bars,
 surfaces and selection roles. macOS has no Main Menu or menu labels because the
 system menu bar owns them. Zen hides the title bar like other chrome; see
 [shared UI](shared-ui.md#window-chrome-and-zen-mode).
+The Capy button keeps its header position and dimensions through Zen, including
+customized regions and native-control clearance. A shared fallback rectangle
+keeps it available when removed or overflowed.
 
 ## Checks
 
@@ -163,6 +166,12 @@ bash tools/performance/workspace-motion.sh web --tool-picker
 Web runs `tools/performance/workspace-motion.sh web` with `--title-bar`,
 `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`,
 `--menu-labels`, `--compact-workspaces` and `--header-controls`.
+The Zen geometry checks are GTK's `native_zen_behaviors`, Web's `--zen`,
+Android's `AndroidTitleBarTest#zenCapyKeepsNativeButtonAndGlyphBoundsAcrossWorkspaces`
+and Windows' `tools/windows-vm/windows-vm.py fixtures editor:zen`. They compare
+the button and icon rectangles through entry and exit in each starting workspace
+and header size, in both themes. Customized regions, absent or overflowed Capy,
+native-control clearance and right-to-left GTK/Web layouts have separate cases.
 
 Other cases in `apps/layer-linux/src/workspace_header_tests.rs` cover editor
 controls, keyboard editing, the 640×480 minimum window, spacing in both themes,

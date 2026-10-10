@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('full','zen')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCacheModel=$true
@@ -9,6 +9,7 @@ using System.Runtime.InteropServices;
 public static class CapyEditorWindow {
  [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
+ [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr window,int x,int y,int width,int height,bool repaint);
  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wParam,IntPtr lParam);
 }
 '@
@@ -70,7 +71,7 @@ function Capture([string]$Name){
         [IO.File]::WriteAllText((Join-Path $run ($Name+'-metrics.json')),(@{
             viewport=@(($canvas.Width/$scale),($canvas.Height/$scale));scale=$scale;
             viewport_origin_physical=@(($canvas.Left-$origin.x),($canvas.Top-$origin.y));
-            client_capture=@($bitmap.Width,$bitmap.Height);camera=(Control 'canvas-camera').Current.Name
+            client_capture=@($bitmap.Width,$bitmap.Height);camera=(Model).state.camera
         }|ConvertTo-Json))
     }finally{$bitmap.Dispose()}
 }
@@ -139,12 +140,142 @@ function Check-Header {
     }
 }
 function Preferences {
-    Invoke 'settings-button'
+    if(Find 'settings-button' -Visible){Invoke 'settings-button'}
+    else { & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit';Invoke 'settings' }
     Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences($Dialog){
     (Control 'CloseButton' -Within $Dialog).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$null -eq (Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)) -and (Control 'drawing-canvas').Current.IsEnabled} 'Preferences did not release canvas'
+}
+function Check-ZenMatrix {
+    function ImageBounds($Button) {
+        $image=$Button.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Image))
+        if(!$image){throw 'Native Capy image bounds are unavailable'}
+        $image.Current.BoundingRectangle
+    }
+    function SameBounds($Before,$After,[string]$Label) {
+        foreach($field in @('Left','Top','Width','Height')) {
+            if([Math]::Abs($Before.$field-$After.$field) -gt 1){throw "$Label $field differs: $($Before.$field) / $($After.$field)"}
+        }
+    }
+    function Check-CapyBounds([string]$Label,[switch]$Fallback) {
+        $normalControl=$null
+        if($Fallback){Wait-Until {!(Find 'zen-button' -Visible)} 'Fallback retained a normal Capy'}
+        else {
+            $normalControl=Control 'zen-button' -Arranged
+            $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+            $tile=@{small=36;medium=48;large=60}[(Model).header.model.size]*$scale
+            if([Math]::Abs($normalControl.Current.BoundingRectangle.Width-$tile) -gt 1){throw "$Label normal Capy size differs"}
+        }
+        $normal=if($normalControl){$normalControl.Current.BoundingRectangle}else{$fallbackNormal}
+        $glyph=if($normalControl){ImageBounds $normalControl}else{$fallbackGlyph}
+        $layout=(Model).layout|ConvertTo-Json -Compress -Depth 70
+        $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+        Wait-Until {[CapyRowPointer]::GetForegroundWindow() -eq $review.MainWindowHandle} 'Native review did not regain foreground'
+        if($normalControl){[CapyRowPointer]::Down('mouse',[int]($normal.Left+$normal.Width/2),[int]($normal.Top+$normal.Height/2));[CapyRowPointer]::Up()}
+        else {(Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x09)}
+        Wait-Until {(Model).chrome_hidden} 'Zen did not activate'
+        Check-Zen
+        SameBounds $normal (Control 'zen-capy').Current.BoundingRectangle "$Label button"
+        SameBounds $glyph (ImageBounds (Control 'zen-capy')) "$Label glyph"
+        Capture ('zen-bounds-'+($Label -replace '/','-'))
+        $at=(Control 'zen-capy').Current.BoundingRectangle
+        [CapyRowPointer]::Down('mouse',[int]($at.Left+$at.Width/2),[int]($at.Top+$at.Height/2));[CapyRowPointer]::Up()
+        Wait-Until {!(Model).chrome_hidden -and !(Model).state.workspace.zen_mode} 'Capy did not leave Zen'
+        if($normalControl){
+            SameBounds $normal (Control 'zen-button').Current.BoundingRectangle "$Label restored button"
+            SameBounds $glyph (ImageBounds (Control 'zen-button')) "$Label restored glyph"
+        }elseif(Find 'zen-button' -Visible){throw "$Label revealed a hidden normal Capy"}
+        if(((Model).layout|ConvertTo-Json -Compress -Depth 70) -ne $layout){throw "$Label changed workspace geometry"}
+        Write-Output "PASS $Label native button/glyph bounds and restored layout"
+    }
+    function Select-Capy([int]$Id,[switch]$Hidden) {
+        Wait-Until {(Model).header.editing} 'Header editor did not open'
+        if(!$Hidden){
+            $source=Control ('header-select-'+$Id) -Arranged
+            $source.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+            return
+        }
+        $target=@{zone=-1}
+        Wait-Until {
+            $geometry=((Control 'title-bar').Current.ItemStatus|ConvertFrom-Json).geometry
+            foreach($zone in 0..2){if($Id -in $geometry.hidden[$zone]){$target.zone=$zone;return $true}}
+            $false
+        } 'Hidden Capy has no native overflow route'
+        $overflow=Control ('header-overflow-'+$target.zone) -Arranged
+        $overflow.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        $row=Control ('header-overflow-item-'+$Id) -Arranged
+        $row.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Wait-Until {!(Find ('header-overflow-item-'+$Id))} 'Header selection left its overflow menu open'
+    }
+    function Step-Capy {
+        $before=(Model).header.model|ConvertTo-Json -Compress -Depth 30
+        [CapyRowPointer]::Key([uint32]$review.Id,0x27)
+        Wait-Until {((Model).header.model|ConvertTo-Json -Compress -Depth 30) -ne $before} 'Native right key did not move Capy'
+    }
+    foreach($theme in @('Dark','Light')) {
+        $dialog=Preferences
+        (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        (Control $theme -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Wait-Until {(Model).state.theme -eq $theme.ToLower()} 'Theme did not apply'
+        Close-Preferences $dialog
+        foreach($workspace in @('illustrator','painter','photographer')) {
+            $id='builtin:workspace:'+ $workspace
+            if((Model).windows_workspace.id -ne $id){
+                & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
+                (Control 'Workspaces' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+                $choice=@((Model).windows_workspace.switcher_display|Where-Object id -eq $id)[0]
+                (Control $choice.title -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+            }
+            Wait-Until {(Model).windows_workspace.id -eq $id -and !(Model).windows_workspace.busy} 'Workspace did not switch'
+            foreach($size in @('small','medium','large')) {
+                WindowCommand 'customize_workspace_ui'
+                Wait-Until {(Model).header.editing} 'Titlebar editor did not open'
+                Invoke ('header-size-'+$size)
+                Wait-Until {(Model).header.model.size -eq $size} 'Header size did not update'
+                Invoke 'header-edit-done'
+                Wait-Until {!(Model).header.editing} 'Header editor did not close'
+                Start-Sleep -Milliseconds 300
+                Check-CapyBounds "$workspace/$theme/$size"
+            }
+        }
+    }
+    WindowCommand 'customize_workspace_ui'
+    Invoke 'header-size-small';Invoke 'header-edit-done'
+    Wait-Until {!(Model).header.editing -and (Model).header.model.size -eq 'small'} 'Small header did not settle'
+    Start-Sleep -Milliseconds 300
+    $fallbackNormal=(Control 'zen-button').Current.BoundingRectangle
+    $fallbackGlyph=ImageBounds (Control 'zen-button')
+    $capy=@((Model).header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'capy'})[0].id
+    foreach($zone in @(1,2)){
+        WindowCommand 'customize_workspace_ui';Select-Capy $capy
+        for($attempt=0;$capy -notin (Model).header.model.zones[$zone].id -and $attempt -lt 128;$attempt++){Step-Capy}
+        if($capy -notin (Model).header.model.zones[$zone].id){throw 'Capy did not reach the requested zone'}
+        Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Header editor did not close'
+        Start-Sleep -Milliseconds 300
+        $null=Control 'zen-button' -Arranged
+        Check-CapyBounds ('custom-zone-'+$zone)
+    }
+    WindowCommand 'customize_workspace_ui';Select-Capy $capy
+    for($attempt=0;(Model).header.model.zones[2][-1].id -ne $capy -and $attempt -lt 128;$attempt++){Step-Capy}
+    Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Overflow header editor did not close'
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $handle=$review.MainWindowHandle;$owner=[uint32]0
+    [CapyRowPointer]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
+    if($owner -ne $review.Id){throw 'Narrow fixture window does not belong to the owned review'}
+    $window=[CapyEditorWindow+Rect]::new()
+    if(![CapyEditorWindow]::GetWindowRect($handle,[ref]$window) -or
+       ![CapyEditorWindow]::MoveWindow($handle,$window.left,$window.top,[int](640*$scale),[int](500*$scale),$true)){throw 'Narrow fixture resize failed'}
+    Wait-Until {!(Find 'zen-button' -Visible)} 'Narrow fixture did not overflow Capy'
+    Check-CapyBounds 'custom-narrow-overflow' -Fallback
+    WindowCommand 'customize_workspace_ui';Select-Capy $capy -Hidden
+    (Control 'header-edit-done').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x2e)
+    Wait-Until {!(@((Model).header.model.zones|ForEach-Object {$_}|Where-Object id -eq $capy).Count)} 'Native Delete did not remove Capy'
+    Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Removed-Capy header editor did not close'
+    Check-CapyBounds 'custom-removed' -Fallback
+
 }
 try{
     Enter-CapyEnvironment
@@ -159,6 +290,15 @@ try{
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace startup did not complete' 45
+    if($Journey -eq 'zen') {
+        $null=[CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)
+        [CapyRowPointer]::Initialize([uint32]$review.Id)
+        Check-ZenMatrix
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        @{zen_native_button_and_glyph_bounds='passed';workspaces='passed';sizes='passed';themes='passed';restored_layout='passed';zero_exit='passed'}|ConvertTo-Json
+        return
+    }
     # Open secondary tools when the workspace keeps them in a collapsed column.
     if(Find 'column-icon-brushes'){Invoke 'column-icon-brushes'}
     Wait-Until {@((Model).layout.groups|Where-Object active -eq 'brushes').Count -eq 1} 'Secondary tools did not open'
@@ -228,5 +368,6 @@ try{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
+    if($Journey -eq 'zen'){[CapyRowPointer]::Dispose()}
     Exit-CapyEnvironment
 }

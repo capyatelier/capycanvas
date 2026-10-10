@@ -218,7 +218,7 @@ mod allocation {
             for (slot, child) in self.children.borrow().iter() {
                 if matches!(
                     slot,
-                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0) | Slot::CanvasBar | Slot::PressureCalibration
+                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0) | Slot::CanvasBar | Slot::PressureCalibration | Slot::ZenCapy
                 ) {
                     continue; // Allocate parents before measuring child origins.
                 }
@@ -293,7 +293,7 @@ mod allocation {
                         .find(|g| g.id == *group && expansion.is_none_or(|e| e.group != *group))
                         .and_then(|g| g.resize_handles.iter().find(|h| h.edge == *edge))
                         .map(|h| h.bounds),
-                    Slot::CanvasBar | Slot::PressureCalibration => unreachable!("allocated after its owner"),
+                    Slot::CanvasBar | Slot::PressureCalibration | Slot::ZenCapy => unreachable!("allocated after its owner"),
                 };
                 child.set_child_visible(bounds.is_some());
                 if let Some(b) = bounds {
@@ -315,6 +315,7 @@ mod allocation {
                             .and_then(|p| p.connection().map(|c| c.bounds)),
                         Slot::CanvasBar => owner.canvas_bar.bounds(),
                         Slot::PressureCalibration => owner.pressure_calibration.bounds(),
+                        Slot::ZenCapy => Some(owner.header.zen_button_bounds()),
                         _ => continue,
                     };
                     child.set_child_visible(bounds.is_some());
@@ -546,6 +547,7 @@ impl PanelColumns {
 enum Slot {
     Canvas,
     Header,
+    ZenCapy,
     Status,
     Group(u32),
     Divider(u32),
@@ -647,7 +649,7 @@ impl DockSurface {
     }
     fn raise_canvas_bar(&self) {
         let mut children = self.imp().children.borrow_mut();
-        for slot in [Slot::PressureCalibration, Slot::CanvasBar] {
+        for slot in [Slot::PressureCalibration, Slot::CanvasBar, Slot::ZenCapy] {
             let Some(index) = children.iter().position(|(s, _)| *s == slot) else { continue; };
             let overlay = children.remove(index);
             let drawer = children.iter().position(|(s, w)| {
@@ -665,6 +667,7 @@ impl DockSurface {
                 slot,
                 Slot::Canvas
                     | Slot::Header
+                    | Slot::ZenCapy
                     | Slot::Status
                     | Slot::CanvasBar
                     | Slot::PressureCalibration
@@ -1205,17 +1208,13 @@ impl Workspace {
         workspaces.root.add_css_class("workspace-notice");
         content.set_child(Some(&surface));
         let zen_capy = gtk::Button::builder()
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Start)
-            .margin_start(6)
-            .margin_top(6)
             .visible(false)
             .build();
         zen_capy.set_widget_name("zen-capy");
         zen_capy.add_css_class("zen-capy");
         let capy_icon = crate::icons::image("layer-zen-looking-up-symbolic");
         zen_capy.set_child(Some(&capy_icon));
-        content.add_overlay(&zen_capy);
+        surface.add(Slot::ZenCapy, &zen_capy);
         // Notices must not resize the full-window canvas, change its viewport,
         // or recreate the GPU swapchain while opening/saving a workspace.
         let notices = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -2052,8 +2051,6 @@ impl Workspace {
         }
     }
 
-    /// A pen without hover (or a first touch) reveals hidden nearby controls
-    /// without leaving an accidental mark. Coordinates are canvas-local units.
     pub fn reveal_chrome_at(&self, x: f32, y: f32) -> bool {
         self.chrome_event(ChromeEvent::Contact {
             position: [x, y],
@@ -2064,7 +2061,7 @@ impl Workspace {
 
     fn set_chrome_hidden(&self, hidden: bool) {
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
-            if !matches!(slot, Slot::Canvas | Slot::CanvasBar) {
+            if !matches!(slot, Slot::Canvas | Slot::CanvasBar | Slot::ZenCapy) {
                 let hidden = hidden && !widget.has_css_class("floating-panel");
                 let can_target = !hidden && !widget.has_css_class("fixed-stack-divider")
                     && !matches!(slot, Slot::DrawerShadow(_) | Slot::ColumnConnection(_, _));

@@ -758,6 +758,10 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             if(kind!=L"clock"&&kind!=L"battery"&&kind!=L"space"&&!(kind==L"document_title"&&drawings->single()))take(item.frame);
         }
         for(auto item:overflow)take(item);take(recovery);
+        if(hidden&&flag(data->model,L"keep_zen_button")){
+            auto bounds=object(geometry,L"zen_button");
+            if(bounds.Size())controls.emplace_back(float(num(bounds,L"x")),float(num(bounds,L"x")+num(bounds,L"width")));
+        }
         std::sort(controls.begin(),controls.end());float next=leftInset,limit=float(width)/scale-rightInset;
         std::vector<winrt::Windows::Graphics::RectInt32> result;
         auto add=[&](float from,float to){int32_t x=int32_t(std::ceil(from*scale)),end=int32_t(std::floor(to*scale));
@@ -776,6 +780,7 @@ HeaderView::~HeaderView()=default;
 Grid HeaderView::Root()const{return impl->root;}
 void HeaderView::Apply(Json const& snapshot){impl->apply(snapshot);}
 void HeaderView::SetInsets(float left,float right){if(left!=impl->leftInset||right!=impl->rightInset){impl->leftInset=left;impl->rightInset=right;impl->schedule();}}
+HeaderView::Json HeaderView::ZenButtonBounds()const{return CapyUi::object(impl->geometry,L"zen_button");}
 void HeaderView::SetFullscreen(bool active){
     if(active==impl->fullscreenActive)return;
     impl->fullscreenActive=active;

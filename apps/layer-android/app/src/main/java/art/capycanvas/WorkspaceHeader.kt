@@ -116,10 +116,6 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
     }
     CompositionLocalProvider(LocalWorkspaceZ provides 300) {
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(300f)) {
-        // The canvas extends behind the title bar. Empty chrome owns input,
-        // but must not paint an opaque strip over the drawing.
-        Box(Modifier.fillMaxWidth().height(height.dp).testTag("title-bar").chromeRegion(input.dock)
-            .headerSource(input, obj("kind" to "background"), host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("title_bar"), -1).headerChrome())
         val width = maxWidth.value
         val geometryKey = "$width:$modelKey:$editing:$metrics:${host.drawingTabs.rows.size}"
         SideEffect { input.width = width; input.metrics = metrics }
@@ -133,6 +129,9 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         LaunchedEffect(resolved?.toString(), height, bankHeight, editing) {
             resolved?.let { host.dispatch(obj("type" to "measure_header", "height" to (height + if (editing) bankHeight + 12f else 0f), "items" to it.array("items"))) }
         }
+        if (snapshot.optBoolean("chrome_hidden")) return@BoxWithConstraints
+        Box(Modifier.fillMaxWidth().height(height.dp).testTag("title-bar").chromeRegion(input.dock)
+            .headerSource(input, obj("kind" to "background"), host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("title_bar"), -1).headerChrome())
         // Keep existing item nodes at their prior positions while the native
         // owner resolves new metrics. Compaction changes a child's presentation,
         // never the identity or capture lifetime of its enclosing editable item.

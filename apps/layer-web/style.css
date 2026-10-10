@@ -158,10 +158,10 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 :where(:root:not([data-touch])) #header nav > button:hover, :where(:root:not([data-touch])) .header-menu > summary:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 #header nav > button:active, .header-menu > summary:active { background: color-mix(in srgb, var(--bg), var(--text) 16%); }
 #header-start > button[aria-pressed="true"] { background: var(--selection); }
-#zen-capy { touch-action: manipulation; position: absolute; left: 6px; top: 6px; z-index: 1001; width: var(--header-tile); height: var(--header-tile); padding: 0; border-radius: calc(var(--header-tile) / 2 * var(--corner-fit)); background: var(--chrome-surface); }
+#zen-capy { touch-action: manipulation; position: absolute; z-index: 1001; padding: 0; border-radius: calc(var(--header-tile) / 2 * var(--corner-fit)); background: var(--chrome-surface); }
 #zen-capy > svg { width: var(--header-capy-icon); height: var(--header-capy-icon); }
 :where(:root:not([data-touch])) :is(#zen-capy, #canvas-status button.proof-status, #view-info):hover { background: color-mix(in srgb, var(--text) 8%, var(--chrome-surface)); }
-#zen-button { position: absolute; left: 6px; top: 6px; z-index: 1001; background: var(--bg); }
+#zen-button { background: var(--bg); }
 #zen-button[aria-pressed="true"] { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 .zen-hidden #zen-button[aria-pressed="true"] { background: var(--bg); }
 :root:not([data-touch]) #zen-button:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
