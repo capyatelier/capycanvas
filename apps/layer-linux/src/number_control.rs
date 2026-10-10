@@ -542,7 +542,12 @@ impl NumberControl {
         if !inline {
             header.append(&labels);
         }
-        control.append(&header);
+        let panel_grid = (panel && spec.kind == NumericKind::Slider).then(gtk::Grid::new);
+        if let Some(grid) = &panel_grid {
+            header.add_css_class("number-header");
+            grid.attach(&header, 0, 0, 1, 1);
+            control.append(grid);
+        } else { control.append(&header); }
         if !description.is_empty() {
             let description = gtk::Label::new(Some(description));
             description.set_xalign(0.0);
@@ -701,7 +706,8 @@ impl NumberControl {
                 stack.add_named(&reserve, Some("measure"));
                 control.imp().width_reserve.set(reserve.upcast()).unwrap();
             }
-            header.append(&stack);
+            if let Some(grid) = &panel_grid { grid.attach(&stack, 1, 0, 1, 2); }
+            else { header.append(&stack); }
             display.connect_clicked(glib::clone!(
                 #[weak]
                 control,
@@ -793,7 +799,8 @@ impl NumberControl {
                     control.imp().steps.set(steps).unwrap();
                 }
                 track.insert_child_after(&slider, track.first_child().as_ref());
-                control.append(&track);
+                if let Some(grid) = &panel_grid { grid.attach(&track, 0, 1, 2, 1); }
+                else { control.append(&track); }
             }
             control.imp().slider.set(slider).unwrap();
         }

@@ -19,8 +19,9 @@ Every host shares the same numeric policy and editable values.
   Values align right and center against the full title/description block.
   GTK stacked panel sliders sit just below the text, within a 36-pixel control.
   The 4-pixel track has a symmetric 16-pixel hit area starting just below the
-  visible bottom of the label. Its left inset is 36 pixels; its fixed 76-pixel
+  visible bottom of the label. Its left inset is 36 pixels; its fixed 84-pixel
   right inset reserves room for ordinary values and units. Panels have no step buttons.
+  The value and its text editor center vertically across the label and slider.
   Double-clicking a tool setting's label restores the shared tool default.
   Adjacent Tool Settings controls have a 2-pixel gap below that hit area.
   Other hosts retain a 24-pixel value row above a matching 24-pixel track/button

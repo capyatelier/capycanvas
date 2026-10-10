@@ -171,7 +171,7 @@ and 33.33 ms. Dropped reports remained zero and thermal status remained 0.
 
 ## GTK panel slider diagnostic
 
-Measured 2026-10-09 with the adjusted GTK panel sliders based on `a90388f25`,
+Measured 2026-10-09 with the centered GTK panel values based on `f4b608c68`,
 in a release build on NVIDIA RTX PRO 6000 Blackwell Max-Q/Vulkan 615.71.09.
 The private Mutter display is 1600 × 1000 at a requested 120 Hz, with a
 2048 × 1536 empty drawing. `native_panel_slider_motion` uses native mouse
@@ -183,18 +183,17 @@ Only GTK presentations whose numeric value changed are counted.
 
 | Theme / field | Moving presentations/s | Interval p99 |
 | --- | --- | --- |
-| Light / Size | 116.25–117.65 | 16.647–16.780 ms |
-| Light / Opacity | 117.24–117.63 | 16.667–16.692 ms |
-| Light / Flow | 116.65–117.64 | 16.670–16.705 ms |
-| Dark / Size | 117.04–118.03 | 16.665–16.682 ms |
-| Dark / Opacity | 117.24–117.83 | 16.680–16.711 ms |
-| Dark / Flow | 116.85–117.24 | 16.667–16.694 ms |
+| Light / Size | 117.23–117.64 | 16.674–16.738 ms |
+| Light / Opacity | 117.04–117.63 | 16.668–16.780 ms |
+| Light / Flow | 117.82–118.62 | 16.556–16.684 ms |
+| Dark / Size | 117.03–117.83 | 16.693–16.723 ms |
+| Dark / Opacity | 117.62–118.23 | 16.691–16.792 ms |
+| Dark / Flow | 114.32–118.44 | 16.646–17.004 ms |
 
 The earlier four-leg diagnostic is limited by pointer-position changes and
 does not measure rendering capacity. These are workstation diagnostics with a
-small drawing and no paired baseline using the twelve-leg workload.
-They do not qualify any reference-tablet target or establish a before/after
-comparison. Raw records are in `artifacts/ui/panel-sliders/`.
+small drawing. They do not qualify any reference-tablet target.
+Raw records are in `artifacts/ui/panel-sliders/`.
 
 ## GTK selected swatch diagnostic
 

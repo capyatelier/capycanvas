@@ -3603,7 +3603,7 @@ fn native_tool_and_color_panels() {
             w.panel_widget(Panel::ToolSettings)
                 .measure(gtk::Orientation::Horizontal, -1)
                 .0
-                <= layer_ui::TOOL_PANEL_MIN_WIDTH as i32,
+                <= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32,
             "{} settings are too wide: {}",
             choice.label,
             w.panel_widget(Panel::ToolSettings).measure(gtk::Orientation::Horizontal, -1).0
@@ -8377,7 +8377,9 @@ fn native_panel_slider_input() {
         assert!(bar.y() - bottom <= 4., "hit area reaches the label's bottom");
         assert_eq!(size.height(), 36);
         assert_eq!(bar.x(), 36.);
-        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 76.);
+        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 84.);
+        let value = find_css(size.upcast_ref(), "number-value").unwrap().compute_bounds(&size).unwrap();
+        assert!((value.y() + value.height() / 2. - size.height() as f32 / 2.).abs() <= 1.);
         assert_eq!(opacity.compute_bounds(&panel).unwrap().y() - size.compute_bounds(&panel).unwrap().y() - size.height() as f32, 2.);
         assert!(find_css(size.upcast_ref(), "number-step").is_none());
         for edge in [1. / scale.height() as f32, 1. - 1. / scale.height() as f32] {
@@ -8525,17 +8527,17 @@ fn native_number_controls() {
     pump(300);
     let scale: gtk::Scale = descendant(&size).unwrap();
     for field in [&size, &narrow, &described] {
-        let header = field.first_child().unwrap();
-        let labels = header.first_child().unwrap();
+        let labels = find_css(field.upcast_ref(), "number-labels").unwrap();
         let title = labels
             .first_child()
             .unwrap()
             .downcast::<gtk::Label>()
             .unwrap();
-        let value = header.last_child().unwrap();
+        let value = find_css(field.upcast_ref(), "number-value").unwrap();
         let lb = labels.compute_bounds(field).unwrap();
         let vb = value.compute_bounds(field).unwrap();
-        assert!((lb.y() + lb.height() / 2.0 - vb.y() - vb.height() / 2.0).abs() <= 1.0);
+        let center = if field.has_css_class("number-panel") { field.height() as f32 / 2. } else { lb.y() + lb.height() / 2. };
+        assert!((center - vb.y() - vb.height() / 2.0).abs() <= 1.0);
         assert!((vb.x() + vb.width() - field.width() as f32).abs() <= 1.0);
         assert!(!title.wraps());
         assert_eq!(title.ellipsize(), gtk::pango::EllipsizeMode::End);
@@ -8559,7 +8561,7 @@ fn native_number_controls() {
     assert!(find_css(size.upcast_ref(), "number-step").is_none());
     assert_eq!(bar.height(), 16.0);
     assert_eq!(bar.x(), 36.0);
-    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 76.0);
+    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 84.0);
     assert_eq!(scale.range_rect().width(), scale.width());
     let (start, end) = scale.slider_range();
     assert_eq!(start, end, "compact slider reserves no thumb width");
