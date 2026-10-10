@@ -123,10 +123,10 @@ function Check-Zen {
 }
 function Check-Header {
     $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
-    $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
+    $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window' -Inspect).Current.BoundingRectangle
     $settings=(Control 'settings-button' -Type ([System.Windows.Automation.ControlType]::Button)).Current.BoundingRectangle
     $points=@(
-        @{x=$menu.Left+$menu.Width/2;y=$menu.Top+$menu.Height/2;expected=1;name='Help menu'},
+        @{x=$menu.Left+$menu.Width/2;y=$menu.Top+$menu.Height/2;expected=1;name='Window menu'},
         @{x=$settings.Left+$settings.Width/2;y=$settings.Top+$settings.Height/2;expected=1;name='Preferences'},
         @{x=$menu.Right+4*$scale;y=$menu.Top+$menu.Height/2;expected=2;name='unused header space'}
     )

@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 // Full labels, the retained compact menu, and whole-item overflow share menus.
 export async function checkHeaderControls({call,evaluate,settle}) {
   const click=async(selector,pointerType='mouse')=>{const p=await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();if(!r.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1,pointerType});await settle();};
-  const select=async(label,container)=>{await evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(container+' button')})].find(b=>(b.querySelector('.menu-label')?.textContent||b.textContent)===${JSON.stringify(label)});if(!b)throw Error('Missing '+${JSON.stringify(label)});b.dataset.headerTest='true';})()`);await click('[data-header-test]');};
+  const select=async(label,container)=>{await evaluate(`(()=>{document.querySelectorAll('[data-header-test]').forEach(button=>delete button.dataset.headerTest);const b=[...document.querySelectorAll(${JSON.stringify(container+' button')})].find(b=>(b.querySelector('.menu-label')?.textContent||b.textContent)===${JSON.stringify(label)});if(!b)throw Error('Missing '+${JSON.stringify(label)});b.dataset.headerTest='true';})()`);await click('[data-header-test]');};
   const resize=async width=>{await call('Emulation.setDeviceMetricsOverride',{width,height:870,deviceScaleFactor:1,mobile:false});await settle();};
   await resize(1440);
   const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/localization-expansion/web';await mkdir(dir,{recursive:true});
-  const menus=await evaluate('layerApp.app.editor_models(0,0).application_menus');assert.equal(menus.length,8);
+  const menus=await evaluate('layerApp.app.editor_models(0,0).application_menus');assert.deepEqual(menus.map(menu=>menu.id),['file','edit','layer','select','filter','view','window']);
   const openMenus=()=>evaluate("[...document.querySelectorAll('.header-menu-labels details[open]')].map(menu=>menu.dataset.menu)");
   const hover=async(id,pointerType)=>{
     const point=await evaluate(`(()=>{const r=document.querySelector('[data-menu="${id}"] > summary').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
@@ -30,21 +30,24 @@ export async function checkHeaderControls({call,evaluate,settle}) {
     assert.deepEqual(await openMenus(),[],`${theme} ${device}: Escape dismisses the menu`);
     await hover('view',device);assert.deepEqual(await openMenus(),[],`${theme} ${device}: hover after dismissal stays closed`);
   }
-  for(const m of menus){await click(`[data-menu="${m.id}"] > summary`);assert.equal(await evaluate(`document.querySelector('[data-menu="${m.id}"]').open`),true);}
-  for(const [width,selector] of [[600,'.header-menu-labels-compact'],[240,'#header-overflow-0']]) {
-    await resize(width);
-    assert.equal(await evaluate("document.querySelectorAll('.header-item[hidden] details[open],.header-menu-labels[hidden] details[open]').length"),0,'Resizing closes hidden menus');
-    assert.ok(await evaluate(`document.activeElement.closest('${selector}')!==null`),'Focus follows the visible menu');
-    await click(`${selector} > summary`);
-    if(width===240)await select('Menu Labels',`${selector} .popover`);
-    assert.deepEqual(await evaluate(`[...document.querySelectorAll('${selector} .menu-label')].map(n=>n.textContent)`),menus.map(m=>m.label));
-    for(const m of menus){await select(m.label,`${selector} .popover`);assert.deepEqual(await evaluate(`[...document.querySelectorAll('${selector} .menu-label')].map(n=>n.textContent)`),m.model.sections.flat().map(i=>i.label));await click(`${selector} .submenu-back`);}
-    const zoom=await evaluate('layerApp.state().camera.zoom');await select('View',`${selector} .popover`);
-    await select(menus.find(m=>m.id==='view').model.sections.flat().find(i=>i.action?.command==='zoom_in').label,`${selector} .popover`);
-    assert.ok(await evaluate('layerApp.state().camera.zoom')>zoom);assert.equal(await evaluate(`document.querySelector('${selector}').open`),false);
-    await click(`${selector} > summary`);await resize(1440);
-    assert.equal(await evaluate("document.querySelectorAll('.header-overflow[open],.header-menu-labels-compact[open]').length"),0);
-    assert.ok(await evaluate(`document.activeElement.closest('${width===600?'.header-menu-labels':'.header-item:not([hidden])'}')!==null`),'Expansion restores a visible control');
+  for(const theme of ['light','dark']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);await settle();
+    for(const m of menus){await click(`[data-menu="${m.id}"] > summary`);assert.equal(await evaluate(`document.querySelector('[data-menu="${m.id}"]').open`),true);}
+    for(const [width,selector] of [[600,'.header-menu-labels-compact'],[240,'#header-overflow-0']]) {
+      await resize(width);
+      assert.equal(await evaluate("document.querySelectorAll('.header-item[hidden] details[open],.header-menu-labels[hidden] details[open]').length"),0,'Resizing closes hidden menus');
+      assert.ok(await evaluate(`document.activeElement.closest('${selector}')!==null`),'Focus follows the visible menu');
+      await click(`${selector} > summary`);
+      if(width===240)await select('Menu Labels',`${selector} .popover`);
+      assert.deepEqual(await evaluate(`[...document.querySelectorAll('${selector} .menu-label')].map(n=>n.textContent)`),menus.map(m=>m.label));
+      for(const m of menus){await select(m.label,`${selector} .popover`);assert.deepEqual(await evaluate(`[...document.querySelectorAll('${selector} .menu-label')].map(n=>n.textContent)`),m.model.sections.flat().map(i=>i.label));await click(`${selector} .submenu-back`);}
+      const zoom=await evaluate('layerApp.state().camera.zoom');await select('View',`${selector} .popover`);
+      await select(menus.find(m=>m.id==='view').model.sections.flat().find(i=>i.action?.command==='zoom_in').label,`${selector} .popover`);
+      assert.ok(await evaluate('layerApp.state().camera.zoom')>zoom);assert.equal(await evaluate(`document.querySelector('${selector}').open`),false);
+      await click(`${selector} > summary`);await resize(1440);
+      assert.equal(await evaluate("document.querySelectorAll('.header-overflow[open],.header-menu-labels-compact[open]').length"),0);
+      assert.ok(await evaluate(`document.activeElement.closest('${width===600?'.header-menu-labels':'.header-item:not([hidden])'}')!==null`),'Expansion restores a visible control');
+    }
   }
   const tags=await evaluate('layerApp.app.bootstrap_view().shipped_tags'),expected={};
   for(const tag of tags){const source=await readFile(new URL(`../../assets/locales/${tag}/workspace.ftl`,import.meta.url),'utf8');const text=key=>{const line=source.split('\n').find(line=>line.startsWith(`${key} = `));assert.ok(line,`${tag} ${key}`);return line.slice(key.length+3);};expected[tag]={drag:text('workspace-header-drag-component'),size:text('workspace-header-size'),tools:text('workspace-add-tools-menu'),clock:text('workspace-header-clock'),battery:text('workspace-header-battery')};}
@@ -53,5 +56,5 @@ export async function checkHeaderControls({call,evaluate,settle}) {
     for(const tag of tags){await restore(tag);const state=await evaluate(`({same:headerLocaleChips.every((chip,index)=>chip===document.querySelectorAll('.header-component')[index])&&headerLocaleSize===document.querySelector('.header-size-choices')&&headerLocaleFooter===document.querySelector('#header-canvas-info'),focused:document.activeElement===headerLocaleFooter,size:headerLocaleSize.ariaLabel,tools:document.querySelector('#header-component-tools').ariaLabel,chips:headerLocaleChips.map(chip=>({label:chip.ariaLabel,title:chip.title})),status:[...document.querySelectorAll('.header-status-placeholder')].map(node=>node.textContent)})`);assert.ok(state.same&&state.focused,`${tag} retained header bank/native controls`);assert.equal(state.size,expected[tag].size);assert.equal(state.tools,expected[tag].tools);for(const chip of state.chips)assert.equal(chip.title,expected[tag].drag.replace('{ $item }',chip.label),`${tag} typed header drag caption`);assert.ok(state.status.includes(expected[tag].clock)&&state.status.includes(expected[tag].battery),`${tag} localized native-status placeholders`);await evaluate('document.fonts.ready.then(()=>new Promise(resolve=>setTimeout(resolve,150)))');const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/header-bank-${theme}-${tag}.png`,Buffer.from(shot.data,'base64'));}
     await evaluate(`document.querySelector('#header-edit-cancel').click()`);await settle();}
   await restore('en');
-  console.log('PASS: all eight full/compact/overflow menus, real Zoom In, resize closure and focus restoration');
+  console.log('PASS: all seven full/compact/overflow menus, real Zoom In, resize closure and focus restoration');
 }

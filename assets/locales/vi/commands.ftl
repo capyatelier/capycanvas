@@ -222,7 +222,6 @@ menu-select = Chọn
 menu-filter = Bộ lọc
 menu-view = Hiển thị
 menu-window = Cửa sổ
-menu-help = Trợ giúp
 menu-main-menu = Trình đơn chính
 menu-image = Ảnh
 menu-blending = Hòa trộn

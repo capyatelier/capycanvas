@@ -23,14 +23,14 @@ Load Layout, and workspace changes save automatically.
   correction). A delivered command that is unavailable in the
   current state is disabled and publishes its reason.
 - **Menus.** The application menus are **File, Edit, Layer, Select, Filter,
-  View, Window, Help**, in that order, and fit beside a centered title in a
+  View, Window**, in that order, and fit beside a centered title in a
   1200px-wide window. File owns documents, windows, open, save and export; Edit
   owns document undo and editing; Layer projects the layer context menu's
   actions; Select owns selection commands; Filter has one submenu per filter
   category, including runtime-loaded filters; View owns canvas, navigation and
-  Zen display; Window owns workspace, panel and toolbar management; Help owns
-  shortcuts, links and About. Rust owns all menu copy, sections, availability
-  and shortcut hints.
+  Zen display; Window owns workspace, panel and toolbar management. Settings
+  contains keyboard shortcuts and About, including website and source links.
+  Rust owns all menu copy, sections, availability and shortcut hints.
 - **Tool keys** follow [Clip Studio Paint's families](https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Tool_Shortcuts.htm):
   P Pen/Pencil, B Brush/Airbrush/Decoration, E Eraser, J Blend/Liquify, S
   Clone Stamp/Healing Brush/Spot Healing Brush, M selection, W Auto select, F Fill, G Gradient, O Move, U Figure, Shift+U Ruler,

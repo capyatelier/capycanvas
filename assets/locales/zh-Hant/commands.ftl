@@ -222,7 +222,6 @@ menu-select = 選取
 menu-filter = 濾鏡
 menu-view = 檢視
 menu-window = 視窗
-menu-help = 說明
 menu-main-menu = 主選單
 menu-image = 影像
 menu-blending = 色彩混合

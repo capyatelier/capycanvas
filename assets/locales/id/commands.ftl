@@ -439,7 +439,6 @@ menu-view = Tampilan
 
 menu-window = Jendela
 
-menu-help = Bantuan
 
 menu-main-menu = Menu Utama
 

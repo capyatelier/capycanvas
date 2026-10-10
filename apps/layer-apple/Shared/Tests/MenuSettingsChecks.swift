@@ -421,25 +421,12 @@ extension XCTestCase {
             app.activate()
             XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         }
-        let links = [("website", "Website", "https://capycanvas.art"),
-            ("source_code", "Source code", "https://github.com/capyatelier/capycanvas")]
-        for (id, label, url) in links {
-            #if os(macOS)
-            workspaceActivate(app.menuBars.menuBarItems["Help"])
-            open(app.menuItems[label], url: url)
-            #else
-            workspaceActivate(app.buttons["menu-Help"])
-            open(app.buttons["command-" + id], url: url)
-            #endif
-        }
-        #if os(macOS)
-        workspaceActivate(app.menuBars.menuBarItems["Capy Canvas"])
-        workspaceActivate(app.menuItems["About Capy Canvas"])
-        #else
-        workspaceActivate(app.buttons["menu-Help"])
-        workspaceActivate(app.buttons["command-about"])
-        #endif
-        for (id, _, url) in links {
+        let links = [("website", "https://capycanvas.art"),
+            ("source_code", "https://github.com/capyatelier/capycanvas")]
+        workspaceActivate(app.buttons["settings-button"])
+        XCTAssertTrue(app.staticTexts["settings-page-about"].waitForExistence(timeout: 10))
+        workspaceActivate(app.staticTexts["settings-page-about"])
+        for (id, url) in links {
             open(app.descendants(matching: .any)["preference-" + id].firstMatch, url: url)
             XCTAssertTrue(app.buttons["settings-done"].exists, "Returning from a link must retain About")
         }
@@ -454,13 +441,16 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
         #if os(macOS)
+        XCTAssertFalse(app.menuBars.menuBarItems["Help"].exists)
         let applicationMenu = app.menuBars.menuBarItems["Capy Canvas"]
         XCTAssertTrue(applicationMenu.exists, "The OS menu must use the public application name")
         workspaceActivate(applicationMenu)
         workspaceActivate(app.menuItems["About Capy Canvas"])
         #else
-        workspaceActivate(app.buttons["menu-Help"])
-        workspaceActivate(app.buttons["command-about"])
+        XCTAssertFalse(app.buttons["menu-Help"].exists)
+        workspaceActivate(app.buttons["settings-button"])
+        XCTAssertTrue(app.staticTexts["settings-page-about"].waitForExistence(timeout: 10))
+        workspaceActivate(app.staticTexts["settings-page-about"])
         #endif
 
         let done = app.buttons["settings-done"]

@@ -12057,12 +12057,16 @@ mod tests {
         assert_eq!(
             ApplicationMenu::ALL.map(|m| m.canonical_label().to_string()),
             [
-                "File", "Edit", "Layer", "Select", "Filter", "View", "Window", "Help"
+                "File", "Edit", "Layer", "Select", "Filter", "View", "Window"
             ]
         );
         for menu in ApplicationMenu::ALL {
             assert!(!app.application_menu(menu).sections.is_empty());
         }
+        assert_eq!(
+            app.application_menu(ApplicationMenu::Primary).sections[0].iter().map(|item| item.label.as_str()).collect::<Vec<_>>(),
+            ["File", "Edit", "Layer", "Select", "Filter", "View", "Window"]
+        );
         for (command, link) in [
             (CommandId::Website, ApplicationLink::Website),
             (CommandId::SourceCode, ApplicationLink::SourceCode),
@@ -16843,9 +16847,10 @@ mod tests {
 
     #[test]
     fn about_links_are_shared_searchable_and_read_only() {
-        for platform in [Platform::Gtk, Platform::Web] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows] {
             let mut s = session(platform);
-            invoke(&mut s, CommandId::About);
+            invoke(&mut s, CommandId::Settings);
+            preference(&mut s, PreferenceAction::Page { page: SettingsPage::About });
             let view = s.preferences().unwrap();
             let about = view
                 .pages

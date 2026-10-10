@@ -176,7 +176,7 @@ try {
     Wait-Until {$null -eq (Manager).prompt -and $null -ne (Row 'Inking')} 'Rename did not update retained list'
     Wait-Until {(HeaderChoice $painting).Current.Name -eq 'Inking'} 'Header did not follow the renamed custom workspace'
     Wait-Until {
-        $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
+        $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window' -Inspect).Current.BoundingRectangle
         $firstChoice=(HeaderChoice $painter).Current.BoundingRectangle
         $menu.Right -le $firstChoice.Left
     } 'Renamed workspace header overlaps the application menus'

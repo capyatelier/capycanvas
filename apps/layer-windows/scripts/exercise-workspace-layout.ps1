@@ -32,7 +32,7 @@ try{
     Write-Output "Owned workspace review $($review.Id)"
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
-    $ids=@('file','edit','layer','select','filter','view','window','help')
+    $ids=@('file','edit','layer','select','filter','view','window')
     $scale=[CapyWorkspaceHeader]::GetDpiForWindow($review.MainWindowHandle)/96.
     foreach($size in @(@{width=744;compact=$true},@{width=1200;compact=$false},@{width=744;compact=$true})){
         $entry=& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File' -Inspect
@@ -63,9 +63,8 @@ try{
     Wait-Until {(Command 'deselect').enabled} 'Select All did not update shared selection'
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'select';Invoke 'deselect'
     Wait-Until {!(Command 'deselect').enabled} 'Deselect did not clear selection'
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'help'
-    foreach($id in @('website','source_code')){if(!(Control $id).Current.IsEnabled){throw "Shared help link is disabled: $id"}}
-    Invoke 'about'
+    Invoke 'settings-button'
+    Invoke 'preference-page-about'
     Wait-Until {$null -ne (Model).preferences -and (Model).preferences.page -eq 'about'} 'About did not open shared settings page'
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
     $about=(Model).preferences|ConvertTo-Json -Depth 40 -Compress
@@ -105,7 +104,7 @@ try{
     Wait-Until {$null -ne (Find 'renderer-stat-6')} 'Workspace Undo did not restore Diagnostics'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{eight_shared_menus='passed';compact_and_expanded_header='passed';responsive_menu_focus='passed';selection_commands='passed';about_page='passed';diagnostics_query_and_row_retention='passed';diagnostics_visibility_and_workspace_undo='passed';native_resize='passed';zero_exit='passed';scope='native UI Automation; physical docking, drawers, full layout parity and presentation remain separate'}|ConvertTo-Json
+    [pscustomobject]@{seven_shared_menus='passed';compact_and_expanded_header='passed';responsive_menu_focus='passed';selection_commands='passed';about_page='passed';diagnostics_query_and_row_retention='passed';diagnostics_visibility_and_workspace_undo='passed';native_resize='passed';zero_exit='passed';scope='native UI Automation; physical docking, drawers, full layout parity and presentation remain separate'}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{

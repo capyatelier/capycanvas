@@ -222,7 +222,6 @@ menu-select = 選択範囲
 menu-filter = フィルター
 menu-view = 表示
 menu-window = ウィンドウ
-menu-help = ヘルプ
 menu-main-menu = メインメニュー
 menu-image = 画像
 menu-blending = 色の合成

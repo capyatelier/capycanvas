@@ -2,7 +2,7 @@ param([Parameter(Mandatory)][object]$Root,[Parameter(Mandatory)][string]$Name,[s
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 $id=$Name.ToLowerInvariant().Replace('application-menu-','')
-if($id -notin @('file','edit','layer','select','filter','view','window','help')){throw "Unknown application menu: $Name"}
+if($id -notin @('file','edit','layer','select','filter','view','window')){throw "Unknown application menu: $Name"}
 function Visible-Control([string]$Id,$Type,[switch]$ByName){
     $property=if($ByName){[System.Windows.Automation.AutomationElement]::NameProperty}else{[System.Windows.Automation.AutomationElement]::AutomationIdProperty}
     $condition=[System.Windows.Automation.PropertyCondition]::new($property,$Id)

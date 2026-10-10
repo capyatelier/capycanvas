@@ -140,7 +140,7 @@ final text as it resigns) are ignored rather than reported as errors.
 | Source | Route |
 | --- | --- |
 | Supported command IDs | Live command flags and ordinary dispatch; retired tonal IDs and Proof-panel-owned proofing commands excluded |
-| File/Edit/Layer/Select/Filter/View/Window/Help actions | Existing live menu providers, including active-layer, saved-selection and effect resources |
+| File/Edit/Layer/Select/Filter/View/Window actions | Existing live menu providers, including active-layer, saved-selection and effect resources |
 | Tools, brushes, brush sets and tool variants | Tool families, brush resources, brush sets, rulers, shapes, auto select/fill sources and gradients; current tool choices |
 | Current tool numeric settings | Shared schema and a value-entry step |
 | Active layer properties | Numeric properties as value entries; choices and toggles as entries; one history step each |

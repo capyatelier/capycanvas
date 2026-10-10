@@ -1568,7 +1568,7 @@ mod tests {
     #[test]
     fn application_menus_follow_actions_without_entering_camera_patches() {
         use layer_ui::{ApplicationMenu, CommandId, Platform};
-        for platform in [Platform::Ios, Platform::Mac] {
+        for platform in [Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows] {
             let mut host = NativeHost::new(platform).unwrap();
             host.resize(1200, 900, 1.).unwrap();
             let menus = host.take_value().unwrap()["application_menus"].clone();
@@ -1586,17 +1586,10 @@ mod tests {
                 );
                 assert_eq!(*menu, expected);
             }
-            let help = menus
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|m| m["id"] == "help")
-                .unwrap();
             assert_eq!(
-                help["model"]["sections"][1][0]["action"]["command"],
-                "website"
+                menus.as_array().unwrap().iter().map(|menu| menu["id"].as_str().unwrap()).collect::<Vec<_>>(),
+                ["file", "edit", "layer", "select", "filter", "view", "window"]
             );
-            assert_eq!(help["model"]["sections"][1][0]["enabled"], true);
             assert!(host.take_value().is_none());
             host.dispatch(UiAction::Invoke {
                 command: CommandId::SelectAll,

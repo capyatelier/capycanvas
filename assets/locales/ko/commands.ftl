@@ -222,7 +222,6 @@ menu-select = 선택 영역
 menu-filter = 필터
 menu-view = 보기
 menu-window = 창
-menu-help = 도움말
 menu-main-menu = 주 메뉴
 menu-image = 이미지
 menu-blending = 색상 합성

@@ -222,7 +222,6 @@ menu-select = Sélection
 menu-filter = Filtre
 menu-view = Affichage
 menu-window = Fenêtre
-menu-help = Aide
 menu-main-menu = Menu principal
 menu-image = Image
 menu-blending = Fusion

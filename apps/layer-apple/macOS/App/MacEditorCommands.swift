@@ -45,9 +45,7 @@ struct MacEditorCommands: Commands {
         CommandMenu("Layer") { if let store { CatalogMenuItems(store: store, id: "layer") } }
         CommandMenu("Select") { if let store { CatalogMenuItems(store: store, id: "select") } }
         CommandMenu("Filter") { if let store { CatalogMenuItems(store: store, id: "filter") } }
-        CommandGroup(replacing: .help) {
-            if let store { CatalogMenuItems(store: store, id: "help", excluding: ["about"]) }
-        }
+        CommandGroup(replacing: .help) {}
         CommandGroup(replacing: .appInfo) {
             if let store { Button(store.command("about")["label"].string) { store.invoke("about") } }
         }

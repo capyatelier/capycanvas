@@ -222,7 +222,6 @@ menu-select = Выделить
 menu-filter = Фильтр
 menu-view = Вид
 menu-window = Окно
-menu-help = Справка
 menu-main-menu = Главное меню
 menu-image = Изображение
 menu-blending = Наложение

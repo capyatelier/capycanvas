@@ -52,11 +52,10 @@ pub enum ApplicationMenu {
     Filter,
     View,
     Window,
-    Help,
     Primary,
 }
 impl ApplicationMenu {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::File,
         Self::Edit,
         Self::Layer,
@@ -64,7 +63,6 @@ impl ApplicationMenu {
         Self::Filter,
         Self::View,
         Self::Window,
-        Self::Help,
     ];
     pub fn switches_on_hover(open: Option<Self>, hovered: Self) -> bool {
         open.is_some_and(|open| open != hovered && Self::ALL.contains(&open))
@@ -82,7 +80,6 @@ impl ApplicationMenu {
             Self::Filter => MessageId::MENU_FILTER,
             Self::View => MessageId::MENU_VIEW,
             Self::Window => MessageId::MENU_WINDOW,
-            Self::Help => MessageId::MENU_HELP,
             Self::Primary => MessageId::MENU_MAIN_MENU,
         })
     }
@@ -229,11 +226,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let sections: &[&[CommandId]] = match menu {
                     M::File => FILE_MENU.sections,
                     M::View => VIEW_MENU.sections,
-                    M::Help => &[
-                        &[CommandId::KeyboardShortcuts],
-                        &[CommandId::Website, CommandId::SourceCode],
-                        &[CommandId::About],
-                    ],
                     _ => unreachable!(),
                 };
                 ContextMenu {

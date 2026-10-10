@@ -222,7 +222,6 @@ menu-select = Seç
 menu-filter = Filtre
 menu-view = Görünüm
 menu-window = Pencere
-menu-help = Yardım
 menu-main-menu = Ana menü
 menu-image = Görüntü
 menu-blending = Karıştırma

@@ -222,7 +222,6 @@ menu-select = เลือก
 menu-filter = ฟิลเตอร์
 menu-view = มุมมอง
 menu-window = หน้าต่าง
-menu-help = ช่วยเหลือ
 menu-main-menu = เมนูหลัก
 menu-image = ภาพ
 menu-blending = การผสม
