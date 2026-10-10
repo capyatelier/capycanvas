@@ -149,11 +149,13 @@ import kotlin.math.roundToInt
                     "color_wheel" -> ColorPanelControls(host, availableHeight - 16.dp) { natural, displayed -> deficits[0] = natural - displayed }
                     "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> deficits[1] = natural - displayed }
                     "histogram", "waveform" -> ScopeControl(host, state, item.getString("control"))
-                    "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
+                    "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size"),
+                        onReset = { host.dispatch(obj("type" to "reset_tool_setting", "id" to "size")) }) {
                         host.dispatch(obj("type" to "set_brush_size", "value" to it))
                     }
                     "size_presets" -> SizePresets(host, state.getJSONObject("brush").number("diameter"))
-                    "brush_opacity" -> NumericSetting("Brush opacity", state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
+                    "brush_opacity" -> NumericSetting("Brush opacity", state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity"),
+                        onReset = { host.dispatch(obj("type" to "reset_tool_setting", "id" to "opacity")) }) {
                         host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
                     }
                     "brush_color" -> ColorControls(host)
@@ -239,10 +241,12 @@ import kotlin.math.roundToInt
         "color_wheel" -> ColorPanelControls(host)
         "navigator" -> NavigatorPanel(host)
         "histogram", "waveform" -> ScopeControl(host, state, control)
-        "brush_size" -> NumericSetting(label, brush.number("diameter"), host.catalog.getJSONObject("brush_size")) {
+        "brush_size" -> NumericSetting(label, brush.number("diameter"), host.catalog.getJSONObject("brush_size"),
+            onReset = { host.dispatch(obj("type" to "reset_tool_setting", "id" to "size")) }) {
             host.dispatch(obj("type" to "set_brush_size", "value" to it))
         }
-        "brush_opacity" -> NumericSetting(label, brush.number("opacity"), host.catalog.getJSONObject("opacity")) { host.dispatch(obj("type" to "set_brush_opacity", "value" to it)) }
+        "brush_opacity" -> NumericSetting(label, brush.number("opacity"), host.catalog.getJSONObject("opacity"),
+            onReset = { host.dispatch(obj("type" to "reset_tool_setting", "id" to "opacity")) }) { host.dispatch(obj("type" to "set_brush_opacity", "value" to it)) }
         "layer_opacity" -> state.array("layers").objects().find { it.getBoolean("selected") }?.let { layer ->
             NumericSetting(label, layer.number("opacity"), host.catalog.getJSONObject("opacity")) { host.dispatch(obj("type" to "set_layer_opacity", "opacity" to it)) }
         }

@@ -2,6 +2,7 @@ package art.capycanvas
 
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
@@ -56,10 +57,11 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     toolbar: Boolean = false, showUnits: Boolean = true, showSlider: Boolean = true, valueOnly: Boolean = false,
     limits: ClosedFloatingPointRange<Float>? = null, onTyping: (Boolean) -> Unit = {}, onText: (TextFieldValue) -> Unit = {},
     registerCommit: (Any, ((Boolean) -> Boolean)?) -> Unit = { _, _ -> },
+    onReset: (() -> Unit)? = null,
     onChange: (Float) -> Unit) {
     NumericSetting(label, value.toDouble(), control, modifier, enabled, description, settings, id, inline,
         toolbar, showUnits, showSlider, valueOnly, limits?.let { it.start.toDouble()..it.endInclusive.toDouble() },
-        onTyping, onText, registerCommit, onChange = { onChange(it.toFloat()) })
+        onTyping, onText, registerCommit, onReset = onReset, onChange = { onChange(it.toFloat()) })
 }
 
 @Composable internal fun NumericSetting(label: String, value: Double, control: JSONObject,
@@ -69,6 +71,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     limits: ClosedFloatingPointRange<Double>? = null, onTyping: (Boolean) -> Unit = {}, onText: (TextFieldValue) -> Unit = {},
     registerCommit: (Any, ((Boolean) -> Boolean)?) -> Unit = { _, _ -> },
     presentedText: String? = null, onEditPhase: ((String) -> Unit)? = null,
+    onReset: (() -> Unit)? = null,
     onChange: (Double) -> Unit) {
     val host = LocalCanvasHost.current
     val captions = remember(label, host.languageTag) { JSONObject(Native.numericLabels(label, host.languageTag)) }
@@ -77,6 +80,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     val focus = LocalFocusManager.current
     val requester = remember { FocusRequester() }
     val ranged = control.getString("kind") == "slider"
+    val panel = ranged && !settings && !inline && !toolbar && !valueOnly
     val displayKey = if (ranged) "edit" else "text"
     fun resolve(value: Double, op: JSONObject): JSONObject {
         val request = obj("control" to control, "value" to value, "operation" to op)
@@ -85,6 +89,10 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     var shown by remember(value, control.toString(), showUnits, presentedText, host.languageTag) { mutableStateOf(resolve(value, obj("type" to "format")).also { shown -> presentedText?.let { shown.put("text", it).put("edit", it) } }) }
     var editing by rememberSaveable { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
+    var scrubbing by remember { mutableStateOf(false) }
+    var scrubCancelled by remember { mutableStateOf(false) }
+    var scrubOrigin by remember { mutableDoubleStateOf(value) }
+    var valueBounds by remember { mutableStateOf(Rect.Zero) }
     var dirty by rememberSaveable { mutableStateOf(false) }
     var fieldBounds by remember { mutableStateOf(Rect.Zero) }
     var text by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(shown.getString(displayKey))) }
@@ -130,6 +138,51 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
         error = null; text = TextFieldValue(shown.getString(displayKey))
         host.textComposition.clear(requester)
         return true
+    }
+    val currentValue by rememberUpdatedState(shown.getDouble("value"))
+    val beginScrub by rememberUpdatedState<(Double) -> Unit>({ origin -> scrubOrigin = origin; beginEdit(); scrubbing = true })
+    val moveScrub by rememberUpdatedState<(Double, Double) -> Unit>({ origin, pixels -> apply(obj("type" to "scrub", "origin" to origin, "pixels" to pixels)) })
+    val settleScrub by rememberUpdatedState<(Double, Boolean) -> Unit>({ origin, cancel ->
+        scrubbing = false
+        if (cancel) {
+            endEdit(cancel = true)
+            shown = resolve(origin, obj("type" to "format"))
+            if (phase == null) onChange(origin)
+        } else endEdit()
+    })
+    val cancelScrub by rememberUpdatedState({ scrubCancelled = true; settleScrub(scrubOrigin, true) })
+    DisposableEffect(scrubbing) {
+        val handler: ((android.view.KeyEvent) -> Boolean)? = if (!scrubbing) null else { event ->
+            if (event.keyCode != android.view.KeyEvent.KEYCODE_ESCAPE) false
+            else { if (event.action == android.view.KeyEvent.ACTION_DOWN) cancelScrub(); true }
+        }
+        if (handler != null) host.numberKeyHandler = handler
+        onDispose { if (handler != null && host.numberKeyHandler === handler) host.numberKeyHandler = null }
+    }
+    val fineDrag = if (!panel) Modifier else Modifier.pointerInput(control.toString(), enabled) {
+        if (!enabled) return@pointerInput
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val origin = currentValue
+            scrubCancelled = false
+            val y = valueBounds.top + down.position.y
+            var moved = false; var released = false
+            try {
+                while (true) {
+                    if (scrubCancelled) break
+                    val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+                    if (change.isConsumed) break
+                    val pixels = (y - valueBounds.top - change.position.y) / density
+                    if (!change.pressed) {
+                        if (moved) { moveScrub(origin, pixels.toDouble()); change.consume() }
+                        released = true; break
+                    }
+                    if (!moved && kotlin.math.abs(pixels) <= viewConfiguration.touchSlop / density) continue
+                    if (!moved) { moved = true; beginScrub(origin) }
+                    change.consume(); moveScrub(origin, pixels.toDouble())
+                }
+            } finally { if (moved && !scrubCancelled) settleScrub(origin, !released) }
+        }
     }
     val commit by rememberUpdatedState<(Boolean) -> Boolean>({ finish(it) })
     DisposableEffect(registerCommit) {
@@ -179,7 +232,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
                 host.textComposition.update(requester, text, focused)
                 if (dirty) onText(it)
             }
-        }, Modifier.then(if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height)
+        }, Modifier.then(if (panel) Modifier.width(80.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(if (panel) 34.dp else height)
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) { finish(); if (heldKey != null) endEdit() }
@@ -213,13 +266,31 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     }
     val valueControl: @Composable () -> Unit = {
         if (editing) field()
-        else Box(Modifier.then(if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else Modifier).height(height).clip(shape)
+        else Box(Modifier.then(if (panel) Modifier.widthIn(max = 80.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else Modifier).height(if (panel) 36.dp else height).clip(shape)
+            .onGloballyPositioned { valueBounds = it.boundsInRoot() }.then(fineDrag)
             .then(if (toolbar) Modifier.toolbarNumberScrub(control, shown.number("fill"), enabled,
                 { if (finish()) apply(obj("type" to "position", "position" to it)) },
                 { if (finish()) apply(obj("type" to "step", "steps" to it)) }) else Modifier)
             .clickable(enabled = enabled) {
             val edit = shown.getString("edit"); text = TextFieldValue(edit, TextRange(0, edit.length)); editing = true
-        }.padding(horizontal = valuePadding).testTag("number-value-$id"), contentAlignment = if (toolbar && !showUnits) Alignment.Center else Alignment.CenterEnd) { Text(shown.getString("text"), maxLines = 1, softWrap = false) }
+        }.padding(horizontal = valuePadding).testTag("number-value-$id"), contentAlignment = if (toolbar && !showUnits) Alignment.Center else Alignment.CenterEnd) { Text(shown.getString(if (scrubbing) "scrub_text" else "text"), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+    }
+    if (panel) {
+        Column(modifier.fillMaxWidth()) {
+            Box(Modifier.fillMaxWidth().height(36.dp)) {
+                Text(label, Modifier.fillMaxWidth().padding(start = 6.dp, end = 88.dp).align(Alignment.TopStart)
+                    .pointerInput(enabled, onReset, control.toString()) { if (enabled) detectTapGestures(onDoubleTap = {
+                        finish(cancel = true)
+                        if (onReset != null) onReset() else if (!control.isNull("default_value")) apply(obj("type" to "expression", "text" to ""))
+                    }) }, color = if (enabled) colors.text else colors.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Box(Modifier.align(Alignment.CenterEnd)) { valueControl() }
+                EditorSlider(shown.number("fill"), { if (finish()) apply(obj("type" to "position", "position" to it)) },
+                    Modifier.fillMaxWidth().padding(start = 36.dp, end = 88.dp).align(Alignment.BottomStart).then(contact).testTag("number-slider-$label"),
+                    enabled = enabled, label = label, height = 16.dp, inactiveTrackColor = colors.input, showThumb = false, activeTrackColor = colors.sliderFill)
+            }
+            errorCaption?.let { Text(it, Modifier.testTag("number-error-$id"), color = colors.accent, fontSize = 12.sp) }
+        }
+        return
     }
     if (inline) {
         Column(modifier) {

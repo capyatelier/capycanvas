@@ -358,6 +358,16 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel .number-slider::-moz-range-thumb { box-shadow: none; }
 .number-spin { background: var(--input); border-radius: var(--control-radius); overflow: hidden; }
 .number-spin .number-entry { width: 60px; height: 32px; }
+.number-panel { position:relative; height:36px; --number-fill:color-mix(in srgb, var(--panel), var(--text)); }
+.number-panel .number-header { position:absolute; inset:0; align-items:flex-start; }
+.number-panel .number-labels { padding:0 88px 0 6px; line-height:20px; }
+.number-panel .number-value-box { position:absolute; inset:0 0 0 auto; align-items:center; }
+.number-panel .number-value { touch-action:none; cursor:ns-resize; }
+.number-panel .number-entry { width:80px; max-width:80px; height:34px; min-height:34px; box-sizing:border-box; }
+.number-panel .number-track { position:absolute; left:36px; right:88px; bottom:0; height:16px; }
+.number-panel .number-slider, .panel .number-panel .number-slider { --thumb-size:0px; height:16px; }
+.number-panel .number-slider::-webkit-slider-thumb { margin-top:2px; box-shadow:none; }
+.number-panel .number-slider::-moz-range-thumb { box-shadow:none; }
 .panel select { background: var(--input); }
 .size-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--size-tile)), var(--size-tile))); gap: var(--size-gap); width: 100%; }
 .panel .size-button { position: relative; width: 100%; height: var(--size-height); min-height: 0; padding: 0; font-size: inherit; font-weight: 400; line-height: 1; border-radius: calc(var(--tile-radius) * var(--corner-fit)); overflow: hidden; }
@@ -705,7 +715,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .properties-header { display:flex; align-items:center; gap:6px; margin-bottom:6px; min-width:0; }
 .properties-layer-type { flex:1; min-width:0; font-size:.9em; opacity:.55; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .effect-properties #properties-add-filter { display:inline-flex; align-items:center; gap:4px; flex:none; min-height:24px; height:24px; line-height:24px; padding:0 6px; }
-.property-controls { display:flex; flex-direction:column; gap:6px; }
+.property-controls { display:flex; flex-direction:column; gap:2px; }
 .property-divider { border:0; border-top:1px solid color-mix(in srgb,var(--text) 15%,transparent); margin:3px 0; }
 .property-section { font-size:inherit; font-weight:700; margin:0 0 0 6px; }
 .property-row { display:flex; align-items:center; gap:6px; justify-content:space-between; min-width:0; }
@@ -768,6 +778,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .tool-subtools .tool-choice-name { flex:1; min-width:0; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tool-subtools .tool-choice-button:not([data-brush]) .tool-choice-name { text-align:left; }
 .tool-settings-control { display:flex; flex-direction:column; gap:8px; }
+.tool-settings-control:not(.tonal-settings) { gap:2px; }
 .tool-settings-control > .selection-modes:not(.choice-grid) > button { height:44px; }
 .tool-settings-control > .selection-modes:not(.choice-grid) svg { width:20px; height:20px; }
 .selection-modes { display:flex; width:100%; }

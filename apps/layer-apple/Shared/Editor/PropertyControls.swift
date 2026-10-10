@@ -30,7 +30,7 @@ struct LayerPropertiesPanel: View {
                     }
                 }
             }
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
                 if !view["resource_label"].isNull { lookup(actions, palette: palette) }
                 if pages.count > 1 || !tools.isEmpty {
                     HStack(spacing: 4) {
@@ -141,7 +141,7 @@ private struct PropertyField: View {
         case "number":
             NumberControl(store: store, label: label, value: value.number, control: control["kind"]["numeric"],
                 identifier: "property-" + key,
-                gestureChange: { change($1, revision: revision, phase: $0, completion: $2) }) {
+                gestureChange: { change($1, revision: revision, phase: $0, completion: $2) }, reset: reset) {
                 change($0, revision: revision, completion: $1)
             }.id(control["kind"].stableKey + label)
         case "toggle":

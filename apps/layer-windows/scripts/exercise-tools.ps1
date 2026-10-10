@@ -123,8 +123,7 @@ Focus $flowSlider
 $flowSlider.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(1)
 Wait-Until {[Math]::Abs((Value 'flow')-1) -lt .0001} 'Slider did not replace the numeric draft'
 Focus (Field 'opacity')
-Wait-Until {(Field 'flow').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq '100.0 %'} 'Slider lost units or retained the invalid numeric draft'
-if((Control 'tool-setting-flow-increase' -Id).Current.IsEnabled){throw 'Increase remained enabled at the numeric maximum'}
+Wait-Until {(Field 'flow').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq '100 %'} 'Slider lost units or retained the invalid numeric draft'
 Draft 'flow' '42';Focus (Field 'opacity')
 Wait-Until {[Math]::Abs((Value 'flow')-.42) -lt .0001} 'Flow did not restore after the slider draft check'
 # Native focus can leave the field before an accessibility invocation runs.

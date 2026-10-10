@@ -108,7 +108,10 @@ struct PanelControls: View {
     }
     private func number(_ label: String, key: String, spec: String, action: String) -> some View {
         let preset = store.state["brush"]["preset"].uint
-        return NumberControl(store: store, label: label, value: store.state["brush"][key].number, control: store.catalog[spec]) { value, completion in
+        return NumberControl(store: store, label: label, value: store.state["brush"][key].number, control: store.catalog[spec], reset: {
+            guard preset == store.state["brush"]["preset"].uint else { return }
+            store.edit(["type": "reset_tool_setting", "id": key == "diameter" ? "size" : "opacity"]) { _ in }
+        }) { value, completion in
             guard preset == store.state["brush"]["preset"].uint else { completion(nil); return }
             store.edit(["type": action, "value": value], completion: completion)
         }.id(preset)

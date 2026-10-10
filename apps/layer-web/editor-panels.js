@@ -71,10 +71,10 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
   }
   function toolSettings(root) {
     let key = "", numbers = [], actions = [], range, choices = [], sampler, gradient;
-    root.disposeSettings = () => { gradient?.dispose();gradient=null; range?.dispose(); numbers.forEach(([,n])=>n.cancelEditing()); };
+    root.disposeSettings = () => { gradient?.dispose();gradient=null; range?.dispose(); numbers.forEach(([,n])=>n.dispose()); };
     return () => {
       const s = state(),editing=s.layer_tools.editing_layer;
-      const owner=[String(s.document_file.epoch),String(editing?.id??''),editing?.mask_selected,String(editing?.mask_id??'')];
+      const owner=[String(s.document_file.epoch),String(s.toolbar_context_generation),s.brush.preset,String(editing?.id??''),editing?.mask_selected,String(editing?.mask_id??'')];
       const picking = ['pick_visible','pick_layer'].includes(s.layer_tools.tool);
       const compact = s.tool_extra.some(o=>o.Choice?.id==='tonal-tones');
       root.classList.toggle('tonal-settings', compact);
@@ -128,7 +128,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
             if(group)root.append(element('h3','',()=>state().tool_extra.find(o=>o.Choice?.beside===field.id)?.Choice.label??state().tool_settings.find(f=>f.id===field.id)?.group??''));
             if(extra){const row=element('div','tool-position-group');grouped=element('div','tool-position-numbers');row.append(extra.bar,grouped);root.append(row);}
           }
-          const node=numberField(field.numeric,()=>state().tool_settings.find(f=>f.id===field.id)?.label??"",value=>dispatch({type:"set_tool_setting",id:field.id,value}),compact||!!grouped);
+          const node=numberField(field.numeric,()=>state().tool_settings.find(f=>f.id===field.id)?.label??"",value=>{if(key===next)dispatch({type:"set_tool_setting",id:field.id,value});},compact||!!grouped);
+          node.onReset=()=>{if(key===next)dispatch({type:'reset_tool_setting',id:field.id});};
           node.dataset.toolSetting=field.id;
           if(grouped)node.querySelector('.number-track').hidden=true;
           if(compact||grouped){const row=element('label','tonal-numeric-row');row.append(element('span','',()=>state().tool_settings.find(f=>f.id===field.id)?.label??''),node);(grouped??root).append(row);}else root.append(node);

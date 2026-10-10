@@ -10,22 +10,28 @@ struct NumberControl: View {
     var presentedText: String? = nil
     var valueOnly = false
     var inline = false
+    var panel = true
     var entryWidth: CGFloat = 48
     var toolbar: Toolbar? = nil
     var registerAdmission: ((String, ((Bool) -> Bool)?) -> Void)? = nil
     var gestureChange: ((String, Double, @escaping @MainActor (String?) -> Void) -> Void)? = nil
+    var reset: (() -> Void)? = nil
     let change: (Double, @escaping @MainActor (String?) -> Void) -> Void
     @State private var field = NumericEditState()
     @State private var formatted = JSON()
     @State private var numericLabels = JSON()
     @State private var showsEntry = false
     @State private var horizontalDrag: Bool?
+    @State private var valueOrigin: Double?
+    @State private var valueDragCancelled = false
+    @FocusState private var scrubFocused: Bool
     @GestureState private var contact = false
     @State private var editing = false
     @State private var inlineMeasure = ""
     @Environment(\.isEnabled) private var enabled
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var slider: Bool { control["kind"].string == "slider" }
+    private var compactPanel: Bool { panel && slider && !inline && !valueOnly && toolbar == nil }
     private var key: String { identifier.isEmpty ? label : identifier }
 
     var body: some View {
@@ -53,7 +59,22 @@ struct NumberControl: View {
                     else { valueButton }
                 }
             }
-            else {
+            else if compactPanel {
+                ZStack {
+                    Text(label).lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading).frame(height: 20)
+                        .padding(.leading, 6).padding(.trailing, 88)
+                        .modifier(NumberControlMeasurement(id: key + ":label"))
+                        .onTapGesture(count: 2, perform: resetValue)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                    sliderTrack.padding(.leading, 36).padding(.trailing, 88)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                    Group {
+                        if showsEntry || field.dirty { numericEntry }
+                        else { valueButton }
+                    }.frame(width: 80).frame(maxWidth: .infinity, alignment: .trailing)
+                }.frame(height: 36).modifier(NumberControlMeasurement(id: key + ":header"))
+            } else {
                 HStack(spacing: 6) {
                     Text(label).lineLimit(1).truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
@@ -71,7 +92,7 @@ struct NumberControl: View {
                     }
                 }.modifier(NumberControlMeasurement(id: key + ":header"))
             }
-            if slider && !valueOnly && !inline {
+            if slider && !valueOnly && !inline && !compactPanel && toolbar == nil {
                 HStack(spacing: 6) {
                     stepButton(-1)
                     sliderTrack
@@ -90,7 +111,7 @@ struct NumberControl: View {
         .onChange(of: value) { _, next in field.receive(next); format(); registerAdmission?(key, admit) }
         .onChange(of: presentedText) { _, _ in format() }
         .onChange(of: control.stableKey) { _, _ in registerAdmission?(key, admit) }
-        .onChange(of: contact) { _, active in if !active { cancelDrag() } }
+        .onChange(of: contact) { _, active in if !active { cancelDrag(); valueDragCancelled = false } }
         .onChange(of: enabled) { _, active in if !active { cancelDrag() } }
         .onDisappear { registerAdmission?(key, nil); cancelDrag() }
         .onChange(of: editing) { _, focused in
@@ -99,11 +120,21 @@ struct NumberControl: View {
             } else if commit() { showsEntry = false; format() }
         }
     }
-    private var valueButton: some View {
+    @ViewBuilder private var valueButton: some View {
+        if compactPanel {
+            valueReadout.focusable().focusEffectDisabled().focused($scrubFocused)
+                .highPriorityGesture(valueDrag)
+                .onKeyPress(.escape) {
+                    guard valueOrigin != nil else { return .ignored }
+                    cancelDrag(); return .handled
+                }
+        } else { valueReadout }
+    }
+    private var valueReadout: some View {
         Button { showsEntry = true } label: {
-            Text(formatted["text"].string).monospacedDigit()
-                .frame(maxWidth: inline || valueOnly || toolbar != nil ? .infinity : nil, alignment: valueOnly ? .center : .trailing)
-                .padding(.horizontal, 6).frame(height: 24)
+            Text(formatted[valueOrigin == nil ? "text" : "scrub_text"].string).monospacedDigit().lineLimit(1)
+                .frame(maxWidth: compactPanel || inline || valueOnly || toolbar != nil ? .infinity : nil, alignment: valueOnly ? .center : .trailing)
+                .padding(.horizontal, 6).frame(height: compactPanel ? 34 : 24)
         }.buttonStyle(EditorControlButtonStyle()).opacity(enabled ? 1 : 0.36)
             // An asynchronous rejection can arrive after text entry closes.
             // Keep compact errors visible without expanding the layer header.
@@ -141,7 +172,7 @@ struct NumberControl: View {
                     if horizontalDrag == true { position(event.location.x / max(1, geometry.size.width), phase: "up") }
                     horizontalDrag = nil
                 }.exclusively(before: SpatialTapGesture().onEnded { tap in position(tap.location.x / max(1, geometry.size.width)) }))
-        }.frame(height: 24).modifier(NumberControlMeasurement(id: key + ":track"))
+        }.frame(height: compactPanel ? 16 : 24).modifier(NumberControlMeasurement(id: key + ":track"))
             .accessibilityElement().accessibilityLabel(label)
             .accessibilityValue(formatted["text"].string)
             .accessibilityAdjustableAction { direction in
@@ -159,8 +190,8 @@ struct NumberControl: View {
             color: palette["text"], identifier: "number-entry-" + key,
             submit: finish, cancel: cancel, step: step)
             .focusedValue(\.editorTextCommit, { _ = commit() })
-            .frame(width: valueOnly || inline || toolbar != nil ? nil : slider ? 80 : entryWidth)
-            .padding(.horizontal, 6).frame(height: valueOnly || slider ? 24 : 32)
+            .frame(width: valueOnly || inline || toolbar != nil ? nil : compactPanel ? 68 : slider ? 80 : entryWidth)
+            .padding(.horizontal, 6).frame(height: compactPanel ? 34 : valueOnly || slider ? 24 : 32)
             .background(palette["input"], in: SquircleShape.control)
             .modifier(NumberControlMeasurement(id: key + ":entry"))
             .accessibilityHint(field.error ?? "")
@@ -230,8 +261,48 @@ struct NumberControl: View {
         _ = resolve(["type": "step", "steps": direction])
     }
     private func cancelDrag() {
+        if valueOrigin != nil { valueDragCancelled = true; settleValueDrag(cancel: true) }
         if horizontalDrag == true { gestureChange?("cancel", field.value) { field.error = $0 } }
         horizontalDrag = nil
+    }
+    private var valueDrag: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .global)
+            .updating($contact) { _, active, _ in active = true }
+            .onChanged { event in
+                guard enabled, !valueDragCancelled else { return }
+                if valueOrigin == nil {
+                    guard commit() else { valueDragCancelled = true; return }
+                    valueOrigin = field.value; scrubFocused = true
+                    gestureChange?("down", field.value) { field.error = $0 }
+                }
+                if let origin = valueOrigin {
+                    _ = resolve(["type": "scrub", "origin": origin, "pixels": -Double(event.translation.height)], phase: "move")
+                }
+            }.onEnded { event in
+                if let origin = valueOrigin, !valueDragCancelled {
+                    _ = resolve(["type": "scrub", "origin": origin, "pixels": -Double(event.translation.height)], phase: "up")
+                    valueOrigin = nil; format()
+                }
+                valueDragCancelled = false
+            }
+    }
+    private func settleValueDrag(cancel: Bool) {
+        guard let origin = valueOrigin else { return }
+        valueOrigin = nil
+        if cancel {
+            if let gestureChange { gestureChange("cancel", origin) { field.error = $0 } }
+            else if Float(origin) != Float(field.value) {
+                let token = field.submit(origin)
+                change(origin) { error in field.complete(token, error: error); format() }
+            }
+        }
+        format()
+    }
+    private func resetValue() {
+        guard enabled else { return }
+        cancelDrag(); cancel()
+        if let reset { reset() }
+        else if !control["default_value"].isNull { _ = resolve(["type": "expression", "text": ""]) }
     }
     private func position(_ position: Double, phase: String? = nil) {
         guard enabled else { return }

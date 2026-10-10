@@ -235,7 +235,7 @@ extension XCTestCase {
             begin()
             editTransform("width", "50", in: app); editTransform("height", "25", in: app)
             expectInk([false, true, true, false, false])
-            editTransform("angle", "90", in: app); expectTransform("angle", "90.0 °", in: app)
+            editTransform("angle", "90", in: app); expectTransform("angle", "90 °", in: app)
             let rotated = [false, true, false, true, false]
             expectInk(rotated)
             attachEditor(in: app, name: apply ? "rotation-before-apply" : "rotation-before-cancel")
@@ -353,7 +353,7 @@ extension XCTestCase {
         XCTAssertLessThanOrEqual(scroll.frame.maxY, keyboard.frame.minY)
         #endif
         entry.typeText("\n")
-        expectTransform("angle", "15.0 °", in: app)
+        expectTransform("angle", "15 °", in: app)
         attachEditor(in: app, name: "angle-after-edit")
         XCTAssertTrue(scroll.frame.contains(angle.frame), "The edited Angle control must remain visible after Return")
         XCTAssertEqual(canvas.frame, canvasFrame, "Closing the keyboard must preserve the canvas bounds")

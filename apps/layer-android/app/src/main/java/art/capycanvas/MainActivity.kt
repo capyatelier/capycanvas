@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         host.shaderInput()
         if (host.textComposition.owns(event)) return super.dispatchKeyEvent(event)
+        if (host.numberKeyHandler?.invoke(event) == true) return true
         host.colorKeyHandler?.let { return it(event) || super.dispatchKeyEvent(event) }
         if (host.headerKeyHandler?.invoke(event) == true) return true
         host.menuKeyHandler?.let { return it(event) || super.dispatchKeyEvent(event) }
@@ -187,6 +188,7 @@ internal fun CanvasHost.claimsDeviceKey(event: KeyEvent): Boolean {
 /** Both the Activity and native dialog windows forward the same key schema. */
 internal fun CanvasHost.key(event: KeyEvent) {
     if (textComposition.owns(event)) return
+    if (numberKeyHandler?.invoke(event) == true) return
     if (pointControlFocus != null && (event.action == KeyEvent.ACTION_UP || !(event.isCtrlPressed || event.isMetaPressed || event.isAltPressed))
         && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
             KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL, KeyEvent.KEYCODE_ESCAPE)) return

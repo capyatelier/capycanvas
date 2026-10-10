@@ -181,10 +181,11 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 else if(kind==L"histogram"||kind==L"waveform")content.Children().Append(CapyScopes::ScopePanel(data,bindings,kind==L"waveform"));
                 else if(kind==L"brush_size"||kind==L"brush_opacity"){
                     bool size=kind==L"brush_size";
+                    NumberPresentation presentation;presentation.reset=[data=data,size]{data->dispatch(O({{L"type",S(L"reset_tool_setting")},{L"id",S(size?L"size":L"opacity")}}));};
                     content.Children().Append(number(data,size?L"Brush size":L"Brush opacity",
                         object(data->catalog,size?L"brush_size":L"opacity"),
                         [brushValue,size]{return brushValue(size?L"diameter":L"opacity");},
-                        [data=data,size](double value){data->dispatch(O({{L"type",S(size?L"set_brush_size":L"set_brush_opacity")},{L"value",N(value)}}));},bindings));
+                        [data=data,size](double value){data->dispatch(O({{L"type",S(size?L"set_brush_size":L"set_brush_opacity")},{L"value",N(value)}}));},bindings,nullptr,false,L"",false,presentation));
                 }else if(kind==L"brush_color"){
                     content.Children().Append(ColorPanel(data,bindings));
                 }else if(kind==L"layer_opacity"){

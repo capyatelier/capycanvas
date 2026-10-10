@@ -99,7 +99,7 @@ internal class SizePanelActions(private val dispatch: (JSONObject) -> Unit, priv
     val host = LocalCanvasHost.current
     val register = remember(actions) { { owner: Any, commit: ((Boolean) -> Boolean)? -> actions.register(owner, commit) } }
     key(control.toString()) {
-        NumericSetting(label, value, control, settings = true, id = id,
+        NumericSetting(label, value, control, id = id,
             registerCommit = register,
             onText = { text -> if (text.composition == null) typedValue(control, value, text.text, host.languageTag)?.takeIf { it != value }?.let { actions.send(obj("op" to op, "value" to it)) } }) {
             actions.send(obj("op" to op, "value" to it))

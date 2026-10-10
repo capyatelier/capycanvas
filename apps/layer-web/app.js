@@ -137,9 +137,9 @@ function button(text, action, className = "") {
   node.addEventListener("click", action);
   return node;
 }
-function numberField(control, label, onChange, inline = false, valueOnly = false) {
+function numberField(control, label, onChange, inline = false, valueOnly = false, panel = true) {
   const read = typeof label === "function" ? label : null;
-  const number = createNumberField({ control, label:read ? read() : label, labels:next => app.numeric_labels(next), onChange, inline, valueOnly, icon, resolve: request => app.number_input(request), errorCaption: reason => app.native_caption({type:"numeric_error",reason}) });
+  const number = createNumberField({ control, label:read ? read() : label, labels:next => app.numeric_labels(next), onChange, inline, valueOnly, panel, icon, resolve: request => app.number_input(request), errorCaption: reason => app.native_caption({type:"numeric_error",reason}) });
   if(read){Object.defineProperty(number,"localizedLabel",{set:next=>number.relabel(next)});bindCopy(number,read,"localizedLabel");}
   return number;
 }
@@ -839,6 +839,7 @@ function buildPanels() {
   const controls = element("div", "size-controls");
   controls.dataset.control = "brush_size";
   const size = numberField(catalog.brush_size, catalog.native_copy.color.brush_size, value => dispatch({ type: "set_brush_size", value }));
+  size.onReset = () => dispatch({ type: "reset_tool_setting", id: "size" });
   size.id = "size-number"; controls.append(size);
   const grid = brushSizeGrid({ app, catalog, state: () => state, dispatch, element, button });
   grid.dataset.control = "size_presets";

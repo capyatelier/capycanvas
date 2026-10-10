@@ -117,12 +117,12 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
             auto captured=std::make_shared<bool>(false);NumberPresentation presentation;presentation.title=property->label().current;
             presentation.identity=[weak=std::weak_ptr<Property>(property)]{if(auto current=weak.lock())return current->identity();return hstring();};
             presentation.phase=[property,captured](hstring const& phase,double v){*captured=phase==L"down";property->action(property->setting(N(v)),phase);};
-            bool inlineTrack=str(object(kind,L"numeric"),L"kind")==L"slider";
+            presentation.reset=[property]{property->reset();};
             auto field=number(data,name,object(kind,L"numeric"),
                 [property]{return num(object(property->model(),L"value"),L"value");},
                 [property,captured](double v){property->action(property->setting(N(v)),*captured?L"move":L"");},
-                bindings,nullptr,false,property->id(),inlineTrack,presentation);
-            return inlineTrack?FrameworkElement(propertyRow(property,field,bindings)):FrameworkElement(field);
+                bindings,nullptr,false,property->id(),false,presentation);
+            return field;
         }
         if(type==L"choice"){
             ComboBox choices;choices.MinWidth(0);choices.MinHeight(32);choices.Height(32);
@@ -243,7 +243,7 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
         AutomationProperties::SetAutomationId(box,id);box.Visibility(Visibility::Collapsed);
     }
     explicit PropertiesView(std::shared_ptr<WorkspaceData> source):data(std::move(source)){
-        root.Spacing(6);body.Spacing(6);title=label(data,L"",true);
+        root.Spacing(6);body.Spacing(2);title=label(data,L"",true);
         title.TextTrimming(TextTrimming::CharacterEllipsis);
         AutomationProperties::SetAutomationId(title,L"properties-layer-name");
         layerType=label(data,L"");layerType.Opacity(.55);layerType.TextTrimming(TextTrimming::CharacterEllipsis);layerType.VerticalAlignment(VerticalAlignment::Center);

@@ -143,7 +143,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
 | Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 58.85–60.02 Hz, maximum p99 33.328 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
 | Colour wheel or picker drag | 60 | **Unqualified.** Committed-wheel diagnostic: mouse 48.24–51.16 UI Hz, touch 52.80–54.39; maximum p99 49.98 ms (2048 × 1536) | [Live paint icon diagnostic](#live-paint-icon-diagnostic) below |
-| Slider and value scrub: size, opacity, flow | 60 | Unmeasured on reference hardware; GTK workstation diagnostic does not qualify this tier | [GTK panel slider diagnostic](top-tier.md#gtk-panel-slider-diagnostic), 2026-10-10 |
+| Slider and value scrub: size, opacity, flow | 60 | Unmeasured on reference hardware; GTK/Web workstation diagnostics do not qualify this tier | [GTK panel slider diagnostic](top-tier.md#gtk-panel-slider-diagnostic), 2026-10-10 |
 | Canvas action bar show, hide and move | 60 | **Not met.** UI frame p50/p95: 32.9/41.7 ms moving the bar, 11.6/21.0 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
 | Tool Options or panel content change | 60 | **Not met.** UI frame p50/p95 25.4/35.3 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 60 | | |

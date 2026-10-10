@@ -766,7 +766,7 @@ private struct ToolbarNumberField: View {
                 .accessibilityIdentifier("toolbar-setting-" + id)
                 .editorPopover(isPresented: $open, placement: .inward) {
                     NumberControl(store: store, label: field["label"].string, value: value, control: control,
-                        identifier: "toolbar-popover-" + id) { next, completion in change(next, completion) }
+                        identifier: "toolbar-popover-" + id, reset: { edit(["type": "reset_tool_setting", "id": id], { _ in }) }) { next, completion in change(next, completion) }
                         .padding(10).frame(width: 240)
                 }
         } else {

@@ -688,7 +688,6 @@ impl Component {
                     else {
                         return;
                     };
-                    if field.numeric.position_matches_value(scale.value(), field.value as f64) { return; }
                     let Ok(value) = field.numeric.resolve(
                         field.value as f64,
                         NumericOperation::Position {

@@ -211,6 +211,35 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
         await click(`${selector('colorize')} input[type=checkbox]`);await page('reds');
         for(const c of retained)if(c.key.startsWith('reds_'))assert.deepEqual(await value(c.key),c.value);
         if(motion) {
+          const field=selector('reds_hue'),origin=(await value('reds_hue')).value;
+          const geometry=await evaluate(`(()=>{const n=document.querySelector('${field}'),r=n.getBoundingClientRect(),t=n.slider.getBoundingClientRect();return {panel:n.panel,height:r.height,steps:n.querySelectorAll('.number-step').length,left:t.left-r.left,right:r.right-t.right,thumb:getComputedStyle(n.slider).getPropertyValue('--thumb-size')}})()`);
+          assert.equal(geometry.panel,true);assert.equal(geometry.height,36);assert.equal(geometry.steps,0);assert.equal(geometry.left,36);assert.equal(geometry.right,88);assert.equal(geometry.thumb.trim(),'0px');
+          await click(`${field} .number-value`);
+          const editor=await evaluate(`(()=>{const n=document.querySelector('${field}'),e=n.entry.getBoundingClientRect(),t=n.slider.getBoundingClientRect();return {width:e.width,height:e.height,gap:e.left-t.right}})()`);
+          assert.equal(editor.width,80);assert.equal(editor.height,34);assert.equal(editor.gap,8);await key('Escape',27);
+          for(const device of ['mouse','pen','touch'])for(const cancel of [false,true]) {
+            const p=await evaluate(`(()=>{const n=document.querySelector('${field} .number-value');n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`),end={x:p.x,y:p.y-9};
+            const contact=async(type,point)=>device==='touch'?call('Input.dispatchTouchEvent',{type,touchPoints:type==='touchEnd'||type==='touchCancel'?[]:[{id:1,...point}]}):call('Input.dispatchMouseEvent',{type,...point,pointerType:device,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,force:.7});
+            await contact(device==='touch'?'touchStart':'mousePressed',p);await contact(device==='touch'?'touchMove':'mouseMoved',{x:p.x,y:p.y-8});await settle();
+            assert.match(await evaluate(`document.querySelector('${field} .number-value').textContent`),/29\.0/,'Scrub keeps decimal width for whole values');
+            await contact(device==='touch'?'touchMove':'mouseMoved',end);await settle();
+            assert.ok(Math.abs((await value('reds_hue')).value-origin-2.3)<1e-5,`${device} fine vertical scrub`);
+            assert.match(await evaluate(`document.querySelector('${field} .number-value').textContent`),/29\.3/);
+            if(cancel&&device!=='touch')await key('Escape',27);
+            await contact(device==='touch'?(cancel?'touchCancel':'touchEnd'):'mouseReleased',end);await settle();
+            if(cancel)assert.equal((await value('reds_hue')).value,origin,`${device} cancellation restores exact origin`);
+            else {await invoke('undo');assert.equal((await value('reds_hue')).value,origin,`${device} scrub makes one Undo`);}
+          }
+          for(const device of ['mouse','pen','touch']) {
+            const p=await evaluate(`(()=>{const r=document.querySelector('${field} .number-slider').getBoundingClientRect();return{x:r.x+r.width*.543,y:r.y+r.height/2}})()`);
+            if(device==='touch'){await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...p}]});await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
+            else for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,pointerType:device,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1,force:.7});
+            await settle();assert.equal((await value('reds_hue')).value,15,`${device} slider snaps degrees to integers`);await invoke('undo');assert.equal((await value('reds_hue')).value,origin,`${device} slider makes one Undo`);
+          }
+          const title=await evaluate(`(()=>{const r=document.querySelector('${field} .number-title').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+          for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...title,button:'left',buttons:type==='mousePressed'?1:0,clickCount:2});await settle();assert.equal((await value('reds_hue')).value,0);await invoke('undo');assert.equal((await value('reds_hue')).value,origin);
+        }
+        if(motion) {
           const before=await value('reds_hue'),slider=`${selector('reds_hue')} .number-slider`;
           const box=await evaluate(`(()=>{const n=document.querySelector('${slider}');n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x,y:r.y+r.height/2,width:r.width}})()`);
           await evaluate(`window.pointwiseMotion={frames:[],frame:layerApp.app.frame.bind(layerApp.app)};layerApp.app.frame=(...args)=>{const t=performance.now();try{return pointwiseMotion.frame(...args)}finally{pointwiseMotion.frames.push([args[0],t,performance.now()-t])}};`);

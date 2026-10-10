@@ -131,7 +131,7 @@ import kotlinx.coroutines.withContext
     val modes = setOf("selection_new", "selection_add", "selection_subtract", "selection_intersect")
     val actions = state.array("tool_actions").objects()
     val commands = state.array("commands").let { list -> remember(list) { list.objects().associateBy { it.getString("id") } } }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         if (actions.any { it.getString("command") in modes }) Row(Modifier.fillMaxWidth().clip(ControlShape).border(1.dp, LocalPalette.current.divider, ControlShape).selectableGroup().testTag("selection-mode-row")) {
             actions.filter { it.getString("command") in modes }.forEach { action ->
                 val id = action.getString("command")
@@ -154,6 +154,7 @@ import kotlinx.coroutines.withContext
             ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool", height = 32f)
         }
         state.array("tool_extra").objects().mapNotNull {it.optJSONObject("Gradient")}.forEach {GradientControl(host,it)}
+        val generation = state.optLong("toolbar_context_generation")
         val fieldControl: @Composable (JSONObject, Boolean) -> Unit = { field, compact ->
             val id = field.getString("id")
             Box(Modifier.testTag("tool-setting-$id")) {
@@ -162,8 +163,9 @@ import kotlinx.coroutines.withContext
                     NumericSetting(field.getString("label"), field.number("value"), field.getJSONObject("numeric"), id = id, inline = true, showSlider = false) {
                         host.dispatch(obj("type" to "set_tool_setting", "id" to id, "value" to it))
                     }
-                } else NumericSetting(field.getString("label"), field.number("value"), field.getJSONObject("numeric"), id = id) {
-                    host.dispatch(obj("type" to "set_tool_setting", "id" to id, "value" to it))
+                } else NumericSetting(field.getString("label"), field.number("value"), field.getJSONObject("numeric"), id = id,
+                    onReset = { if (host.snapshot?.getJSONObject("state")?.optLong("toolbar_context_generation") == generation) host.dispatch(obj("type" to "reset_tool_setting", "id" to id)) }) {
+                    if (host.snapshot?.getJSONObject("state")?.optLong("toolbar_context_generation") == generation) host.dispatch(obj("type" to "set_tool_setting", "id" to id, "value" to it))
                 }
             }
         }

@@ -257,9 +257,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             StackPanel content;content.Width(280);content.Spacing(12);
             content.Children().Append(label(data,next==L"brush_color"?L"Brush color":L"Brush opacity",true));
             if(next==L"brush_opacity"){
+                NumberPresentation presentation;presentation.reset=[data=data]{data->dispatch(O({{L"type",S(L"reset_tool_setting")},{L"id",S(L"opacity")}}));};
                 content.Children().Append(number(data,L"Opacity",object(data->catalog,L"opacity"),
                     [data=data]{return num(object(data->state,L"brush"),L"opacity");},
-                    [data=data](double value){data->dispatch(O({{L"type",S(L"set_brush_opacity")},{L"value",N(value)}}));},popupBindings));
+                    [data=data](double value){data->dispatch(O({{L"type",S(L"set_brush_opacity")},{L"value",N(value)}}));},popupBindings,nullptr,false,L"",false,presentation));
             }else if(next==L"brush_color"){
                 content.Children().Append(ColorPanel(data,popupBindings));
             }

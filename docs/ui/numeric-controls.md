@@ -8,7 +8,7 @@ Every host shares the same numeric policy and editable values.
   uses `GtkSpinButton` in panels and `AdwSpinRow` in Preferences.
 - Wider integers and continuous values: label left and a plain, tappable value
   right; a native slider underneath. Tapping the value enters text editing.
-  GTK panel values also accept vertical mouse, touch and pen drags for fine
+  Panel values also accept vertical mouse, touch and pen drags for fine
   adjustment: up increases, down decreases, and four logical pixels equal one
   field step. Escape or native cancellation restores the starting value.
   Edit Color numbers adjust by vertical drag without a slider
@@ -19,7 +19,7 @@ Every host shares the same numeric policy and editable values.
   Android uses 48 dp settings targets; GTK and web use 32-pixel settings tracks.
 - Titles stay on one line with ellipsis (desktop/web hover shows the full name).
   Values align right and center against the full title/description block.
-  GTK stacked panel sliders sit just below the text, within a 36-pixel control.
+  Stacked panel sliders sit just below the text, within a 36-pixel control.
   The 4-pixel track has a symmetric 16-pixel hit area starting just below the
   visible bottom of the label. Its left inset is 36 pixels; its fixed 88-pixel
   right inset reserves room for ordinary values and units. Panels have no step
@@ -33,9 +33,9 @@ Every host shares the same numeric policy and editable values.
   Ordinary size, export and preview dialogs and brush value popovers use this
   same presentation. Layers opacity, toolbar tiles, view readouts, Curves point
   coordinates, tonal ranges and color controls keep their specialized layouts.
-  Other hosts retain a 24-pixel value row above a matching 24-pixel track/button
-  row with minus and plus at its ends and no visible thumb (dp on Android).
-  There is a 6-pixel gap between each step button and the bar.
+  GTK, Web, Android, Windows, macOS and iPadOS share this panel geometry
+  (logical pixels, dp on Android). Preferences retain step buttons and larger
+  targets.
   Panel fill is a theme-aware grey halfway between
   panel background and text. Settings keep larger targets, accent fill and a
   visible thumb. Their values/editors use standard Adwaita input sizing (34px
@@ -74,7 +74,7 @@ Percentages keep tenths within five percentage points of either soft-range edge
 and snap to whole percentages elsewhere. Angles snap to whole degrees.
 Other units retain their declared resolution; whole-count fields stay integers.
 Text entry and fine scrubbing retain fractional values independently of slider
-snapping. Settled readouts omit trailing fractional zeroes. GTK value drags use
+snapping. Settled readouts omit trailing fractional zeroes. Panel value drags use
 the shared fixed-decimal `scrub_text` until release or cancellation, then restore
 the settled readout without changing the value. Compact readouts keep at most
 one fractional digit, including for large pixel values.
@@ -103,7 +103,9 @@ context. Storage preserves typed numeric detail until the shared UI presents it.
 
 GTK calls the policy directly; web uses `WebApp.number_input`; Android uses
 the stateless `Native.number` JNI call, Apple uses `capy_apple_numeric`, and Windows
-uses `capy_number`. Native numeric callers retain the prepared launch language
+uses `capy_number`. Unchanged slider positions preserve fine text/scrub values
+and authored values beyond the soft range in Rust, including f32 model echoes.
+Native numeric callers retain the prepared launch language
 context; they do not select a language for each request. No GPU handle/lock or UI-state snapshot
 is needed to evaluate a number. Hosts own native focus, gesture capture,
 unfinished text and transient display state only.
@@ -118,8 +120,10 @@ A property scrub uses the existing shared gesture transaction: press begins a
 preview, release commits one undo step, and cancellation restores the original
 value and redo history. Hosts keep the gesture open through native release
 handling. Unchanged model publications preserve unfinished text and focus.
-GTK value drags measure native surface coordinates so focus scrolling does not
-change the fine adjustment distance.
+Panel value drags measure native surface coordinates so focus scrolling does not
+change the fine adjustment distance. Native keyboard routing retains the active
+readout contact so Escape can cancel before release. Losing contact, retiring
+the control or disabling it also cancels the preview.
 
 Curves keeps Input and Output in place, blank and disabled until a point is
 selected, so selecting a point does not move the graph. Encoded RGB
@@ -177,8 +181,9 @@ the channel-corrected input before master; individual pages display their input
 before correction. Curves uses its selected Encoded RGB or Log HDR domain.
 Statistics updates retain numerical drafts and focus. The same
 [calibration controls](color-picker.md#levels-and-curves) serve both adjustments.
-These hosts keep channel selection and actions in one row and place number fields
-beside their labels. Curves puts Input and Output in two equal columns below
+These hosts keep channel selection and actions in one row and use compact panel
+sliders for ordinary number fields. Curves puts Input and Output in two equal
+columns below
 its graph, with labels above the fields so translations fit a narrow panel.
 Reset and clipping buttons share the status row. Unfinished numbers keep
 their editor and focus when statistics or the selected graph point changes.
@@ -191,7 +196,7 @@ statistics; changes below the adjustment update them.
 review sheet to `artifacts/ui/numeric/`. `native_slider_feedback` sweeps brush
 size forward and back through the GTK session: model refreshes do not emit
 edits, and deferred GTK range changes compare values at the core's numeric
-fine resolution before slider snapping, avoiding f64/f32 rounding loops and
+fine resolution in Rust before slider snapping, avoiding f64/f32 rounding loops and
 preserving fractional text/scrub values and values beyond the soft bounds.
 `native_panel_slider_input` checks
 native drags along both vertical edges of the panel slider hit area, value
@@ -214,11 +219,16 @@ resolved slider, scrub and expression values to whole-pixel region/refinement
 controls, preserving their integer admission rules.
 Android instrumented tests cover
 native editing, expression evaluation, slider geometry and settings input
-isolation. `native_numeric_preedit_guard` covers both GTK widget branches and
+isolation. `panelValuesScrubFineAndCancelAcrossContacts` and
+`propertyValueScrubsHaveOneUndoAcrossContacts` cover mouse, touch and pen value
+drags in both themes, fixed decimals, native cancellation and property history.
+`native_numeric_preedit_guard` covers both GTK widget branches and
 step buttons using native preedit signals; actual IME journeys remain separate.
 `native_numeric_size_apply_refuses_uncommitted_text` checks Canvas Size and Image
 Size Apply in both themes, including refusal without document edits.
-Web's `--curves` journey covers graph contacts, page changes, exact readouts and
+Web's `--pointwise-effects` journey checks compact panel geometry, editor
+clearance, value scrubbing and label reset. Its `--curves` journey covers graph
+contacts, page changes, exact readouts and
 numeric cancellation. Android's
 `AndroidHostTest#curvesPagesNativeContactsAndExactCoordinates` exercises native
 contacts and history; `AndroidTextCompositionTest#curveCoordinatesKeepNativeCompositionAndUnchangedPrecision`

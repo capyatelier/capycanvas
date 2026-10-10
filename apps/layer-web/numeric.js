@@ -1,7 +1,7 @@
 import { composingKey } from "./text-input.js";
 // Native text/range controls around Rust's numeric policy. No expression,
 // range-mapping, unit-formatting or rounding rules are duplicated here.
-export function createNumberField({ control, label, labels: captions, resolve, errorCaption, onChange, icon, inline = false, widthSamples, valueOnly = false }) {
+export function createNumberField({ control, label, labels: captions, resolve, errorCaption, onChange, icon, inline = false, widthSamples, valueOnly = false, panel = true }) {
   const node = (tag, cls) => { const el = document.createElement(tag); el.className = cls; return el; };
   const initialCaptions = typeof captions === "function" ? captions(label) : captions;
   const root = node("div", `number-control number-${control.kind}`);
@@ -24,8 +24,10 @@ export function createNumberField({ control, label, labels: captions, resolve, e
   };
   const minus = step(-1, "minus", initialCaptions.decrease), plus = step(1, "plus", initialCaptions.increase);
   const ranged = control.kind === "slider";
+  panel = panel && ranged && !inline && !valueOnly;
+  if (panel) root.classList.add('number-panel');
   const buttonValue = ranged || valueOnly;
-  if (ranged) { track.append(minus, slider, plus); root.append(track); }
+  if (ranged) { if (panel) track.append(slider); else track.append(minus, slider, plus); root.append(track); }
   else { valueBox.classList.add("number-spin"); valueBox.append(minus, plus); }
   if (inline) {
     root.classList.add("number-inline"); root.title = label;
@@ -38,6 +40,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     if (valueOnly) { root.classList.add('number-value-only'); entry.size = 1; }
   }
   let value = control.min, display, presented, editing = false, disabled = false, errorReason = null;
+  let scrub = null, scrubbing = false, suppressClick = false, disposed = false;
   let gesture = false, cancelled = false, heldKey, releaseTimer, releasePointer;
   const finishGesture = (phase = 'up') => {
     clearTimeout(releaseTimer); releaseTimer = null;
@@ -47,11 +50,11 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     gesture = cancelled = false; heldKey = null;
     if(active)root.onEditPhase?.(phase);
   };
-  const blurGesture = () => finishGesture();
+  const blurGesture = () => scrub ? finishScrub(true) : finishGesture();
   const beginGesture = () => {
     if(releaseTimer)finishGesture();
-    if(!root.onEditPhase || disabled || gesture)return;
-    gesture = true;root.onEditPhase('down');window.addEventListener('blur',blurGesture);
+    if(disabled || gesture)return;
+    gesture = true;root.onEditPhase?.('down');window.addEventListener('blur',blurGesture);
   };
   root.addEventListener('pointerdown', e => {
     if(e.button || !(e.target===slider || e.target.closest('.number-step')))return;
@@ -70,6 +73,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     if(composingKey(e))return;
     if(e.key==='Escape'&&gesture){
       e.preventDefault();e.stopPropagation();
+      if(scrub){finishScrub(true);return;}
       if(!cancelled){root.onEditPhase?.('cancel');cancelled=true;}finish(true);return;
     }
     if((e.target===entry&&['ArrowUp','ArrowDown'].includes(e.key)) || (e.target===slider&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','PageUp','PageDown','Home','End'].includes(e.key))){
@@ -78,9 +82,9 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     }
   },true);
   root.addEventListener('keyup',e=>{if(e.key===heldKey)finishGesture();},true);
-  root.addEventListener('focusout',e=>{if(gesture&&!root.contains(e.relatedTarget))finishGesture();});
+  root.addEventListener('focusout',e=>{if(gesture&&!root.contains(e.relatedTarget)){if(scrub)finishScrub(true);else finishGesture();}});
   function show(next) {
-    value = next.value; display = next; valueButton.textContent = next.text;
+    value = next.value; display = next; valueButton.textContent = scrubbing ? next.scrub_text : next.text;
     if (valueOnly) valueBox.querySelector('.number-measure').textContent = next.text;
     if (!editing) entry.value = ranged ? next.edit : next.text;
     entry.setAttribute("aria-valuenow", value * control.scale);
@@ -92,7 +96,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     errorReason = null;root.classList.remove("error");entry.removeAttribute("aria-invalid");entry.title = "";
   }
   function apply(operation) {
-    if(cancelled)return true;
+    if(cancelled || disposed)return true;
     if(operation.type==='expression' && presented!=null && operation.text===presented){clearError();return true;}
     try {
       const next = resolve({ control, value, operation });
@@ -118,7 +122,43 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     if (buttonValue) { entry.hidden = true; valueButton.hidden = false; }
     return true;
   }
-  valueButton.addEventListener("click", begin);
+  valueButton.addEventListener("click", e => { if(suppressClick){suppressClick=false;e.preventDefault();}else begin(); });
+  function finishScrub(cancel = false) {
+    const contact = scrub;if(!contact)return;
+    scrub = null;scrubbing = false;suppressClick = contact.moved;
+    if(contact.moved){
+      if(cancel){
+        value = contact.origin;
+        if(root.onEditPhase)finishGesture('cancel');else if(!disposed)onChange(value);
+      }else finishGesture();
+      root.format();
+    }
+    if(valueButton.hasPointerCapture(contact.id))valueButton.releasePointerCapture(contact.id);
+  }
+  if(panel){
+    valueButton.addEventListener('pointerdown',e=>{
+      if(e.button || disabled || scrub || !finish())return;
+      suppressClick=false;scrub={id:e.pointerId,y:e.clientY,origin:value,moved:false};
+      valueButton.setPointerCapture(e.pointerId);
+    });
+    valueButton.addEventListener('pointermove',e=>{
+      if(scrub?.id!==e.pointerId)return;
+      const pixels=scrub.y-e.clientY;
+      if(!scrub.moved && Math.abs(pixels)<6)return;
+      if(!scrub.moved){scrub.moved=true;scrubbing=true;beginGesture();}
+      e.preventDefault();apply({type:'scrub',origin:scrub.origin,pixels});
+    });
+    valueButton.addEventListener('pointerup',e=>{
+      if(scrub?.id!==e.pointerId)return;
+      if(scrub.moved)apply({type:'scrub',origin:scrub.origin,pixels:scrub.y-e.clientY});
+      finishScrub();
+    });
+    for(const type of ['pointercancel','lostpointercapture'])valueButton.addEventListener(type,()=>finishScrub(true));
+    title.addEventListener('dblclick',e=>{
+      if(disabled)return;e.preventDefault();finish(true);
+      if(root.onReset)root.onReset();else if(typeof control.default_value==='number')apply({type:'expression',text:''});
+    });
+  }
   entry.addEventListener("focus", () => { editing = true; });
   entry.addEventListener("input", () => { editing = true; });
   entry.addEventListener("blur", () => finish());
@@ -137,7 +177,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     if(!display || next!==value || text!==presented){presented=text;const result=resolve({control,value:next,operation:{type:'format'}});if(text!=null)result.text=result.edit=text;show(result);}
   };
   root.getValue = () => value;
-  root.setDisabled = next => { if (disabled === next) return; if(next)finishGesture('cancel');disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
+  root.setDisabled = next => { if (disabled === next) return; if(next){finishScrub(true);finishGesture('cancel');}disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
   root.setDescription = text => {
     labels.querySelector('.number-description')?.remove();
     if (text) { const p = node("p", "number-description"); p.textContent = text; labels.append(p); }
@@ -159,10 +199,12 @@ export function createNumberField({ control, label, labels: captions, resolve, e
   root.apply = apply;
   root.cancelEditing = () => finish(true);
   root.commit = () => finish();
-  root.dispose = () => {finishGesture('cancel');finish(true);};
+  root.dispose = () => {disposed=true;finishScrub(true);finishGesture('cancel');finish(true);};
   entry.hidden = buttonValue; valueButton.hidden = !buttonValue;
   if (!ranged) { entry.setAttribute("role", "spinbutton"); entry.setAttribute("aria-valuemin", control.min * control.scale); entry.setAttribute("aria-valuemax", control.max * control.scale); }
   root.update(value);
+  root.panel = panel;
+  if(panel)captureSliderContacts(root);
   return root;
 }
 

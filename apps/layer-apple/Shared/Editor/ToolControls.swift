@@ -125,7 +125,7 @@ struct ToolSettingsControls: View {
         let editingContext = context
         let actions = store.state["tool_actions"].array
         let modes = actions.filter { SelectionModes.commands.contains($0["command"].string) }
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
             if !modes.isEmpty { SelectionModeGroup(store: store, actions: modes) }
             ForEach(store.state["tool_extra"].array.map { $0["Gradient"] }.filter { !$0.isNull }, id: \.["gradient"]["destination"].stableKey) { gradient in
                 GradientEditor(store: store, control: gradient, identifier: "tool-gradient") { action, completion in
@@ -184,7 +184,10 @@ private extension ToolSettingsControls {
     }
     func setting(_ item: JSON, editingContext: String, valueOnly: Bool = false) -> some View {
         NumberControl(store: store, label: item["label"].string, value: item["value"].number,
-            control: item["numeric"], identifier: "tool-" + item.settingID, valueOnly: valueOnly) { value, completion in
+            control: item["numeric"], identifier: "tool-" + item.settingID, valueOnly: valueOnly, reset: {
+                guard editingContext == context else { return }
+                store.edit(["type": "reset_tool_setting", "id": item.settingID]) { _ in }
+            }) { value, completion in
             guard editingContext == context else { completion(nil); return }
             store.edit(["type": "set_tool_setting", "id": item.settingID, "value": value], completion: completion)
         }.id(context + item.settingID + item["label"].string + item["numeric"].stableKey)

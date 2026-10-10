@@ -291,6 +291,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     scrub(number.valueButton); scrub(face);
     face.addEventListener('click', () => {
       editor = createNumberField({ control: field.numeric, label: field.label, labels:next=>app.numeric_labels(next), errorCaption, icon, resolve: request => app.number_input(request), onChange: change });
+      editor.onReset=()=>send(context,{type:'reset_tool_setting',id:field.id});
       editor.update(current); openPopup(face, editor);
     });
     row.append(label, glyph, number, face);

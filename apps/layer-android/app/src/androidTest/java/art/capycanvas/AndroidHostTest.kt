@@ -3280,22 +3280,22 @@ class AndroidHostTest {
     }
 
     @Test fun editorGeometryStaysConsistent() {
+        action(obj("type" to "customize", "action" to obj("type" to "set_control_visible", "panel" to "sizes", "control" to "brush_size", "visible" to true)))
         val toolbar = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }
         val firstTile = toolbar.array("tiles").objects().first().getInt("id")
         compose.onNodeWithTag("tile-toolbar-$firstTile").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
         compose.onNodeWithTag(capyTag()).assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
         compose.onNodeWithTag("tab-name-tool_settings", useUnmergedTree = true).assertTextEquals("Tool")
         compose.onNodeWithTag("tab-sizes").performClick()
-        compose.onNodeWithTag("number-value-Brush size").assertHeightIsEqualTo(24.dp)
-        compose.onNodeWithTag("number-slider-Brush size").assertHeightIsEqualTo(24.dp)
-        val numericSlider = compose.onNodeWithTag("number-slider-Brush size")
-        // Visual spacing excludes Compose's expanded minimum touch targets.
+        val valueNode = compose.onAllNodesWithTag("number-value-Brush size").onFirst()
+        valueNode.assertHeightIsEqualTo(36.dp)
+        val numericSlider = compose.onAllNodesWithTag("number-slider-Brush size").onFirst()
+        numericSlider.assertHeightIsEqualTo(16.dp)
         val rangeBounds = numericSlider.fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
-        val minusBounds = compose.onNodeWithContentDescription("Decrease Brush size").fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
-        val plusBounds = compose.onNodeWithContentDescription("Increase Brush size").fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
-        val gap = with(compose.density) { 6.dp.toPx() }
-        assertEquals(gap, rangeBounds.left - minusBounds.right, 1f)
-        assertEquals(gap, plusBounds.left - rangeBounds.right, 1f)
+        val valueBounds = valueNode.fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
+        val density = compose.activity.resources.displayMetrics.density
+        assertTrue(valueBounds.width <= 80f * density + 1f)
+        assertTrue(valueBounds.left - rangeBounds.right >= 8f * density - 1f)
         numericSlider.performTouchInput { swipe(center, centerRight, 300) }
         waitState { it.getJSONObject("brush").getDouble("diameter") > 1000.0 }
         numericSlider.performTouchInput { swipe(center, centerLeft, 300) }
@@ -3317,19 +3317,121 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-done").performClick()
     }
 
+    private fun numericContact(node: SemanticsNodeInteraction, tool: Int): (Int, Float) -> Unit {
+        val bounds = node.fetchSemanticsNode().boundsInRoot
+        val density = compose.activity.resources.displayMetrics.density
+        val location = IntArray(2)
+        instrumentation.runOnMainSync { compose.activity.window.decorView.getLocationOnScreen(location) }
+        var down = SystemClock.uptimeMillis()
+        return { phase, pixels ->
+            if (phase == MotionEvent.ACTION_DOWN) down = SystemClock.uptimeMillis()
+            val properties = MotionEvent.PointerProperties().apply { id = 0; toolType = tool }
+            val point = MotionEvent.PointerCoords().apply { x = location[0] + bounds.center.x; y = location[1] + bounds.center.y - pixels * density; pressure = .7f }
+            val source = when (tool) { MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE; MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS; else -> InputDevice.SOURCE_TOUCHSCREEN }
+            val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), phase, 1, arrayOf(properties), arrayOf(point), 0, if (tool == MotionEvent.TOOL_TYPE_MOUSE) MotionEvent.BUTTON_PRIMARY else 0, 1f, 1f, 0, 0, source, 0)
+            try {
+                val delivered = instrumentation.uiAutomation.injectInputEvent(event, true)
+                if (phase != MotionEvent.ACTION_CANCEL) assertTrue("tool=$tool phase=$phase point=${point.x},${point.y} bounds=$bounds", delivered)
+            } finally { event.recycle() }
+            SystemClock.sleep(40); compose.waitForIdle()
+        }
+    }
+
+    @Test fun panelValuesScrubFineAndCancelAcrossContacts() {
+        action(obj("type" to "customize", "action" to obj("type" to "set_control_visible", "panel" to "sizes", "control" to "brush_size", "visible" to true)))
+        fun valueNode() = compose.onAllNodesWithTag("number-value-Brush size").onFirst()
+        fun diameter() = state().getJSONObject("brush").getDouble("diameter")
+        action(obj("type" to "reset_tool_setting", "id" to "size"))
+        val defaultSize = diameter()
+        val density = compose.activity.resources.displayMetrics.density
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            compose.onNodeWithTag("tab-sizes").performClick()
+            for (tool in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                action(obj("type" to "set_brush_size", "value" to 42))
+                val send = numericContact(valueNode(), tool)
+                send(MotionEvent.ACTION_CANCEL, 0f)
+                try {
+                    send(MotionEvent.ACTION_DOWN, 0f); send(MotionEvent.ACTION_MOVE, 20f)
+                    waitState { it.getJSONObject("brush").getDouble("diameter") == 47.0 }
+                    send(MotionEvent.ACTION_MOVE, 4f)
+                    waitState { it.getJSONObject("brush").getDouble("diameter") == 43.0 }
+                    valueNode().assertTextEquals("43.0 px")
+                    send(MotionEvent.ACTION_CANCEL, 4f)
+                    waitState { it.getJSONObject("brush").getDouble("diameter") == 42.0 }
+                    send(MotionEvent.ACTION_DOWN, 0f); send(MotionEvent.ACTION_MOVE, 20f); send(MotionEvent.ACTION_UP, 20f)
+                    waitState { it.getJSONObject("brush").getDouble("diameter") == 47.0 }
+                    valueNode().assertTextEquals("47 px")
+                    send(MotionEvent.ACTION_DOWN, 0f); send(MotionEvent.ACTION_MOVE, 20f)
+                    waitState { it.getJSONObject("brush").getDouble("diameter") == 52.0 }
+                    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE)
+                    waitState { it.getJSONObject("brush").getDouble("diameter") == 47.0 }
+                    send(MotionEvent.ACTION_UP, 20f)
+                    valueNode().performClick()
+                    val field = compose.onAllNodesWithTag("number-Brush size").onFirst()
+                    field.performTextReplacement("12345678901234567890 +")
+                    val editor = field.fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
+                    val slider = compose.onAllNodesWithTag("number-slider-Brush size").onFirst().fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
+                    assertTrue(editor.width <= 80f * density + 1f)
+                    assertTrue(editor.left - slider.right >= 8f * density - 1f)
+                    field.performTextReplacement("42.5"); field.performImeAction()
+                    waitState { it.getJSONObject("brush").getDouble("diameter") == 42.5 }
+                    assertEquals(42.5, diameter(), 0.0)
+                    val valueTop = valueNode().fetchSemanticsNode().boundsInRoot.top
+                    val title = compose.onNode(hasText("Brush size") and SemanticsMatcher("numeric row label") { kotlin.math.abs(it.boundsInRoot.top - valueTop) < 4f * density })
+                    title.performTouchInput { doubleClick(androidx.compose.ui.geometry.Offset(24f * density, center.y)) }
+                    waitState { it.getJSONObject("brush").getDouble("diameter") == defaultSize }
+                } finally { send(MotionEvent.ACTION_CANCEL, 0f) }
+            }
+        }
+    }
+
+    @Test fun propertyValueScrubsHaveOneUndoAcrossContacts() {
+        compose.onNodeWithTag("tab-properties").performClick()
+        fun opacity() = state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == "opacity" }.getJSONObject("value").getDouble("value")
+        val layer = state().getJSONObject("layer_properties").getLong("layer")
+        val density = compose.activity.resources.displayMetrics.density
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (tool in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+                action(obj("type" to "effect", "action" to obj("op" to "number", "layer" to layer, "key" to "opacity", "operation" to obj("type" to "value", "value" to .6))))
+                val node = compose.onAllNodesWithTag("number-value-opacity").onLast().performScrollTo()
+                val send = numericContact(node, tool)
+                val before = opacity()
+                send(MotionEvent.ACTION_CANCEL, 0f)
+                try {
+                    send(MotionEvent.ACTION_DOWN, 0f); send(MotionEvent.ACTION_MOVE, 20f); send(MotionEvent.ACTION_CANCEL, 20f)
+                    waitState { opacity() == before }
+                    send(MotionEvent.ACTION_DOWN, 0f); send(MotionEvent.ACTION_MOVE, 20f); send(MotionEvent.ACTION_UP, 20f)
+                    waitState { opacity() > before }
+                    val after = opacity()
+                    assertEquals(before + .05, after, .000001)
+                    action(obj("type" to "invoke", "command" to "undo")); waitState { opacity() == before }
+                    action(obj("type" to "invoke", "command" to "redo")); waitState { opacity() == after }
+                } finally { send(MotionEvent.ACTION_CANCEL, 0f) }
+            }
+        }
+    }
+
+
     @Test fun compactNumberInputAndVerticalRibbonStayUsable() {
+        action(obj("type" to "customize", "action" to obj("type" to "set_control_visible", "panel" to "sizes", "control" to "brush_size", "visible" to true)))
         // The full editor shows brush size in Tool Settings as well as Sizes.
-        fun sizeNode(matcher: SemanticsMatcher) = compose.onNode(matcher and hasAnyAncestor(hasTestTag("group-${group("sizes").getInt("id")}")))
+        compose.onNodeWithTag("tab-sizes").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("number-value-Brush size").fetchSemanticsNodes().isNotEmpty() }
+        fun sizeNode(matcher: SemanticsMatcher) = compose.onAllNodes(matcher).onFirst()
         sizeNode(hasTestTag("number-value-Brush size")).performClick()
         val field = sizeNode(hasTestTag("number-Brush size"))
         field.performTextReplacement("45/2")
         field.performImeAction()
         waitState { it.getJSONObject("brush").number("diameter") == 22.5f }
-        sizeNode(hasContentDescription("Increase Brush size")).performClick()
-        val step = host.catalog.getJSONObject("brush_size").number("step")
-        waitState { it.getJSONObject("brush").number("diameter") == 22.5f + step }
-        sizeNode(hasTestTag("number-value-Brush size")).assertTextEquals("%.1f px".format(java.util.Locale.ROOT, 22.5f + step))
-        sizeNode(hasContentDescription("Decrease Brush size")).performClick()
+        sizeNode(hasTestTag("number-value-Brush size")).assertTextEquals("22.5 px")
+        sizeNode(hasTestTag("number-value-Brush size")).performClick()
+        field.performTextReplacement("23.5"); field.performImeAction()
+        waitState { it.getJSONObject("brush").number("diameter") == 23.5f }
+        sizeNode(hasTestTag("number-value-Brush size")).assertTextEquals("23.5 px")
+        sizeNode(hasTestTag("number-value-Brush size")).performClick()
+        field.performTextReplacement("22.5"); field.performImeAction()
         waitState { it.getJSONObject("brush").number("diameter") == 22.5f }
 
         action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "edge", "edge" to "top", "outer" to true), "viewport" to viewport()))

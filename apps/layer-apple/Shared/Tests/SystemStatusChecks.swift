@@ -33,7 +33,7 @@ extension XCTestCase {
         let size = app.buttons["number-value-tool-size"]
         workspaceActivate(size)
         app.textFields["number-entry-tool-size"].typeText("37\n")
-        expectation(for: NSPredicate(format: "value == %@", "37.0 px"), evaluatedWith: size)
+        expectation(for: NSPredicate(format: "value == %@", "37 px"), evaluatedWith: size)
         waitForExpectations(timeout: 10)
         attachEditor(in: app, name: "brush-three-column-drawer")
         workspaceActivate(app.buttons["header-tool-sculpt"])
@@ -43,7 +43,7 @@ extension XCTestCase {
         attachEditor(in: app, name: "sculpt-three-column-drawer")
         workspaceActivate(app.buttons["header-tool-drawing_brush"])
         XCTAssertTrue(pencil.waitForExistence(timeout: 10))
-        expectation(for: NSPredicate(format: "value == %@", "37.0 px"), evaluatedWith: size)
+        expectation(for: NSPredicate(format: "value == %@", "37 px"), evaluatedWith: size)
         waitForExpectations(timeout: 10)
         workspaceActivate(app.buttons["header-tool-drawing_brush"])
         XCTAssertTrue(drawer.waitForNonExistence(timeout: 10), "The current opener toggles its drawer closed")

@@ -1240,9 +1240,6 @@ impl NumberControl {
         true
     }
     fn apply(&self, op: NumericOperation) -> bool {
-        if matches!(&op, NumericOperation::Position { position } if self.spec().position_matches_value(*position, self.value())) {
-            return true;
-        }
         if matches!(&op, NumericOperation::Expression { text } if self.imp().presented_text.borrow().as_deref() == Some(text.as_str())) {
             self.feedback(None);
             return true;

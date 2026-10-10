@@ -179,7 +179,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
     val enabled = view.getBoolean("enabled")
     val pages = view.array("pages").objects()
     key(state.getJSONObject("document_file").optLong("epoch"), layer) {
-    Column(Modifier.fillMaxWidth().testTag("layer-properties").alpha(if(enabled) 1f else .4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(Modifier.fillMaxWidth().testTag("layer-properties").alpha(if(enabled) 1f else .4f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(view.getString("name"), Modifier.testTag("properties-layer-name"), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (view.getString("layer_type").isNotEmpty() || !view.isNull("add_filter")) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(view.getString("layer_type"), Modifier.weight(1f).testTag("properties-layer-type"), color = LocalPalette.current.secondary,
@@ -287,9 +287,8 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
     var latest by remember { mutableDoubleStateOf(value) }
     SideEffect { if (owner == null) latest = value }
     fun action(value: Double) = JSONObject((owner ?: currentRequest()).toString()).put("operation", obj("type" to "value", "value" to value))
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-    if (!valueOnly) Text(label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-    NumericSetting(label, value, numeric, Modifier.weight(if (valueOnly) 1f else 2f), enabled = enabled, id = id, inline = true, valueOnly = valueOnly, showSlider = !valueOnly, presentedText = text, onEditPhase = { phase ->
+    NumericSetting(label, value, numeric, Modifier.fillMaxWidth(), enabled = enabled, id = id, inline = valueOnly, valueOnly = valueOnly, showSlider = !valueOnly, presentedText = text,
+        onReset = { host.effect(JSONObject(currentRequest().toString()).put("op", "reset")) }, onEditPhase = { phase ->
         if (phase == "down") { owner = currentRequest(); latest = value }
         val action = action(latest)
         if (phase != "down") owner = null
@@ -298,7 +297,6 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
         latest = next
         val action = action(next)
         host.effect(if (owner == null) action else obj("op" to "gesture", "phase" to "move", "action" to action))
-    }
     }
 }
 

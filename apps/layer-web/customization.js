@@ -211,10 +211,12 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     switch (control) {
       case "brush_size":
         input = numberField(catalog.brush_size, label, value => dispatch({ type: "set_brush_size", value }));
+        input.onReset = () => dispatch({ type: "reset_tool_setting", id: "size" });
         row.append(input);
         sync = () => input.update(state().brush.diameter); break;
       case "brush_opacity":
-        range(() => state().brush.opacity, (value) => ({ type: "set_brush_opacity", value })); break;
+        range(() => state().brush.opacity, (value) => ({ type: "set_brush_opacity", value }));
+        input.onReset = () => dispatch({ type: "reset_tool_setting", id: "opacity" }); break;
       case "layer_opacity":
         range(() => state().layers.find((l) => l.selected).opacity,
           (opacity) => ({ type: "set_layer_opacity", opacity })); break;

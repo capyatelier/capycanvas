@@ -178,7 +178,7 @@ function Check-PropertyScrub {Pointer-Session {
     Wait-Until {[Math]::Abs((Property 'opacity').value.value-.7) -lt .03} 'The opacity slider did not follow the drag'
     Invoke 'Undo' -Name;Wait-Until {(Property 'opacity').value.value -eq $opacity} 'An opacity slider drag needed more than one Undo'
 }}
-function Property-Row([string]$Key,[string]$Case,[switch]$Wrapped){
+function Property-Row([string]$Key,[string]$Case){
     $property=Property $Key
     if($property.kind.kind -ne 'number' -or $property.kind.numeric.kind -ne 'slider'){throw "Expected a shared slider property: $Key"}
     $panel=Control 'layer-properties' -Arranged
@@ -187,14 +187,13 @@ function Property-Row([string]$Key,[string]$Case,[switch]$Wrapped){
     $entry=Control ('property-'+$Key) -Within $field -Arranged
     $track=Control ('property-'+$Key+'-slider') -Within $field -Arranged
     $bounds=@{panel=$panel.Current.BoundingRectangle;caption=$caption.Current.BoundingRectangle;field=$field.Current.BoundingRectangle;entry=$entry.Current.BoundingRectangle;track=$track.Current.BoundingRectangle}
-    @{case=$Case;key=$Key;label=$property.label;wrapped=[bool]$Wrapped;bounds=$bounds;value=$property.value;dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow);identities=@{entry=($entry.GetRuntimeId() -join ':');track=($track.GetRuntimeId() -join ':')}}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ($Case+'-geometry.json'))
+    @{case=$Case;key=$Key;label=$property.label;bounds=$bounds;value=$property.value;dpi=[CapyRowPointer]::GetDpiForWindow($drawingWindow);identities=@{entry=($entry.GetRuntimeId() -join ':');track=($track.GetRuntimeId() -join ':')}}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ($Case+'-geometry.json'))
     $outer=$bounds.panel;$outer.Inflate(1,1);$inner=$bounds.field;$inner.Inflate(1,1)
     if(!$outer.Contains($bounds.caption) -or !$outer.Contains($bounds.field) -or !$inner.Contains($bounds.entry) -or !$inner.Contains($bounds.track)){throw "Property controls are outside their visible panel: $Key"}
-    $trackMiddle=$bounds.track.Top+$bounds.track.Height/2;$entryMiddle=$bounds.entry.Top+$bounds.entry.Height/2
-    if([Math]::Abs($trackMiddle-$entryMiddle) -gt 1 -or $bounds.track.Right -gt $bounds.entry.Left+1){throw "Property slider and value are not inline: $Key"}
-    if($Wrapped){
-        if($bounds.caption.Bottom -gt $bounds.field.Top+1 -or [Math]::Abs($bounds.caption.Left-$bounds.field.Left) -gt 1 -or [Math]::Abs($bounds.caption.Right-$bounds.field.Right) -gt 1){throw "Long property caption did not wrap above its full-width control: $Key"}
-    }elseif([Math]::Abs($bounds.caption.Top+$bounds.caption.Height/2-$entryMiddle) -gt 1 -or $bounds.caption.Right -gt $bounds.field.Left+1){throw "Ordinary property caption is not inline: $Key"}
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    if([Math]::Abs($bounds.field.Height-36*$scale) -gt 1 -or [Math]::Abs($bounds.entry.Width-80*$scale) -gt 1 -or [Math]::Abs($bounds.entry.Height-34*$scale) -gt 1){throw "Compact property row or value dimensions differ: $Key"}
+    if([Math]::Abs($bounds.track.Height-16*$scale) -gt 1 -or $bounds.track.Left-$bounds.field.Left -lt 24*$scale -or $bounds.entry.Left-$bounds.track.Right -lt 4*$scale -or $bounds.track.Width -lt 80*$scale){throw "Compact property slider dimensions differ: $Key"}
+    if($bounds.caption.Right -gt $bounds.entry.Left+1 -or $bounds.track.Right -gt $bounds.entry.Left+1 -or $bounds.caption.Bottom -gt $bounds.track.Top+1){throw "Compact property caption, slider or value overlap: $Key"}
     Capture $Case -Composed
 }
 function Property-Resize([int]$Width){
@@ -220,19 +219,51 @@ function Property-Typed([string]$Key,[string]$Text,[double]$Expected){
     Wait-Until {[Math]::Abs((Property $Key).value.value-$Expected) -lt 1e-6} "Typed property did not commit: $Key"
     Invoke 'Undo' -Name;Wait-Until {(Property $Key).value.value -eq $before} "Typed property needed more than one Undo: $Key"
 }
+function Property-Theme {
+    $before=(Model).state.theme
+    Invoke 'settings-button'
+    (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $choice=if($before -eq 'dark'){'Light'}else{'Dark'}
+    (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Model).state.theme -ne $before} 'Property theme change not acknowledged'
+    Invoke 'CloseButton'
+    Wait-Until {!(Model).preferences} 'Property theme preferences did not close'
+}
+function Check-PropertyValueScrub {Pointer-Session {
+    foreach($device in @('mouse','pen','touch')){
+        Edit 'property-opacity' '50';(Control 'property-opacity-slider').SetFocus()
+        Wait-Until {[Math]::Abs((Property 'opacity').value.value-.5) -lt 1e-6} 'Value scrub seed did not commit'
+        $before=(Property 'opacity').value.value;$box=(Control 'property-opacity' -Arranged).Current.BoundingRectangle
+        $x=[int]($box.Left+$box.Width/2);$y=[int]($box.Top+$box.Height/2)
+        [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x,$y-30)
+        Wait-Until {(Property 'opacity').value.value -gt $before} "$device value scrub did not preview"
+        [CapyRowPointer]::Up()
+        Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} "$device value scrub did not finish"
+        Invoke 'Undo' -Name;Wait-Until {(Property 'opacity').value.value -eq $before} "$device value scrub needed more than one Undo"
+        [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x,$y-30)
+        Wait-Until {(Property 'opacity').value.value -gt $before} "$device canceled value scrub did not preview"
+        [CapyRowPointer]::Key(0x1B)
+        [CapyRowPointer]::Up()
+        Wait-Until {(Property 'opacity').value.value -eq $before} "$device Escape did not cancel the value scrub"
+    }
+}}
 function Check-PropertyLayout {
     Property-Resize 960;Select-Panel 'properties'
-    Property-Row 'opacity' 'opacity-inline-en'
+    Property-Row 'opacity' 'opacity-compact-en'
+    Property-Theme
+    Property-Row 'opacity' 'opacity-compact-alternate-theme'
+    Property-Theme
     $blend=Control 'property-blend' -Arranged;$panel=(Control 'layer-properties').Current.BoundingRectangle
     if(!$panel.Contains($blend.Current.BoundingRectangle)){throw 'Blend is not fully visible below the inline opacity row'}
     Check-PropertyScrub
+    Check-PropertyValueScrub
     Property-Typed 'opacity' '60' .6
     $document=(Model).state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=(Model).windows_gpu_generation
     $entryId=(Control 'property-opacity').GetRuntimeId() -join ':';$blendId=(Control 'property-blend').GetRuntimeId() -join ':';$blendValue=(Property 'blend').value.value
     $trackId=(Control 'property-opacity-slider').GetRuntimeId() -join ':';$opacityValue=(Property 'opacity').value.value
     $retained={((Control 'property-opacity').GetRuntimeId() -join ':') -eq $entryId -and ((Control 'property-opacity-slider').GetRuntimeId() -join ':') -eq $trackId -and (Property 'opacity').value.value -eq $opacityValue -and ((Control 'property-blend').GetRuntimeId() -join ':') -eq $blendId -and (Property 'blend').value.value -eq $blendValue -and ((Model).state.document_file|ConvertTo-Json -Depth 20 -Compress) -eq $document -and (Model).windows_gpu_generation -eq $gpu}
     Property-Resize 744;Property-Language 'ru'
-    Property-Row 'opacity' 'opacity-narrow-ru' -Wrapped
+    Property-Row 'opacity' 'opacity-narrow-ru'
     if(!(& $retained)){throw 'Narrow localized Properties changed retained controls, values or document/GPU ownership'}
     Property-Language 'en';Property-Resize 1200
     Property-Row 'opacity' 'opacity-restored-en'
@@ -380,7 +411,7 @@ function Check-CurveGestures {
         Tap-Point 1;$graph=Control 'property-rgb-curve';$graph.SetFocus();Wait-Until {$graph.Current.HasKeyboardFocus} 'The curve graph did not take focus'
         for($i=0;$i -lt 5;$i++){[CapyRowPointer]::Hold(0x26,$true);Start-Sleep -Milliseconds 60}
         [CapyRowPointer]::Hold(0x26,$false)
-        Wait-Until {[Math]::Abs((Property 'rgb').value.value[1][1]-$point[1]-5/255) -lt 1e-4} 'A held Up arrow did not step the point by 1/255 per repeat'
+        try{Wait-Until {[Math]::Abs((Property 'rgb').value.value[1][1]-$point[1]-5/255) -lt 1e-4} 'A held Up arrow did not step the point by 1/255 per repeat'}catch{throw "Held Up baseline=$($point[1]), current=$((Property 'rgb').value.value[1][1]), expected=$($point[1]+5/255): $_"}
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'A held arrow was not one Undo'
         Tap-Point 1;[CapyRowPointer]::Key(0x2E)
         Wait-Until {(Property 'rgb').value.value.Count -eq 2} 'Delete did not remove the selected point'
@@ -424,7 +455,7 @@ try {
         Check-PropertyLayout
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
         if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-        @{theme=$Theme;inline_opacity='passed';typed_and_drag_one_undo='passed';filter_slider='passed';narrow_localized_caption='passed';retained_property_controls='passed';visual_review='required';run=$run}|ConvertTo-Json
+        @{theme=$Theme;compact_opacity_both_themes='passed';typed_and_drag_one_undo='passed';filter_slider='passed';narrow_localized_caption_ellipsis='passed';retained_property_controls='passed';visual_review='required';run=$run}|ConvertTo-Json
         return
     }
     Select-Panel 'adjustments'

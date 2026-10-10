@@ -455,7 +455,7 @@ struct DoublePress : std::enable_shared_from_this<DoublePress> {
     void reset(){pressed.reset();last.reset();}
 };
 struct NumberPresentation {
-    bool preference=false;hstring description;std::function<hstring()> identity;
+    bool preference=false;hstring description;std::function<hstring()> identity;std::function<void()> reset;
     std::vector<hstring> widthSamples;std::function<J(J const&,double,J const&)> resolve;std::function<hstring()> title,text,descriptionText;
     std::function<void(hstring const&,double)> phase;
 };

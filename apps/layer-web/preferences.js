@@ -285,7 +285,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
               }
               break;
             case "number":
-              input = numberField(row.kind.control, row.title, value => send({ type: "edit", id: row.id, value }));
+              input = numberField(row.kind.control, row.title, value => send({ type: "edit", id: row.id, value }), false, false, false);
               input.setDescription(row.description); text.remove();
               line.classList.add("number-preference"); widget = input; break;
             case "switch":

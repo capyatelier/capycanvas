@@ -87,6 +87,17 @@ import SwiftUI
                         ["x": $0.minX, "y": $0.minY, "width": $0.width, "height": $0.height] }])
                 try fixture.encoded().write(to: directory.appendingPathComponent("native-\(name).json"), atomically: true, encoding: .utf8)
                 precondition(geometry.frames.keys.filter { $0.hasSuffix(":root") }.count == 30)
+                for column in widths.indices {
+                    for row in [0, 1, 2, 3, 4, 9] {
+                        let key = "\(column)-\(row)"
+                        let root = geometry.frames[key + ":root"]!, track = geometry.frames[key + ":track"]!
+                        let value = geometry.frames[key + ":value"]!
+                        precondition(abs(root.height - 36) < 0.5 && abs(track.height - 16) < 0.5)
+                        precondition(abs(track.minX - root.minX - 36) < 0.5 && abs(root.maxX - track.maxX - 88) < 0.5)
+                        precondition(abs(value.width - 80) < 0.5 && abs(value.height - 34) < 0.5 && value.minX - track.maxX >= 7.5)
+                        precondition(geometry.frames[key + ":minus"] == nil && geometry.frames[key + ":plus"] == nil)
+                    }
+                }
                 precondition(store.failure == nil, store.failure ?? "")
                 print("Captured 30 numeric controls: \(name)")
             }

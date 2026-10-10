@@ -130,7 +130,7 @@ struct SizeDialog::Impl:std::enable_shared_from_this<Impl>{
             },
             field.binds,nullptr,false,id(operation),false,presentation,&field.admissions);
         if(auto entry=numberEntry(number)){
-            entry.Width(96);
+            if(str(control,L"kind")!=L"slider")entry.Width(96);
             entry.TextChanged([weak,index,operation,control,generation](Windows::Foundation::IInspectable const& sender,auto&&){
                 auto self=weak.lock();
                 if(!self||self->fields[index].generation!=generation||self->data->updating||!self->settled())return;

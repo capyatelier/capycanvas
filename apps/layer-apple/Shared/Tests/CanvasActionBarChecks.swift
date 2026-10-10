@@ -144,7 +144,8 @@ extension XCTestCase {
             choose("Feather")
             let panel = app.descendants(matching: .any)["selection-refine-panel"].firstMatch
             expect(panel, "exists == YES", "Feather opens the Refine panel")
-            workspaceActivate(app.buttons["number-increase-selection-refine-value"])
+            workspaceActivate(app.buttons["number-value-selection-refine-value"])
+            app.textFields["number-entry-selection-refine-value"].typeText("2\n")
             attachEditor(in: app, name: "canvas-bar-refine")
             workspaceActivate(app.buttons["selection-refine-apply"])
             expect(panel, "exists == NO", "Apply closes the Refine panel")

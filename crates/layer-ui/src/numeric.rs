@@ -364,6 +364,8 @@ impl NumericControl {
         }
         let formatting = matches!(operation, NumericOperation::Format);
         let slider = matches!(operation, NumericOperation::Position { .. });
+        let same_position = (self.min..=self.max).contains(&value)
+            && matches!(&operation, NumericOperation::Position { position } if self.position_matches_value(*position, value));
         let mut resolved = match operation {
             NumericOperation::Format => value,
             NumericOperation::Step { steps } => {
@@ -393,7 +395,8 @@ impl NumericControl {
             return Err(NumericError::FiniteNumber);
         }
         // Formatting an externally supplied value must never change it.
-        if !formatting {
+        if same_position { resolved = value; }
+        else if !formatting {
             resolved = self.quantized(resolved, slider);
         }
         let shown = if resolved == 0.0 {
@@ -733,6 +736,17 @@ mod tests {
 mod compact_tests {
     use super::*;
     #[test]
+    fn unchanged_slider_positions_preserve_fine_values_and_extended_authored_values() {
+        for (spec, value) in [(NumericControl::brush_size(), 120.5), (NumericControl::percent(), 0.355),
+            (NumericControl::rotation(), 12.6_f64.to_radians()),
+            (NumericControl { max: 10., ..NumericControl::percent() }, 2.3456)] {
+            let value = f64::from(value as f32);
+            let fill = spec.resolve(value, NumericOperation::Format).unwrap().fill;
+            assert_eq!(spec.resolve(value, NumericOperation::Position { position: fill }).unwrap().value, value);
+        }
+        assert_eq!(NumericControl::percent().resolve(10., NumericOperation::Position { position: 1. }).unwrap().value, 1.);
+    }
+    #[test]
     fn size_slider_uses_the_existing_32_pixel_threshold_and_fine_edits_keep_decimals() {
         let spec = NumericControl::brush_size();
         for (value, expected) in [
@@ -745,7 +759,7 @@ mod compact_tests {
         ] {
             let fill = spec.resolve(value, NumericOperation::Format).unwrap().fill;
             let result = spec
-                .resolve(value, NumericOperation::Position { position: fill })
+                .resolve(spec.min, NumericOperation::Position { position: fill })
                 .unwrap();
             assert!((result.value - expected).abs() < 0.0001);
             for operation in [NumericOperation::Value { value }, NumericOperation::Expression { text: value.to_string() }] {
@@ -781,7 +795,7 @@ mod compact_tests {
                 (spec.soft_max * spec.scale - 4.3, spec.soft_max * spec.scale - 4.3)] {
                 let value = value_at(shown);
                 let fill = spec.resolve(value, NumericOperation::Format).unwrap().fill;
-                let slider = spec.resolve(value, NumericOperation::Position { position: fill }).unwrap();
+                let slider = spec.resolve(spec.min, NumericOperation::Position { position: fill }).unwrap();
                 assert!((slider.value * spec.scale - expected).abs() < 1e-8);
                 assert!((spec.resolve(value, NumericOperation::Expression { text: shown.to_string() }).unwrap().value - value).abs() < 1e-8);
             }
@@ -793,7 +807,7 @@ mod compact_tests {
         let spec = NumericControl::rotation();
         let value = 12.6 / spec.scale;
         let fill = spec.resolve(value, NumericOperation::Format).unwrap().fill;
-        let slider = spec.resolve(value, NumericOperation::Position { position: fill }).unwrap();
+        let slider = spec.resolve(spec.min, NumericOperation::Position { position: fill }).unwrap();
         assert!((slider.value * spec.scale - 13.).abs() < 1e-10);
         assert!(spec.values_equal(slider.value, f64::from(slider.value as f32)));
         let scrub = NumericControl::brush_size().resolve(120., NumericOperation::Scrub { origin: 120., pixels: 2. }).unwrap();

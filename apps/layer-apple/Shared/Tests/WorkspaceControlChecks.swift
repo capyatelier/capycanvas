@@ -173,12 +173,13 @@ extension XCTestCase {
         workspaceActivate(configuration.buttons["configuration-layer"])
         workspaceActivate(app.buttons["configuration-layer-option-1"])
         let value = configuration.buttons["number-value-layer-opacity"]
-        XCTAssertEqual(value.value as? String, "100.0 %")
-        workspaceActivate(configuration.buttons["number-decrease-layer-opacity"])
-        expectation(for: NSPredicate(format: "value != %@", "100.0 %"), evaluatedWith: value)
+        XCTAssertEqual(value.value as? String, "100 %")
+        workspaceActivate(value)
+        configuration.textFields["number-entry-layer-opacity"].typeText("99\n")
+        expectation(for: NSPredicate(format: "value != %@", "100 %"), evaluatedWith: value)
         waitForExpectations(timeout: 5)
         let decreased = value.value as? String ?? ""
-        XCTAssertEqual(decreased, "99.0 %")
+        XCTAssertEqual(decreased, "99 %")
         close()
         let liveValue = app.buttons["number-value-layer-opacity"]
         editorHistory("Undo", in: app)
@@ -220,7 +221,7 @@ extension XCTestCase {
         XCTAssertEqual(values.count, 1, "Configuration offers the hidden Brush size slider")
         XCTAssertTrue(app.buttons["size-8"].isSelected, "The preset must update both the live panel and configuration")
         for value in values.allElementsBoundByIndex {
-            expectation(for: NSPredicate(format: "value == %@", "8.0 px"), evaluatedWith: value)
+            expectation(for: NSPredicate(format: "value == %@", "8 px"), evaluatedWith: value)
         }
         waitForExpectations(timeout: 5)
         let configuration = app.scrollViews.containing(.button, identifier: "configure-visible-brush_size").firstMatch
@@ -243,7 +244,7 @@ extension XCTestCase {
         waitForExpectations(timeout: 5)
         workspaceActivate(app.buttons["close-panel-configuration"])
         let size = app.buttons["number-value-Brush size"]
-        expectation(for: NSPredicate(format: "value == %@", "8.0 px"), evaluatedWith: size)
+        expectation(for: NSPredicate(format: "value == %@", "8 px"), evaluatedWith: size)
         waitForExpectations(timeout: 5)
         let liveColor = app.buttons["brush-color"]
         let liveControls = app.scrollViews.containing(.button, identifier: "brush-color").firstMatch

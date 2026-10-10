@@ -56,10 +56,10 @@ try{
  Key 0x5A -Ctrl;Key 0x45;Start-Sleep -Milliseconds 200
  if((Model).state.document_file.revision -ne $revision -or !(Command 'pen').selected){throw 'Native slider keys invoked a canvas shortcut'}
  foreach($activation in @(0x20,0x0D)){
-  $step=Control 'tool-setting-flow-increase'
-  if(!$step.Current.IsEnabled){$step=Control 'tool-setting-flow-decrease'}
-  Focus $step;$flow=Value 'flow';Key $activation
-  Wait-Until {[Math]::Abs((Value 'flow')-$flow) -gt .000001} 'Space/Enter did not activate the focused native button'
+  Focus (Control $pen);Key 0x45
+  Wait-Until {(Command 'eraser').selected} 'Activation check did not select Eraser'
+  Focus (Control $pen);Key $activation
+  Wait-Until {(Command 'pen').selected} 'Space/Enter did not activate the focused native button'
  }
  $zen=(Command 'zen_mode').selected;$focused=[System.Windows.Automation.AutomationElement]::FocusedElement.GetRuntimeId() -join ':'
  Key 0x09

@@ -104,10 +104,11 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         }
         if(kind==L"brush_size"||kind==L"brush_opacity"){
             bool size=kind==L"brush_size";
+            NumberPresentation presentation;presentation.reset=[data=data,size]{data->dispatch(O({{L"type",S(L"reset_tool_setting")},{L"id",S(size?L"size":L"opacity")}}));};
             return number(data,labelText,object(data->catalog,size?L"brush_size":L"opacity"),
                 [data=data,size]{return num(object(data->state,L"brush"),size?L"diameter":L"opacity");},
                 [data=data,size](double value){data->dispatch(O({{L"type",S(size?L"set_brush_size":L"set_brush_opacity")},{L"value",N(value)}}));},
-                bindings,nullptr,false,L"configure-"+kind);
+                bindings,nullptr,false,L"configure-"+kind,false,presentation);
         }
         if(kind==L"brush_color"){
             auto pick=button(data,labelText,[weak=weak_from_this()]{if(auto self=weak.lock())self->customize(

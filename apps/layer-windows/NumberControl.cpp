@@ -7,6 +7,7 @@ namespace {
 struct NumericCaption {hstring title,language,errorLanguage;J labels,errorReason;};
 struct NumberState {
     double value=0;bool editing=false,dragging=false,formatting=false,gesture=false;
+    bool scrubbing=false;std::optional<uint32_t> pointer;double origin=0,originY=0;
     hstring identity;
     hstring measuredText;double measuredWidth=-1;
     std::function<J(J const&,double,J const&)> resolve;
@@ -40,17 +41,20 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     auto finish=[local,phase](hstring const& name){if(local->gesture){local->gesture=false;phase(name,local->value);}};
     auto showText=[local,spec,presented](wchar_t const* field){return presented?presented():str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),field);};
     bool ranged=str(spec,L"kind")==L"slider",preference=presentation.preference;
-    double valueHeight=preference?34.:(ranged?24.:32.),stepSize=ranged&&!preference?24.:32.;
+    bool panel=ranged&&!preference&&!valueOnly&&!inlineTrack;
+    double valueHeight=preference||panel?34.:(ranged?24.:32.),stepSize=panel?16.:ranged&&!preference?24.:32.;
     StackPanel root;root.Spacing(0);
     auto numberId=identifier.empty()?title:identifier;
     AutomationProperties::SetAutomationId(root,L"number-root-"+numberId);
     AutomationProperties::SetName(root,title);
     Grid header;header.UseLayoutRounding(false);header.ColumnSpacing(6);header.MinHeight(valueHeight);ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
-    ColumnDefinition right;right.Width({1,GridUnitType::Auto});header.ColumnDefinitions().Append(right);
+    ColumnDefinition right;right.Width({panel?88.:1.,panel?GridUnitType::Pixel:GridUnitType::Auto});header.ColumnDefinitions().Append(right);
+    if(panel){header.Height(36);header.MinHeight(36);}
     auto text=label(data,title);text.Margin(Thickness{preference?0.:6.,0,0,0});text.VerticalAlignment(VerticalAlignment::Center);
     text.LineHeight(20);text.TextTrimming(TextTrimming::CharacterEllipsis);
     tooltip(text,title);
     StackPanel labels;labels.UseLayoutRounding(false);labels.VerticalAlignment(VerticalAlignment::Center);labels.Children().Append(text);
+    if(panel){labels.VerticalAlignment(VerticalAlignment::Top);text.Height(20);}
     weak_ref<TextBlock> detailView;
     if(!presentation.description.empty()||presentation.descriptionText){
         auto detail=label(data,presentation.description);detailView=make_weak(detail);detail.FontSize(data->textSize()/1.2);
@@ -70,6 +74,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     });
     entry.TextAlignment(TextAlignment::Right);Grid::SetColumn(entry,1);
     weak_ref<TextBlock> readout;
+    Button valueSurface{nullptr};
     if(ranged&&!valueOnly){
         // Read mode has the same text extent as the shared plain value. Keep
         // native text editing/accessibility while avoiding a hidden caret gutter.
@@ -80,7 +85,14 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         readout=make_weak(display);
         entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),hiddenText);
         Grid valueBox;valueBox.UseLayoutRounding(false);Grid::SetColumn(valueBox,1);Grid::SetColumn(entry,0);
-        valueBox.Children().Append(entry);valueBox.Children().Append(display);header.Children().Append(valueBox);
+        valueBox.Children().Append(entry);
+        if(panel){
+            valueBox.Width(80);valueBox.HorizontalAlignment(HorizontalAlignment::Right);entry.Width(80);
+            valueSurface=button(data,L"",[]{});valueSurface.Content(display);valueSurface.Padding({0});valueSurface.Height(34);
+            valueSurface.IsTabStop(false);AutomationProperties::SetAccessibilityView(valueSurface,Automation::Peers::AccessibilityView::Raw);
+            valueBox.Children().Append(valueSurface);
+        }else valueBox.Children().Append(display);
+        header.Children().Append(valueBox);
         entry.IsEnabledChanged([readout](auto&&,DependencyPropertyChangedEventArgs const& args){
             if(auto view=readout.get())view.Opacity(unbox_value<bool>(args.NewValue())?1.:.36);
         });
@@ -109,7 +121,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         measure.Measure({std::numeric_limits<float>::infinity(),32});
         local->measuredText=value;local->measuredWidth=double(measure.DesiredSize().Width);return local->measuredWidth;
     };
-    auto setText=[data,local,measureText,readout,hiddenText,ranged,valueOnly,inlineTrack,preference,weak=make_weak(entry)](hstring const& value){
+    auto surface=make_weak(valueSurface);
+    auto setText=[data,local,measureText,readout,surface,hiddenText,ranged,valueOnly,inlineTrack,preference,panel,weak=make_weak(entry)](hstring const& value){
         bool previous=std::exchange(local->formatting,true);
         struct Reset{bool& value;bool previous;~Reset(){value=previous;}} reset{local->formatting,previous};
         if(auto control=weak.get()){
@@ -118,15 +131,16 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
                 bool reading=control.FocusState()==FocusState::Unfocused&&!local->editing;
                 if(display.Text()!=value)display.Text(value);
                 display.Visibility(reading?Visibility::Visible:Visibility::Collapsed);
+                if(auto target=surface.get())target.Visibility(reading?Visibility::Visible:Visibility::Collapsed);
                 control.Foreground(reading?hiddenText:data->brush(L"text"));
             }
             if(ranged&&!valueOnly&&!inlineTrack){
-                auto width=control.FocusState()==FocusState::Unfocused?measureText(value)+(preference?18:12):92.;
+                auto width=panel?80.:control.FocusState()==FocusState::Unfocused?measureText(value)+(preference?18:12):92.;
                 if(std::abs(control.Width()-width)>.01)control.Width(width);
             }
         }
     };
-    entry.TextChanging([data,local,readout,inlineTrack](Windows::Foundation::IInspectable const& sender,auto&&){
+    entry.TextChanging([data,local,readout,surface,inlineTrack,panel](Windows::Foundation::IInspectable const& sender,auto&&){
         // Covers typing, paste, accessibility and IME edits, including after Enter.
         if(data->updating||local->formatting)return;
         local->editing=true;
@@ -134,7 +148,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         // immediately and preserve it when focus subsequently enters.
         if(auto display=readout.get()){
             display.Visibility(Visibility::Collapsed);auto control=sender.as<TextBox>();
-            control.Foreground(data->brush(L"text"));if(!inlineTrack)control.Width(92);
+            if(auto target=surface.get())target.Visibility(Visibility::Collapsed);
+            control.Foreground(data->brush(L"text"));if(!inlineTrack)control.Width(panel?80:92);
         }
     });
     slider.Minimum(0);slider.Maximum(1);slider.StepFrequency(0.001);slider.MinHeight(0);slider.Height(stepSize);
@@ -189,6 +204,50 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     };
     if(commits)commits->emplace_back([commit]{commit(false);});
     if(admissions)admissions->emplace_back(commit);
+    if(panel){
+        auto restore=[local,spec,set,setText,finish]{
+            bool active=std::exchange(local->scrubbing,false);local->pointer.reset();local->dragging=false;
+            if(active){bool transaction=local->gesture;finish(L"cancel");local->value=local->origin;if(!transaction)set(local->value);}
+            setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
+        };
+        auto move=[local,spec,set,setText,phase](double y){
+            double pixels=local->originY-y;
+            auto dpi=GetDpiForSystem();double slop=std::max(2.,double(GetSystemMetricsForDpi(SM_CYDRAG,dpi))*96./std::max(96u,dpi));
+            if(!local->scrubbing&&std::abs(pixels)<=slop)return;
+            if(!std::exchange(local->scrubbing,true)&&phase){local->gesture=true;phase(L"down",local->origin);}
+            auto next=local->resolve(spec,local->origin,O({{L"type",S(L"scrub")},{L"origin",N(local->origin)},{L"pixels",N(pixels)}}));
+            local->value=num(next,L"value");setText(str(next,L"scrub_text"));set(local->value);
+        };
+        valueSurface.PointerPressed([local,commit,weak=make_weak(valueSurface)](auto&&,PointerRoutedEventArgs const& e){
+            if(local->pointer||!commit(false))return;auto target=weak.get();if(!target||!target.IsEnabled())return;
+            if(e.GetCurrentPoint(target).Properties().IsCanceled())return;
+            local->pointer=e.Pointer().PointerId();local->origin=local->value;local->originY=e.GetCurrentPoint(nullptr).Position().Y;
+            if(!target.CapturePointer(e.Pointer())){local->pointer.reset();return;}
+            local->dragging=true;target.Focus(FocusState::Pointer);e.Handled(true);
+        });
+        valueSurface.PointerMoved([local,move,restore,identity=presentation.identity](auto&&,PointerRoutedEventArgs const& e){
+            if(local->pointer!=e.Pointer().PointerId())return;
+            if(e.GetCurrentPoint(nullptr).Properties().IsCanceled()||(identity&&local->identity!=identity())){restore();return;}
+            move(e.GetCurrentPoint(nullptr).Position().Y);e.Handled(true);
+        });
+        valueSurface.PointerReleased([local,move,finish,setText,showText,restore,weak=make_weak(entry)](auto&&,PointerRoutedEventArgs const& e){
+            if(local->pointer!=e.Pointer().PointerId())return;
+            if(e.GetCurrentPoint(nullptr).Properties().IsCanceled()){restore();return;}
+            bool scrub=local->scrubbing;if(scrub)move(e.GetCurrentPoint(nullptr).Position().Y);
+            local->pointer.reset();local->dragging=false;local->scrubbing=false;
+            if(scrub){finish(L"up");setText(showText(L"text"));}else if(auto entry=weak.get())entry.Focus(FocusState::Pointer);
+            e.Handled(true);
+        });
+        valueSurface.PointerCanceled([restore](auto&&,auto&&){restore();});
+        valueSurface.PointerCaptureLost([local,restore](auto&&,auto&&){if(local->pointer)restore();});
+        valueSurface.KeyDown([local,restore](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Escape&&local->pointer){restore();e.Handled(true);}});
+        text.DoubleTapped([local,spec,set,commit,reset=presentation.reset](auto&&,DoubleTappedRoutedEventArgs const& e){
+            commit(true);
+            if(reset)reset();else if(spec.HasKey(L"default_value")&&spec.GetNamedValue(L"default_value").ValueType()==Windows::Data::Json::JsonValueType::Number){
+                auto next=local->resolve(spec,local->value,O({{L"type",S(L"expression")},{L"text",S(L"")}}));local->value=num(next,L"value");set(local->value);
+            }e.Handled(true);
+        });
+    }
     entry.GotFocus([data,local,showText,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();entry.Background(data->brush(L"input"));
         if(!local->editing)setText(showText(L"edit"));
@@ -242,9 +301,10 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         auto panel=color(str(palette,L"panel")),ink=color(str(palette,L"text"));
         track.Color({255,uint8_t((int(panel.R)+ink.R)/2),uint8_t((int(panel.G)+ink.G)/2),uint8_t((int(panel.B)+ink.B)/2)});
     });
-    bindings.emplace_back([data,local,caption,spec,get,entry,slider,setText,presented,identity=presentation.identity]{
+    bindings.emplace_back([data,local,caption,spec,get,entry,slider,setText,presented,finish,identity=presentation.identity]{
         if(identity && local->identity!=identity()){
-            local->identity=identity();local->editing=false;local->dragging=false;
+            finish(L"cancel");
+            local->identity=identity();local->editing=false;local->dragging=false;local->pointer.reset();local->scrubbing=false;
             showNumericError(entry,L"");caption->errorReason=J{};
         }
         if(local->editing||local->dragging)return;
@@ -255,6 +315,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         entry.Background(entry.FocusState()==FocusState::Unfocused?clear():data->brush(L"input"));
         slider.Value(num(shown,L"fill"));
     });
+    root.Unloaded([local,finish](auto&&,auto&&){finish(L"cancel");local->pointer.reset();local->scrubbing=false;local->dragging=false;});
     if(inlineTrack){
         // Compact layer controls retain the same shared value/expression rules
         // and target guards as full numeric controls.
@@ -272,6 +333,10 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         header.Children().RemoveAt(1);entry.ClearValue(FrameworkElement::WidthProperty());entry.MinWidth(0);
         entry.HorizontalAlignment(HorizontalAlignment::Stretch);entry.TextAlignment(TextAlignment::Center);
         root.Children().Append(entry);return root;
+    }
+    if(panel){
+        slider.Margin({36,0,88,0});slider.VerticalAlignment(VerticalAlignment::Bottom);Grid::SetColumnSpan(slider,2);
+        header.Children().Append(slider);root.Children().Append(header);return root;
     }
     StackPanel spin;spin.Orientation(Orientation::Horizontal);spin.Spacing(0);
     if(!ranged){

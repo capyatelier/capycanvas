@@ -562,12 +562,12 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             faceValue.Text(text);
             faceValue.FontSize(self->data->textSize()*(self->tileStyle==L"small"&&text.size()>=4?.9:1.));
         };
-        face.Click([weak,state,settingSpec,currentTitle=presentation.title,set](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
+        face.Click([weak,state,settingSpec,currentTitle=presentation.title,set,reset](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto self=weak.lock();if(!self)return;
             if(std::exchange(state->scrubbed,false))return;
             self->closePopup();
             Bindings bindings;StackPanel content;content.MinWidth(220);content.MaxWidth(320);
-            NumberPresentation presentation;presentation.title=currentTitle;
+            NumberPresentation presentation;presentation.title=currentTitle;presentation.reset=reset;
             content.Children().Append(number(self->data,currentTitle(),settingSpec,[state]{return state->value;},set,bindings,nullptr,false,L"",false,presentation));
             for(auto const& bind:bindings)bind();
             self->editor=Flyout();self->editor.Content(content);TrackPopup(self->editor,self->data);

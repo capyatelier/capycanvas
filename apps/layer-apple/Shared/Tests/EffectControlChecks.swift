@@ -73,7 +73,7 @@ extension XCTestCase {
         choose("transparency", 0, "Keep"); expectPixels(gray, in: app)
         XCTAssertTrue(alpha.waitForNonExistence(timeout: 10))
         editorHistory("Undo", in: app); expectPixels(black, in: app)
-        expectValue(alpha, "37.0 %")
+        expectValue(alpha, "37 %")
         edit("threshold", "0.1")
         _ = pixels("Black output removes the bright pixels") { r, g, b in min(r, g, b) >= 253 }
         editorHistory("Undo", in: app); expectPixels(black, in: app)
@@ -85,7 +85,7 @@ extension XCTestCase {
         app.launch(); ready(); expectPixels(black, in: app)
         expectValue(app.buttons["property-colors"], "Black")
         expectValue(app.buttons["property-transparency"], "Threshold")
-        expectValue(alpha, "37.0 %")
+        expectValue(alpha, "37 %")
         workspaceActivate(app.buttons["layer-Delete selected layers"]); expectPixels(blue, in: app)
         add("Brightness to Opacity", category: "Artistic")
         XCTAssertFalse(app.buttons["property-colors"].exists)
@@ -275,11 +275,11 @@ extension XCTestCase {
         middle.clickOrTap()
         expectation(for: NSPredicate { _, _ in markers.count == 3 }, evaluatedWith: gradient)
         waitForExpectations(timeout: 10); expectPixels(red, in: app)
-        expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
+        expectValue(app.buttons["number-value-gradient-position"], "50 %")
         XCTAssertTrue(app.buttons["gradient-remove"].isEnabled, "A new stop must be selected without another tap")
         let nearMiddle = middle.withOffset(CGVector(dx: 3, dy: 0))
         nearMiddle.clickOrTap()
-        expectPixels(red, in: app); expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
+        expectPixels(red, in: app); expectValue(app.buttons["number-value-gradient-position"], "50 %")
         let stopDestination = gradient.coordinate(withNormalizedOffset:
             CGVector(dx: (6 + (gradient.frame.width - 12) * 0.7) / gradient.frame.width, dy: 39.0 / 46))
         middle.press(forDuration: 0.05, thenDragTo: stopDestination, withVelocity: .slow, thenHoldForDuration: 0.1)
@@ -343,7 +343,7 @@ extension XCTestCase {
         workspaceActivate(app.buttons["number-value-property-sigma"])
         let sigma = app.textFields["number-entry-property-sigma"]
         XCTAssertTrue(sigma.waitForExistence(timeout: 10))
-        sigma.typeText("2 + 3\n"); expect(app.buttons["number-value-property-sigma"], "5.0 px")
+        sigma.typeText("2 + 3\n"); expect(app.buttons["number-value-property-sigma"], "5 px")
 
         workspaceActivate(app.buttons["panel-tab-adjustments"])
         // Close search to clear its shared query, then open a fresh search.
@@ -384,7 +384,7 @@ extension XCTestCase {
         let position = app.textFields["number-entry-gradient-position"]
         workspaceActivate(app.buttons["number-value-gradient-position"])
         XCTAssertTrue(position.waitForExistence(timeout: 5))
-        position.typeText("25\n"); expect(app.buttons["number-value-gradient-position"], "25.0 %")
+        position.typeText("25\n"); expect(app.buttons["number-value-gradient-position"], "25 %")
         let gradientReset = app.buttons["gradient-reset"]
         XCTAssertTrue(gradientReset.waitForExistence(timeout: 10))
         revealEditorControl(gradientReset, in: app.scrollViews.containing(.button, identifier: "gradient-reset").firstMatch)

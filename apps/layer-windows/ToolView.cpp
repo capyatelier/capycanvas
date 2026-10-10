@@ -139,7 +139,7 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
     Bindings fields;
     hstring key;
     std::shared_ptr<RangeControl> range;
-    explicit SettingsView(std::shared_ptr<WorkspaceData> data):data(std::move(data)){root.Spacing(6);}
+    explicit SettingsView(std::shared_ptr<WorkspaceData> data):data(std::move(data)){root.Spacing(2);}
     static bool picking(J const& state){
         auto tool=str(object(state,L"layer_tools"),L"tool");return tool==L"pick_visible"||tool==L"pick_layer";
     }
@@ -367,6 +367,8 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                     }
                 }
                 NumberPresentation presentation;presentation.identity=[context]{return context;};
+                presentation.reset=[weak,id,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)
+                    self->data->dispatch(O({{L"type",S(L"reset_tool_setting")},{L"id",S(id)}}));};
                 presentation.title=[weak,id]{if(auto self=weak.lock())return str(find(array(self->data->state,L"tool_settings"),L"id",id),L"label");return hstring();};
                 auto control=number(data,str(item,L"label"),object(item,L"numeric"),
                     [weak,id]{if(auto self=weak.lock())return num(find(array(self->data->state,L"tool_settings"),L"id",id),L"value");return 0.;},

@@ -162,14 +162,15 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   function numberEditor(numeric,label,request,valueOnly=false){
     let owner;
     const action=value=>({...(owner??request()),operation:{type:"value",value}});
-    const number=numberField(numeric,label,value=>send(owner?{op:"gesture",phase:"move",action:action(value)}:action(value)),true,valueOnly);
+    const number=numberField(numeric,label,value=>send(owner?{op:"gesture",phase:"move",action:action(value)}:action(value)),valueOnly,valueOnly);
+    number.onReset=()=>send({...request(),op:'reset'});
     number.onEditPhase=phase=>{
       if(phase==="down")owner=request();
       const next=action(number.getValue());
       if(phase!=="down")owner=null;
       send({op:"gesture",phase,action:next});
     };
-    captureSliderContacts(number);
+    if(!number.panel)captureSliderContacts(number);
     return number;
   }
   function curveEditor(layer,key,initial){
@@ -278,7 +279,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
         }
         const change=value=>send({op:"set",layer:view.layer,key:c.key,value:{kind:c.kind.kind,value}});let field=fields.get(c.key);
         if(!field){
-        if(c.kind.kind==="number") {const n=numberEditor(c.kind.numeric,()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",()=>({op:"number",layer:view.layer,key:c.key}));field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",n),update:c=>n.update(c.value.value),disable:x=>n.setDisabled(x),dispose:()=>n.dispose()};}
+        if(c.kind.kind==="number") {const n=numberEditor(c.kind.numeric,()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",()=>({op:"number",layer:view.layer,key:c.key}));field={node:n,update:c=>n.update(c.value.value),disable:x=>n.setDisabled(x),dispose:()=>n.dispose()};}
         else if(c.kind.kind==="curve") {
           let curve=curveEditor(view.layer,c.key,c),domain=JSON.stringify(c.curve.domain);
           const node=element('div');node.append(curve.node);

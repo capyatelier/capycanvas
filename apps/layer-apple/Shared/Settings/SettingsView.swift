@@ -127,7 +127,7 @@ struct SettingsView: View {
                 choice(row)
             case "number":
                 let reset = numberResets[row["id"].string, default: 0]
-                NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"]) { value, completion in
+                NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"], panel: false) { value, completion in
                     // Reset replaces this draft; a late focus callback from the
                     // discarded editor must not overwrite the shared default.
                     guard reset == numberResets[row["id"].string, default: 0] else { completion(nil); return }

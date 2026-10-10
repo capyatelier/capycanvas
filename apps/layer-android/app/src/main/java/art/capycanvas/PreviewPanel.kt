@@ -54,7 +54,7 @@ internal class PreviewOps(val type: String, val value: String, val apply: String
             Text(view.getString("title"), Modifier.padding(end = 8.dp), fontWeight = FontWeight.Bold)
             key(view.optString("kind", view.getString("label"))) {
                 NumericSetting(view.getString("label"), view.number("radius"), view.getJSONObject("numeric"),
-                    Modifier.padding(end = 8.dp).testTag("$name-value"), settings = true, id = name) {
+                    Modifier.padding(end = 8.dp).testTag("$name-value"), id = name) {
                     send(obj("op" to ops.value, "radius" to it))
                 }
             }
