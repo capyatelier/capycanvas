@@ -38,6 +38,7 @@ const TOOLBAR_DIVIDER_SIZE: f32 = 8.0;
 /// Shared gesture distances in logical UI pixels, not preferences.
 pub const WORKSPACE_PROXIMITY: f32 = 80.0;
 const PANEL_SNAP_DISTANCE: f32 = WORKSPACE_PROXIMITY * 0.5;
+const COLUMN_COLLAPSE_DISTANCE: f32 = 72.0;
 #[cfg(test)]
 const TOOL_TILE_COUNT: usize = crate::TOOLBAR_CONTROLS.len();
 
@@ -581,9 +582,7 @@ impl ResizeCollapse {
         } else {
             x - self.origin
         };
-        // Match the 36px opening distance, measured inward from the minimum
-        // edge. Narrow columns retain the existing icon-strip width trigger.
-        width <= self.minimum - TILE_SIZE || width <= TILE_SIZE
+        width <= self.minimum - COLUMN_COLLAPSE_DISTANCE || width <= TILE_SIZE
     }
 }
 

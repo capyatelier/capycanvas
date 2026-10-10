@@ -3075,7 +3075,7 @@ fn native_navigator_column_resize() {
                 let s = stats.lock().unwrap();
                 (s.cpu.len(), s.overview_frames)
             };
-            drag.update(delta(minimum - TILE_SIZE - 1.));
+            drag.update(delta(minimum - 72. - 1.));
             pump(200);
             assert!(w.workspace_drag.borrow().is_some());
             assert!(state(&w).workspace.layout.is_collapsed(root));
@@ -3088,7 +3088,7 @@ fn native_navigator_column_resize() {
                 );
                 assert_eq!(s.overview_frames, previews);
             }
-            drag.update(delta(minimum - TILE_SIZE + 1.));
+            drag.update(delta(minimum - 72. + 1.));
             pump(200);
             assert_visible(true);
             assert!(
@@ -3096,7 +3096,7 @@ fn native_navigator_column_resize() {
                 "reopening must present the overview before release"
             );
         }
-        drag.update(delta(minimum - TILE_SIZE - 1.));
+        drag.update(delta(minimum - 72. - 1.));
         pump(200);
         assert_visible(false);
         drag.end();
@@ -11058,9 +11058,12 @@ fn native_divider_cursor_input() {
         } else {
             layer_ui::LAYERS_MIN_WIDTH
         };
-        let threshold = minimum - TILE_SIZE - TILE_SIZE;
+        let threshold = minimum - TILE_SIZE - 72.;
         for (distance, collapsed) in [
             (minimum - TILE_SIZE + 20., false),
+            (minimum - TILE_SIZE - 36., false),
+            (threshold + 1., false),
+            (threshold, true),
             (threshold - 2., true),
             (threshold + 2., false),
             (threshold - 2., true),
@@ -11097,7 +11100,6 @@ fn native_divider_cursor_input() {
             { "down": true }, { "down": false }
         ]));
         let after = state(&w).workspace;
-        let expected = if group == 5 { 242. } else { 254. };
         assert_eq!(
             after
                 .layout
@@ -11106,7 +11108,11 @@ fn native_divider_cursor_input() {
                 .find(|b| b.id == band)
                 .unwrap()
                 .extent,
-            expected + WORKSPACE_SPACING
+            0.
+        );
+        assert_eq!(
+            w.resolved().groups.iter().find(|g| g.id == group).unwrap().bounds.width,
+            if group == 5 { Panel::Brushes } else { Panel::Layers }.default_width(viewport[0])
         );
         assert!(w.workspace_drag.borrow().is_none());
         input.perform(serde_json::json!([{ "point": [point[0] + outward * 20., point[1]] }]));

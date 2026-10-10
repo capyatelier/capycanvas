@@ -1319,6 +1319,7 @@ mod tests {
         let resolved = geometry(layout);
         let d = resolved.dividers.iter().find(|d| d.id == divider).unwrap();
         for (width, expected) in [
+            (threshold + 36., None),
             (threshold + 0.5, None),
             (threshold, inclusive.then_some(root)),
             (threshold - 0.5, Some(root)),
@@ -1339,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn resize_collapse_uses_36_pixels_inside_minimum_on_both_edges() {
+    fn resize_collapse_uses_72_pixels_inside_minimum_on_both_edges() {
         for layout in [DockLayout::default(), DockLayout::editor_default()] {
             for (panel, minimum) in [
                 (Panel::Brushes, TOOL_PANEL_MIN_WIDTH),
@@ -1363,7 +1364,7 @@ mod tests {
                     band.id,
                     band.root.id(),
                     band.edge == Edge::Right,
-                    minimum - TILE_SIZE,
+                    minimum - 72.,
                     true,
                 );
             }
@@ -1377,7 +1378,7 @@ mod tests {
             unreachable!();
         };
         *axis = Axis::Horizontal;
-        assert_collapse_threshold(&layout, 4, 5, false, TOOL_PANEL_MIN_WIDTH - TILE_SIZE, true);
+        assert_collapse_threshold(&layout, 4, 5, false, TOOL_PANEL_MIN_WIDTH - 72., true);
         // Brush size has no content minimum: the existing icon-width trigger
         // still wins for this narrow column.
         assert_collapse_threshold(&layout, 4, 6, true, TILE_SIZE, true);
@@ -1397,7 +1398,7 @@ mod tests {
             content_height: 0.,
             scroll: None,
         });
-        assert_collapse_threshold(&layout, 3, 4, false, 320. - TILE_SIZE, true);
+        assert_collapse_threshold(&layout, 3, 4, false, 320. - 72., true);
         assert_eq!(layout.collapse_at_divider(4, [0., 0.], VIEW), None);
 
         // Standalone tool ribbons retain their existing resize behavior.

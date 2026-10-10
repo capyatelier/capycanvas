@@ -569,8 +569,8 @@ class AndroidInteractionTest {
         // Exact threshold checks bypass the system's touch resampling, while
         // exercising the same native Compose MotionEvent dispatch and JNI path.
         systemInput = false
-        for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) for (right in listOf(false, true)) {
-            tool = pointer; restore()
+        for (theme in listOf("light", "dark")) for (pointer in pointerTools) for (right in listOf(false, true)) {
+            action(obj("type" to "set_theme", "theme" to theme)); tool = pointer; restore()
             val id = if (right) 43 else 41
             val band = if (right) 42 else 40
             val direction = if (right) -1 else 1
@@ -592,6 +592,14 @@ class AndroidInteractionTest {
             move(35f); assertEquals("Reverse before reaching edge", before, workspace())
             move(37f); assertEquals(expanded, workspace())
             move(edge + 45); assertNotEquals(expanded, workspace())
+            for (distance in listOf(edge - 36, edge - 71)) {
+                move(distance); assertFalse("Inward drag stays expanded before 72 pixels", exists("collapsed-column-$id"))
+            }
+            move(edge - 73); assertTrue(exists("collapsed-column-$id"))
+            if (right) assertFalse("Navigator hides at the collapse boundary", exists("navigator-overview"))
+            move(edge - 71); assertFalse("Reverse across the collapse boundary", exists("collapsed-column-$id"))
+            if (right) assertTrue("Navigator returns when reversing collapse", exists("navigator-overview"))
+            move(edge - 73); assertTrue(exists("collapsed-column-$id"))
             event(MotionEvent.ACTION_CANCEL)
             waitFor("cancel restores collapsed width") { workspace() == before }
             event(MotionEvent.ACTION_DOWN, press)

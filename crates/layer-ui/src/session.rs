@@ -13179,9 +13179,9 @@ mod tests {
     #[test]
     fn resize_collapse_preserves_history_and_pre_gesture_width() {
         let viewport = [1200., 900.];
-        for cancel in [false, true] {
-            for group in [5, 8] {
-                let mut s = session(Platform::Gtk);
+        for platform in Platform::ALL {
+            for (cancel, group) in [(false, 5), (false, 8), (true, 5), (true, 8)] {
+                let mut s = session(platform);
                 let original = s.state.workspace.clone();
                 let root = original.layout.column_for_group(group).unwrap();
                 let width = original
@@ -13226,21 +13226,22 @@ mod tests {
                     .unwrap();
                 };
                 drag(&mut s, ContactPhase::Down, start[0]);
-                for width in [minimum, minimum - TILE_SIZE + 0.5] {
+                let threshold = minimum - 72.;
+                for width in [minimum, minimum - 36., threshold + 0.5] {
                     drag(&mut s, ContactPhase::Move, x_for_width(width));
                     assert!(!s.state.workspace.layout.is_collapsed(root));
                 }
                 drag(
                     &mut s,
                     ContactPhase::Move,
-                    x_for_width(minimum - TILE_SIZE - 0.5),
+                    x_for_width(threshold),
                 );
                 assert!(s.state.workspace.layout.is_collapsed(root));
                 let collapsed = s.state.workspace.clone();
                 drag(
                     &mut s,
                     ContactPhase::Move,
-                    x_for_width(minimum - TILE_SIZE - 1.),
+                    x_for_width(threshold - 1.),
                 );
                 assert_eq!(s.state.workspace, collapsed, "Hold below the threshold");
                 drag(
@@ -13250,7 +13251,7 @@ mod tests {
                     } else {
                         ContactPhase::Up
                     },
-                    x_for_width(minimum - TILE_SIZE - 1.),
+                    x_for_width(threshold - 1.),
                 );
                 if cancel {
                     assert_eq!(s.state.workspace, original);
@@ -13453,18 +13454,21 @@ mod tests {
             } else {
                 crate::TOOL_PANEL_MIN_WIDTH
             };
-            t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE + 0.5);
-            assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-            t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE - 0.5);
+            let threshold = minimum - TILE_SIZE - 72.;
+            for distance in [minimum - TILE_SIZE - 36., threshold + 0.5] {
+                t.drag(ContactPhase::Move, distance);
+                assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
+            }
+            t.drag(ContactPhase::Move, threshold);
             let collapsed = t.session.state.workspace.clone();
             assert!(collapsed.layout.is_collapsed(t.root));
             assert_eq!(collapsed.layout.collapsed[0].expanded_width, t.saved_width);
             // Reversing this collapse resumes immediately, even before the
             // pointer has reached the minimum-width edge.
-            t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE + 0.5);
+            t.drag(ContactPhase::Move, threshold + 0.5);
             assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
             assert!((t.width() - t.minimum).abs() < 0.01);
-            t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE - 0.5);
+            t.drag(ContactPhase::Move, threshold - 0.5);
             assert_eq!(t.session.state.workspace, collapsed);
             t.drag(ContactPhase::Up, edge + 100.);
             assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
@@ -13578,7 +13582,7 @@ mod tests {
                     };
                     let base = (origin - t.center) * t.outward;
                     let distance = |width| base + width;
-                    let threshold = (t.minimum - TILE_SIZE).max(TILE_SIZE);
+                    let threshold = (t.minimum - 72.).max(TILE_SIZE);
                     t.drag(ContactPhase::Down, 0.);
                     // Jump directly from a wide column across the threshold.
                     // Nested columns must retain the pre-collapse parent edge.
@@ -13591,7 +13595,7 @@ mod tests {
                         t.drag(ContactPhase::Move, distance(threshold));
                         assert!(
                             t.session.state.workspace.layout.is_collapsed(t.root),
-                            "the 36px collapse threshold is inclusive"
+                            "the collapse threshold is inclusive"
                         );
                         t.drag(ContactPhase::Move, distance(threshold + 0.5));
                         assert!(

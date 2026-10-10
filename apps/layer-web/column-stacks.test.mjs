@@ -30,7 +30,31 @@ export async function checkColumnStacks({call,evaluate,settle}) {
   fixture.zen_mode=false;
   const reset=()=>send({type:'restore_workspace',workspace:fixture});
   try {
-    await call('Page.bringToFront');await reset();
+    await call('Page.bringToFront');
+    for(const theme of ['light','dark']) for(device of ['mouse','pen','touch']) for(const right of [false,true]) {
+      const workspace=structuredClone(saved),minimum=right?226:128;
+      Object.assign(workspace.layout,{bands:[{id:40,edge:right?'right':'left',extent:320,root:tabs(41,[right?'layers':'brushes'])}],floating:[],collapsed:[],column_stacks:[],column_scroll:[],fit_tab_groups:[],fit_height_groups:[],next_id:Math.max(42,workspace.layout.next_id)});
+      workspace.zen_mode=false;
+      await send({type:'set_theme',theme});await send({type:'restore_workspace',workspace});
+      const before=await snapshot(),layout=await resolved(),divider=layout.dividers.find(d=>d.id===40),start=center(divider.bounds);
+      const origin=right?divider.parent.x+divider.parent.width-3:divider.parent.x+3;
+      const at=width=>({x:origin+(right?-width:width),y:start.y});
+      await input('down',start);
+      for(const width of [minimum,minimum-36,minimum-71]) {
+        await input('move',at(width));await wait(100);
+        assert.equal((await snapshot()).layout.collapsed.length,0,`${theme}/${device}: ${minimum-width}px overshoot stays expanded`);
+      }
+      await input('move',at(minimum-73));await wait(100);
+      assert.equal((await snapshot()).layout.collapsed[0].root,41);
+      await input('move',at(minimum-71));await wait(100);
+      assert.equal((await snapshot()).layout.collapsed.length,0,'Reversing crosses the same collapse boundary');
+      await input('move',at(minimum-73));await input('up');await wait(100);
+      const collapsed=await snapshot();
+      assert.equal(collapsed.layout.collapsed[0].expanded_width,layout.groups.find(g=>g.id===41).bounds.width);
+      await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await snapshot(),before);
+      await send({type:'invoke',command:'redo_workspace'});assert.deepEqual(await snapshot(),collapsed);
+    }
+    device='mouse';await reset();
     let layout=await resolved();
     assert.equal(layout.collapsed.length,2);
     assert.equal(layout.collapsed[1].bounds.y-layout.collapsed[0].bounds.y-layout.collapsed[0].bounds.height,6);

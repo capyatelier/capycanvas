@@ -96,7 +96,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation with 16 visible paint layers | 90 | | |
 | Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
-| Panel or column resize | 90 | Color resize unmeasured on reference hardware; GTK desktop diagnostic remains below target | [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04 |
+| Panel or column resize | 90 | Tier workload unmeasured. Blank-canvas Debug divider diagnostic: 24.49–45.67 changing bounds/s, window-vsync p99 33.46–83.74 ms | [Divider resize diagnostic](#divider-resize-diagnostic), 2026-10-10; [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04 |
 | Pen pressure utility and curve drag | 90 | Unmeasured on reference hardware | [Pen pressure measurement protocol](../ui/pen-pressure.md#validation); GTK desktop measurements do not qualify this tier |
 | Drawer open and close | 90 | | |
 | Grouped tool menus, drawer switching and tile drag | 90 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
@@ -107,6 +107,20 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | List scrolling: layers, brushes, filters | 90 | | |
 | Menu open and close | 90 | Application menu heading switching unmeasured on the tier canvas | [Menu interaction](../ui/window-bar.md); mouse and pen functional checks do not qualify presented frame rate |
 | G-Pen 1536 px stroke with a pending language change | 90 | **Not met.** 56.80 fresh updates/s (52.40–56.99), completion-gap p99 32.08–34.97 ms | Language-change diagnostic below; synthetic owner replay, no scanout qualification |
+
+## Divider resize diagnostic
+
+The Wacom MovinkPad 11 was measured on 2026-10-10 with the 72-pixel collapse
+distance applied to `2c94caffe`, a Debug APK and `dev-perf` Rust. The display
+reported 60 Hz. `AndroidWorkspacePerformanceTest#continuousResizeFrameTiming`
+uses a blank drawing, a custom panel workspace and default panel glass. After
+warming up, one five-second mouse drag and one touch drag resized each of
+Brushes, Properties, Navigator and the toolbar. Changing bounds reached
+24.49–45.67 updates/s; distinct window-vsync rates were 27.42–57.93/s with p99
+intervals of 33.46–83.74 ms. All eight windows published no full snapshots or
+panel content changes and lost no frame reports. These diagnostics do not measure
+collapse transitions or qualify the 90 Hz, 24 MP tier workload. Raw reports are in
+`artifacts/panel-collapse-threshold/android-resize-logcat.txt`.
 
 ## Selected-pixel previews
 
