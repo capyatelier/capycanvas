@@ -8,7 +8,7 @@ export async function checkHeaderControls({call,evaluate,settle}) {
   const resize=async width=>{await call('Emulation.setDeviceMetricsOverride',{width,height:870,deviceScaleFactor:1,mobile:false});await settle();};
   await resize(1440);
   const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/localization-expansion/web';await mkdir(dir,{recursive:true});
-  const menus=await evaluate('layerApp.app.editor_models(0,0).application_menus');assert.deepEqual(menus.map(menu=>menu.id),['file','edit','layer','select','filter','view','window']);
+  const menus=await evaluate('layerApp.app.editor_models(0,0).application_menus');assert.deepEqual(menus.map(menu=>menu.id),['file','edit','image','layer','select','filter','view','window']);
   const openMenus=()=>evaluate("[...document.querySelectorAll('.header-menu-labels details[open]')].map(menu=>menu.dataset.menu)");
   const hover=async(id,pointerType)=>{
     const point=await evaluate(`(()=>{const r=document.querySelector('[data-menu="${id}"] > summary').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
@@ -56,5 +56,5 @@ export async function checkHeaderControls({call,evaluate,settle}) {
     for(const tag of tags){await restore(tag);const state=await evaluate(`({same:headerLocaleChips.every((chip,index)=>chip===document.querySelectorAll('.header-component')[index])&&headerLocaleSize===document.querySelector('.header-size-choices')&&headerLocaleFooter===document.querySelector('#header-canvas-info'),focused:document.activeElement===headerLocaleFooter,size:headerLocaleSize.ariaLabel,tools:document.querySelector('#header-component-tools').ariaLabel,chips:headerLocaleChips.map(chip=>({label:chip.ariaLabel,title:chip.title})),status:[...document.querySelectorAll('.header-status-placeholder')].map(node=>node.textContent)})`);assert.ok(state.same&&state.focused,`${tag} retained header bank/native controls`);assert.equal(state.size,expected[tag].size);assert.equal(state.tools,expected[tag].tools);for(const chip of state.chips)assert.equal(chip.title,expected[tag].drag.replace('{ $item }',chip.label),`${tag} typed header drag caption`);assert.ok(state.status.includes(expected[tag].clock)&&state.status.includes(expected[tag].battery),`${tag} localized native-status placeholders`);await evaluate('document.fonts.ready.then(()=>new Promise(resolve=>setTimeout(resolve,150)))');const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/header-bank-${theme}-${tag}.png`,Buffer.from(shot.data,'base64'));}
     await evaluate(`document.querySelector('#header-edit-cancel').click()`);await settle();}
   await restore('en');
-  console.log('PASS: all seven full/compact/overflow menus, real Zoom In, resize closure and focus restoration');
+  console.log('PASS: all eight full/compact/overflow menus, real Zoom In, resize closure and focus restoration');
 }

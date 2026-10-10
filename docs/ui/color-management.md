@@ -219,6 +219,9 @@ Show the document profile/depth, source profile or assumption, active proof stat
 export destination and display status. This helps distinguish a wrongly tagged
 image from a wrong export setting or a viewing limitation.
 
+Image › Color Management groups Assign Profile…, Convert Color Space… and Change
+Bit Depth…. Image › Blending selects how layers combine.
+
 - **Assign Profile…** corrects interpretation while preserving the declared RGB
   numbers. Appearance may change. Internal storage conversion is an implementation
   detail; do not define this action as “keep GPU bytes unchanged.”

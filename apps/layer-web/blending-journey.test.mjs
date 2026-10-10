@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
-const edit='.header-menu[data-menu="edit"]';
+const image='.header-menu[data-menu="image"]';
 const dialog='dialog[open]';
 
 export async function checkBlending({call,evaluate,settle}) {
@@ -24,13 +24,13 @@ export async function checkBlending({call,evaluate,settle}) {
   const calm=()=>evaluate('new Promise(resolve=>{let last=performance.now(),steady=0;const frame=t=>{steady=t-last<40?steady+1:0;last=t;if(steady>=3)resolve();else requestAnimationFrame(frame);};requestAnimationFrame(frame);})');
   const choose=async(label,kind)=>{
     await calm();
-    await tap(await middle(`document.querySelector('${edit} > summary')`),kind);
-    await wait(`document.querySelector('${edit}').open`);
+    await tap(await middle(`document.querySelector('${image} > summary')`),kind);
+    await wait(`document.querySelector('${image}').open`);
     for(const row of ['Blending',label]) {
       await wait(`!!${menuRow(row)}&&!${menuRow(row)}.disabled`);
       await tap(await middle(menuRow(row)),kind);
     }
-    await wait(`!document.querySelector('${edit}').open`);
+    await wait(`!document.querySelector('${image}').open`);
   };
   const capture=async(file,expression)=>{
     const r=await rect(expression);
@@ -53,7 +53,7 @@ export async function checkBlending({call,evaluate,settle}) {
     assert.equal(await evaluate(selected('blend_linear')),false,'one undo step restores Perceptual');
 
     await invoke('document_properties');
-    await wait(`[...document.querySelectorAll('${dialog} h3')].some(h=>h.textContent==='Blending'&&h.nextElementSibling?.textContent==='Perceptual')`);
+    await wait(`[...document.querySelectorAll('${dialog} h3')].some(h=>h.textContent==='Blending'&&h.nextElementSibling?.textContent==='Perceptual Blending')`);
     await capture('properties',`document.querySelector('${dialog}')`);
     await evaluate(`[...document.querySelectorAll('${dialog} button')].find(b=>b.textContent==='Done').click()`);
     await wait(`!document.querySelector('${dialog}')`);

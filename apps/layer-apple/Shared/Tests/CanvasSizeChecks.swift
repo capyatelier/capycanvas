@@ -4,7 +4,7 @@ extension XCTestCase {
     @MainActor func checkCanvasSize(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"}]"#
         app.launch(); capturePaintEditor(in: app)
-        editorMenu(in: app, menu: "Edit", id: "canvas_size", label: "Canvas Size…", submenu: "Image")
+        editorMenu(in: app, menu: "Image", id: "canvas_size", label: "Canvas Size…")
         let apply = app.buttons["canvas-size-apply"], message = app.staticTexts["canvas-size-message"]
         let title = editorDocumentTitle(in: app)
         func expect(_ element: XCUIElement, _ format: String, _ argument: String) {
@@ -34,7 +34,7 @@ extension XCTestCase {
     @MainActor func checkImageSize(in app: XCUIApplication) {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"}]"#
         app.launch(); capturePaintEditor(in: app)
-        editorMenu(in: app, menu: "Edit", id: "image_size", label: "Image Size…", submenu: "Image")
+        editorMenu(in: app, menu: "Image", id: "image_size", label: "Image Size…")
         let apply = app.buttons["image-size-apply"], message = app.staticTexts["image-size-message"]
         let title = editorDocumentTitle(in: app)
         func shown(_ element: XCUIElement) -> String { (element.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? element.label }

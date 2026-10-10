@@ -271,10 +271,12 @@ function Native-Clipboard-NoEffect($Target,[string]$Name){
  }
  $checks[$Name]='passed'
 }
-function Paste-In-Place{
+function Paste-Special([string]$Command){
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
- (Control 'Paste in Place' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ (Control 'menu-paste-special' -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ Invoke-Id $Command
 }
+function Paste-In-Place {Paste-Special 'paste_in_place'}
 function Menu-Item([string]$Name){
  $condition=[System.Windows.Automation.AndCondition]::new(
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),
@@ -414,7 +416,7 @@ try {
  Changed {Chord @(0x11) 0x5a};Wait-Until {!(Model).state.layer_tools.editing_layer.has_mask} 'Undo did not remove the temporary clipboard mask'
  $checks.focused_mask_copy_cut_and_external_paste='passed'
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null
- New-Image {& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke-Id 'paste_as_new_image'} '40x30' 'external-paste-as-new-image'
+ New-Image {Paste-Special 'paste_as_new_image'} '40x30' 'external-paste-as-new-image'
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);$png=[IO.MemoryStream]::new([byte[]](137,80,78,71,13,10,26,10,0,0,0,0));try{$data=[Windows.Forms.DataObject]::new();$data.SetImage($image);$data.SetData('PNG',$false,$png);[Windows.Forms.Clipboard]::SetDataObject($data,$true)}finally{$png.Dispose();$image.Dispose()}} @($foreign)|Out-Null
  if((Formats) -notcontains 'PNG' -or (Formats) -notcontains 'Bitmap'){throw 'The fallback producer did not advertise both the corrupt PNG and valid Bitmap'}
  New-Image {Chord @(0x11,0x12) 0x4e} '40x30' 'corrupt-png-falls-back-to-bitmap' 0 @('40x30')

@@ -2,10 +2,12 @@
 
 [Workspace and UI](README.md)
 
-**Edit › Image** holds the commands that change the whole image: Crop, Crop
-Canvas to Selection, Canvas Size…, Image Size…, Rotate Image 90° Left and Right,
-Rotate Image 180°, Flip Image Horizontally and Vertically, Trim and Reveal All.
-Command search finds them all.
+**Image** sits between Edit and Layer. Image Size… and Canvas Size… come first,
+followed by Crop, Crop Canvas to Selection, Trim and Reveal All. **Rotate and
+Flip** groups the whole-image quarter turns, half turn and flips.
+**Color Management** holds Assign Profile…, Convert Color Space… and Change Bit
+Depth…; **Blending** holds Perceptual Blending and Linear Light Blending.
+See [color management](color-management.md). Command search finds them all.
 
 - **One step each:** every command is one undo step, and applies to locked layers
   too; locks protect content, not the document's size.

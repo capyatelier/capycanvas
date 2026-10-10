@@ -79,9 +79,12 @@ export async function checkImageLayers({call,evaluate,settle}) {
   };
   const editMenu=async label=>{
     await click(await middle('.header-menu[data-menu="edit"] > summary'));
-    const row=`[...document.querySelectorAll('.header-menu[open] .popover button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)})`;
-    await wait(`document.querySelector('.header-menu[data-menu="edit"]').open&&!!${row}&&!${row}.disabled`);
-    await click(await evaluate(`(()=>{const r=${row}.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`));
+    await wait(`document.querySelector('.header-menu[data-menu="edit"]').open`);
+    for(const caption of ['Paste Special',label]) {
+      const row=`[...document.querySelectorAll('.header-menu[open] .popover button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(caption)})`;
+      await wait(`!!${row}&&!${row}.disabled`);
+      await click(await evaluate(`(()=>{const r=${row}.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`));
+    }
   };
   const select=async([x0,y0,x1,y1])=>{
     await invoke('rectangle_select');

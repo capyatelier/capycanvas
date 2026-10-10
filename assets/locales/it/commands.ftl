@@ -565,7 +565,7 @@ commands-refusal-conversions-layer-changed = Il livello è cambiato durante la c
 commands-refusal-retouch-layers-select-a-paint-layer-first = Seleziona prima un livello di pittura
 commands-refusal-retouch-layers-show-the-layer-first = Mostra prima il livello
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Imposta prima il livello su Normale
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = La Separazione di frequenze richiede fusione Percettiva. Modificala in Modifica ▸ Fusione.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = La Separazione di frequenze richiede fusione Percettiva. Modificala in { menu-image } ▸ { menu-blending }.
 commands-refusal-retouch-layers-the-destination-group-is-locked = Il gruppo di destinazione è bloccato
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = I livelli separati supererebbero il limite di 1 GiB per una modifica
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = La maschera di un gruppo non può essere applicata da sola; Unisci gruppo la applica
@@ -636,3 +636,6 @@ command-next-drawing = Disegno successivo
 command-previous-drawing = Disegno precedente
 
 command-center-zoom-clicks = Centra al clic
+menu-paste-special = Incolla speciale
+menu-rotate-and-flip = Ruota e rifletti
+menu-color-management = Gestione del colore

@@ -42,9 +42,12 @@ struct MacEditorCommands: Commands {
         CommandGroup(replacing: .undoRedo) {
             if let store { CatalogMenuItems(store: store, id: "edit", excluding: ["settings"]) }
         }
-        CommandMenu("Layer") { if let store { CatalogMenuItems(store: store, id: "layer") } }
-        CommandMenu("Select") { if let store { CatalogMenuItems(store: store, id: "select") } }
-        CommandMenu("Filter") { if let store { CatalogMenuItems(store: store, id: "filter") } }
+        if let store {
+            CommandMenu(store.applicationMenu("image")["label"].string) { CatalogMenuItems(store: store, id: "image") }
+            CommandMenu(store.applicationMenu("layer")["label"].string) { CatalogMenuItems(store: store, id: "layer") }
+            CommandMenu(store.applicationMenu("select")["label"].string) { CatalogMenuItems(store: store, id: "select") }
+            CommandMenu(store.applicationMenu("filter")["label"].string) { CatalogMenuItems(store: store, id: "filter") }
+        }
         CommandGroup(replacing: .help) {}
         CommandGroup(replacing: .appInfo) {
             if let store { Button(store.command("about")["label"].string) { store.invoke("about") } }
@@ -69,7 +72,7 @@ private struct SettingsMenuItem: View {
     @ObservedObject var store: EditorStore
     var body: some View {
         let command = store.command("settings")
-        Button("Settings…") { store.invoke("settings") }
+        Button(command["label"].string) { store.invoke("settings") }
             .disabled(!command["enabled"].bool)
             .keyboardShortcut(menuShortcut(command["bindings"][0]))
     }

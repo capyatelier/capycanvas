@@ -4008,10 +4008,10 @@ class AndroidInteractionTest {
         waitFor("the crop bar offers $id", 5_000) { cropping() }
         if (shown(tag)) tap(bounds(tag).center) else viaMore(listOf(commandState(id).getString("label")))
     }
-    /** The Crop tool: C with the mouse, Edit › Image › Crop with the others. */
+    /** The Crop tool: C with the mouse, Image › Crop with the others. */
     private fun openCrop(device: Int) {
         if (device == MotionEvent.TOOL_TYPE_MOUSE) instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_C)
-        else chooseFromApplicationMenu("edit", listOf("Image", "Crop"))
+        else chooseFromApplicationMenu("image", listOf("Crop"))
         waitFor("the crop bar", 5_000) { cropping() }
         settle()
     }
@@ -4147,14 +4147,14 @@ class AndroidInteractionTest {
                 val name = listOf("mouse", "finger", "stylus")[index]
                 tool = device
                 val (label, id) = if (index % 2 == 0) "Linear Light Blending" to "blend_linear" else "Perceptual Blending" to "blend_perceptual"
-                chooseFromApplicationMenu("edit", listOf("Blending", label)) {
+                chooseFromApplicationMenu("image", listOf("Blending", label)) {
                     if (device == MotionEvent.TOOL_TYPE_STYLUS) for (theme in listOf("light", "dark")) {
                         action(obj("type" to "set_theme", "theme" to theme))
                         waitFor("$name: the menu stays open across themes", 3_000) { popupCount() >= 1 && menuText(label) != null }
                         captureCanvasBar("blending-menu-$theme", "blending")
                     }
                 }
-                waitFor("$name: Edit › Blending › $label", 5_000) { selected(id) }
+                waitFor("$name: Image › Blending › $label", 5_000) { selected(id) }
                 if (id == "blend_linear") awaitPixels("$name: linear light shows the half-covered paint lighter", center) { (pixel) -> red(pixel) > red(perceptual) + 15 }
                 else awaitPixels("$name: Perceptual returns the canvas", center) { (pixel) -> same(pixel, perceptual) }
                 println("PASS document blending $name")
@@ -4166,7 +4166,7 @@ class AndroidInteractionTest {
             popupInput = false
             action(obj("type" to "set_theme", "theme" to originalTheme))
         }
-        println("PASS Edit › Blending with mouse, finger and stylus changes the canvas in one undo step each")
+        println("PASS Image › Blending with mouse, finger and stylus changes the canvas in one undo step each")
     }
 
     @Test fun dodgeBurnAndFrequencySeparationAcrossDevices() {
@@ -4372,7 +4372,7 @@ class AndroidInteractionTest {
                 waitFor("$name: redo crops again", 5_000) { size() == cropped }
                 if (hasSelection()) command("deselect")
 
-                chooseFromApplicationMenu("edit", listOf("Image", "Canvas Size…"))
+                chooseFromApplicationMenu("image", listOf("Canvas Size…"))
                 waitFor("$name: the Canvas Size panel", 5_000) { panel() != null && shown("canvas-size-panel") }
                 onMain { assertTrue("$name: the panel leaves window focus with the canvas", owner.view.hasWindowFocus()) }
                 assertFalse("$name: no field is edited when the panel opens", host.editingText)
@@ -4416,7 +4416,7 @@ class AndroidInteractionTest {
                 waitFor("$name: redo restores the size", 5_000) { size() == original }
                 awaitPixels("$name: redo shows the stroke again", listOf(hiddenPoint)) { (h) -> shows(h, rgba) }
                 if (device == MotionEvent.TOOL_TYPE_STYLUS) {
-                    chooseFromApplicationMenu("edit", listOf("Image", "Canvas Size…"))
+                    chooseFromApplicationMenu("image", listOf("Canvas Size…"))
                     waitFor("$name: the panel reopens", 5_000) { shown("canvas-size-panel") }
                     instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
                     waitFor("$name: Back cancels the panel", 5_000) { panel() == null && !exists("canvas-size-panel") && size() == original }
@@ -4629,7 +4629,7 @@ class AndroidInteractionTest {
         }
         fun near(label: String, value: Int, expected: Double, tolerance: Int) = assertTrue("$label: $value vs $expected", kotlin.math.abs(value - expected) <= tolerance)
         fun type(field: String, text: String) = typeNumber("setting-number-image-size-$field", text)
-        fun image(path: String) = chooseFromApplicationMenu("edit", listOf("Image", path))
+        fun image(vararg path: String) = chooseFromApplicationMenu("image", path.toList())
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         popupInput = true
         try {
@@ -4709,7 +4709,7 @@ class AndroidInteractionTest {
                 waitFor("$name: one undo step restores the size", 10_000) { size() == original }
                 println("PASS image size $name")
 
-                image("Rotate Image 90° Right")
+                image("Rotate and Flip", "Rotate Image 90° Right")
                 waitFor("$name: the canvas turns", 10_000) { size() == original.second to original.first }
                 command("fit_canvas")
                 awaitPixels("$name: the fill left of the middle turns to above it", listOf(documentPoint(height * .5, width * .3), documentPoint(height * .5, width * .75))) { (f, p) ->

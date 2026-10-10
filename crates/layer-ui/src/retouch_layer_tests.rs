@@ -3,7 +3,7 @@ mod retouch_layer_checks {
     use layer_core::{BlendSpace, Edit, LayerBlend, LayerKind, RasterOperationKind};
     use std::collections::BTreeSet;
 
-    const LINEAR_REASON: &str = "Frequency Separation needs Perceptual blending. Change it in Edit ▸ Blending.";
+    const LINEAR_REASON: &str = "Frequency Separation needs Perceptual blending. Change it in Image ▸ Blending.";
 
     fn perceptual() -> UiSession<Recorder> {
         let mut s = session(Platform::Gtk);

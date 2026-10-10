@@ -1588,7 +1588,7 @@ mod tests {
             }
             assert_eq!(
                 menus.as_array().unwrap().iter().map(|menu| menu["id"].as_str().unwrap()).collect::<Vec<_>>(),
-                ["file", "edit", "layer", "select", "filter", "view", "window"]
+                ["file", "edit", "image", "layer", "select", "filter", "view", "window"]
             );
             assert!(host.take_value().is_none());
             host.dispatch(UiAction::Invoke {

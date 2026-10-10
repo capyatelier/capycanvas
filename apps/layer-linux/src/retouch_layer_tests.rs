@@ -70,7 +70,7 @@ fn snapshots(w: &Rc<Workspace>, name: &str) {
 
 fn retouch_layers_journey(id: &str, device: &str) {
     let (_app, w, mut input) = start(id);
-    run(&w, &mut input, device, CommandId::BlendPerceptual, &["Edit", "Blending", "Perceptual Blending"]);
+    run(&w, &mut input, device, CommandId::BlendPerceptual, &["Image", "Blending", "Perceptual Blending"]);
     until(|| document(&w).composition().blend == layer_core::BlendSpace::Perceptual, "the drawing blends perceptually");
     fill(&w, [0.25, 0.35, 0.3, 1.], [0.15, 0.15, 0.85, 0.85]);
     fill(&w, [0.8, 0.7, 0.3, 1.], [0.35, 0.4, 0.5, 0.6]);

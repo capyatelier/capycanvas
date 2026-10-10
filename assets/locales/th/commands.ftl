@@ -562,7 +562,7 @@ commands-refusal-conversions-layer-changed = เลเยอร์เปลี�
 commands-refusal-retouch-layers-select-a-paint-layer-first = เลือกเลเยอร์ระบายสีก่อน
 commands-refusal-retouch-layers-show-the-layer-first = แสดงเลเยอร์ก่อน
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = ตั้งเลเยอร์เป็นปกติก่อน
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = แยกความถี่ต้องใช้การผสมตามการรับรู้ เปลี่ยนในแก้ไข ▸ การผสม
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = แยกความถี่ต้องใช้การผสมตามการรับรู้ เปลี่ยนใน{ menu-image } ▸ { menu-blending }
 commands-refusal-retouch-layers-the-destination-group-is-locked = กลุ่มปลายทางล็อกอยู่
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = เลเยอร์ที่แยกจะเกินขีดจำกัด 1 GiB ต่อการแก้ไข
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = ใช้มาสก์กลุ่มแยกไม่ได้ รวมกลุ่มจะนำมาสก์ไปใช้
@@ -633,3 +633,6 @@ command-next-drawing = ภาพวาดถัดไป
 command-previous-drawing = ภาพวาดก่อนหน้า
 
 command-center-zoom-clicks = จัดกึ่งกลางเมื่อคลิก
+menu-paste-special = วางแบบพิเศษ
+menu-rotate-and-flip = หมุนและพลิก
+menu-color-management = การจัดการสี

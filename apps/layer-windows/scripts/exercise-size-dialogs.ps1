@@ -28,10 +28,8 @@ function Desktop-Button([string]$Name){
     foreach($scope in @($root,[System.Windows.Automation.AutomationElement]::RootElement)){$hit=$scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition);if($hit){return $hit}}
 }
 function Open-SizeDialog([string]$Command,[scriptblock]$Opened){
-    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
-    $image=@{item=$null};Wait-Until {$image.item=Menu-Item 'menu-image';$image.item} 'Edit menu has no Image submenu'
-    $image.item.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    $entry=@{item=$null};Wait-Until {$entry.item=Menu-Item $Command;$entry.item} "Image submenu has no $Command"
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Image'
+    $entry=@{item=$null};Wait-Until {$entry.item=Menu-Item $Command;$entry.item} "Image menu has no $Command"
     $entry.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until $Opened "$Command did not open the shared draft"
 }

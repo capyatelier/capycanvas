@@ -1,6 +1,7 @@
 //! Pixel clipboard journeys: Copy and Paste within a drawing, between
 //! drawings and with other applications, from the keyboard and the bar.
 use super::canvas_bar_tests::{Device, choose_from_bar_menu, document, filled_selection, remote_input, until_some};
+use super::photo_edit::choose;
 use super::*;
 use crate::files::clipboard::{CLIP_MIME, current};
 use layer_core::PaintBasePolicy;
@@ -108,8 +109,8 @@ fn native_clipboard_copy_paste_round_trips() {
         chord(&mut native, &[CONTROL], INSERT);
         copied(&w, before, "Ctrl+Insert")
     };
-    let selection = document(&w).working.selection.clone().unwrap().coverage_bounds();
-    assert_eq!(clip.origin, [selection.min.x.floor() as i64, selection.min.y.floor() as i64]);
+    assert_eq!(clip.origin, [650, 500]);
+    assert_eq!(clip.source.extent, [500, 350]);
     assert_eq!(clip.policy, PaintBasePolicy::WorkingPixels);
     let formats = clipboard_formats(&w);
     assert!(formats.iter().any(|m| m == "image/png") && formats.iter().any(|m| m == CLIP_MIME), "{formats:?}");
@@ -259,7 +260,7 @@ fn native_clipboard_copy_paste_round_trips() {
     w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
     until(|| document(&w).scene().order().len() == count && idle(&w), "copied-file placement cancels");
     let owner = document(&w).owner;
-    w.dispatch(UiAction::Invoke { command: CommandId::PasteAsNewImage });
+    choose(&w, &mut native, "Edit", &["Paste Special", "Paste as New Image"]);
     until(|| w.gpu.borrow().is_some() && !w.documents.changing.get() && document(&w).owner != owner && idle(&w), "Paste as New Image opens a copied file in another tab");
     assert_eq!(document(&w).composition().size, photo.extent);
     assert!(state(&w).document_file.modified);

@@ -1116,7 +1116,7 @@ commands-refusal-retouch-layers-show-the-layer-first = Tampilkan lapisan terlebi
 
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Atur lapisan ke Normal terlebih dahulu
 
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = Pemisahan Frekuensi memerlukan pembauran Perseptual. Ubah di Edit ▸ Pembauran.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = Pemisahan Frekuensi memerlukan pembauran Perseptual. Ubah di { menu-image } ▸ { menu-blending }.
 
 commands-refusal-retouch-layers-the-destination-group-is-locked = Grup tujuan dikunci
 
@@ -1217,3 +1217,6 @@ command-next-drawing = Gambar berikutnya
 command-previous-drawing = Gambar sebelumnya
 
 command-center-zoom-clicks = Pusatkan saat mengeklik
+menu-paste-special = Tempel khusus
+menu-rotate-and-flip = Putar dan balik
+menu-color-management = Manajemen warna

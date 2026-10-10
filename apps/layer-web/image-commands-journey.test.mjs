@@ -48,10 +48,10 @@ export async function checkImageCommands({call,evaluate,settle,device=false}) {
   const calm=()=>evaluate('new Promise(resolve=>{let last=performance.now(),steady=0;const frame=t=>{steady=t-last<40?steady+1:0;last=t;if(steady>=3)resolve();else requestAnimationFrame(frame);};requestAnimationFrame(frame);})');
   const choose=async(path,kind)=>{
     await calm();
-    await tap(await middle('.header-menu[data-menu="edit"] > summary'),kind);
-    await wait(`document.querySelector('.header-menu[data-menu="edit"]').open`);
-    for(const label of ['Image',...path])await tapRow('.header-menu[open] .popover',label,kind);
-    await wait(`!document.querySelector('.header-menu[data-menu="edit"]').open`);
+    await tap(await middle('.header-menu[data-menu="image"] > summary'),kind);
+    await wait(`document.querySelector('.header-menu[data-menu="image"]').open`);
+    for(const label of path)await tapRow('.header-menu[open] .popover',label,kind);
+    await wait(`!document.querySelector('.header-menu[data-menu="image"]').open`);
   };
   const onBar=selector=>`(n=>!!n&&!n.closest('.canvas-action-bar-item,.canvas-action-bar-completion').hidden)(document.querySelector('${bar} ${selector}'))`;
   const pressBar=async(command,kind)=>{
@@ -179,7 +179,7 @@ export async function checkImageCommands({call,evaluate,settle,device=false}) {
       await sample(width*.5,height*.5,blue,`${kind}: Ctrl+Z undoes Image Size in one step`);
       console.log(`PASS ${kind}: Image Size to 50% with Constrain proportions, then Undo`);
 
-      await choose(['Rotate Image 90° Right'],kind);
+      await choose(['Rotate and Flip','Rotate Image 90° Right'],kind);
       await wait(sized([height,width]));
       await invoke('fit_canvas');
       await sample(height*.5,width*.3,blue,`${kind}: the fill left of the middle turns to above it`);

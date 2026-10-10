@@ -562,7 +562,7 @@ commands-refusal-conversions-layer-changed = 圖層在轉換過程中發生了�
 commands-refusal-retouch-layers-select-a-paint-layer-first = 請先選擇繪畫圖層
 commands-refusal-retouch-layers-show-the-layer-first = 請先顯示圖層
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = 請先將圖層設為正常模式
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = 頻率分離需要感知色彩混合。請在「編輯 ▸ 色彩混合」中變更。
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = 頻率分離需要感知色彩混合。請在「{ menu-image } ▸ { menu-blending }」中變更。
 commands-refusal-retouch-layers-the-destination-group-is-locked = 目標圖層群組已鎖定
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = 分離後的圖層將超過單次編輯的 1 GiB 限制
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = 圖層群組的遮罩無法單獨套用；合併圖層群組時會套用它
@@ -633,3 +633,6 @@ command-next-drawing = 下一幅畫
 command-previous-drawing = 上一幅畫
 
 command-center-zoom-clicks = 點擊時置中
+menu-paste-special = 選擇性貼上
+menu-rotate-and-flip = 旋轉與翻轉
+menu-color-management = 色彩管理

@@ -1,4 +1,4 @@
-//! Blending with real Mutter delivery: the New drawing dialog's field, Edit ›
+//! Blending with real Mutter delivery: the New drawing dialog's field, Image ›
 //! Blending with its undo, and the Document Properties row, in the light and
 //! dark themes.
 use super::crop::fill_rect;
@@ -15,7 +15,7 @@ fn blending_row(w: &Workspace) -> adw::ComboRow {
 
 #[test]
 #[ignore = "isolated compositor, GPU and native mouse delivery"]
-fn native_blending_new_drawing_edit_menu_and_properties() {
+fn native_blending_new_drawing_image_menu_and_properties() {
     let (_app, w, mut input) = start("art.capycanvas.Blending");
     let directory = std::path::Path::new("../../artifacts/photo-m4/blending").join(std::process::id().to_string());
     std::fs::create_dir_all(&directory).unwrap();
@@ -27,8 +27,8 @@ fn native_blending_new_drawing_edit_menu_and_properties() {
     pump(300);
     let perceptual = shown(&w, center);
 
-    choose(&w, &mut input, "Edit", &["Blending", "Linear Light Blending"]);
-    until(|| document(&w).composition().blend == BlendSpace::Linear, "Edit › Blending › Linear Light Blending");
+    choose(&w, &mut input, "Image", &["Blending", "Linear Light Blending"]);
+    until(|| document(&w).composition().blend == BlendSpace::Linear, "Image › Blending › Linear Light Blending");
     pump(300);
     let linear = shown(&w, center);
     assert!(linear[0] > perceptual[0] + 15, "half-opacity paint over white is lighter in linear light: {perceptual:?} {linear:?}");
@@ -40,7 +40,7 @@ fn native_blending_new_drawing_edit_menu_and_properties() {
     w.dispatch(UiAction::Invoke { command: CommandId::DocumentProperties });
     until(|| w.window.visible_dialog().is_some(), "Document Properties");
     let dialog = w.window.visible_dialog().unwrap();
-    until(|| labelled(dialog.upcast_ref(), "Blending").is_some() && labelled(dialog.upcast_ref(), "Perceptual").is_some(), "the Blending row");
+    until(|| labelled(dialog.upcast_ref(), "Blending").is_some() && labelled(dialog.upcast_ref(), "Perceptual Blending").is_some(), "the Blending row");
     response(&w, "done");
     finish(&w);
 

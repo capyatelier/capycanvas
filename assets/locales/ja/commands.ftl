@@ -562,7 +562,7 @@ commands-refusal-conversions-layer-changed = 変換中にレイヤーが変更�
 commands-refusal-retouch-layers-select-a-paint-layer-first = 先に描画レイヤーを選んでください。
 commands-refusal-retouch-layers-show-the-layer-first = 先にレイヤーを表示してください。
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = 先にレイヤーの合成モードを「通常」にしてください。
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = 周波数分離には、知覚的な色の合成が必要です。「編集」▸「色の合成」で変更してください。
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = 周波数分離には、知覚的な色の合成が必要です。「{ menu-image }」▸「{ menu-blending }」で変更してください。
 commands-refusal-retouch-layers-the-destination-group-is-locked = 移動先のグループはロックされています。
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = 分離後のレイヤーは、1回の編集で使える1 GiBの上限を超えます。
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = グループのマスクだけを適用することはできません。「グループを結合」で適用します。
@@ -633,3 +633,6 @@ command-next-drawing = 次の作品
 command-previous-drawing = 前の作品
 
 command-center-zoom-clicks = クリック位置を中心に
+menu-paste-special = 特殊貼り付け
+menu-rotate-and-flip = 回転と反転
+menu-color-management = カラー管理

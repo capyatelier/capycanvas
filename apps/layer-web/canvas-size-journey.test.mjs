@@ -111,6 +111,7 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
       } else {
         assert.ok(!outcome.status.includes('busy'),JSON.stringify(outcome));
         await invoke('undo');
+        await wait(`(t=>t.width===${width}&&t.height===${height})(layerApp.state().tabs[0])`);
         assert.deepEqual(await size(),[width,height],'Undo restores the size after growing left and up');
       }
       await invoke('undo');
@@ -146,7 +147,7 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
       assert.deepEqual(await size(),cropped,`${kind}: redo crops again`);
       if(await evaluate('layerApp.state().layer_tools.has_selection'))await invoke('deselect');
 
-      await choose('edit',['Image',await evaluate(`layerApp.state().commands.find(c=>c.id==='canvas_size').label`)],kind);
+      await choose('image',[await evaluate(`layerApp.state().commands.find(c=>c.id==='canvas_size').label`)],kind);
       await wait(`!!document.querySelector('${dialog}')?.open`);
       assert.equal(await evaluate(`document.querySelector('${dialog}').contains(document.activeElement)&&!document.activeElement.matches('input,select')`),true,`${kind}: the dialog opens without focusing a field`);
       assert.equal(await evaluate(`document.querySelector('${dialog} footer .suggested-action').disabled`),true,`${kind}: Apply is disabled at the current size`);
@@ -188,7 +189,7 @@ export async function checkCanvasSize({call,evaluate,settle,device=false}) {
       assert.deepEqual(await size(),[width,height],`${kind}: redo restores the original size`);
       await sample(hiddenPoint,p=>near(p,rgba),`${kind}: redo shows the stroke again`);
     }
-    console.log(`PASS canvas size (${device?'tablet':'desktop'}): Crop on the selection bar hides pixels in one undo step, and Edit › Image › Canvas Size… with the matching anchor restores the size and position so the hidden strokes reappear, with mouse, touch and pen; growing left and up right after a stroke is never refused; screenshots in ${directory}`);
+    console.log(`PASS canvas size (${device?'tablet':'desktop'}): Crop on the selection bar hides pixels in one undo step, and Image › Canvas Size… with the matching anchor restores the size and position so the hidden strokes reappear, with mouse, touch and pen; growing left and up right after a stroke is never refused; screenshots in ${directory}`);
   } catch(error) {
     await writeFile(`${directory}/failure.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     console.error('Canvas size state',await evaluate(`JSON.stringify({error:layerApp.state().host_error,status:document.querySelector('#status').textContent,size:[layerApp.state().tabs[0].width,layerApp.state().tabs[0].height],

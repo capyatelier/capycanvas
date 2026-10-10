@@ -565,7 +565,7 @@ commands-refusal-conversions-layer-changed = Die Ebene hat sich während der Umw
 commands-refusal-retouch-layers-select-a-paint-layer-first = Zuerst eine Malebene auswählen
 commands-refusal-retouch-layers-show-the-layer-first = Zuerst die Ebene einblenden
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Zuerst die Ebene auf Normal stellen
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = Frequenztrennung benötigt wahrnehmungsbasierte Verrechnung. Unter Bearbeiten ▸ Verrechnung ändern.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = Frequenztrennung benötigt wahrnehmungsbasierte Verrechnung. Unter { menu-image } ▸ { menu-blending } ändern.
 commands-refusal-retouch-layers-the-destination-group-is-locked = Die Zielgruppe ist gesperrt
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = Die getrennten Ebenen würden die Grenze von 1 GiB pro Bearbeitung überschreiten
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = Die Maske einer Gruppe kann nicht einzeln angewandt werden; Gruppe vereinen wendet sie an
@@ -637,3 +637,6 @@ command-next-drawing = Nächste Zeichnung
 command-previous-drawing = Vorherige Zeichnung
 
 command-center-zoom-clicks = Beim Klicken zentrieren
+menu-paste-special = Inhalte einfügen
+menu-rotate-and-flip = Drehen und spiegeln
+menu-color-management = Farbverwaltung

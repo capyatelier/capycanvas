@@ -1,6 +1,6 @@
 //! Whole-image journeys with real Mutter delivery: Image Size down with
 //! Constrain proportions then Undo, Rotate Image 90° Right on a non-square
-//! canvas, Reveal All after a crop and Trim, all from Edit › Image; and Image
+//! canvas, Reveal All after a crop and Trim, all from Image; and Image
 //! Size timing on a 24 MP photo.
 use super::crop::{Device, bar_widget, center, crop_ready, drag, fill_rect, setting, tap};
 use super::photo_edit::{choose, document, labelled, shown, start, until_some_widget, window_point};
@@ -50,8 +50,8 @@ fn native_image_size_down_with_constrain_then_undo() {
     let (_app, w, mut input) = start("art.capycanvas.ImageSize");
     let paint = fill_rect(&w, [0.2, 0.2, 0.8, 0.8]);
     let before = document(&w);
-    choose(&w, &mut input, "Edit", &["Image", "Image Size…"]);
-    until(|| state(&w).layer_tools.image_size.is_some(), "Edit › Image › Image Size… opens the dialog");
+    choose(&w, &mut input, "Image", &["Image Size…"]);
+    until(|| state(&w).layer_tools.image_size.is_some(), "Image › Image Size… opens the dialog");
     let view = state(&w).layer_tools.image_size.unwrap();
     assert!(view.constrain, "Constrain proportions starts on");
     let half = [before.composition().size[0] / 2, before.composition().size[1] / 2];
@@ -99,7 +99,7 @@ fn native_rotate_image_right_on_a_non_square_canvas() {
     let spot = [width * 0.15, height * 0.15];
     pump(300);
     assert!(blue(shown(&w, spot)), "the fill sits top left");
-    choose(&w, &mut input, "Edit", &["Image", "Rotate Image 90° Right"]);
+    choose(&w, &mut input, "Image", &["Rotate and Flip", "Rotate Image 90° Right"]);
     until(|| [document(&w).composition().size[0], document(&w).composition().size[1]] == [before.composition().size[1], before.composition().size[0]], "the canvas turns");
     until(|| settled(&w), "the turned pixels are captured");
     assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
@@ -126,7 +126,7 @@ fn native_reveal_all_after_a_crop() {
     until(|| state(&w).layer_tools.tool != LayerCanvasTool::Crop, "Apply crops");
     let cropped = document(&w);
     assert!(cropped.composition().size[0] < before.composition().size[0]);
-    choose(&w, &mut input, "Edit", &["Image", "Reveal All"]);
+    choose(&w, &mut input, "Image", &["Reveal All"]);
     until(|| document(&w).composition().size[0] > cropped.composition().size[0], "Reveal All grows the canvas");
     let revealed = document(&w);
     let expected = [(width * 0.8).round(), (height * 0.8).round()];
@@ -179,12 +179,12 @@ fn native_trim_to_the_visible_pixels() {
     let before = document(&w);
     let [width, height] = [before.composition().size[0] as f32, before.composition().size[1] as f32];
     let paper = before.scene().constant_backdrop().first().copied().expect("paper");
-    choose(&w, &mut input, "Edit", &["Image", "Trim"]);
+    choose(&w, &mut input, "Image", &["Trim"]);
     until(|| state(&w).notice.is_some(), "with the paper showing, Trim explains that nothing changes");
     assert_eq!(document(&w).composition().size[0], before.composition().size[0]);
     w.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: layer_ui::occurrence_token(paper), value: false } });
     until(|| !document(&w).scene().occurrence(paper).unwrap().visible, "the paper hides");
-    choose(&w, &mut input, "Edit", &["Image", "Trim"]);
+    choose(&w, &mut input, "Image", &["Trim"]);
     until(|| document(&w).composition().size[0] < before.composition().size[0], "Trim shrinks the canvas to the fill");
     let trimmed = document(&w);
     let expected = [(width * 0.5).round(), (height * 0.55).round()];

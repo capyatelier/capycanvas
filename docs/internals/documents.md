@@ -115,7 +115,7 @@ A document's **Blending** (`Composition.blend`) sets how its layers combine:
   Float documents always blend this way. An omitted wire blend value means Linear.
 
 Painted pixels keep their values either way; only their combination changes
-([blend space](rendering.md#blend-space)). **Edit ▸ Blending** switches it in
+([blend space](rendering.md#blend-space)). **Image ▸ Blending** switches it in
 one undo step (a composition record edit), refused at float depth with "Float
 documents blend in linear light". Converting a document to float makes it
 Linear in the same step, and undo restores both. Paint color mixing follows each
@@ -215,7 +215,7 @@ High and Low add up to the layer again, within two codes at 8 and 16 bits,
 because they share one blur and Linear Light adds encoded values. That holds only
 when layers blend perceptually, so the command is refused in Linear-light and
 float documents with "Frequency Separation needs Perceptual blending. Change it
-in Edit ▸ Blending." It also needs a visible, Normal paint layer outside a
+in Image ▸ Blending." It also needs a visible, Normal paint layer outside a
 locked group.
 
 A `Stroke` stores real pen samples and a `BrushSnapshot`, which captures the brush

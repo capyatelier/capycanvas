@@ -562,7 +562,7 @@ commands-refusal-conversions-layer-changed = 변환하는 동안 레이어가 �
 commands-refusal-retouch-layers-select-a-paint-layer-first = 먼저 페인팅 레이어를 선택하세요.
 commands-refusal-retouch-layers-show-the-layer-first = 먼저 레이어를 표시하세요.
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = 먼저 레이어의 혼합 모드를 표준으로 설정하세요.
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = 주파수 분리에는 지각적 색상 합성이 필요합니다. 편집 ▸ 색상 합성에서 변경하세요.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = 주파수 분리에는 지각적 색상 합성이 필요합니다. { menu-image } ▸ { menu-blending }에서 변경하세요.
 commands-refusal-retouch-layers-the-destination-group-is-locked = 대상 그룹은 잠겨 있습니다.
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = 분리한 레이어가 한 번의 편집에 허용되는 1 GiB 한도를 초과합니다.
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = 그룹의 마스크는 따로 적용할 수 없습니다. 그룹 병합으로 적용하세요.
@@ -633,3 +633,6 @@ command-next-drawing = 다음 그림
 command-previous-drawing = 이전 그림
 
 command-center-zoom-clicks = 클릭 시 중앙으로 이동
+menu-paste-special = 선택하여 붙여넣기
+menu-rotate-and-flip = 회전 및 뒤집기
+menu-color-management = 색상 관리

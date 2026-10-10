@@ -1,10 +1,10 @@
 fn blending_submenu(s: &UiSession<Recorder>) -> Vec<(String, bool, Option<bool>)> {
-    s.application_menu(ApplicationMenu::Edit)
+    s.application_menu(ApplicationMenu::Image)
         .sections
         .into_iter()
         .flatten()
         .find(|item| item.label == "Blending")
-        .expect("Edit ▸ Blending")
+        .expect("Image ▸ Blending")
         .sections
         .into_iter()
         .flatten()
@@ -13,7 +13,7 @@ fn blending_submenu(s: &UiSession<Recorder>) -> Vec<(String, bool, Option<bool>)
 }
 
 #[test]
-fn edit_blending_changes_how_layers_combine_in_one_undo_step() {
+fn image_blending_changes_how_layers_combine_in_one_undo_step() {
     let mut s = session(Platform::Gtk);
     let mut expected = s.engine.document().clone();
     assert_eq!(blending_submenu(&s), [

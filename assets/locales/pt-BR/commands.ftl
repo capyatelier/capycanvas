@@ -565,7 +565,7 @@ commands-refusal-conversions-layer-changed = A camada mudou enquanto era convert
 commands-refusal-retouch-layers-select-a-paint-layer-first = Selecione primeiro uma camada de pintura
 commands-refusal-retouch-layers-show-the-layer-first = Mostre primeiro a camada
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Defina primeiro a camada como Normal
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = A Separação de frequências requer mesclagem Perceptual. Altere em Editar ▸ Mesclagem.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = A Separação de frequências requer mesclagem Perceptual. Altere em { menu-image } ▸ { menu-blending }.
 commands-refusal-retouch-layers-the-destination-group-is-locked = O grupo de destino está bloqueado
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = As camadas separadas excederiam o limite de 1 GiB para uma edição
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = A máscara de um grupo não pode ser aplicada sozinha; Mesclar grupo a aplica
@@ -638,3 +638,6 @@ command-next-drawing = Próximo desenho
 command-previous-drawing = Desenho anterior
 
 command-center-zoom-clicks = Centralizar ao clicar
+menu-paste-special = Colar especial
+menu-rotate-and-flip = Girar e inverter
+menu-color-management = Gerenciamento de cores

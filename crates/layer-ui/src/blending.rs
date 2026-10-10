@@ -1,4 +1,4 @@
-//! The document's Blending, how its layers combine: Edit ▸ Blending.
+//! The document's Blending, how its layers combine: Image ▸ Blending.
 use super::*;
 use layer_core::{BlendSpace, Edit};
 

@@ -562,7 +562,7 @@ commands-refusal-conversions-layer-changed = 图层在转换过程中发生了�
 commands-refusal-retouch-layers-select-a-paint-layer-first = 请先选择绘画图层
 commands-refusal-retouch-layers-show-the-layer-first = 请先显示图层
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = 请先将图层设为正常模式
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = 频率分离需要感知颜色混合。请在“编辑 ▸ 颜色混合”中更改。
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = 频率分离需要感知颜色混合。请在“{ menu-image } ▸ { menu-blending }”中更改。
 commands-refusal-retouch-layers-the-destination-group-is-locked = 目标图层组已锁定
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = 分离后的图层将超过单次编辑的 1 GiB 限制
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = 图层组的蒙版无法单独应用；合并图层组时会应用它
@@ -633,3 +633,6 @@ command-next-drawing = 下一幅画
 command-previous-drawing = 上一幅画
 
 command-center-zoom-clicks = 点击时居中
+menu-paste-special = 选择性粘贴
+menu-rotate-and-flip = 旋转和翻转
+menu-color-management = 色彩管理

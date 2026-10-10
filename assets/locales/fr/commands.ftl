@@ -565,7 +565,7 @@ commands-refusal-conversions-layer-changed = Le calque a changé pendant sa conv
 commands-refusal-retouch-layers-select-a-paint-layer-first = Sélectionner d’abord un calque de peinture
 commands-refusal-retouch-layers-show-the-layer-first = Afficher d’abord le calque
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Passer d’abord le calque en mode Normal
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = La séparation de fréquences nécessite la fusion perceptuelle. La modifier dans Édition ▸ Fusion.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = La séparation de fréquences nécessite la fusion perceptuelle. La modifier dans { menu-image } ▸ { menu-blending }.
 commands-refusal-retouch-layers-the-destination-group-is-locked = Le groupe de destination est verrouillé
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = Les calques séparés dépasseraient la limite de 1 GiB par modification
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = Le masque d’un groupe ne peut pas être appliqué seul ; Fusionner le groupe l’applique
@@ -637,3 +637,6 @@ command-next-drawing = Dessin suivant
 command-previous-drawing = Dessin précédent
 
 command-center-zoom-clicks = Centrer au clic
+menu-paste-special = Collage spécial
+menu-rotate-and-flip = Rotation et retournement
+menu-color-management = Gestion des couleurs

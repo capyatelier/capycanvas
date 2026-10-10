@@ -562,7 +562,7 @@ commands-refusal-conversions-layer-changed = Katman dönüştürülürken deği�
 commands-refusal-retouch-layers-select-a-paint-layer-first = Önce bir boya katmanı seçin
 commands-refusal-retouch-layers-show-the-layer-first = Önce katmanı gösterin
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Önce katmanı Normal moduna ayarlayın
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = Frekans ayrımı için Algısal karıştırma gerekir. Düzenle ▸ Karıştırma menüsünden değiştirin.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = Frekans ayrımı için Algısal karıştırma gerekir. { menu-image } ▸ { menu-blending } menüsünden değiştirin.
 commands-refusal-retouch-layers-the-destination-group-is-locked = Hedef grup kilitli
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = Ayrılan katmanlar, tek düzenleme için 1 GiB sınırını aşar
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = Grup maskesi tek başına uygulanamaz; Grubu birleştir bunu uygular
@@ -634,3 +634,6 @@ command-next-drawing = Sonraki çizim
 command-previous-drawing = Önceki çizim
 
 command-center-zoom-clicks = Tıklayınca ortala
+menu-paste-special = Özel Yapıştır
+menu-rotate-and-flip = Döndür ve Çevir
+menu-color-management = Renk Yönetimi

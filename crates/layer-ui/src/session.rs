@@ -12057,7 +12057,7 @@ mod tests {
         assert_eq!(
             ApplicationMenu::ALL.map(|m| m.canonical_label().to_string()),
             [
-                "File", "Edit", "Layer", "Select", "Filter", "View", "Window"
+                "File", "Edit", "Image", "Layer", "Select", "Filter", "View", "Window"
             ]
         );
         for menu in ApplicationMenu::ALL {
@@ -12065,7 +12065,7 @@ mod tests {
         }
         assert_eq!(
             app.application_menu(ApplicationMenu::Primary).sections[0].iter().map(|item| item.label.as_str()).collect::<Vec<_>>(),
-            ["File", "Edit", "Layer", "Select", "Filter", "View", "Window"]
+            ["File", "Edit", "Image", "Layer", "Select", "Filter", "View", "Window"]
         );
         for (command, link) in [
             (CommandId::Website, ApplicationLink::Website),

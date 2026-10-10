@@ -70,8 +70,10 @@ or removed like other bindings.
   paste follows the shared bindings and gates, even
   without an asynchronous clipboard reader. Missing native delivery cancels
   the request instead of leaving the drawing busy.
-- **Edit menu and bar:** the clipboard commands stay in the existing Edit menu.
-  The selection bar's Copy ▾ holds Copy, Copy Merged and Cut.
+- **Edit menu and bar:** Cut, Copy, Copy Merged, Copy Pixels and Paste are direct
+  Edit commands. **Paste Special** groups Paste in Place, Paste to Shown Position,
+  Paste at Cursor, Paste Into and Paste as New Image. The selection bar's Copy ▾
+  holds Copy, Copy Merged and Cut.
 
 ## Layer masks
 

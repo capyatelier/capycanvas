@@ -167,24 +167,24 @@ fn crop_canvas_to_selection_uses_the_coverage_bounds_and_refuses_inverted_select
 }
 
 #[test]
-fn edit_image_submenu_holds_the_geometry_commands_and_photo_keymaps_bind_canvas_size() {
+fn image_menu_groups_geometry_and_color_commands_and_photo_keymaps_bind_canvas_size() {
     let s = canvas_size_session();
-    let edit = s.application_menu(ApplicationMenu::Edit);
-    let mut seen = Vec::new();
-    let image = edit.sections.iter().flatten().find(|i| i.label == "Image").expect("Edit ▸ Image");
-    let image: Vec<Vec<_>> = image.sections.iter().map(|s| s.iter().map(|i| i.action.clone()).collect()).collect();
+    let image = s.application_menu(ApplicationMenu::Image);
     let invoke = |commands: &[CommandId]| commands.iter().map(|&command| Some(UiAction::Invoke { command })).collect::<Vec<_>>();
-    assert_eq!(image, [
-        invoke(&[CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize, CommandId::ImageSize]),
+    let actions = |sections: &[Vec<ContextMenuItem>]| sections.iter().map(|section| section.iter().map(|item| item.action.clone()).collect::<Vec<_>>()).collect::<Vec<_>>();
+    assert_eq!(actions(&image.sections[..2]), [
+        invoke(&[CommandId::ImageSize, CommandId::CanvasSize]),
+        invoke(&[CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::Trim, CommandId::RevealAll]),
+    ]);
+    let rotation = &image.sections[2][0];
+    assert_eq!(rotation.label, "Rotate and Flip");
+    assert_eq!(actions(&rotation.sections), [
         invoke(&[CommandId::RotateImageLeft, CommandId::RotateImageRight, CommandId::RotateImage180]),
         invoke(&[CommandId::FlipImageHorizontal, CommandId::FlipImageVertical]),
-        invoke(&[CommandId::Trim, CommandId::RevealAll]),
     ]);
-    for item in edit.sections.iter().flatten().filter(|i| i.action.is_some()) {
-        assert!(!seen.contains(&item.action), "{}", item.label);
-        seen.push(item.action.clone());
-    }
-    assert!(edit.sections.iter().all(|section| !section.is_empty()));
+    let color = &image.sections[3][0];
+    assert_eq!(color.label, "Color Management");
+    assert_eq!(actions(&color.sections), [invoke(&[CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth])]);
     let chord = KeyChord { key: "c".into(), command: true, alt: true, shift: false };
     for platform in [Platform::Gtk, Platform::Web] {
         assert!(chord.available(platform));

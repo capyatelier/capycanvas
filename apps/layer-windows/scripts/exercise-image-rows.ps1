@@ -118,6 +118,7 @@ function Chord([uint16[]]$Modifiers,[uint16]$Key){
 }
 function Paste-In-Place{
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'edit'
+ (Control 'menu-paste-special' -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  Invoke-Id 'paste_in_place'
 }
 function Requests{@((Model).state.requests).Count}
@@ -135,8 +136,7 @@ try{
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
  $stderr=Join-Path $run 'stderr.log';Start-Review $stderr
  if($MotionPreflight){
-  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
-  (Control 'menu-image').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Image'
   Invoke-Id 'canvas_size';Wait-Until {Find 'canvas-size-width'} 'Object diagnostic Canvas Size did not open'
   (Control 'canvas-size-width' -Type ([System.Windows.Automation.ControlType]::Edit)).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('9504')
   (Control 'canvas-size-height' -Type ([System.Windows.Automation.ControlType]::Edit)).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('6336')

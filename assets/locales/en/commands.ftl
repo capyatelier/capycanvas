@@ -565,7 +565,7 @@ commands-refusal-conversions-layer-changed = The layer changed while it was bein
 commands-refusal-retouch-layers-select-a-paint-layer-first = Select a paint layer first
 commands-refusal-retouch-layers-show-the-layer-first = Show the layer first
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Set the layer to Normal first
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = Frequency Separation needs Perceptual blending. Change it in Edit ▸ Blending.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = Frequency Separation needs Perceptual blending. Change it in { menu-image } ▸ { menu-blending }.
 commands-refusal-retouch-layers-the-destination-group-is-locked = The destination group is locked
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = The separated layers would exceed the 1 GiB limit for one edit
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = A group's mask can't be applied on its own; Merge Group applies it
@@ -637,3 +637,6 @@ command-next-drawing = Next drawing
 command-previous-drawing = Previous drawing
 
 command-center-zoom-clicks = Center on click
+menu-paste-special = Paste Special
+menu-rotate-and-flip = Rotate and Flip
+menu-color-management = Color Management

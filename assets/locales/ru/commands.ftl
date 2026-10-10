@@ -567,7 +567,7 @@ commands-refusal-conversions-layer-changed = Слой изменился во в
 commands-refusal-retouch-layers-select-a-paint-layer-first = Сначала выберите рисованный слой
 commands-refusal-retouch-layers-show-the-layer-first = Сначала покажите слой
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Сначала задайте слою обычный режим
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = Частотному разложению нужно перцепционное наложение. Измените его в меню Правка ▸ Наложение.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = Частотному разложению нужно перцепционное наложение. Измените его в меню { menu-image } ▸ { menu-blending }.
 commands-refusal-retouch-layers-the-destination-group-is-locked = Целевая группа заблокирована
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = Разделённые слои превысят предел 1 GiB для одной правки
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = Маску группы нельзя применить отдельно; она применяется при объединении группы
@@ -640,3 +640,6 @@ command-next-drawing = Следующий рисунок
 command-previous-drawing = Предыдущий рисунок
 
 command-center-zoom-clicks = Центрировать при щелчке
+menu-paste-special = Специальная вставка
+menu-rotate-and-flip = Поворот и отражение
+menu-color-management = Управление цветом

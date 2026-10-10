@@ -54,8 +54,11 @@ export async function checkClipboard({call,evaluate,settle}) {
   const headerRow=label=>`[...document.querySelectorAll('.header-menu[open] .popover button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)})`;
   const editMenu=async(label,kind)=>{
     await tap(await middle('.header-menu[data-menu="edit"] > summary'),kind);
-    await wait(`document.querySelector('.header-menu[data-menu="edit"]').open&&!!${headerRow(label)}&&!${headerRow(label)}.disabled`);
-    await tap(await evaluate(`(()=>{const r=${headerRow(label)}.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`),kind);
+    await wait(`document.querySelector('.header-menu[data-menu="edit"]').open`);
+    for(const row of ['Paste Special',label]) {
+      await wait(`!!${headerRow(row)}&&!${headerRow(row)}.disabled`);
+      await tap(await evaluate(`(()=>{const r=${headerRow(row)}.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`),kind);
+    }
   };
   const camera=()=>evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{zoom:c.zoom,t:c.translation,v:c.viewport,r:{x:r.x,y:r.y,width:r.width,height:r.height}}})()');
   const screen=async(x,y)=>{const c=await camera();return{x:c.r.x+(x*c.zoom+c.t[0])*c.r.width/c.v[0],y:c.r.y+(y*c.zoom+c.t[1])*c.r.height/c.v[1]};};
@@ -94,7 +97,7 @@ export async function checkClipboard({call,evaluate,settle}) {
     await wait(`layerApp.state().layers.length===${count+1}`);await idle();
     assert.notEqual((await state()).canvas_bar?.context.kind,'placement',`${kind}: a copy from Capy pastes with no handles`);
     await invoke('undo');await wait(`layerApp.state().layers.length===${count}`);
-    console.log(`${kind}: Copy ▾ › Copy, then Edit › Paste in Place`);
+    console.log(`${kind}: Copy ▾ › Copy, then Edit › Paste Special › Paste in Place`);
   }
 
   const count=await layers(),before=await nonce();

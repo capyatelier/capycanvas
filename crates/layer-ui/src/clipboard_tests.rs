@@ -1541,8 +1541,11 @@ mod clipboard_checks {
         assert_eq!(serde_json::to_value(CommandId::PasteImage).unwrap(), "paste_image", "the persisted id is kept");
         assert!(KeyChord::new("c", Modifiers { command: true, shift: true, alt: false }).available(Platform::Web));
         let edit = s.application_menu(ApplicationMenu::Edit);
-        let labels: Vec<_> = edit.sections[2].iter().map(|item| item.label.as_str()).collect();
-        assert_eq!(labels, ["Cut", "Copy", "Copy Pixels", "Copy Merged", "Paste", "Paste as New Image", "Paste to Shown Position", "Paste in Place", "Paste at Cursor", "Paste Into"]);
+        let labels: Vec<_> = edit.sections[1].iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["Cut", "Copy", "Copy Merged", "Copy Pixels", "Paste", "Paste Special"]);
+        let special = &edit.sections[1].last().unwrap().sections;
+        let labels: Vec<_> = special.iter().flatten().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["Paste in Place", "Paste to Shown Position", "Paste at Cursor", "Paste Into", "Paste as New Image"]);
 
         assert!(!key(&mut s, "c", true, true, true).handled, "a focused text field keeps Ctrl+C");
         assert!(s.state.requests.is_empty());

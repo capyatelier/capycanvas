@@ -562,7 +562,7 @@ commands-refusal-conversions-layer-changed = Lớp đã thay đổi trong khi đ
 commands-refusal-retouch-layers-select-a-paint-layer-first = Trước tiên hãy chọn lớp vẽ
 commands-refusal-retouch-layers-show-the-layer-first = Trước tiên hãy hiện lớp
 commands-refusal-retouch-layers-set-the-layer-to-normal-first = Trước tiên hãy đặt lớp về Bình thường
-commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending-change-it-in-edit-blending = Tách tần số cần Hòa trộn theo cảm nhận. Đổi trong Chỉnh sửa ▸ Hòa trộn.
+commands-refusal-retouch-layers-frequency-separation-needs-perceptual-blending = Tách tần số cần Hòa trộn theo cảm nhận. Đổi trong { menu-image } ▸ { menu-blending }.
 commands-refusal-retouch-layers-the-destination-group-is-locked = Nhóm đích đã khóa
 commands-refusal-retouch-layers-the-separated-layers-would-exceed-the-1-gib-limit-for-one-edit = Các lớp sau khi tách sẽ vượt giới hạn 1 GiB cho một lần chỉnh sửa
 commands-refusal-art-layers-a-group-s-mask-can-t-be-applied-on-its-own-merge-group-applies-it = Không thể áp dụng riêng mặt nạ nhóm; Gộp nhóm sẽ áp dụng mặt nạ
@@ -635,3 +635,6 @@ command-next-drawing = Bản vẽ tiếp theo
 command-previous-drawing = Bản vẽ trước
 
 command-center-zoom-clicks = Căn giữa khi nhấp
+menu-paste-special = Dán đặc biệt
+menu-rotate-and-flip = Xoay và lật
+menu-color-management = Quản lý màu

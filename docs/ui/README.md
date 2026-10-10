@@ -178,6 +178,17 @@ Commands have stable identities and shared availability rules. A button, menu it
 and shortcut invoke the same action and agree on whether it is enabled.
 Native text fields still handle their own editing keys.
 
+`ApplicationMenu::ALL` defines the menu bar's order: File, Edit, Image, Layer,
+Select, Filter, View and Window. `UiSession::application_menu` supplies their
+localized titles, sections, submenus, actions, availability and shortcuts to every
+host. Native macOS registers its system menu slots and presents shared titles and
+contents for the application-specific menus.
+Edit starts with Undo and Redo, keeps everyday clipboard, fill, clear and transform
+commands direct, and groups specialized pastes under Paste Special. Search
+Commands and Preferences come last; macOS puts settings in its application menu.
+Whole-image operations live in [Image](image-commands.md). Rasterize Source,
+Discard Paint Edits and Clear Entire Layer live in Layer and its context menus.
+
 ## Layout and customization
 
 The [layout model](../../crates/layer-ui/src/layout.rs) describes docked bands,

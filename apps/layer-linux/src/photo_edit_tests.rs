@@ -216,7 +216,7 @@ fn native_discard_paint_edits_after_painting_on_a_photo() {
     let stroke = [w_ * 0.5, h_ * 0.5];
     pump(300);
     let before = shown(&w, stroke);
-    choose(&w, &mut input, "Edit", &["Discard Paint Edits"]);
+    choose(&w, &mut input, "Layer", &["Layer Settings", "Discard Paint Edits"]);
     until(|| document(&w).scene().paint_source(id).unwrap().raster.is_empty(), "Discard Paint Edits removes the edits");
     let reverted = document(&w).scene().paint_source(id).unwrap().clone();
     assert!(std::sync::Arc::ptr_eq(reverted.base.as_ref().unwrap().image.storage(), painted.base.as_ref().unwrap().image.storage()));
@@ -262,8 +262,8 @@ fn native_canvas_size_from_the_top_left_anchor_then_undo() {
     let (_app, w, mut input) = start("art.capycanvas.CanvasSize");
     let before = document(&w);
     let paint = before.working.occurrence.unwrap();
-    choose(&w, &mut input, "Edit", &["Image", "Canvas Size…"]);
-    until(|| state(&w).layer_tools.canvas_size.is_some(), "Edit › Image › Canvas Size… opens the dialog");
+    choose(&w, &mut input, "Image", &["Canvas Size…"]);
+    until(|| state(&w).layer_tools.canvas_size.is_some(), "Image › Canvas Size… opens the dialog");
     let width = canvas_size_number(&w, "width");
     let spin = width.first_child().and_then(|header| header.last_child()).and_downcast::<gtk::SpinButton>().unwrap();
     spin.set_text("2600");

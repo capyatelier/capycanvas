@@ -1049,14 +1049,15 @@ fn application_menu_hover_switches_only_an_open_neighbor_on_both_apple_platforms
 
 #[test]
 fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
-    fn item(app: &App, command: &str) -> Value {
-        fn find(value: &Value, command: &str) -> Option<Value> {
-            if value["action"]["command"] == command {
+    use layer_ui::CommandId;
+    fn item(app: &App, command: CommandId) -> Value {
+        fn find(value: &Value, label: &str) -> Option<Value> {
+            if value["label"] == label && !value["action"].is_null() {
                 return Some(value.clone());
             }
             match value {
-                Value::Array(items) => items.iter().find_map(|v| find(v, command)),
-                Value::Object(map) => map.values().find_map(|v| find(v, command)),
+                Value::Array(items) => items.iter().find_map(|v| find(v, label)),
+                Value::Object(map) => map.values().find_map(|v| find(v, label)),
                 _ => None,
             }
         }
@@ -1066,7 +1067,7 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
                 find(
                     &app.request(2, json!({"type":"application_menu","menu":menu}))
                         .unwrap(),
-                    command,
+                    &command.label(),
                 )
             })
             .unwrap()
@@ -1079,25 +1080,25 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
         app.stroke();
         app.draw_until_idle();
         let ink = app.pixels();
-        let clear = item(&app, "clear_layer");
+        let clear = item(&app, CommandId::ClearLayer);
         assert_eq!(clear["enabled"], true);
         app.action(clear["action"].clone());
         app.draw_until_idle();
         assert_ne!(app.pixels(), ink);
-        app.action(item(&app, "undo")["action"].clone());
+        app.action(item(&app, CommandId::Undo)["action"].clone());
         app.draw_until_idle();
         assert_eq!(app.pixels(), ink);
-        app.action(item(&app, "select_all")["action"].clone());
+        app.action(item(&app, CommandId::SelectAll)["action"].clone());
         app.draw_until_idle();
-        app.action(item(&app, "fill_selection")["action"].clone());
+        app.action(item(&app, CommandId::FillSelection)["action"].clone());
         app.draw_until_idle();
         assert_ne!(app.pixels(), ink);
-        app.action(item(&app, "undo")["action"].clone());
+        app.action(item(&app, CommandId::Undo)["action"].clone());
         app.draw_until_idle();
         assert_eq!(app.pixels(), ink);
-        app.action(item(&app, "deselect")["action"].clone());
+        app.action(item(&app, CommandId::Deselect)["action"].clone());
         app.draw_until_idle();
-        assert_eq!(item(&app, "deselect")["enabled"], false);
+        assert_eq!(item(&app, CommandId::Deselect)["enabled"], false);
         let filters = app
             .request(2, json!({"type":"application_menu","menu":"filter"}))
             .unwrap();
@@ -1112,7 +1113,7 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
         app.action(action);
         app.draw_until_idle();
         assert_ne!(app.pixels(), ink);
-        app.action(item(&app, "undo")["action"].clone());
+        app.action(item(&app, CommandId::Undo)["action"].clone());
         app.draw_until_idle();
         assert_eq!(app.pixels(), ink);
     }

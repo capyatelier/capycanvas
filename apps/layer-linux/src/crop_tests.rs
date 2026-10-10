@@ -114,12 +114,12 @@ pub(super) fn fill_rect(w: &Rc<Workspace>, [x0, y0, x1, y1]: [f32; 4]) -> layer_
 }
 
 /// A filled rectangle over the middle of the canvas, then the Crop tool from
-/// Edit › Image.
+/// Image.
 pub(super) fn crop_ready(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
     let (app, w, mut input) = start(id);
     fill_rect(&w, [0.2, 0.2, 0.8, 0.8]);
-    choose(&w, &mut input, "Edit", &["Image", "Crop"]);
-    until(|| cropping(&w), "Edit › Image › Crop opens the crop bar");
+    choose(&w, &mut input, "Image", &["Crop"]);
+    until(|| cropping(&w), "Image › Crop opens the crop bar");
     (app, w, input)
 }
 

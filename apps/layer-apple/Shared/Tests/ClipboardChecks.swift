@@ -85,7 +85,7 @@ extension XCTestCase {
         #if os(macOS)
         app.typeKey("n", modifierFlags: [.command, .option])
         #else
-        editorMenu(in: app, menu: "Edit", id: "paste_as_new_image", label: "Paste as New Image")
+        editorMenu(in: app, menu: "Edit", id: "paste_as_new_image", label: "Paste as New Image", submenu: "Paste Special")
         #endif
         let second = app.buttons["drawing-tab-2"].firstMatch
         if !second.waitForExistence(timeout: 5) { workspaceActivate(app.buttons["document-title"]) }

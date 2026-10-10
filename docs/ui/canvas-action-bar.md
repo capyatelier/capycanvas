@@ -53,7 +53,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
   requires an unlocked paint target because it also erases the source.
 - **Crop:** Crop Canvas to Selection crops the canvas to the bounds of the selection's coverage, as metadata: pixels outside stay on their layers and reappear when the canvas grows. It is disabled, with a reason, for an inverted selection.
 - **Moving selected pixels:** a Move drag over a selection keeps the Selection context; the bar hides during the contact and returns beside the moved selection. Leave Copy is the Move toggle described in [Selections](selections.md#moving-selected-pixels).
-- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)), Layer › New › New Dodge & Burn Layer, Filter › Frequency Separation…, Discard Paint Edits, the merges (Merge Down, Merge Group, Merge Visible, Stamp Visible and Flatten Image) and Edit › Blending's Perceptual and Linear Light Blending have no bar item; menus and command search reach them.
+- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Image; see [image commands](image-commands.md)), Layer › New › New Dodge & Burn Layer, Filter › Frequency Separation…, Discard Paint Edits, the merges (Merge Down, Merge Group, Merge Visible, Stamp Visible and Flatten Image) and Image › Blending's Perceptual and Linear Light Blending have no bar item; menus and command search reach them.
 
 ## Placement
 
@@ -133,7 +133,7 @@ Grow…, Shrink…, Feather…, Border… and Smooth… open one dialog, over th
 
 ## Crop
 
-The Crop tool (C; Shift+C in the GIMP keys) is in the Tools toolbar of the Photo workspace and in Edit › Image. It is a canvas operation like a transform: until it is applied or cancelled, commands that edit the document are unavailable with the reason "Apply or cancel the crop first", and Tool Options shows the bar's items with the frame's width, height and Straighten angle.
+The Crop tool (C; Shift+C in the GIMP keys) is in the Tools toolbar of the Photo workspace and in Image. It is a canvas operation like a transform: until it is applied or cancelled, commands that edit the document are unavailable with the reason "Apply or cancel the crop first", and Tool Options shows the bar's items with the frame's width, height and Straighten angle.
 
 - **Frame:** it starts as the whole canvas. Its eight handles drag immediately with every device; a finger on a handle drags it, and a finger elsewhere navigates. The mouse or pen inside the frame moves it. Shift keeps the frame's proportions and Alt resizes about its centre.
 - **Ratio ▾:** a ratio fits the largest frame of that shape in the canvas, in the frame's current orientation. Original is the canvas's own ratio. Swap Orientation turns landscape into portrait and back.

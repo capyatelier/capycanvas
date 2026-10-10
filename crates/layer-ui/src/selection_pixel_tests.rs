@@ -165,11 +165,9 @@ mod selection_pixel_checks {
         let edited_paint=paint(s.engine.document(),id).clone();
         assert!(!edited_paint.operations.is_empty() || !edited_paint.raster.is_empty());
         assert_eq!(reason(&s), None);
-        let edit_menu = s.application_menu(ApplicationMenu::Edit);
         let labels = |sections: &[Vec<ContextMenuItem>]| sections.iter().flatten().map(|i| i.label.clone()).collect::<Vec<_>>();
-        let edit = labels(&edit_menu.sections);
-        let rasterize = edit.iter().position(|l| l == "Rasterize Source…").unwrap();
-        assert_eq!(edit[rasterize + 1], "Discard Paint Edits");
+        let edit = labels(&s.application_menu(ApplicationMenu::Edit).sections);
+        assert!(!edit.iter().any(|label| matches!(label.as_str(), "Rasterize Source…" | "Discard Paint Edits" | "Clear Entire Layer")));
         let layer_menu = s.layer_menu(crate::session::occurrence_token(id), false).unwrap();
         let settings = layer_menu.sections.iter().flatten().find(|i| i.label == "Layer Settings").unwrap();
         let settings = labels(&settings.sections);
@@ -372,9 +370,10 @@ mod selection_pixel_checks {
             walk(&menu.sections, &mut out);
             out
         };
-        for command in [CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer] {
+        for command in [CommandId::ClearSelected, CommandId::ClearOutside] {
             assert!(labels(&edit).contains(&command.label().to_string()), "Edit › {command:?}");
         }
+        assert!(labels(&layer).contains(&CommandId::ClearLayer.label().to_string()));
         for command in [
             CommandId::ClearSelected,
             CommandId::ClearOutside,

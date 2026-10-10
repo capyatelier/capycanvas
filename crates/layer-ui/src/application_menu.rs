@@ -47,6 +47,7 @@ impl ApplicationLink {
 pub enum ApplicationMenu {
     File,
     Edit,
+    Image,
     Layer,
     Select,
     Filter,
@@ -55,9 +56,10 @@ pub enum ApplicationMenu {
     Primary,
 }
 impl ApplicationMenu {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::File,
         Self::Edit,
+        Self::Image,
         Self::Layer,
         Self::Select,
         Self::Filter,
@@ -75,6 +77,7 @@ impl ApplicationMenu {
         localization.text(match self {
             Self::File => MessageId::MENU_FILE,
             Self::Edit => MessageId::MENU_EDIT,
+            Self::Image => MessageId::MENU_IMAGE,
             Self::Layer => MessageId::MENU_LAYER,
             Self::Select => MessageId::MENU_SELECT,
             Self::Filter => MessageId::MENU_FILTER,
@@ -168,25 +171,28 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             M::Layer if self.selection_masks.quick() => self.quick_mask_menu(),
             M::Edit => ContextMenu { title: menu.localized_label(self.localization()).to_string(), sections: vec![
-                vec![command(CommandId::SearchCommands)],
                 [CommandId::Undo, CommandId::Redo].map(command).into(),
-                [CommandId::Cut, CommandId::Copy, CommandId::CopyPixels, CommandId::CopyMerged, CommandId::PasteImage, CommandId::PasteAsNewImage, CommandId::PasteAtView, CommandId::PasteInPlace, CommandId::PasteAtCursor, CommandId::PasteInto]
-                    .into_iter()
-                    .filter(|id| id.available_on(self.state.platform))
-                    .map(command)
-                    .collect(),
-                [CommandId::RasterizeSource, CommandId::DiscardPaintEdits, CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside, CommandId::ClearLayer].map(command).into(),
+                [CommandId::Cut, CommandId::Copy, CommandId::CopyMerged, CommandId::CopyPixels, CommandId::PasteImage]
+                    .map(command).into_iter().chain([ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_PASTE_SPECIAL), vec![
+                        [CommandId::PasteInPlace, CommandId::PasteAtView, CommandId::PasteAtCursor].map(command).into(),
+                        [CommandId::PasteInto, CommandId::PasteAsNewImage].map(command).into(),
+                    ])]).collect(),
+                [CommandId::FillSelection, CommandId::ClearSelected, CommandId::ClearOutside].map(command).into(),
                 vec![command(CommandId::ScaleRotate), command(CommandId::TransformAgain)],
-                vec![ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_IMAGE), vec![
-                    [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::CanvasSize, CommandId::ImageSize].map(command).into(),
+                vec![command(CommandId::SearchCommands), command(CommandId::Settings)],
+            ] },
+            M::Image => ContextMenu { title: menu.localized_label(self.localization()).to_string(), sections: vec![
+                [CommandId::ImageSize, CommandId::CanvasSize].map(command).into(),
+                [CommandId::Crop, CommandId::CropCanvasToSelection, CommandId::Trim, CommandId::RevealAll].map(command).into(),
+                vec![ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_ROTATE_AND_FLIP), vec![
                     [CommandId::RotateImageLeft, CommandId::RotateImageRight, CommandId::RotateImage180].map(command).into(),
                     [CommandId::FlipImageHorizontal, CommandId::FlipImageVertical].map(command).into(),
-                    [CommandId::Trim, CommandId::RevealAll].map(command).into(),
                 ])],
-                [CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth].map(command).into_iter()
-                    .chain([ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_BLENDING), vec![[CommandId::BlendPerceptual, CommandId::BlendLinear].map(command).into()])])
-                    .collect(),
-                vec![command(CommandId::Settings)],
+                vec![ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_COLOR_MANAGEMENT), vec![
+                    [CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth].map(command).into(),
+                ]), ContextMenuItem::submenu(&self.localization().text(MessageId::MENU_BLENDING), vec![
+                    [CommandId::BlendPerceptual, CommandId::BlendLinear].map(command).into(),
+                ])],
             ] },
             M::Select => ContextMenu { title: menu.localized_label(self.localization()).to_string(), sections: vec![
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
@@ -298,7 +304,41 @@ const ZOOM_LEVELS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
 
 #[cfg(test)]
 mod tests {
-    use super::ApplicationMenu;
+    use super::*;
+    use crate::session::test_support::session;
+
+    #[test]
+    fn edit_and_image_menus_preserve_live_commands_on_every_platform() {
+        fn check<R: CanvasRenderer>(session: &UiSession<R>, sections: &[Vec<ContextMenuItem>], commands: &mut Vec<CommandId>) {
+            for item in sections.iter().flatten() {
+                if let Some(UiAction::Invoke { command }) = item.action {
+                    assert!(!commands.contains(&command), "duplicate {command:?}");
+                    commands.push(command);
+                    let state = session.command(command);
+                    assert_eq!(item.label, state.label.as_ref());
+                    assert_eq!(item.enabled, state.enabled, "{command:?}");
+                    let keys = session.state.settings.action_keys(&UiAction::Invoke { command }, session.state.platform);
+                    let bindings: Vec<_> = keys.iter().map(|key| key.native_binding(session.state.platform)).collect();
+                    assert_eq!(item.bindings, bindings, "{command:?}");
+                }
+                check(session, &item.sections, commands);
+            }
+        }
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows] {
+            let session = session(platform);
+            let edit = session.application_menu(ApplicationMenu::Edit);
+            assert_eq!(edit.sections.iter().map(Vec::len).sum::<usize>(), 15);
+            assert_eq!(edit.sections[0].iter().map(|item| item.action.clone()).collect::<Vec<_>>(),
+                [CommandId::Undo, CommandId::Redo].map(|command| Some(UiAction::Invoke { command })));
+            let mut commands = Vec::new();
+            check(&session, &edit.sections, &mut commands);
+            for command in [CommandId::ClearLayer, CommandId::RasterizeSource, CommandId::DiscardPaintEdits, CommandId::AssignProfile, CommandId::ConvertColorSpace, CommandId::ChangeBitDepth] {
+                assert!(!commands.contains(&command), "{platform:?}: {command:?} belongs outside Edit");
+            }
+            check(&session, &session.application_menu(ApplicationMenu::Image).sections, &mut commands);
+            assert_eq!(commands.len(), 35, "{platform:?}: all remaining Edit/Image commands survive exactly once");
+        }
+    }
 
     #[test]
     fn application_menu_hover_tracks_only_open_menu_bar_neighbors() {
