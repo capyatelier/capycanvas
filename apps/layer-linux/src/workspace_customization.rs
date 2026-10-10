@@ -1315,11 +1315,13 @@ impl Workspace {
                 return None;
             }
             PanelControl::BrushSize => {
-                let input = crate::number_control::NumberControl::new(
+                let input = crate::number_control::NumberControl::panel(
                     NumericControl::brush_size(),
                     &control.localized_label(&self.localization()),
-                    "",
                  self.localization().clone());
+                input.connect_reset_requested(glib::clone!(#[weak(rename_to=w)] self, move || {
+                    w.dispatch(UiAction::ResetToolSetting { id: "size".into() });
+                }));
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -1331,11 +1333,13 @@ impl Workspace {
                 FieldValue::Size(input)
             }
             PanelControl::BrushOpacity => {
-                let input = crate::number_control::NumberControl::new(
+                let input = crate::number_control::NumberControl::panel(
                     NumericControl::percent(),
                     &control.localized_label(&self.localization()),
-                    "",
                  self.localization().clone());
+                input.connect_reset_requested(glib::clone!(#[weak(rename_to=w)] self, move || {
+                    w.dispatch(UiAction::ResetToolSetting { id: "opacity".into() });
+                }));
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -1393,10 +1397,9 @@ impl Workspace {
                 FieldValue::Layer(input)
             }
             PanelControl::LayerOpacity => {
-                let input = crate::number_control::NumberControl::new(
+                let input = crate::number_control::NumberControl::panel(
                     NumericControl::percent(),
                     &control.localized_label(&self.localization()),
-                    "",
                  self.localization().clone());
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]

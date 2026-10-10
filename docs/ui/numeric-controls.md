@@ -2,12 +2,12 @@
 
 [Workspace and UI](README.md)
 
-Every host shares the same touch-first numeric controls.
+Every host shares the same numeric policy and editable values.
 
 - Small-range integers: label left, a conventional spin control right. GTK
   uses `GtkSpinButton` in panels and `AdwSpinRow` in Preferences.
 - Wider integers and continuous values: label left and a plain, tappable value
-  right; a native slider underneath with minus and plus at its ends. Tapping
+  right; a native slider underneath. Tapping
   the value enters text editing. There are no hidden drag gestures on it,
   except in Edit Color, whose numbers have no slider and adjust by vertical
   drag ([color picking](color-picker.md#edit-color)).
@@ -17,9 +17,16 @@ Every host shares the same touch-first numeric controls.
   Android uses 48 dp settings targets; GTK and web use 32-pixel settings tracks.
 - Titles stay on one line with ellipsis (desktop/web hover shows the full name).
   Values align right and center against the full title/description block.
-  Panel sliders use a 24-pixel value row above a matching 24-pixel track/button
-  row with no visible thumb (dp on Android). There is a 6-pixel gap between
-  each step button and the bar. Panel fill is a theme-aware grey halfway between
+  GTK stacked panel sliders sit just below the text, within a 34-pixel control. The
+  4-pixel track has a symmetric 16-pixel hit area reaching the visible bottom
+  of the label. Its left inset is 36 pixels; its fixed 72-pixel right inset
+  reserves room for ordinary values and units. Panels have no step buttons.
+  Double-clicking a tool setting's label restores the shared tool default.
+  Adjacent Tool Settings controls have a 6-pixel gap below that hit area.
+  Other hosts retain a 24-pixel value row above a matching 24-pixel track/button
+  row with minus and plus at its ends and no visible thumb (dp on Android).
+  There is a 6-pixel gap between each step button and the bar.
+  Panel fill is a theme-aware grey halfway between
   panel background and text. Settings keep larger targets, accent fill and a
   visible thumb. Their values/editors use standard Adwaita input sizing (34px
   high, 9px horizontal padding) on GTK/web; Android keeps 48dp targets with 12dp
@@ -161,7 +168,15 @@ statistics; changes below the adjustment update them.
 review sheet to `artifacts/ui/numeric/`. `native_slider_feedback` sweeps brush
 size forward and back through the GTK session: model refreshes do not emit
 edits, and deferred GTK range changes compare values at the core's numeric
-resolution, avoiding f64/f32 rounding loops. Android instrumented tests cover
+resolution, avoiding f64/f32 rounding loops. `native_panel_slider_input` checks
+native drags along both vertical edges of the panel slider hit area, value
+editing and label double-click reset in both themes, with workspace captures
+in `artifacts/ui/panel-sliders/`. `native_panel_slider_motion` records moving
+GTK presentation rates and p99 gaps for three sustained scrubs each of size,
+opacity and flow. Run it through the private-display runner with
+`LAYER_NATIVE_EVENT_MS=4`, setting `CAPY_NATIVE_TEST_THEME=light` or `dark`.
+Its desktop fixture is a diagnostic, not reference-tablet qualification.
+Android instrumented tests cover
 native editing, expression evaluation, slider geometry and settings input
 isolation. `native_numeric_preedit_guard` covers both GTK widget branches and
 step buttons using native preedit signals; actual IME journeys remain separate.

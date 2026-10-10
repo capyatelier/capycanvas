@@ -128,7 +128,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Drawer open and close | 120 | | |
 | Grouped tool menus, drawer switching and tile drag | 120 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
 | Colour wheel or picker drag | 120 | **Unqualified.** Current GTK 2× workstation picker diagnostic: docked SDR 75.00, HDR 62.96 canvas presents/s; reference tablet unmeasured | [GTK Color diagnostic](#gtk-color-panel-resize), 2026-10-04; earlier [swatch diagnostic](#gtk-selected-swatch-diagnostic) |
-| Slider scrub: size, opacity, flow | 120 | | |
+| Slider scrub: size, opacity, flow | 120 | **Unqualified.** GTK workstation diagnostic only; reference tablet unmeasured | [GTK panel slider diagnostic](#gtk-panel-slider-diagnostic), 2026-10-09 |
 | Canvas action bar show, hide and move | 120 | **Not met.** UI frame p50/p95: 63.2/90.0 ms moving the bar, 23.0/34.6 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 120 | | |
@@ -168,6 +168,30 @@ APK hashes and the rate calculation are under
 The post-rebase repeat at `2a55ce947`, with identical app and test APK hashes,
 recorded 77.08, 79.86 and 78.65 window frames/s, with p99 gaps of 33.33, 25.00
 and 33.33 ms. Dropped reports remained zero and thermal status remained 0.
+
+## GTK panel slider diagnostic
+
+Measured 2026-10-09 with the compact GTK panel sliders based on `ee4805dfe`,
+in a release build on NVIDIA RTX PRO 6000 Blackwell Max-Q/Vulkan 615.71.09.
+The private Mutter display is 1600 × 1000 at a requested 120 Hz, with a
+2048 × 1536 empty drawing. `native_panel_slider_motion` uses native mouse
+input at requested 4 ms intervals, warms each field, and records three
+five-second scrubs each of brush size, opacity and flow in both themes.
+Only GTK presentations whose numeric value changed are counted.
+
+| Theme / field | Moving presentations/s | Interval p99 |
+| --- | --- | --- |
+| Light / Size | 55.75–55.95 | 33.306–33.414 ms |
+| Light / Opacity | 55.75–56.13 | 33.360–33.494 ms |
+| Light / Flow | 55.64–56.04 | 33.363–33.407 ms |
+| Dark / Size | 55.65–55.95 | 33.339–33.474 ms |
+| Dark / Opacity | 55.64–55.75 | 33.353–33.471 ms |
+| Dark / Flow | 55.45–55.55 | 33.358–33.511 ms |
+
+Every workstation run falls below the 120 Hz goal.
+These are workstation diagnostics with a small drawing and no paired baseline.
+They do not qualify any reference-tablet target or establish a before/after
+comparison. Raw records are in `artifacts/ui/panel-sliders/`.
 
 ## GTK selected swatch diagnostic
 

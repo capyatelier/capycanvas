@@ -3604,8 +3604,9 @@ fn native_tool_and_color_panels() {
                 .measure(gtk::Orientation::Horizontal, -1)
                 .0
                 <= layer_ui::TOOL_PANEL_MIN_WIDTH as i32,
-            "{} settings are too wide",
-            choice.label
+            "{} settings are too wide: {}",
+            choice.label,
+            w.panel_widget(Panel::ToolSettings).measure(gtk::Orientation::Horizontal, -1).0
         );
     }
     assert!(
@@ -8267,15 +8268,7 @@ fn native_preferences_and_shortcuts() {
 fn native_slider_feedback() {
     let app = native_test_app("dev.layer.SliderFeedbackTest");
     let slider = |control: &crate::number_control::NumberControl| {
-        control
-            .last_child()
-            .unwrap()
-            .first_child()
-            .unwrap()
-            .next_sibling()
-            .unwrap()
-            .downcast::<gtk::Scale>()
-            .unwrap()
+        descendant::<gtk::Scale>(control).unwrap()
     };
     for spec in [
         NumericControl::brush_size(),
@@ -8353,6 +8346,130 @@ fn native_slider_feedback() {
 }
 
 #[test]
+#[ignore = "private Wayland display, native panel slider input"]
+fn native_panel_slider_input() {
+    let app = native_test_app("art.capycanvas.PanelSliders");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    let mut input = RemoteInput::new();
+    input.ready();
+    until(|| w.window.is_maximized() && w.surface.width() > 0, "slider workspace allocated");
+    let workspace = tool_settings_workspace(&w, &[], true, true);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    let output = artifact_dir("../../artifacts/ui/panel-sliders");
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 });
+        let panel = w.panel_widget(Panel::ToolSettings);
+        let size = named::<crate::number_control::NumberControl>(&panel, "tool-setting-size");
+        let opacity = named::<crate::number_control::NumberControl>(&panel, "tool-setting-opacity");
+        until(|| size.is_mapped() && size.width() > 0, "panel slider allocated");
+        pump(150);
+        let defaults = [size.value(), opacity.value()];
+        let scale = descendant::<gtk::Scale>(&size).unwrap();
+        let title = find_css(size.upcast_ref(), "number-title").unwrap().downcast::<gtk::Label>().unwrap();
+        let bar = scale.compute_bounds(&size).unwrap();
+        let text = title.compute_bounds(&size).unwrap();
+        let ink = title.layout().pixel_extents().0;
+        let bottom = text.y() + (title.layout_offsets().1 + ink.y() + ink.height()) as f32;
+        assert!(bar.y() >= bottom - 1., "slider starts below the visible label: {bar:?}, text bottom {bottom}");
+        assert!(bar.y() - bottom <= 4., "hit area reaches the label's bottom");
+        assert_eq!(size.height(), 34);
+        assert_eq!(bar.x(), 36.);
+        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 72.);
+        assert!(find_css(size.upcast_ref(), "number-step").is_none());
+        for edge in [1. / scale.height() as f32, 1. - 1. / scale.height() as f32] {
+            w.dispatch(UiAction::SetToolSetting { id: "size".into(), value: 32. });
+            let from = screen_point(scale.upcast_ref(), &w.window, [0.2, edge]);
+            let to = screen_point(scale.upcast_ref(), &w.window, [0.75, edge]);
+            let mut events = vec![contact("mouse", "down", from)];
+            for step in 1..=12 {
+                events.push(contact("mouse", "move", [from[0] + (to[0] - from[0]) * step as f32 / 12., to[1]]));
+            }
+            events.push(contact("mouse", "up", to));
+            input.perform(serde_json::Value::Array(events));
+            assert!(size.value() > 100., "dragging edge {edge} of the slider hit area changes size: {}", size.value());
+            assert!(!descendant::<gtk::Entry>(&size).unwrap().is_mapped(), "slider drag keeps the value editor closed");
+        }
+        for (field, default) in [(&size, defaults[0]), (&opacity, defaults[1])] {
+            edit_number(field, if field == &size { "123" } else { "35%" });
+            let title = find_css(field.upcast_ref(), "number-title").unwrap();
+            let point = screen_point(&title, &w.window, [0.2, 0.5]);
+            input.perform(serde_json::json!([
+                { "point": point }, { "down": true }, { "down": false },
+                { "down": true }, { "down": false }
+            ]));
+            assert_eq!(field.value(), default, "double-clicking the label restores the shared default");
+        }
+        let value = find_css(size.upcast_ref(), "number-value").unwrap();
+        input.click(screen_point(&value, &w.window, [0.5, 0.8]));
+        assert!(descendant::<gtk::Entry>(&size).unwrap().is_mapped(), "the value remains easy to edit");
+        size.cancel_edit();
+        capture_reference(&w, &format!("{output}/gtk-{theme:?}.png"), 1.);
+    }
+    input.finish();
+    w.window.destroy();
+}
+
+#[test]
+#[ignore = "private Wayland display, sustained native panel slider motion"]
+fn native_panel_slider_motion() {
+    let app = native_test_app("art.capycanvas.PanelSliderMotion");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    let mut input = RemoteInput::new().settle_ms(0).timeout_secs(15);
+    input.ready();
+    until(|| w.window.is_maximized() && w.surface.width() > 0, "slider motion workspace allocated");
+    let workspace = tool_settings_workspace(&w, &[], true, true);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::WetWatercolor as u32 });
+    pump(1200);
+    let clock = w.surface.frame_clock().unwrap();
+    let mut reports = Vec::new();
+    for id in ["size", "opacity", "flow"] {
+        let field = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"));
+        let scale = descendant::<gtk::Scale>(&field).unwrap();
+        let point = |position| screen_point(scale.upcast_ref(), &w.window, [position, 0.5]);
+        input.perform(serde_json::json!([contact("mouse", "down", point(0.2)), contact("mouse", "move", point(0.8)), contact("mouse", "up", point(0.8))]));
+        pump(200);
+        for run in 0..3 {
+            input.perform(serde_json::json!([contact("mouse", "down", point(0.2))]));
+            pump(100);
+            let timings = Rc::new(RefCell::new(Vec::new()));
+            let value = Rc::new(Cell::new(field.value()));
+            let handler = clock.connect_after_paint(glib::clone!(#[strong] timings, #[strong] value, #[weak] field, move |clock| {
+                if value.replace(field.value()) != field.value() && let Some(timing) = clock.current_timings() {
+                    timings.borrow_mut().push(timing);
+                }
+            }));
+            let events: Vec<_> = (0..1250).map(|step| {
+                let phase = (step as f32 / 1250. * 4.) % 2.;
+                contact("mouse", "move", point(if phase < 1. { 0.2 + 0.6 * phase } else { 0.8 - 0.6 * (phase - 1.) }))
+            }).collect();
+            input.perform(serde_json::Value::Array(events));
+            clock.disconnect(handler);
+            input.perform(serde_json::json!([contact("mouse", "up", point(0.2))]));
+            pump(100);
+            let mut presented: Vec<_> = timings.borrow().iter().filter(|t| t.is_complete() && t.presentation_time() > 0).map(|t| t.presentation_time()).collect();
+            presented.sort_unstable(); presented.dedup();
+            assert!(presented.len() > 2, "slider produces native moving presentations");
+            let seconds = (presented.last().unwrap() - presented[0]) as f64 / 1_000_000.;
+            assert!(seconds >= 5., "sustained gesture duration: {seconds}");
+            let mut gaps: Vec<_> = presented.windows(2).map(|pair| (pair[1] - pair[0]) as f64 / 1000.).collect();
+            gaps.sort_by(f64::total_cmp);
+            let report = serde_json::json!({"field":id,"run":run,"theme":state(&w).theme,"moving_presentations":presented.len(),"seconds":seconds,"presentation_hz":(presented.len()-1) as f64/seconds,"gap_p99_ms":gaps[gaps.len()*99/100],"canvas":ui_session(&w).engine().document().composition().size});
+            eprintln!("{report}"); reports.push(report);
+        }
+    }
+    let output = artifact_dir("../../artifacts/ui/panel-sliders");
+    std::fs::write(format!("{output}/motion-{:?}.json", state(&w).theme), serde_json::to_vec_pretty(&reports).unwrap()).unwrap();
+    input.finish();
+    w.window.destroy();
+}
+
+#[test]
 #[ignore = "numeric widget editing and review sheet: requires a Wayland display"]
 fn native_number_controls() {
     let app = native_test_app("dev.layer.NumberTest");
@@ -8371,8 +8488,8 @@ fn native_number_controls() {
     body.set_margin_end(18);
     body.add_css_class("dock-panel");
     let size =
-        crate::number_control::NumberControl::new(NumericControl::brush_size(), "Brush size", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
-    let alpha = crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+        crate::number_control::NumberControl::panel(NumericControl::brush_size(), "Brush size", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+    let alpha = crate::number_control::NumberControl::panel(NumericControl::percent(), "Opacity", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
     let small = crate::number_control::NumberControl::new(
         NumericControl::number(0.0, 16.0, 1.0, 0),
         "Small integer",
@@ -8384,10 +8501,9 @@ fn native_number_controls() {
     size.set_value(32.0);
     alpha.set_value(0.5);
     small.set_value(4.0);
-    let narrow = crate::number_control::NumberControl::new(
+    let narrow = crate::number_control::NumberControl::panel(
         NumericControl::percent(),
         "A long slider name that must not wrap",
-        "",
      layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
     narrow.set_value(0.5);
     let narrow_container = adw::Clamp::builder()
@@ -8433,18 +8549,16 @@ fn native_number_controls() {
         );
     }
     assert!(
-        narrow.height() <= 50,
+        narrow.height() <= 34,
         "compact row height: {}",
         narrow.height()
     );
     assert_eq!(narrow.width(), 176);
-    let track = scale.parent().unwrap();
-    let minus = track.first_child().unwrap().compute_bounds(&track).unwrap();
-    let plus = track.last_child().unwrap().compute_bounds(&track).unwrap();
-    let bar = scale.compute_bounds(&track).unwrap();
-    assert_eq!(bar.height(), 24.0);
-    assert_eq!(bar.x(), minus.x() + minus.width() + 6.0);
-    assert_eq!(bar.x() + bar.width() + 6.0, plus.x());
+    let bar = scale.compute_bounds(&size).unwrap();
+    assert!(find_css(size.upcast_ref(), "number-step").is_none());
+    assert_eq!(bar.height(), 16.0);
+    assert_eq!(bar.x(), 36.0);
+    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 72.0);
     assert_eq!(scale.range_rect().width(), scale.width());
     let (start, end) = scale.slider_range();
     assert_eq!(start, end, "compact slider reserves no thumb width");

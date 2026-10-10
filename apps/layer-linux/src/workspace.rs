@@ -1184,14 +1184,13 @@ impl Workspace {
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let layer_panel = crate::layers::LayerPanel::new(localization.clone());
         let effects = Rc::new(crate::effects::EffectPanels::new());
-        let size_number = crate::number_control::NumberControl::new(
+        let size_number = crate::number_control::NumberControl::panel(
             NumericControl::brush_size(),
             &localization.text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE),
-            "",
          localization.clone());
         size_number.set_widget_name("brush-size");
         let opacity =
-            crate::number_control::NumberControl::new(NumericControl::percent(), &localization.text(layer_ui::MessageId::TOOL_SETTING_OPACITY), "", localization.clone());
+            crate::number_control::NumberControl::panel(NumericControl::percent(), &localization.text(layer_ui::MessageId::TOOL_SETTING_OPACITY), localization.clone());
         opacity.set_width_request(100);
         let color = crate::color_editor::ColorButton::new();
         let status = gtk::Label::new(None);
@@ -1477,6 +1476,11 @@ impl Workspace {
                 value: v.value() as f32
             })
         ));
+        for (input, id) in [(&self.size_number, "size"), (&self.opacity, "opacity")] {
+            input.connect_reset_requested(glib::clone!(#[weak(rename_to=this)] self, move || {
+                this.dispatch(UiAction::ResetToolSetting { id: id.into() });
+            }));
+        }
         self.opacity.connect_value_changed(glib::clone!(
             #[weak(rename_to = this)]
             self,

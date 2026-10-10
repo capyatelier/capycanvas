@@ -304,11 +304,26 @@ impl NumberControl {
     }
 
     pub fn new(spec: NumericControl, title: &str, description: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
-        Self::build(spec, title, description, false, false, localization)
+        Self::build(spec, title, description, false, false, false, localization)
+    }
+    pub fn panel(spec: NumericControl, title: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
+        Self::build(spec, title, "", false, false, true, localization)
+    }
+    pub fn connect_reset_requested(&self, callback: impl Fn() + 'static) {
+        let label = self.imp().inline_caption.get().or_else(|| self.imp().caption.get()).unwrap();
+        let click = gtk::GestureClick::new();
+        click.set_button(1);
+        click.connect_pressed(glib::clone!(#[weak(rename_to=control)] self, move |gesture, count, _, _| {
+            if count != 2 || control.composing() { return; }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            control.cancel_edit();
+            callback();
+        }));
+        label.add_controller(click);
     }
     /// One-line slider with only an editable value. Numeric policy is unchanged.
     pub fn inline(spec: NumericControl, title: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
-        Self::build(spec, title, "", true, false, localization)
+        Self::build(spec, title, "", true, false, false, localization)
     }
     /// Panel row with its label, slider and editable value on one line.
     pub fn labeled_inline(
@@ -337,7 +352,7 @@ impl NumberControl {
     /// A bounded editable value without a slider or step buttons.
     pub fn value_only(spec: NumericControl, title: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
         let number = spec.kind == NumericKind::Number;
-        let control = Self::build(spec, title, "", true, number, localization);
+        let control = Self::build(spec, title, "", true, number, false, localization);
         control.set_halign(gtk::Align::Center);
         let imp = control.imp();
         if let Some(reserve) = imp.width_reserve.get() { reserve.set_visible(false); }
@@ -357,7 +372,7 @@ impl NumberControl {
     }
     /// Compact toolbar presentation using the same editor as panel controls.
     pub fn compact(spec: NumericControl, title: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
-        Self::build(spec, title, "", true, true, localization)
+        Self::build(spec, title, "", true, true, false, localization)
     }
     /// GtkBox's layout manager owns allocation. The tile owner supplies its
     /// final width before allocating the row, so native minimum sizes cannot
@@ -489,6 +504,7 @@ impl NumberControl {
         description: &str,
         inline: bool,
         compact: bool,
+        panel: bool,
         localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Self {
         let control: Self = glib::Object::new();
@@ -503,6 +519,7 @@ impl NumberControl {
         control.set_orientation(gtk::Orientation::Vertical);
         control.set_hexpand(true);
         control.add_css_class("number-control");
+        if panel { control.add_css_class("number-panel"); }
         if inline {
             control.add_css_class("number-inline");
             control.set_tooltip_text(Some(title));
@@ -741,22 +758,6 @@ impl NumberControl {
             control.install_value_gestures(&display);
             control.imp().display.set(display).unwrap();
             control.imp().stack.set(stack).unwrap();
-            let track = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            track.add_css_class("number-track");
-            let minus = crate::icons::button("layer-minus-symbolic");
-            let plus = crate::icons::button("layer-plus-symbolic");
-            for (button, steps, caption) in [(&minus, -1.0, &captions.decrease), (&plus, 1.0, &captions.increase)] {
-                button.add_css_class("flat");
-                button.add_css_class("number-step");
-                button.set_tooltip_text(Some(caption));
-                button.connect_clicked(glib::clone!(
-                    #[weak]
-                    control,
-                    move |_| {
-                        if control.commit_text() { control.apply(NumericOperation::Step { steps }); }
-                    }
-                ));
-            }
             let slider = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.001);
             slider.set_draw_value(false);
             slider.set_hexpand(true);
@@ -775,11 +776,24 @@ impl NumberControl {
             if inline {
                 header.prepend(&slider);
             } else {
-                track.append(&minus);
-                track.append(&slider);
-                track.append(&plus);
+                let track = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                track.add_css_class("number-track");
+                if !panel {
+                    let steps = [crate::icons::button("layer-minus-symbolic"), crate::icons::button("layer-plus-symbolic")];
+                    for (button, count, caption) in [(&steps[0], -1., &captions.decrease), (&steps[1], 1., &captions.increase)] {
+                        button.add_css_class("flat");
+                        button.add_css_class("number-step");
+                        button.set_tooltip_text(Some(caption));
+                        button.connect_clicked(glib::clone!(#[weak] control, move |_| {
+                            if control.commit_text() { control.apply(NumericOperation::Step { steps: count }); }
+                        }));
+                    }
+                    track.append(&steps[0]);
+                    track.append(&steps[1]);
+                    control.imp().steps.set(steps).unwrap();
+                }
+                track.insert_child_after(&slider, track.first_child().as_ref());
                 control.append(&track);
-                control.imp().steps.set([minus, plus]).unwrap();
             }
             control.imp().slider.set(slider).unwrap();
         }

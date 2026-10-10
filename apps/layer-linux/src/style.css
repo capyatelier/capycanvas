@@ -178,6 +178,10 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .dock-panel .number-control scale highlight { background: mix(var(--panel-bg), var(--window-fg-color), .5); }
 .dock-panel .number-control scale slider { min-width: 0; min-height: 0; padding: 0; border: 0; margin: 0; opacity: 0; }
 .dock-panel .number-inline scale { margin: 0; }
+.number-panel .number-track { margin: -6px 72px 0 36px; }
+.number-panel.number-control scale { min-width: 0; min-height: 16px; padding: 0; margin: 0; }
+.number-panel.number-control scale highlight { background: mix(var(--panel-bg), var(--window-fg-color), .5); }
+.number-panel.number-control scale slider { min-width: 0; min-height: 0; padding: 0; border: 0; margin: 0; opacity: 0; }
 .number-inline button.number-value, .number-inline entry.number-entry { padding: 2px 3px; }
 .gradient-editor > box > button { min-width: 24px; padding: 4px; }
 .number-control.error entry { box-shadow: inset 0 0 0 1px #e55; }

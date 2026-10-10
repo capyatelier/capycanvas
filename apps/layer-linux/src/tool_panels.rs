@@ -410,10 +410,13 @@ impl ToolSettings {
                 }
                 let input = if compact || grouped.is_some() {
                     NumberControl::labeled_inline(control.numeric.clone(), &control.label, &control.tooltip_localized(&workspace.localization()), &inline_labels, &inline_values, workspace.localization().clone())
-                } else { NumberControl::new(control.numeric.clone(), &control.label, "", workspace.localization().clone()) };
+                } else { NumberControl::panel(control.numeric.clone(), &control.label, workspace.localization().clone()) };
                 if grouped.is_some() { input.set_slider_visible(false); }
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
+                input.connect_reset_requested(glib::clone!(#[weak] workspace, move || {
+                    workspace.dispatch(UiAction::ResetToolSetting { id: id.into() });
+                }));
                 input.connect_value_changed(glib::clone!(
                     #[weak]
                     workspace,
@@ -591,8 +594,11 @@ impl SizePanel {
     pub fn new(workspace: &Rc<Workspace>) -> Self {
         let root = body();
         root.set_spacing(12);
-        let number = NumberControl::new(layer_ui::NumericControl::brush_size(), &workspace.localization().text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), "", workspace.localization().clone());
+        let number = NumberControl::panel(layer_ui::NumericControl::brush_size(), &workspace.localization().text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), workspace.localization().clone());
         number.set_widget_name("drawer-control-brush-size");
+        number.connect_reset_requested(glib::clone!(#[weak] workspace, move || {
+            workspace.dispatch(UiAction::ResetToolSetting { id: "size".into() });
+        }));
         number.connect_value_changed(glib::clone!(
             #[weak]
             workspace,
