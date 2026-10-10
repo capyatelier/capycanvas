@@ -354,11 +354,7 @@ mod selection_pixel_checks {
     }
 
     #[test]
-    fn selection_actions_are_reachable_from_menus_and_search() {
-        let s = session(Platform::Gtk);
-        let edit = s.application_menu(ApplicationMenu::Edit);
-        let select = s.application_menu(ApplicationMenu::Select);
-        let layer = s.application_menu(ApplicationMenu::Layer);
+    fn selection_edits_have_one_application_menu_home() {
         let labels = |menu: &ContextMenu| {
             fn walk(sections: &[Vec<ContextMenuItem>], out: &mut Vec<String>) {
                 for item in sections.iter().flatten() {
@@ -370,23 +366,24 @@ mod selection_pixel_checks {
             walk(&menu.sections, &mut out);
             out
         };
-        for command in [CommandId::ClearSelected, CommandId::ClearOutside] {
-            assert!(labels(&edit).contains(&command.label().to_string()), "Edit › {command:?}");
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Ios, Platform::Mac, Platform::Windows] {
+            let s = session(platform);
+            let edit = s.application_menu(ApplicationMenu::Edit);
+            let select = s.application_menu(ApplicationMenu::Select);
+            let layer = s.application_menu(ApplicationMenu::Layer);
+            for command in [CommandId::ClearSelected, CommandId::ClearOutside] {
+                assert!(labels(&edit).contains(&command.label().to_string()), "Edit › {command:?}");
+            }
+            assert!(labels(&layer).contains(&CommandId::ClearLayer.label().to_string()));
+            for command in [CommandId::ClearSelected, CommandId::ClearOutside, CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer] {
+                assert!(!labels(&select).contains(&command.label().to_string()), "{platform:?}: {command:?} edits pixels or creates layers");
+            }
+            let new = layer.sections[0][0].sections.concat();
+            for command in [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer] {
+                assert!(new.iter().any(|i| i.action == Some(UiAction::Invoke { command })), "Layer › New › {command:?}");
+            }
+            assert_eq!(s.state.settings.keys(&CommandId::ClearOutside.shortcut_id()), [], "Clear Outside has no default");
         }
-        assert!(labels(&layer).contains(&CommandId::ClearLayer.label().to_string()));
-        for command in [
-            CommandId::ClearSelected,
-            CommandId::ClearOutside,
-            CommandId::CopySelectionToLayer,
-            CommandId::CutSelectionToLayer,
-        ] {
-            assert!(labels(&select).contains(&command.label().to_string()), "Select › {command:?}");
-        }
-        let new = layer.sections[0][0].sections.concat();
-        for command in [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer] {
-            assert!(new.iter().any(|i| i.action == Some(UiAction::Invoke { command })), "Layer › New › {command:?}");
-        }
-        assert_eq!(s.state.settings.keys(&CommandId::ClearOutside.shortcut_id()), [], "Clear Outside has no default");
     }
 
     #[test]

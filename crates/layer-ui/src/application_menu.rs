@@ -197,7 +197,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             M::Select => ContextMenu { title: menu.localized_label(self.localization()).to_string(), sections: vec![
                 [CommandId::SelectAll, CommandId::Deselect, CommandId::Reselect, CommandId::InvertSelection].into_iter().map(command).collect(),
                 [CommandId::QuickMask, CommandId::NewSelectionLayer, CommandId::SaveSelectionLayer].into_iter().map(command).collect(),
-                [CommandId::CopySelectionToLayer, CommandId::CutSelectionToLayer, CommandId::ClearSelected, CommandId::ClearOutside].into_iter().map(command).collect(),
                 [
                     CommandId::GrowSelection,
                     CommandId::ShrinkSelection,

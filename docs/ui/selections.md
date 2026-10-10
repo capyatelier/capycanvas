@@ -23,14 +23,19 @@ never loads coverage or paints into another target implicitly.
 
 ## Select menu
 
-The Select menu is the complete home for current-selection commands, in this
+The Select menu creates, modifies, stores and displays selections, in this
 order: Select All, Deselect, Reselect, Invert Selection; Quick Mask, New
-Selection Layer…, Save as Selection Layer…; Copy and Cut Selection to New Layer,
-Clear Selected Pixels, Clear Outside Selection; Grow… and Shrink…; selection
-from layer opacity or from a layer mask (Replace, Add, Subtract or Intersect);
+Selection Layer…, Save as Selection Layer…; Grow…, Shrink…, Feather…, Border…,
+Smooth… and Transform Outline; selection from layer opacity or from a layer mask
+(Replace, Add, Subtract or Intersect);
 Load Selection and Replace Selection Layer from Current Selection submenus; and
 Show Selection Outline. [`application_menu.rs`](../../crates/layer-ui/src/application_menu.rs)
 holds the order.
+
+Fill Selection, Clear Selected Pixels and Clear Outside Selection live in Edit.
+Copy Selection to New Layer and Cut Selection to New Layer live in Layer → New.
+The [selection bar](canvas-action-bar.md) also offers these pixel and layer edits
+beside the selection.
 
 - Reselect restores the last deselected coverage of the document and is enabled
   only while nothing is selected.

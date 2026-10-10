@@ -189,6 +189,8 @@ commands direct, and groups specialized pastes under Paste Special. Search
 Commands and Preferences come last; macOS puts settings in its application menu.
 Whole-image operations live in [Image](image-commands.md). Rasterize Source,
 Discard Paint Edits and Clear Entire Layer live in Layer and its context menus.
+Select holds [selection controls](selections.md#select-menu); pixel and layer
+edits remain available through Edit, Layer and the contextual selection bar.
 
 ## Layout and customization
 
