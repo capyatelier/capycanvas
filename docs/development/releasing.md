@@ -12,7 +12,7 @@ provide test and build details; the release sequence lives here.
 | --- | --- | --- |
 | Linux x86_64 | Signed Flatpak download and project-hosted update repository | Publish the GitHub Release, deploy Flatpak updates, verify installation and updating. Flathub app publication is not configured by these workflows. |
 | Web | Downloadable static/PWA ZIP and `editor.capycanvas.art` | Publish the ZIP and deploy the editor from the same tag; verify the live revision and offline/update journeys. |
-| Android ARM64 | Direct Play-signed APK and working Play internal testing | Verify both installation paths. Closed testing (`alpha`) may be awaiting Google review; check its state before promotion. Production Play rollout is outside this procedure. |
+| Android ARM64 | Direct Play-signed APK, Play internal and closed (`alpha`) testing | Verify both installation paths and check the closed track's current review state before promotion. Production Play rollout is outside this procedure. |
 | Windows x64 | Signed installer and portable ZIP | Verify both downloads. Microsoft Store is not set up; retain the generated MSIX and report Store submission as deferred. |
 | macOS Apple silicon | Signed, notarized DMG | Verify download, Gatekeeper, installation and updating. The workflow does not submit a Mac App Store build. |
 | iPadOS | Working TestFlight beta | Verify the exact build and its availability to the intended tester group. Beta review and production App Store submission are separate actions. |
@@ -99,13 +99,29 @@ capyatelier/capycanvas` to inspect results. If a job fails, follow
 [recovery](#recovering-a-failed-release) before retrying uploads.
 
 CI creates a draft with the [package outputs](#release-workflow), `SHA256SUMS`
-and provenance attestations. Confirm every expected asset is present, download
-to a fresh directory, and check its hashes:
+and provenance attestations. Expect eleven assets: the ten output files in the
+table, including the Flatpak reference and repository archive, plus `SHA256SUMS`.
+The iPad build is uploaded to App Store Connect, not attached to the release.
+Use the authenticated CLI with the explicit tag to find the draft; the latest
+published release is still the previous version. A draft can return 404 from
+the REST release-by-tag endpoint even when the CLI can find it.
+Download to a fresh directory, check the ten checksum subjects, and verify
+provenance for every asset, including the checksum manifest:
 
 ```bash
+CAPY_RELEASE_DOWNLOADS="artifacts/release/$CAPY_RELEASE_TAG/downloads"
+gh release view "$CAPY_RELEASE_TAG" --repo capyatelier/capycanvas \
+  --json isDraft,tagName,targetCommitish,assets
 gh release download "$CAPY_RELEASE_TAG" --repo capyatelier/capycanvas \
-  --dir "artifacts/release/$CAPY_RELEASE_TAG/downloads"
-(cd "artifacts/release/$CAPY_RELEASE_TAG/downloads" && sha256sum --check SHA256SUMS)
+  --dir "$CAPY_RELEASE_DOWNLOADS"
+(cd "$CAPY_RELEASE_DOWNLOADS" && sha256sum --check SHA256SUMS) || exit 1
+for CAPY_RELEASE_ASSET in "$CAPY_RELEASE_DOWNLOADS"/*; do
+  gh attestation verify "$CAPY_RELEASE_ASSET" --repo capyatelier/capycanvas \
+    --source-ref "refs/tags/$CAPY_RELEASE_TAG" \
+    --source-digest "$CAPY_RELEASE_COMMIT" \
+    --signer-workflow capyatelier/capycanvas/.github/workflows/release.yml \
+    --deny-self-hosted-runners || exit 1
+done
 ```
 
 ### 4. Verify the exact packages and beta build
@@ -117,6 +133,14 @@ identities under [testing](testing.md) and [devices](devices.md); never replace 
 user's installation or use their drawings. Record any limitation in verifying
 the production identity rather than treating a rebuilt test package as the
 exact download.
+
+Report package checks and installation/runtime journeys separately. Signatures,
+static inspection, source builds and private-identity installer tests do not
+verify the production package's installation or runtime. Software GPU results
+do not qualify painting or performance on hardware. Record unavailable hardware,
+portals or store access as unverified, with the attempted check and its result.
+If the user explicitly defers a device journey, continue the authorized uploads
+and report that journey as unverified; the exception applies only to that check.
 
 Verify Android's downloaded APK without Google services and Play internal
 installation separately ([Android checks](#android-apk)). On macOS check the
@@ -130,7 +154,11 @@ For an intentional pre-release format change, follow [AGENTS.md](../../AGENTS.md
 include the limitation in release and beta notes, preserve original fixture
 files, and tell testers to export flattened PNGs before updating. Report old-file
 editing/recovery separately from current-format save/reopen. A failed package
-check needs a fix and new version before publication.
+check needs diagnosis: distinguish an application or package defect from an
+unavailable test environment or obsolete fixture. Preserve failing results;
+passing an isolated retry does not erase a failure in the full journey. A
+confirmed application or package defect needs a fix and new version before
+publication.
 
 ### 5. Complete the configured store channels
 
@@ -172,9 +200,11 @@ a required release step; the release and editor workflows do not refresh it.
 Verify live downloads and release notes, the editor's source commit, the Flatpak
 update source, Play internal installation and TestFlight tester availability.
 Report the version/tag and evidence, each delivered channel, pending reviews,
-deferred stores, failures and unverified journeys. Required checks or deployments
-still failing make the release incomplete; Microsoft Store awaiting setup and
-closed testing awaiting review must stay visible in the report.
+deferred stores, failures and unverified journeys. Distinguish successful delivery
+from verified use of each package. Required checks or deployments still failing
+make the release incomplete; explicitly deferred device checks, Microsoft Store
+awaiting setup, and Play or TestFlight awaiting review must stay visible in the
+report.
 
 ## Store submission is separate from upload
 
@@ -226,12 +256,35 @@ the editor's `deploy.yml` and triggered `pages.yml`. Verify the public
 [downloads](https://capycanvas.art/download/) and
 [release notes](https://capycanvas.art/download/past-versions/), including any
 compatibility warning. Verify [the editor](https://editor.capycanvas.art/)
-against the deployed repository's `release/source.json`: its `commit` must match
-`CAPY_RELEASE_COMMIT`. Compare the live `index.html` and Wasm hashes with
-`release/manifest.json` in that repository. Pages caches can temporarily serve an
-older deployment after Actions succeeds; check the live
-content before reporting the update complete. A release asset alone does not
-update either site.
+against `release/source.json` and `release/manifest.json` in the
+`capyatelier/capycanvas-release` Git repository; these are not public editor URL
+paths. Their `commit` and `source.commit`, respectively, must match
+`CAPY_RELEASE_COMMIT`. Compare the live `index.html`, `sw.js`, application JS and
+Wasm sizes and SHA-256 hashes with that manifest. The editor rebuilds the source
+and prepares it for its domain, so its bytes can differ from the downloadable
+Web ZIP. Pages caches can temporarily serve an older deployment after Actions
+succeeds; check the live content before reporting the update complete.
+
+Run the [Web journeys](web.md#tests) against the public origin separately from
+the ZIP. The deployment does not run browser journeys. On a private Wayland
+display with a hardware GPU, the harness creates its own temporary browser
+profile:
+
+```bash
+LAYER_WEB_URL=https://editor.capycanvas.art/ node apps/layer-web/test.mjs --pen
+LAYER_WEB_URL=https://editor.capycanvas.art/ node apps/layer-web/test.mjs --editor
+```
+
+Use the additional journeys required by the changes and record each result.
+Do not add `--package` or use the workspace-motion wrapper for this check; both
+start a local server and override the public target. Headless screenshots may
+omit WebGPU pixels. File-picker mocks verify application handling, not native
+save dialogs. A release asset alone does not update either site.
+
+If the editor's source commit is already deployed, `deploy.yml` makes no new
+commit and does not trigger Pages. Retry a failed Pages delivery directly with
+`gh workflow run pages.yml --repo capyatelier/capycanvas-release`, then recheck
+the public content.
 
 ## Recovering a failed release
 
@@ -267,8 +320,11 @@ tester identities, internal invitation links, local credential paths and signing
 backups out of the repository, issues and release notes. Review staged changes
 before committing. Ignored `artifacts/` and `*.local.md` can hold local test
 evidence and handoff notes, but are not secure storage for credentials; sanitize
-their contents before sharing them. A new agent obtains current private access
-and tester details from the maintainer, not from repository history.
+their contents before sharing them. Use an approved authentication session or
+short-lived process environment for API access. Keep tokens out of command
+arguments, shell traces and saved request/response logs. A new agent obtains
+current private access and tester details from the maintainer, not from
+repository history.
 
 ## Versions
 
@@ -337,13 +393,24 @@ refuse to cancel changes already in review. Retry APK download with
 `android_apk.py download`; retry internal rollout with the promotion workflow
 below. A code change still needs a new version.
 
-After a failed Play commit, inspect current bundles and tracks before retrying
-the upload with the saved AAB. For an Android-only CI retry, commit that original
-AAB to Play first: the upload script then refuses a rebuilt AAB with a different hash.
+An HTTP 5xx error from Play's commit is ambiguous: inspect bundles and tracks
+through a fresh edit before retrying the upload with the saved AAB. Direct helper
+calls require a privately supplied `TOKEN` environment variable; upload also
+requires `NOTES` containing the shared AppStream notes. Set `CAPY_RELEASE_AAB`
+to the recovered, hash-checked bundle, then use:
+
+```bash
+python3 tools/build/android_publish.py upload "$CAPY_RELEASE_VERSION" "$CAPY_RELEASE_AAB"
+```
+
+For an Android-only CI retry, commit that original AAB to Play first: the upload
+script then refuses a rebuilt AAB with a different hash. Wait for the original
+workflow run to finish before requesting the rerun.
 Use `gh run rerun <run-id> --repo capyatelier/capycanvas --job <android-job-id>`.
 Preserve and hash-check the failed attempt's `android-bundle` before removing
 that specific Actions artifact to allow the retry to save an artifact with the
-same name. Keep successful Apple jobs out of the retry.
+same name. Compare the retry's AAB hash with the retained original before
+accepting the candidate. Keep successful Apple jobs out of the retry.
 
 After testing the final internal build, check closed-track setup and review state.
 When promotion is needed and no changes are in review, run **Promote Android
