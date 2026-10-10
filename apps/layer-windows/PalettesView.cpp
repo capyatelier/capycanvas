@@ -524,7 +524,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         Grid::SetColumn(info,1);footer.Children().Append(info);Grid::SetRow(footer,2);root.Children().Append(footer);
         note.TextWrapping(TextWrapping::Wrap);note.FontSize(data->textSize());note.Visibility(Visibility::Collapsed);AutomationProperties::SetAutomationId(note,L"palette-message");
         AutomationProperties::SetLiveSetting(note,Microsoft::UI::Xaml::Automation::Peers::AutomationLiveSetting::Polite);Grid::SetRow(note,3);root.Children().Append(note);
-        add=tileButton(data->caption(L"palettes",L"add_current"));add.Background(data->brush(L"input"));add.Padding({0,0,0,0});add.Content(icon(L"plus",data->theme()));
+        add=tileButton(data->caption(L"palettes",L"add_current"));Border addFace;addFace.CornerRadius({6,6,6,6});addFace.Background(data->brush(L"input"));addFace.Child(icon(L"plus",data->theme()));add.Content(addFace);
         tooltip(add,data->caption(L"palettes",L"add_current"));AutomationProperties::SetAutomationId(add,L"palette-add");
         add.Click([weak](auto&&,auto&&){if(auto self=weak.lock())self->addColor();});grid.Children().Append(add);
         scroll.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});

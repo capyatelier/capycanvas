@@ -97,7 +97,7 @@ struct PalettePanel: View {
                 controller.focused = true; controller.addCurrent()
             } label: {
                 SharedIcon(name: "plus").frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(palette["input"], in: SquircleShape.control).contentShape(Rectangle())
+                    .background(palette["input"], in: SquircleShape.control).padding(3).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!view["can_name"].bool || covered).opacity(view["can_name"].bool ? 1 : 0.4)
                 .frame(width: cells.width(count - 1), height: cells.tile)
                 .offset(x: cells.x(count - 1), y: cells.y(count - 1))

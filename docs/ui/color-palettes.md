@@ -29,7 +29,8 @@ right.
   visible cell collapses it. Expansion fits at most four rows within the existing
   body; neither overlay changes the footer position. Covered controls cannot
   receive pointer or keyboard input.
-- The final saved-palette tile is **+**, which adds the current color. Saving or
+- The final saved-palette tile is **+**, which adds the current color. Its background
+  has the same three-pixel inset as the color patches. Saving or
   choosing a swatch does not update history. The added swatch becomes selected.
 - Clicking the footer selector opens a chooser over the body. Search and a **+**
   menu sit at the top; that menu contains **New Palette…** and **Import Palette…**.

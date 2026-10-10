@@ -369,7 +369,7 @@ window.capy-workspace.glass .palette-cover { background: transparent; }
 .palette-tile.selected { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .palette-panel button.palette-tile:hover, .edit-color-dialog button.palette-tile:hover { background: alpha(currentColor, .10); }
 .palette-empty { margin: 3px; border-radius: var(--control-radius); background: alpha(currentColor, .05); }
-.palette-panel button.palette-add, .edit-color-dialog button.palette-add { border: 0; border-radius: var(--control-radius); background: var(--input-bg); padding: 0; min-width: 0; min-height: 0; }
+.palette-panel button.palette-add { border: 0; border-radius: calc(var(--control-radius) + 3px); background: var(--input-bg); background-clip: content-box; padding: 3px; min-width: 0; min-height: 0; }
 .palette-panel button.palette-selector, .palette-panel button.palette-name { min-width: 0; min-height: 24px; padding: 0 4px; border-radius: var(--control-radius); font-weight: 400; }
 .palette-panel button.palette-name { padding: 0 2px; }
 .palette-panel .palette-detail { font-size: .9em; margin-right: 2px; }
@@ -411,7 +411,7 @@ menubutton.edit-color-format > button { min-height: 28px; padding: 0 6px; border
 button.edit-color-more { min-width: 34px; min-height: 34px; padding: 0; border-radius: var(--control-radius); }
 button.edit-color-more image { -gtk-icon-transform: rotate(180deg); }
 button.edit-color-more.open image { -gtk-icon-transform: none; }
-.edit-color-dialog button.palette-add { margin: 3px; background: alpha(var(--window-fg-color), .06); }
+.edit-color-dialog button.palette-add { border: 0; border-radius: var(--control-radius); background: alpha(var(--window-fg-color), .06); padding: 0; min-width: 0; min-height: 0; margin: 3px; }
 .edit-color-sheet flowboxchild { padding: 0; }
 .edit-color-sheet entry { min-height: 34px; border: 0; border-radius: var(--control-radius); background: var(--input-bg); box-shadow: none; }
 .edit-color-strip { padding: 8px 12px; border-radius: var(--surface-radius); background: var(--dialog-bg-color); color: var(--dialog-fg-color); box-shadow: 0 2px 12px alpha(black, .25); font-weight: 400; font-feature-settings: "tnum"; }

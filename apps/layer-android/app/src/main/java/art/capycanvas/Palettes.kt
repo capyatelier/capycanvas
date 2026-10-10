@@ -471,9 +471,9 @@ private fun DrawScope.checker() {
     background: Color = Color.Transparent, flipped: Boolean = false, onClick: () -> Unit) {
     val controller = LocalCanvasHost.current.palettes
     HoverTip(label, modifier) {
-        Box(Modifier.fillMaxSize().paletteFocus(controller).clip(ControlShape).background(background).alpha(if (enabled) 1f else .4f)
+        Box(Modifier.fillMaxSize().paletteFocus(controller).clip(ControlShape).alpha(if (enabled) 1f else .4f)
             .clickable(enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
-            .semantics { contentDescription = label }, contentAlignment = Alignment.Center) { SharedIcon(icon, null, Modifier.size(16.dp).rotate(if (flipped) 180f else 0f)) }
+            .semantics { contentDescription = label }.padding(3.dp).clip(ControlShape).background(background), contentAlignment = Alignment.Center) { SharedIcon(icon, null, Modifier.size(16.dp).rotate(if (flipped) 180f else 0f)) }
     }
 }
 
