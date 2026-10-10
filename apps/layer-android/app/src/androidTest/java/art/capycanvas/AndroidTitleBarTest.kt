@@ -337,6 +337,92 @@ class AndroidTitleBarTest {
         }
     }
 
+    @Test fun applicationMenusKeepNativeKeyboardNavigation() {
+        fun focusedLabel(): String? {
+            val focused = node("workspace-menu")?.second?.find {
+                it.config.getOrNull(SemanticsProperties.Focused) == true && it.config.contains(SemanticsActions.OnClick)
+            } ?: return null
+            fun texts(value: SemanticsNode): List<String> = value.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } + value.children.flatMap(::texts)
+            return texts(focused).firstOrNull()
+        }
+        for (theme in listOf("light", "dark")) for (navigation in listOf(KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_TAB)) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            restore()
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            tap("application-menu-file")
+            waitFor("File menu opens for keyboard") { node("workspace-menu") != null }
+            key(navigation)
+            waitFor("Keyboard focuses a File command with key $navigation") {
+                focusedLabel() != null
+            }
+            val first = snapshot().array("application_menus").objects().first { it.getString("id") == "file" }
+                .getJSONObject("model").array("sections").getJSONArray(0).getJSONObject(0).getString("label")
+            repeat(3) {
+                var current: String? = null
+                instrumentation.runOnMainSync { current = focusedLabel() }
+                if (current != first) key(if (navigation == KeyEvent.KEYCODE_TAB) KeyEvent.KEYCODE_TAB else KeyEvent.KEYCODE_DPAD_UP,
+                    if (navigation == KeyEvent.KEYCODE_TAB) KeyEvent.META_SHIFT_ON else 0)
+            }
+            waitFor("Keyboard reaches New command") { focusedLabel() == first }
+            key(KeyEvent.KEYCODE_ENTER)
+            waitFor("Keyboard invokes New Drawing") { node("workspace-menu") == null && node("new-document-create") != null }
+            tap("new-document-cancel")
+            waitFor("New Drawing closes") { node("new-document-create") == null }
+        }
+    }
+
+    @Test fun openApplicationMenusFollowMouseAndPenHover() {
+        fun hover(id: String, action: Int = MotionEvent.ACTION_HOVER_MOVE) {
+            val event = motion(tool, action, screenBounds("application-menu-$id").center,
+                SystemClock.uptimeMillis(), 0)
+            try { assertTrue("OS accepts hover tool=$tool", instrumentation.uiAutomation.injectInputEvent(event, true)) }
+            finally { event.recycle() }
+            SystemClock.sleep(220)
+        }
+        fun contents(id: String): Boolean {
+            val menu = snapshot().array("application_menus").objects().first { it.getString("id") == id }.getJSONObject("model")
+            val popup = node("workspace-menu")?.second ?: return false
+            fun texts(node: SemanticsNode): List<String> =
+                node.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } + node.children.flatMap(::texts)
+            val labels = texts(popup)
+            return (!menu.has("title") || menu.getString("title") in labels) &&
+                menu.array("sections").values().flatMap { (it as JSONArray).objects() }.first().getString("label") in labels
+        }
+        for (theme in listOf("light", "dark")) for (inputTool in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            restore()
+            tool = inputTool
+            hover("file", MotionEvent.ACTION_HOVER_ENTER)
+            instrumentation.runOnMainSync { assertNull("Closed menus stay closed on hover", node("workspace-menu")) }
+            tap("application-menu-file")
+            waitFor("File menu contents") { contents("file") }
+            for (id in listOf("edit", "view")) {
+                hover(id)
+                waitFor("Hover switches to $id") { contents(id) }
+                val anchor = screenBounds("application-menu-$id")
+                assertEquals("Hovered menu anchors to $id", anchor.left, screenBounds("workspace-menu").left, 2 * density)
+                hover(id)
+                waitFor("Repeated hover retains $id") { contents(id) }
+                shot("hover-$theme-$inputTool-$id")
+            }
+            key(KeyEvent.KEYCODE_ESCAPE)
+            waitFor("Escape closes hovered menu") { node("workspace-menu") == null }
+            hover("file")
+            instrumentation.runOnMainSync { assertNull("Dismissed menus stay closed on another label", node("workspace-menu")) }
+            hover("file", MotionEvent.ACTION_HOVER_EXIT)
+            tap("application-menu-file")
+            waitFor("File menu reopens") { contents("file") }
+            val outside = screenBounds("title-bar").center
+            val downAt = SystemClock.uptimeMillis()
+            for (phase in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                val contact = motion(tool, phase, outside, downAt)
+                try { assertTrue(instrumentation.uiAutomation.injectInputEvent(contact, true)) }
+                finally { contact.recycle() }
+            }
+            waitFor("Outside contact closes application menu") { node("workspace-menu") == null }
+        }
+    }
+
     @Test fun fullLabelsFitAndMenusAnchorToEachLabelAndEditorActionsAlignRight() {
         tool = MotionEvent.TOOL_TYPE_FINGER
         for (theme in listOf("dark", "light")) for ((size, gap, height) in listOf(Triple("small", 6f, 48f), Triple("medium", 8f, 64f), Triple("large", 10f, 80f))) {
@@ -369,15 +455,13 @@ class AndroidTitleBarTest {
                 if (size == "small") {
                     val anchor = screenBounds(tag)
                     tap(tag)
-                    waitFor("${menu.getString("id")} popup focus") { node("workspace-menu")?.first?.view?.hasWindowFocus() == true }
+                    waitFor("${menu.getString("id")} menu retains header focus") { node("workspace-menu") != null && node("title-bar")?.first?.view?.hasWindowFocus() == true }
                     val popup = screenBounds("workspace-menu")
                     assertEquals("Menu starts under its own label", anchor.left, popup.left, 2 * density)
                     val frame = android.graphics.Rect()
                     instrumentation.runOnMainSync { checkNotNull(node("title-bar")).first.view.getWindowVisibleDisplayFrame(frame) }
-                    if (popup.height <= frame.bottom - anchor.bottom - 48 * density)
-                        assertTrue("${menu.getString("id")} is below its label: $popup / $anchor", popup.top >= anchor.bottom - density && popup.top <= anchor.bottom + 12 * density)
-                    else
-                        assertTrue("Tall menus fit the viewport: $popup / $frame", popup.top >= frame.top - density && popup.bottom <= frame.bottom + density)
+                    assertTrue("${menu.getString("id")} is below its label: $popup / $anchor", popup.top >= anchor.bottom - density && popup.top <= anchor.bottom + 12 * density)
+                    assertTrue("Menus fit below the header: $popup / $frame", popup.bottom <= frame.bottom + density)
                     if (menu.getString("id") == "select") instrumentation.runOnMainSync {
                         fun row(label: String): SemanticsNode? {
                             fun find(n: SemanticsNode): SemanticsNode? =

@@ -101,6 +101,13 @@ controls. Joined tile gaps retain their even 2/2/4px sizing; menu labels and
 workspace choices keep their own compact track spacing. The inline editor's
 form spacing and the workspace's panel gaps remain independent of title-bar size.
 
+Click a menu label to open its menu. While a labeled menu is open, mouse or pen
+hover over another label switches to that menu. Hover alone leaves closed menus
+closed. Escape and outside clicks dismiss the menu; touch opens labels by tapping.
+Tall menus scroll below the labels so the neighboring headings stay reachable.
+Hosts keep menu focus and popup placement native and use the shared Rust hover
+decision for custom menu rows. macOS uses its system menu bar.
+
 Menu Labels compacts to an icon-sized menu inside its own item when space is
 short. At narrow widths, each region overflows whole items into a More menu. Tools
 still open their normal drawers, anchored to the visible overflow control;
@@ -143,6 +150,7 @@ system menu bar owns them. Zen hides the title bar like other chrome; see
 Run native input in a private compositor, never on the user's desktop:
 
 ```bash
+bash tools/performance/workspace-motion.sh gtk --native-test=native_header_menu_hover_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_picker_journey
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_drag_only_bank_input
 bash tools/performance/workspace-motion.sh gtk --native-test=native_header_catalog_preview_input

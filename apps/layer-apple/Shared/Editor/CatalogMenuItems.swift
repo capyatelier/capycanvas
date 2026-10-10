@@ -7,6 +7,8 @@ struct ApplicationMenus: View {
     var iconSize: CGFloat = 16
     var tileSize: CGFloat = 36
     var radius: CGFloat = 18
+    @State private var selectedMenu: String?
+    @State private var hoveredMenu: String?
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var textSize: Double {
         store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3
@@ -20,22 +22,38 @@ struct ApplicationMenus: View {
             HStack(spacing: 2) {
                 ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                     let menu = store.snapshot["application_menus"][index]
-                    ApplicationMenuButton(store: store, id: menu["id"].string) {
+                    ApplicationMenuButton(store: store, id: menu["id"].string, isPresented: Binding(
+                        get: { selectedMenu == menu["id"].string },
+                        set: { open in
+                            if open { selectedMenu = menu["id"].string }
+                            else if selectedMenu == menu["id"].string { selectedMenu = nil }
+                        })) {
                         Text(menu["label"].string).font(EditorTextMetrics.font(size: textSize, weight: .medium)).fixedSize()
                             .frame(width: EditorTextMetrics.width(menu["label"].string, size: textSize, weight: .medium))
                             .padding(.horizontal, 8).frame(height: 26)
                     }.buttonStyle(MenuLabelStyle(palette: palette))
+                        .onHover { hovering in
+                            let id = menu["id"].string
+                            if !hovering { if hoveredMenu == id { hoveredMenu = nil }; return }
+                            hoveredMenu = id
+                            guard let open = selectedMenu else { return }
+                            store.query(["type": "application_menu_hover", "open": open, "hovered": id]) { reply in
+                                if reply.bool && selectedMenu == open && hoveredMenu == id { selectedMenu = id }
+                            }
+                        }
                         .accessibilityIdentifier("menu-" + menu["label"].string)
                         .modifier(HeaderControlMeasurement(id: "menu-" + menu["label"].string))
                 }
-            }.padding(5).frame(height: 36).glassSurface(SquircleShape.tile, fill: palette.chromeSurface).fixedSize()
+            }.editorPopoverPassThrough().padding(5).frame(height: 36).glassSurface(SquircleShape.tile, fill: palette.chromeSurface).fixedSize()
                 .modifier(HeaderControlMeasurement(id: "header-menu-labels"))
+                .onDisappear { selectedMenu = nil; hoveredMenu = nil }
             ApplicationMenuButton(store: store) {
                 SharedIcon(name: "menu", size: iconSize).frame(width: tileSize, height: tileSize)
             }.buttonStyle(HeaderButtonStyle(radius: radius))
                 .accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
                 .modifier(HeaderControlMeasurement(id: "application-menus"))
         }
+        .onDisappear { selectedMenu = nil; hoveredMenu = nil }
     }
 }
 
@@ -59,6 +77,7 @@ private struct MenuLabelStyle: ButtonStyle {
 struct ApplicationMenuButton<Label: View>: View {
     @ObservedObject var store: EditorStore
     var id: String? = nil
+    var isPresented: Binding<Bool>? = nil
     @ViewBuilder let label: () -> Label
     var body: some View {
         #if os(iOS)
@@ -66,7 +85,7 @@ struct ApplicationMenuButton<Label: View>: View {
             AppleContextMenu(model) { action in
                 store.dispatch(action)
             }
-        }, identifier: "application-menu-content", label: label)
+        }, identifier: "application-menu-content", isPresented: isPresented, label: label)
             .disabled(!store.snapshot["preferences"].isNull)
         #else
         Menu {

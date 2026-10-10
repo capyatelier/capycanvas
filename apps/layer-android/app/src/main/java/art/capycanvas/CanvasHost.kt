@@ -239,6 +239,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val textComposition = TextComposition()
     internal var toolbarEditorBounds: androidx.compose.ui.geometry.Rect? = null
     internal var headerKeyHandler: ((android.view.KeyEvent) -> Boolean)? = null
+    internal var menuKeyHandler: ((android.view.KeyEvent) -> Boolean)? = null
     private var platformPredictionAvailable: Boolean? = null
     internal val nativePredictionEnabled: Boolean
         get() = platformPredictionAvailable == true && (snapshot?.objectOrNull("state")?.objectOrNull("settings")?.let {

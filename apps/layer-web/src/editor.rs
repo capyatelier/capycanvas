@@ -231,6 +231,11 @@ impl WebApp {
         let link: layer_ui::ApplicationLink = serde_wasm_bindgen::from_value(link).map_err(js)?;
         Ok(link.url().into())
     }
+    pub fn application_menu_hover(&self, open: JsValue, hovered: JsValue) -> Result<bool, JsValue> {
+        let open = serde_wasm_bindgen::from_value(open).map_err(js)?;
+        let hovered = serde_wasm_bindgen::from_value(hovered).map_err(js)?;
+        Ok(layer_ui::ApplicationMenu::switches_on_hover(open, hovered))
+    }
 }
 
 impl WebApp {

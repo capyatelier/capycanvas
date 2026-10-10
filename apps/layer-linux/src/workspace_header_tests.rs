@@ -220,6 +220,50 @@ impl Driver {
 }
 
 #[test]
+#[ignore = "private display and native pointer menu heading navigation"]
+fn native_header_menu_hover_input() {
+    let mut d = Driver::new("art.capycanvas.HeaderMenuHover");
+    let mut workspace = state(&d.w).workspace;
+    workspace.layout.header = Default::default();
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    pump(250);
+    let menus = ApplicationMenu::ALL.map(|id| (id, named::<gtk::MenuButton>(d.w.window.upcast_ref(), &format!("application-menu-{id:?}"))));
+    let opened = || menus.iter().filter(|(_, button)| button.popover().unwrap().is_mapped()).map(|(id, _)| *id).collect::<Vec<_>>();
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        for id in [ApplicationMenu::File, ApplicationMenu::Edit, ApplicationMenu::View] {
+            let button = &menus.iter().find(|(candidate, _)| *candidate == id).unwrap().1;
+            let point = d.point(button.upcast_ref());
+            d.input.perform(serde_json::json!([{"point": point}]));
+            assert!(opened().is_empty(), "{theme:?}: closed menus stay closed over {id:?}");
+        }
+        let file = &menus[0].1;
+        d.click(file.upcast_ref());
+        assert_eq!(opened(), vec![ApplicationMenu::File], "{theme:?}: File opens by click");
+        for id in [ApplicationMenu::Edit, ApplicationMenu::View, ApplicationMenu::File] {
+            let button = &menus.iter().find(|(candidate, _)| *candidate == id).unwrap().1;
+            let point = d.point(button.upcast_ref());
+            d.input.perform(serde_json::json!([{"point": point}]));
+            assert_eq!(opened(), vec![id], "{theme:?}: hover switches to exactly one {id:?} popup");
+            if id == ApplicationMenu::View && std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+                d.input.perform(serde_json::json!([{"capture": format!("menu-hover-{}", format!("{theme:?}").to_lowercase())}]));
+            }
+        }
+        d.input.key(0xff1b);
+        assert!(opened().is_empty(), "{theme:?}: Escape closes the popup");
+        let point = d.point(menus[1].1.upcast_ref());
+        d.input.perform(serde_json::json!([{"point": point}]));
+        assert!(opened().is_empty(), "{theme:?}: hover after Escape stays closed");
+        d.click(file.upcast_ref());
+        assert_eq!(opened(), vec![ApplicationMenu::File], "{theme:?}: click reopens File");
+        d.click(file.upcast_ref());
+        assert!(opened().is_empty(), "{theme:?}: second click toggles File closed");
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_header_managed_input --native-storage"]
 fn native_header_managed_input() {
     let mut d = Driver::managed("art.capycanvas.HeaderStorage");

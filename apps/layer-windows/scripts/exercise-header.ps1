@@ -1,6 +1,7 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','options','options-light','options-pen','options-touch')][string]$Journey='full')
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','options','options-light','options-pen','options-touch','menus','menus-light')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 if($Journey -eq 'options-light'){$Theme='light'}
+if($Journey -eq 'menus-light'){$Theme='light'}
 if($Journey -eq 'options-pen'){$Device='pen'}
 if($Journey -eq 'options-touch'){$Device='touch'}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
@@ -30,6 +31,39 @@ function Screen($Box) {
 function WindowCommand([string]$Id) {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     Invoke $Id
+}
+function Check-MenuHover([int]$Height) {
+    $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width ([int](1400*$scale)) -Height ([int]($Height*$scale))
+    Check-Geometry
+    $type=[System.Windows.Automation.ControlType]::MenuItem
+    $markers=@('new_document','undo','zoom_in')
+    $headings=@('file','edit','view')
+    $points=@($headings|ForEach-Object {At ('application-menu-'+$_)})
+    foreach($at in $points){
+        [CapyRowPointer]::Hover($at.x,$at.y);Start-Sleep -Milliseconds 350
+        foreach($marker in $markers){if(Find $marker -Type $type -Visible){throw 'Hover opened a closed application menu'}}
+    }
+    $at=$points[0];[CapyRowPointer]::Down('mouse',$at.x,$at.y);[CapyRowPointer]::Up()
+    Wait-Until {$null -ne (Find $markers[0] -Type $type -Visible)} 'Pointer click did not open File'
+    foreach($index in 1,2,0){
+        $at=$points[$index];[CapyRowPointer]::Hover($at.x,$at.y)
+        Wait-Until {
+            if(!(Find $markers[$index] -Type $type -Visible)){return $false}
+            foreach($other in 0..2){if($other -ne $index -and (Find $markers[$other] -Type $type -Visible)){return $false}}
+            return $true
+        } ('Hover did not switch to '+$headings[$index])
+        $heading=(Control ('application-menu-'+$headings[$index])).Current.BoundingRectangle
+        $item=Control $markers[$index] -Type $type
+        $popup=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($item)
+        @{height=$Height;heading=$heading;item=$item.Current.BoundingRectangle;popup=$popup.Current.BoundingRectangle}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ('menu-hover-'+$Height+'-'+$headings[$index]+'-layout.json'))
+        if($popup.Current.BoundingRectangle.Top -lt $heading.Bottom){throw 'Application menu popup overlaps its headings'}
+        Capture ('menu-hover-'+$Height+'-'+$headings[$index]) -Composed
+    }
+    [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
+    Wait-Until {foreach($marker in $markers){if(Find $marker -Type $type -Visible){return $false}};return $true} 'Escape did not dismiss the switched application menu'
+    $at=$points[1];[CapyRowPointer]::Hover($at.x,$at.y);Start-Sleep -Milliseconds 350
+    foreach($marker in $markers){if(Find $marker -Type $type -Visible){throw 'Hover reopened the application menu after Escape'}}
 }
 function Check-Geometry {
     Wait-Until {
@@ -457,6 +491,14 @@ try {
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
+    if($Journey -in @('menus','menus-light')){
+        Check-MenuHover 800;Check-MenuHover 480
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved
+        if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+        @{theme=$Theme;application_menu_hover='passed';closed_hover='passed';escape='passed';scope='OS-injected mouse on the owned desktop'}|ConvertTo-Json|Set-Content (Join-Path $run 'results.json')
+        Get-Content (Join-Path $run 'results.json')
+        return
+    }
     if($Journey -ne 'full'){
         $initial=HeaderJson
         Edit-Header;Check-WorkspaceOptions

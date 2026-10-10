@@ -715,8 +715,24 @@ impl Header {
             HeaderItem::MenuLabels => {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
                 row.add_css_class("header-menu-labels");
-                for id in ApplicationMenu::ALL {
-                    row.append(&w.chrome_menu(id));
+                let menus: Vec<_> = ApplicationMenu::ALL.into_iter().map(|id| (id, w.chrome_menu(id))).collect();
+                for (id, menu) in &menus {
+                    let motion = gtk::EventControllerMotion::new();
+                    motion.set_propagation_limit(gtk::PropagationLimit::None);
+                    let id = *id;
+                    let neighbors: Vec<_> = menus.iter().map(|(id, button)| (*id, button.downgrade())).collect();
+                    motion.connect_enter(move |controller, _, _| {
+                        if controller.current_event_state().intersects(gdk::ModifierType::BUTTON1_MASK | gdk::ModifierType::BUTTON2_MASK | gdk::ModifierType::BUTTON3_MASK) { return; }
+                        let open = neighbors.iter().find_map(|(id, button)| button.upgrade()
+                            .filter(|button| button.popover().is_some_and(|popup| popup.is_mapped())).map(|button| (*id, button)));
+                        if ApplicationMenu::switches_on_hover(open.as_ref().map(|(id, _)| *id), id)
+                            && let Some(button) = controller.widget().and_downcast::<gtk::MenuButton>() {
+                            open.unwrap().1.popdown();
+                            button.popup();
+                        }
+                    });
+                    menu.add_controller(motion);
+                    row.append(menu);
                 }
                 row.upcast()
             }

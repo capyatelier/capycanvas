@@ -1029,6 +1029,25 @@ fn custom_catalog_load_preserves_document_filters() {
 }
 
 #[test]
+fn application_menu_hover_switches_only_an_open_neighbor_on_both_apple_platforms() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        for theme in ["light", "dark"] {
+            app.action(json!({"type":"set_theme","theme":theme}));
+            for hovered in layer_ui::ApplicationMenu::ALL {
+                assert_eq!(app.request(2, json!({"type":"application_menu_hover",
+                    "open":null,"hovered":hovered})).unwrap(), false);
+                for open in layer_ui::ApplicationMenu::ALL {
+                    assert_eq!(app.request(2, json!({"type":"application_menu_hover",
+                        "open":open,"hovered":hovered})).unwrap(), open != hovered,
+                        "platform={platform}, theme={theme}, open={open:?}, hovered={hovered:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
     fn item(app: &App, command: &str) -> Value {
         fn find(value: &Value, command: &str) -> Option<Value> {

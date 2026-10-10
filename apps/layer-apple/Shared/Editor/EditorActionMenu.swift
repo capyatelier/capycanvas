@@ -4,20 +4,22 @@ struct EditorMenuButton<Label: View>: View {
     let menu: () -> AppleContextMenu
     var identifier = "editor-action-menu"
     var rootFocusesSelection = true
+    var isPresented: Binding<Bool>? = nil
     @ViewBuilder let label: () -> Label
     @Environment(\.editorPopupStore) private var store
-    @State private var active = false
+    @State private var localActive = false
     @State private var popupID = UUID()
+    private var active: Binding<Bool> { isPresented ?? $localActive }
     var body: some View {
-        Button { active.toggle() } label: { label().contentShape(Rectangle()) }
-            .accessibilityValue(active ? "Expanded" : "Collapsed")
-            .editorPopover(isPresented: $active) {
-                if active {
+        Button { active.wrappedValue.toggle() } label: { label().contentShape(Rectangle()) }
+            .accessibilityValue(active.wrappedValue ? "Expanded" : "Collapsed")
+            .editorPopover(isPresented: active) {
+                if active.wrappedValue {
                     EditorActionMenu(model: menu(), identifier: identifier,
-                        rootFocusesSelection: rootFocusesSelection) { active = false }
+                        rootFocusesSelection: rootFocusesSelection) { active.wrappedValue = false }
                 }
             }
-            .onChange(of: active) { _, open in store?.workspace.popover(popupID, open: open) }
+            .onChange(of: active.wrappedValue) { _, open in store?.workspace.popover(popupID, open: open) }
             .onDisappear { store?.workspace.popover(popupID, open: false) }
     }
 }

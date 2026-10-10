@@ -70,7 +70,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::vector<Border> zones;
     bool built=false,editing=false,hidden=false,fullscreenActive=false,applying=false,resolvingLink=false,queryBusy=false;
     using MenuItems=winrt::Windows::Foundation::Collections::IVector<MenuFlyoutItemBase>;
-    MenuFlyout activeMenu{nullptr};std::function<void(MenuItems)> menuPopulate;hstring menuSource;
+    MenuFlyout activeMenu{nullptr};std::function<void(MenuItems)> menuPopulate;hstring menuSource,hoveredMenu;
     bool scheduled=false,trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     float leftInset=0,rightInset=0;
     double tile=36,iconSize=20,itemGap=6,height=48,totalHeight=48,menuWidth=0,switchWidth=36;
@@ -274,6 +274,31 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             item.Flyout(menu([weak=weak_from_this(),id](auto target){if(auto self=weak.lock())
                 self->fillMenu(target,object(find(array(self->data->model,L"application_menus"),L"id",id),L"model"));
             }));
+            item.Flyout().OverlayInputPassThroughElement(menuLabels);
+            item.Flyout().Placement(Primitives::FlyoutPlacementMode::BottomEdgeAlignedLeft);
+            item.Flyout().Opening([weak=weak_from_this(),id](auto const& sender,auto&&){if(auto self=weak.lock();self&&self->root.XamlRoot()){
+                auto target=std::find_if(self->menus.begin(),self->menus.end(),[id](Button const& button){return unbox_value<hstring>(button.Tag())==id;});
+                if(target==self->menus.end())return;
+                auto xaml=self->root.XamlRoot();
+                auto bounds=target->TransformToVisual(xaml.Content()).TransformBounds({0,0,float(target->ActualWidth()),float(target->ActualHeight())});
+                Style style;style.TargetType(xaml_typename<MenuFlyoutPresenter>());
+                Setter limit;limit.Property(FrameworkElement::MaxHeightProperty());limit.Value(box_value(std::max(1.,double(xaml.Size().Height-bounds.Y-bounds.Height-12))));
+                style.Setters().Append(limit);sender.template as<MenuFlyout>().MenuFlyoutPresenterStyle(style);
+            }});
+            item.PointerEntered([weak=weak_from_this(),id](auto&&,PointerRoutedEventArgs const& event){if(auto self=weak.lock()){
+                auto point=event.GetCurrentPoint(self->menuLabels);
+                if(event.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch||point.IsInContact()||self->editing)return;
+                self->hoveredMenu=id;
+                auto popup=self->activeMenu;if(!popup)return;
+                auto open=std::find_if(self->menus.begin(),self->menus.end(),[popup](Button const& button){return button.Flyout()==popup;});
+                if(open==self->menus.end())return;
+                auto request=O({{L"type",S(L"application_menu_hover")},{L"open",S(unbox_value<hstring>(open->Tag()))},{L"hovered",S(id)}});
+                QueryWorkspace(self->data->query,request,[weak,id,popup](J reply){if(auto self=weak.lock();self&&flag(reply,L"result")&&self->activeMenu==popup&&self->hoveredMenu==id&&!self->editing){
+                    auto target=std::find_if(self->menus.begin(),self->menus.end(),[id](Button const& button){return unbox_value<hstring>(button.Tag())==id;});
+                    if(target!=self->menus.end()){auto button=*target;popup.Hide();button.Flyout().ShowAt(button);}
+                }});
+            }});
+            item.PointerExited([weak=weak_from_this(),id](auto&&,auto&&){if(auto self=weak.lock();self&&self->hoveredMenu==id)self->hoveredMenu=L"";});
             menuLabels.Children().Append(item);menus.push_back(item);
         }
         auto primaryMenu=[weak=weak_from_this()](auto target){if(auto self=weak.lock())self->fillMenu(target,object(self->view,L"primary_menu"));};

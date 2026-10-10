@@ -103,6 +103,7 @@ class MainActivity : ComponentActivity() {
         if (host.textComposition.owns(event)) return super.dispatchKeyEvent(event)
         host.colorKeyHandler?.let { return it(event) || super.dispatchKeyEvent(event) }
         if (host.headerKeyHandler?.invoke(event) == true) return true
+        host.menuKeyHandler?.let { return it(event) || super.dispatchKeyEvent(event) }
         if (host.drawingTabs.key(event)) return true
         if (host.palettes.key(event)) return true
         if (event.action == KeyEvent.ACTION_DOWN && (event.isCtrlPressed || event.isMetaPressed))

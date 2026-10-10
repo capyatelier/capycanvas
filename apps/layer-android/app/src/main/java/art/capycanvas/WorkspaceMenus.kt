@@ -24,11 +24,13 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.Role
@@ -62,7 +64,7 @@ internal suspend fun CanvasHost.menuCopy(request: JSONObject): JSONObject? = sus
  * items. They never reconstruct eligibility, naming, defaults or commands. */
 @Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, preserveContact: Boolean = false,
     focusable: Boolean = !preserveContact, command: ((JSONObject) -> Unit)? = null,
-    copy: (suspend () -> JSONObject?)? = null, showTitle: Boolean = true, dismiss: () -> Unit) {
+    copy: (suspend () -> JSONObject?)? = null, showTitle: Boolean = true, maxHeight: Dp = Dp.Unspecified, dismiss: () -> Unit) {
     var projected by remember(menu) { mutableStateOf(menu) }
     val currentCopy by rememberUpdatedState(copy)
     LaunchedEffect(host, host.languageTag, menu) {
@@ -74,12 +76,20 @@ internal suspend fun CanvasHost.menuCopy(request: JSONObject): JSONObject? = sus
     // A focusable Android popup cancels the contact in the activity that opened
     // it. Context menus must leave that contact with the original drag owner.
     BackHandler(!focusable, dismiss)
-    DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).testTag("workspace-menu").onPreviewKeyEvent { event ->
+    DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).heightIn(max = maxHeight).testTag("workspace-menu").onPreviewKeyEvent { event ->
             val key = event.nativeKeyEvent
             if (key.keyCode == KeyEvent.KEYCODE_ESCAPE) { if (key.action == KeyEvent.ACTION_DOWN) dismiss(); true } else false
         },
         properties = if (focusable) PopupProperties(focusable = true) else WindowlessMenu,
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
+        if (!focusable) {
+            val view = LocalView.current
+            DisposableEffect(host, view) {
+                val keys: (KeyEvent) -> Boolean = view::dispatchKeyEvent
+                host.menuKeyHandler = keys
+                onDispose { if (host.menuKeyHandler === keys) host.menuKeyHandler = null }
+            }
+        }
         WorkspaceMenuItems(host, current.array("sections"), dismiss, if (showTitle && current.has("title")) current.getString("title") else null, command)
     }
 }

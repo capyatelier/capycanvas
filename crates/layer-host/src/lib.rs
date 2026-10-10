@@ -726,6 +726,10 @@ impl NativeHost {
             ApplicationMenu {
                 menu: layer_ui::ApplicationMenu,
             },
+            ApplicationMenuHover {
+                open: Option<layer_ui::ApplicationMenu>,
+                hovered: layer_ui::ApplicationMenu,
+            },
             ApplicationLink {
                 link: layer_ui::ApplicationLink,
             },
@@ -867,6 +871,7 @@ impl NativeHost {
             Query::ExportMetadataCopy { format, keep } => json!(layer_ui::ExportMetadataView::localized_for(format, keep, self.session.localization())),
             Query::ToolbarStamp { context } => json!(self.session.toolbar_stamp(context)?),
             Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
+            Query::ApplicationMenuHover { open, hovered } => json!(layer_ui::ApplicationMenu::switches_on_hover(open, hovered)),
             Query::ApplicationLink { link } => json!(link.url()),
             Query::ProofForm => layer_ui::proof_workflow::proof_form(&self.session),
             Query::ProofCopy => json!(layer_ui::proof_workflow::proof_copy(&self.session)),

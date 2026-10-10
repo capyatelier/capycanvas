@@ -3,6 +3,11 @@ import SwiftUI
 enum EditorPopoverPlacement { case below, inward }
 
 extension View {
+    func editorPopoverPassThrough() -> some View {
+        transformAnchorPreference(key: EditorPopovers.self, value: .bounds) { requests, anchor in
+            for index in requests.indices { requests[index].passThrough = anchor }
+        }
+    }
     func editorPopover<Popup: View>(isPresented: Binding<Bool>, placement: EditorPopoverPlacement = .below,
         @ViewBuilder content: () -> Popup) -> some View {
         modifier(EditorPopoverSource(isPresented: isPresented, placement: placement, popup: content()))
@@ -31,6 +36,7 @@ private struct EditorPopoverRequest {
     let placement: EditorPopoverPlacement
     let content: AnyView
     let dismiss: () -> Void
+    var passThrough: Anchor<CGRect>?
 }
 private struct EditorPopovers: PreferenceKey {
     static var defaultValue: [EditorPopoverRequest] { [] }
@@ -45,7 +51,8 @@ struct EditorPopoverHost: ViewModifier {
         content.overlayPreferenceValue(EditorPopovers.self) { requests in
             GeometryReader { geometry in
                 if let request = requests.last {
-                    EditorPopoverLayer(request: request, source: geometry[request.anchor], viewport: geometry.size)
+                    EditorPopoverLayer(request: request, source: geometry[request.anchor], viewport: geometry.size,
+                        passThrough: request.passThrough.map { geometry[$0] })
                         .id(request.id)
                 }
             }
@@ -57,8 +64,12 @@ private struct EditorPopoverLayer: View {
     let request: EditorPopoverRequest
     let source: CGRect
     let viewport: CGSize
+    let passThrough: CGRect?
     @State private var size = CGSize(width: 340, height: 300)
     @Environment(\.scenePhase) private var phase
+    private var maximumHeight: CGFloat {
+        passThrough.map { max(0, viewport.height - max(source.maxY, $0.maxY) - 14) } ?? max(0, viewport.height - 16)
+    }
     private var origin: CGPoint {
         let x: CGFloat, y: CGFloat
         if request.placement == .inward {
@@ -66,16 +77,18 @@ private struct EditorPopoverLayer: View {
             y = source.midY - min(24, size.height / 2)
         } else {
             x = source.minX
-            y = source.maxY + size.height + 6 <= viewport.height - 8 ? source.maxY + 6 : source.minY - size.height - 6
+            let bottom = max(source.maxY, passThrough?.maxY ?? source.maxY)
+            y = passThrough != nil || bottom + size.height + 6 <= viewport.height - 8 ? bottom + 6 : source.minY - size.height - 6
         }
         return CGPoint(x: max(8, min(x, viewport.width - size.width - 8)),
             y: max(8, min(y, viewport.height - size.height - 8)))
     }
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Color.clear.contentShape(Rectangle()).onTapGesture { request.dismiss() }.accessibilityHidden(true)
+            Color.clear.contentShape(EditorPopoverDismissRegion(passThrough: passThrough), eoFill: true)
+                .onTapGesture { request.dismiss() }.accessibilityHidden(true)
             request.content
-                .frame(maxWidth: max(0, viewport.width - 16), maxHeight: max(0, viewport.height - 16))
+                .frame(maxWidth: max(0, viewport.width - 16), maxHeight: maximumHeight)
                 .fixedSize(horizontal: true, vertical: true)
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
                 .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8)))
@@ -85,5 +98,14 @@ private struct EditorPopoverLayer: View {
                 .accessibilityAddTraits(.isModal)
         }.onKeyPress(.escape) { request.dismiss(); return .handled }
             .onChange(of: phase) { _, phase in if phase != .active { request.dismiss() } }
+    }
+}
+
+private struct EditorPopoverDismissRegion: Shape {
+    let passThrough: CGRect?
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect)
+        if let passThrough { path.addRect(passThrough) }
+        return path
     }
 }

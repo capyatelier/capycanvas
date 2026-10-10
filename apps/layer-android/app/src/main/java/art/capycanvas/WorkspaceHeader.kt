@@ -23,6 +23,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import android.view.KeyEvent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
@@ -35,6 +38,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
@@ -258,10 +262,25 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
     var menuLabel by remember { mutableStateOf<String?>(null) }
+    var hoveredMenu by remember { mutableStateOf<String?>(null) }
+    val menuFocus = remember { FocusRequester() }
     var menuBounds by remember { mutableStateOf(Rect.Zero) }
     val menuAnchors = remember { mutableStateMapOf<String, Rect>() }
     val density = LocalDensity.current.density
+    val windowHeight = LocalWindowInfo.current.containerSize.height
     LaunchedEffect(editing) { menu = null }
+    LaunchedEffect(menu != null, compact) {
+        if (menu != null && kind == "menu_labels" && !compact) menuFocus.requestFocus()
+    }
+    val hoverMenu by rememberUpdatedState<(String, Boolean) -> Unit> { hovered, entered ->
+        if (entered) hoveredMenu = hovered else if (hoveredMenu == hovered) hoveredMenu = null
+        if (entered && menu != null && !editing) {
+            val open = menuLabel
+            host.query(obj("type" to "application_menu_hover", "open" to open, "hovered" to hovered)) { switch ->
+                if (switch == true && menu != null && menuLabel == open && hoveredMenu == hovered && !editing) menuLabel = hovered
+            }
+        }
+    }
     DisposableEffect(menu != null) {
         val ownsPopup = menu != null
         if (ownsPopup) input.dock.popup(true)
@@ -272,7 +291,10 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
             context = if (kind == "workspaces") ({ host.workspaceManager?.optJSONObject("switcher_options") }) else null)
         .onPreviewKeyEvent { event ->
             val key = event.nativeKeyEvent
-            if (kind == "workspaces" && (key.keyCode == KeyEvent.KEYCODE_MENU || key.isShiftPressed && key.keyCode == KeyEvent.KEYCODE_F10)) {
+            if (menu != null && key.keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                if (key.action == KeyEvent.ACTION_DOWN) menu = null
+                true
+            } else if (kind == "workspaces" && (key.keyCode == KeyEvent.KEYCODE_MENU || key.isShiftPressed && key.keyCode == KeyEvent.KEYCODE_F10)) {
                 if (key.action == KeyEvent.ACTION_DOWN) input.menu(id, input.sources.values.firstOrNull { it.source.optInt("value", -1) == id }?.bounds ?: Rect.Zero)
                 true
             } else false
@@ -291,13 +313,22 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 else -> "menu"
             }
             when {
-                kind == "menu_labels" && !compact -> Row(Modifier.height(36.dp).glass(SquircleShape(50), colors.headerSurface).padding(5.dp),
+                kind == "menu_labels" && !compact -> Row(Modifier.height(36.dp).glass(SquircleShape(50), colors.headerSurface).padding(5.dp)
+                    .focusRequester(menuFocus).focusable(!editing),
                     horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     snapshot.array("application_menus").objects().forEach { application ->
                         Box(Modifier.onGloballyPositioned { menuAnchors[application.getString("id")] = it.boundsInRoot() }) {
                             val menuId = application.getString("id")
                             HeaderButton(application.getString("label"), false, !editing, menu != null && menuLabel == menuId,
-                                Modifier.height(26.dp).testTag("application-menu-${application.getString("id")}"),
+                                Modifier.height(26.dp).testTag("application-menu-${application.getString("id")}").pointerInput(menuId) {
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            if (event.type == PointerEventType.Enter && event.changes.any { !it.pressed && it.type in listOf(PointerType.Mouse, PointerType.Stylus) }) hoverMenu(menuId, true)
+                                            else if (event.type == PointerEventType.Exit) hoverMenu(menuId, false)
+                                        }
+                                    }
+                                },
                                 fillWidth = false, surface = false, shape = SquircleShape(50),
                                 onClick = { menuLabel = menuId; menu = application.getJSONObject("model") }) {
                                 Text(application.getString("label"), Modifier.padding(horizontal = 8.dp), maxLines = 1)
@@ -334,7 +365,10 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                 Box(Modifier.align(Alignment.TopStart).offset { IntOffset((anchor.left - menuBounds.left).roundToInt(), (anchor.top - menuBounds.top).roundToInt()) }
                     .size((anchor.width / density).dp, (anchor.height / density).dp)) {
                     if (menuLabel == "workspaces") WorkspaceMenu(host, workspaceSwitcherMenu(host.workspaceManager)) { menu = null }
-                    else if (menuLabel != null) WorkspaceMenu(host, snapshot.array("application_menus").objects().first { it.getString("id") == menuLabel }.getJSONObject("model")) { menu = null }
+                    else if (menuLabel != null) key(menuLabel) {
+                        WorkspaceMenu(host, snapshot.array("application_menus").objects().first { it.getString("id") == menuLabel }.getJSONObject("model"), focusable = false,
+                            maxHeight = ((windowHeight - anchor.bottom) / density - 48).coerceAtLeast(1f).dp) { menu = null }
+                    }
                     else WorkspaceMenu(host, opened, copy = { host.menuCopy(obj("type" to "application_menu", "menu" to "primary")) }) { menu = null }
                 }
             }

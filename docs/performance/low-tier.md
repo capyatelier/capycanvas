@@ -147,7 +147,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | List scrolling: layers, brushes, filters | 60 | | |
 | Workspace choices: horizontal scroll | 60 | Screen 59.42–59.82 presents/s, maximum p99 33.24 ms | Workspace switcher scrolling below; long-list fixture |
 | Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
-| Menu open and close | 60 | | |
+| Menu open and close | 60 | Application menu heading switching unmeasured on reference hardware | [Menu interaction](../ui/window-bar.md); functional checks do not qualify presented frame rate |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
 
 ## Idle brush preparation

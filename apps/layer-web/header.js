@@ -151,6 +151,13 @@ export function createHeader({app, state, paintPair, workspace, element, button,
       const labels=element('div','header-menu-labels');
       for(const spec of menuModels) {
         const m=menu(()=>application(spec.id),spec.label); m.dataset.menu=spec.id;
+        m.querySelector('summary').addEventListener('pointerenter',event=>{
+          if(event.pointerType==='touch'||event.buttons||editing)return;
+          const open=labels.querySelector('details[open]');
+          if(app.application_menu_hover(open?.dataset.menu??null,spec.id)) {
+            open.open=false;m.open=true;m.querySelector('summary').focus({preventScroll:true});
+          }
+        });
         if(spec.id==='window')m.querySelector('.popover').id='workspace-menu'; labels.append(m);
       }
       r.full=labels;
@@ -437,6 +444,10 @@ export function createHeader({app, state, paintPair, workspace, element, button,
   },{capture:true});
   window.addEventListener('keydown',e=>{
     if(e.key==='Escape')clearButtonPress();
+    if(e.key==='Escape'&&!e.isComposing) {
+      const open=root.querySelector('details[open]');
+      if(open){open.open=false;open.querySelector('summary').focus({preventScroll:true});updateZen();e.preventDefault();e.stopImmediatePropagation();return;}
+    }
     if(e.isComposing||e.target.closest('input,select,textarea,[contenteditable=true],dialog[open],.popover,.panel-context-menu'))return;
     if(e.key==='Escape'&&contact){end(null,true);e.preventDefault();e.stopImmediatePropagation();return;}
     if((e.key==='ContextMenu'||e.key==='F10'&&e.shiftKey)&&e.target.closest('[data-workspace-options]'))return;

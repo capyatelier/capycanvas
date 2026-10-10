@@ -3,11 +3,33 @@ import assert from 'node:assert/strict';
 
 // Full labels, the retained compact menu, and whole-item overflow share menus.
 export async function checkHeaderControls({call,evaluate,settle}) {
-  const click=async selector=>{const p=await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();if(!r.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();};
+  const click=async(selector,pointerType='mouse')=>{const p=await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();if(!r.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1,pointerType});await settle();};
   const select=async(label,container)=>{await evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(container+' button')})].find(b=>(b.querySelector('.menu-label')?.textContent||b.textContent)===${JSON.stringify(label)});if(!b)throw Error('Missing '+${JSON.stringify(label)});b.dataset.headerTest='true';})()`);await click('[data-header-test]');};
   const resize=async width=>{await call('Emulation.setDeviceMetricsOverride',{width,height:870,deviceScaleFactor:1,mobile:false});await settle();};
   await resize(1440);
+  const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/localization-expansion/web';await mkdir(dir,{recursive:true});
   const menus=await evaluate('layerApp.app.editor_models(0,0).application_menus');assert.equal(menus.length,8);
+  const openMenus=()=>evaluate("[...document.querySelectorAll('.header-menu-labels details[open]')].map(menu=>menu.dataset.menu)");
+  const hover=async(id,pointerType)=>{
+    const point=await evaluate(`(()=>{const r=document.querySelector('[data-menu="${id}"] > summary').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await call('Input.dispatchMouseEvent',{type:'mouseMoved',...point,buttons:0,pointerType});await settle();
+  };
+  for(const theme of ['light','dark'])for(const device of ['mouse','pen']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);await settle();
+    await hover('edit',device);assert.deepEqual(await openMenus(),[],`${theme} ${device}: hover keeps closed menus closed`);
+    await click('[data-menu="file"] > summary',device);
+    for(const id of ['edit','view','file']) {
+      await hover(id,device);assert.deepEqual(await openMenus(),[id],`${theme} ${device}: hover switches one open menu`);
+      assert.deepEqual(await evaluate(`[...document.querySelectorAll('[data-menu="${id}"] .menu-label')].map(node=>node.textContent)`),menus.find(menu=>menu.id===id).model.sections.flat().map(item=>item.label));
+      await hover(id,device);assert.deepEqual(await openMenus(),[id],`${theme} ${device}: repeated hover retains the menu`);
+      if(id==='view') {
+        const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/menu-hover-${theme}-${device}.png`,Buffer.from(shot.data,'base64'));
+      }
+    }
+    for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:27});await settle();
+    assert.deepEqual(await openMenus(),[],`${theme} ${device}: Escape dismisses the menu`);
+    await hover('view',device);assert.deepEqual(await openMenus(),[],`${theme} ${device}: hover after dismissal stays closed`);
+  }
   for(const m of menus){await click(`[data-menu="${m.id}"] > summary`);assert.equal(await evaluate(`document.querySelector('[data-menu="${m.id}"]').open`),true);}
   for(const [width,selector] of [[600,'.header-menu-labels-compact'],[240,'#header-overflow-0']]) {
     await resize(width);
@@ -24,7 +46,6 @@ export async function checkHeaderControls({call,evaluate,settle}) {
     assert.equal(await evaluate("document.querySelectorAll('.header-overflow[open],.header-menu-labels-compact[open]').length"),0);
     assert.ok(await evaluate(`document.activeElement.closest('${width===600?'.header-menu-labels':'.header-item:not([hidden])'}')!==null`),'Expansion restores a visible control');
   }
-  const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/localization-expansion/web';await mkdir(dir,{recursive:true});
   const tags=await evaluate('layerApp.app.bootstrap_view().shipped_tags'),expected={};
   for(const tag of tags){const source=await readFile(new URL(`../../assets/locales/${tag}/workspace.ftl`,import.meta.url),'utf8');const text=key=>{const line=source.split('\n').find(line=>line.startsWith(`${key} = `));assert.ok(line,`${tag} ${key}`);return line.slice(key.length+3);};expected[tag]={drag:text('workspace-header-drag-component'),size:text('workspace-header-size'),tools:text('workspace-add-tools-menu'),clock:text('workspace-header-clock'),battery:text('workspace-header-battery')};}
   const restore=async tag=>{await evaluate(`layerApp.dispatch({type:'restore_saved_settings',saved:JSON.stringify({...layerApp.state().settings,language:{Explicit:${JSON.stringify(tag)}}})})`);await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function poll(){if(!layerApp.app.language_pending()&&document.documentElement.lang===${JSON.stringify(tag)})resolve();else if(performance.now()>end)reject(Error('Header language timeout'));else setTimeout(poll,20);}poll();})`);await settle();};

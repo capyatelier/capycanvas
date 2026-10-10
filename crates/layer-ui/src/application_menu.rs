@@ -66,6 +66,10 @@ impl ApplicationMenu {
         Self::Window,
         Self::Help,
     ];
+    pub fn switches_on_hover(open: Option<Self>, hovered: Self) -> bool {
+        open.is_some_and(|open| open != hovered && Self::ALL.contains(&open))
+            && Self::ALL.contains(&hovered)
+    }
     pub fn canonical_label(self) -> std::sync::Arc<str> {
         self.localized_label(&Localizer::shared(UiLanguage::English))
     }
@@ -299,3 +303,20 @@ impl<R: CanvasRenderer> UiSession<R> {
 }
 
 const ZOOM_LEVELS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
+
+#[cfg(test)]
+mod tests {
+    use super::ApplicationMenu;
+
+    #[test]
+    fn application_menu_hover_tracks_only_open_menu_bar_neighbors() {
+        let menus = ApplicationMenu::ALL.into_iter().chain([ApplicationMenu::Primary]);
+        for hovered in menus.clone() {
+            assert!(!ApplicationMenu::switches_on_hover(None, hovered));
+            for open in menus.clone() {
+                assert_eq!(ApplicationMenu::switches_on_hover(Some(open), hovered),
+                    open != hovered && open != ApplicationMenu::Primary && hovered != ApplicationMenu::Primary);
+            }
+        }
+    }
+}

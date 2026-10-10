@@ -30,6 +30,7 @@ fn request(json: &str) -> Result<Value, String> {
             | "expansion"
             | "renderer_stats"
             | "application_menu"
+            | "application_menu_hover"
             | "application_link"
             | "header"
             | "palette_menu"
