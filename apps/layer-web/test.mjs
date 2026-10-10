@@ -699,7 +699,7 @@ try {
       x: 600,
       y: 450,
     });
-    await evaluate("layerApp.dispatch({type:'restore_settings',settings:{...layerApp.state().settings,zen_show_capy:false,zen_reveal_at_edges:true}})");
+    await evaluate("layerApp.dispatch({type:'restore_settings',settings:{...layerApp.state().settings,zen_show_capy:false}})");
     await click('[data-command="zen_mode"]');
     await evaluate("new Promise(r=>setTimeout(r,250))");
     assert.equal(
@@ -728,9 +728,6 @@ try {
       "artifacts/ui/web-zen.png",
       Buffer.from(zen.data, "base64"),
     );
-    // No hover first: hidden UI must consume a reveal tap, not paint beneath it.
-    // Screenshot scaling can temporarily change emulation/hover; restore the
-    // normal pointer position and wait for native hit-testing before input.
     await call("Input.dispatchMouseEvent", {
       type: "mouseMoved",
       x: 600,
@@ -751,8 +748,8 @@ try {
     // hidden toolbar's old proximity zone must not reveal it any more.
     for (const [x, y, hidden] of [
       [600, 120, true],
-      [600, 80, false],
-      [600, 120, false],
+      [600, 80, true],
+      [600, 120, true],
       [600, 165, true],
       [600, 120, true],
       [600, 820, true], // Empty bottom edge: the status HUD is not a panel.
@@ -767,68 +764,10 @@ try {
         `Zen hover at ${x},${y}`,
       );
     }
-    const beforeReveal = await evaluate("String(layerApp.state().revision)");
-    await call("Input.dispatchTouchEvent", {
-      type: "touchStart",
-      touchPoints: [{ id: 9, x: 20, y: 450 }],
-    });
-    await call("Input.dispatchTouchEvent", {
-      type: "touchEnd",
-      touchPoints: [],
-    });
-    await settle();
-    assert.equal(
-      await evaluate(
-        "document.querySelector('#workspace').classList.contains('zen-hidden')",
-      ),
-      false,
-    );
-    assert.equal(
-      await evaluate("String(layerApp.state().revision)"),
-      beforeReveal,
-    );
-    await evaluate("document.querySelector('details').open=true");
-    await call("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: 600,
-      y: 450,
-    });
-    assert.equal(
-      await evaluate(
-        "document.querySelector('#workspace').classList.contains('zen-hidden')",
-      ),
-      false,
-    );
-    await evaluate("document.querySelector('details').open=false");
-    await call("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: 24,
-      y: 24,
-    });
-    assert.equal(
-      await evaluate(
-        "document.querySelector('#workspace').classList.contains('zen-hidden')",
-      ),
-      false,
-    );
-    await call("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: 600,
-      y: 450,
-    });
-    await click('[data-command="settings"]');
-    assert.equal(
-      await evaluate(
-        "document.querySelector('#workspace').classList.contains('zen-hidden')",
-      ),
-      false,
-    );
-    await evaluate("layerApp.dispatch({type:'close_settings'})");
-    await click('[data-command="zen_mode"]');
-    assert.deepEqual(
-      await evaluate("layerApp.state().camera.translation"),
-      geometry.view.translation,
-    );
+    await evaluate("layerApp.dispatch({type:'open_settings',page:'appearance'})");
+    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"),false);
+    await evaluate("layerApp.dispatch({type:'close_settings'});layerApp.dispatch({type:'invoke',command:'zen_mode'})");
+    assert.deepEqual(await evaluate("layerApp.state().camera.translation"),geometry.view.translation);
     await evaluate("document.activeElement?.blur()");
     const transparency = await evaluate(
       "['off','low','medium','high'].indexOf(layerApp.state().settings.transparency)",
@@ -932,7 +871,7 @@ try {
     );
     assert.deepEqual(errors, []);
     console.log(
-      "PASS: hardware Wasm/WebGPU ink, pen pressure, controls/layers/undo, settings persistence, dock moves/tabs/drag/resize, two-touch camera, Zen fade/reveal without viewport change, dark/light/Zen screenshots",
+      "PASS: hardware Wasm/WebGPU ink, pen pressure, controls/layers/undo, settings persistence, dock moves/tabs/drag/resize, two-touch camera, Zen hide/exit without viewport change, dark/light/Zen screenshots",
     );
   }
 } catch (error) {

@@ -215,7 +215,7 @@ private final class Changes: @unchecked Sendable {
         func packet(_ revision: Int = 11, model: Int = 11, content: Int = 10, width: Int = 350) -> JSON {
             let bounds = ["x": 0, "y": 48, "width": width, "height": 400]
             return JSON(["workspace_update": update(revision, model: model, content: content).raw,
-                "layout": ["viewport": [1200, 900], "tab_bar_height": 36, "reveal_edges": ["left"],
+                "layout": ["viewport": [1200, 900], "tab_bar_height": 36,
                     "work_area": bounds, "status": bounds, "groups": [["id": 7, "bounds": bounds]], "collapsed": [], "dividers": []],
                 "workspace_layout": ["bands": [["id": 1, "extent": width]], "floating": [], "collapsed": [], "fit_tab_groups": [7],
                     "column_stacks": [["column": 7, "members": [7], "drawers": false, "auto_hide": false]]],

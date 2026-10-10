@@ -67,7 +67,6 @@ internal class DockInteraction(val host: CanvasHost) {
     val regions = mutableMapOf<Any, Region>()
     data class ChromeRegion(val bounds: Rect, val z: Int)
     val chromeRegions = mutableMapOf<Any, ChromeRegion>()
-    var zenButton: Rect? = null
     var drawer: JSONObject? = null
     val drawerSources = mutableStateMapOf<String, DrawerSource>()
     var drawerTileRevision by mutableIntStateOf(0)
@@ -112,7 +111,6 @@ internal class DockInteraction(val host: CanvasHost) {
         popupOwners = (popupOwners + if (open) 1 else -1).coerceAtLeast(0)
         refresh()
     }
-    var canvasBar: Rect? = null
     /** The canvas bar's place, kept while a canvas contact hides the bar. */
     var canvasBarSlot by mutableStateOf<Rect?>(null)
     private var active: JSONObject? = null
@@ -167,9 +165,7 @@ internal class DockInteraction(val host: CanvasHost) {
 
     // Shared workspace gestures have their own Zen state in Rust. Only tile
     // reordering uses the host's generic dragging fact.
-    private fun Rect.logical() = obj("x" to left / density, "y" to top / density, "width" to width / density, "height" to height / density)
     fun facts() = obj("held" to false, "dragging" to (active?.optString("type") == "tile_drag"),
-        "zen_button" to zenButton?.logical(), "canvas_bar" to canvasBar?.logical(),
         "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion, "content_drawer" to drawer?.optJSONObject("placement")?.optJSONObject("bounds"),
         "drawer_connection" to drawer?.optJSONObject("connection")?.optJSONObject("bounds"))
     fun refresh() = host.chrome(obj("kind" to "refresh"), facts())

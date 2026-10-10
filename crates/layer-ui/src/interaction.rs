@@ -137,12 +137,6 @@ pub struct ChromeFacts {
     /// Native/DOM tab hit for the current contact; labels have host-measured widths.
     #[serde(default)]
     pub contact_tab: Option<crate::Panel>,
-    /// Visible standalone Capy hit target; using it must not reveal over the button.
-    #[serde(default)]
-    pub zen_button: Option<crate::Bounds>,
-    /// Visible canvas action bar; hovering it must not reveal docked chrome.
-    #[serde(default)]
-    pub canvas_bar: Option<crate::Bounds>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -269,9 +263,6 @@ pub(crate) struct Interaction {
     pub navigation_tap: bool,
     pub keyboard_chrome: bool,
     pub keep_chrome_until_contact: bool,
-    /// Fixed top-left guard after explicitly entering Zen. Not a preference.
-    pub zen_entry_guard: bool,
-    pub hover: Option<[f32; 2]>,
     pub facts: ChromeFacts,
     pub viewport: Option<[f32; 2]>,
     pub pointer: Option<PointerContact>,

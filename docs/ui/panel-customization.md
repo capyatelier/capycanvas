@@ -287,12 +287,10 @@ picker's availability rules.
   and live-move gestures coalesce into one entry; cancel restores the start.
   Default shortcuts are Ctrl+Alt+Z and Ctrl+Alt+Shift+Z (Command on Apple).
   Workspace history never changes drawing undo or stores document pixels.
-- Dragging a floating panel in Zen does not reveal hidden docks. Reaching an
-  occupied screen edge reveals them normally and latches that visibility only
-  until the drag ends. While docks are hidden, neither screen edges nor docked
-  panels are targets; only tab merging into other visible floats is allowed,
-  never side-by-side floating splits. After any drop or cancellation, visibility uses normal
-  cursor proximity; neither floating nor docked drops force docks to stay open.
+- Dragging a floating panel in Zen keeps docks hidden, including at screen
+  edges. While docks are hidden, neither screen edges nor docked panels are
+  targets; only tab merging into other visible floats is allowed, never
+  side-by-side floating splits. Drops and cancellation keep docks hidden.
   Floating panels remain visible independently. Native tool-tile DND keeps
   chrome visible for its active grab. Loss of focus cancels ordinary captured
   move/resize gestures and restores their original geometry.
@@ -333,7 +331,7 @@ the same controls.
   saved settings or undo entries. Queued header measurements containing removed
   items are ignored after a layout or workspace change. Hosts do not decide widths, heights, targets,
   naming rules or menu availability. `DragWorkspace` owns tear-off, live movement,
-  snapping, singleton/group semantics and Zen reveal state. `ResizeFloating`
+  snapping, singleton/group semantics and Zen visibility. `ResizeFloating`
   owns eight-edge resizing; `DoubleClickPanelHandle` toggles a docked lone
   panel's tab or refits a docked toolbar, or restores floating dimensions and cycles the applicable
   default layout or tab visibility. `panel_handle_target` determines handle

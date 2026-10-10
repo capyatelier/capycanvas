@@ -1180,13 +1180,12 @@ mod clipboard_checks {
         assert_eq!(&object.affine.0[..4], &[1., 0., 0., 1.], "paste never shrinks to fit");
         invoke(&mut s, CommandId::CancelTransform);
         s.set_viewport([400., 300.], [800, 600]).unwrap();
-        s.interaction.hover = Some([100., 125.]);
         let mut hover = event(&s, 2, PenPhase::Hover, 0.);
         hover.surface_position = Point { x: 200., y: 250. }; s.cursor_input(Some(hover));
         let expected = s.pointer64([200., 250.]);
         invoke(&mut s, CommandId::PasteAtCursor);
         hover.surface_position = Point { x: 600., y: 500. }; s.cursor_input(Some(hover));
-        s.interaction.hover = Some([300., 250.]); s.state.camera.center_on([350., 250.]);
+        s.state.camera.center_on([350., 250.]);
         let copied = clip([20, 10], [0; 2], s.engine.document().composition().color);
         let actual = s.clip_position(&copied, PasteMode::AtCursor);
         assert_eq!([actual.x, actual.y], [(expected[0] - 10.).round() as f32, (expected[1] - 5.).round() as f32]);

@@ -229,9 +229,6 @@ function iconButton(id) {
   node.dataset.icon = "true";
   node.classList.add("tile-button");
   const glyph = icon(state.commands.find((c) => c.id === id).icon);
-  if (id === "zen_mode") {
-    glyph.style.width = glyph.style.height = `${catalog.zen_icon_size}px`;
-  }
   node.append(glyph);
   return node;
 }
@@ -1311,17 +1308,13 @@ function input(event) {
   }
 }
 function chromeInput(event) {
-  const capy = $("zen-capy");
-  const capyBounds = capy && !capy.hidden ? capy.getBoundingClientRect() : null;
   return input({
     type: "chrome",
     event,
     viewport: workspaceViewport,
     facts: {
-      zen_button: capyBounds ? {x:capyBounds.x,y:capyBounds.y,width:capyBounds.width,height:capyBounds.height} : null,
       expanded_panel: customization?.placement(),
       ...workspaceChrome?.facts(),
-      canvas_bar: canvasBar?.bounds() ?? null,
       contact_tab: event.kind === "contact"
         ? document.elementFromPoint(...event.position)?.closest(".dock-tab")?.dataset.panel ?? null
         : null,

@@ -266,9 +266,6 @@ impl DockLayout {
         if strip.width <= 0. || strip.height <= 0. {
             return;
         }
-        if !result.reveal_edges.contains(&edge) {
-            result.reveal_edges.push(edge);
-        }
         for (alignment, toolbars) in runs {
             let size = sizes[alignment.index()];
             let gap = gap.min(size / (toolbars.len() as f32 * 2.).max(1.));

@@ -77,7 +77,7 @@ import Foundation
         let current = stateFields.unobserved["workspace"], layout = next["layout"]
         guard current["layout"].raw is NSDictionary, layout.raw is NSDictionary,
             next["camera"].raw is NSDictionary, next["panel_measurements"].raw is NSArray,
-            ["groups", "dividers", "collapsed", "reveal_edges", "viewport"].allSatisfy({ layout[$0].raw is NSArray }),
+            ["groups", "dividers", "collapsed", "viewport"].allSatisfy({ layout[$0].raw is NSArray }),
             layout["work_area"].raw is NSDictionary, layout["status"].raw is NSDictionary,
             layout["tab_bar_height"].raw is NSNumber else { return nil }
         var dimensions = current["layout"].object

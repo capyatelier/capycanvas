@@ -198,14 +198,14 @@ class AndroidFeatureParityTest {
         assertNull(host.failure); assertNull(host.actionError); assertTrue(predicate(pixel(point)))
     }
     @Test fun toolDrawersOpenInZenAndOutsideContactDoesNotPaint() {
-        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "zen_reveal_at_edges", "value" to true)))
         action(obj("type" to "invoke", "command" to "pen"))
+        action(obj("type" to "move_panel", "panel" to "toolbar", "viewport" to viewport(),
+            "target" to obj("kind" to "float", "position" to JSONArray(listOf(400, 200)))))
         action(obj("type" to "invoke", "command" to "zen_mode"))
         compose.waitUntil(10_000) { host.snapshot!!.optBoolean("chrome_hidden") }
         val pen = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects()
             .first().getInt("id")
         val undoBefore = state().array("commands").objects().first { it.getString("id") == "undo" }.getBoolean("enabled")
-        stroke(Offset(.01f, .5f))
         shown("tile-toolbar-$pen")
         compose.onNodeWithTag("tile-toolbar-$pen").performTouchInput { click() }
         shown("tool-drawer")

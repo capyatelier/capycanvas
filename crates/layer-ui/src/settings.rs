@@ -79,7 +79,6 @@ pub struct Settings {
     pub accent: Option<HexColor>,
     pub zen_icon: ZenIcon,
     pub zen_show_capy: bool,
-    pub zen_reveal_at_edges: bool,
     /// Shared by Quick Mask and every saved selection, across documents.
     pub selection_painting: layer_core::SelectionPaintBehavior,
     pub pressure_curve: layer_core::PressureResponse,
@@ -126,7 +125,6 @@ impl Default for Settings {
             accent: None,
             zen_icon: ZenIcon::default(),
             zen_show_capy: true,
-            zen_reveal_at_edges: false,
             selection_painting: Default::default(),
             pressure_curve: layer_core::PressureResponse::default(),
             cursor: CursorMode::default(),
@@ -339,7 +337,6 @@ pub enum PreferenceId {
     Transparency,
     ZenIcon,
     ZenShowCapy,
-    ZenRevealAtEdges,
     DarkBase,
     LightBase,
     Accent,
@@ -376,7 +373,6 @@ impl PreferenceId {
             Self::Transparency => "transparency",
             Self::ZenIcon => "zen-icon",
             Self::ZenShowCapy => "zen-show-capy",
-            Self::ZenRevealAtEdges => "zen-reveal-at-edges",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
             Self::Accent => "accent",
@@ -1273,14 +1269,6 @@ impl Settings {
                     },
                 ),
                 row(
-                    PreferenceId::ZenRevealAtEdges,
-                    &localizer.text(MessageId::SETTINGS_REVEAL_PANELS_NEAR_SCREEN_EDGES),
-                    "",
-                    PreferenceKind::Switch {
-                        active: self.zen_reveal_at_edges,
-                    },
-                ),
-                row(
                     PreferenceId::ZenIcon,
                     &localizer.text(MessageId::SETTINGS_BUTTON_ICON),
                     "",
@@ -1437,9 +1425,6 @@ impl Settings {
             }
             ZenIcon => self.zen_icon = crate::ZenIcon::CHOICES[value.choice().unwrap() as usize].0,
             ZenShowCapy => self.zen_show_capy = matches!(value, PreferenceValue::Bool(true)),
-            ZenRevealAtEdges => {
-                self.zen_reveal_at_edges = matches!(value, PreferenceValue::Bool(true))
-            }
             DarkBase | LightBase => {
                 let PreferenceValue::Text(text) = value else {
                     unreachable!()
@@ -2415,28 +2400,18 @@ mod copy_tests {
                 group.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
                 [
                     PreferenceId::ZenShowCapy,
-                    PreferenceId::ZenRevealAtEdges,
                     PreferenceId::ZenIcon
                 ]
             );
             assert!(settings.zen_show_capy);
-            assert!(!settings.zen_reveal_at_edges);
-            for (id, value) in [
-                (PreferenceId::ZenShowCapy, false),
-                (PreferenceId::ZenRevealAtEdges, true),
-            ] {
-                settings
-                    .edit(id, PreferenceValue::Bool(value), platform)
-                    .unwrap();
-                let restored =
-                    serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap())
-                        .unwrap();
-                assert_eq!(restored, settings);
-                let mut preferences = PreferencesState::default();
-                preferences.edit(&mut settings, PreferenceAction::Reset { id }, platform, &Localizer::shared(UiLanguage::English));
-                assert!(preferences.error.is_none());
-                assert_eq!(settings, Settings::default());
-            }
+            let id = PreferenceId::ZenShowCapy;
+            settings.edit(id, PreferenceValue::Bool(false), platform).unwrap();
+            let restored = serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored, settings);
+            let mut preferences = PreferencesState::default();
+            preferences.edit(&mut settings, PreferenceAction::Reset { id }, platform, &Localizer::shared(UiLanguage::English));
+            assert!(preferences.error.is_none());
+            assert_eq!(settings, Settings::default());
             settings
                 .edit(PreferenceId::ZenIcon, PreferenceValue::Choice(3), platform)
                 .unwrap();
@@ -2605,7 +2580,6 @@ mod copy_tests {
                 PreferenceId::License,
                 PreferenceId::ZenIcon,
                 PreferenceId::ZenShowCapy,
-                PreferenceId::ZenRevealAtEdges,
             ] {
                 assert!(settings.field(id, platform).unwrap().description.is_empty());
             }
@@ -2715,19 +2689,16 @@ mod restore_tests {
             theme: Some(Theme::Dark),
             zoom_speed: 2.0,
             zen_show_capy: false,
-            zen_reveal_at_edges: true,
             pan_speed: 1.5,
             ..Default::default()
         };
         let mut saved = serde_json::to_value(&chosen).unwrap();
         assert_eq!(Settings::restore(&saved.to_string()), chosen);
         saved["retired_setting"] = serde_json::json!(true);
-        saved["zen_reveal_at_edges"] = serde_json::json!({});
         saved["pan_speed"] = serde_json::json!(-1.0);
         assert_eq!(
             Settings::restore(&saved.to_string()),
             Settings {
-                zen_reveal_at_edges: false,
                 pan_speed: 1.0,
                 ..chosen
             }

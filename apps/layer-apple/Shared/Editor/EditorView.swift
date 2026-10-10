@@ -44,15 +44,13 @@ struct EditorView<Canvas: View>: View {
                 PressureCalibration(store: store)
                 if store.snapshot["keep_zen_button"].bool {
                     let command = store.command("zen_mode")
+                    let header = store.snapshot["header"]
+                    let size = header["sizes"].array.first { $0["id"].string == header["model"]["size"].string } ?? JSON()
                     IconTile(icon: command["icon"].string, label: command["tooltip"].string,
-                        enabled: command["enabled"].bool, corner: .half) { store.invoke("zen_mode") }
-                        .frame(width: 36, height: 36)
+                        enabled: command["enabled"].bool, size: size["capy_icon"].number, corner: .half) { store.invoke("zen_mode") }
+                        .frame(width: size["tile"].number, height: size["tile"].number)
                         .glassSurface(SquircleShape.tile, fill: palette.chromeSurface)
                         .modifier(WorkspaceContext(store: store, target: JSON(["kind": "zen_mode"])))
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor-workspace")) } action: {
-                            store.workspace.zenButton = $0
-                        }
-                        .onDisappear { store.workspace.zenButton = nil }
                         .offset(x: store.headerLeadingInset + 6, y: 6).accessibilityIdentifier("zen-button")
                 }
             }

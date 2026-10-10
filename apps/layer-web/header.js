@@ -227,7 +227,8 @@ export function createHeader({app, state, paintPair, workspace, element, button,
       if(!editing&&wasEditing)document.querySelector('#canvas').focus({preventScroll:true});
     }
     root.dataset.size=size.id;
-    for(const [name,value] of Object.entries({tile:size.tile,icon:size.icon,gap:size.gap})) {
+    for(const [name,value] of Object.entries({tile:size.tile,icon:size.icon,'capy-icon':size.capy_icon,gap:size.gap})) {
+      workspace.style.setProperty(`--header-${name}`,`${value}px`);
       root.style.setProperty(`--header-${name}`,`${value}px`);
       bank.style.setProperty(`--header-${name}`,`${value}px`);
     }
@@ -382,7 +383,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
       for(const svg of ghost.querySelectorAll('svg[data-paint-pair]'))updatePaintPairIcon(svg,paintPair());
       ghost.classList.add('header-drag-preview');ghost.inert=true;ghost.hidden=false;
       if(contact.node.matches('[data-header-overflow-item]'))ghost.classList.add('header-overflow-preview');
-      ghost.style.setProperty('--header-tile',`${size.tile}px`);ghost.style.setProperty('--header-icon',`${size.icon}px`);
+      ghost.style.setProperty('--header-tile',`${size.tile}px`);ghost.style.setProperty('--header-icon',`${size.icon}px`);ghost.style.setProperty('--header-capy-icon',`${size.capy_icon}px`);
       for(const name of ['--header-foreground','--header-background'])ghost.style.setProperty(name,root.style.getPropertyValue(name));
       workspace.append(ghost);root.classList.add('header-dragging');workspace.dataset.headerDragging='true';
       for(const menu of root.querySelectorAll('details[open]'))menu.open=false;

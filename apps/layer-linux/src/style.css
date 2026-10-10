@@ -11,9 +11,9 @@ window, label, text { font-size: var(--ui-text-size); }
 .window-bar { background: transparent; }
 .window-bar .header-item, .window-bar .header-tool, .window-bar .chrome-control { background: transparent; box-shadow: none; padding: 0; }
 .window-bar menubutton.chrome-control > button { min-width: 24px; min-height: 24px; padding: 6px; border-radius: var(--header-radius); }
-.window-bar { --header-radius: calc(18px * var(--corner-fit)); --header-control-bg: var(--glass-chip); }
-.window-bar.header-medium { --header-radius: calc(24px * var(--corner-fit)); }
-.window-bar.header-large { --header-radius: calc(30px * var(--corner-fit)); }
+.window-bar, .zen-capy { --header-radius: calc(18px * var(--corner-fit)); --header-control-bg: var(--glass-chip); }
+.window-bar.header-medium, .zen-capy.header-medium { --header-radius: calc(24px * var(--corner-fit)); }
+.window-bar.header-large, .zen-capy.header-large { --header-radius: calc(30px * var(--corner-fit)); }
 .window-bar .header-tool { min-width: 0; min-height: 0; padding: 4px; border-radius: var(--header-radius); }
 .window-bar .header-tool.capy-button { padding: 0; }
 /* The live canvas is an app-owned Wayland subsurface, outside GTK's render
@@ -264,7 +264,7 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .vertical-component .brush-track slider { min-width: 26px; min-height: 10px; margin: 0 -5px; }
 .window-bar, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
-.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--glass-chip); border-radius: calc(18px * var(--corner-fit)); }
+.zen-capy { min-width: 36px; min-height: 36px; padding: 0; background: var(--glass-chip); border-radius: var(--header-radius); }
 /* Preferences are a native surface, not the canvas surround (especially light). */
 .layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }
 /* Match libadwaita's ActionRow subtitles despite our global label font rule. */

@@ -40,7 +40,6 @@ settings-webgpu = WebGPU
 settings-direct3d-12 = Direct3D 12
 settings-native-gpu = GPU ของระบบ
 settings-show-capy-in-zen-mode = แสดง Capy ในโหมดเซน
-settings-reveal-panels-near-screen-edges = แสดงแผงเมื่อเข้าใกล้ขอบหน้าจอ
 settings-button-icon = ไอคอนปุ่ม
 settings-accent-color = สีเน้น
 settings-dark-theme-base-color = สีพื้นฐานธีมมืด

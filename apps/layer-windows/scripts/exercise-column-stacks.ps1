@@ -248,7 +248,6 @@ try {
     (Control 'CloseButton' -Within $dialog).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {$null -eq (Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
     Check-Open 12;Capture 'stacked-light'
-    # UIA theme selection leaves the pointer over the strip, where Zen reveals chrome.
     $outside=Screen (Model).layout.work_area;[CapyRowPointer]::Hover($outside.x,$outside.y)
     $canvas=(Control 'drawing-canvas').GetRuntimeId() -join ':';$generation=(Model).windows_gpu_generation
     (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key(0x09)

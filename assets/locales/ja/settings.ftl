@@ -41,7 +41,6 @@ settings-webgpu = WebGPU
 settings-direct3d-12 = Direct3D 12
 settings-native-gpu = ネイティブGPU
 settings-show-capy-in-zen-mode = 集中モードでCapyを表示
-settings-reveal-panels-near-screen-edges = 画面の端でパネルを表示
 settings-button-icon = ボタンのアイコン
 settings-accent-color = アクセントカラー
 settings-dark-theme-base-color = ダークテーマの基本色

@@ -1214,7 +1214,6 @@ impl Workspace {
         zen_capy.set_widget_name("zen-capy");
         zen_capy.add_css_class("zen-capy");
         let capy_icon = crate::icons::image("layer-zen-looking-up-symbolic");
-        capy_icon.set_pixel_size(ZEN_ICON_SIZE as i32);
         zen_capy.set_child(Some(&capy_icon));
         content.add_overlay(&zen_capy);
         // Notices must not resize the full-window canvas, change its viewport,
@@ -1876,20 +1875,7 @@ impl Workspace {
             None
         };
         let facts = ChromeFacts {
-            canvas_bar: self.canvas_bar.visible_bounds(),
             contact_tab,
-            zen_button: self
-                .zen_capy
-                .is_visible()
-                .then(|| {
-                    self.zen_capy.compute_bounds(&self.surface).map(|b| Bounds {
-                        x: b.x(),
-                        y: b.y(),
-                        width: b.width(),
-                        height: b.height(),
-                    })
-                })
-                .flatten(),
             expanded_panel: self.customization.placement(),
             content_drawer: self.drawer.placement().map(|p| p.bounds),
             drawer_connection: self
@@ -3104,6 +3090,17 @@ impl Workspace {
         ));
     }
     fn reconcile_layout(self: &Rc<Self>, layout: &DockLayout) {
+        let size = layout.header.size;
+        self.zen_capy.set_size_request(size.tile() as i32, size.tile() as i32);
+        for variant in HeaderSize::ALL {
+            let class = format!("header-{}", variant.id());
+            if variant == size { self.zen_capy.add_css_class(&class); }
+            else { self.zen_capy.remove_css_class(&class); }
+        }
+        if let Some(image) = self.zen_capy.child().and_downcast::<gtk::Image>() {
+            image.set_pixel_size(size.capy_icon());
+        }
+
         *self.surface.imp().layout.borrow_mut() = layout.clone();
         let resolved = self.resolved();
         if !self.customization.reconcile_toolbars(self, layout, &resolved) { return; }

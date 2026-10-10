@@ -319,7 +319,6 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
     ],
 };
 pub const WORKSPACE_MENU_LABEL: &str = "Window";
-pub const ZEN_ICON_SIZE: u32 = 31;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelChoice {
@@ -346,7 +345,6 @@ pub struct UiCatalog {
     pub canvas_bar_reappear_ms: u32,
     pub app_name: &'static str,
     pub text_size_pt: u8,
-    pub zen_icon_size: u32,
     pub panel_expansion_ms: u32,
     pub panels: Vec<PanelChoice>,
     /// Primary drawing tools for hosts that also expose a compact tool chooser.
@@ -378,7 +376,6 @@ pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
         document_delivery_copy: DocumentDeliveryCopy::new(localization),
         command_search_style: COMMAND_SEARCH_STYLE,
         canvas_bar_reappear_ms: CANVAS_BAR_REAPPEAR_MS,
-        zen_icon_size: ZEN_ICON_SIZE,
         app_name: localization.language().app_name(),
         text_size_pt: UI_TEXT_PT,
         panel_expansion_ms: PANEL_EXPANSION_MS,

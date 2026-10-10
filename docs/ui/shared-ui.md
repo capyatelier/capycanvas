@@ -223,47 +223,30 @@ exits Zen; Tab toggles Zen outside settings and native text editors. Explicit
 settings dialogs remain usable.
 
 Preferences → Appearance → Zen mode has **Show Capy in Zen mode** (on by
-default) and **Reveal panels near screen edges** (off by default). With reveal
-enabled, the shared `near_chrome` rule reveals hidden controls only within
-80 logical pixels (`WORKSPACE_PROXIMITY`) of an occupied window edge, not by
-approaching a hidden toolbar or panel. The top always reveals the header;
-left/right/bottom reveal only when a visible dock band occupies that edge. The
-status HUD alone does not enable bottom-edge reveal. Once visible, the same
-80px margin around panels, header and HUD keeps controls available; enabled
-edge zones also retain visibility to prevent oscillation. Neither distance is a
-preference.
+default) and **Button icon**. Moving or touching a screen edge keeps controls
+hidden. Floating panels remain available, and their drags can merge with other
+floating panels without exposing hidden docks.
 
-Enabling Zen hides the chrome at once. The core suppresses hover reveal inside
-a fixed 300 × 300 logical-pixel top-left guard until the pointer leaves it, so
-the activating button does not reveal itself again; a fresh deliberate contact
-re-enables edge reveal for touch users. Hosts animate opacity over 180 ms and
+Enabling Zen hides the chrome at once. Hosts animate opacity over 180 ms and
 disable hit-testing while hidden. Web respects reduced-motion preferences; GTK
 uses the platform animation setting. Keyboard navigation, open menus, settings
-and native title-bar grabs keep controls available. Floating panel movement
-reveals hidden docks only at an occupied screen edge, then holds that visibility
-for the rest of the drag. Every drop returns to normal cursor proximity. An
-initial contact in a hidden control's reveal zone reveals instead of painting,
-and cannot also activate a newly exposed button. A captured stroke does not
-reveal controls under its moving tip. Moving away or leaving the window fades
-the chrome, except during a native title-bar grab. A release or subsequent
-unpressed motion clears that grab latch; leave/cancel during a WM drag does not.
-On touch, the last contact keeps revealed controls available after finger lift;
-another contact away from controls can hide them.
+and native title-bar grabs keep controls available. The next canvas contact
+releases an interaction pin without also painting.
 
-Zen's hidden/visible state, last hover/contact, keyboard pin, and first-contact
-consumption live in Rust (`Settings.zen_show_capy`, `zen_reveal_at_edges`, and
-`InputReply`'s `chrome_hidden` and `keep_zen_button` flags), not frontend
-booleans. Hosts send `UiInput::Chrome` events plus `ChromeFacts` (native grab,
-panel drag, popup visibility) and only apply visibility, hit-testing and
-styling. Android carries both flags in its change-detected snapshot, including
-updates without a document revision. The DOM retains only its suppressed-click
-pointer ID to prevent the browser's subsequent click from activating a revealed
-control. These decisions belong to `DragWorkspace` and the Rust interaction
-state, not frontend callbacks.
+Zen’s visibility and interaction pins live in Rust (`Settings.zen_show_capy`
+and `InputReply`’s `chrome_hidden` and `keep_zen_button` flags). Hosts send
+`UiInput::Chrome` events plus `ChromeFacts` (native grab, panel drag and popup
+visibility) and apply visibility, hit-testing and styling. Android carries both
+flags in its change-detected snapshot, including updates without a document
+revision.
 
-The Capy button is a sibling of the header with a same-sized spacer. Its active
-background is subtle grey while the full UI is visible and neutral when only
-the button remains; hover still works. Its icon is 31px (`ZEN_ICON_SIZE`).
+The standalone Capy button uses the title bar’s current Small, Medium or Large
+size even when Capy was removed from the title bar. Its button dimensions and
+icon match the normal header button: shared `HeaderSize::tile` and
+`HeaderSize::capy_icon` supply 36/31, 48/41 and 60/52 logical pixels. Hosts read
+these metrics from `HeaderSizeView`; Zen never substitutes a fixed button or
+icon size.
+
 **Button icon** offers Looking up (default), Facing forward, Bathing and
 Sleeping. Rust stores `Settings.zen_icon` and supplies each command's icon. The
 generic `ChoicePresentation::ImageTiles { columns: 4 }` uses the same choice

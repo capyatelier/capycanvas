@@ -1281,9 +1281,6 @@ pub struct Divider {
 pub struct ResolvedLayout {
     pub viewport: [f32; 2],
     pub tab_bar_height: f32,
-    /// Header edge plus edges occupied by visible dock bands. The status HUD
-    /// alone does not create a bottom-edge Zen reveal target.
-    pub reveal_edges: Vec<Edge>,
     /// Unobstructed document fitting area, not the GPU widget allocation.
     pub work_area: Bounds,
     /// HUD strip inside the free area, above any bottom dock.
@@ -3211,7 +3208,6 @@ impl DockLayout {
         let mut result = ResolvedLayout {
             viewport: [width, height],
             tab_bar_height: TAB_BAR_HEIGHT,
-            reveal_edges: vec![Edge::Top],
             work_area: remaining,
             status: Bounds::default(),
             groups: Vec::new(),
@@ -3285,12 +3281,6 @@ impl DockLayout {
                 Edge::Bottom => Edge::Top,
             };
             let divider = bounds.strip(opposite, extent.min(WORKSPACE_SPACING));
-            if bounds.width > 0.0
-                && bounds.height > 0.0
-                && !result.reveal_edges.contains(&band.edge)
-            {
-                result.reveal_edges.push(band.edge);
-            }
             result.dividers.push(Divider {
                 fixed: false,
                 id: band.id,
@@ -4167,50 +4157,6 @@ impl ResolvedLayout {
                 bounds: edge_line(bounds, screen_edge),
             }
         })
-    }
-    /// Hidden chrome reveals only at the window edge; visible chrome remains
-    /// available near its controls. Hosts may also pin it for focus/popovers.
-    pub fn near_chrome(&self, point: [f32; 2], viewport: [f32; 2], hidden: bool) -> bool {
-        let [x, y] = point;
-        let [width, height] = viewport;
-        if !(Bounds {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
-        })
-        .contains(x, y)
-        {
-            return false;
-        }
-        // Reveal only edges with controls. The header always occupies the top;
-        // the HUD alone must not activate an otherwise empty bottom edge.
-        // Keep enabled reveal zones visible too, preserving hysteresis.
-        let edge = self.reveal_edges.iter().any(|edge| match edge {
-            Edge::Top => y <= WORKSPACE_PROXIMITY,
-            Edge::Bottom => height - y <= WORKSPACE_PROXIMITY,
-            Edge::Left => x <= WORKSPACE_PROXIMITY,
-            Edge::Right => width - x <= WORKSPACE_PROXIMITY,
-        });
-        if hidden || edge {
-            return edge;
-        }
-        y <= crate::HEADER_HEIGHT + WORKSPACE_PROXIMITY
-            || self
-                .collapsed
-                .iter()
-                .any(|c| c.bounds.distance_to(point) <= WORKSPACE_PROXIMITY)
-            || (x >= self.status.x - WORKSPACE_PROXIMITY
-                && x <= self.status.x + self.status.width + WORKSPACE_PROXIMITY
-                && y >= self.status.y - WORKSPACE_PROXIMITY
-                && y <= self.status.y + self.status.height + WORKSPACE_PROXIMITY)
-            || self.groups.iter().filter(|g| !g.floating).any(|g| {
-                let b = g.bounds;
-                x >= b.x - WORKSPACE_PROXIMITY
-                    && x <= b.x + b.width + WORKSPACE_PROXIMITY
-                    && y >= b.y - WORKSPACE_PROXIMITY
-                    && y <= b.y + b.height + WORKSPACE_PROXIMITY
-            })
     }
 }
 
@@ -7341,118 +7287,16 @@ mod tests {
     }
 
     #[test]
-    fn workspace_insets_and_zen_proximity_share_panel_geometry() {
+    fn workspace_insets_follow_panel_geometry() {
         let layout = DockLayout::default();
         let resolved = layout.workspace(1200.0, 900.0, 48.0, 28.0);
         assert_eq!(resolved.groups[0].bounds.x, 6.0);
         assert_eq!(resolved.groups[0].bounds.y, 48.0);
-        assert!(resolved.near_chrome([600.0, 30.0], VIEWPORT, false));
-        assert!(resolved.near_chrome([20.0, 450.0], VIEWPORT, false));
-        assert!(resolved.near_chrome([600.0, 875.0], VIEWPORT, false));
-        assert!(!resolved.near_chrome([600.0, 450.0], VIEWPORT, false));
         let mut hidden = layout;
         hidden.bands.clear();
         let resolved = hidden.workspace(1200.0, 900.0, 48.0, 28.0);
         assert!(resolved.groups.is_empty() && resolved.dividers.is_empty());
-        assert!(!resolved.near_chrome([20.0, 450.0], VIEWPORT, false));
-        assert!(!resolved.near_chrome([100.0, 450.0], VIEWPORT, false));
         assert_eq!(resolved.work_area.width, 1188.0);
-    }
-    #[test]
-    fn zen_reveals_at_window_edges_but_hides_away_from_controls() {
-        let resolved = DockLayout::default().workspace(1200.0, 900.0, 48.0, 28.0);
-        for point in [[600.0, 80.0], [80.0, 450.0], [1120.0, 450.0]] {
-            assert!(resolved.near_chrome(point, VIEWPORT, true));
-        }
-        for point in [
-            [600.0, 81.0],
-            [81.0, 450.0],
-            [1119.0, 450.0],
-            [600.0, 819.0],
-        ] {
-            assert!(!resolved.near_chrome(point, VIEWPORT, true));
-        }
-        // Near a ribbon/side panel, but not a window edge: remain visible if
-        // already shown, never reveal merely by approaching the hidden tools.
-        for point in [
-            [600.0, 120.0],
-            [600.0, 124.0],
-            [270.0, 450.0],
-            [936.0, 450.0],
-        ] {
-            assert!(!resolved.near_chrome(point, VIEWPORT, true));
-            assert!(resolved.near_chrome(point, VIEWPORT, false));
-        }
-        for point in [[600.0, 165.0], [600.0, 450.0], [-1.0, 20.0]] {
-            assert!(!resolved.near_chrome(point, VIEWPORT, true));
-            assert!(!resolved.near_chrome(point, VIEWPORT, false));
-        }
-        // An empty bottom edge does not reveal, even directly over the HUD.
-        assert!(!resolved.near_chrome([600.0, 899.0], VIEWPORT, true));
-        // Visible controls retain the same fixed 80px proximity distance.
-        let panel = resolved
-            .groups
-            .iter()
-            .find(|g| g.active == Panel::Brushes)
-            .unwrap()
-            .bounds;
-        let right = panel.x + panel.width;
-        assert!(resolved.near_chrome([right + 80.0, 450.0], VIEWPORT, false));
-        assert!(!resolved.near_chrome([right + 81.0, 450.0], VIEWPORT, false));
-    }
-    #[test]
-    fn zen_reveal_edges_follow_docking_and_panel_visibility() {
-        let center = [600.0, 450.0];
-        let edges = [
-            (Edge::Top, [600.0, 1.0]),
-            (Edge::Bottom, [600.0, 899.0]),
-            (Edge::Left, [1.0, 450.0]),
-            (Edge::Right, [1199.0, 450.0]),
-        ];
-        for destination in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-            let mut layout = DockLayout::default();
-            // Leave one standalone toolbar; top/bottom docks only accept these.
-            for panel in Panel::ALL
-                .into_iter()
-                .filter(|p| p.kind() == PanelKind::Content)
-            {
-                layout.set_panel_visible(panel, false).unwrap();
-            }
-            layout
-                .move_item(
-                    VIEWPORT,
-                    DockItem::Group { group: 2 },
-                    DockTarget::Edge {
-                        edge: destination,
-                        outer: true,
-                    },
-                )
-                .unwrap();
-            let resolved = layout.workspace(1200.0, 900.0, 48.0, 28.0);
-            assert!(!resolved.near_chrome(center, VIEWPORT, true));
-            for (edge, point) in edges {
-                let enabled = edge == Edge::Top || edge == destination;
-                assert_eq!(
-                    resolved.near_chrome(point, VIEWPORT, true),
-                    enabled,
-                    "dock={destination:?}, edge={edge:?}"
-                );
-                if enabled {
-                    assert!(
-                        resolved.near_chrome(point, VIEWPORT, false),
-                        "revealed chrome must not oscillate"
-                    );
-                }
-            }
-            layout.bands.clear();
-            let resolved = layout.workspace(1200.0, 900.0, 48.0, 28.0);
-            for (edge, point) in edges {
-                assert_eq!(
-                    resolved.near_chrome(point, VIEWPORT, true),
-                    edge == Edge::Top
-                );
-            }
-        }
     }
     fn assert_tile_fits(tile: Bounds, extent: [f32; 2]) {
         assert!(tile.x >= 0. && tile.y >= 0.);

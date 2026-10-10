@@ -41,7 +41,6 @@ settings-webgpu = WebGPU
 settings-direct3d-12 = Direct3D 12
 settings-native-gpu = Yerel GPU
 settings-show-capy-in-zen-mode = Zen modunda Capy'yi göster
-settings-reveal-panels-near-screen-edges = Ekran kenarlarına yaklaşınca panelleri göster
 settings-button-icon = Düğme simgesi
 settings-accent-color = Vurgu rengi
 settings-dark-theme-base-color = Koyu temanın temel rengi

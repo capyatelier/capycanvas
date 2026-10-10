@@ -183,7 +183,7 @@ class AndroidTitleBarTest {
         SystemClock.sleep(200)
     }
 
-    @Test fun zenCapyAndEdgeRevealPreferences() {
+    @Test fun zenCapyPreferencesKeepEveryHeaderSize() {
         fun preference(id: String, value: Boolean) = action(obj("type" to "preferences", "action" to
             obj("type" to "edit", "id" to id, "value" to value)))
         fun hidden() = snapshot().optBoolean("chrome_hidden")
@@ -193,57 +193,48 @@ class AndroidTitleBarTest {
         }
         action(obj("type" to "restore_settings", "settings" to JSONObject()))
         assertTrue(state().getJSONObject("settings").getBoolean("zen_show_capy"))
-        assertFalse(state().getJSONObject("settings").getBoolean("zen_reveal_at_edges"))
-        val theme = "dark"
-        for ((show, edges) in listOf(true to false, true to true, false to false, false to true)) {
+        for (theme in listOf("dark", "light")) for (size in listOf("small", "medium", "large")) for (show in listOf(true, false)) {
             action(obj("type" to "set_theme", "theme" to theme))
+            restore(size)
             action(obj("type" to "open_settings", "page" to "appearance"))
-            // Reveal scrolls the native preferences row into view, then use real contacts.
-            for ((id, value) in listOf("zen_show_capy" to show, "zen_reveal_at_edges" to edges)) {
-                action(obj("type" to "preferences", "action" to obj("type" to "reveal", "id" to id)))
-                waitFor("preference row") { node("preference-$id") != null }
-                if (state().getJSONObject("settings").getBoolean(id) != value) {
-                    tool = MotionEvent.TOOL_TYPE_FINGER
-                    tap("preference-$id")
-                    waitFor("switch $id") { state().getJSONObject("settings").getBoolean(id) == value }
-                }
+            val id = "zen_show_capy"
+            action(obj("type" to "preferences", "action" to obj("type" to "reveal", "id" to id)))
+            waitFor("preference row") { node("preference-$id") != null }
+            if (state().getJSONObject("settings").getBoolean(id) != show) {
+                tool = MotionEvent.TOOL_TYPE_FINGER
+                tap("preference-$id")
+                waitFor("Capy switch") { state().getJSONObject("settings").getBoolean(id) == show }
             }
-            shot("zen-settings-$theme-$show-$edges")
+            shot("zen-settings-$theme-$size-$show")
             action(obj("type" to "close_settings"))
             val baseline = layout()
             val camera = state().getJSONObject("camera").toString()
-            val devices = if (show && !edges) listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS) else listOf(MotionEvent.TOOL_TYPE_FINGER)
+            val normal = bounds("header-item-1")
+            val devices = if (show) listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS) else listOf(MotionEvent.TOOL_TYPE_FINGER)
             for (device in devices) {
                 tool = device
                 val workspace = bounds("workspace")
-                instrumentation.runOnMainSync { host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(workspace.width / density / 2, workspace.height / density / 2)))) }
                 action(obj("type" to "invoke", "command" to "zen_mode"))
-                waitFor("hidden chrome $theme/$show/$edges/$device") { hidden() && (node("zen-button") != null) == show }
-                shot("zen-$theme-$show-$edges-$device")
-                contact(Offset(workspace.center.x, workspace.top + 6 * density))
-                waitFor("edge policy $edges device $device") { hidden() == !edges }
-                assertTrue(state().getJSONObject("workspace").getBoolean("zen_mode"))
-                if (edges) {
-                    // Move away from the revealed edge before using the standalone Capy.
-                    instrumentation.runOnMainSync { host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(workspace.width / density / 2, workspace.height / density / 2)))) }
-                    waitFor("rehide after edge reveal") { hidden() && (!show || node("zen-button") != null) }
-                }
+                waitFor("hidden chrome $theme/$size/$show/$device") { hidden() && (node("zen-button") != null) == show }
                 if (show) {
-                    tap("zen-button")
-                } else {
-                    key(KeyEvent.KEYCODE_TAB)
+                    val zen = bounds("zen-button")
+                    assertEquals("Capy button width", normal.width, zen.width, .01f)
+                    assertEquals("Capy button height", normal.height, zen.height, .01f)
                 }
+                shot("zen-$theme-$size-$show-$device")
+                contact(Offset(workspace.center.x, workspace.top + 6 * density))
+                assertTrue(hidden())
+                assertTrue(state().getJSONObject("workspace").getBoolean("zen_mode"))
+                if (show) tap("zen-button") else key(KeyEvent.KEYCODE_TAB)
                 waitFor("Zen exit") { !state().getJSONObject("workspace").getBoolean("zen_mode") && !hidden() }
                 assertEquals(baseline, layout())
                 assertEquals(camera, state().getJSONObject("camera").toString())
             }
         }
         preference("zen_show_capy", false)
-        preference("zen_reveal_at_edges", true)
         scenario.close(); launch()
         assertFalse(state().getJSONObject("settings").getBoolean("zen_show_capy"))
-        assertTrue(state().getJSONObject("settings").getBoolean("zen_reveal_at_edges"))
-        android.util.Log.i("ZenAcceptance", "PASS: defaults, switches, all combinations, touch/mouse/stylus, Capy exit, keyboard exit, unchanged layout/camera, restart persistence")
+        android.util.Log.i("ZenAcceptance", "PASS: Capy visibility, all header sizes and themes, touch/mouse/stylus, edge contacts, Capy and keyboard exit, unchanged layout/camera, restart persistence")
     }
 
     @Test fun bankBodiesGripsCancellationAndHistoryEveryDeviceAndSize() {

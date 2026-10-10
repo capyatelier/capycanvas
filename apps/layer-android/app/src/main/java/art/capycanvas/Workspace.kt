@@ -325,7 +325,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
             if (snapshot.objectOrNull("preferences") == null && (hidden && snapshot.optBoolean("keep_zen_button"))) {
-                ZenButton(host, state, dock, hidden)
+                ZenButton(host, snapshot, dock)
             }
             val layout = snapshot.getJSONObject("layout")
             if (!hidden) CollapsedColumns(host, snapshot, panels, dock)
@@ -491,19 +491,21 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     lineTo(left, radius); squircleTo(Offset(left + radius, radius), Offset(-radius, 0f), Offset(0f, -radius)); close()
 }
 
-@Composable private fun ZenButton(host: CanvasHost, state: JSONObject, dock: DockInteraction, hidden: Boolean) {
+@Composable private fun ZenButton(host: CanvasHost, snapshot: JSONObject, dock: DockInteraction) {
     val colors = LocalPalette.current
+    val state = snapshot.getJSONObject("state")
+    val header = snapshot.getJSONObject("header")
+    val size = header.array("sizes").objects().first { it.getString("id") == header.getJSONObject("model").getString("size") }
     val command = state.array("commands").objects().first { it.getString("id") == "zen_mode" }
     val target = remember { obj("kind" to "zen_mode") }
     val anchor = dock.anchorKey(target)
-    DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor); dock.zenButton = null; dock.refresh() } }
-    IconTile(command.getString("icon"), command.getString("tooltip"), command.getBoolean("selected") && !hidden,
+    DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor) } }
+    IconTile(command.getString("icon"), command.getString("tooltip"),
         modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button").chromeRegion(dock)
             .glass(TileShape, colors.headerSurface)
             .onGloballyPositioned {
                 val bounds = it.boundsInRoot().translate(-dock.origin)
                 dock.anchors[anchor] = bounds
-                if (dock.zenButton != bounds) { dock.zenButton = bounds; dock.refresh() }
             }
             .pointerInput(dock) {
                 awaitEachGesture {
@@ -511,8 +513,8 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                     if (currentEvent.buttons.isSecondaryPressed) { down.consume(); dock.context(target) }
                 }
             },
-        onLongClick = { dock.holdContext(target) }, iconSize = host.catalog.getInt("zen_icon_size").dp,
-        selectedColor = colors.text.copy(alpha = .08f)) { host.invoke("zen_mode") }
+        onLongClick = { dock.holdContext(target) }, iconSize = size.number("capy_icon").dp,
+        tileSize = size.number("tile").dp) { host.invoke("zen_mode") }
 }
 
 @Composable private fun PanelGroup(host: CanvasHost, state: JSONObject, group: JSONObject,

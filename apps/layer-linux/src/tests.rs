@@ -5070,19 +5070,13 @@ fn native_zen_icons() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Edit {
-            id: PreferenceId::ZenRevealAtEdges,
-            value: PreferenceValue::Bool(true),
-        },
-    });
     let dir = artifact_dir("../../artifacts/ui/zen-icons");
     let zen = command(&w, CommandId::ZenMode);
     let image = zen.child().and_downcast::<gtk::Image>().unwrap();
     let bounds = zen.compute_bounds(&w.surface).unwrap();
     assert_eq!(
         image.pixel_size(),
-        (state(&w).workspace.layout.header.size.tile() * 440. / 512.).round() as i32
+        state(&w).workspace.layout.header.size.capy_icon()
     );
     assert_eq!(w.preferences.dialog.content_height(), 744);
     assert_eq!(
@@ -5129,7 +5123,7 @@ fn native_zen_icons() {
             );
             assert_eq!(
                 image.pixel_size(),
-                (state(&w).workspace.layout.header.size.tile() * 440. / 512.).round() as i32
+                state(&w).workspace.layout.header.size.capy_icon()
             );
             assert_eq!(zen.compute_bounds(&w.surface).unwrap(), bounds);
             for other in 0..4 {
@@ -5161,8 +5155,6 @@ fn native_zen_icons() {
         capture_reference(&w, &format!("{dir}/gtk-selector-{name}.png"), 1.0);
         w.dispatch(UiAction::CloseSettings);
         pump(250);
-        // Total Zen hides the button with the header, retaining its selected
-        // state for the edge reveal.
         click(&zen);
         w.chrome_event(layer_ui::ChromeEvent::Motion {
             position: [600.0, 450.0],
@@ -5175,9 +5167,9 @@ fn native_zen_icons() {
             position: [600.0, 1.0],
         });
         pump(250);
-        assert!(w.header.root.can_target());
+        assert!(!w.header.root.can_target());
         capture_reference(&w, &format!("{dir}/gtk-active-{name}.png"), 1.0);
-        click(&zen);
+        click(&w.zen_capy);
         pump(250);
         assert!(!zen.has_css_class("selected-tool"));
         capture_reference(&w, &format!("{dir}/gtk-inactive-{name}.png"), 1.0);
@@ -5427,27 +5419,31 @@ fn native_zen_behaviors() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
-    let zen = command(&w, CommandId::ZenMode);
     let saved = state(&w).workspace.layout;
     for theme in [Theme::Dark, Theme::Light] {
-        for show in [true, false] {
-            for edges in [false, true] {
-                w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-                for (id, value) in [
-                    (PreferenceId::ZenShowCapy, show),
-                    (PreferenceId::ZenRevealAtEdges, edges),
-                ] {
-                    w.dispatch(UiAction::Preferences {
-                        action: PreferenceAction::Edit {
-                            id,
-                            value: PreferenceValue::Bool(value),
-                        },
-                    });
-                }
-                click(&zen);
-                let reply = w.chrome_event(ChromeEvent::Motion {
-                    position: [600., 450.],
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for size in layer_ui::HeaderSize::ALL {
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::Header {
+                    action: layer_ui::HeaderAction::SetSize { size },
+                },
+            });
+            pump(250);
+            let zen = command(&w, CommandId::ZenMode);
+            let normal = zen.compute_bounds(&w.surface).unwrap();
+            let normal_icon = zen.child().and_downcast::<gtk::Image>().unwrap();
+            let normal_glyph = normal_icon.compute_bounds(&w.surface).unwrap();
+            let layout = state(&w).workspace.layout;
+            for show in [true, false] {
+                w.dispatch(UiAction::Preferences {
+                    action: PreferenceAction::Edit {
+                        id: PreferenceId::ZenShowCapy,
+                        value: PreferenceValue::Bool(show),
+                    },
                 });
+                click(&zen);
+                let reply = w.chrome_event(ChromeEvent::Motion { position: [600., 450.] });
+                pump(250);
                 assert!(reply.chrome_hidden);
                 assert_eq!(w.zen_capy.is_visible(), show);
                 assert!(!w.header.root.can_target());
@@ -5456,28 +5452,31 @@ fn native_zen_behaviors() {
                         assert!(widget.has_css_class("zen-hidden") && !widget.can_target());
                     }
                 }
-                assert_eq!(w.reveal_chrome_at(600., 6.), edges);
-                assert_eq!(w.header.root.can_target(), edges);
-                if show && !edges {
+                assert!(!w.reveal_chrome_at(600., 6.));
+                assert!(!w.header.root.can_target());
+                if show {
+                    let fallback = w.zen_capy.compute_bounds(&w.surface).unwrap();
+                    assert_eq!([fallback.width(), fallback.height()], [normal.width(), normal.height()]);
+                    let icon = w.zen_capy.child().and_downcast::<gtk::Image>().unwrap();
+                    let glyph = icon.compute_bounds(&w.surface).unwrap();
+                    assert_eq!(icon.pixel_size(), normal_icon.pixel_size());
+                    assert_eq!([glyph.width(), glyph.height()], [normal_glyph.width(), normal_glyph.height()]);
                     click(&w.zen_capy);
                 } else {
                     for pressed in [true, false] {
                         w.interact(UiInput::Key {
-                            key: "Tab".into(),
-                            pressed,
-                            repeat: false,
-                            modifiers: Modifiers::default(),
-                            editing: false,
-                            divider: None,
+                            key: "Tab".into(), pressed, repeat: false,
+                            modifiers: Modifiers::default(), editing: false, divider: None,
                         });
                     }
                 }
                 assert!(!state(&w).workspace.zen_mode);
                 assert!(!w.zen_capy.is_visible());
-                assert_eq!(state(&w).workspace.layout, saved);
+                assert_eq!(state(&w).workspace.layout, layout);
             }
         }
     }
+    w.dispatch(UiAction::Customize { action: CustomizationAction::Header { action: layer_ui::HeaderAction::SetSize { size: saved.header.size } } });
     w.dispatch(UiAction::OpenSettings {
         page: SettingsPage::Appearance,
     });
@@ -5489,7 +5488,7 @@ fn native_zen_behaviors() {
             w.preferences.dialog.upcast_ref(),
             "setting-zen-reveal-at-edges"
         )
-        .is_some()
+        .is_none()
     );
     w.dispatch(UiAction::CloseSettings);
     pump(250);
@@ -12129,28 +12128,19 @@ fn native_workspace_controls_docking_and_ink() {
         }
     }
     crate::capture(&w, "../../artifacts/ui/gtk-zen.png");
-    w.dispatch(UiAction::Preferences {
-        action: PreferenceAction::Edit {
-            id: PreferenceId::ZenRevealAtEdges,
-            value: PreferenceValue::Bool(true),
-        },
-    });
-    assert!(w.reveal_chrome_at(600.0, 24.0));
-    assert!(!w.header.root.has_css_class("zen-hidden"));
+    assert!(!w.reveal_chrome_at(600.0, 24.0));
+    assert!(w.header.root.has_css_class("zen-hidden"));
     assert!(command(&w, CommandId::ZenMode).has_css_class("selected-tool"));
     pump(200);
     crate::capture(&w, "../../artifacts/ui/gtk-zen-controls.png");
     w.chrome_event(ChromeEvent::Motion {
         position: [600.0, 450.0],
     });
-    click(&command(&w, CommandId::Settings));
-    assert!(
-        !w.header.root.has_css_class("zen-hidden"),
-        "settings must pin chrome"
-    );
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Appearance });
+    assert!(!w.header.root.has_css_class("zen-hidden"), "settings must pin chrome");
     w.dispatch(UiAction::CloseSettings);
     pump(100);
-    click(&command(&w, CommandId::ZenMode));
+    click(&w.zen_capy);
     assert!(!w.header.root.has_css_class("zen-hidden"));
     assert_eq!(state(&w).camera.translation, camera.translation);
     w.dispatch(UiAction::Invoke {

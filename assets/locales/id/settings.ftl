@@ -84,7 +84,6 @@ settings-native-gpu = GPU native
 
 settings-show-capy-in-zen-mode = Tampilkan Capy dalam mode Zen
 
-settings-reveal-panels-near-screen-edges = Tampilkan panel dekat tepi layar
 
 settings-button-icon = Ikon tombol
 

@@ -73,7 +73,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     MenuFlyout activeMenu{nullptr};std::function<void(MenuItems)> menuPopulate;hstring menuSource,hoveredMenu;
     bool scheduled=false,trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
     float leftInset=0,rightInset=0;
-    double tile=36,iconSize=20,itemGap=6,height=48,totalHeight=48,menuWidth=0,switchWidth=36;
+    double tile=36,iconSize=20,capyIconSize=0,itemGap=6,height=48,totalHeight=48,menuWidth=0,switchWidth=36;
     std::optional<uint64_t> menuGeneration;
     uint32_t focusedItem=0;
     std::set<uint32_t> handledRequests;
@@ -499,7 +499,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 }else if(kind==L"tool"&&ctlKind==L"divider"){
                     Border line;line.Height(1);line.Margin({6,6,6,6});line.Background(data->brush(L"tabbar"));pick.Content(line);
                 }else if(!iconName.empty()){
-                    auto glyphSize=kind==L"capy"?tile*440./512.:iconSize;
+                    auto glyphSize=kind==L"capy"?capyIconSize:iconSize;
                     auto iconKey=iconName+L":"+to_hstring(glyphSize);
                     if(native.iconKey!=iconKey){pick.Content(icon(iconName,data->theme(),glyphSize));native.iconKey=iconKey;}
                     if(kind==L"capy")pick.Padding({0,0,0,0});
@@ -717,7 +717,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         data->model=snapshot;data->state=object(snapshot,L"state");data->refreshPalette();view=object(snapshot,L"header");
         if(!view.Size())return;
         editing=flag(view,L"editing");hidden=flag(snapshot,L"chrome_hidden")&&!flag(snapshot,L"windows_rendering_suspended");
-        auto size=find(array(view,L"sizes"),L"id",str(object(view,L"model"),L"size"));tile=num(size,L"tile",36);iconSize=num(size,L"icon",20);itemGap=num(size,L"item_gap");height=num(size,L"height",48);
+        auto size=find(array(view,L"sizes"),L"id",str(object(view,L"model"),L"size"));tile=num(size,L"tile",36);iconSize=num(size,L"icon",20);capyIconSize=num(size,L"capy_icon");itemGap=num(size,L"item_gap");height=num(size,L"height",48);
         auto nextTheme=data->theme(),nextPalette=object(data->state,L"palette").Stringify();
         if(!built||nextTheme!=theme||nextPalette!=palette){theme=nextTheme;palette=nextPalette;build();}
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);

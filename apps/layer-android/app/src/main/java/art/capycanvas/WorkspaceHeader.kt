@@ -354,7 +354,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                             else -> activate()
                         }
                     }) {
-                    val iconSize = if (kind == "capy") size.number("tile") * 440f / 512f else size.number("icon")
+                    val iconSize = size.number(if (kind == "capy") "capy_icon" else "icon")
                     LiveIcon(host, icon, label, Modifier.size(iconSize.dp))
                 }
             }

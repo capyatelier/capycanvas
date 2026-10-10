@@ -330,7 +330,7 @@ private struct HeaderItemControl: View {
     private func tile(_ icon: String, action: @escaping () -> Void) -> some View {
         let selected = description["selected"].bool, enabled = editing || description["enabled"].bool
         return Button(action: action) {
-            PanelIcon(name: icon, size: kind == "capy" ? size["tile"].number * 440 / 512 : size["icon"].number)
+            PanelIcon(name: icon, size: size[kind == "capy" ? "capy_icon" : "icon"].number)
                 .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
         }.buttonStyle(HeaderButtonStyle(selected: selected, hovering: hovering, inBar: inBar, drawerOpen: drawerOpen, radius: radius))
             .disabled(!enabled).opacity(enabled ? 1 : 0.36)

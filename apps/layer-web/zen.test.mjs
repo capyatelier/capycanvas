@@ -60,17 +60,19 @@ export async function checkZen({call, evaluate, settle, capture = async () => {}
     await exit();
     await send({type:'restore_settings',settings:{}});
     assert.equal(await evaluate('layerApp.state().settings.zen_show_capy'),true);
-    assert.equal(await evaluate('layerApp.state().settings.zen_reveal_at_edges'),false);
-    for (const theme of ['dark','light']) for (const show of [true,false]) for (const edges of [false,true]) {
+    assert.equal(await evaluate("'zen_reveal_at_edges' in layerApp.state().settings"),false);
+    for (const theme of ['dark','light']) for (const size of ['small','medium','large']) for (const show of [true,false]) {
       await send({type:'set_theme',theme});
       await send({type:'open_settings',page:'appearance'});
-      for (const [id,value] of [['zen_show_capy',show],['zen_reveal_at_edges',edges]]) {
-        if (await evaluate(`layerApp.state().settings.${id}`) !== value)
-          await contact('touch', await point(`#setting-${id.replaceAll('_','-')}`));
-        assert.equal(await evaluate(`layerApp.state().settings.${id}`),value);
-      }
-      await capture(`settings-${theme}-${show}-${edges}`);
+      await send({type:'customize',action:{type:'header',action:{type:'set_size',size}}});
+      assert.equal(await evaluate("document.querySelector('#setting-zen-reveal-at-edges')"),null);
+      if (await evaluate('layerApp.state().settings.zen_show_capy') !== show)
+        await contact('touch', await point('#setting-zen-show-capy'));
+      assert.equal(await evaluate('layerApp.state().settings.zen_show_capy'),show);
+      await capture(`settings-${theme}-${show}-${size}`);
       await send({type:'close_settings'});
+      const dimensions = selector => evaluate(`(() => {const n=document.querySelector(${JSON.stringify(selector)}),b=n.getBoundingClientRect(),g=n.querySelector('svg').getBoundingClientRect();return [b.width,b.height,g.width,g.height]})()`);
+      const normal = await dimensions('#zen-button');
       const layout = await evaluate('layerApp.state().workspace.layout');
       const camera = await evaluate('JSON.stringify(layerApp.state().camera,(_,v)=>typeof v==="bigint"?String(v):v)');
       const [width,height] = await evaluate('[innerWidth,innerHeight]');
@@ -79,22 +81,19 @@ export async function checkZen({call, evaluate, settle, capture = async () => {}
         await invoke('zen_mode'); await motion(center);
         await evaluate('new Promise(r=>setTimeout(r,220))');
         assert.ok(await hidden()); assert.equal(await capy(),show);
-        await capture(`zen-${theme}-${show}-${edges}-${device}`);
+        await capture(`zen-${theme}-${show}-${size}-${device}`);
+        await motion(edge);
         await contact(device,edge);
-        assert.equal(await hidden(),!edges,`${theme}/${show}/${device}: edge reveal ${edges}`);
-        if (edges) {
-          assert.ok(await evaluate('layerApp.state().workspace.zen_mode'),'revealing does not exit Zen');
-          await motion(center); assert.ok(await hidden());
-        }
+        assert.ok(await hidden(),`${theme}/${show}/${device}: edges keep chrome hidden`);
+        if (show) assert.deepEqual(await dimensions('#zen-capy'),normal,`${theme}/${size}: button and glyph match`);
         if (show) {
           const target = await point('#zen-capy');
           if (device === 'mouse') await motion(target);
           await watchCapyExit();
           await contact(device,target);
           assert.equal(await evaluate('layerApp.state().workspace.zen_mode'),false,'one Capy tap exits Zen');
-          await checkCapyExit(`${theme}/${edges}/${device}`);
+          await checkCapyExit(`${theme}/${size}/${device}`);
         } else {
-          // Keyboard recovery remains available even with both switches off.
           await evaluate('document.activeElement?.blur()');
           await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
           await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
@@ -125,7 +124,7 @@ export async function checkZen({call, evaluate, settle, capture = async () => {}
     } finally {
       await call('Emulation.setEmulatedMedia',{features:[]});
     }
-    console.log('PASS: Zen defaults, settings controls, all four options in both themes, touch/mouse/pen edge contacts, one-tap Capy exit without an opacity dip, other header controls still fade, keyboard recovery, customized title bar, unchanged layout/camera');
+    console.log('PASS: Zen defaults, settings controls, all three sizes in both themes, touch/mouse/pen exits, edges stay hidden, one-tap Capy exit without an opacity dip, other header controls still fade, keyboard recovery, customized title bar, unchanged layout/camera');
   } catch (error) {
     console.error('Zen failure state:', await evaluate(`JSON.stringify({zen:layerApp.state().workspace.zen_mode,settings:layerApp.state().settings,settingsOpen:layerApp.state().settings_open,commands:layerApp.state().commands.filter(c=>c.id==='zen_mode'),status:document.querySelector('#status').textContent,hidden:document.querySelector('#workspace').classList.contains('zen-hidden'),focus:document.activeElement?.outerHTML.slice(0,160),popups:[...document.querySelectorAll('details[open],:popover-open:not(.hover-tooltip),dialog[open]')].map(n=>n.outerHTML.slice(0,160))})`));
     await capture('failure');

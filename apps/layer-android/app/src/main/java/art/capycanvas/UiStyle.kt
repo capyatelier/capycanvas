@@ -339,10 +339,10 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
 }
 
 @Composable internal fun IconTile(name: String, label: String, selected: Boolean = false,
-    enabled: Boolean = true, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, fill: Color? = null, iconSize: Dp = 16.dp, selectedColor: Color? = null, onClick: () -> Unit) {
+    enabled: Boolean = true, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, fill: Color? = null, iconSize: Dp = 16.dp, selectedColor: Color? = null, tileSize: Dp = 36.dp, onClick: () -> Unit) {
     val colors = LocalPalette.current
     HoverTip(label, modifier) {
-    Box(Modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) selectedColor ?: colors.active else Color.Transparent, TileShape)
+    Box(Modifier.size(tileSize).alpha(if (enabled) 1f else 0.4f).background(if (selected) selectedColor ?: colors.active else Color.Transparent, TileShape)
         .combinedClickable(enabled = enabled, role = Role.Button, onClickLabel = label, onLongClick = onLongClick, onClick = onClick), contentAlignment = Alignment.Center) {
         SharedIcon(name, label, modifier = Modifier.size(iconSize), fill = fill)
     }

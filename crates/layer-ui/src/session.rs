@@ -146,8 +146,6 @@ pub use effects::{
 };
 pub use filter_loading::FilterLoadState;
 
-const ZEN_CORNER_GUARD: f32 = 300.0;
-
 #[derive(Clone, Copy)]
 struct WorkspaceDrag {
     original: DockItem,
@@ -162,7 +160,7 @@ struct WorkspaceDrag {
     preview: Option<Bounds>,
     offset: [f32; 2],
     press: [f32; 2],
-    chrome_revealed: bool,
+    chrome_visible: bool,
     moved: bool,
     drawer: Option<DrawerAnchor>,
     position: [f32; 2],
@@ -1093,15 +1091,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("Invalid chrome position".into());
                 }
                 let was_hidden = self.interaction.hidden;
-                if matches!(event, ChromeEvent::Contact { .. })
-                    || matches!(event, ChromeEvent::Leave { touch: false })
-                    || position.is_some_and(|[x, y]| {
-                        !(0.0..ZEN_CORNER_GUARD).contains(&x)
-                            || !(0.0..ZEN_CORNER_GUARD).contains(&y)
-                    })
-                {
-                    self.interaction.zen_entry_guard = false;
-                }
                 self.interaction.facts = facts;
                 self.interaction.viewport = Some(viewport);
                 if matches!(event, ChromeEvent::Contact { .. }) {
@@ -1252,13 +1241,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     })?;
                     reply.handled = true;
                 }
-                match event {
-                    ChromeEvent::Motion { position } | ChromeEvent::Contact { position, .. } => {
-                        self.interaction.hover = Some(position);
-                        self.interaction.keyboard_chrome = false;
-                    }
-                    ChromeEvent::Leave { touch: false } => self.interaction.hover = None,
-                    _ => {}
+                if matches!(event, ChromeEvent::Motion { .. } | ChromeEvent::Contact { .. }) {
+                    self.interaction.keyboard_chrome = false;
                 }
                 if let ChromeEvent::Contact { canvas: true, .. } = event {
                     contact = Some((was_hidden, facts.popup_open));
@@ -1614,7 +1598,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.facts.held = false;
                 // A native DND grab can blur the window without ending the
                 // drag. Only the host's drag-end/cancel lifecycle releases it.
-                self.interaction.hover = None;
                 let divider = self.divider_drag.take();
                 let floating = self.floating_resize.take();
                 let workspace = self.workspace_drag.take();
@@ -1659,14 +1642,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn refresh_chrome(&mut self) {
         if !self.state.workspace.zen_mode {
             self.interaction.keep_chrome_until_contact = false;
-            self.interaction.zen_entry_guard = false;
-        }
-        // Hover/refresh and button release inside the activation corner must
-        // not undo the user's explicit request to hide. A fresh contact or
-        // pointer movement outside the fixed guard restores normal revealing.
-        if self.interaction.zen_entry_guard {
-            self.interaction.hidden = true;
-            return;
         }
         let pinned = self.interaction.facts.held
             || self.interaction.facts.dragging
@@ -1677,40 +1652,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.state.customization.is_open()
             || self.divider_drag.is_some()
             || self.floating_resize.is_some()
-            || self.workspace_drag.is_some_and(|drag| drag.chrome_revealed);
-        if !self.state.workspace.zen_mode || pinned {
-            self.interaction.hidden = false;
-        } else if self.workspace_drag.is_some() {
-            // Moving a float is not a reveal gesture. Once an occupied screen
-            // edge reveals docks, that visibility is latched for this drag.
-            self.interaction.hidden = true;
-        } else if self.interaction.pointer.is_none()
-            && !self.input_pending
-            && !self.engine.has_active_stroke()
-        {
-            let near =
-                self.state.settings.zen_reveal_at_edges
-                    && self
-                        .interaction
-                        .viewport
-                        .zip(self.interaction.hover)
-                        .is_some_and(|(viewport, position)| {
-                            !(self.interaction.hidden
-                                && self.state.settings.zen_show_capy
-                                && self.interaction.facts.zen_button.is_some_and(|bounds| {
-                                    bounds.contains(position[0], position[1])
-                                })
-                                || self.interaction.facts.canvas_bar.is_some_and(|bounds| {
-                                    bounds.contains(position[0], position[1])
-                                }))
-                                && self.layout(viewport).near_chrome(
-                                    position,
-                                    viewport,
-                                    self.interaction.hidden,
-                                )
-                        });
-            self.interaction.hidden = !near;
-        }
+            || self.workspace_drag.is_some_and(|drag| drag.chrome_visible);
+        self.interaction.hidden = self.state.workspace.zen_mode && !pinned;
     }
     /// Measure once in logical workspace units; all hosts use the same chrome
     /// insets, docking topology, and tile allocation rules.
@@ -1857,9 +1800,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.workspace_drag_tabs.clear();
         self.workspace_drag_tabs.extend_from_slice(tabs);
-        self.interaction.hover = Some(position);
         self.interaction.viewport = Some(viewport);
-        self.interaction.zen_entry_guard = false;
         if phase == ContactPhase::Down {
             self.workspace_tab_drag = None;
             let mut layout = self.layout(viewport);
@@ -1889,7 +1830,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     preview: None,
                     offset: [0.; 2],
                     press: position,
-                    chrome_revealed: true,
+                    chrome_visible: true,
                     moved: false,
                     drawer: None,
                     position,
@@ -1964,7 +1905,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 preview: (whole && source_floating).then_some(source_bounds),
                 offset: [position[0] - source_bounds.x, position[1] - source_bounds.y],
                 press: position,
-                chrome_revealed: !source_floating || !self.interaction.hidden,
+                chrome_visible: !source_floating || !self.interaction.hidden,
                 moved: false,
                 drawer: self
                     .state
@@ -2008,8 +1949,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or("Workspace drag is not active")?;
         drag.position = position;
         drag.viewport = viewport;
-        drag.chrome_revealed |= self.state.settings.zen_reveal_at_edges
-            && self.layout(viewport).near_chrome(position, viewport, true);
         drag.moved |= position != drag.press;
         if drag.floating.is_none()
             && !matches!(drag.item, DockItem::Column { .. })
@@ -2150,7 +2089,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let docks_hidden = self.state.workspace.zen_mode
             && self
                 .workspace_drag
-                .map_or(self.interaction.hidden, |drag| !drag.chrome_revealed);
+                .map_or(self.interaction.hidden, |drag| !drag.chrome_visible);
         if docks_hidden {
             resolved.groups.retain(|g| g.floating);
             resolved.dividers.clear();
@@ -4030,7 +3969,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     before.original == after.original
                         && before.floating == after.floating
                         && before.viewport == after.viewport
-                        && before.chrome_revealed == after.chrome_revealed
+                        && before.chrome_visible == after.chrome_visible
                 })
         {
             self.workspace_model_revision = model_revision;
@@ -5333,10 +5272,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.state.customization.drawer = None;
                     self.state.customization.column_drawers.clear();
                 }
-                self.interaction.zen_entry_guard = self.state.workspace.zen_mode
-                    && self.interaction.hover.is_some_and(|[x, y]| {
-                        (0.0..ZEN_CORNER_GUARD).contains(&x) && (0.0..ZEN_CORNER_GUARD).contains(&y)
-                    });
                 self.interaction.hidden = self.state.workspace.zen_mode;
                 self.interaction.keep_chrome_until_contact = false;
                 self.interaction.keyboard_chrome = false;
@@ -11186,69 +11121,36 @@ mod tests {
     }
 
     #[test]
-    fn zen_capy_and_edge_reveal_are_independent_and_do_not_change_layout() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for capy in [true, false] {
-                for edges in [false, true] {
+    fn zen_keeps_capy_size_and_hides_chrome_at_every_edge() {
+        for platform in Platform::ALL {
+            for (size, icon) in HeaderSize::ALL.into_iter().zip([31, 41, 52]) {
+                for capy in [true, false] {
                     let mut s = session(platform);
-                    for (id, value) in [
-                        (PreferenceId::ZenShowCapy, capy),
-                        (PreferenceId::ZenRevealAtEdges, edges),
-                    ] {
-                        preference(&mut s, PreferenceAction::Edit { id, value: PreferenceValue::Bool(value), });
-                    }
+                    s.state.workspace.layout.header.size = size;
+                    preference(&mut s, PreferenceAction::Edit {
+                        id: PreferenceId::ZenShowCapy, value: PreferenceValue::Bool(capy),
+                    });
                     let layout = s.state.workspace.layout.clone();
                     let camera = s.state.camera.clone();
+                    let normal = serde_json::to_value(s.header_view()).unwrap();
                     invoke(&mut s, CommandId::ZenMode);
-                    let reply = chrome(
-                        &mut s,
-                        ChromeEvent::Motion {
-                            position: [600., 450.],
-                        },
-                        ChromeFacts::default(),
-                    );
-                    assert!(reply.chrome_hidden);
-                    assert_eq!(reply.keep_zen_button, capy);
-                    if capy {
-                        let facts = ChromeFacts {
-                            zen_button: Some(Bounds {
-                                x: 6.,
-                                y: 6.,
-                                width: 36.,
-                                height: 36.,
-                            }),
-                            ..ChromeFacts::default()
-                        };
-                        for event in [
-                            ChromeEvent::Motion {
-                                position: [24., 24.],
-                            },
-                            ChromeEvent::Contact {
-                                position: [24., 24.],
-                                canvas: false,
-                            },
-                        ] {
-                            let reply = chrome(&mut s, event, facts);
-                            assert!(
-                                reply.chrome_hidden && reply.keep_zen_button && !reply.handled,
-                                "The visible Capy must receive the click even when edge reveal is enabled"
-                            );
+                    let zen = serde_json::to_value(s.header_view()).unwrap();
+                    assert_eq!(normal["sizes"], zen["sizes"]);
+                    assert_eq!(normal["model"]["size"], zen["model"]["size"]);
+                    let metrics = zen["sizes"].as_array().unwrap().iter()
+                        .find(|v| v["id"] == size.id()).unwrap();
+                    assert_eq!(metrics["tile"], size.tile());
+                    assert_eq!(metrics["capy_icon"], icon);
+                    for position in [[600., 450.], [600., 6.], [600., 898.],
+                        [6., 450.], [1198., 450.], [24., 24.]] {
+                        for event in [ChromeEvent::Motion { position },
+                            ChromeEvent::Contact { position, canvas: true }] {
+                            let reply = chrome(&mut s, event, ChromeFacts::default());
+                            assert!(reply.chrome_hidden);
+                            assert_eq!(reply.keep_zen_button, capy);
+                            assert!(!reply.handled);
                         }
                     }
-                    let reply = chrome(
-                        &mut s,
-                        ChromeEvent::Contact {
-                            position: [600., 6.],
-                            canvas: true,
-                        },
-                        ChromeFacts::default(),
-                    );
-                    assert_eq!(reply.chrome_hidden, !edges);
-                    assert_eq!(
-                        reply.handled, edges,
-                        "Only a reveal contact is consumed; otherwise canvas input continues"
-                    );
-                    assert_eq!(reply.keep_zen_button, capy && !edges);
                     assert_eq!(s.state.workspace.layout, layout);
                     assert_eq!(s.state.camera, camera);
                     assert!(!key(&mut s, "Tab", true, false, false).chrome_hidden);
@@ -11261,7 +11163,6 @@ mod tests {
     #[test]
     fn zen_visibility_pinning_and_first_contact_are_core_state() {
         let mut s = session(Platform::Gtk);
-        s.state.settings.zen_reveal_at_edges = true;
         invoke(&mut s, CommandId::ZenMode);
         let motion = |p| ChromeEvent::Motion { position: p };
         let touch = |p| ChromeEvent::Contact {
@@ -11275,9 +11176,9 @@ mod tests {
             "HUD is not a bottom panel"
         );
         let first = chrome(&mut s, touch([20.0, 450.0]), facts);
-        assert!(first.handled && !first.chrome_hidden);
+        assert!(!first.handled && first.chrome_hidden);
         assert!(!chrome(&mut s, touch([20.0, 450.0]), facts).handled);
-        assert!(!chrome(&mut s, ChromeEvent::Leave { touch: true }, facts).chrome_hidden);
+        assert!(chrome(&mut s, ChromeEvent::Leave { touch: true }, facts).chrome_hidden);
         assert!(chrome(&mut s, motion([600.0, 450.0]), facts).chrome_hidden);
         for facts in [
             ChromeFacts {
@@ -11309,69 +11210,21 @@ mod tests {
         assert!(!chrome(&mut s, motion([600.0, 450.0]), facts).chrome_hidden);
     }
     #[test]
-    fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
+    fn enabling_zen_hides_immediately_after_capy_contact() {
         let mut s = session(Platform::Gtk);
-        s.state.settings.zen_reveal_at_edges = true;
         let facts = ChromeFacts::default();
-        chrome(
-            &mut s,
-            ChromeEvent::Motion {
-                position: [24.0, 24.0],
-            },
-            facts,
-        );
+        chrome(&mut s, ChromeEvent::Motion { position: [24., 24.] }, facts);
         invoke(&mut s, CommandId::ZenMode);
         assert!(s.interaction.hidden);
-        for event in [
-            ChromeEvent::Refresh,
-            ChromeEvent::Motion {
-                position: [24.0, 24.0],
-            },
-            ChromeEvent::Motion {
-                position: [299.0, 79.0],
-            },
-            ChromeEvent::Motion {
-                position: [79.0, 299.0],
-            },
-        ] {
+        for event in [ChromeEvent::Refresh,
+            ChromeEvent::Motion { position: [24., 24.] },
+            ChromeEvent::Contact { position: [24., 24.], canvas: false }] {
             assert!(chrome(&mut s, event, facts).chrome_hidden);
         }
-        assert!(
-            chrome(
-                &mut s,
-                ChromeEvent::Motion {
-                    position: [500.0, 400.0]
-                },
-                facts
-            )
-            .chrome_hidden
-        );
-        assert!(
-            !chrome(
-                &mut s,
-                ChromeEvent::Motion {
-                    position: [24.0, 24.0]
-                },
-                facts
-            )
-            .chrome_hidden
-        );
-        invoke(&mut s, CommandId::ZenMode);
-        invoke(&mut s, CommandId::ZenMode);
-        assert!(
-            !chrome(
-                &mut s,
-                ChromeEvent::Contact {
-                    position: [24.0, 24.0],
-                    canvas: true
-                },
-                facts
-            )
-            .chrome_hidden
-        );
         invoke(&mut s, CommandId::ZenMode);
         assert!(!chrome(&mut s, ChromeEvent::Refresh, facts).chrome_hidden);
     }
+
     #[test]
     fn zen_stays_visible_through_drag_focus_loss_until_drag_end() {
         let mut s = session(Platform::Gtk);
@@ -12782,7 +12635,6 @@ mod tests {
     #[test]
     fn collapsed_drawer_pins_revealed_total_zen_but_explicit_zen_closes_it() {
         let mut s = session(Platform::Gtk);
-        s.state.settings.zen_reveal_at_edges = true;
         s.set_platform(Platform::Gtk);
         for column in [4, 8] {
             s.state.workspace.layout.column_stack_mut(column).drawers = true;
@@ -12801,7 +12653,7 @@ mod tests {
             })
             .unwrap()
         };
-        assert!(!hover(&mut s, [10., 400.]).chrome_hidden);
+        assert!(hover(&mut s, [10., 400.]).chrome_hidden);
         customize(&mut s, CustomizationAction::ToggleColumnDrawer {
             group: 5,
             panel: Panel::Brushes,
@@ -14432,9 +14284,6 @@ mod tests {
             drag(app, item, phase, position, viewport);
             chrome(app, ChromeEvent::Refresh, ChromeFacts::default())
         };
-        // Bottom has no dock/reveal zone; top snapping reaches below the
-        // header, beyond the 80px reveal zone. Neither may dock invisibly.
-        // The other points lie on the hidden sidebars, outside reveal zones.
         for point in [
             [600.0, 899.0],
             [600.0, crate::HEADER_HEIGHT + 50.0],
@@ -14505,10 +14354,9 @@ mod tests {
     }
 
     #[test]
-    fn zen_floating_drag_reveals_at_edges_and_release_uses_normal_proximity() {
+    fn zen_floating_drag_stays_hidden_at_edges() {
         let viewport = [1200.0, 900.0];
         let mut app = session(Platform::Gtk);
-        app.state.settings.zen_reveal_at_edges = true;
         app.dispatch(UiAction::MovePanel {
             panel: Panel::Sizes,
             viewport,
@@ -14533,8 +14381,6 @@ mod tests {
         assert!(drag(&mut app, ContactPhase::Move, center).chrome_hidden);
         assert!(drag(&mut app, ContactPhase::Up, center).chrome_hidden);
         assert!(!app.interaction.keep_chrome_until_contact);
-        // A hidden dock cannot intercept a floating panel near its old
-        // boundary, before the artist has reached a window reveal edge.
         let hidden_panel = find_group(&app, viewport, |g| g.active == Panel::Brushes);
         assert!(
             app.drop_hint(
@@ -14551,35 +14397,15 @@ mod tests {
             )
             .is_none()
         );
-        assert!(drag(&mut app, ContactPhase::Down, center).chrome_hidden);
-        assert!(!drag(&mut app, ContactPhase::Move, [40.0, 450.0]).chrome_hidden);
-        assert!(!drag(&mut app, ContactPhase::Move, center).chrome_hidden);
-        assert!(drag(&mut app, ContactPhase::Up, center).chrome_hidden);
-        assert!(!app.interaction.keep_chrome_until_contact);
-        // Docked drops also return to normal cursor proximity.
-        assert!(drag(&mut app, ContactPhase::Down, center).chrome_hidden);
-        assert!(!drag(&mut app, ContactPhase::Move, [40.0, 450.0]).chrome_hidden);
-        let target = [
-            hidden_panel.bounds.x + hidden_panel.bounds.width * 0.5,
-            450.0,
-        ];
-        assert!(!drag(&mut app, ContactPhase::Up, target).chrome_hidden);
-        assert!(app.state.workspace.layout.floating.is_empty());
-        assert!(!app.interaction.keep_chrome_until_contact);
-        assert!(
-            chrome(&mut app, ChromeEvent::Motion { position: center }, facts).chrome_hidden
-        );
-        assert!(
-            chrome(
-                &mut app,
-                ChromeEvent::Contact {
-                    position: center,
-                    canvas: true
-                },
-                facts
-            )
-            .chrome_hidden
-        );
+        for edge in [[40., 450.], [1160., 450.], [600., 6.], [600., 898.]] {
+            assert!(drag(&mut app, ContactPhase::Down, center).chrome_hidden);
+            assert!(drag(&mut app, ContactPhase::Move, edge).chrome_hidden);
+            assert!(app.drop_hint(viewport, edge, &[], DockItem::Panel { panel: Panel::Sizes }, None).is_none());
+            assert!(drag(&mut app, ContactPhase::Move, center).chrome_hidden);
+            assert!(drag(&mut app, ContactPhase::Up, center).chrome_hidden);
+            assert!(!app.interaction.keep_chrome_until_contact);
+            assert!(find_group(&app, viewport, |g| g.active == Panel::Sizes).floating);
+        }
     }
 
     #[test]

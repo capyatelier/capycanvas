@@ -4,7 +4,7 @@ extension XCTestCase {
     @MainActor func checkZenPreferences(in app: XCUIApplication) {
         let tab = app.buttons["panel-tab-sizes"]
         let capy = app.descendants(matching: .any)["zen-button"].firstMatch
-        var current = (show: true, edges: false)
+        var current = true
         func isOn(_ element: XCUIElement) -> Bool {
             (element.value as? NSNumber)?.boolValue ?? (element.value as? String == "1")
         }
@@ -24,12 +24,11 @@ extension XCTestCase {
             waitForExpectations(timeout: 10)
             XCTAssertEqual(tab.exists, visible, message)
         }
-        func configure(show: Bool, edges: Bool, theme: String) {
+        func configure(show: Bool, theme: String) {
             workspaceActivate(app.buttons["settings-button"])
             XCTAssertTrue(app.buttons["settings-done"].waitForExistence(timeout: 10))
             for (id, title, value, saved) in [
-                ("zen_show_capy", "Show Capy in Zen mode", show, current.show),
-                ("zen_reveal_at_edges", "Reveal panels near screen edges", edges, current.edges),
+                ("zen_show_capy", "Show Capy in Zen mode", show, current),
             ] {
                 let search = app.textFields["settings-search"]
                 workspaceActivate(search)
@@ -45,23 +44,25 @@ extension XCTestCase {
                     waitForExpectations(timeout: 5)
                 }
             }
-            current = (show, edges)
-            attachEditor(in: app, name: "zen-settings-\(theme)-\(show)-\(edges)")
+            current = show
+            attachEditor(in: app, name: "zen-settings-\(theme)-\(show)")
             workspaceActivate(app.buttons["settings-done"])
             XCTAssertTrue(app.buttons["settings-done"].waitForNonExistence(timeout: 5))
         }
         for theme in ["light", "dark"] {
-            app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"hand"}]"#
-            app.launch()
-            XCTAssertTrue(tab.waitForExistence(timeout: 30))
-            for show in [true, false] {
-                for edges in [false, true] {
-                    configure(show: show, edges: edges, theme: theme)
-                    let baseline = tab.frame
+            for headerSize in ["small", "medium", "large"] {
+                app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"restore_settings","settings":{}},{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"hand"},{"type":"customize","action":{"type":"header","action":{"type":"set_size","size":"\#(headerSize)"}}}]"#
+                app.launch()
+                current = true
+                XCTAssertTrue(tab.waitForExistence(timeout: 30))
+                for show in [true, false] {
+                    configure(show: show, theme: theme)
+                    let baseline = tab.frame, normalCapySize = capy.frame.size
                     workspaceActivate(capy)
                     chrome(visible: false, "Zen hides the workspace chrome")
                     XCTAssertEqual(capy.waitForExistence(timeout: 5), show, "Show Capy decides the standalone button")
-                    attachEditor(in: app, name: "zen-\(theme)-\(show)-\(edges)")
+                    if show { XCTAssertEqual(capy.frame.size, normalCapySize, "Zen keeps the \(headerSize) Capy button size") }
+                    attachEditor(in: app, name: "zen-\(theme)-\(headerSize)-\(show)")
                     #if os(macOS)
                     if show {
                         let controls = app.windows.firstMatch.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "_XCUI:"))
@@ -72,27 +73,15 @@ extension XCTestCase {
                     }
                     #endif
                     let size = workspaceViewport(in: app).frame.size
-                    let edge = point(size.width / 2, 60), center = point(size.width / 2, size.height / 2)
+                    let edge = point(size.width / 2, 6)
                     #if os(macOS)
-                    edge.hover()
-                    if !edges { edge.click() }
+                    edge.hover(); edge.click()
                     #else
                     edge.tap()
                     #endif
-                    chrome(visible: edges, "Reveal at edges decides whether the top edge shows panels")
-                    if edges {
-                        #if os(macOS)
-                        center.hover()
-                        #else
-                        center.tap()
-                        #endif
-                        chrome(visible: false, "Leaving the edge hides the revealed panels")
-                    }
-                    if show {
-                        workspaceActivate(capy)
-                    } else {
-                        app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
-                    }
+                    chrome(visible: false, "Edge contact keeps panels hidden")
+                    if show { workspaceActivate(capy) }
+                    else { app.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: []) }
                     chrome(visible: true, "The Capy or Tab exits Zen")
                     XCTAssertEqual(tab.frame, baseline, "Zen leaves the workspace layout unchanged")
                 }

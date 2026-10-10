@@ -756,14 +756,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto header=object(snapshot,L"header");auto size=find(array(header,L"sizes"),L"id",str(object(header,L"model"),L"size"));double tile=num(size,L"tile",36);
         auto command=find(array(data->state,L"commands"),L"id",L"zen_mode");
         zenCapy.Width(tile);zenCapy.Height(tile);zenCapy.Background(headerSurface(data));zenCapy.CornerRadius({tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit,tile*.5*CornerFit});
-        zenCapy.Content(icon(str(command,L"icon",L"capy"),data->theme(),tile*440./512.));
+        zenCapy.Content(icon(str(command,L"icon",L"capy"),data->theme(),num(size,L"capy_icon")));
         AutomationProperties::SetName(zenCapy,str(command,L"label"));tooltip(zenCapy,str(command,L"tooltip"));
         Canvas::SetLeft(zenCapy,titlebar[0]+6);Canvas::SetTop(zenCapy,6);
         zenCapy.Visibility(keep?Visibility::Visible:Visibility::Collapsed);
-        IJsonValue bounds=keep?IJsonValue(O({{L"x",N(titlebar[0]+6)},{L"y",N(6)},{L"width",N(tile)},{L"height",N(tile)}})):IJsonValue(JsonValue::CreateNullValue());
-        if(!data->chrome.HasKey(L"zen_button")||data->chrome.GetNamedValue(L"zen_button").Stringify()!=bounds.Stringify()){
-            data->chrome.Insert(L"zen_button",bounds);gestures->ChromeChanged();
-        }
         if(!zenCapySource){zenCapySource=true;gestures->Source(zenCapy,{},O({{L"kind",S(L"zen_mode")}}),false);}
     }
     bool zenCapySource=false;

@@ -648,7 +648,7 @@ impl Header {
                 };
                 let image = w.customization.icon(w, icon, if entry.item == HeaderItem::Capy {
                     b.add_css_class("capy-button");
-                    (size.tile() * 440. / 512.).round() as i32
+                    size.capy_icon()
                 } else {
                     size.icon()
                 });

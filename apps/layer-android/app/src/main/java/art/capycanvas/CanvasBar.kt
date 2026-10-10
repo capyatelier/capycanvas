@@ -100,7 +100,6 @@ private class BarFrame {
         if (!visible) {
             revealed = false
             host.glassBox(glass, null)
-            dock.canvasBar = null; dock.refresh()
             return@LaunchedEffect
         }
         val bounds = (placed ?: placement).getJSONObject("bounds")
@@ -111,7 +110,7 @@ private class BarFrame {
         frame.bounds = placed?.getJSONObject("bounds") ?: bounds
         revealed = true
     }
-    DisposableEffect(dock) { onDispose { dock.canvasBar = null; dock.canvasBarSlot = null; dock.refresh() } }
+    DisposableEffect(dock) { onDispose { dock.canvasBarSlot = null } }
     val shown = placement.optInt("items").coerceIn(0, items.size)
     fun edit(action: JSONObject) = host.dispatch(obj("type" to "canvas_bar_edit", "context" to context, "action" to action))
     fun choiceMenu(id: String, load: (JSONObject?) -> Unit) = host.query(obj("type" to "canvas_bar_choice_menu", "context" to context, "id" to id)) {
@@ -122,7 +121,7 @@ private class BarFrame {
         Box(Modifier.padding(BarShadowMargin).fillMaxSize().testTag("canvas-action-bar")
             .then(if (revealed) Modifier.chromeRegion(dock) else Modifier).onGloballyPositioned {
                 val bounds = it.boundsInRoot().translate(-dock.origin)
-                if (dock.canvasBar != bounds) { dock.canvasBar = bounds; dock.canvasBarSlot = bounds; dock.refresh() }
+                if (dock.canvasBarSlot != bounds) dock.canvasBarSlot = bounds
             }
             .panelSurface(BarElevation, shape).glass(shape, key = glass)
             .semantics { contentDescription = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("canvas_actions") }) {

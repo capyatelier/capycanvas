@@ -417,7 +417,6 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   await call("Emulation.setTouchEmulationEnabled", {enabled:false}); await shot("touch-floating-panel");
   await reset(); await float("sizes", [450,320]); await float("layers", [720,320]);
   const settings = await evaluate("layerApp.state().settings");
-  await send({type:"restore_settings",settings:{...settings,zen_reveal_at_edges:true}});
   await send({type:"invoke",command:"zen_mode"});
   await mouse("mouseMoved", {x:620,y:600}); await wait();
   const zenHidden = () => evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')");
@@ -442,14 +441,12 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   });
   assert.equal((await group("sizes")).id, (await group("layers")).id);
   assert.equal((await group("sizes")).floating, true);
-  // An occupied edge reveals docks through the drag, then normal proximity
-  // decides visibility on release. No persistent post-drop pin remains.
   const start = await point(grip("sizes"));
   await mouse("mouseMoved", start); await mouse("mousePressed", start, {button:"left",clickCount:1});
   await mouse("mouseMoved", {x:20,y:500}, {button:"left",buttons:1}); await wait();
-  assert.equal(await zenHidden(), false);
+  assert.equal(await zenHidden(), true);
   await mouse("mouseMoved", {x:620,y:680}, {button:"left",buttons:1}); await wait();
-  assert.equal(await zenHidden(), false);
+  assert.equal(await zenHidden(), true);
   await mouse("mouseReleased", {x:620,y:680}, {button:"left",clickCount:1}); await wait();
   assert.equal(await zenHidden(), true);
   await send({type:"restore_settings",settings});
@@ -721,13 +718,11 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   await send({ type: "restore_workspace", workspace: initial });
   await wait();
   const settings = await evaluate("layerApp.state().settings");
-  await send({ type: "restore_settings", settings: { ...settings, zen_reveal_at_edges: true } });
-  await send({ type: "invoke", command: "zen_mode" });
   await click(tab("sizes"));
+  await send({ type: "invoke", command: "zen_mode" });
   assert.equal(await expanded(), "sizes");
-  // First canvas tap closes only the drawer; second tap hides chrome.
   await clickAt({ x: 850, y: 450 }); assert.equal(await expanded(), null);
-  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
+  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
   await clickAt({ x: 850, y: 450 });
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
   await send({ type: "restore_settings", settings });

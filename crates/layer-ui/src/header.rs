@@ -37,6 +37,9 @@ impl HeaderSize {
             Self::Large => 36,
         }
     }
+    pub fn capy_icon(self) -> i32 {
+        (self.tile() * 440. / 512.).round() as i32
+    }
     pub fn height(self) -> f32 {
         self.tile() + 2. * self.item_gap()
     }
@@ -623,6 +626,7 @@ pub struct HeaderSizeView {
     pub label: std::sync::Arc<str>,
     pub tile: f32,
     pub icon: i32,
+    pub capy_icon: i32,
     pub height: f32,
     pub gap: f32,
     pub item_gap: f32,
@@ -688,6 +692,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                     label: id.localized_label(self.localization()),
                     tile: id.tile(),
                     icon: id.icon(),
+                    capy_icon: id.capy_icon(),
                     height: id.height(),
                     gap: id.gap(),
                     item_gap: id.item_gap(),

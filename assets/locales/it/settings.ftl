@@ -40,7 +40,6 @@ settings-webgpu = WebGPU
 settings-direct3d-12 = Direct3D 12
 settings-native-gpu = GPU nativa
 settings-show-capy-in-zen-mode = Mostra Capy in modalità Zen
-settings-reveal-panels-near-screen-edges = Mostra pannelli vicino ai bordi dello schermo
 settings-button-icon = Icona del pulsante
 settings-accent-color = Colore di accento
 settings-dark-theme-base-color = Colore di base del tema scuro

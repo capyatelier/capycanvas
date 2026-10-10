@@ -463,7 +463,6 @@ export async function checkParity({ call, evaluate, settle }) {
   // No desktop input injection required: exercise host DOM listeners directly
   // for Zen/scroll, and the same shared actions used by native docking controls.
   await action({ type: "system_theme_changed", theme: "dark" });
-  await action({ type: "restore_settings", settings: { ...settings, zen_reveal_at_edges: true } });
   await click("#zen-button");
   // Read the synchronous listener result in the same task, before compositor
   // hover events from the real desktop can replace the test pointer position.
@@ -474,14 +473,14 @@ export async function checkParity({ call, evaluate, settle }) {
   })()`);
   assert.equal(await point(600, 450), true);
   assert.equal(await point(600, 95), true);
-  assert.equal(await point(600, 79), false);
-  assert.equal(await point(600, 115), false);
-  assert.equal(await point(600, 150), false); // 80px keep-visible margin below ribbon.
+  assert.equal(await point(600, 79), true);
+  assert.equal(await point(600, 115), true);
+  assert.equal(await point(600, 150), true);
   assert.equal(await point(600, 170), true);
   assert.equal(await point(600, 899), true); // HUD alone is not a bottom panel.
-  assert.equal(await point(1, 450), false);
+  assert.equal(await point(1, 450), true);
   assert.equal(await point(600, 450), true);
-  assert.equal(await point(1199, 450), false);
+  assert.equal(await point(1199, 450), true);
   for (const panel of ["brushes", "sizes"])
     await action({
       type: "move_panel",
@@ -499,15 +498,15 @@ export async function checkParity({ call, evaluate, settle }) {
   });
   assert.equal(await point(600, 450), true);
   assert.equal(await point(1199, 450), true); // No remaining right dock.
-  assert.equal(await point(600, 899), false); // Bottom dock now exists.
+  assert.equal(await point(600, 899), true);
   await action({type:"customize",action:{type:"set_panel_visible",panel:"toolbar",visible:false}});
   assert.equal(await point(600, 450), true);
   assert.equal(await point(600, 899), true);
-  assert.equal(await point(600, 1), false); // Header always remains reachable.
+  assert.equal(await point(600, 1), true);
   await restoreFixture(true);
   assert.equal(await point(600, 450), true);
   await capture("zen");
-  await click("#zen-button");
+  await click("#zen-capy");
   assert.equal(await evaluate("layerApp.state().workspace.zen_mode"), false);
   const camera = await evaluate(
     "(({zoom,translation})=>({zoom,translation}))(layerApp.state().camera)",
@@ -645,6 +644,6 @@ export async function checkParity({ call, evaluate, settle }) {
     "",
   );
   console.log(
-    "PASS: GTK/web geometry ≤1px incl. Tool Set groups/brush rows, dark/light glass/shadow pixels ≤3/255, settings captures, nonselectable chrome/no focus halos, copyable title, menu/drawer dismissal without ink, live controls, immediate settings persistence, GPU pen cursor, occupied-edge Zen 80/80, wheel modifiers, ribbon wrapping/tabbed grips, fresh Wasm workspace restore",
+    "PASS: GTK/web geometry ≤1px incl. Tool Set groups/brush rows, dark/light glass/shadow pixels ≤3/255, settings captures, nonselectable chrome/no focus halos, copyable title, menu/drawer dismissal without ink, live controls, immediate settings persistence, GPU pen cursor, Zen edges stay hidden, wheel modifiers, ribbon wrapping/tabbed grips, fresh Wasm workspace restore",
   );
 }

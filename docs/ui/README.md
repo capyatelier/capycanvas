@@ -213,9 +213,8 @@ is one layout change, and cancelling it restores the original arrangement.
 ## Zen mode and the camera
 
 Zen mode hides the header and docked chrome and keeps floating panels.
-Preferences choose whether Capy stays visible and whether panels reveal near
-occupied screen edges. Shared logic manages visibility, reveal behavior and the
-state that keeps controls available during a menu or interaction; see
+Preferences choose Capy’s icon and whether it stays visible. Shared logic manages
+visibility and keeps controls available during a menu or interaction; see
 [shared UI](shared-ui.md#window-chrome-and-zen-mode).
 
 Hiding controls does not resize the document viewport or move the camera. The

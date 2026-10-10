@@ -2472,13 +2472,7 @@ class AndroidHostTest {
         capture("workspace-hidden-panel-configure")
     }
 
-    private fun withZenEdgeReveal(test: () -> Unit) {
-        val saved = state().getJSONObject("settings").getBoolean("zen_reveal_at_edges")
-        fun reveal(value: Boolean) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "zen_reveal_at_edges", "value" to value)))
-        reveal(true)
-        try { test() } finally { reveal(saved) }
-    }
-    @Test fun zenFloatingDragOnlyMergesFloatsUntilOccupiedEdgeRevealsDocks() = withZenEdgeReveal {
+    @Test fun zenFloatingDragOnlyMergesFloatsAtEveryEdge() {
         customize(obj("type" to "set_control_visible", "panel" to "sizes", "control" to "size_presets", "visible" to false))
         floatPanel("sizes", 480f, 300f)
         floatPanel("layers", 750f, 360f)
@@ -2512,11 +2506,12 @@ class AndroidHostTest {
         val start = grip("layers")
         val left = androidx.compose.ui.geometry.Offset(10 * density, root.height / 2)
         workspace.performTouchInput { down(start); moveTo(left, 16) }
-        compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
+        compose.waitForIdle()
+        assertTrue(host.snapshot!!.getBoolean("chrome_hidden"))
         workspace.performTouchInput { moveTo(root.center - root.topLeft, 16) }
         compose.waitForIdle()
-        assertFalse("Edge reveal lasts through the drag", host.snapshot!!.getBoolean("chrome_hidden"))
-        capture("workspace-zen-revealed-drag")
+        assertTrue("Edge contact keeps docks hidden", host.snapshot!!.getBoolean("chrome_hidden"))
+        capture("workspace-zen-edge-drag")
         workspace.performTouchInput { up() }
         compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
         assertTrue("Dropping in the center stays floating", group("layers").getBoolean("floating"))
@@ -2602,18 +2597,20 @@ class AndroidHostTest {
         assertNull(host.actionError)
     }
 
-    @Test fun zenMouseCanMoveFromCanvasOntoRevealedPanel() = withZenEdgeReveal {
+    @Test fun zenMouseCanMoveFromCanvasOntoFloatingPanel() {
+        floatPanel("brushes", 420f, 300f)
         action(obj("type" to "invoke", "command" to "zen_mode"))
         val workspace = compose.onNodeWithTag("workspace")
         workspace.performMouseInput { moveTo(center) }
         compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
         workspace.performMouseInput { moveTo(androidx.compose.ui.geometry.Offset(1f, center.y)) }
-        compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
+        compose.waitForIdle()
+        assertTrue(host.snapshot!!.getBoolean("chrome_hidden"))
         val root = workspace.fetchSemanticsNode().boundsInRoot
         val tab = compose.onNodeWithTag("tab-brushes").fetchSemanticsNode().boundsInRoot.center - root.topLeft
         workspace.performMouseInput { moveTo(tab) }
         compose.waitForIdle()
-        assertFalse("Hovering a revealed tab keeps its panel visible", host.snapshot!!.getBoolean("chrome_hidden"))
+        assertTrue("Hovering a floating tab keeps docks hidden", host.snapshot!!.getBoolean("chrome_hidden"))
         capture("workspace-zen-mouse-on-panel")
         action(obj("type" to "invoke", "command" to "zen_mode"))
     }
@@ -3947,13 +3944,14 @@ class AndroidHostTest {
         assertNull(host.failure)
     }
 
-    @Test fun zenKeepsChromeThroughDrawerDismissalAndPanelDrag() = withZenEdgeReveal {
+    @Test fun zenKeepsFloatingPanelsThroughDrawerDismissalAndPanelDrag() {
+        floatPanel("toolbar", 420f, 120f)
+        floatPanel("brushes", 420f, 300f)
+        floatPanel("layers", 740f, 300f)
         compose.onNodeWithTag(capyTag()).performClick()
         waitState { it.getJSONObject("workspace").getBoolean("zen_mode") }
-        val edge = androidx.compose.ui.geometry.Offset(0.01f, 0.5f)
         val center = androidx.compose.ui.geometry.Offset(0.7f, 0.6f)
-        canvasEvent(MotionEvent.ACTION_HOVER_MOVE, listOf(edge), MotionEvent.TOOL_TYPE_MOUSE)
-        compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
+        compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
         val tile = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects().first().getInt("id")
         compose.onNodeWithTag("tile-toolbar-$tile").performClick()
         waitState { it.getJSONObject("customization").objectOrNull("drawer") != null }
@@ -3965,8 +3963,7 @@ class AndroidHostTest {
         canvasEvent(MotionEvent.ACTION_DOWN, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
         canvasEvent(MotionEvent.ACTION_UP, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
         compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
-        canvasEvent(MotionEvent.ACTION_HOVER_MOVE, listOf(edge), MotionEvent.TOOL_TYPE_MOUSE)
-        compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
+        compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
         val source = compose.onNodeWithTag("tab-brushes")
         val target = compose.onNodeWithTag("tab-layers").fetchSemanticsNode().boundsInRoot.center
         val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
@@ -3974,7 +3971,7 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any {
             it.array("panels").values().containsAll(listOf("brushes", "layers"))
         } }
-        assertFalse("Dropping a panel keeps its workspace visible", host.snapshot!!.getBoolean("chrome_hidden"))
+        assertTrue("Dropping a floating panel keeps docks hidden", host.snapshot!!.getBoolean("chrome_hidden"))
         capture("24-zen-after-drag")
         compose.runOnIdle { host.invoke("zen_mode") }
     }

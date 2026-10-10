@@ -58,7 +58,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
   assert.equal(metrics.step, 16);
   assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 24);
-  assert.ok(await evaluate("(() => { const button = document.querySelector('#zen-button'); return Math.abs(button.querySelector('svg').getBoundingClientRect().width - button.getBoundingClientRect().height * 440 / 512) < .02; })()"), 'Capy button uses the enlarged favicon proportions');
+  assert.ok(await evaluate("(() => { const button = document.querySelector('#zen-button'); return Math.abs(button.querySelector('svg').getBoundingClientRect().width - Math.round(button.getBoundingClientRect().height * 440 / 512)) < .02; })()"), 'Capy button uses the enlarged favicon proportions');
   assert.equal(await evaluate("document.querySelector('#zen-button svg').dataset.asset"), 'zen-looking-up');
   assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='zen_mode').shortcut"), 'Tab');
   await evaluate("document.activeElement?.blur()");
@@ -72,20 +72,15 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     const track=document.querySelector('#size-number .number-track'), [minus,bar,plus]=[...track.children].map(n=>n.getBoundingClientRect());
     return minus.height===24 && plus.height===24 && bar.left===minus.right+6 && bar.right+6===plus.left;
   })()`), 'compact panel track has symmetric 6px gaps before the step buttons');
-  // The corner-guard journey opts into edge reveal explicitly.
-  await evaluate("layerApp.dispatch({type:'restore_settings',settings:{...layerApp.state().settings,zen_show_capy:false,zen_reveal_at_edges:true}})");
-  // Real host events: activation hides immediately, even while the pointer
-  // remains over the Zen button, and the fixed corner guard survives refresh.
+  await evaluate("layerApp.dispatch({type:'restore_settings',settings:{...layerApp.state().settings,zen_show_capy:false}})");
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
   await click('#zen-button');
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:299,clientY:24,pointerType:'mouse',bubbles:true}))");
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,pointerType:'mouse',bubbles:true})); window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
-  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
-  await click('#zen-button');
-  // Total Zen, edge reveal, generic image choices
-  // and deep linking use real DOM controls backed by the shared preference API.
+  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
+  await action({type:'invoke',command:'zen_mode'});
   const zenVisible = () => evaluate("(async () => { const n=document.querySelector('#zen-button'); await Promise.all(n.getAnimations().map(a=>a.finished)); return getComputedStyle(n).pointerEvents === 'auto' && getComputedStyle(n).opacity === '1'; })()");
   const zenMenu = () => evaluate(`(() => { const n=document.querySelector('#zen-button'); n.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:24,clientY:36})); })()`);
   const chooseMenu = async text => {
@@ -113,11 +108,13 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
       await capture(`zen-icons-${theme}-${index}`);
     }
     await click('#close-settings');
+    await preference({type:'edit',id:'zen_show_capy',value:false});
     await click('#zen-button');
     assert.equal(await zenVisible(), false, 'Total Zen hides the Capy with the rest of the chrome');
     await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
-    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
-    assert.ok(await zenVisible(), 'Edge reveal restores controls');
+    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
+    assert.equal(await zenVisible(),false);
+    await action({type:'preferences',action:{type:'edit',id:'zen_show_capy',value:true}});
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.floating-panel')).pointerEvents"), 'auto');
     // A touch hold must open settings, not trigger the button's exit click.
     await call('Input.setIgnoreInputEvents', { ignore: false });
@@ -133,22 +130,21 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     await click('#close-settings');
     await action({ type: 'invoke', command: 'zen_mode' });
     await click('#zen-button');
-    await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
     await settle();
-    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
+    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
     await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:100,clientY:24,bubbles:true}))");
     await capture(`zen-active-${theme}`);
-    await click('#zen-button');
+    await click('#zen-capy');
   }
   await preference({ type: 'reset', id: 'zen_icon' });
   await action({ type: 'restore_workspace', workspace: originalWorkspace });
   assert.ok(await evaluate("document.elementFromPoint(24,24).closest('#zen-button') !== null"), 'the visible header must not intercept the persistent button');
   await call('Input.setIgnoreInputEvents', { ignore: false });
-  for (const enabled of [true, true, false]) {
+  for (const enabled of [true, false]) {
     await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 24, y: 24 }] });
     await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await settle();
-    assert.equal(await evaluate('layerApp.state().workspace.zen_mode'), enabled, 'a hidden control first reveals, then activates on the next tap');
+    assert.equal(await evaluate('layerApp.state().workspace.zen_mode'), enabled, 'one Capy tap toggles Zen');
   }
   await call('Input.setIgnoreInputEvents', { ignore: true });
   // Values are plain editing buttons. The slider uses the
