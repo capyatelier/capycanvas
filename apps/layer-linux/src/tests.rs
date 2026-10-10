@@ -3075,7 +3075,7 @@ fn native_navigator_column_resize() {
                 let s = stats.lock().unwrap();
                 (s.cpu.len(), s.overview_frames)
             };
-            drag.update(delta(minimum - 72. - 1.));
+            drag.update(delta(minimum - 108. - 1.));
             pump(200);
             assert!(w.workspace_drag.borrow().is_some());
             assert!(state(&w).workspace.layout.is_collapsed(root));
@@ -3088,7 +3088,7 @@ fn native_navigator_column_resize() {
                 );
                 assert_eq!(s.overview_frames, previews);
             }
-            drag.update(delta(minimum - 72. + 1.));
+            drag.update(delta(minimum - 108. + 1.));
             pump(200);
             assert_visible(true);
             assert!(
@@ -3096,7 +3096,7 @@ fn native_navigator_column_resize() {
                 "reopening must present the overview before release"
             );
         }
-        drag.update(delta(minimum - 72. - 1.));
+        drag.update(delta(minimum - 108. - 1.));
         pump(200);
         assert_visible(false);
         drag.end();
@@ -11061,10 +11061,10 @@ fn native_divider_cursor_input() {
         } else {
             layer_ui::LAYERS_MIN_WIDTH
         };
-        let threshold = minimum - TILE_SIZE - 72.;
+        let threshold = (minimum - 108.).max(TILE_SIZE) - TILE_SIZE;
         for (distance, collapsed) in [
             (minimum - TILE_SIZE + 20., false),
-            (minimum - TILE_SIZE - 36., false),
+            (minimum - TILE_SIZE - 72., false),
             (threshold + 1., false),
             (threshold, true),
             (threshold - 2., true),

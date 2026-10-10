@@ -13226,8 +13226,8 @@ mod tests {
                     .unwrap();
                 };
                 drag(&mut s, ContactPhase::Down, start[0]);
-                let threshold = minimum - 72.;
-                for width in [minimum, minimum - 36., threshold + 0.5] {
+                let threshold = (minimum - 108.).max(TILE_SIZE);
+                for width in [minimum, minimum - 72., threshold + 0.5] {
                     drag(&mut s, ContactPhase::Move, x_for_width(width));
                     assert!(!s.state.workspace.layout.is_collapsed(root));
                 }
@@ -13454,8 +13454,8 @@ mod tests {
             } else {
                 crate::TOOL_PANEL_MIN_WIDTH
             };
-            let threshold = minimum - TILE_SIZE - 72.;
-            for distance in [minimum - TILE_SIZE - 36., threshold + 0.5] {
+            let threshold = (minimum - 108.).max(TILE_SIZE) - TILE_SIZE;
+            for distance in [minimum - TILE_SIZE - 72., threshold + 0.5] {
                 t.drag(ContactPhase::Move, distance);
                 assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
             }
@@ -13582,7 +13582,7 @@ mod tests {
                     };
                     let base = (origin - t.center) * t.outward;
                     let distance = |width| base + width;
-                    let threshold = (t.minimum - 72.).max(TILE_SIZE);
+                    let threshold = (t.minimum - 108.).max(TILE_SIZE);
                     t.drag(ContactPhase::Down, 0.);
                     // Jump directly from a wide column across the threshold.
                     // Nested columns must retain the pre-collapse parent edge.

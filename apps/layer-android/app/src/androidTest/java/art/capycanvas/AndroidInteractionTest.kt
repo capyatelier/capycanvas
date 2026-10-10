@@ -595,14 +595,14 @@ class AndroidInteractionTest {
             move(35f); assertEquals("Reverse before reaching edge", before, workspace())
             move(37f); assertEquals(expanded, workspace())
             move(edge + 45); assertNotEquals(expanded, workspace())
-            for (distance in listOf(edge - 36, edge - 71)) {
-                move(distance); assertFalse("Inward drag stays expanded before 72 pixels", exists("collapsed-column-$id"))
+            for (distance in listOf(edge - 72, edge - 107)) {
+                move(distance); assertFalse("Inward drag stays expanded before three small tiles", exists("collapsed-column-$id"))
             }
-            move(edge - 73); assertTrue(exists("collapsed-column-$id"))
+            move(edge - 109); assertTrue(exists("collapsed-column-$id"))
             if (right) assertFalse("Navigator hides at the collapse boundary", exists("navigator-overview"))
-            move(edge - 71); assertFalse("Reverse across the collapse boundary", exists("collapsed-column-$id"))
+            move(edge - 107); assertFalse("Reverse across the collapse boundary", exists("collapsed-column-$id"))
             if (right) assertTrue("Navigator returns when reversing collapse", exists("navigator-overview"))
-            move(edge - 73); assertTrue(exists("collapsed-column-$id"))
+            move(edge - 109); assertTrue(exists("collapsed-column-$id"))
             event(MotionEvent.ACTION_CANCEL)
             waitFor("cancel restores collapsed width") { workspace() == before }
             event(MotionEvent.ACTION_DOWN, press)

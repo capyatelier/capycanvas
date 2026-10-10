@@ -438,11 +438,12 @@ with native Compose input, including `toolbarManagerSelectsConfirmsDeletesAndRes
 ## Collapsed columns
 
 Dragging an expanded side column's divider inward collapses the column after
-72 logical pixels past its fitted width limit. Narrow columns collapse at the
-36-pixel icon-strip width when that keeps the trigger reachable. Reversing the
-same drag across its collapse boundary opens the column again. A drag that starts
-collapsed opens after 36 logical pixels outward. Collapse retains the width from
-before the gesture; resizing, collapse and reversal share one workspace undo step.
+108 logical pixels (three small tiles) past its fitted width limit. Narrow columns
+collapse at the 36-pixel icon-strip width when that keeps the trigger reachable.
+Reversing the same drag across its collapse boundary opens the column again. A
+drag that starts collapsed opens after 36 logical pixels outward. Collapse retains
+the width from before the gesture; resizing, collapse and reversal share one
+workspace undo step.
 
 [Stacked columns](stacked-columns.md) replace the former Group panel mode. Each
 stack contains complete collapsed columns and owns “Open individual panels” and
