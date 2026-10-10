@@ -133,6 +133,8 @@ subtitle. Image objects, masks, selections and effect layers do not offer this c
 Properties gives the layer name its own heading, with the smaller, muted
 layer type below it. **Add Filter** sits at the right of that second row with an
 **fx+** icon, its text label and a menu arrow. The Layers footer uses the same icon.
+Its Add Filter button shares the other footer buttons' theme color and flat style,
+with a transparent resting background.
 GTK Properties dropdowns and their adjacent action buttons share the compact
 24-pixel panel height and 6-pixel horizontal padding, in docks and drawers.
 **Add Filter** is also available in each eligible layer's context menu. It opens

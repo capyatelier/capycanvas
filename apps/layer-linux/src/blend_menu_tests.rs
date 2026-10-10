@@ -208,6 +208,7 @@ fn native_pass_through_group_and_new_group_preference() {
 #[test]
 #[ignore = "isolated compositor and native menu input"]
 fn native_layer_color_modes_and_add_filter() {
+    std::fs::create_dir_all("../../artifacts/layer-modes").unwrap();
     let app = native_test_app("art.capycanvas.LayerModes");
     let w = fixture_workspace(&app); w.window.maximize(); w.window.present(); pump(1600);
     let owner = state(&w).layer_tools.editing_layer.unwrap().id;
@@ -232,6 +233,23 @@ fn native_layer_color_modes_and_add_filter() {
             pump(200);
             if index < 2 {
                 let add = named::<gtk::MenuButton>(w.window.upcast_ref(), if index == 0 { "properties-add-filter" } else { "layer-add-filter" });
+                if index == 1 {
+                    input.perform(serde_json::json!([{"point":screen_point(w.area.upcast_ref(), &w.window, [0.5,0.5])}]));
+                    w.area.grab_focus(); pump(200);
+                    let peer = named::<gtk::Button>(w.layer_panel.footer.upcast_ref(), "layer-add-layer-symbolic");
+                    let child = peer.child().unwrap();
+                    peer.set_child(Some(&crate::icons::image("layer-add-filter-symbolic")));
+                    let expected = super::icons::capture_widget(&w.window, &peer);
+                    let actual = super::icons::capture_widget(&w.window, &add);
+                    peer.set_child(Some(&child));
+                    assert_eq!((actual.width(), actual.height()), (expected.width(), expected.height()));
+                    let mut pixels = vec![0; actual.width() as usize * actual.height() as usize * 4];
+                    let mut reference = pixels.clone();
+                    actual.download(&mut pixels, actual.width() as usize * 4);
+                    expected.download(&mut reference, expected.width() as usize * 4);
+                    assert!(pixels.iter().zip(&reference).all(|(a,b)| a.abs_diff(*b) <= 1), "FX uses the footer's background and icon color in {theme:?}");
+                    actual.save_to_png(format!("../../artifacts/layer-modes/footer-filter-{theme:?}.png")).unwrap();
+                }
                 input.click(screen_point(add.upcast_ref(), &w.window, [0.5, 0.5]));
             } else {
                 let row = find_named(w.layer_panel.root.upcast_ref(), &format!("art-layer-{}", state(&w).layer_tools.editing_layer.unwrap().id)).unwrap();
