@@ -1178,7 +1178,8 @@ impl Component {
         } else {
             Vec::new()
         };
-        if let Ok(value) = slider_bookmark_value(self.control, &values, position, length, &self.localization.borrow()) {
+        let value = slider_bookmark_value(self.control, &values, position, length, &self.localization.borrow());
+        if let Ok(value) = value {
             let number = self
                 .control
                 .slider()

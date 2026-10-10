@@ -757,6 +757,61 @@ fn slider_gestures(d: &mut Driver, devices: &[&str]) {
 }
 
 #[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_added_sliders_input"]
+fn native_toolbar_added_sliders_input() {
+    let mut d = Driver::new("art.capycanvas.AddedToolbarSliders");
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        restore(&d, WorkspacePreset::Illustrator);
+        let before = state(&d.w).workspace.layout.panel(Panel::Toolbar).unwrap().tiles()[0].id;
+        d.w.dispatch(UiAction::Customize {
+            action: CustomizationAction::InsertTools { panel: Panel::Toolbar, before: Some(before) },
+        });
+        pump(250);
+        d.named("tool-search").downcast::<gtk::SearchEntry>().unwrap().set_text("slider");
+        pump(300);
+        for control in [ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider] {
+            d.click_name(&format!("tool-choice-{}", serde_json::to_string(&control).unwrap()));
+        }
+        d.click_name("confirm-tools");
+        pump(300);
+        assert!(state(&d.w).customization.picker.is_none());
+        let panels = state(&d.w).workspace.layout.panels;
+        let generation = ui_session_mut(&d.w).capture_workspace().unwrap().history.generation;
+        for device in ["mouse", "touch"] {
+            for control in [ToolbarControl::BrushSizeSlider, ToolbarControl::BrushOpacitySlider] {
+                let binding = control.slider().unwrap();
+                d.w.dispatch(binding.action(if control == ToolbarControl::BrushSizeSlider { 5. } else { 0.1 }));
+                pump(50);
+                let id = component_id(&d, control);
+                let scale = d.named(&format!("component-slider-{id}")).downcast::<gtk::Scale>().unwrap();
+                let point = screen_point(scale.upcast_ref(), &d.w.window,
+                    if scale.orientation() == gtk::Orientation::Vertical { [0.5, 0.25] } else { [0.75, 0.5] });
+                drag(&mut d, device, point, point, false);
+                let current = binding.field(&state(&d.w)).unwrap().value;
+                assert!(current > if control == ToolbarControl::BrushSizeSlider { 5. } else { 0.1 },
+                    "{device}/{control:?}: tapping updates the brush");
+                assert!(d.named("brush-slider-preview").is_mapped(), "tap retains the preview");
+                d.input.key(0xff1b);
+                let end = screen_point(scale.upcast_ref(), &d.w.window,
+                    if scale.orientation() == gtk::Orientation::Vertical { [0.5, 0.75] } else { [0.25, 0.5] });
+                drag(&mut d, device, point, end, false);
+                assert!(binding.field(&state(&d.w)).unwrap().value < current,
+                    "{device}/{control:?}: dragging updates the brush");
+                assert!(!find_named(d.w.window.upcast_ref(), "brush-slider-preview").is_some_and(|p| p.is_mapped()),
+                    "drag release closes the preview");
+                assert_eq!(d.named(&format!("component-slider-{id}")), scale.upcast::<gtk::Widget>());
+                assert_eq!(state(&d.w).workspace.layout.panels, panels, "value changes preserve the toolbar");
+                assert_eq!(ui_session_mut(&d.w).capture_workspace().unwrap().history.generation, generation,
+                    "value changes preserve workspace history");
+            }
+        }
+        d.capture_canvas(&format!("added-sliders-{theme:?}.png"));
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "private Mutter: --native-test=native_toolbar_components_input"]
 fn native_toolbar_components_input() {
     let mut d = Driver::new("art.capycanvas.ToolbarComponents");

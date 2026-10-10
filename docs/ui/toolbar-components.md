@@ -127,7 +127,9 @@ The bar stacks on narrow side toolbars and moves into overflow as a whole.
 - GTK `toolbar_components.rs` owns retained native widgets, measurement, focus,
   pointer capture and native dropdowns. Both normal toolbars and nested drawer toolbars
   use the same typed `TileWidget` builder and refresh path. The existing numeric
-  editor supplies parsing and keyboard behavior.
+  editor supplies parsing and keyboard behavior. Slider input resolves the shared
+  value and releases component-state borrows before changing the GTK scale;
+  its synchronous value-change signal can dispatch an edit and refresh the component.
 - Web `toolbar-components.js`, Android `ToolbarComponents.kt` and Apple
   `ToolbarComponents.swift` render the same owned component projection in ordinary
   toolbars and retained drawers. `toolbar_transport.rs` exposes stateless fitting,
@@ -164,6 +166,8 @@ private Mutter display with `--native-test=` and one of these tests from
   previews and bookmarks, context changes, placement and both themes. The
   `native_toolbar_components_pen_input` variant adds `--tablet`; its synthetic
   serials cannot authorize popup grabs, so popups are covered by mouse and touch.
+- `native_toolbar_added_sliders_input`: Add Tools in Paint, then tap and drag
+  the new size and opacity sliders with mouse and touch in both themes.
 - `native_toolbar_components_narrow_input` with `LAYER_MOTION_VIEWPORT=680x500`:
   overflow and full options at small widths.
 - `native_toolbar_components_drawer_input`, `native_toolbar_options_presentation_input`,
