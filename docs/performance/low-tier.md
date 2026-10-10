@@ -83,12 +83,14 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Pan during private session checkpoints | 60 | Unqualified: renderer 60.00–60.12 submissions/s, interval p99 18.70–18.92 ms; screen presentation and thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px during private session checkpoints | 60 | Unqualified: 77.6–79.0 fresh completed updates/s, completion gap p99 23.36–24.07 ms; thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px, repeated short contacts during checkpoints | 60 | Diagnostic only: 11.02–14.27 MiB process writes per 50 contacts; observed head age max 3.52–4.37 s. Paused motion has no qualified frame rate | [Session checkpoints](#session-checkpoints) |
-| Pan: Hand tool, one or two fingers | 60 | **Meets for two fingers:** 59.20–59.26 presented fps, p99 16.68–16.87 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/tcl/` |
-| Pinch zoom | 60 | **Misses:** 52.76–53.39 presented fps, p99 33.34–49.94 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/tcl/` |
+| Pan: Hand tool, one or two fingers | 60 | **Current binary unmeasured; earlier 1.0.11 only:** 59.31–59.37 presented fps, p99 16.68–16.84 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized APK `10e734af`, navigation source `87b79f29`; `artifacts/navigation-controls/zoom-audit-20261009/final/low/` |
+| Pinch zoom | 60 | **Current binary unmeasured; earlier 1.0.11 missed:** 49.00–53.77 presented fps, p99 33.36–50.05 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized APK `10e734af`, navigation source `87b79f29`; `artifacts/navigation-controls/zoom-audit-20261009/final/low/` |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 60 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
 | Pan: Hand tool, one or two fingers, M3 BUILD20 | 60 | **Unqualified on current M3.** 59.078–59.729 completed updates/s; completion gap p99 18.821–19.033 ms; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison); older actual presents below |
 | Pinch zoom, earlier retained-Navigator revision | 60 | Photo, Navigator open: screen 59.40 presents/s, p99 ≤16.83 ms; viewport 59.90 fresh completed updates/s | Retained-Navigator navigation below |
-| Two-finger rotate | 60 | **Meets:** 58.97–59.37 presented fps, p99 16.68–16.84 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/tcl/` |
+| Two-finger rotate | 60 | **Current binary unmeasured; earlier 1.0.11 only:** 59.05–59.36 presented fps, p99 16.69–16.86 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized APK `10e734af`, navigation source `87b79f29`; `artifacts/navigation-controls/zoom-audit-20261009/final/low/` |
+| Smooth Zoom tool, left/right | 60 | **Current binary unmeasured; earlier 1.0.11 missed:** 43.33–43.82 presented fps, p99 99.95–99.96 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized APK `10e734af`, navigation source `87b79f29`; `artifacts/navigation-controls/zoom-audit-20261009/final/low/` |
+| Smooth Zoom tool, up/down | 60 | **Current binary unmeasured; earlier 1.0.11 missed:** 43.43–43.56 presented fps, p99 99.96–116.21 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized APK `10e734af`, navigation source `87b79f29`; `artifacts/navigation-controls/zoom-audit-20261009/final/low/` |
 | Footer zoom and rotation sliders | 60 | Unmeasured on the reference tablet | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
@@ -1713,3 +1715,18 @@ This establishes completion and preparation ordering, not a controlled startup
 comparison or input-to-display latency. Shader compilation remains a substantial
 first-use delay. Records are under
 `artifacts/transform-root-cause/native-restore-fixed/`.
+
+## Zoom settings navigation comparison
+
+Current 1.0.12 APK `ef20cbb3`, base `ee4805dfe`, is unmeasured on TCL because
+the reference tablet is reserved by another session. The earlier 1.0.11 APK
+`10e734af` measurements retained above do not qualify this build.
+
+The earlier run uses the 12 MP photo, an empty paint layer and the Navigator,
+warm shaders, thermal status 0 and three five-second gestures, with
+SurfaceFlinger actual-present timestamps. Baseline `f02d74518` horizontal Zoom
+measured 41.48–43.59 fps, p99 99.97–116.55 ms. Both earlier builds miss the
+Zoom target. The earlier candidate pinch had a 50.05 ms gap run against
+baseline p99 33.35–33.55 ms; the comparison does not establish no regression.
+Evidence: `artifacts/navigation-controls/zoom-audit-20261009/comparison.json`;
+current build provenance: `artifacts/navigation-controls/zoom-audit-20261009/post-rebase-source-provenance.json`.

@@ -161,3 +161,14 @@ tool-tonal-tones = 階調 · 基準白に対する段数
 tool-action-group-transform-warp-split = グリッドを分割
 
 tools-transform-reference = 位置の基準点
+
+zoom-tool-click = クリック
+zoom-tool-in = 拡大
+zoom-tool-out = 縮小
+zoom-tool-drag = ドラッグ
+zoom-tool-smooth = 連続
+zoom-tool-area = 範囲
+zoom-tool-click-only = クリックのみ
+zoom-tool-direction = 方向
+zoom-tool-left-right = 左右
+zoom-tool-up-down = 上下

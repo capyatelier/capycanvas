@@ -344,7 +344,7 @@ pub fn install(workspace: &Rc<Workspace>) {
                         let to = [from[0] + dx as f32 * dpi, from[1] + dy as f32 * dpi];
                         let scale = pinch.pinch_scale() as f32;
                         if scale.is_finite() && scale > 0. {
-                            let result = workspace.gpu.borrow_mut().as_mut().map(|g| g.session.gesture(from, to, scale / previous, pinch.pinch_angle_delta() as f32));
+                            let result = workspace.gpu.borrow_mut().as_mut().map(|g| g.session.multi_touch_gesture(from, to, scale / previous, pinch.pinch_angle_delta() as f32));
                             input.touchpad.set(Some((to, scale)));
                             if let Some(result) = result { workspace.changed(result); }
                         }

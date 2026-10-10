@@ -161,3 +161,14 @@ tool-tonal-tones = Sắc độ · stop so với màu trắng tham chiếu
 tool-action-group-transform-warp-split = Chia lưới
 
 tools-transform-reference = Điểm neo vị trí
+
+zoom-tool-click = Nhấp
+zoom-tool-in = Phóng to
+zoom-tool-out = Thu nhỏ
+zoom-tool-drag = Kéo
+zoom-tool-smooth = Liên tục
+zoom-tool-area = Vùng
+zoom-tool-click-only = Chỉ nhấp
+zoom-tool-direction = Hướng
+zoom-tool-left-right = Trái/phải
+zoom-tool-up-down = Lên/xuống

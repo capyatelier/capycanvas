@@ -250,7 +250,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | --- | --- |
 | Editor smoke, drawing, pen | `--editor`, `--pen`, `--prediction`, `--raster`, `--color-mixing` |
 | Enclose and Fill | `--enclose-fill` |
-| Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-controls`, `--zoom-readout`, `--move-selection` |
+| Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-controls`, `--zoom-readout`, `--zoom-tool-settings`, `--move-selection` |
 | Retouching | `--clone`, `--heal` |
 | Color | `--color-panel`, `--color-wheel-resize`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
 | Layers and filters | `--layers`, `--layer-relationships`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--gradients`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |

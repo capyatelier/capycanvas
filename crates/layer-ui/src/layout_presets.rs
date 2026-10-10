@@ -87,7 +87,7 @@ impl WorkspacePreset {
                 ToolSlot {slot:S::Marquee}, ToolSlot {slot:S::Lasso}, ToolSlot {slot:S::AutomaticSelection}, Command {command:C::SelectionBrush}, Divider,
                 ToolSlot {slot:S::Drawing}, Command {command:C::Eraser}, Command {command:C::Clone}, ToolSlot {slot:S::Healing},
                 Command {command:C::Blend}, Command {command:C::Liquify}, ToolSlot {slot:S::PhotoFill}, Divider,
-                Command {command:C::Hand}, Command {command:C::Eyedropper}, Color,
+                Command {command:C::Hand}, Command {command:C::Zoom}, Command {command:C::Eyedropper}, Color,
             ];
             let tiles=controls.into_iter().map(|control| {
                 let id=layout.next_tile_id;

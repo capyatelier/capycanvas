@@ -160,3 +160,14 @@ tool-tonal-tones = โทน · สต็อปเทียบกับสีข
 tool-action-group-transform-warp-split = แบ่งตาราง
 
 tools-transform-reference = จุดยึดตำแหน่ง
+
+zoom-tool-click = คลิก
+zoom-tool-in = ขยาย
+zoom-tool-out = ย่อ
+zoom-tool-drag = ลาก
+zoom-tool-smooth = ต่อเนื่อง
+zoom-tool-area = พื้นที่
+zoom-tool-click-only = คลิกเท่านั้น
+zoom-tool-direction = ทิศทาง
+zoom-tool-left-right = ซ้าย/ขวา
+zoom-tool-up-down = ขึ้น/ลง

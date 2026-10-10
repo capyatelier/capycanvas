@@ -160,3 +160,14 @@ tool-tonal-tones = Tonos · pasos respecto al blanco de referencia
 
 tool-action-group-transform-warp-split = Dividir cuadrícula
 tools-transform-reference = Anclaje de posición
+
+zoom-tool-click = Clic
+zoom-tool-in = Acercar
+zoom-tool-out = Alejar
+zoom-tool-drag = Arrastrar
+zoom-tool-smooth = Continuo
+zoom-tool-area = Área
+zoom-tool-click-only = Solo clic
+zoom-tool-direction = Dirección
+zoom-tool-left-right = Izquierda/derecha
+zoom-tool-up-down = Arriba/abajo

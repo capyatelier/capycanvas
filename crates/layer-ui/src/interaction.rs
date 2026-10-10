@@ -233,7 +233,7 @@ pub(crate) struct NavigationContact {
     pub mode: NavigationMode,
     pub origin: [f32; 2],
     pub dragged: bool,
-    pub rectangle: bool,
+    pub zoom: crate::ZoomToolSettings,
 }
 
 #[derive(Clone, Copy)]

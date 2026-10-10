@@ -161,3 +161,14 @@ tool-tonal-tones = Tons · pontos de exposição relativos ao branco de referên
 tool-action-group-transform-warp-split = Dividir grade
 
 tools-transform-reference = Âncora de posição
+
+zoom-tool-click = Clique
+zoom-tool-in = Ampliar
+zoom-tool-out = Reduzir
+zoom-tool-drag = Arrastar
+zoom-tool-smooth = Contínuo
+zoom-tool-area = Área
+zoom-tool-click-only = Só clique
+zoom-tool-direction = Direção
+zoom-tool-left-right = Esquerda/direita
+zoom-tool-up-down = Cima/baixo

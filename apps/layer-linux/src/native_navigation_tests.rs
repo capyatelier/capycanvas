@@ -67,12 +67,13 @@ fn native_navigation_controls() {
     let mut input = RemoteInput::new().settle_ms(120);
     input.ready();
     let mut workspace = state(&w).workspace;
-    workspace.layout.insert_tools(Panel::Toolbar, None, &[ToolbarControl::Command { command: CommandId::Hand }]).unwrap();
-    let navigation_tile = workspace.layout.panel(Panel::Toolbar).unwrap().tiles().last().unwrap().id;
+    workspace.layout.insert_tools(Panel::Toolbar, None, &[ToolbarControl::Command { command: CommandId::Hand }, ToolbarControl::Command { command: CommandId::Zoom }]).unwrap();
+    let zoom_tile = workspace.layout.panel(Panel::Toolbar).unwrap().tiles().last().unwrap().id;
+    let navigation_tile = workspace.layout.panel(Panel::Toolbar).unwrap().tiles().iter().rev().nth(1).unwrap().id;
     w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
     pump(150);
-    let double_tool = |input: &mut RemoteInput| {
-        let button = named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{navigation_tile}"));
+    let double_tool = |input: &mut RemoteInput, tile| {
+        let button = named::<gtk::Button>(w.surface.upcast_ref(), &format!("tile-{tile}"));
         let point = screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]);
         input.perform(serde_json::json!([{ "point": point }, { "down": true }, { "down": false },
             { "down": true }, { "down": false }]));
@@ -159,19 +160,19 @@ fn native_navigation_controls() {
         w.dispatch(UiAction::Invoke { command: CommandId::Zoom });
         w.dispatch(UiAction::SetZoom { zoom: 0.37 });
         pump(150);
-        double_tool(&mut input);
+        double_tool(&mut input, zoom_tile);
         assert_eq!(state(&w).camera.zoom, 1., "double-clicking the Zoom button selects Actual Pixels");
         assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Zoom);
         w.dispatch(UiAction::Invoke { command: CommandId::RotateView });
         w.dispatch(UiAction::SetRotation { rotation: 0.4 });
         pump(150);
-        double_tool(&mut input);
+        double_tool(&mut input, navigation_tile);
         assert!(state(&w).camera.rotation.abs() < 1e-6, "double-clicking Rotate View resets rotation");
         assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::RotateView);
         w.dispatch(UiAction::Invoke { command: CommandId::Hand });
         w.dispatch(UiAction::SetZoom { zoom: 2. });
         pump(150);
-        double_tool(&mut input);
+        double_tool(&mut input, navigation_tile);
         assert!(state(&w).camera.zoom < 1., "double-clicking Hand fits the canvas");
         assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Hand);
         assert!(state(&w).customization.drawer.is_none(), "double-click closes the tool drawer");
@@ -428,6 +429,137 @@ pub(super) fn pass_through(document: &mut layer_core::Document) {
     let group = document.artwork.occurrences.insert(PortableId::random(),group).unwrap();
     document.artwork.stacks.get_mut(root).unwrap().entries.insert(0,group);
     refresh(document);
+}
+
+#[test]
+#[ignore = "private Wayland display, hardware GPU and native pointer input"]
+fn native_zoom_settings_and_canvas_preferences() {
+    let app = native_test_app("art.capycanvas.ZoomSettings");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let workspace = tool_settings_workspace(&w, &[CommandId::Hand, CommandId::Zoom], true, true);
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    pump(200);
+    let mut input = RemoteInput::new().settle_ms(120);
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Invoke { command: CommandId::Zoom });
+        pump(200);
+        let select = |id: &str, index| {
+            let group = named::<adw::ToggleGroup>(&w.panel_widget(Panel::ToolSettings), &format!("tool-choice-bar-{id}"));
+            let row = group.parent().unwrap();
+            assert!(row.first_child().unwrap().is::<gtk::Label>(), "choice label sits before native segments");
+            group.set_active(index);
+            until(|| crate::preferences::load().unwrap().is_some_and(|saved| saved.zoom_tool == state(&w).settings.zoom_tool), "Zoom choice is persisted by native preferences");
+        };
+        for (id, count) in [("zoom-click", 2), ("zoom-drag", 3), ("zoom-direction", 2)] {
+            let group = named::<adw::ToggleGroup>(&w.panel_widget(Panel::ToolSettings), &format!("tool-choice-bar-{id}"));
+            assert_eq!(group.n_toggles(), count);
+            let labels: Vec<_> = widgets(group.upcast_ref()).filter_map(|widget| widget.downcast::<gtk::Label>().ok()).filter(|label| label.is_visible() && !label.text().is_empty()).collect();
+            assert_eq!(labels.len(), count as usize, "each choice has a visible label");
+            for label in labels {
+                assert!(!label.layout().is_ellipsized(), "{id} choice is readable: {}", label.text());
+                let bounds = label.compute_bounds(&group).unwrap();
+                assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= group.width() as f32 + 1., "{id} label fits its segments: {}", label.text());
+            }
+        }
+        select("zoom-click", 0);
+        select("zoom-drag", 0);
+        select("zoom-direction", 0);
+        assert_eq!(state(&w).settings.zoom_tool.drag, layer_ui::ZoomDrag::Smooth);
+        let point = screen_point(w.area.upcast_ref(), &w.window, [0.55, 0.55]);
+        let drag = |input: &mut RemoteInput, offset: [f32; 2]| input.perform(serde_json::json!([
+            { "point": point }, { "down": true }, { "point": [point[0] + offset[0], point[1] + offset[1]] }, { "down": false }
+        ]));
+        let checkpoint = ui_session(&w).engine().checkpoint();
+        let revisions: Vec<_> = state(&w).layers.iter().map(|l| l.paint_revision).collect();
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
+        let before = state(&w).camera.zoom;
+        drag(&mut input, [64., 0.]);
+        assert!(state(&w).camera.zoom > before, "horizontal smooth drag zooms in");
+        select("zoom-direction", 1);
+        assert_eq!(state(&w).settings.zoom_tool.direction, layer_ui::ZoomDirection::Vertical);
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
+        let before = state(&w).camera.zoom;
+        drag(&mut input, [0., -64.]);
+        assert!(state(&w).camera.zoom > before, "vertical upward smooth drag zooms in");
+        select("zoom-drag", 1);
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
+        let before = state(&w).camera;
+        input.perform(serde_json::json!([{ "point": point }, { "down": true }, { "point": [point[0] + 96., point[1] + 72.] }]));
+        assert_eq!(state(&w).camera, before, "area zoom waits for release");
+        let mut overlay = Vec::new();
+        ui_session(&w).append_layer_overlay(&mut overlay);
+        assert_eq!(overlay.len(), 4, "area preview has four edges");
+        let dir = artifact_dir("../../artifacts/navigation-controls/gtk");
+        capture_reference(&w, &format!("{dir}/zoom-area-{theme:?}.png"), 1.);
+        input.perform(serde_json::json!([{ "down": false }]));
+        assert!(state(&w).camera.zoom > before.zoom, "release fits the selected area");
+        overlay.clear();
+        ui_session(&w).append_layer_overlay(&mut overlay);
+        assert!(overlay.is_empty());
+        select("zoom-drag", 2);
+        w.dispatch(UiAction::Invoke { command: CommandId::ResetView });
+        let before = state(&w).camera.zoom;
+        input.perform(serde_json::json!([{ "point": point }, { "down": true }, { "point": [point[0] + 64., point[1]] }]));
+        assert_eq!(state(&w).camera.zoom, before, "click-only ignores drag movement");
+        input.perform(serde_json::json!([{ "down": false }]));
+        select("zoom-click", 1);
+        assert!(state(&w).settings.zoom_tool.zoom_out);
+        let before = state(&w).camera.zoom;
+        input.click(point);
+        assert!(state(&w).camera.zoom < before, "Out changes the click direction");
+        select("zoom-click", 0);
+        let center = named::<gtk::CheckButton>(&w.panel_widget(Panel::ToolSettings), "tool-action-CenterZoomClicks");
+        center.set_active(true);
+        pump(100);
+        assert!(state(&w).settings.zoom_tool.center_clicked_point);
+        until(|| crate::preferences::load().unwrap().is_some_and(|saved| saved.zoom_tool == state(&w).settings.zoom_tool), "Center clicked point is persisted by native preferences");
+        let before = state(&w).camera;
+        let origin = screen_point(w.area.upcast_ref(), &w.window, [0., 0.]);
+        let anchor = layer_core::Point { x: (point[0] - origin[0]) * w.area.scale_factor() as f32, y: (point[1] - origin[1]) * w.area.scale_factor() as f32 };
+        let document_point = before.input_transform().map(anchor);
+        input.click(point);
+        let after = state(&w).camera;
+        let middle = after.work_area_center();
+        let centered = after.input_transform().map(layer_core::Point { x: middle[0], y: middle[1] });
+        assert!((document_point.x - centered.x).abs() < 0.02 && (document_point.y - centered.y).abs() < 0.02, "clicked point moves to canvas center");
+        assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+        assert_eq!(state(&w).layers.iter().map(|l| l.paint_revision).collect::<Vec<_>>(), revisions);
+        capture_reference(&w, &format!("{dir}/zoom-settings-{theme:?}.png"), 1.);
+        center.set_active(false);
+        w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
+        until(|| w.preferences.dialog.is_mapped(), "Canvas preferences open");
+        let wheel = named::<adw::ComboRow>(w.preferences.dialog.upcast_ref(), "setting-wheel-behavior");
+        assert_eq!(wheel.model().unwrap().n_items(), 2);
+        wheel.set_selected(1);
+        pump(100);
+        assert!(state(&w).settings.wheel_zoom);
+        let rotation = named::<adw::SwitchRow>(w.preferences.dialog.upcast_ref(), "setting-rotate-with-two-fingers");
+        rotation.set_active(false);
+        pump(100);
+        assert!(!state(&w).settings.rotate_with_two_fingers);
+        until(|| crate::preferences::load().unwrap().is_some_and(|saved| saved == state(&w).settings), "Canvas preferences persist current Zoom and navigation settings");
+        rotation.set_active(true);
+        capture_reference(&w, &format!("{dir}/canvas-preferences-{theme:?}.png"), 1.);
+        w.preferences.dialog.close();
+        pump(150);
+        let before = state(&w).camera;
+        input.perform(serde_json::json!([{ "point": point }, { "wheel": [0, -1] }]));
+        assert!(state(&w).camera.zoom > before.zoom, "Zoom mouse wheel preference changes ordinary wheel input");
+        let before = state(&w).camera;
+        input.perform(serde_json::json!([{ "key": 0xffe1, "down": true }, { "wheel": [0, 1] }, { "key": 0xffe1, "down": false }]));
+        assert_eq!(state(&w).camera.zoom, before.zoom, "Shift keeps wheel panning with Zoom preference");
+        assert!(state(&w).camera.translation[0] < before.translation[0]);
+        w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::WheelBehavior, value: PreferenceValue::Choice(0) } });
+        select("zoom-drag", 0);
+        select("zoom-direction", 0);
+    }
+    input.finish();
+    w.window.destroy();
 }
 
 #[test]

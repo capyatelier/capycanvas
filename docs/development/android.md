@@ -608,7 +608,10 @@ APK calls, so test-APK benchmarks use the unminified build.
   above a Solid Color fill. Warmup waits for the active brush and canvas, primes
   painting and a matching navigation gesture, then restores the camera.
   The timed interval ends with the gesture, before draining frames.
-  `-e motion pan|pinch|rotate` measures navigation;
+  `-e motion pan|pinch|rotate` measures touch navigation;
+  `-e motion smooth_zoom -e zoomDirection horizontal|vertical` measures the Zoom
+  tool through native stylus input. The latter records changing zoom percentages
+  and checks that navigation preserves the drawing revision;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
   `intervalMs`, `durationMs`, `repeats`, `blending` and `label`.
   `contactMs` with `pauseMs` runs repeated short contacts as a checkpoint/history

@@ -38,7 +38,7 @@ impl ToolbarControl {
                 CommandId::DrawingBrush => G::Drawing,
                 CommandId::Sculpt => G::Sculpt,
                 CommandId::Select => G::Selection,
-                CommandId::Hand | CommandId::Zoom | CommandId::RotateView => G::Navigation,
+                CommandId::Hand | CommandId::RotateView => G::Navigation,
                 CommandId::Figure => G::Slot(ToolSlotId::Figure),
                 CommandId::Ruler => G::Slot(ToolSlotId::Ruler),
                 CommandId::Gradient => G::Slot(ToolSlotId::Gradient),
@@ -56,7 +56,7 @@ impl ToolControlGroup {
     fn variants(self) -> Vec<ToolVariant> {
         match self {
             Self::Slot(slot) => slot.variants().to_vec(),
-            Self::Navigation => [CommandId::Hand, CommandId::Zoom, CommandId::RotateView].into_iter().map(command).collect(),
+            Self::Navigation => [CommandId::Hand, CommandId::RotateView].into_iter().map(command).collect(),
             Self::Selection => SelectionTool::ALL.into_iter().map(|t| command(t.command())).collect(),
             Self::Brush(tool) => {
                 let groups: Vec<_> = ToolGroup::ALL.into_iter().filter(|g| g.tool() == tool).collect();
@@ -74,7 +74,7 @@ impl ToolControlGroup {
     fn contains(self, variant: ToolVariant) -> bool {
         match self {
             Self::Slot(slot) => slot.variants().contains(&variant),
-            Self::Navigation => matches!(variant, ToolVariant::Command { command: CommandId::Hand | CommandId::Zoom | CommandId::RotateView }),
+            Self::Navigation => matches!(variant, ToolVariant::Command { command: CommandId::Hand | CommandId::RotateView }),
             Self::Selection => matches!(variant, ToolVariant::Command { command } if SelectionTool::ALL.iter().any(|t| t.command() == command)),
             Self::Brush(tool) => match variant {
                 ToolVariant::BrushGroup { group } => group.tool() == tool && ToolGroup::ALL.iter().filter(|g| g.tool() == tool).count() > 1,
@@ -88,7 +88,7 @@ impl ToolControlGroup {
     fn active(self, state: &UiState) -> bool {
         match self {
             Self::Slot(slot) => ToolVariant::active(state).is_some_and(|v| slot.variants().contains(&v)),
-            Self::Navigation => state.layer_tools.tool.navigation().is_some(),
+            Self::Navigation => matches!(state.layer_tools.tool, LayerCanvasTool::Hand | LayerCanvasTool::RotateView),
             Self::Selection => state.layer_tools.tool.selection_tool().is_some(),
             Self::Brush(tool) => state.layer_tools.tool == LayerCanvasTool::Paint && state.brush.tool == tool,
             Self::Drawing => state.layer_tools.tool == LayerCanvasTool::Paint && tools::is_drawing(state.brush.tool),

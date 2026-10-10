@@ -30,6 +30,8 @@ mod localization_inventory;
 
 mod search;
 mod camera;
+mod zoom_tool;
+pub use zoom_tool::{ZoomDirection, ZoomDrag, ZoomToolAction, ZoomToolSettings};
 mod document_tabs;
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
@@ -495,6 +497,7 @@ command_ids! {
     PlacementOriginalSize,
     Hand,
     Zoom,
+    CenterZoomClicks,
     RotateView,
     Eyedropper,
     Gradient,
@@ -672,7 +675,7 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
+            Self::CenterZoomClicks | Self::QuickMask | Self::SelectionOutline | Self::MaskOverlay | Self::MaskOverlayProtected | Self::SelectionBrushPressure | Self::SelectionNew | Self::SelectionAdd | Self::SelectionSubtract | Self::SelectionIntersect | Self::SelectionAntialias | Self::SelectionConstrainAngles
                 | Self::SelectionFixedRatio | Self::SelectionFixedSize | Self::SelectionFromCenter
                 | Self::SelectionVisible | Self::SelectionEditing | Self::SelectionReference
                 | Self::CropRatioFree | Self::CropRatioOriginal | Self::CropRatioSquare | Self::CropRatioFourFive
@@ -792,6 +795,7 @@ impl CommandId {
             Self::FitWidth => "fit",
             Self::RotateView => "rotate-right",
             Self::Zoom => "search",
+            Self::CenterZoomClicks => "search",
             Self::Eyedropper => "eyedropper",
             Self::Gradient => "gradient",
             Self::Figure => "figure",
@@ -1058,6 +1062,7 @@ impl CommandId {
             Self::FitWidth => MessageId::COMMAND_FIT_WIDTH,
             Self::RotateView => MessageId::COMMAND_ROTATE_VIEW,
             Self::Zoom => MessageId::COMMAND_ZOOM,
+            Self::CenterZoomClicks => MessageId::COMMAND_CENTER_ZOOM_CLICKS,
             Self::Eyedropper => MessageId::COMMAND_EYEDROPPER,
             Self::Gradient => MessageId::COMMAND_GRADIENT,
             Self::Figure => MessageId::COMMAND_FIGURE,
@@ -1473,6 +1478,7 @@ pub enum UiAction {
     Invoke {
         command: CommandId,
     },
+    ZoomTool { action: ZoomToolAction },
     /// Zoom about the work-area centre, clamped to the camera limits.
     SetZoom {
         zoom: f32,

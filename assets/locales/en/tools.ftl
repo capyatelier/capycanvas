@@ -161,3 +161,14 @@ tool-tonal-tones = Tones · stops relative to reference white
 tool-action-group-transform-warp-split = Split Grid
 
 tools-transform-reference = Position anchor
+
+zoom-tool-click = Click
+zoom-tool-in = In
+zoom-tool-out = Out
+zoom-tool-drag = Drag
+zoom-tool-smooth = Smooth
+zoom-tool-area = Area
+zoom-tool-click-only = Click only
+zoom-tool-direction = Direction
+zoom-tool-left-right = Left/right
+zoom-tool-up-down = Up/down

@@ -1111,7 +1111,7 @@ impl WebApp {
         serialize(
             &self
                 .session
-                .gesture([from_x, from_y], [to_x, to_y], scale, rotation)
+                .multi_touch_gesture([from_x, from_y], [to_x, to_y], scale, rotation)
                 .map_err(js)?,
         )
     }

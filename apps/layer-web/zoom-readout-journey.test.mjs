@@ -90,7 +90,7 @@ async function checkCanvasNavigation({call,evaluate,settle}) {
   const key=async(key,code,vk,down,modifiers=0)=>{await call('Input.dispatchKeyEvent',{type:down?'rawKeyDown':'keyUp',key,code,windowsVirtualKeyCode:vk,nativeVirtualKeyCode:vk,modifiers});await settle();};
   const press=async(name,code,vk,modifiers=0)=>{await key(name,code,vk,true,modifiers);await key(name,code,vk,false,modifiers);};
   const doubleTool=async()=>{
-    const p=await evaluate('(()=>{const r=document.querySelector(".tile-button button[data-command=hand]").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');
+    const p=await evaluate('(()=>{const command=layerApp.state().layer_tools.tool==="zoom"?"zoom":"hand";const r=document.querySelector(`.tile-button button[data-command="${command}"]`).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');
     for(const clickCount of [1,2])for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mouseReleased'?0:1,clickCount});
     await settle();
   };
@@ -412,4 +412,58 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
     await evaluate(`if(window.zoomPicker!==undefined)window.showSaveFilePicker=zoomPicker;document.querySelector('${menu}:popover-open')?.hidePopover();if(!zoomWorkspace.layout.canvas_info.visible)layerApp.dispatch({type:'restore_workspace',workspace:zoomWorkspace})`);
     if(theme)await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);
   }
+}
+
+
+export async function checkZoomToolSettings({call,evaluate,settle}) {
+  const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/navigation-controls/web';await mkdir(directory,{recursive:true});
+  const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();},invoke=command=>send({type:'invoke',command});
+  const camera=()=>evaluate('(()=>{const c=layerApp.state().camera;return{zoom:c.zoom,rotation:c.rotation,t:Array.from(c.translation)}})()');
+  const artwork=()=>evaluate('({paint:layerApp.state().layers.map(l=>[String(l.id),String(l.paint_revision)]),undo:layerApp.state().commands.find(c=>c.id==="undo").enabled})');
+  const mouse=async(type,p,buttons=1)=>{await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons,clickCount:1});await settle();};
+  const click=async selector=>{await new Promise(resolve=>setTimeout(resolve,250));const p=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error(${JSON.stringify(selector)}+JSON.stringify({tool:layerApp.state().layer_tools.tool,extra:layerApp.state().tool_extra,choices:[...document.querySelectorAll("[data-toolbar-choice]")].map(n=>n.dataset.toolbarChoice),settings:layerApp.state().settings.zoom_tool}));const r=n.getBoundingClientRect();if(!r.width||!r.height)throw Error('Hidden '+${JSON.stringify(selector)});return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);await mouse('mousePressed',p);await mouse('mouseReleased',p,0);};
+  const choose=async(id,index)=>click(`[data-toolbar-choice="${id}"] [data-toolbar-segment="${id}-${index}"]`);
+  const original=await evaluate('layerApp.state().settings');
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});await invoke('reset_view');await invoke('pen');await click('.tile-button button[data-command="zoom"]');
+    const controls=await evaluate(`['hand','zoom'].map(id=>{const n=document.querySelector('.tile-button button[data-command="'+id+'"]');return n?.closest('[data-tile]')?.dataset.tile})`);
+    assert.ok(controls.every(Boolean),'Hand/Rotate and Zoom each have a toolbar button');assert.equal(new Set(controls).size,2,'Zoom has a separate toolbar tile beside Hand/Rotate');
+
+    for(const [id,labels] of [['zoom-click',['In','Out']],['zoom-drag',['Smooth','Area','Click only']],['zoom-direction',['Left/right','Up/down']]]) {
+      assert.deepEqual(await evaluate(`[...document.querySelector('[data-toolbar-choice="${id}"]').querySelectorAll('[role=radio]')].map(n=>n.textContent)`),labels);
+      assert.equal(await evaluate(`document.querySelector('[data-toolbar-choice="${id}"] [role=radiogroup]')!=null`),true);
+    }
+    await choose('zoom-click',0);await choose('zoom-drag',0);await choose('zoom-direction',0);
+    const settingsShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/zoom-settings-${theme}.png`,Buffer.from(settingsShot.data,'base64'));
+    await click('[data-tool-action="center_zoom_clicks"]');
+    assert.equal(await evaluate('layerApp.state().settings.zoom_tool.center_clicked_point'),true);
+    await click('[data-tool-action="center_zoom_clicks"]');
+    await send({type:'customize',action:{type:'close_expanded'}});
+    const point=await evaluate('(()=>{const [x,y,w,h]=layerApp.state().camera.work_area,r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(x+w*.4)*r.width/layerApp.canvas.width,y:r.y+(y+h*.4)*r.height/layerApp.canvas.height}})()'),kept=await artwork();
+    let before=await camera();await mouse('mousePressed',point);assert.deepEqual(await camera(),before,'click waits for release');await mouse('mouseReleased',point,0);let after=await camera();assert.ok(after.zoom>before.zoom,`Zoom click: ${JSON.stringify({point,before,after,state:await evaluate('({tool:layerApp.state().layer_tools.tool,settings:layerApp.state().settings.zoom_tool,hit:document.elementFromPoint('+point.x+','+point.y+')?.outerHTML,drawer:layerApp.state().customization.drawer})')})}`);
+    const physical=await evaluate(`(()=>{const r=layerApp.canvas.getBoundingClientRect();return[(${point.x}-r.x)*layerApp.canvas.width/r.width,(${point.y}-r.y)*layerApp.canvas.height/r.height]})()`);
+    for(let axis=0;axis<2;axis++)assert.ok(Math.abs((physical[axis]-before.t[axis])/before.zoom-(physical[axis]-after.t[axis])/after.zoom)<.01,'click retains cursor anchor');
+    before=await camera();await mouse('mousePressed',point);await mouse('mouseMoved',{x:point.x+40,y:point.y});await mouse('mouseReleased',{x:point.x+40,y:point.y},0);assert.ok((await camera()).zoom>before.zoom,'horizontal Smooth drag increases magnification');
+    await choose('zoom-direction',1);await send({type:'customize',action:{type:'close_expanded'}});before=await camera();await mouse('mousePressed',point);await mouse('mouseMoved',{x:point.x,y:point.y-40});await mouse('mouseReleased',{x:point.x,y:point.y-40},0);assert.ok((await camera()).zoom>before.zoom,'vertical Smooth drag upwards increases magnification');
+    await choose('zoom-drag',1);await send({type:'customize',action:{type:'close_expanded'}});
+    before=await camera();const end={x:point.x+100,y:point.y+80};await mouse('mousePressed',point);await mouse('mouseMoved',end);assert.deepEqual(await camera(),before,'Area defers camera change');
+    const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/zoom-area-${theme}.png`,Buffer.from(shot.data,'base64'));
+    await mouse('mouseReleased',end,0);after=await camera();assert.ok(after.zoom>before.zoom,'Area release fits chosen rectangle');await mouse('mouseMoved',point,0);assert.deepEqual(await camera(),after,'released area contact ends');
+    await choose('zoom-click',1);await choose('zoom-drag',2);await choose('zoom-direction',1);await send({type:'customize',action:{type:'close_expanded'}});
+    before=await camera();await mouse('mousePressed',point);await mouse('mouseMoved',end);assert.deepEqual(await camera(),before,'Click only ignores motion');await mouse('mouseReleased',end,0);assert.deepEqual(await camera(),before,'Click only ignores moved contact release');await mouse('mousePressed',point);await mouse('mouseReleased',point,0);assert.ok((await camera()).zoom<before.zoom,'Out click decreases magnification');assert.deepEqual(await artwork(),kept,'Zoom settings and navigation preserve painting history');
+    const settings=await evaluate('layerApp.state().settings.zoom_tool');assert.deepEqual(settings,{zoom_out:true,drag:'click_only',direction:'vertical',center_clicked_point:false});
+    await invoke('settings');await click('[data-settings-page="canvas"]');
+    await click('.preference-choice:has(#setting-wheel-behavior) summary');await click('.preference-choice:has(#setting-wheel-behavior) [data-choice="1"]');
+    await click('#setting-rotate-with-two-fingers');assert.equal(await evaluate('layerApp.state().settings.wheel_zoom'),true);assert.equal(await evaluate('layerApp.state().settings.rotate_with_two_fingers'),false);
+    await send({type:'close_settings'});
+    const recognizedGesture=async()=>{await evaluate(`(()=>{for(const [type,scale,rotation] of [['gesturestart',1,0],['gesturechange',1.05,15],['gestureend',1.05,15]]){const event=new Event(type,{bubbles:true,cancelable:true});Object.assign(event,{clientX:${point.x},clientY:${point.y},scale,rotation});layerApp.canvas.dispatchEvent(event);}})()`);await settle();};
+    before=await camera();await recognizedGesture();after=await camera();assert.equal(after.rotation,before.rotation,'recognized trackpad gesture respects two-finger rotation off');assert.ok(after.zoom>before.zoom,'recognized trackpad gesture still zooms with rotation off');
+    await invoke('settings');await click('[data-settings-page="canvas"]');await click('#setting-rotate-with-two-fingers');await send({type:'close_settings'});before=await camera();await recognizedGesture();after=await camera();assert.ok(Math.abs(after.rotation-before.rotation)>.01,'recognized trackpad gesture rotates when enabled');assert.ok(after.zoom>before.zoom,'recognized trackpad gesture zooms when rotation is enabled');
+    await invoke('settings');await click('[data-settings-page="canvas"]');await click('#setting-rotate-with-two-fingers');await send({type:'close_settings'});const previousOrigin=await evaluate('performance.timeOrigin');await call('Page.reload');
+    for(let i=0;i<400;i++){if(await evaluate(`performance.timeOrigin!==${previousOrigin}&&!!window.layerApp&&document.body.dataset.gpu==="ready"`).catch(()=>false))break;if(i===399)throw Error('Zoom preferences reload');await new Promise(resolve=>setTimeout(resolve,50));}
+    await evaluate('layerApp.documents.startRecovery().then(()=>true)');await settle();
+    assert.deepEqual(await evaluate('layerApp.state().settings.zoom_tool'),settings,'Zoom preferences survive reload');assert.equal(await evaluate('layerApp.state().settings.wheel_zoom'),true);assert.equal(await evaluate('layerApp.state().settings.rotate_with_two_fingers'),false);
+    await send({type:'restore_settings',settings:original});
+  }
+  console.log('PASS: separate Zoom toolbar button, labeled radio settings, anchoring, Area release, Click only, paint history, recognized trackpad rotation preference and preference reload in light/dark');
 }

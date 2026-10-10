@@ -173,3 +173,8 @@ settings-keymap-preview-added = เพิ่ม: { $count }
 settings-keymap-preview-changed = เปลี่ยน: { $count }
 settings-keymap-preview-removed = ลบ: { $count }
 settings-keymap-preview-unavailable = ใช้ไม่ได้: { $count }
+
+settings-mouse-wheel = ล้อเมาส์
+settings-wheel-pan = เลื่อน
+settings-wheel-zoom = ซูม
+settings-rotate-with-two-fingers = หมุนด้วยสองนิ้ว

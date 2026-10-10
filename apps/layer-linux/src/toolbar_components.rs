@@ -1268,7 +1268,7 @@ impl Component {
                 row.append(&number);
                 Field::Numeric(number)
             }
-            ToolOption::Choice { segmented: true, columns: Some(_), .. } => {
+            ToolOption::Choice { segmented: true, labeled:true, .. } | ToolOption::Choice { segmented: true, columns: Some(_), .. } => {
                 let field = crate::tool_extra::ExtraField::new(w, option, context);
                 row.append(&field.root);
                 Field::Extra(field)

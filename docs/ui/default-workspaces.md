@@ -63,9 +63,9 @@ Switching layouts keeps that state and the document, camera and undo history.
 | Paint | Tools toolbar on the left edge and Commands toolbar on top. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties/Filters and Layers, opened on load. |
 | Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform (Color/Palettes on Windows, which awaits the scope controls), Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
 
-Paint keeps 17 tool positions: Pen, Pencil, Brush,
+Paint keeps 18 tool positions: Pen, Pencil, Brush,
 Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,
-Gradient; Operation, Figure, Ruler, Hand and Eyedropper. The color selector is
+Gradient; Operation, Figure, Ruler, Hand, Zoom and Eyedropper. The color selector is
 separate. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
 Selection; Auto select includes Select by Color; Fill includes the Lasso Fill
 category, containing Lasso Fill and Enclose and Fill; Blend
@@ -73,16 +73,17 @@ includes Clone. Operation, Figure, Ruler and Gradient expose their existing
 variations in the same positions. Pen and Pencil remain separate. Pen exposes
 Pen and Marker; Pencil exposes Pencil and Pastel; Brush exposes Paint,
 Watercolor and Oil; Airbrush exposes Airbrush and Spray. The other brush
-categories expose their presets. Every group has a softly rounded bottom-right
+categories expose their presets. Hand groups Rotate View; Zoom is a separate button beside it.
+Every group has a softly rounded bottom-right
 triangle and remembers the selected subgroup's icon, including when inactive.
 Selection menus, drawers and the docked Tool Set use the same separate manual
 and automatic memberships. Its Commands
 toolbar holds New, Open, Save; Undo, Redo; Clear, Fill selection, Scale/rotate;
 and Flip horizontal.
 
-Photo has 15 tool positions on these hosts: Operation, Crop; Marquee, Lasso,
+Photo has 16 tool positions on these hosts: Operation, Crop; Marquee, Lasso,
 Auto select, Paint Selection; Drawing, Eraser, Clone, Healing, Blend, Liquify,
-Gradient/Fill; Hand and Eyedropper, followed by the color selector. Marquee holds
+Gradient/Fill; Hand, Zoom and Eyedropper, followed by the color selector. Marquee holds
 Rectangle and Ellipse, Lasso holds Lasso and Polygon, and Drawing holds Brush,
 Pen, Pencil, Airbrush and Decoration. Healing starts with Spot Heal and includes
 Heal. Gradient/Fill includes all existing gradient variations, Fill and Lasso

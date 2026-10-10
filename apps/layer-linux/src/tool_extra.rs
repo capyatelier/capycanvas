@@ -8,6 +8,7 @@ use std::{cell::Cell, rc::Rc};
 pub struct ExtraField {
     pub root: gtk::Box,
     buttons: Vec<gtk::ToggleButton>,
+    segments: Option<adw::ToggleGroup>,
     gradient: Option<crate::effects::GradientEditor>,
     updating: Rc<Cell<bool>>,
 }
@@ -21,14 +22,34 @@ impl ExtraField {
         if let ToolOption::Gradient(control)=option {
             let editor=crate::effects::GradientEditor::new(w,control);
             editor.update_control(control);
-            return Self {root:editor.root.clone(),gradient:Some(editor),buttons:Vec::new(),updating:Rc::new(Cell::new(false))};
+            return Self {root:editor.root.clone(),gradient:Some(editor),buttons:Vec::new(),segments:None,updating:Rc::new(Cell::new(false))};
         }
         let ToolOption::Choice {
-            id, label, items, columns, segmented: true, ..
+            id, label, items, columns, labeled, segmented: true, ..
         } = option
         else {
             unreachable!("additional segmented tool choice")
         };
+        if *labeled {
+            let ids: Vec<_> = (0..items.len()).map(|i| i.to_string()).collect();
+            let choices: Vec<_> = ids.iter().zip(items).map(|(id, item)| (id.as_str(), item.label.as_ref())).collect();
+            let segments = crate::panel_controls::segmented(&format!("tool-choice-bar-{id}"), &choices);
+            segments.set_homogeneous(false);
+            segments.add_css_class("text-segments");
+            segments.upcast_ref::<gtk::Widget>().update_property(&[gtk::accessible::Property::Label(label)]);
+            let root = crate::panel_controls::row(label, &segments);
+            if let Some(caption) = root.first_child().and_downcast::<gtk::Label>() { caption.set_width_chars(6); caption.set_wrap(true); }
+            let updating = Rc::new(Cell::new(false));
+            let actions: Vec<_> = items.iter().map(|item| item.action.clone()).collect();
+            segments.connect_active_notify(glib::clone!(#[weak] w, #[strong] updating, move |group| {
+                if !updating.get() && let Some(action) = actions.get(group.active() as usize) {
+                    w.dispatch(UiAction::ToolbarEdit { context, action: Box::new(action.clone()) });
+                }
+            }));
+            let field = Self { root, buttons:Vec::new(), segments:Some(segments), updating, gradient:None };
+            field.refresh(option);
+            return field;
+        }
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.set_homogeneous(true);
         if columns.is_none() { root.add_css_class("linked"); }
@@ -81,7 +102,7 @@ impl ExtraField {
             } else { root.append(&button); }
             buttons.push(button);
         }
-        let field = Self { root, buttons, updating, gradient:None };
+        let field = Self { root, buttons, segments:None, updating, gradient:None };
         field.refresh(option);
         field
     }
@@ -93,6 +114,21 @@ impl ExtraField {
         };
         self.root.update_property(&[gtk::accessible::Property::Label(label)]);
         self.updating.set(true);
+        if let Some(segments) = &self.segments {
+            if let Some(caption) = self.root.first_child().and_downcast::<gtk::Label>() { caption.set_label(label); }
+            segments.upcast_ref::<gtk::Widget>().update_property(&[gtk::accessible::Property::Label(label)]);
+            for (index, item) in items.iter().enumerate() {
+                if let Some(toggle) = segments.toggle(index as u32) {
+                    toggle.set_label(Some(&item.label));
+                    if let Some(caption) = toggle.child().and_downcast::<gtk::Label>() { caption.set_label(&item.label); }
+                    else {
+                        let caption = gtk::Label::builder().label(&*item.label).wrap(true).wrap_mode(gtk::pango::WrapMode::Word).justify(gtk::Justification::Center).build();
+                        toggle.set_child(Some(&caption));
+                    }
+                }
+            }
+            segments.set_active(items.iter().position(|item| item.selected).map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
+        }
         for (button, item) in self.buttons.iter().zip(items) {
             button.set_tooltip_text(Some(&item.label));
             button.update_property(&[gtk::accessible::Property::Label(&item.label)]);

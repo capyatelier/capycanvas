@@ -140,7 +140,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-#[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
+#[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
 pub(crate) enum WorkspaceAction {
     Input { input: WorkspaceInput },
     PreferencesRetry,

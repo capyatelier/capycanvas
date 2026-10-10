@@ -189,3 +189,8 @@ settings-keymap-preview-unavailable = { $count ->
     [one] No disponible: { $count }
    *[other] No disponibles: { $count }
     }
+
+settings-mouse-wheel = Rueda del ratón
+settings-wheel-pan = Desplazar
+settings-wheel-zoom = Zoom
+settings-rotate-with-two-fingers = Girar con dos dedos

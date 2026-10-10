@@ -107,6 +107,19 @@ sheet: the action's keys, Add Shortcut with inline recording, and reset. Actions
 that share a name, such as the Eraser tool and the Eraser brush, describe which
 is which.
 
+## Zoom and canvas navigation
+
+Zoom Tool Settings contain the labeled Click, Drag and Direction radio bars and
+Center clicked point checkbox. Their shared `ZoomToolSettings` are saved in the
+application preferences and apply across drawings, workspaces and temporary Zoom
+use. Click centering affects tool clicks; wheel and pinch keep their anchors.
+
+Canvas preferences contain Mouse wheel (Pan/Zoom), Rotate with two fingers,
+and the existing pan and zoom speeds. The rotation switch applies to touch and
+trackpad gestures; it preserves panning, pinch zoom and the Rotate tool.
+Ctrl-wheel still zooms and Shift-wheel pans
+horizontally. Shortcut styles do not change these navigation choices.
+
 ## Modifier keys
 
 Modifier keys are the first shortcut category. Holding one uses an action until

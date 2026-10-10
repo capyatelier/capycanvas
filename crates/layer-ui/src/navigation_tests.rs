@@ -14,7 +14,7 @@ mod navigation_controls {
     }
 
     fn modifier_keys(s: &mut UiSession<Recorder>, value: Modifiers, pressed: bool) {
-        for (active, name) in [(value.command, "Control_L"), (value.alt, "Alt_L"), (value.shift, "Shift_L")] {
+        for (active, name) in [(value.command, if s.state.platform.apple() {"Meta_L"} else {"Control_L"}), (value.alt, "Alt_L"), (value.shift, "Shift_L")] {
             if active { key(s, name, pressed, value); }
         }
     }
@@ -87,6 +87,247 @@ mod navigation_controls {
         pointer(&mut s, ContactPhase::Move, [at[0] - 90., at[1]]);
         assert!(s.state.camera.zoom < moved.zoom);
         pointer(&mut s, ContactPhase::Up, [at[0] - 90., at[1]]);
+    }
+
+    #[test]
+    fn zoom_settings_capture_direction_and_click_mode_without_painting() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::Zoom);
+            s.dispatch(UiAction::SetZoom {zoom:1.}).unwrap();
+            let checkpoint = s.engine.checkpoint();
+            let at = [340., 420.];
+            let point = anchor(&s, at);
+            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Direction {value:ZoomDirection::Vertical}}).unwrap();
+            pointer(&mut s, ContactPhase::Down, at);
+            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Direction {value:ZoomDirection::Horizontal}}).unwrap();
+            pointer(&mut s, ContactPhase::Move, [at[0]+90., at[1]]);
+            assert_eq!(s.state.camera.zoom, 1.);
+            pointer(&mut s, ContactPhase::Move, [at[0]+90., at[1]-60.]);
+            assert!(s.state.camera.zoom > 1.);
+            same_point(anchor(&s, at), point);
+            pointer(&mut s, ContactPhase::Up, [at[0]+90., at[1]-60.]);
+            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Click {out:true}}).unwrap();
+            let before = s.state.camera.zoom;
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Up, at);
+            assert!(s.state.camera.zoom < before);
+            modifier_keys(&mut s, Modifiers {alt:true,..Default::default()}, true);
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Up, at);
+            assert!((s.state.camera.zoom-before).abs()<1e-5);
+            modifier_keys(&mut s, Modifiers {alt:true,..Default::default()}, false);
+            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Drag {value:ZoomDrag::ClickOnly}}).unwrap();
+            let before = s.state.camera.clone();
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Move, [at[0]+80., at[1]+30.]);
+            pointer(&mut s, ContactPhase::Up, [at[0]+80., at[1]+30.]);
+            same_view(&s.state.camera, &before);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+            assert_eq!(s.engine.backend().dabs, 0);
+        }
+    }
+
+    #[test]
+    fn zoom_out_after_releasing_a_captured_zoom_in_contact_keeps_its_own_modifiers() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::Pen);
+            let at = [350.,420.];
+            let command = Modifiers {command:true,..Default::default()};
+            key(&mut s, "Control_L", true, Modifiers::default());
+            key(&mut s, " ", true, command);
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Move, [at[0]+48.,at[1]]);
+            key(&mut s, " ", false, command);
+            key(&mut s, "Control_L", false, command);
+            pointer(&mut s, ContactPhase::Move, [at[0]+80.,at[1]]);
+            pointer(&mut s, ContactPhase::Up, [at[0]+80.,at[1]]);
+            let before = s.state.camera.zoom;
+            key(&mut s, "Alt_L", true, Modifiers::default());
+            key(&mut s, " ", true, Modifiers {alt:true,..Default::default()});
+            let reply = pointer(&mut s, ContactPhase::Down, at);
+            assert_eq!(reply.navigation_cursor, Some(NavigationMode::ZoomOut));
+            pointer(&mut s, ContactPhase::Up, at);
+            assert!(s.state.camera.zoom < before);
+            key(&mut s, " ", false, Modifiers {alt:true,..Default::default()});
+            key(&mut s, "Alt_L", false, Modifiers {alt:true,..Default::default()});
+            assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Paint);
+        }
+    }
+
+    #[test]
+    fn area_zoom_repositions_cancels_and_ignores_degenerate_rectangles() {
+        let mut s = session(Platform::Gtk);
+        invoke(&mut s, CommandId::Zoom);
+        s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Drag {value:ZoomDrag::Area}}).unwrap();
+        let at = [300., 350.];
+        let before = s.state.camera.clone();
+        for end in [[500.,350.],[300.,550.]] {
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Move, end);
+            pointer(&mut s, ContactPhase::Up, end);
+            same_view(&s.state.camera, &before);
+        }
+        pointer(&mut s, ContactPhase::Down, at);
+        pointer(&mut s, ContactPhase::Move, [500.,550.]);
+        assert!(key(&mut s, " ", true, Modifiers::default()).handled);
+        pointer(&mut s, ContactPhase::Move, [550.,580.]);
+        let contact = s.interaction.pointer.unwrap().navigation.unwrap();
+        assert_eq!(contact.origin, [350.,380.]);
+        assert_eq!(s.state.camera, before);
+        assert!(key(&mut s, " ", false, Modifiers::default()).handled);
+        assert!(key(&mut s, "escape", true, Modifiers::default()).handled);
+        pointer(&mut s, ContactPhase::Up, [550.,580.]);
+        same_view(&s.state.camera, &before);
+        pointer(&mut s, ContactPhase::Down, [350.,380.]);
+        pointer(&mut s, ContactPhase::Move, [550.,580.]);
+        let center = anchor(&s, [450.,480.]);
+        pointer(&mut s, ContactPhase::Up, [550.,580.]);
+        assert!(s.state.camera.zoom > before.zoom);
+        same_point(anchor(&s, s.state.camera.work_area_center()), center);
+    }
+
+    #[test]
+    fn temporary_area_zoom_does_not_treat_its_shortcut_as_repositioning() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            s.dispatch(UiAction::ZoomTool {action:ZoomToolAction::Drag {value:ZoomDrag::Area}}).unwrap();
+            let modifiers = Modifiers {command:true,..Default::default()};
+            modifier_keys(&mut s, modifiers, true);
+            key(&mut s, " ", true, modifiers);
+            let at = [300.,350.];
+            let end = [500.,550.];
+            let before = s.state.camera.clone();
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Move, end);
+            assert_eq!(s.interaction.pointer.unwrap().navigation.unwrap().origin, at);
+            same_view(&s.state.camera, &before);
+            pointer(&mut s, ContactPhase::Up, end);
+            assert!(s.state.camera.zoom > before.zoom);
+            key(&mut s, " ", false, modifiers);
+            modifier_keys(&mut s, modifiers, false);
+            assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Paint);
+        }
+    }
+
+    #[test]
+    fn zoom_click_centering_does_not_change_smooth_wheel_or_pinch_anchors() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::Zoom);
+            invoke(&mut s, CommandId::CenterZoomClicks);
+            let at = [300.,400.];
+            let point = anchor(&s, at);
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Up, at);
+            same_point(anchor(&s, s.state.camera.work_area_center()), point);
+            let point = anchor(&s, at);
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Move, [at[0]+50., at[1]]);
+            pointer(&mut s, ContactPhase::Up, [at[0]+50., at[1]]);
+            same_point(anchor(&s, at), point);
+            s.state.settings.wheel_zoom = true;
+            s.scroll(at, [0.,-40.], 1., false, false).unwrap();
+            same_point(anchor(&s, at), point);
+            let zoom = s.state.camera.zoom;
+            s.scroll(at, [0.,-40.], 1., true, false).unwrap();
+            assert!(s.state.camera.zoom > zoom);
+            same_point(anchor(&s, at), point);
+            let zoom = s.state.camera.zoom;
+            s.scroll(at, [0.,-40.], 1., false, true).unwrap();
+            assert_eq!(s.state.camera.zoom, zoom);
+            s.state.settings.rotate_with_two_fingers = false;
+            let before = s.state.camera.clone();
+            let point = anchor(&s, [400.,400.]);
+            s.touch(1, PenPhase::Down, [300.,400.]);
+            s.touch(2, PenPhase::Down, [500.,400.]);
+            s.touch(2, PenPhase::Move, [500.,500.]);
+            assert_eq!(s.state.camera.rotation, before.rotation);
+            assert!(s.state.camera.zoom > before.zoom);
+            same_point(anchor(&s, [400.,450.]), point);
+            s.touch(1, PenPhase::Cancel, [300.,400.]);
+            s.touch(2, PenPhase::Cancel, [500.,500.]);
+            let before = s.state.camera.clone();
+            let point = anchor(&s, at);
+            let to = [at[0]+30., at[1]-20.];
+            s.multi_touch_gesture(at, to, 1.1, 0.2).unwrap();
+            assert_eq!(s.state.camera.rotation, before.rotation);
+            assert!(s.state.camera.zoom > before.zoom);
+            same_point(anchor(&s, to), point);
+            let before = s.state.camera.clone();
+            assert!(s.multi_touch_gesture(at, at, 1., f32::NAN).is_err());
+            same_view(&s.state.camera, &before);
+            invoke(&mut s, CommandId::RotateRight);
+            assert_ne!(s.state.camera.rotation, before.rotation);
+            s.dispatch(UiAction::SetZoomLocked {locked:true}).unwrap();
+            let before = s.state.camera.clone();
+            pointer(&mut s, ContactPhase::Down, at);
+            pointer(&mut s, ContactPhase::Up, at);
+            same_view(&s.state.camera, &before);
+        }
+    }
+
+    #[test]
+    fn zoom_controls_retain_localized_action_identity_and_saved_preferences() {
+        let settings = Settings {zoom_tool:ZoomToolSettings {zoom_out:true, drag:ZoomDrag::Area,
+            direction:ZoomDirection::Vertical, center_clicked_point:true},wheel_zoom:true,
+            rotate_with_two_fingers:false,..Default::default()};
+        assert_eq!(Settings::restore(&serde_json::to_string(&settings).unwrap()), settings);
+        let defaults = Settings::restore(r#"{"zoom_tool":{"drag":"invalid"},"wheel_zoom":true}"#);
+        assert_eq!(defaults.zoom_tool, ZoomToolSettings::default());
+        assert!(defaults.wheel_zoom);
+        let canonical = settings.zoom_tool.controls(&Localizer::shared(UiLanguage::English));
+        for language in UiLanguage::ALL {
+            let controls = settings.zoom_tool.controls(&Localizer::shared(language));
+            for (actual, expected) in controls.iter().zip(&canonical) {
+                assert!(actual.same_schema(expected));
+                let ToolOption::Choice {labeled, items, label,..} = actual else {panic!("zoom choice")};
+                assert!(*labeled && !label.is_empty());
+                assert_eq!(items.iter().filter(|item|item.selected).count(), 1);
+                assert!(items.iter().all(|item| !item.label.is_empty()));
+            }
+        }
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::Zoom);
+            let context = s.state.toolbar_context();
+            let action = UiAction::ZoomTool {action:ZoomToolAction::Drag {value:ZoomDrag::Area}};
+            s.dispatch(UiAction::ToolbarEdit {context, action:Box::new(action.clone())}).unwrap();
+            assert_eq!(s.state.settings.zoom_tool.drag, ZoomDrag::Area);
+            invoke(&mut s, CommandId::Hand);
+            assert!(s.dispatch(UiAction::ToolbarEdit {context, action:Box::new(action)}).is_err());
+            let layout = WorkspacePreset::Illustrator.layout(platform);
+            let controls = layout.panel(Panel::Toolbar).unwrap().tiles();
+            assert!(controls.iter().any(|tile|tile.control==ToolbarControl::Command {command:CommandId::Zoom}));
+            assert!(!ToolbarControl::Command {command:CommandId::Zoom}.has_variants());
+        }
+    }
+
+    #[test]
+    fn zoom_tool_edits_request_the_latest_settings_without_artwork_history() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            let checkpoint = s.engine.checkpoint();
+            let actions = [
+                UiAction::ZoomTool {action:ZoomToolAction::Click {out:true}},
+                UiAction::ZoomTool {action:ZoomToolAction::Drag {value:ZoomDrag::Area}},
+                UiAction::ZoomTool {action:ZoomToolAction::Direction {value:ZoomDirection::Vertical}},
+                UiAction::Invoke {command:CommandId::CenterZoomClicks},
+            ];
+            for action in actions {
+                let change = s.dispatch(action).unwrap();
+                assert_ne!(change.regions & regions::HOST, 0);
+                let saved = s.state.requests.iter().rev().find_map(|request| match &request.kind {
+                    HostRequestKind::SaveSettings {settings} => Some(settings.as_ref()),
+                    _ => None,
+                }).unwrap();
+                assert_eq!(saved, &s.state.settings);
+                assert_eq!(s.engine.checkpoint(), checkpoint);
+            }
+            assert_eq!(s.state.settings.zoom_tool, ZoomToolSettings {zoom_out:true,drag:ZoomDrag::Area,
+                direction:ZoomDirection::Vertical,center_clicked_point:true});
+        }
     }
 
     #[test]
@@ -453,12 +694,12 @@ mod navigation_controls {
     fn tool_button_double_click_uses_the_displayed_navigation_variant() {
         for platform in [Platform::Gtk, Platform::Android, Platform::Web, Platform::Mac, Platform::Ios] {
             for command in [CommandId::Hand, CommandId::Zoom, CommandId::RotateView] {
-                let control = ToolbarControl::Command { command: CommandId::Hand };
+                let control = ToolbarControl::Command { command: if command == CommandId::Zoom { command } else { CommandId::Hand } };
                 let (mut s, panel, ids) = group_fixture(platform, &[control]);
                 let tile = ids[0];
                 let anchor = DrawerAnchor::Tile { panel, tile };
-                let choice = slot_choice(&s, anchor, ToolVariant::Command { command });
-                s.dispatch(choice).unwrap();
+                if command == CommandId::Zoom { invoke(&mut s, command); }
+                else { let choice = slot_choice(&s, anchor, ToolVariant::Command { command }); s.dispatch(choice).unwrap(); }
                 let view = s.panel_view(panel).unwrap();
                 let button = view.tiles.iter().find(|item| item.id == tile).unwrap();
                 assert_eq!(Some(button.choice.icon), command.icon());
@@ -470,7 +711,7 @@ mod navigation_controls {
                 let center = self::anchor(&s, s.state.camera.work_area_center());
                 let checkpoint = s.engine.checkpoint();
                 activate_slot(&mut s, anchor);
-                assert!(s.state.customization.drawer.is_some());
+                assert_eq!(s.state.customization.drawer.is_some(), command != CommandId::Zoom);
                 s.dispatch(UiAction::DoubleClickTool { control }).unwrap();
                 assert!(s.state.customization.drawer.is_none());
                 assert!(s.command(command).selected);

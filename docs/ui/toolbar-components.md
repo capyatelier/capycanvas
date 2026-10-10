@@ -105,6 +105,9 @@ atomic; child fields are never independent drop destinations.
 
 Segmented choices retain connected icon buttons (for example New/Add/Subtract/
 Intersect selection); list choices such as selection source remain dropdowns.
+Choices with `labeled` use text segments with the shared label at the left,
+including Zoom Click, Drag and Direction. They keep their measured natural size
+and enter overflow as a whole. Panel captions wrap to fit narrow docks.
 Grid choices can name a setting through `beside`; the settings panel places the
 compact chooser next to that setting's numeric group under the choice label.
 Horizontal bars keep one tile of width per choice but match the dropdown's 24px
@@ -146,7 +149,7 @@ Press, hold, then drag the slider’s empty leading cap or the options More butt
 reorder the component. A quick cap drag never reorders. Holding a track remains
 a numeric interaction. Disabled controls retain a draggable cap wrapper. Holding
 empty Tool Options space with touch or pen opens its display menu; mouse uses
-secondary click. Vertical options always use icons.
+secondary click. Vertical options use icons except choices that request labeled text segments.
 
 Compact top/bottom options prefer sixteen tiles of length (side options eight),
 then shrink to the available edge.

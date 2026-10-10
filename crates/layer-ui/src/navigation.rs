@@ -38,7 +38,7 @@ pub(super) fn command_mode(command: CommandId) -> Option<NavigationMode> {
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn append_navigation_overlay(&self, segments: &mut Vec<layer_render::CursorSegment>) {
         let Some(pointer) = self.interaction.pointer else { return };
-        let Some(contact) = pointer.navigation.filter(|c| c.rectangle && c.dragged) else { return };
+        let Some(contact) = pointer.navigation.filter(|c| c.zoom.drag == ZoomDrag::Area && c.dragged && matches!(c.mode, NavigationMode::Zoom | NavigationMode::ZoomOut)) else { return };
         let dpi = self.logical_viewport.map_or(1., |v| self.state.camera.viewport[0] as f32 / v[0]);
         let [x, y] = contact.origin.map(|v| v / dpi);
         let [u, v] = pointer.position.map(|v| v / dpi);
@@ -55,18 +55,21 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn navigation_mode(&self) -> Option<NavigationMode> {
         if let Some(mode) = self.interaction.pointer.and_then(|p| p.navigation.map(|n| n.mode)) { return Some(mode); }
-        self.interaction.navigation.as_ref().map(|(_, mode)| *mode)
-            .or_else(|| self.layer_interaction.tool.navigation())
-            .map(|mode| if mode == NavigationMode::Zoom && self.interaction.modifiers.alt { NavigationMode::ZoomOut } else { mode })
+        let mode = self.interaction.navigation.as_ref().map(|(_, mode)| *mode)
+            .or_else(|| self.layer_interaction.tool.navigation())?;
+        let mode = if mode == NavigationMode::Zoom && self.state.settings.zoom_tool.zoom_out { NavigationMode::ZoomOut } else { mode };
+        Some(if self.interaction.modifiers.alt && !self.in_modifier_hold("alt") {
+            match mode { NavigationMode::Zoom => NavigationMode::ZoomOut, NavigationMode::ZoomOut => NavigationMode::Zoom, _ => mode }
+        } else { mode })
     }
     pub(super) fn begin_navigation(&mut self, button: PointerButton, origin: [f32; 2]) -> NavigationContact {
         self.remember_view();
         self.interaction.navigation_tap = false;
-        let mut mode = if button == PointerButton::Pan { NavigationMode::Pan }
+        let mode = if button == PointerButton::Pan { NavigationMode::Pan }
             else { self.navigation_mode().unwrap_or_default() };
-        if mode == NavigationMode::Zoom && self.interaction.modifiers.alt { mode = NavigationMode::ZoomOut; }
-        NavigationContact { mode, origin, dragged: false,
-            rectangle: matches!(mode, NavigationMode::Zoom | NavigationMode::ZoomOut) && self.interaction.modifiers.shift }
+        let mut zoom = self.state.settings.zoom_tool;
+        if self.interaction.modifiers.shift && !self.in_modifier_hold("shift") { zoom.drag = ZoomDrag::Area; }
+        NavigationContact { mode, origin, dragged: false, zoom }
     }
     pub(super) fn release_navigation(&mut self, key: &str) -> Result<UiChange, String> {
         if self.interaction.navigation.as_ref().is_some_and(|(token, _)| token == key) {
@@ -88,8 +91,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let from = if contact.dragged { previous } else { contact.origin };
         contact.dragged |= moved;
         if contact.dragged {
-            if contact.rectangle {
-                if phase == ContactPhase::Up && !self.state.camera.zoom_locked {
+            if matches!(contact.mode, NavigationMode::Zoom | NavigationMode::ZoomOut) && contact.zoom.drag == ZoomDrag::Area {
+                if self.interaction.pressed.iter().any(|key| key == " ") && !self.in_modifier_hold(" ") && phase == ContactPhase::Move {
+                    for axis in 0..2 { contact.origin[axis] += position[axis] - previous[axis]; }
+                }
+                if phase == ContactPhase::Up && !self.state.camera.zoom_locked
+                    && (position[0] - contact.origin[0]).abs().min((position[1] - contact.origin[1]).abs()) > 3. * dpi {
                     let camera = &mut self.state.camera;
                     let center = [(contact.origin[0] + position[0]) * 0.5, (contact.origin[1] + position[1]) * 0.5];
                     let point = camera.surface_to_document64(center.map(f64::from)).map(|v| v as f32);
@@ -105,7 +112,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             return match contact.mode {
                 NavigationMode::Pan => self.gesture(from, position, 1., 0.),
                 NavigationMode::Zoom | NavigationMode::ZoomOut => {
-                    let scale = ((position[0] - from[0]) / dpi * 0.01 * self.state.settings.zoom_speed).clamp(-10., 10.).exp();
+                    if contact.zoom.drag == ZoomDrag::ClickOnly { return Ok(UiChange::default()); }
+                    let scale = (contact.zoom.direction.distance(from, position) / dpi * 0.01 * self.state.settings.zoom_speed).clamp(-10., 10.).exp();
                     self.gesture(contact.origin, contact.origin, scale, 0.)
                 }
                 NavigationMode::Rotate => {
@@ -119,12 +127,23 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if phase != ContactPhase::Up { return Ok(UiChange::default()); }
         if matches!(contact.mode, NavigationMode::Zoom | NavigationMode::ZoomOut) {
+            if self.state.camera.zoom_locked { return Ok(UiChange::default()); }
             let scale = if contact.mode == NavigationMode::ZoomOut { 0.5_f32.sqrt() } else { 2_f32.sqrt() };
-            return self.gesture(contact.origin, contact.origin, scale, 0.);
+            let to = if contact.zoom.center_clicked_point { self.state.camera.work_area_center() } else { contact.origin };
+            return self.gesture(contact.origin, to, scale, 0.);
         }
         Ok(UiChange::default())
     }
     pub(super) fn navigation_key(&mut self, key: &str, pressed: bool, reply: &mut InputReply) -> Result<bool, String> {
+        if let Some(pointer) = self.interaction.pointer
+            && pointer.navigation.is_some_and(|c| c.zoom.drag == ZoomDrag::Area && matches!(c.mode, NavigationMode::Zoom | NavigationMode::ZoomOut)) {
+                if key == "escape" {
+                    if pressed { self.interaction.pointer = None; reply.change = self.changed(regions::CAMERA, true); }
+                    reply.handled = true;
+                    return Ok(true);
+                }
+                if key == " " { reply.handled = true; return Ok(true); }
+            }
         if self.navigation_mode() != Some(NavigationMode::Pan) || !self.navigation_idle()
             || self.interaction.modifiers.command || self.interaction.modifiers.alt { return Ok(false); }
         let direction = match key {

@@ -267,6 +267,7 @@ impl TouchGesture {
         phase: PenPhase,
         point: [f32; 2],
         single_pan: bool,
+        rotate: bool,
     ) -> bool {
         // Cancellation may have no usable coordinates. Retire the contact
         // before validating positions or interpreting any camera movement.
@@ -316,7 +317,7 @@ impl TouchGesture {
                 center(a, b),
                 center(c, d),
                 after_length / before_length,
-                rotation,
+                if rotate {rotation} else {0.},
             )
             .is_ok()
     }
@@ -446,12 +447,12 @@ mod tests {
         let mut camera = Camera::new([1000, 1000], [1000, 1000]);
         let mut touch = TouchGesture::default();
         let before = camera.clone();
-        assert!(!touch.update(&mut camera, 1, PenPhase::Down, [100.0, 100.0], false));
-        assert!(!touch.update(&mut camera, 1, PenPhase::Move, [200.0, 100.0], false));
+        assert!(!touch.update(&mut camera, 1, PenPhase::Down, [100.0, 100.0], false, true));
+        assert!(!touch.update(&mut camera, 1, PenPhase::Move, [200.0, 100.0], false, true));
         assert_eq!(camera, before);
-        touch.update(&mut camera, 2, PenPhase::Down, [300.0, 100.0], false);
+        touch.update(&mut camera, 2, PenPhase::Down, [300.0, 100.0], false, true);
         let anchor = camera.input_transform().map(Point { x: 250.0, y: 100.0 });
-        assert!(touch.update(&mut camera, 2, PenPhase::Move, [200.0, 300.0], false));
+        assert!(touch.update(&mut camera, 2, PenPhase::Move, [200.0, 300.0], false, true));
         assert!((camera.zoom - before.zoom * 2.0).abs() < 0.001);
         assert!((camera.rotation - std::f32::consts::FRAC_PI_2).abs() < 0.001);
         near(
@@ -459,10 +460,10 @@ mod tests {
             camera.input_transform().map(Point { x: 200.0, y: 200.0 }),
         );
         let before = camera.clone();
-        touch.update(&mut camera, 3, PenPhase::Down, [400.0, 300.0], false);
-        touch.update(&mut camera, 2, PenPhase::Up, [200.0, 300.0], false);
+        touch.update(&mut camera, 3, PenPhase::Down, [400.0, 300.0], false, true);
+        touch.update(&mut camera, 2, PenPhase::Up, [200.0, 300.0], false, true);
         assert_eq!(camera, before);
         touch.clear();
-        assert!(!touch.update(&mut camera, 3, PenPhase::Move, [300.0, 300.0], false));
+        assert!(!touch.update(&mut camera, 3, PenPhase::Move, [300.0, 300.0], false, true));
     }
 }

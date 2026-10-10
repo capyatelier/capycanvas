@@ -39,7 +39,10 @@ class AndroidViewportBenchmarkTest {
         val languageSwitches = args.getString("languageSwitches")?.split(',').orEmpty()
         val motion = args.getString("motion", "stroke")!!
         val blending = args.getString("blending")
-        check(motion in listOf("stroke", "hover", "pan", "pinch", "rotate"))
+        check(motion in listOf("stroke", "hover", "pan", "pinch", "rotate", "smooth_zoom"))
+        val smoothZoom = motion == "smooth_zoom"
+        val zoomDirection = args.getString("zoomDirection", "horizontal")!!
+        check(zoomDirection in listOf("horizontal", "vertical"))
         val cursor = args.getString("cursor")
         val retainedMotion = motion in listOf("stroke", "hover")
         val passThrough = args.getString("passThrough", "false") == "true"
@@ -125,6 +128,8 @@ class AndroidViewportBenchmarkTest {
                 image.recycle()
             }
             var activePresent: JSONArray? = null
+            var minimumZoomPercent = Int.MAX_VALUE
+            var maximumZoomPercent = 0
             var switchLanguage: String? = null
             var languageRequested = 0L
             fun requestLanguage(tag: String) {
@@ -147,10 +152,10 @@ class AndroidViewportBenchmarkTest {
                     if (left > 0) java.util.concurrent.locks.LockSupport.parkNanos(left)
                     if (i == count / 2) switchLanguage?.let { tag -> requestLanguage(tag); switchLanguage = null }
                     val t = i * interval / 1000.0 * speed
-                    val x = cx + radiusX * sin(t * 3.2)
-                    val y = cy + radiusY * sin(t * 4.7 + run * .31)
+                    val x = cx + if (smoothZoom) { if (zoomDirection == "horizontal") 100 * sin(t * PI) else 0.0 } else radiusX * sin(t * 3.2)
+                    val y = cy + if (smoothZoom) { if (zoomDirection == "vertical") -100 * sin(t * PI) else 0.0 } else radiusY * sin(t * 4.7 + run * .31)
                     val p = pressure ?: (.65 + .3 * sin(t * 1.7))
-                    if (osInput) {
+                    if (osInput || smoothZoom) {
                         coords[0].x = x.toFloat() + host.surfaceOrigin.x
                         coords[0].y = y.toFloat() + host.surfaceOrigin.y
                         coords[0].pressure = if (i == count) 0f else p.toFloat()
@@ -166,6 +171,10 @@ class AndroidViewportBenchmarkTest {
                     }
                     if (i % 120 == 119 && activePresent != null) native {
                         activePresent!!.put(JSONArray(Native.presentationTimings(it, true)))
+                    }
+                    if (smoothZoom && i % 120 == 119) {
+                        minimumZoomPercent = min(minimumZoomPercent, host.cameraReadout.zoomPercent)
+                        maximumZoomPercent = max(maximumZoomPercent, host.cameraReadout.zoomPercent)
                     }
                 }
             }
@@ -217,18 +226,28 @@ class AndroidViewportBenchmarkTest {
             waitFor { !native { Native.renderingPending(it) } }
             host.drain(obj("type" to "invoke", "command" to "undo"))
             SystemClock.sleep(800)
+            if (smoothZoom) {
+                val settings = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("settings").toString())
+                val zoom = settings.optJSONObject("zoom_tool")
+                if (zoom != null) {
+                    zoom.put("drag", "smooth").put("direction", zoomDirection).put("zoom_out", false)
+                    host.drain(obj("type" to "restore_settings", "settings" to settings))
+                } else check(zoomDirection == "horizontal")
+                host.drain(obj("type" to "invoke", "command" to "zoom"))
+            }
             if (motion == "hover") stroke(0, 1500, true)
             if (!retainedMotion) {
-                gesture(1500)
+                if (smoothZoom) stroke(0, 1500) else gesture(1500)
                 restoreNavigationCamera()
                 SystemClock.sleep(800)
             }
             waitFor { host.snapshot?.optBoolean("brush_ready") == true }
             val readiness = host.snapshot!!
-            val info = obj("radii" to JSONArray(listOf(radiusX, radiusY)), "navigator" to navigator, "label" to label, "photo" to (args.getString("photo") ?: "generated"), "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
+            val info = obj("radii" to JSONArray(listOf(radiusX, radiusY)), "navigator" to navigator, "label" to label, "photo" to (args.getString("photo") ?: "generated"), "motion" to motion, "zoom_direction" to zoomDirection, "repeats" to repeats, "os_input" to (osInput || smoothZoom), "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
                 "startup" to obj("gpu_ready" to readiness.optBoolean("gpu_ready"), "canvas_ready" to readiness.optBoolean("canvas_ready"), "brush_ready" to readiness.optBoolean("brush_ready"), "shaders_ready" to readiness.optBoolean("shaders_ready")),
                 "display" to native { JSONObject(Native.displayStatus(it)) })
             info.put("thermal_status",activity.getSystemService(android.os.PowerManager::class.java).currentThermalStatus)
+            if (smoothZoom) info.put("state", host.snapshot!!.getJSONObject("state"))
             File(output, "$label-info.json").writeText(info.toString(2))
             assertEquals(if (retainedMotion) "SharedDemandRefresh" else "Fifo", info.getJSONObject("display").getString("present_mode"))
             assertEquals(retainedMotion, info.getJSONObject("display").getBoolean("retained_target"))
@@ -244,6 +263,8 @@ class AndroidViewportBenchmarkTest {
                 val queryPool = java.util.concurrent.Executors.newSingleThreadExecutor()
                 val queryResults = JSONArray()
                 val beforeRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
+                minimumZoomPercent = Int.MAX_VALUE
+                maximumZoomPercent = 0
                 host.measurementReport(true)
                 val present = JSONArray()
                 native { Native.presentationTimings(it, true); Native.completionTimings(it, true) }
@@ -274,7 +295,7 @@ class AndroidViewportBenchmarkTest {
                     }
                 }
                 if (motion == "stroke"&&contact > 0)repeat(duration/(contact+pause)) {index ->stroke((run+1)*1000+index,contact);SystemClock.sleep(pause.toLong())}
-                else if (retainedMotion) stroke(run + 1, duration, motion == "hover") else gesture(duration)
+                else if (retainedMotion || smoothZoom) stroke(run + 1, duration, motion == "hover") else gesture(duration)
                 val ended = System.nanoTime()
                 val endedBoot = SystemClock.elapsedRealtimeNanos()
                 sessionSampler.shutdown();assertTrue(sessionSampler.awaitTermination(10,java.util.concurrent.TimeUnit.SECONDS));sessionSample()
@@ -295,7 +316,12 @@ class AndroidViewportBenchmarkTest {
                 assertNull(host.actionError)
                 if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
                 if (motion == "hover") assertEquals("Hover never paints", beforeRevision, afterRevision)
+                if (smoothZoom) {
+                    assertEquals("Zoom never changes the document", beforeRevision, afterRevision)
+                    assertTrue("Zoom moves the camera", maximumZoomPercent > minimumZoomPercent)
+                }
                 val data = host.measurementReport(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
+                    .put("minimum_zoom_percent", minimumZoomPercent).put("maximum_zoom_percent", maximumZoomPercent)
                     .put("session_samples",sessionSamples)
                     .put("contact_ms",contact).put("pause_ms",pause)
                     .put("artwork_queries", queryResults)

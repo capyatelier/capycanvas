@@ -32,15 +32,18 @@ export function actionField({ element, button, icon }, spec, send, { label, aria
 }
 
 export function choiceField({ element, button, icon, openPopup, closePopup }, spec, send, { labels = false } = {}) {
-  const row = element('div', `toolbar-option ${spec.segmented ? 'toolbar-segments selection-modes' : 'toolbar-choice'}`);
+  const row = element('div', `toolbar-option ${spec.labeled ? 'toolbar-labeled-choice' : spec.segmented ? 'toolbar-segments selection-modes' : 'toolbar-choice'}`);
+  const group = spec.labeled ? element('div', 'toolbar-segments selection-modes') : row;
+  const label = spec.labeled ? element('span', 'toolbar-option-label', spec.label) : null;
+  if (label) row.append(label, group);
   row.dataset.toolbarField = ''; row.dataset.toolbarChoice = spec.id;
   if (spec.columns) { row.classList.add('choice-grid'); row.style.setProperty('--choice-columns', spec.columns); row.title = spec.label; }
   let selected = spec.items.findIndex(i => i.selected), entries = [];
   const captions = [];
   const buttons = spec.segmented ? spec.items.map((item, i) => {
-    const b = button('', () => send(spec.items[i].action)); b.append(icon(item.icon));
-    if (labels && !spec.columns) b.append(captions[i] = element('span', 'toolbar-segment-label', item.label));
-    b.title = item.label; b.setAttribute('aria-label', item.label); b.dataset.toolbarSegment = `${spec.id}-${i}`; row.append(b); return b;
+    const b = button('', () => send(spec.items[i].action)); if (!spec.labeled) b.append(icon(item.icon));
+    if ((labels || spec.labeled) && !spec.columns) b.append(captions[i] = element('span', 'toolbar-segment-label', item.label));
+    b.title = item.label; b.setAttribute('aria-label', item.label); b.dataset.toolbarSegment = `${spec.id}-${i}`; group.append(b); return b;
   }) : [];
   const b = spec.segmented ? null : button('', () => {
     const menu = element('div', 'toolbar-choice-menu');
@@ -54,11 +57,12 @@ export function choiceField({ element, button, icon, openPopup, closePopup }, sp
   const chosen = b ? element('span', 'toolbar-choice-label') : null, arrow = b ? icon('chevron-down') : null;
   let shownIcon;
   if (b) { b.setAttribute('aria-label', spec.label); b.title = spec.label; row.append(b); }
-  row.setAttribute('role', spec.segmented ? 'radiogroup' : 'group'); row.setAttribute('aria-label', spec.label);
+  group.setAttribute('role', spec.segmented ? 'radiogroup' : 'group'); group.setAttribute('aria-label', spec.label);
   function update(option) {
     spec = option.Choice;
     const items = spec.items; selected = items.findIndex(i => i.selected);
-    row.setAttribute('aria-label', spec.label);
+    group.setAttribute('aria-label', spec.label);
+    if (label) label.textContent = spec.label;
     if (spec.columns) row.title = spec.label;
     if (b) { b.setAttribute('aria-label', spec.label); b.title = spec.label; }
     if (b) { const item = items[selected] || items[0]; if(shownIcon!==item.icon){shownIcon=item.icon;b.replaceChildren(icon(item.icon),chosen,arrow);} chosen.textContent=item.label; }
@@ -66,7 +70,7 @@ export function choiceField({ element, button, icon, openPopup, closePopup }, sp
     entries.forEach(({entry,caption},i) => { caption.textContent=items[i].label; entry.setAttribute('aria-checked', i === selected); });
   }
   update({ Choice: spec });
-  return { row, update, segmented: buttons.length };
+  return { row, update, segmented: spec.labeled ? 0 : buttons.length, intrinsic: !!spec.labeled };
 }
 
 // Retained DOM controls. Rust owns the field schema, edit context, numeric math,
@@ -312,7 +316,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     const sizes = fields.map(f => {
       if (f.gradient) return [vertical?extent[0]:120,24];
       if (f.segmented) return vertical ? [extent[0], style.size[1] * (extent[0] < style.size[0] * f.segmented ? f.segmented : 1)] : [style.size[0] * f.segmented, fieldHeight];
-      if (!f.interval && (vertical || f.action)) return style.size;
+      if (!f.interval && !f.intrinsic && (vertical || f.action)) return style.size;
       f.row.style.width = 'max-content'; f.row.style.height = 'auto'; f.row.hidden = false;
       return [f.row.scrollWidth, Math.max(fieldHeight, f.row.scrollHeight)];
     });

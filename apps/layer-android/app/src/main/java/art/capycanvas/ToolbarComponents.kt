@@ -144,7 +144,7 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
             val measureKey = options.map { option -> when {
                 option.has("Range") -> option.getJSONObject("Range").let { listOf(it.getString("id"), it.array("bounds").objects().map { f -> f.getJSONObject("numeric").toString() }) }
                 option.has("Numeric") -> option.getJSONObject("Numeric").let { listOf(it.getString("id"), it.getString("label"), it.getJSONObject("numeric").toString()) }
-                option.has("Choice") -> option.getJSONObject("Choice").let { listOf(it.getBoolean("segmented"), it.array("items").length(), it.optInt("columns"), it.optString("beside")) }
+                option.has("Choice") -> option.getJSONObject("Choice").let { listOf(it.getBoolean("segmented"), it.optBoolean("labeled"), it.array("items").length(), it.optInt("columns"), it.optString("beside")) }
                 else -> "action"
             } }.toString()
             val sizes = remember(measureKey, preferences.toString(), style, vertical, width, textStyle, density) {
@@ -183,6 +183,9 @@ internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float,
     preferences: JSONObject, textWidth: (String) -> Float, caption: String? = null, language: String = ""): List<Float> = when {
     option.has("Gradient") -> listOf(if(vertical) width else 120f,24f)
     option.has("Range") -> listOf(if (preferences.getBoolean("sliders")) 280f else 100f, 28f)
+    option.has("Choice") && option.getJSONObject("Choice").optBoolean("labeled") -> option.getJSONObject("Choice").let {
+        listOf(maxOf(64f, textWidth(it.getString("label"))) + 8f + it.array("items").objects().sumOf { item -> (textWidth(item.getString("label")) + 12f).toDouble() }.toFloat(), 32f)
+    }
     option.has("Choice") && option.getJSONObject("Choice").optInt("columns") > 0 -> option.getJSONObject("Choice").let {
         val columns = it.getInt("columns")
         listOf(columns * 18f, ((it.array("items").length() + columns - 1) / columns) * 18f)
@@ -357,7 +360,17 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
 @Composable internal fun ToolbarChoice(choice: JSONObject, vertical: Boolean, labeled: Boolean, stacked: Boolean,
     iconSize: Int, edit: (JSONObject) -> Unit, prefix: String = "toolbar", height: Float = 24f, captions: Boolean = false,
     menu: ((String, (JSONObject?) -> Unit) -> Unit)? = null,
-    menuCopy: (suspend (String) -> JSONObject?)? = null) {
+    menuCopy: (suspend (String) -> JSONObject?)? = null, textOnly: Boolean = false) {
+    if (choice.optBoolean("labeled")) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(choice.getString("label"), Modifier.widthIn(min = 64.dp, max = 96.dp))
+            Box(Modifier.weight(1f)) {
+                ToolbarChoice(JSONObject(choice.toString()).put("labeled", false), false, true, false, iconSize, edit,
+                    prefix, height, captions = true, menu = menu, menuCopy = menuCopy, textOnly = true)
+            }
+        }
+        return
+    }
     val colors = LocalPalette.current
     val items = choice.array("items").objects()
     val id = choice.getString("id")
@@ -389,11 +402,11 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
         val segment: @Composable (JSONObject, Int, Modifier) -> Unit = { item, index, modifier ->
             HoverTip(item.getString("label"), modifier) {
             Row(Modifier.fillMaxSize().testTag(if(prefix=="tool" && id=="selection-mode") "tool-action-${item.getJSONObject("action").getString("command")}" else "$prefix-segment-$id-$index").background(if (item.getBoolean("selected")) colors.active else colors.input)
-                .then(if (captions) Modifier.focusProperties { canFocus = false } else Modifier)
+                .then(if (captions && !textOnly) Modifier.focusProperties { canFocus = false } else Modifier)
                 .selectable(item.getBoolean("selected"), role = Role.RadioButton) { edit(item.getJSONObject("action")) },
                 horizontalArrangement = Arrangement.spacedBy(CaptionGap.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-                SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical || prefix == "tool") iconSize.dp else 16.dp))
-                if (captions) Text(item.getString("label"), maxLines = 1, softWrap = false)
+                if (!textOnly) SharedIcon(item.getString("icon"), item.getString("label"), Modifier.size(if (vertical || prefix == "tool") iconSize.dp else 16.dp))
+                if (captions) Text(item.getString("label"), maxLines = if (textOnly) 2 else 1, softWrap = textOnly)
             }
             }
         }

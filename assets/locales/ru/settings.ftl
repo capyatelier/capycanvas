@@ -197,3 +197,8 @@ settings-keymap-preview-unavailable = { $count ->
     [many] Недоступно: { $count }
    *[other] Недоступно: { $count }
     }
+
+settings-mouse-wheel = Колесо мыши
+settings-wheel-pan = Перемещение
+settings-wheel-zoom = Масштаб
+settings-rotate-with-two-fingers = Вращать двумя пальцами

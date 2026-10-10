@@ -60,10 +60,12 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | --- | --- | --- | --- |
 | Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
 | Tool cursor hover, with and without brush size | 90 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
-| Pan: Hand tool, one or two fingers | 90 | **Misses 90:** two-finger pan 58.90–59.05 presented fps, p99 16.79–16.80 ms, 24 MP photo, thermal 0; panel reports 60 Hz | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/mid/` |
-| Pinch zoom | 90 | **Misses 90:** 57.50–58.07 presented fps, p99 33.50 ms, 24 MP photo, thermal 0; panel reports 60 Hz | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/mid/` |
+| Pan: Hand tool, one or two fingers | 90 | **Misses:** 58.91–59.00 presented fps, p99 16.78–16.80 ms, 24 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/mid/` |
+| Pinch zoom | 90 | **Misses:** 58.10–58.58 presented fps, p99 33.48–33.49 ms, 24 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/mid/` |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 90 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
-| Two-finger rotate | 90 | **Misses 90:** 58.94–58.96 presented fps, p99 16.78–16.79 ms, 24 MP photo, thermal 0; panel reports 60 Hz | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/mid/` |
+| Two-finger rotate | 90 | **Misses:** 58.88–58.95 presented fps, p99 16.78–16.81 ms, 24 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/mid/` |
+| Smooth Zoom tool, left/right | 90 | **Misses:** 50.20–50.33 presented fps, p99 67.00–83.73 ms, 24 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/mid/` |
+| Smooth Zoom tool, up/down | 90 | **Misses:** 50.03–50.28 presented fps, p99 66.99–117.22 ms, 24 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/mid/` |
 | Footer zoom and rotation sliders | 90 | Unmeasured on the reference tablet | |
 | Navigator drag | 90 | | |
 | Brush-cursor hover | 90 | | |
@@ -969,3 +971,17 @@ audit](../../artifacts/illustration-filters/pair1/merged-pair-final-matched-evid
 Native paint/mask/history/reopen and parameter/source-persistence checks pass
 separately on both tiers. The Top supplemental trace and identical rerun fail
 strict GPU coverage and remain preserved.
+
+## Zoom settings navigation comparison
+
+The 2026-10-09 1.0.12 run uses the tier photo, an empty paint layer and the
+Navigator, warm shaders, thermal status 0 and three five-second gestures.
+SurfaceFlinger actual-present timestamps establish the displayed rates. The
+`smooth_zoom` benchmark uses native stylus input and verifies changing zoom
+percentages without changing the drawing revision.
+
+Baseline `f02d74518` horizontal Zoom measured 50.77–50.90 fps, p99 50.26–50.33 ms. Both
+builds miss this tier. The measured build includes upstream rendering changes
+as well as Zoom settings, so this comparison does not isolate their cost or
+establish no regression.
+Current per-gesture evidence: `artifacts/navigation-controls/zoom-audit-20261009/post-rebase-results.json`.

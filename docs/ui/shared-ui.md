@@ -374,16 +374,17 @@ exports and visual tests read pixels back. Camera movement uses the same
 forward/inverse transform for drawing and display. Shared `TouchGesture`
 interprets two fingers as anchored pan/zoom/rotation; one finger does not paint.
 Mouse and stylus event collectors remain native.
-Wheel input pans; Shift-wheel pans horizontally; Ctrl-wheel zooms around the
-cursor. Hosts normalize native wheel units and Rust applies the camera gesture.
+Wheel input follows Canvas → Mouse wheel (Pan by default, or Zoom).
+Shift-wheel pans horizontally; Ctrl-wheel always zooms around the cursor. Hosts normalize native wheel units and Rust applies the camera gesture.
 These gestures also work while a mouse navigation button is held, including
 middle-button TrackPoint scrolling. A wheel gesture keeps that contact alive
 until release or cancellation. Painting, direct touch gestures, source-disc
 drags and queued paint input keep the camera fixed. Ctrl takes precedence over
 Shift, and wheel zoom respects the view's zoom lock. Web captures wheel input
 over the canvas before browser zoom; wheel input over panels stays with them.
-Hand, Zoom and Rotate View share the Hand tool's flyout. Tap H, Z or R to
-select one; hold the key while using it to return to the previous tool on release.
+Hand and Rotate View share a flyout; Zoom has its own button beside it. Tap
+H, Z or R to select one; hold the key while using it to return to the previous
+tool on release.
 Temporary navigation does not switch the painting tool or commit an unfinished
 polygon selection. Space pans, Ctrl+Space zooms, Alt+Space or Ctrl+Alt+Space zooms
 out, and Shift+Space rotates. Middle/right drag also pans. Once captured, a
@@ -391,11 +392,23 @@ contact retains its navigation mode through key release until up or cancellation
 Space with arrow keys pans in keyboard-sized steps; Page Up/Down while panning
 moves almost one visible page. Ordinary arrow keys retain their editing behavior.
 
-Zoom clicks step on release, with Alt reversing the direction. Horizontal drag
-zooms smoothly around the press location: right enlarges, left reduces. A small
-movement threshold separates clicks from drags. Shift-drag with Zoom draws a
+Zoom Tool Settings expose Click (In/Out), Drag (Smooth/Area/Click only),
+Direction (Left/right or Up/down), and Center clicked point. Defaults are In,
+Smooth, Left/right, and centering off. These tool choices are application
+preferences shared across drawings and workspaces, stored in `Settings.zoom_tool`.
+Clicks step on release; unbound Alt reverses the chosen click direction.
+Smooth drag right or up zooms in; left or down zooms out, around the press
+location. A small movement threshold separates clicks from drags. Shift-drag with Zoom draws a
 rectangle and fits that area on release. Rotate View turns around the work-area
-centre. Double-click the Hand tool button to fit, Zoom for actual pixels, or
+centre. Area mode uses the same rectangle without Shift. Press Space during
+the drag to move the rectangle; Escape cancels it. Space held for temporary
+Zoom remains part of that shortcut. A line or rectangle smaller than the movement
+threshold does not zoom. Click only suppresses zoom for moved contacts.
+Center clicked point moves the clicked image point to the work-area centre only
+on clicks; smooth drag, wheel and pinch retain their anchors. The contact captures
+the tool choices at press, including temporary navigation. Canvas → Rotate with
+two fingers controls touch and trackpad rotation while retaining pan and pinch.
+Double-click the Hand tool button to fit, Zoom for actual pixels, or
 Rotate View to reset rotation. These operations change the view, never the artwork or its Undo history.
 
 Fit preserves rotation and mirrors and measures the rotated canvas bounds.

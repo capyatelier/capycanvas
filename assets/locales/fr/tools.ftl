@@ -160,3 +160,14 @@ tool-tonal-tones = Tons · diaphragmes par rapport au blanc de référence
 
 tool-action-group-transform-warp-split = Diviser la grille
 tools-transform-reference = Point d’ancrage de position
+
+zoom-tool-click = Clic
+zoom-tool-in = Agrandir
+zoom-tool-out = Réduire
+zoom-tool-drag = Glisser
+zoom-tool-smooth = Continu
+zoom-tool-area = Zone
+zoom-tool-click-only = Clic seul
+zoom-tool-direction = Direction
+zoom-tool-left-right = Gauche/droite
+zoom-tool-up-down = Haut/bas

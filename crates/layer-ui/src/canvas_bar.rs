@@ -632,6 +632,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         id: group.id(),
                         label: group.localized_label(self.localization()),
                         segmented: group.segmented(),
+                        labeled: false,
                         columns: None,
                         beside: None,
                         items: vec![state.choice_item(self.bar_label(id))],
@@ -695,7 +696,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 None => ToolOption::Choice {
                     id: menu.id(),
                     label: menu.label(self.localization()),
-                    segmented: false,
+                    segmented: false, labeled: false,
                     columns: None,
                     beside: None,
                     items: Vec::new(),

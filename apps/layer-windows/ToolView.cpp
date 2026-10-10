@@ -290,23 +290,33 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
                 auto spec=object(value.GetObject(),L"Choice");auto items=array(spec,L"items");auto specId=str(spec,L"id");
                 if(!str(spec,L"beside").empty())continue;
                 auto bar=segmented(true,items.Size());AutomationProperties::SetName(bar,str(spec,L"label"));
+                bool labeled=flag(spec,L"labeled");
+                auto caption=label(data,str(spec,L"label"));
+                if(labeled){
+                    Grid row;row.ColumnSpacing(8);
+                    ColumnDefinition title;title.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(title);
+                    ColumnDefinition control;control.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(control);
+                    caption.MinWidth(64);caption.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(caption);
+                    Grid::SetColumn(bar,1);row.Children().Append(bar);root.Children().Append(row);
+                }
                 AutomationProperties::SetAutomationId(bar,L"tool-choice-"+specId);
-                fields.emplace_back([weak,bar,specId]{if(auto self=weak.lock())for(auto option:array(self->data->state,L"tool_extra"))
-                    if(auto current=object(option.GetObject(),L"Choice");str(current,L"id")==specId)AutomationProperties::SetName(bar,str(current,L"label"));});
+                fields.emplace_back([weak,bar,caption,specId]{if(auto self=weak.lock())for(auto option:array(self->data->state,L"tool_extra"))
+                    if(auto current=object(option.GetObject(),L"Choice");str(current,L"id")==specId){AutomationProperties::SetName(bar,str(current,L"label"));caption.Text(str(current,L"label"));}});
                 for(uint32_t i=0;i<items.Size();i++){
                     auto item=items.GetObjectAt(i);auto action=object(item,L"action");
                     auto pick=segment(str(item,L"icon"),str(item,L"label"),str(item,L"label"),L"tool-choice-"+specId+L"-"+to_hstring(i),true,i,
                         [weak,action,context]{if(auto self=weak.lock();self&&settingsContext(self->data->state)==context)self->data->dispatch(action);});
+                    if(labeled)pick.Content(label(data,str(item,L"label")));
                     Grid::SetColumn(pick,int(i));bar.Children().Append(pick);
-                    fields.emplace_back([weak,pick,specId,i]{if(auto self=weak.lock()){
+                    fields.emplace_back([weak,pick,specId,i,labeled]{if(auto self=weak.lock()){
                         J current;for(auto option:array(self->data->state,L"tool_extra"))if(str(object(option.GetObject(),L"Choice"),L"id")==specId)current=object(option.GetObject(),L"Choice");
                         auto items=array(current,L"items");bool chosen=i<items.Size()&&flag(items.GetObjectAt(i),L"selected");
                         pick.Background(chosen?selected(self->data):self->data->brush(L"input"));
-                        if(i<items.Size()){auto title=str(items.GetObjectAt(i),L"label");AutomationProperties::SetName(pick,title);tooltip(pick,title);}
+                        if(i<items.Size()){auto title=str(items.GetObjectAt(i),L"label");AutomationProperties::SetName(pick,title);tooltip(pick,title);if(labeled)pick.Content(label(self->data,title));}
                         AutomationProperties::SetItemStatus(pick,chosen?self->data->caption(L"search",L"selected"):hstring());
                     }});
                 }
-                root.Children().Append(bar);
+                if(!labeled)root.Children().Append(bar);
             }
             auto settings=array(data->state,L"tool_settings");StackPanel numbers{nullptr};
             for(auto value:settings){

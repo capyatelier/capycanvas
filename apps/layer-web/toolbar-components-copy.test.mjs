@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeElement} from './fake-dom.mjs';
-import {createToolbarComponent} from './toolbar-components.js';
+import {choiceField,createToolbarComponent} from './toolbar-components.js';
 import {refreshCopy} from './localization.js';
 
 class Element extends FakeElement {
@@ -64,4 +64,15 @@ test('toolbar bookmark preview keeps its native popup and stamp while captions f
   const h=harness(t,true),cap=h.root.querySelector('.toolbar-slider-cap');cap.click();const popup=h.root.querySelector('.toolbar-brush-preview'),bookmark=popup.querySelector('.toolbar-preview-bookmark'),slider=h.root.querySelector('.number-slider');
   assert.equal(bookmark.title,'en:remove_bookmark');h.switch('ru');assert.equal(h.root.querySelector('.toolbar-brush-preview'),popup);assert.equal(popup.querySelector('.toolbar-preview-bookmark'),bookmark);assert.equal(h.root.querySelector('.number-slider'),slider);assert.equal(h.stamps(),1);assert.equal(bookmark.title,'ru:remove_bookmark');assert.equal(bookmark.getAttribute('aria-label'),'ru:remove_bookmark');assert.equal(h.root.querySelector('.toolbar-more').title,'ru:more_options');assert.equal(cap.title,'ru:size');assert.equal(slider.getAttribute('aria-label'),'ru:size');assert.deepEqual(h.actions,[]);
   const next=h.tile();next.component.bookmarks[0].selected=false;h.root.updateComponent(next);assert.equal(bookmark.title,'ru:bookmark_value');bookmark.click();assert.equal(h.actions[0].action.type,'toggle_slider_bookmark');
+});
+
+
+test('labeled segmented choices retain radio controls and publish captions and actions',t=>{
+  const h=harness(t),element=(tag,cls,text)=>{const n=h.doc.createElement(tag);n.className=cls??'';if(text!=null)n.textContent=text;return n;},button=(text,action)=>{const n=element('button','',text);n.addEventListener('click',action);return n;};
+  const spec=language=>({id:'navigation-direction',label:`${language}:Direction`,labeled:true,segmented:true,items:['Horizontal','Vertical'].map((name,i)=>({label:`${language}:${name}`,icon:'zoom-in',selected:i===0,action:{type:'zoom_tool',action:{kind:'direction',value:i?'vertical':'horizontal'}}}))});
+  const field=choiceField({element,button,icon:()=>{throw Error('labeled radio must use text');}},spec('en'),action=>h.actions.push(action)),group=field.row.querySelector('.toolbar-segments'),label=field.row.querySelector('.toolbar-option-label'),radios=group.querySelectorAll('button');
+  assert.equal(label.textContent,'en:Direction');assert.equal(group.getAttribute('role'),'radiogroup');assert.deepEqual(radios.map(n=>n.textContent),['en:Horizontal','en:Vertical']);radios[1].focus();
+  const translated=spec('fr');translated.items[0].selected=false;translated.items[1].selected=true;field.update({Choice:translated});
+  assert.equal(field.row.querySelector('.toolbar-option-label'),label);assert.deepEqual(group.querySelectorAll('button'),radios);assert.equal(h.doc.activeElement,radios[1]);assert.equal(group.getAttribute('aria-label'),'fr:Direction');assert.equal(label.textContent,'fr:Direction');assert.deepEqual(radios.map(n=>n.getAttribute('aria-checked')),['false','true']);assert.deepEqual(radios.map(n=>n.textContent),['fr:Horizontal','fr:Vertical']);assert.deepEqual(h.actions,[]);
+  radios[1].click();assert.deepEqual(h.actions,[{type:'zoom_tool',action:{kind:'direction',value:'vertical'}}]);
 });

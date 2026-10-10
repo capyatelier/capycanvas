@@ -160,3 +160,14 @@ tool-tonal-tones = Toni · stop rispetto al bianco di riferimento
 tool-action-group-transform-warp-split = Suddividi griglia
 
 tools-transform-reference = Punto di ancoraggio
+
+zoom-tool-click = Clic
+zoom-tool-in = Ingrandisci
+zoom-tool-out = Riduci
+zoom-tool-drag = Trascina
+zoom-tool-smooth = Continuo
+zoom-tool-area = Area
+zoom-tool-click-only = Solo clic
+zoom-tool-direction = Direzione
+zoom-tool-left-right = Sinistra/destra
+zoom-tool-up-down = Su/giù

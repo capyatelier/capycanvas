@@ -214,7 +214,7 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
             assert_eq!(selected_slot_variant(&s, anchor), ToolVariant::BrushPreset { id });
         }
     }
-    for control in [ToolbarControl::Brush { id: Tool::Pen.default_preset() }, ToolbarControl::Command { command: CommandId::Eyedropper }] {
+    for control in [ToolbarControl::Brush { id: Tool::Pen.default_preset() }, ToolbarControl::Command { command: CommandId::Eyedropper }, ToolbarControl::Command { command: CommandId::Zoom }] {
         assert!(!control.has_variants());
         let (mut s, panel, ids) = group_fixture(Platform::Gtk, &[control]);
         let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
@@ -225,7 +225,7 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
         assert!(s.context_menu(ContextTarget::ToolVariants { anchor }).is_err());
         assert!(s.context_menu(ContextTarget::ToolVariants { anchor: header }).is_err());
     }
-    for command in [CommandId::Hand, CommandId::Zoom, CommandId::RotateView] {
+    for command in [CommandId::Hand, CommandId::RotateView] {
         let control = ToolbarControl::Command { command };
         assert!(control.has_variants());
         let (s, panel, ids) = group_fixture(Platform::Gtk, &[control]);
@@ -234,7 +234,7 @@ fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
             Some(UiAction::ChooseToolVariant { variant: ToolVariant::Command { command }, .. }) => Some(command),
             _ => None,
         }).collect();
-        assert_eq!(commands, [CommandId::Hand, CommandId::Zoom, CommandId::RotateView]);
+        assert_eq!(commands, [CommandId::Hand, CommandId::RotateView]);
     }
 }
 
@@ -426,7 +426,7 @@ fn queued_header_measurements_cannot_overwrite_a_replaced_header() {
 #[test]
 fn shipped_tool_slot_presets_keep_compact_counts_and_separate_pen_and_pencil() {
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
-        for (preset, count) in [(WorkspacePreset::Illustrator, 17), (WorkspacePreset::Photographer, 15)] {
+        for (preset, count) in [(WorkspacePreset::Illustrator, 18), (WorkspacePreset::Photographer, 16)] {
             let layout = preset.layout(platform);
             let controls: Vec<_> = layout.panel(Panel::Toolbar).unwrap().tiles().iter().map(|tile| tile.control).collect();
             assert_eq!(controls.iter().filter(|control| !matches!(control, ToolbarControl::Color | ToolbarControl::Divider)).count(), count);

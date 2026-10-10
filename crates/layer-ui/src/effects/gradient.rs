@@ -45,7 +45,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         let mut control=PropertyControl::new("gradient",&self.localization().text(MessageId::COMMAND_GRADIENT),PropertyKind::Gradient,EffectValue::Gradient(definition.clone()),EffectValue::Gradient(GradientDefinition::default()));
         control.gradient=Some(GradientControls::new(GradientDestination::Tool {epoch:self.state.document_file.epoch},&definition,self.localization()));
         vec![ToolOption::Choice {id:"gradient-shape",label:self.localization().text(MessageId::RESOURCES_PARAMETER_GRADIENT_FILL_STYLE),
-            segmented:true,columns:None,beside:None,items:self.group_choices(ToolControlGroup::Slot(ToolSlotId::Gradient),None).into_iter().map(|(_,item)|item).collect()},ToolOption::Gradient(Box::new(control))]
+            segmented:true, labeled:false,columns:None,beside:None,items:self.group_choices(ToolControlGroup::Slot(ToolSlotId::Gradient),None).into_iter().map(|(_,item)|item).collect()},ToolOption::Gradient(Box::new(control))]
     }
     pub(super) fn gradient_action(&mut self,target:GradientDestination,edit:GradientEdit)->Result<(),String> {
         let mut gradient=match &target {

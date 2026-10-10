@@ -639,3 +639,5 @@ command-save-view = Сохранить вид
 command-restore-view = Восстановить сохранённый вид
 command-next-drawing = Следующий рисунок
 command-previous-drawing = Предыдущий рисунок
+
+command-center-zoom-clicks = Центрировать точку щелчка

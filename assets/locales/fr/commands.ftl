@@ -636,3 +636,5 @@ command-save-view = Enregistrer la vue
 command-restore-view = Restaurer la vue enregistrée
 command-next-drawing = Dessin suivant
 command-previous-drawing = Dessin précédent
+
+command-center-zoom-clicks = Centrer le point cliqué

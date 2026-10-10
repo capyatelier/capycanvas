@@ -189,3 +189,8 @@ settings-keymap-preview-unavailable = { $count ->
     [one] Indisponible : { $count }
    *[other] Indisponibles : { $count }
     }
+
+settings-mouse-wheel = Molette de la souris
+settings-wheel-pan = Déplacer
+settings-wheel-zoom = Zoom
+settings-rotate-with-two-fingers = Tourner avec deux doigts

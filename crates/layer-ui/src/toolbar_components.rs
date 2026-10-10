@@ -128,6 +128,7 @@ pub enum ToolOption {
         id: &'static str,
         label: std::sync::Arc<str>,
         segmented: bool,
+        labeled: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         columns: Option<u8>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,6 +158,7 @@ impl ToolOption {
                 Self::Choice {
                     id: a,
                     segmented: p,
+                    labeled: g,
                     columns: c,
                     beside: e,
                     items: x,
@@ -165,6 +167,7 @@ impl ToolOption {
                 Self::Choice {
                     id: b,
                     segmented: q,
+                    labeled: h,
                     columns: d,
                     beside: f,
                     items: y,
@@ -172,7 +175,7 @@ impl ToolOption {
                 },
             ) => {
                 a == b
-                    && p == q && c == d && e == f
+                    && p == q && g == h && c == d && e == f
                     && x.len() == y.len()
                     && x.iter()
                         .zip(y)
@@ -307,6 +310,7 @@ impl UiState {
                 id,
                 label,
                 segmented,
+                labeled: false,
                 columns: None,
                 beside: None,
                 items,

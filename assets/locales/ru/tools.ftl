@@ -161,3 +161,14 @@ tool-tonal-tones = Тона · ступени относительно этал�
 tool-action-group-transform-warp-split = Разделить сетку
 
 tools-transform-reference = Опорная точка
+
+zoom-tool-click = Щелчок
+zoom-tool-in = Приблизить
+zoom-tool-out = Отдалить
+zoom-tool-drag = Перетаскивание
+zoom-tool-smooth = Плавно
+zoom-tool-area = Область
+zoom-tool-click-only = Только щелчок
+zoom-tool-direction = Направление
+zoom-tool-left-right = Влево/вправо
+zoom-tool-up-down = Вверх/вниз

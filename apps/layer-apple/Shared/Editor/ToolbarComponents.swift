@@ -430,6 +430,10 @@ private let captionPadding: CGFloat = 10, captionGap: CGFloat = 6, captionIcon: 
     if !option["Range"].isNull { return CGSize(width: preferences["sliders"].bool ? 280 : 100, height: 28) }
     if !option["Gradient"].isNull { return CGSize(width: vertical ? width : 120, height: 24) }
     let choice = option["Choice"]
+    if choice["labeled"].bool {
+        let labels = choice["items"].array.map { ceil(toolbarTextWidth($0["label"].string, size: textSize)) + 12 }.reduce(0, +)
+        return CGSize(width: max(64, ceil(toolbarTextWidth(choice["label"].string, size: textSize))) + 8 + labels, height: 32)
+    }
     if choice["columns"].uint > 0 {
         let columns = CGFloat(choice["columns"].uint), rows = (CGFloat(choice["items"].array.count) / columns).rounded(.up)
         return CGSize(width: columns * gridCell, height: rows * gridCell)
@@ -581,7 +585,12 @@ struct SegmentedChoiceBar: View {
     let palette: EditorPalette
     let send: (JSON) -> Void
     var body: some View {
-        if choice["columns"].uint > 0 { grid } else { bar }
+        if choice["labeled"].bool {
+            HStack(spacing: 8) {
+                Text(choice["label"].string).frame(minWidth: 64, alignment: .leading)
+                bar
+            }
+        } else if choice["columns"].uint > 0 { grid } else { bar }
     }
     private var grid: some View {
         let items = choice["items"].array, columns = Int(choice["columns"].uint)
@@ -610,9 +619,9 @@ struct SegmentedChoiceBar: View {
             let item = items[index]
             Button { send(item) } label: {
                 HStack(spacing: captionGap) {
-                    SharedIcon(name: item["icon"].string, size: iconSize)
-                    if captions { Text(item["label"].string).lineLimit(1).fixedSize() }
-                }.padding(.horizontal, captions ? captionPadding : 0)
+                    if !choice["labeled"].bool { SharedIcon(name: item["icon"].string, size: iconSize) }
+                    if captions || choice["labeled"].bool { Text(item["label"].string).lineLimit(choice["labeled"].bool ? 2 : 1) }
+                }.padding(.horizontal, choice["labeled"].bool ? 6 : captions ? captionPadding : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(item["selected"].bool ? surface.active : palette["input"],
                         in: shape.segment(index, of: items.count, stacked: stacked))

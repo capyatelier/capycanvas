@@ -632,3 +632,5 @@ command-save-view = 보기 저장
 command-restore-view = 저장한 보기 복원
 command-next-drawing = 다음 그림
 command-previous-drawing = 이전 그림
+
+command-center-zoom-clicks = 클릭한 지점을 중앙에 배치

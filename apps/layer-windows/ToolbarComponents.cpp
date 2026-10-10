@@ -683,26 +683,38 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 AutomationProperties::SetAutomationId(pick,L"toolbar-segment-"+id+L"-"+to_hstring(i));
                 row.Children().Append(pick);buttons.push_back(pick);
             }
-            result.row=row;result.segmented=int(items.Size());
-            result.update=[row,buttons,data=data](J const& option){
-                auto spec=object(option,L"Choice");AutomationProperties::SetName(row,str(spec,L"label"));
+            bool labeled=flag(choice,L"labeled");
+            auto choiceCaption=label(data,str(choice,L"label"));
+            if(labeled){
+                Grid form;form.ColumnSpacing(8);
+                ColumnDefinition title;title.Width({1,GridUnitType::Auto});form.ColumnDefinitions().Append(title);
+                ColumnDefinition choiceColumn;choiceColumn.Width({1,GridUnitType::Star});form.ColumnDefinitions().Append(choiceColumn);
+                choiceCaption.MinWidth(64);choiceCaption.VerticalAlignment(VerticalAlignment::Center);form.Children().Append(choiceCaption);
+                Grid::SetColumn(row,1);form.Children().Append(row);result.row=form;result.intrinsic=true;
+                result.natural=[data=data,choice,items]{double width=std::max(64.,textWidth(data,str(choice,L"label")))+8;
+                    for(auto item:items)width+=textWidth(data,str(item.GetObject(),L"label"))+12;
+                    return winrt::Windows::Foundation::Size{float(width),32};};
+            }else{result.row=row;result.segmented=int(items.Size());}
+            result.update=[row,buttons,choiceCaption,labeled,data=data](J const& option){
+                auto spec=object(option,L"Choice");AutomationProperties::SetName(row,str(spec,L"label"));choiceCaption.Text(str(spec,L"label"));
                 auto current=array(spec,L"items");
                 for(uint32_t i=0;i<std::min<uint32_t>(current.Size(),uint32_t(buttons.size()));++i){
+                    if(labeled)buttons[i].Content(label(data,str(current.GetObjectAt(i),L"label")));
                     bool chosen=flag(current.GetObjectAt(i),L"selected");
                     buttons[i].Background(chosen?selected(data):clear());AutomationProperties::SetName(buttons[i],str(current.GetObjectAt(i),L"label"));tooltip(buttons[i],str(current.GetObjectAt(i),L"label"));AutomationProperties::SetItemStatus(buttons[i],chosen?data->caption(L"search",L"selected"):L"");
                 }
             };
-            result.orient=[weak,row,buttons,glyphs]{
+            result.orient=[weak,row,buttons,glyphs,labeled]{
                 auto self=weak.lock();if(!self)return;
                 double tileW=array(self->style,L"size").GetNumberAt(0);
-                bool stacked=self->vertical&&self->width<tileW*double(buttons.size());
+                bool stacked=!labeled&&self->vertical&&self->width<tileW*double(buttons.size());
                 row.RowDefinitions().Clear();row.ColumnDefinitions().Clear();
                 for(size_t i=0;i<buttons.size();++i){
                     if(stacked){RowDefinition line;line.Height({1,GridUnitType::Star});row.RowDefinitions().Append(line);Grid::SetRow(buttons[i],int(i));Grid::SetColumn(buttons[i],0);}
                     else{ColumnDefinition cell;cell.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(cell);Grid::SetColumn(buttons[i],int(i));Grid::SetRow(buttons[i],0);}
                     double first=i==0?6:0,last=i+1==buttons.size()?6:0;
                     buttons[i].CornerRadius(stacked?CornerRadius{first,first,last,last}:CornerRadius{first,last,last,first});
-                    buttons[i].Content(icon(glyphs[i],self->data->theme(),self->vertical?self->iconSize:16));
+                    if(!labeled)buttons[i].Content(icon(glyphs[i],self->data->theme(),self->vertical?self->iconSize:16));
                 }
             };
             return result;

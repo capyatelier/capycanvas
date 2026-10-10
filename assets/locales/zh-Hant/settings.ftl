@@ -189,3 +189,8 @@ settings-keymap-preview-unavailable = { $count ->
     [one] 無法使用：{ $count }
    *[other] 無法使用：{ $count }
     }
+
+settings-mouse-wheel = 滑鼠滾輪
+settings-wheel-pan = 平移
+settings-wheel-zoom = 縮放
+settings-rotate-with-two-fingers = 雙指旋轉

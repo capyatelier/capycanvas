@@ -634,3 +634,5 @@ command-save-view = Lưu chế độ xem
 command-restore-view = Khôi phục chế độ xem đã lưu
 command-next-drawing = Bản vẽ tiếp theo
 command-previous-drawing = Bản vẽ trước
+
+command-center-zoom-clicks = Đưa điểm nhấp vào giữa

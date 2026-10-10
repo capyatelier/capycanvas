@@ -632,3 +632,5 @@ command-save-view = บันทึกมุมมอง
 command-restore-view = คืนค่ามุมมองที่บันทึกไว้
 command-next-drawing = ภาพวาดถัดไป
 command-previous-drawing = ภาพวาดก่อนหน้า
+
+command-center-zoom-clicks = จัดจุดที่คลิกไว้ตรงกลาง

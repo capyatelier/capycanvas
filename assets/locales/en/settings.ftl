@@ -189,3 +189,8 @@ settings-keymap-preview-unavailable = { $count ->
     [one] Not available: { $count }
    *[other] Not available: { $count }
     }
+
+settings-mouse-wheel = Mouse wheel
+settings-wheel-pan = Pan
+settings-wheel-zoom = Zoom
+settings-rotate-with-two-fingers = Rotate with two fingers

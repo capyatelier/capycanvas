@@ -632,3 +632,5 @@ command-save-view = 表示を保存
 command-restore-view = 保存した表示を復元
 command-next-drawing = 次の作品
 command-previous-drawing = 前の作品
+
+command-center-zoom-clicks = クリックした位置を中央に

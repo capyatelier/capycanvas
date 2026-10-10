@@ -370,7 +370,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         vec![ToolOption::Choice {
             id: "tonal-tones",
             label: self.localization().text(MessageId::TOOL_TONAL_TONES),
-            segmented: true,
+            segmented: true, labeled: false,
             columns: None,
             beside: None,
             items: TonalOptions::choices(self.engine.document().composition().color.depth.is_float())

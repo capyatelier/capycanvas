@@ -2614,7 +2614,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let selection = self.layer_interaction.tool.selection_tool();
         let selection_mode = self.effective_selection_mode();
-        let selected = (id == CommandId::QuickMask && self.selection_masks.quick())
+        let selected = (id == CommandId::CenterZoomClicks && self.state.settings.zoom_tool.center_clicked_point)
+            || (id == CommandId::QuickMask && self.selection_masks.quick())
             || (id == CommandId::SelectionOutline && self.selection_tools.options.display.outline)
             || (id == CommandId::MaskOverlay && self.selection_tools.options.display.overlay)
             || (id == CommandId::MaskOverlayProtected && self.grayscale_masks())
@@ -2860,8 +2861,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut save_settings = matches!(
             &action,
             UiAction::SetTheme { .. }
+                | UiAction::ZoomTool { .. }
                 | UiAction::Invoke {
-                    command: CommandId::ToggleTheme
+                    command: CommandId::ToggleTheme | CommandId::CenterZoomClicks
                 }
         );
         let (mut changed, wake) = match action {
@@ -2973,6 +2975,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                         (0, false)
                     }
                 }
+            }
+            UiAction::ZoomTool { action } => {
+                self.state.settings.zoom_tool.apply(action);
+                self.refresh_tools();
+                (SETTINGS | BRUSH | COMMANDS, false)
             }
             UiAction::SetZoom { zoom } => {
                 self.require_navigation_idle()?;
@@ -4135,6 +4142,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             phase,
             position,
             self.layer_interaction.tool == LayerCanvasTool::Hand,
+            self.state.settings.rotate_with_two_fingers,
         ) {
             self.initial_fit = false;
             self.sync_camera();
@@ -4162,7 +4170,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Ok(self.changed(0, false));
         }
-        if zoom {
+        if zoom || (self.state.settings.wheel_zoom && !horizontal) {
             if delta[1] == 0. || self.state.camera.zoom_locked { return Ok(self.changed(0, false)); }
             self.remember_view();
             let current = self.state.camera.zoom;
@@ -4188,6 +4196,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             1.0,
             0.0,
         )
+    }
+
+    pub fn multi_touch_gesture(&mut self, from: [f32; 2], to: [f32; 2], scale: f32, rotation: f32) -> Result<UiChange, String> {
+        if !rotation.is_finite() { return Err("Invalid camera gesture".into()); }
+        self.gesture(from, to, scale, if self.state.settings.rotate_with_two_fingers {rotation} else {0.})
     }
 
     pub fn gesture(
@@ -5037,6 +5050,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 else { self.start_picker()?; }
                 Ok((BRUSH | COMMANDS | CUSTOMIZATION | COLOR_PREVIEW, true))
             }
+            CommandId::CenterZoomClicks => {
+                self.state.settings.zoom_tool.center_clicked_point ^= true;
+                Ok((SETTINGS | BRUSH | COMMANDS, false))
+            }
             CommandId::Hand | CommandId::Zoom | CommandId::RotateView => {
                 let tool = match command { CommandId::Zoom => LayerCanvasTool::Zoom, CommandId::RotateView => LayerCanvasTool::RotateView, _ => LayerCanvasTool::Hand };
                 self.layer_action(LayerAction::Tool { tool })?;
@@ -5325,6 +5342,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.settings = settings;
         if mask_mode_changed { self.refresh_document(); }
         self.refresh_shortcuts(bindings_changed);
+        self.refresh_tools();
         Ok(())
     }
 
@@ -5487,6 +5505,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
+        if self.layer_interaction.tool == LayerCanvasTool::Zoom {
+            self.state.tool_actions = vec![ToolSettingAction {command:CommandId::CenterZoomClicks, checkable:true}];
+        }
         self.state.color_picker.layer = self.eyedropper.layer;
         self.eyedropper.editor &= self.eyedropper.picking.previous.is_some();
         self.state.color_picker.editor = self.eyedropper.editor;
@@ -5548,7 +5569,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             self.state.tool_settings.extend(edges);
         }
-        self.state.tool_extra = if self.operation.transforming() { self.transform_extra() } else { self.tonal_extra() };
+        self.state.tool_extra = if self.layer_interaction.tool == LayerCanvasTool::Zoom { self.state.settings.zoom_tool.controls(self.localization()) } else if self.operation.transforming() { self.transform_extra() } else { self.tonal_extra() };
         self.state.layer_tools.mask_editing = self.mask_editing_view();
         self.state.layer_tools.selection_resize = self.selection_masks.refine_view();
         self.state.layer_tools.canvas_size = self.canvas_size_view();

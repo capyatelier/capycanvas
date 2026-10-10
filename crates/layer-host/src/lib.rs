@@ -410,7 +410,7 @@ impl NativeHost {
         if self.document_close_prepared { return Ok(()); }
         let previous = self.session.state().revision;
         if began { self.session.begin_view_gesture(); }
-        let change = self.session.gesture(anchor, anchor, scale, rotation)?;
+        let change = self.session.multi_touch_gesture(anchor, anchor, scale, rotation)?;
         self.apply_change(previous, change);
         Ok(())
     }
@@ -1787,6 +1787,13 @@ mod tests {
         app.gesture(anchor, 1.5, 0.2, true).unwrap();
         assert!((app.session.state().camera.zoom - zoom * 1.5).abs() < 0.0001);
         assert!(app.take_value().unwrap().get("state").is_none());
+        app.dispatch(UiAction::Preferences { action: layer_ui::PreferenceAction::Edit {
+            id: layer_ui::PreferenceId::RotateWithTwoFingers, value: layer_ui::PreferenceValue::Bool(false),
+        }}).unwrap();
+        let before = app.session.state().camera.clone();
+        app.gesture(anchor, 1.2, 0.5, true).unwrap();
+        assert_eq!(app.session.state().camera.rotation, before.rotation);
+        assert!((app.session.state().camera.zoom - before.zoom * 1.2).abs() < 0.0001);
         let camera = json!(app.session.state().camera);
         assert!(
             app.scroll(anchor, [f32::NAN, 0.], 2., false, false)

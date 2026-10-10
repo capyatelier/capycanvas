@@ -426,6 +426,12 @@ that folder to `$env:PATH`, for example
 
 The zoom menu grows to fit its shared captions and shortcut hints. Its readout
 exposes localized open/closed accessibility status after the native popup events.
+`exercise-navigation-controls.ps1` checks the Zoom Click, Drag and Direction
+text segments, Center clicked point, separate Zoom toolbar placement, canvas
+wheel/touch preferences and settings persistence. Run
+`fixtures navigation-controls navigation-controls:light` through the VM runner
+for both themes.
+
 `exercise-zoom-readout.ps1` checks each caption's full text and visible character
 rectangles, containment and shortcut separation, and waits for popup acknowledgment.
 Review the raw captures for complete glyphs; positive character bounds can still

@@ -418,3 +418,5 @@ button.edit-color-more.open image { -gtk-icon-transform: none; }
 .edit-color-strip .edit-color-pair { border-radius: calc(8px * var(--corner-fit)); }
 .edit-color-strip-hex { font-weight: 500; }
 .edit-color-number { font-feature-settings: "tnum"; }
+
+.text-segments toggle { min-width: 0; padding: 4px; }

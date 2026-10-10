@@ -637,3 +637,5 @@ command-save-view = Salvar visualização
 command-restore-view = Restaurar visualização salva
 command-next-drawing = Próximo desenho
 command-previous-drawing = Desenho anterior
+
+command-center-zoom-clicks = Centralizar o ponto clicado

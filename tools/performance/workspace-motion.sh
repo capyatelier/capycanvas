@@ -24,6 +24,13 @@ esac
 motion_run_dir=$(mktemp -d /tmp/capy-workspace-motion.XXXXXX)
 export XDG_RUNTIME_DIR="$motion_run_dir/runtime"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
+motion_schema_source=/usr/share/glib-2.0/schemas
+motion_schema_dir="$motion_run_dir/schemas"
+mkdir "$motion_schema_dir"
+cp "$motion_schema_source/org.gnome.desktop.wm.keybindings.gschema.xml" "$motion_schema_dir/"
+printf '[org.gnome.desktop.wm.keybindings]\nactivate-window-menu=[]\n' >"$motion_schema_dir/private.gschema.override"
+glib-compile-schemas "$motion_schema_dir"
+export GSETTINGS_SCHEMA_DIR="$motion_schema_dir" GSETTINGS_BACKEND=memory
 export WAYLAND_DISPLAY=layer-bench-motion
 export GDK_BACKEND=wayland GSK_RENDERER=vulkan GTK_A11Y=none
 if [[ "$motion_platform" == gtk ]]; then

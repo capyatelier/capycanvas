@@ -161,3 +161,14 @@ tool-tonal-tones = 明暗 · 相對於參考白的級數
 tool-action-group-transform-warp-split = 分割網格
 
 tools-transform-reference = 位置參考點
+
+zoom-tool-click = 點擊
+zoom-tool-in = 放大
+zoom-tool-out = 縮小
+zoom-tool-drag = 拖曳
+zoom-tool-smooth = 平滑
+zoom-tool-area = 區域
+zoom-tool-click-only = 僅點擊
+zoom-tool-direction = 方向
+zoom-tool-left-right = 左右
+zoom-tool-up-down = 上下

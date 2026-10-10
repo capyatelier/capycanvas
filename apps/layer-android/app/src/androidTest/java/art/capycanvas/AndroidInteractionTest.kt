@@ -2247,6 +2247,118 @@ class AndroidInteractionTest {
         }
     }
 
+    @Test fun navigationPreferencesControlWheel() {
+        fun camera() = state().getJSONObject("camera")
+        fun zoom() = camera().getDouble("zoom")
+        fun wheel(meta: Int = 0) {
+            val at = bounds("workspace").center; val location = IntArray(2)
+            onMain { surface.getLocationInWindow(location) }
+            val now = SystemClock.uptimeMillis()
+            val motion = MotionEvent.obtain(now, now, MotionEvent.ACTION_SCROLL, 1,
+                arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE }),
+                arrayOf(MotionEvent.PointerCoords().apply { x = at.x - location[0]; y = at.y - location[1]; setAxisValue(MotionEvent.AXIS_VSCROLL, 1f) }),
+                meta, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+            try { onMain { assertTrue(surface.dispatchGenericMotionEvent(motion)) } } finally { motion.recycle() }
+            settle()
+        }
+        tool = MotionEvent.TOOL_TYPE_MOUSE
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "open_settings", "page" to "canvas"))
+            waitFor("navigation preferences are visible") { shown("setting-choice-wheel_behavior") }
+            for (value in listOf(1, 0)) {
+                tap(bounds("setting-choice-wheel_behavior").center)
+                popupInput = true
+                try { tap(bounds("setting-choice-option-wheel_behavior-$value").center) } finally { popupInput = false }
+                waitFor("wheel preference changes") { state().getJSONObject("settings").getBoolean("wheel_zoom") == (value == 1) }
+            }
+            val rotates = state().getJSONObject("settings").getBoolean("rotate_with_two_fingers")
+            tap(bounds("preference-rotate_with_two_fingers").center)
+            waitFor("two finger rotation changes") { state().getJSONObject("settings").getBoolean("rotate_with_two_fingers") != rotates }
+            captureCanvasBar("navigation-preferences-$theme", "navigation-controls")
+            tap(bounds("preference-rotate_with_two_fingers").center)
+            action(obj("type" to "close_settings")); command("reset_view")
+            val before = camera(); wheel()
+            assertEquals("ordinary wheel pans", before.getDouble("zoom"), zoom(), .00001)
+            assertNotEquals(before.getJSONArray("translation").toString(), camera().getJSONArray("translation").toString())
+            val beforeCtrl = zoom(); wheel(KeyEvent.META_CTRL_ON)
+            assertTrue("Ctrl wheel always zooms", zoom() != beforeCtrl)
+            val beforeShift = camera(); wheel(KeyEvent.META_SHIFT_ON)
+            assertEquals("Shift wheel retains zoom", beforeShift.getDouble("zoom"), zoom(), .00001)
+            assertNotEquals(beforeShift.getJSONArray("translation").getDouble(0), camera().getJSONArray("translation").getDouble(0))
+            assertEquals("Shift wheel retains vertical position", beforeShift.getJSONArray("translation").getDouble(1), camera().getJSONArray("translation").getDouble(1), .00001)
+            action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "wheel_behavior", "value" to 1)))
+            val beforeZoom = zoom(); wheel(); assertTrue("Zoom preference changes ordinary wheel", zoom() != beforeZoom)
+            action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "wheel_behavior", "value" to 0)))
+            println("PASS navigation preferences theme=$theme")
+        }
+    }
+
+    @Test fun zoomToolChoicesAcrossDevices() {
+        fun camera() = state().getJSONObject("camera")
+        fun zoom() = camera().getDouble("zoom")
+        fun settings() = state().getJSONObject("settings").getJSONObject("zoom_tool")
+        fun persisted(): Boolean {
+            val saved = JSONObject(activity.getSharedPreferences(CanvasHost.preferencesName, 0).getString("settings", "{}")!!).optJSONObject("zoom_tool") ?: return false
+            return listOf("zoom_out", "drag", "direction", "center_clicked_point").all { saved.opt(it) == settings().opt(it) }
+        }
+        fun choose(id: String, index: Int) {
+            tap(bounds("tool-segment-$id-$index").center); settle()
+            waitFor("Zoom choice is persisted without a request error") { persisted() }
+        }
+        fun undo() = state().array("commands").objects().first { it.getString("id") == "undo" }.getBoolean("enabled")
+        val kept = layerStates().map { it.getLong("id") to it.getLong("paint_revision") }
+        val history = undo()
+        for (theme in listOf("light", "dark")) for (pointer in pointerTools) {
+            restore()
+            action(obj("type" to "set_theme", "theme" to theme)); command("zoom")
+            action(obj("type" to "select_panel_tab", "group" to group("tool_settings").getLong("id"), "panel" to "tool_settings"))
+            tool = pointer
+            waitFor("Zoom choices are visible") { shown("tool-segment-zoom-drag-0") }
+            for (label in listOf("Click", "Drag", "Direction", "In", "Out", "Smooth", "Area", "Click only", "Left/right", "Up/down"))
+                assertNotNull("Zoom shows $label", textBounds(label))
+            command("reset_view")
+            val work = camera().getJSONArray("work_area")
+            val origin = IntArray(2); onMain { surface.getLocationInWindow(origin) }
+            val center = Offset(origin[0] + work.getDouble(0).toFloat() + work.getDouble(2).toFloat() / 2,
+                origin[1] + work.getDouble(1).toFloat() + work.getDouble(3).toFloat() / 2)
+            choose("zoom-click", 1); assertTrue(settings().getBoolean("zoom_out"))
+            val beforeOut = zoom(); tap(center); waitFor("Out click zooms out") { zoom() < beforeOut }
+            choose("zoom-click", 0); assertFalse(settings().getBoolean("zoom_out"))
+            val beforeIn = zoom(); tap(center); waitFor("In click zooms in") { zoom() > beforeIn }
+            choose("zoom-drag", 0); assertEquals("smooth", settings().getString("drag"))
+            for (direction in 0..1) {
+                choose("zoom-direction", direction)
+                assertEquals(if (direction == 0) "horizontal" else "vertical", settings().getString("direction"))
+                command("reset_view"); val before = zoom()
+                drag(center, center + if (direction == 0) Offset(48 * density, 0f) else Offset(0f, -48 * density))
+                waitFor("Smooth direction $direction increases magnification") { zoom() > before }
+            }
+            choose("zoom-drag", 1); assertEquals("area", settings().getString("drag"))
+            command("reset_view"); val beforeArea = zoom()
+            event(MotionEvent.ACTION_DOWN, center - Offset(40 * density, 30 * density))
+            event(MotionEvent.ACTION_MOVE, center + Offset(40 * density, 30 * density)); settle()
+            assertEquals("Area waits for release", beforeArea, zoom(), .00001)
+            captureCanvasBar("area-$theme-$pointer", "navigation-controls")
+            event(MotionEvent.ACTION_UP); waitFor("Area fits on release") { zoom() > beforeArea }
+            choose("zoom-drag", 2); assertEquals("click_only", settings().getString("drag"))
+            command("reset_view"); val beforeDrag = zoom()
+            drag(center, center + Offset(50 * density, 40 * density))
+            assertEquals("Click Only ignores a drag", beforeDrag, zoom(), .00001)
+            val centered = settings().getBoolean("center_clicked_point")
+            tap(bounds("tool-action-center_zoom_clicks").center)
+            waitFor("Center checkbox changes the shared preference") { settings().getBoolean("center_clicked_point") != centered }
+            waitFor("Center checkbox is persisted") { persisted() }
+            captureCanvasBar("zoom-settings-$theme-$pointer", "navigation-controls")
+            tap(bounds("tool-action-center_zoom_clicks").center)
+            assertEquals("Zoom preserves artwork", kept, layerStates().map { it.getLong("id") to it.getLong("paint_revision") })
+            assertEquals("Zoom preserves history", history, undo())
+            println("PASS Zoom choices theme=$theme pointer=$pointer")
+        }
+        tool = MotionEvent.TOOL_TYPE_MOUSE
+        choose("zoom-drag", 0); choose("zoom-direction", 0); choose("zoom-click", 0)
+    }
+
     @Test fun navigationToolButtonsDoubleClickWithoutResettingCanvasClicks() {
         val ids = (0..2).map { fixture.getJSONObject("layout").getInt("next_tile_id") + it }
         fixture.getJSONObject("layout").apply { put("next_tile_id", ids.last() + 1) }

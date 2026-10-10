@@ -87,6 +87,9 @@ pub struct Settings {
     pub hide_cursor_while_drawing: bool,
     pub pan_speed: f32,
     pub zoom_speed: f32,
+    pub zoom_tool: ZoomToolSettings,
+    pub wheel_zoom: bool,
+    pub rotate_with_two_fingers: bool,
     /// New groups blend Pass Through instead of Normal.
     pub pass_through_groups: bool,
     pub feedback: bool,
@@ -130,6 +133,9 @@ impl Default for Settings {
             hide_cursor_while_drawing: true,
             pan_speed: 1.0,
             zoom_speed: 1.0,
+            zoom_tool: ZoomToolSettings::default(),
+            wheel_zoom: false,
+            rotate_with_two_fingers: true,
             pass_through_groups: false,
             feedback: true,
             platform_prediction: true,
@@ -341,6 +347,8 @@ pub enum PreferenceId {
     HideCursorWhileDrawing,
     PanSpeed,
     ZoomSpeed,
+    WheelBehavior,
+    RotateWithTwoFingers,
     PassThroughGroups,
     Pressure,
     Feedback,
@@ -376,6 +384,8 @@ impl PreferenceId {
             Self::HideCursorWhileDrawing => "hide-cursor-while-drawing",
             Self::PanSpeed => "pan-speed",
             Self::ZoomSpeed => "zoom-speed",
+            Self::WheelBehavior => "wheel-behavior",
+            Self::RotateWithTwoFingers => "rotate-with-two-fingers",
             Self::PassThroughGroups => "pass-through-groups",
             Self::Pressure => "pressure",
             Self::Feedback => "feedback",
@@ -1091,6 +1101,11 @@ impl Settings {
                 PreferenceGroup {
                     title: localizer.text(MessageId::SETTINGS_NAVIGATION).to_string(),
                     rows: vec![
+                        row(WheelBehavior, &localizer.text(MessageId::SETTINGS_MOUSE_WHEEL), "", PreferenceKind::Choice {
+                            options: [MessageId::SETTINGS_WHEEL_PAN, MessageId::SETTINGS_WHEEL_ZOOM].into_iter().map(|id| localizer.text(id).to_string()).collect(),
+                            selected: u32::from(self.wheel_zoom), icons: Vec::new(), presentation: ChoicePresentation::Dropdown,
+                        }),
+                        row(RotateWithTwoFingers, &localizer.text(MessageId::SETTINGS_ROTATE_WITH_TWO_FINGERS), "", PreferenceKind::Switch { active: self.rotate_with_two_fingers }),
                         number(
                             PanSpeed,
                             &localizer.text(MessageId::SETTINGS_SCROLL_PAN_SPEED),
@@ -1451,6 +1466,8 @@ impl Settings {
             Pressure => self.pressure_gamma = n,
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
+            WheelBehavior => self.wheel_zoom = value.choice().unwrap() == 1,
+            RotateWithTwoFingers => self.rotate_with_two_fingers = matches!(value, PreferenceValue::Bool(true)),
             PassThroughGroups => {
                 self.pass_through_groups = matches!(value, PreferenceValue::Bool(true))
             }

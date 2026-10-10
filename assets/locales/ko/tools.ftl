@@ -161,3 +161,14 @@ tool-tonal-tones = 톤 · 기준 흰색에 대한 스톱
 tool-action-group-transform-warp-split = 격자 분할
 
 tools-transform-reference = 위치 기준점
+
+zoom-tool-click = 클릭
+zoom-tool-in = 확대
+zoom-tool-out = 축소
+zoom-tool-drag = 드래그
+zoom-tool-smooth = 연속
+zoom-tool-area = 영역
+zoom-tool-click-only = 클릭만
+zoom-tool-direction = 방향
+zoom-tool-left-right = 좌우
+zoom-tool-up-down = 상하

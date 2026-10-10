@@ -53,10 +53,12 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | --- | --- | --- | --- |
 | Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
 | Tool cursor hover, with and without brush size | 120 | Renderer 119.3–119.6 submissions/s; submission interval p99 15.0–15.6 ms. Presentation unqualified. | [Tool cursors](#tool-cursors) |
-| Pan: Hand tool, one or two fingers | 120 | **Misses on 61 MP:** two-finger pan 33.93–35.12 presented fps, p99 41.67 ms, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/top/` |
-| Pinch zoom | 120 | **Misses on 61 MP:** 33.13–35.66 presented fps, p99 41.67–50.00 ms, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/top/` |
+| Pan: Hand tool, one or two fingers | 120 | **Misses:** 33.73–34.56 presented fps, p99 41.67 ms, 61 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/top/` |
+| Pinch zoom | 120 | **Misses:** 33.51–36.69 presented fps, p99 41.67–50.00 ms, 61 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/top/` |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 120 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
-| Two-finger rotate | 120 | **Misses on 61 MP:** 33.32–34.13 presented fps, p99 41.67 ms, Navigator open, thermal 0 | Measured 2026-10-08, optimized APK `e74cd6b9`; `artifacts/navigation-controls/android/top/` |
+| Two-finger rotate | 120 | **Misses:** 33.33–45.48 presented fps, p99 33.33–41.67 ms, 61 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/top/` |
+| Smooth Zoom tool, left/right | 120 | **Misses:** 35.75–42.09 presented fps, p99 50.00–58.34 ms, 61 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/top/` |
+| Smooth Zoom tool, up/down | 120 | **Misses:** 34.56–43.73 presented fps, p99 50.00–58.34 ms, 61 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/top/` |
 | Painting with Filters previews pending (61 MP) | 120 | One frame-gap outlier; repeat passes. Completed-update rate unqualified. Curves thumbnail opening 6.782 → 0.943–1.015 s | [Filters previews](#filters-previews), 2026-10-06 |
 | Footer zoom and rotation sliders | 120 | Unmeasured on the reference tablet | |
 | Navigator drag | 120 | | |
@@ -2422,3 +2424,17 @@ but starts after telemetry collection and must not be read as physical pen-up
 latency. Raw measurements and build logs are in
 `artifacts/fx-performance/{baseline,final,final-repeat}/`. Low-tier and mid-tier
 performance remain unmeasured for this change.
+
+## Zoom settings navigation comparison
+
+The 2026-10-09 1.0.12 run uses the tier photo, an empty paint layer and the
+Navigator, warm shaders, thermal status 0 and three five-second gestures.
+SurfaceFlinger actual-present timestamps establish the displayed rates. The
+`smooth_zoom` benchmark uses native stylus input and verifies changing zoom
+percentages without changing the drawing revision.
+
+Baseline `f02d74518` horizontal Zoom measured 34.32–38.44 fps, p99 50.00 ms. Both
+builds miss this tier. The measured build includes upstream rendering changes
+as well as Zoom settings, so this comparison does not isolate their cost or
+establish no regression.
+Current per-gesture evidence: `artifacts/navigation-controls/zoom-audit-20261009/post-rebase-results.json`.

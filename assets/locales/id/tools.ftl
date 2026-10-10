@@ -323,3 +323,14 @@ tool-tonal-tones = Nada · stop relatif terhadap putih acuan
 tool-action-group-transform-warp-split = Pisahkan Kisi
 
 tools-transform-reference = Jangkar posisi
+
+zoom-tool-click = Klik
+zoom-tool-in = Perbesar
+zoom-tool-out = Perkecil
+zoom-tool-drag = Seret
+zoom-tool-smooth = Halus
+zoom-tool-area = Area
+zoom-tool-click-only = Klik saja
+zoom-tool-direction = Arah
+zoom-tool-left-right = Kiri/kanan
+zoom-tool-up-down = Atas/bawah

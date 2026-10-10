@@ -880,7 +880,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn transform_extra(&self) -> Vec<ToolOption> {
         let Some(t) = self.operation.current.as_ref().filter(|t| !t.pixel_move && !t.layer_move && t.mode != TransformMode::Warp) else { return Vec::new(); };
         vec![ToolOption::Choice { id: "transform-reference", label: self.localization().text(MessageId::TOOLS_TRANSFORM_REFERENCE),
-            segmented: true, columns: Some(3), beside: Some("transform_x"), items: CanvasAnchor::ALL.into_iter().map(|reference| ToolSetItem { enabled: true,
+            segmented: true, labeled: false, columns: Some(3), beside: Some("transform_x"), items: CanvasAnchor::ALL.into_iter().map(|reference| ToolSetItem { enabled: true,
                 label: reference.localized_label(self.localization()),
                 icon: "ellipse-fill", preview: None, selected: t.reference == reference,
                 action: UiAction::TransformReference { reference },

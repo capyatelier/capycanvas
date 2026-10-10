@@ -189,3 +189,8 @@ settings-keymap-preview-unavailable = { $count ->
     [one] Kullanılamayan: { $count }
    *[other] Kullanılamayan: { $count }
     }
+
+settings-mouse-wheel = Fare tekerleği
+settings-wheel-pan = Kaydır
+settings-wheel-zoom = Yakınlaştır
+settings-rotate-with-two-fingers = İki parmakla döndür

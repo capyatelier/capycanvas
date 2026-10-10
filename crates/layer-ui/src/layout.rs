@@ -1366,6 +1366,7 @@ impl DockLayout {
             command(Figure),
             command(Ruler),
             command(Hand),
+            command(Zoom),
             command(Eyedropper),
             Color,
         ];
@@ -4640,7 +4641,7 @@ mod tests {
             commands(Panel::Toolbar),
             [
                 Pen, Pencil, Brush, Eraser, Airbrush, Decoration, Blend, Liquify, Lasso,
-                AutoSelect, Fill, Gradient, Move, Figure, Ruler, Hand, Eyedropper
+                AutoSelect, Fill, Gradient, Move, Figure, Ruler, Hand, Zoom, Eyedropper
             ]
         );
         assert_eq!(

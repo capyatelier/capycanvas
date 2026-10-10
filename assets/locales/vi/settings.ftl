@@ -185,3 +185,8 @@ settings-keymap-preview-removed = { $count ->
 settings-keymap-preview-unavailable = { $count ->
    *[other] Không khả dụng: { $count }
     }
+
+settings-mouse-wheel = Con lăn chuột
+settings-wheel-pan = Di chuyển
+settings-wheel-zoom = Thu phóng
+settings-rotate-with-two-fingers = Xoay bằng hai ngón tay

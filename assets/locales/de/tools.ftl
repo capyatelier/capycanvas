@@ -160,3 +160,14 @@ tool-tonal-tones = Tonwerte · Blendenstufen relativ zum Referenzweiß
 
 tool-action-group-transform-warp-split = Raster teilen
 tools-transform-reference = Positionsanker
+
+zoom-tool-click = Klicken
+zoom-tool-in = Vergrößern
+zoom-tool-out = Verkleinern
+zoom-tool-drag = Ziehen
+zoom-tool-smooth = Stufenlos
+zoom-tool-area = Bereich
+zoom-tool-click-only = Nur klicken
+zoom-tool-direction = Richtung
+zoom-tool-left-right = Links/rechts
+zoom-tool-up-down = Oben/unten

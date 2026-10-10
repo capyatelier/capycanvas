@@ -160,3 +160,14 @@ tool-tonal-tones = Tonlar · referans beyaza göre poz cinsinden
 
 tool-action-group-transform-warp-split = Izgarayı böl
 tools-transform-reference = Konum sabitleme noktası
+
+zoom-tool-click = Tıklama
+zoom-tool-in = Yakınlaştır
+zoom-tool-out = Uzaklaştır
+zoom-tool-drag = Sürükleme
+zoom-tool-smooth = Sürekli
+zoom-tool-area = Alan
+zoom-tool-click-only = Yalnızca tıklama
+zoom-tool-direction = Yön
+zoom-tool-left-right = Sol/sağ
+zoom-tool-up-down = Yukarı/aşağı

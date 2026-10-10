@@ -189,3 +189,8 @@ settings-keymap-preview-unavailable = { $count ->
     [one] 利用不可: { $count }
    *[other] 利用不可: { $count }
     }
+
+settings-mouse-wheel = マウスホイール
+settings-wheel-pan = 移動
+settings-wheel-zoom = ズーム
+settings-rotate-with-two-fingers = 2本指で回転
