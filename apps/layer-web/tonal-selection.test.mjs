@@ -94,11 +94,12 @@ export async function checkTonalSelections({call,evaluate,settle}) {
       await evaluate(`(()=>{const w=structuredClone(layerApp.state().workspace);for(const p of w.layout.panels)if(p.content.tiles?.some(t=>t.control.kind==='tool_options'))p.content.tiles=p.content.tiles.filter(t=>t.control.kind==='tool_options');layerApp.dispatch({type:'restore_workspace',workspace:w})})()`);await idle();
     }
     assert.ok((await rect(inline)).width>=280);assert.equal((await rect('[data-toolbar-choice="tonal-tones"]')).height,24);
-    await type(`${inline} [data-toolbar-setting=tonal_lower]`,'-6.0');await type(`${inline} [data-toolbar-setting=tonal_upper]`,'1.0');
+    await type(`${inline} [data-toolbar-setting=tonal_upper]`,'1.0');await type(`${inline} [data-toolbar-setting=tonal_lower]`,'-6.0');
+    assert.deepEqual(await values(),[-6,1],'inline endpoints are ready for contacts');
     for(const device of ['mouse','touch','pen'])for(const index of [0,1]) {
       const thumb=await rect(`${inline} .interval-thumb.${index?'upper':'lower'}`),before=await values();
       const a={x:thumb.x+3,y:thumb.y+7};await gesture(a,{x:a.x+(index?6:-6),y:a.y},device);
-      const after=await values();assert.ok(index?after[1]>before[1]:after[0]<before[0]);
+      const after=await values();assert.ok(index?after[1]>before[1]:after[0]<before[0],`${device} inline endpoint ${index}: ${before} -> ${after}, thumb ${JSON.stringify(thumb)}`);
     }
     await capture('toolbar-custom');
     const before=await values(),thumb=await rect(`${inline} .interval-thumb.lower`),p={x:thumb.x+3,y:thumb.y+7};

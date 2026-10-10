@@ -135,8 +135,8 @@ exceeds that limit even when the loop is small.
   feather-radius entry, selection combinations, and single-step undo/redo.
 - `native_selection_tools_input` exercises GTK mouse/touch tool selection,
   retained two-panel drawers, numeric inputs, canvas gestures, polygon keyboard
-  editing, GPU masks, undo/redo, Photo toolbar entries, and light/dark captures.
-- `native_selection_pen_input` exercises the six drawer choices and the four new
+  editing, GPU masks, undo/redo, Photo selection slots, and light/dark captures.
+- `native_selection_pen_input` exercises published drawer choices and selection
   tools through native Wayland tablet events. These are injected pen events,
   not physical-device testing. It is separate from numeric-entry testing because
   the test tablet proxy fails its display connection when GTK opens that editor.

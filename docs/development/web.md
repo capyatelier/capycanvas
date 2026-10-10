@@ -250,6 +250,10 @@ the [Linux guide](linux.md#tests) for the runner's requirements.
 
 Journeys by area; the table in `test.mjs` lists them all. `journeys.mjs` runs the
 first matching row and its error check, or leaves the default journey to the host.
+Every selected journey requires an error check and awaits its result before
+reporting success. Fixtures that inject diagnostics check their specific allowance.
+`--stale-storage` awaits drawing recovery and durable checkpoints before
+reloading its corrupted workspace and preference fixtures.
 
 | Area | Selectors |
 | --- | --- |
@@ -278,9 +282,14 @@ crossed by the lasso stays empty. Shared export previews check actual GPU pixels
 and saved raster identities check untouched references, one-step Undo/Redo and
 Escape cancellation.
 
+`--selection-tools` checks mode-row alignment inside the active drawer and
+Photo command availability through the slots' published variant menus.
+
 `--language-switching` visits all shipped languages in light and dark themes,
 checks retained Preferences and dirty size-entry identity, focus and selection,
 rapid choices, browser language resolution and another same-profile tab.
+Concurrent tab edits await each tab's model and published language matching the
+current saved preference before capturing the final choice.
 The `--live-language-*` journeys compare current catalog copy in both themes
 while retaining native controls, draft text, focus, selected options and prepared
 results. They count expression submissions and worker preparation to reject

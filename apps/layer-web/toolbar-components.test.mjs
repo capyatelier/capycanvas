@@ -45,7 +45,9 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   await wait(`!!document.querySelector(${JSON.stringify(slider)})`);
   for (const device of ['mouse', 'touch', 'pen']) {
     await send({ type: 'set_tool_setting', id: 'size', value: 5 });
+    await wait('layerApp.state().brush.diameter===5');
     await drag(slider, true, device);
+    await wait('layerApp.state().brush.diameter>5');
     const diameter = await evaluate('layerApp.state().brush.diameter');
     if (!(diameter > 5)) {
       await capture('slider-failure');
@@ -133,6 +135,22 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
     assert.deepEqual(await rect(value), initial, 'fixed numeric width');
   }
   await capture('photo-options');
+  await send({ type: 'set_tool_setting', id: 'size', value: 12 });
+  const canvas = await rect('#canvas');
+  await gesture({ x: canvas.x + canvas.width * .4, y: canvas.y + canvas.height * .5 },
+    { x: canvas.x + canvas.width * .6, y: canvas.y + canvas.height * .5 }, 'mouse');
+  await wait("layerApp.state().commands.find(command=>command.id==='scale_rotate').enabled");
+  for (const theme of ['light', 'dark']) {
+    await send({ type: 'set_theme', theme });
+    for (const command of ['cancel_transform', 'apply_transform']) {
+      await invoke('scale_rotate');
+      await wait("layerApp.state().commands.find(command=>command.id==='apply_transform').enabled");
+      const label = await evaluate(`layerApp.state().commands.find(command=>command.id===${JSON.stringify(command)}).label`);
+      await click(`[data-toolbar-component=tool_options] .toolbar-action button[aria-label=${JSON.stringify(label)}]`);
+      await wait("!layerApp.state().commands.find(command=>command.id==='apply_transform').enabled");
+      await capture(`transform-${command}-${theme}`);
+    }
+  }
   await invoke('rectangle_select');
   const segments = await rect('[data-toolbar-choice=selection-mode]'), dropdown = await rect('[data-toolbar-choice=variant] > button');
   assert.deepEqual([segments.y, segments.height], [dropdown.y, dropdown.height], 'segments match the dropdown height');

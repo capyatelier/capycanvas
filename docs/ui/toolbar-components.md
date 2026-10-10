@@ -96,7 +96,10 @@ visible insertion targets attached to their original tile IDs.
 
 Actions use the surrounding toolbar’s tile dimensions, centered beside the
 shorter form fields. Hosts supply natural sizes and theme spacing; Rust fits
-complete fields in order, reserving **More tool options** at the trailing end. That button always opens the complete tool/variant and settings drawer,
+complete fields in order, reserving **More tool options** at the trailing end.
+Fields taller than the remaining height enter overflow with their successors;
+earlier fitting fields stay visible.
+More always opens the complete tool/variant and settings drawer,
 including actions that did not fit. Grouped tools include sibling variations and
 the active tool's presets through the shared drawer projection. The drawer aligns to its right edge with a
 standard gap, connector and corner treatment of other tool drawers. Multiple
@@ -165,7 +168,8 @@ private Mutter display with `--native-test=` and one of these tests from
 `apps/layer-linux/src/toolbar_component_tests.rs`:
 
 - `native_toolbar_components_input`: editing, hold-to-reorder caps, stamp
-  previews and bookmarks, context changes, placement and both themes. The
+  previews and bookmarks, inline transform completion, context changes,
+  placement and both themes. The
   `native_toolbar_components_pen_input` variant adds `--tablet`; its synthetic
   serials cannot authorize popup grabs, so popups are covered by mouse and touch.
 - `native_toolbar_added_sliders_input`: Add Tools in Paint, then tap and drag
@@ -177,7 +181,8 @@ private Mutter display with `--native-test=` and one of these tests from
   `native_toolbar_rows_input`.
 
 Set `LAYER_NATIVE_TEST_EXECUTABLE` to the release test binary when iterating.
-Web runs `tools/performance/workspace-motion.sh web --toolbar-components`, or
+Web runs `tools/performance/workspace-motion.sh web --toolbar-components`, including
+inline transform completion in both themes, or
 `apps/layer-web/device.test.mjs --toolbar-components` on a tablet. Android runs
 `AndroidInteractionTest#toolbarComponentsAcrossDevicesAndLayouts` and
 `#toolbarEditorsAndOverflow`. Apple runs the `toolbar_component` tests in

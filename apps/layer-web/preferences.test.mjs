@@ -640,7 +640,8 @@ export async function checkLiveLanguage({call,evaluate,settle}) {
   await evaluate(`window.languageTiming={quanta:[],publications:[],methods:{},longTasks:[]};for(const method of ['state_update','catalog','bootstrap_view','document_delivery_copy','preferences_cached','panel_view','workspace_update','layout_update','editor_models','application_menus','document_tabs']){const original=layerApp.app[method].bind(layerApp.app);layerApp.app[method]=function(...args){const started=performance.now();try{return original(...args);}finally{(languageTiming.methods[method]??=[]).push(performance.now()-started);}};}const prepare=layerApp.app.prepare_language.bind(layerApp.app);layerApp.app.prepare_language=function(...args){const start=performance.now();try{const result=prepare(...args);if(result)queueMicrotask(()=>languageTiming.publications.push({start,duration:performance.now()-start}));return result;}finally{languageTiming.quanta.push(performance.now()-start);}};window.languageObserver=new PerformanceObserver(list=>{for(const task of list.getEntries())languageTiming.longTasks.push({start:task.startTime,duration:task.duration});});languageObserver.observe({type:'longtask',buffered:false});`);
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const ready=async(tag,session)=>{
-    const expression=`new Promise((resolve,reject)=>{const end=performance.now()+20000;function poll(){if(window.layerApp&&!layerApp.app.language_pending()&&document.documentElement.lang===${JSON.stringify(tag)})resolve(true);else if(performance.now()>end)reject(Error('Language publication '+document.documentElement.lang));else setTimeout(poll,10);}poll();})`;
+    const target=tag==null?"JSON.parse(localStorage.getItem('layer.preferences.v1')).language.Explicit":JSON.stringify(tag);
+    const expression=`new Promise((resolve,reject)=>{const end=performance.now()+20000;function poll(){const expected=${target};if(window.layerApp&&!layerApp.app.language_pending()&&document.documentElement.lang===expected&&${tag==null?'layerApp.state().settings.language.Explicit===expected':'true'})resolve(true);else if(performance.now()>end)reject(Error('Language publication '+document.documentElement.lang+' expected '+expected));else setTimeout(poll,10);}poll();})`;
     if(session){const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true},session);if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description);}
     else await evaluate(expression);
   };
@@ -701,6 +702,7 @@ export async function checkLiveLanguage({call,evaluate,settle}) {
       evaluate("layerApp.dispatch({type:'preferences',action:{type:'edit',id:'language',value:2}})"),
       call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'preferences',action:{type:'edit',id:'language',value:4}})"},sessionId),
     ]);
+    await Promise.all([ready(null),ready(null,sessionId)]);
     const latest=await evaluate("JSON.parse(localStorage.getItem('layer.preferences.v1')).language.Explicit");
     await ready(latest);await ready(latest,sessionId);
     await call('Page.bringToFront',{},sessionId);await call('Page.bringToFront');

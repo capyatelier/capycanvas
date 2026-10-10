@@ -1917,7 +1917,7 @@ fn native_header_drawer_controls_input() {
                 d.click_name("size-preset-1.5"); assert_eq!(state(&d.w).brush.diameter, 1.5);
             }
             let bounds = d.named("tool-drawer").compute_bounds(&d.w.surface).unwrap();
-            assert!(bounds.y() >= d.w.header.height() && bounds.x() >= 0.);
+            assert!(bounds.y() >= d.w.header.height() && bounds.x() >= 0., "{control:?}: {bounds:?}, header {}px", d.w.header.height());
             d.click_name(&name);
             assert!(
                 state(&d.w).customization.drawer.is_none(),

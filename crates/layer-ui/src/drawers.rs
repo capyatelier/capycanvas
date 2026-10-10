@@ -605,6 +605,7 @@ impl ContentDrawer {
         let (x, y, height) = match direction {
             Edge::Bottom => {
                 let y = (anchor.y + anchor.height + WORKSPACE_SPACING)
+                    .max(available.y)
                     .min(available.y + available.height - 1.0);
                 (horizontal_x, y, height.min(available.y + available.height - y))
             }
@@ -824,6 +825,23 @@ mod tests {
             "{p:?}"
         );
     }
+    #[test]
+    fn header_drawers_clear_the_native_header_height() {
+        let mut layout = DockLayout::default();
+        let control = ToolbarControl::Panel { panel: Panel::Brushes };
+        layout.header.add(HeaderZone::Left, None, &[HeaderItem::Tool { control }]).unwrap();
+        let id = layout.header.entries().find(|entry| entry.item == HeaderItem::Tool { control }).unwrap().id;
+        for height in [64., 100.] {
+            layout.header_presentation = HeaderPresentation {
+                height, items: vec![HeaderItemBounds { id, bounds: Bounds { x: 58., y: 10., width: 40., height: 46. } }],
+            };
+            let p = ContentDrawer::for_header(&layout, id).unwrap().placement(&layout, VIEWPORT, &[195.]).unwrap();
+            assert_eq!(p.direction, Edge::Bottom);
+            assert_eq!(p.bounds.y, height);
+            contained(&p, VIEWPORT);
+        }
+    }
+
     #[test]
     fn workspace_bottom_clearance_contains_drawers_without_changing_canvas_size() {
         for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {

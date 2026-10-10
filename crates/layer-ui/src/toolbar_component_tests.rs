@@ -203,6 +203,23 @@ fn toolbar_options_follow_tools_and_preserve_completion_actions() {
 }
 
 #[test]
+fn toolbar_options_keep_fitting_rows_before_tall_fields_overflow() {
+    for (width, height, sizes) in [
+        (1308., 36., [[36., 36.], [36., 36.], [100., 54.], [36., 36.]]),
+        (100., 90., [[80., 36.], [36., 36.], [36., 54.], [36., 36.]]),
+    ] {
+        let layout = tool_options_layout(width, height, Axis::Horizontal, &sizes, [36., 36.], 10.);
+        for field in &layout.fields[..2] {
+            let bounds = field.expect("fitting prefix remains visible");
+            assert_eq!(bounds.height, 36.);
+            assert!(bounds.y + bounds.height <= height);
+            assert!(bounds.intersection(layout.more).is_none());
+        }
+        assert!(layout.fields[2..].iter().all(Option::is_none));
+    }
+}
+
+#[test]
 fn toolbar_component_defaults_round_trip_on_supported_hosts() {
     for (preset, platform) in WorkspacePreset::ALL.into_iter().flat_map(|p| Platform::ALL.map(|platform| (p, platform))) {
         let layout = preset.layout(platform);

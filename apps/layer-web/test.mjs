@@ -248,7 +248,7 @@ try {
     [process.argv.includes("--clipboard"), () => checkClipboard({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--canvas-size"), () => checkCanvasSize({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--crop"), () => checkCrop({call,evaluate,settle}), checkErrors],
-    [process.argv.includes("--image-commands"), () => checkImageCommands({call,evaluate,settle})],
+    [process.argv.includes("--image-commands"), () => checkImageCommands({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--merges"), () => checkMerges({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--retouch-layers"), () => checkRetouchLayers({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--move-selection"), () => checkMoveSelection({call,evaluate,settle}), checkErrors],
@@ -309,7 +309,7 @@ try {
     [process.argv.includes("--workspace-manager-visual"), () => checkWorkspaceManagerVisual({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--workspace-manager"), () => checkWorkspaceManager({call,evaluate,settle,reload}), checkErrors],
     [process.argv.includes("--workspace-store"), () => checkWorkspaceStore({evaluate}), checkErrors],
-    [process.argv.includes("--stale-storage"), () => checkStaleStorageStartup({evaluate,reload})],
+    [process.argv.includes("--stale-storage"), () => checkStaleStorageStartup({evaluate,reload}), checkErrors],
     [process.argv.includes("--drawer-switch"), () => checkToolbarDrawerSwitching({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--drawer-style"), () => checkDrawerStyling({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--drawer-drag"), () => checkDrawerDragging({call,evaluate,settle}), checkErrors],
@@ -324,7 +324,7 @@ try {
     [process.argv.includes("--filter-previews"), () => checkFilterPreviews({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--spatial-filter-windows"), () => checkSpatialFilterWindows({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes("--tonal-selection"), () => checkTonalSelections({call,evaluate,settle}), checkErrors],
-    [process.argv.includes("--toolbar-components"), () => checkToolbarComponents({call,evaluate,settle})],
+    [process.argv.includes("--toolbar-components"), () => checkToolbarComponents({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--tool-variations"), () => checkToolVariations({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--selection-tools"), () => checkSelectionTools({call,evaluate,settle}), checkErrors],
     [process.argv.includes('--enclose-fill'), () => checkEncloseFill({call,evaluate,settle}), checkErrors],
@@ -334,7 +334,7 @@ try {
     [process.argv.includes("--brush-drawers"), () => checkBrushDrawers({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--editor"), () => checkEditor({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes("--staged-startup"), () => checkStagedStartup({ call, evaluate, settle, canvasPixels }), checkErrors],
-    [process.argv.includes("--stroke-recording"), () => checkStrokeRecording({call,evaluate,settle})],
+    [process.argv.includes("--stroke-recording"), () => checkStrokeRecording({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--scopes-smoke"), () => checkScopesSmoke({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--scopes"), () => checkScopes({call,evaluate,settle,canvasPixels}), checkErrors],
     [process.argv.includes('--gradients'), () => checkGradientDefinitions({call,evaluate,settle}), checkErrors],
@@ -369,7 +369,7 @@ try {
       assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
       await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
     }, checkErrors],
-    [process.argv.includes("--contact-brushes"), () => checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL)],
+    [process.argv.includes("--contact-brushes"), () => checkContactBrushes({call,evaluate,settle},process.env.LAYER_BRUSH_PHOTO_URL), checkErrors],
     [process.argv.includes("--pen"), async () => {
       await checkPenRendering({call, evaluate, settle});
       await checkPrediction({call, evaluate, settle});

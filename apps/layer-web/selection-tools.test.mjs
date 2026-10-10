@@ -73,7 +73,7 @@ export async function checkSelectionTools({call, evaluate, settle}) {
       }
       assert.ok(await evaluate(`!!document.querySelector('[data-tool-setting=${brush?'selection_brush_size':'selection_feather'}]')`));
       if(!brush && choice.icon!=='tonal-select')assert.ok(await evaluate('!!document.querySelector("[data-tool-action=selection_antialias]")'));
-      const tops=await evaluate('[...document.querySelectorAll(".selection-modes:not(.tonal-tones) button")].map(n=>n.getBoundingClientRect().top)');
+      const tops=await evaluate(`${JSON.stringify((brush?['selection_add','selection_subtract']:modes).map(mode))}.map(selector=>{const r=document.querySelector(selector).getBoundingClientRect();if(!r.width||!r.height)throw Error('Hidden '+selector);return r.top;})`);
       assert.ok(tops.every(y=>Math.abs(y-tops[0])<1),'Modes fit one row');
     }
     await invoke('rectangle_select'); await contact(mode('selection_new')); await contact(mode('selection_fixed_size'));
@@ -119,8 +119,8 @@ export async function checkSelectionTools({call, evaluate, settle}) {
     await workspace({type:'switch',id:'builtin:workspace:photographer'});
     const commands=await evaluate('layerApp.state().commands');
     assert.ok(tools.every(id=>commands.some(c=>c.id===id)));
-    const layout=await evaluate('JSON.stringify(layerApp.state().workspace.layout)');
-    for(const id of tools.filter(id=>id!=='selection_brush')) assert.ok(layout.includes(`"${id}"`),`Photo toolbar ${id}`);
+    const variants=await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='toolbar').content.tiles.filter(tile=>tile.control.kind==='tool_slot').flatMap(tile=>layerApp.app.context_menu({kind:'tool_variants',anchor:{kind:'tile',panel:'toolbar',tile:tile.id}}).sections.flat()).map(item=>item.action?.variant?.command)`);
+    for(const id of tools.filter(id=>id!=='selection_brush')) assert.ok(variants.includes(id),`Photo toolbar variant ${id}`);
     console.log('PASS selection drawers, eight tools/options, mode icons, mouse/touch/pen, remembered icon, GPU gestures, undo/redo, Photo defaults');
   } catch(error) {
     await mkdir('artifacts/selection-web',{recursive:true});

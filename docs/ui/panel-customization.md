@@ -365,6 +365,8 @@ the same controls.
 Rust owns tile semantics, drawer open/closed state, contents, placement and
 animation geometry ([`drawers.rs`](../../crates/layer-ui/src/drawers.rs)). Hosts
 report tile bounds, content measurements and input.
+Drawer bodies stay below the complete presented window bar, including native
+padding around their origin controls.
 
 - A tool tile first selects its tool. Pressing it again opens its drawer, and
   pressing the originating tile again closes it; an already selected tool opens

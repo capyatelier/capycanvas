@@ -76,6 +76,12 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
     throw Error(`Startup timed out: ${await evaluate("layerApp.app.workspace_view()")}`);
   };
   const ready = 'window.layerApp?.startupTimes.complete != null && JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy';
+  const restart = async () => {
+    await evaluate('(async()=>{await layerApp.documents.startRecovery();await layerApp.documents.autosave(true)})()');
+    await reload();
+    await wait(ready);
+    await evaluate('layerApp.documents.startRecovery()');
+  };
   const snapshot = edit => `new Promise((resolve, reject) => {
     const open = indexedDB.open("capycanvas.workspaces", 1);
     open.onerror = () => reject(open.error);
@@ -125,14 +131,14 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   })`;
   const reset = "Saved workspaces couldn't be opened, so they were reset.";
   await wait(ready);
+  await evaluate('layerApp.documents.startRecovery()');
   const stale = await evaluate(snapshot(`database => Object.values(database.items).map(item => { item.entity.working.zen_mode = {}; return item.entity.id; })`));
   assert.ok(stale.length >= 3);
   const unreadable = await evaluate(workspaceRecord("database"));
   await evaluate(`localStorage.setItem("layer.preferences.v1", JSON.stringify({...layerApp.state().settings, pan_speed: 2, tip_lock: true, prediction_algorithm: "kalman", zoom_speed: "fast"}))`);
   await evaluate(`sessionStorage.setItem("capy.workspace.owner", JSON.stringify({id: 7, epoch: "stale", extra: true}))`);
   assert.equal(await evaluate(olderColorPreferences), true);
-  await reload();
-  await wait(ready);
+  await restart();
   const view = JSON.parse(await evaluate("layerApp.app.workspace_view()"));
   assert.equal(view.error, null);
   assert.equal(view.id, "builtin:workspace:illustrator");
@@ -165,8 +171,7 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   })`);
   assert.equal(await evaluate("(async () => Array.isArray(await layerApp.app.profile_library('list')))()"), true);
   assert.equal(await evaluate("(async () => !!(await layerApp.app.export_presets({type: 'get', index: 0})).recipe)()"), true);
-  await reload();
-  await wait(ready);
+  await restart();
   assert.equal(JSON.parse(await evaluate("layerApp.app.workspace_view()")).error, null);
   assert.equal(await evaluate('document.querySelector(".canvas-notice-text")?.textContent || ""'), "");
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");

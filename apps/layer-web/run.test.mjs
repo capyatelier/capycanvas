@@ -1,4 +1,3 @@
-// Test launcher discovery without building Wasm or starting a server.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -12,6 +11,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { runJourney } from "./journeys.mjs";
+
+test("browser journeys require an error check", async () => {
+  await assert.rejects(runJourney([[true, async () => {}]]), TypeError);
+});
+
+test("browser journeys await their error check", async () => {
+  const failure = new Error("browser error");
+  await assert.rejects(runJourney([[true, async () => {}, async () => { throw failure; }]]), error => error === failure);
+});
 
 const launcher = fileURLToPath(new URL("run.sh", import.meta.url));
 for (const [name, installed, customHome, override, expected] of [

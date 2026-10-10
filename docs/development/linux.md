@@ -186,6 +186,8 @@ names stay literal.
 `native_live_language_switching` exercises the Language preference in both
 themes and verifies retained editors, document revisions and numeric refusals.
 It checks built-in and authored drawer tab titles without replacing tab widgets.
+Its fixture enables the numeric Brush size control before opening that drawer;
+the default Brush size panel shows presets.
 Run it on the private display with the same command used for other native tests.
 
 Numeric controls retain the shared refusal from the last edit. Language changes
@@ -323,6 +325,9 @@ and the toolbar component mouse/touch, pen and value-control journeys. They cove
 both themes, editing, slider feedback, popovers and toolbar allocation.
 Tool-settings journeys share `tool_settings_workspace` for toolbar commands and
 panel placement; restore actions, waits and interaction assertions stay in callers.
+Selection journeys locate published variant choices by their localized labels
+inside the mapped Tools or slot Brushes panel, then send native contacts to the
+containing button.
 `native_enclose_fill_pointer_workflow` checks Enclose and Fill with native mouse
 contacts in both themes: two fully enclosed reference holes fill a separate paint
 layer, a hole crossed by the lasso stays empty, and the reference stays exact.

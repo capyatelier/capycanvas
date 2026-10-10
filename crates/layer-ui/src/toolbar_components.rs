@@ -431,7 +431,7 @@ pub fn tool_options_layout(
             } else {
                 w
             };
-            if x + w > width {
+            if x + w > width || y + row_height.max(h) > height {
                 break;
             }
             fields[end] = Some(Bounds {
@@ -450,9 +450,7 @@ pub fn tool_options_layout(
         for i in start..end {
             let b = fields[i].as_mut().unwrap();
             b.height = row_height;
-            if y + row_height > height
-                || (b.y + b.height + gap > more.y && b.x + b.width + gap > more.x)
-            {
+            if b.y + b.height + gap > more.y && b.x + b.width + gap > more.x {
                 fields[i..].fill(None);
                 return ToolOptionsLayout { fields, more };
             }

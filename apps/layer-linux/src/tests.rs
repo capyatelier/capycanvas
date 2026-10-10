@@ -13545,6 +13545,7 @@ fn native_live_language_switching() {
     let literal_title = "Tool 🎨 {literal}";
     let literal_toolbar = workspace.layout.add_toolbar(Some(workspace.layout.panel_group(Panel::Sizes).unwrap()), literal_title, &[]).unwrap();
     w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    w.dispatch(UiAction::Customize { action: CustomizationAction::SetControlVisible { panel: Panel::Sizes, control: PanelControl::BrushSize, visible: true } });
     until(|| find_named(w.window.upcast_ref(), "application-menu-Primary").is_some_and(|menu| menu.is_mapped()), "mapped primary language menu ready");
     let primary_menu = named::<gtk::MenuButton>(w.window.upcast_ref(), "application-menu-Primary");
     let group = state(&w).workspace.layout.panel_group(Panel::Sizes).unwrap();

@@ -52,7 +52,7 @@ export function createPreviewPanel({app,name,view,kind,value,apply,cancel,elemen
       field.id=`${name}-value`;field.dataset.kind=kind(v);shown=JSON.stringify([v.numeric,v.kind]);
       if(v.numeric.kind==='slider'){
         captureSliderContacts(field);
-        field.slider.addEventListener('touchstart',e=>e.preventDefault(),{passive:false});
+        field.slider.addEventListener('touchstart',e=>{if(e.cancelable)e.preventDefault();},{passive:false});
       }
       if(number)number.replaceWith(field);else title.after(field);
       number=field;

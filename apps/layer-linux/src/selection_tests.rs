@@ -2,6 +2,23 @@
 use super::*;
 use layer_ui::SelectionTool;
 
+fn selection_choice(d: &Driver, command: CommandId) -> gtk::Widget {
+    let state = state(&d.w);
+    let drawer = state.customization.drawer.as_ref().expect("open selection drawer");
+    let (panel, choices) = drawer.tool_set.as_ref()
+        .map_or((Panel::Tools, &state.tool_panels.tools), |tools| (Panel::Brushes, tools));
+    let item = choices.groups.iter().chain(&choices.subtools).find(|item|
+        matches!(item.action, UiAction::ChooseToolVariant { variant, .. } if variant.command() == command)
+    ).expect("published selection choice");
+    let panel_name = format!("drawer-panel-{panel:?}");
+    let tools = widgets(d.w.window.upcast_ref()).find(|widget|
+        widget.widget_name() == panel_name && widget.is_mapped()
+    ).expect("mapped selection drawer");
+    let label = mapped_label(&tools, &item.label).expect("mapped selection choice");
+    std::iter::successors(Some(label), |widget| widget.parent())
+        .find(|widget| widget.is::<gtk::Button>()).unwrap()
+}
+
 fn selection(d: &Driver) -> Option<layer_core::Selection> {
     ui_session(&d.w)
         .engine()
@@ -141,7 +158,7 @@ fn native_selection_brush_input() {
     let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
     d.click_name(&opener);
     if state(&d.w).customization.drawer.is_none() { d.click_name(&opener); }
-    d.click_name("tool-choice-SelectionBrush");
+    d.click(&selection_choice(&d, CommandId::SelectionBrush));
     let panel=d.named("drawer-panel-ToolSettings");
     for id in ["selection_brush_size","selection_brush_hardness","selection_brush_opacity"] {
         let control=d.named(&format!("tool-setting-{id}"));
@@ -212,7 +229,7 @@ fn native_selection_tools_input() {
     let select_icon = d.header_icon(CommandId::Select, "lasso");
     assert!(find_named(&d.named("tool-drawer"), "drawer-panel-Brushes").is_none());
     for (i, tool) in SelectionTool::ALL.into_iter().enumerate() {
-        let button = d.named(&format!("tool-choice-{:?}", tool.command()));
+        let button = selection_choice(&d, tool.command());
         assert!(
             button.compute_bounds(&tools).unwrap().height() >= 32.,
             "compact selection tool row"
@@ -233,7 +250,7 @@ fn native_selection_tools_input() {
         );
         assert_eq!(d.named("drawer-panel-Tools"), tools);
         assert_eq!(d.named("drawer-panel-ToolSettings"), settings);
-        assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), 8);
+        assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), SelectionTool::ALL.len());
         assert_shared_icons(&d.named("tool-drawer"));
     }
     for theme in [Theme::Dark, Theme::Light] {
@@ -245,7 +262,7 @@ fn native_selection_tools_input() {
             .save_to_png(output.join(format!("sketch-select-{theme:?}.png")))
             .unwrap();
     }
-    d.click_name("tool-choice-RectangleSelect");
+    d.click(&selection_choice(&d, CommandId::RectangleSelect));
     d.click_name("tool-action-SelectionFixedSize");
     d.number(&d.named("tool-setting-selection_width"), "240");
     d.number(&d.named("tool-setting-selection_height"), "120");
@@ -347,18 +364,13 @@ fn native_selection_tools_input() {
         CommandId::PolygonSelect,
         CommandId::ColorSelect,
     ] {
-        let tile = state(&d.w)
-            .workspace
-            .layout
-            .panel(Panel::Toolbar)
-            .unwrap()
-            .tiles()
-            .iter()
-            .find(|t| t.control == ToolbarControl::Command { command })
-            .unwrap()
-            .id;
-        let button = d.named(&format!("tile-{tile}"));
-        d.click(&button);
+        let tile = state(&d.w).workspace.layout.panel(Panel::Toolbar).unwrap().tiles().iter()
+            .find(|tile| matches!(tile.control, ToolbarControl::ToolSlot { slot }
+                if slot.variants().iter().any(|variant| variant.command() == command))).unwrap().id;
+        let opener = format!("tile-{tile}");
+        d.click_name(&opener);
+        if state(&d.w).customization.drawer.is_none() { d.click_name(&opener); }
+        d.click(&selection_choice(&d, command));
         assert_eq!(
             state(&d.w)
                 .layer_tools
@@ -368,8 +380,10 @@ fn native_selection_tools_input() {
                 .command(),
             command
         );
+        assert!(state(&d.w).customization.drawer.is_some());
+        d.click_name(&opener);
+        assert!(state(&d.w).customization.drawer.is_none());
     }
-    // Leave a useful review capture showing the new toolbar and color selection.
     for theme in [Theme::Dark, Theme::Light] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(250);
@@ -396,14 +410,14 @@ fn native_selection_pen_input() {
         d.click_name(&opener);
     }
     for tool in SelectionTool::ALL {
-        let button = d.named(&format!("tool-choice-{:?}", tool.command()));
+        let button = selection_choice(&d, tool.command());
         let p = d.point(&button);
         d.input.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
         assert_eq!(state(&d.w).layer_tools.tool.selection_tool(), Some(tool));
         assert!(state(&d.w).customization.drawer.is_some());
         d.header_icon(CommandId::Select, tool.command().icon().unwrap());
     }
-    d.click_name("tool-choice-RectangleSelect");
+    d.click(&selection_choice(&d, CommandId::RectangleSelect));
     for command in [CommandId::SelectionAdd, CommandId::SelectionSubtract, CommandId::SelectionIntersect, CommandId::SelectionNew] {
         let button = d.named(&format!("tool-action-{command:?}"));
         let p = d.point(&button);
@@ -413,13 +427,14 @@ fn native_selection_pen_input() {
     }
     let mut select_icon = CommandId::RectangleSelect.icon().unwrap();
     for (command, choice, icon) in [
-        (CommandId::DrawingBrush, "brush-set-pencil", "pencil"),
-        (CommandId::Sculpt, "sculpt-set-liquify", "liquify"),
-        (CommandId::Select, "tool-choice-ColorSelect", "color-select"),
+        (CommandId::DrawingBrush, Some("brush-set-pencil"), "pencil"),
+        (CommandId::Sculpt, Some("sculpt-set-liquify"), "liquify"),
+        (CommandId::Select, None, "color-select"),
     ] {
         let p = d.point(&d.named(&d.header_tool(ToolbarControl::Command { command })));
         d.input.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
-        let p = d.point(&d.named(choice));
+        let choice = choice.map_or_else(|| selection_choice(&d, CommandId::ColorSelect), |name| d.named(name));
+        let p = d.point(&choice);
         d.input.perform(serde_json::json!([{"pen":"move","point":p},{"pen":"down"},{"pen":"up"},{"pen":"leave"}]));
         d.header_icon(command, icon);
         if command == CommandId::Select {
@@ -497,7 +512,7 @@ fn native_selection_options_input() {
         d.click_name(&opener);
     }
     for tool in SelectionTool::ALL.into_iter().filter(|t| !matches!(t, SelectionTool::Brush | SelectionTool::Tonal)) {
-        d.click_name(&format!("tool-choice-{:?}", tool.command()));
+        d.click(&selection_choice(&d, tool.command()));
         assert!(d.named("tool-setting-selection_feather").is_visible());
         let row = d.named("selection-mode-row");
         assert!(row.measure(gtk::Orientation::Horizontal, -1).0 as f32
@@ -540,7 +555,7 @@ fn native_selection_options_input() {
         d.click_name("tool-action-SelectionNew");
         assert!(buttons[0].is_active(), "clicking the active mode keeps it selected");
     }
-    d.click_name("tool-choice-RectangleSelect");
+    d.click(&selection_choice(&d, CommandId::RectangleSelect));
     d.number(&d.named("tool-setting-selection_feather"), "8");
     d.click_name(&opener);
     canvas_drag(&mut d, [600., 600.], [900., 800.], false);
@@ -581,7 +596,7 @@ fn native_selection_options_input() {
     pump(100);
     assert_eq!(selection(&d), Some(intersection));
     d.click_name(&opener);
-    d.click_name("tool-choice-ColorSelect");
+    d.click(&selection_choice(&d, CommandId::ColorSelect));
     d.click_name("tool-action-SelectionAntialias");
     let output = std::path::PathBuf::from(
         std::env::var("LAYER_TEST_ARTIFACTS")
@@ -619,7 +634,7 @@ fn native_tonal_selection_input() {
     }
     let opener=d.header_tool(ToolbarControl::Command {command:CommandId::Select});
     d.click_name(&opener);if state(&d.w).customization.drawer.is_none() {d.click_name(&opener);}
-    d.click_name("tool-choice-TonalSelect");wait_tonal(&d);
+    d.click(&selection_choice(&d, CommandId::TonalSelect));wait_tonal(&d);
     assert!(selection(&d).is_none(),"opening the tool does not change the selection");
     let panel=d.named("drawer-panel-ToolSettings");
     assert!(panel.width() >= layer_ui::PANEL_MIN_WIDTH as i32);
@@ -689,7 +704,8 @@ fn native_tonal_selection_input() {
     let high=d.named("tool-setting-tonal_upper").compute_bounds(&range).unwrap();
     assert!(low.x()+low.width()<=track.x() && track.x()+track.width()<=high.x());
     assert!(low.width()<=48. && high.width()<=48.,"endpoint boxes fit the displayed numbers: {} / {}",low.width(),high.width());
-    assert!(track.width()>=range.width() as f32*0.7,"track uses the space released by the endpoint boxes");
+    let available=range.width() as f32-low.width()-high.width()-2.*range.downcast_ref::<gtk::Box>().unwrap().spacing() as f32;
+    assert!((track.width()-available).abs()<=1.,"track fills the available width: {}px of {available}px",track.width());
     eprintln!("Tonal range widths: low {}px, track {}px, high {}px",low.width(),track.width(),high.width());
     eprintln!("Tonal Custom: controls {custom_height}px; drawer {}px",d.named("tool-drawer").height());
     save_snapshot(&d.w, 100, || output.join("tonal-custom.png"));

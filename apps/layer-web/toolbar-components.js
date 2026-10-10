@@ -197,7 +197,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     for (const type of ['pointercancel', 'lostpointercapture']) slider.addEventListener(type, () => { if (contact) closePopup(); contact = null; });
     // Chromium's native touch range edit runs after pointerdown and can replace
     // a snapped value. Pointer capture above owns touch; retain keyboard input.
-    slider.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+    slider.addEventListener('touchstart', e => { if (e.cancelable) e.preventDefault(); }, { passive: false });
     slider.addEventListener('input', () => { change(app.number_input({ control: field.numeric, value: current, operation: { type: 'position', position: Number(slider.value) } }).value); show(); });
     const outside = e => { if (popup && popup === preview && !row.contains(e.target) && !popup.contains(e.target)) closePopup(); };
     const escape = e => { if (e.key === 'Escape') { closePopup(); contact = null; } };
