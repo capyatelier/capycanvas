@@ -25,6 +25,8 @@ Every host shares the same numeric policy and editable values.
   right inset reserves room for ordinary values and units. Panels have no step
   buttons.
   The value and its text editor center vertically across the label and slider.
+  The panel editor is capped at 80 pixels, keeping at least an 8-pixel gap from
+  the slider hit area. Long expressions scroll within the field.
   Double-clicking a tool setting or property label restores its shared default.
   Adjacent Tool Settings and Properties controls have a 2-pixel gap below that
   hit area.

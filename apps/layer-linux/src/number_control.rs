@@ -693,7 +693,11 @@ impl NumberControl {
                 control.imp().editing.set(stack.visible_child_name().as_deref() == Some("entry"));
             }));
             stack.add_named(&display, Some("value"));
-            stack.add_named(&entry, Some("entry"));
+            if panel {
+                entry.set_width_chars(1);
+                let editor = adw::Clamp::builder().maximum_size(80).tightening_threshold(80).child(&entry).build();
+                stack.add_named(&editor, Some("entry"));
+            } else { stack.add_named(&entry, Some("entry")); }
             if inline {
                 // Invisible stack pages participate in measurement. Measure all
                 // range samples in the actual font; expressions scroll within
@@ -733,7 +737,7 @@ impl NumberControl {
                         .resolve(control.value(), NumericOperation::Format)
                         .unwrap();
                     let entry = imp.entry.get().unwrap();
-                    if !control.has_css_class("number-inline") {
+                    if !control.has_css_class("number-inline") && !control.has_css_class("number-panel") {
                         entry.set_width_chars(value.edit.chars().count().clamp(3, 10) as i32);
                     }
                     let text = imp.presented_text.borrow().clone();

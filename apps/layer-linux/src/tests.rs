@@ -8716,10 +8716,29 @@ fn native_number_controls() {
         pump(100);
         let input: gtk::Entry = descendant(&narrow).unwrap();
         assert!(input.width() < 100, "short values use compact editors");
+        for field in [&size, &narrow] {
+            let slider = descendant::<gtk::Scale>(field).unwrap();
+            let track = slider.compute_bounds(field).unwrap();
+            click(&find_css(field.upcast_ref(), "number-value").unwrap().downcast::<gtk::Button>().unwrap());
+            let editor = descendant::<gtk::Entry>(field).unwrap();
+            for draft in ["1234567890", "1234567890+1234567890", "1/0"] {
+                editor.set_text(draft);
+                pump(30);
+                let bounds = editor.compute_bounds(field).unwrap();
+                assert!(bounds.width() <= 80., "panel editor stays within its reserved space: {bounds:?}");
+                assert!(bounds.x() >= track.x() + track.width() + 8., "editor keeps an 8px gap from the slider hit area: {bounds:?}, {track:?}");
+                assert_eq!(slider.compute_bounds(field).unwrap(), track, "editing keeps the slider's bounds fixed");
+                assert_eq!(field.height(), 36, "editing preserves the compact row height");
+                assert_eq!(editor.text(), draft, "long expressions remain editable within the field");
+            }
+            editor.set_text("1234567890+1234567890");
+            pump(30);
+        }
         crate::snapshot_window(&window, 1.0)
             .save_to_png(format!("{dir}/gtk-edit-{theme}.png"))
             .unwrap();
-        input.emit_activate();
+        size.cancel_edit();
+        narrow.cancel_edit();
     }
     // Preferences use the native entry height, not the compact panel editor.
     body.remove(&described);
