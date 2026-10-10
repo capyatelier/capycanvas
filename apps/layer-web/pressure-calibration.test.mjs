@@ -54,9 +54,28 @@ export async function checkPressureCalibration({call,evaluate,settle}) {
     await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:touchStart.x,y:touchStart.y+10,id:91,radiusX:1,radiusY:1,force:.65}]});
     await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
     assert.notDeepEqual(await points(),edited,'touch drag edits a point');
-    const beforeRemoval=await points(),removal=await graphPoint(...beforeRemoval[1]);
-    await stroke(removal,{x:removal.x+400,y:removal.y-400});
-    assert.equal((await points()).length,3,'dragging an interior point outside removes it on release');
+    for(const [index,pointerType] of ['mouse','pen','touch'].entries()){
+      if(index){const fresh=await graphPoint(.1,.5);await stroke(fresh,fresh);assert.equal((await points()).length,4,`${pointerType} removal starts with an interior point`);}
+      const beforeRemoval=await points(),removal=await graphPoint(...beforeRemoval[1]);
+      const outside=await evaluate("(()=>{const g=document.querySelector('#pen-pressure-dialog .curve-editor'),r=g.getBoundingClientRect(),inset=layerApp.state().pressure_calibration.editor.controls.inset;return{x:r.left+inset-20,far:r.left+inset-32,further:r.left+inset-48}})()");
+      const move=async x=>{
+        if(pointerType==='touch')await call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x,y:removal.y,id:92+index,radiusX:1,radiusY:1,force:.65}]});
+        else await pointer('mouseMoved',{x,y:removal.y},pointerType);
+        await settle();
+      };
+      if(pointerType==='touch')await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...removal,id:92+index,radiusX:1,radiusY:1,force:.65}]});else await pointer('mousePressed',removal,pointerType);
+      await settle();
+      await move(outside.x);
+      assert.equal((await points()).length,4,`${pointerType} keeps the point within 24 logical px of the plot`);
+      await move(outside.far);
+      assert.equal((await points()).length,3,`${pointerType} removes the interior point on Move beyond 24 logical px, before release`);
+      await move(outside.further);
+      await move(removal.x);
+      assert.equal((await points()).length,3,`${pointerType} continued input does not restore the deleted point`);
+      if(pointerType==='touch')await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});else await pointer('mouseReleased',{x:removal.x,y:removal.y},pointerType);
+      await settle();
+      assert.equal((await points()).length,3,`${pointerType} release retains the deletion`);
+    }
     const end=await graphPoint(1,1);
     await stroke(end,{x:end.x-40,y:end.y+40});
     assert.deepEqual((await points()).at(-1),[1,1],'output end stays fixed');

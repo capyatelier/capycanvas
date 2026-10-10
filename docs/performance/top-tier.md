@@ -2484,7 +2484,7 @@ establish no regression.
 Current per-gesture evidence: `artifacts/navigation-controls/zoom-audit-20261009/post-rebase-results.json`.
 ## GTK pen pressure utility
 
-Measured on 2026-10-10 UTC in the pen-pressure worktree based on `12779d197`,
+Measured on 2026-10-10 UTC in the pen-pressure worktree based on `3332d9f90`,
 with release Rust, GTK 4.22.5 and an NVIDIA RTX PRO 6000 Blackwell Max-Q GPU
 (Vulkan, driver 615.71.09). The private Mutter display runs at 1100 × 800 and
 120 Hz, with a 256 × 256 F32 drawing at Fit and the default workspace. The
@@ -2492,8 +2492,10 @@ pressure curve has three authored controls and no coordinate readouts. After
 the functional journey warms the controls, each theme runs three five-second
 panel drags and three curve drags. The panel follows a 200 × 100 logical-pixel
 ellipse; actual native allocations span x = 182–582 and y = 115–315, all snapped
-to device pixels. Each gesture observes 598–600 moving allocations. The curve
-handle moves horizontally at its upper bound. Pointer positioning settles before
+to device pixels. Each gesture observes 549–601 moving allocations. The curve
+handle follows a 4 × 20 logical-pixel ellipse inside the graph, changing both
+input and output. Its authored input spans 0.2341–0.2659 and output spans
+0.7826–1. Pointer positioning settles before
 each press, and the test verifies the native target hit. Presentation timestamps
 are restricted to observed moving-state windows; idle frames are excluded.
 Screen recording is disabled during measurement, and visual captures run
@@ -2502,14 +2504,15 @@ during these measurements.
 
 | Motion | Light presents/s / maximum p99 gap | Dark presents/s / maximum p99 gap |
 | --- | --- | --- |
-| Utility frame | 119.20–119.40 / 8.522 ms | 119.20–119.41 / 8.659 ms |
-| Pressure curve | 116.21–116.41 / 16.712 ms | 116.02–116.21 / 16.712 ms |
+| Utility frame | 115.22–119.41 / 16.713 ms | 108.98–119.40 / 25.020 ms |
+| Pressure curve | 119.21–119.60 / 8.620 ms | 113.83–120.00 / 16.820 ms |
 
-All twelve gestures meet the 114 presents/s floor. All six utility-frame
-gestures meet the two-frame gap limit. Five of six curve gestures narrowly
-exceed the strict 2000/120 = 16.6667 ms limit: light p99 is 16.668–16.712 ms and
-dark p99 is 16.663–16.712 ms. Curve pacing remains unqualified. This desktop
-comparison does not qualify the reference tablet or its 61 MP canvas.
+Ten of twelve gestures meet the 114 presents/s floor. One dark utility-frame
+gesture and one dark curve gesture miss it. Seven of twelve gestures meet the
+strict 2000/120 = 16.6667 ms gap limit: one light utility-frame gesture, two dark
+utility-frame gestures, all three light curve gestures and one dark curve
+gesture. Both motions remain unqualified across themes. These desktop results
+do not qualify the reference tablet or its 61 MP canvas.
 
 Moving only the utility frame updates shared bounds without rebuilding the
 curve plot. GTK retains content and measurement, and presents pending placement
@@ -2518,19 +2521,14 @@ coverage prevents inner translucent controls from requesting canvas backdrops;
 the native journey verifies zero utility backdrop regions and separately checks
 opaque, faded and translucent synthetic surfaces. Both theme journeys pass.
 
-Earlier 60 × 30 logical-pixel motion had a geometric ceiling near 64 changed
-pixel positions/s on this display, so its 56.9–60.8 presents/s cannot establish
-a 120 Hz panel regression. With the larger path before retained placement, panel
-rates were 93.09–116.41 presents/s with p99 up to 25.24 ms. That comparison also
-predates eight upstream commits and the separated-press fixture correction;
-it does not isolate the performance effect of one change.
-
 Current raw reports, native positions and executable/source identity are in
-`artifacts/pressure-calibration/corrected-native-perf/placement-separated-press/`.
-The corrected-path baseline remains in `artifacts/pressure-calibration/corrected-native-perf/`;
-the small-path reports and captures remain in `artifacts/pressure-calibration/revised-gtk/`.
-Diagnostic runs with concurrent VM work and failed uncaptured gestures are
-preserved separately under `placement-clock-wake/` and `placement-rebased/`.
+`artifacts/pressure-calibration/immediate-removal-checks/`. Earlier diagnostics
+remain in `artifacts/pressure-calibration/corrected-native-perf/` and
+`artifacts/pressure-calibration/revised-gtk/`. Their curve path went above the
+graph at the upper output bound; immediate drag-out removal now requires the
+inward path. Those results do not isolate the cost of this change or measure
+the current two-axis curve workload. The earlier 60 × 30 utility-frame path also
+had a geometric ceiling near 64 changed pixel positions/s on this display.
 Run
 `native_pressure_calibration --tablet` with `LAYER_PRESSURE_MOTION=1` and
 `LAYER_NATIVE_EVENT_MS=8` to repeat the workload.

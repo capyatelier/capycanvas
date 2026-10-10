@@ -2954,16 +2954,22 @@ class AndroidHostTest {
             val endX = screen[0] + graphForDrag.left - graphForDrag.width * .4f
             val dragY = screen[1] + graphForDrag.top + graphForDrag.height * .04f
             val downAt = SystemClock.uptimeMillis()
-            for (step in 0..12) {
-                val phase = when (step) { 0 -> MotionEvent.ACTION_DOWN; 12 -> MotionEvent.ACTION_UP; else -> MotionEvent.ACTION_MOVE }
+            fun sendDrag(step: Int, phase: Int) {
                 val position = MotionEvent.PointerCoords().apply { x = startX + (endX - startX) * step / 12f; y = dragY; pressure = .7f }
                 val property = MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER }
                 val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), phase, 1,
                     arrayOf(property), arrayOf(position), 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
                 try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) }
                 finally { event.recycle() }
-                if (step != 12) SystemClock.sleep(16)
             }
+            try {
+                for (step in 0..11) {
+                    sendDrag(step, if (step == 0) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE)
+                    SystemClock.sleep(16)
+                }
+                waitState { points().length() == 3 }
+                assertEquals("Dragged control point disappears during Move: ${points()}", 3, points().length())
+            } finally { sendDrag(12, MotionEvent.ACTION_UP) }
             compose.waitForIdle()
             assertEquals("Dragged control points: ${points()}", 3, points().length())
             compose.onNodeWithTag("pen-pressure-reset").performClick()
@@ -3014,15 +3020,18 @@ class AndroidHostTest {
             assertEquals(original, saved())
             open()
             compose.onNodeWithTag("pen-pressure-lighter").performClick()
+            waitState { points().toString() != start }
             val applied = points().toString()
             compose.onNodeWithTag("pen-pressure-apply").performClick()
-            waitState { it.objectOrNull("pressure_calibration") == null && saved() == applied }
+            waitState { it.objectOrNull("pressure_calibration") == null }
+            assertEquals("Apply saves the edited pressure curve", applied, saved())
             penStroke(15)
             waitState { it.array("commands").objects().first { command -> command.getString("id") == "undo" }.getBoolean("enabled") }
             capture("pressure-calibration-$theme")
             open()
             assertEquals(applied, points().toString())
             compose.onNodeWithTag("pen-pressure-reset").performClick()
+            waitState { points().toString() == start }
             compose.onNodeWithTag("pen-pressure-apply").performClick()
             waitState { it.objectOrNull("pressure_calibration") == null && saved() == start }
         }

@@ -19,7 +19,8 @@ coordinate fields or changing numeric readouts. Endpoint input coordinates
 are fixed, and the final endpoint stays at 100% input and output. Click to add
 an interior control, drag to reshape it, and double-click or press Delete to
 remove it. Dragging an interior control more than 24 logical pixels outside the
-plot removes it on release; cancelling restores it. Endpoints cannot be removed.
+plot removes it immediately during the drag. Further motion cannot move another
+control; cancelling the drag or pressing Escape restores it. Endpoints cannot be removed.
 Arrow keys move the selected control; Shift increases the step.
 Handles have enough inset to remain visible at graph edges.
 

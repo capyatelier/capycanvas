@@ -30,7 +30,7 @@ pub struct PressureCalibrationView {
     pub editor: CurveEditorView,
 }
 
-struct PointDrag { baseline: PressureResponse, index: usize, press: [f32; 2], extent: [f32; 2] }
+struct PointDrag { baseline: PressureResponse, index: Option<usize>, press: [f32; 2], extent: [f32; 2] }
 
 #[derive(Default)]
 pub(crate) struct Calibration {
@@ -76,17 +76,17 @@ impl Calibration {
                         let index = super::effects::curves::hit(draft.points(), point, extent)
                             .or_else(|| draft.insert([point[0] / extent[0], 1. - point[1] / extent[1]]));
                         self.selected = index;
-                        if let Some(index) = index { self.point_drag = Some(PointDrag { baseline, index, press: point, extent }); }
+                        if let Some(index) = index { self.point_drag = Some(PointDrag { baseline, index: Some(index), press: point, extent }); }
                     }
                     ContactPhase::Move | ContactPhase::Up => {
-                        if let Some(drag) = &self.point_drag {
-                            let origin = drag.baseline.points().get(drag.index).copied()
+                        if let Some(drag) = &mut self.point_drag && let Some(index) = drag.index {
+                            let origin = drag.baseline.points().get(index).copied()
                                 .filter(|_| drag.baseline.points().len() == draft.points().len())
                                 .unwrap_or([drag.press[0] / drag.extent[0], 1. - drag.press[1] / drag.extent[1]]);
-                            draft.set_point(drag.index, [origin[0] + (point[0] - drag.press[0]) / drag.extent[0],
+                            draft.set_point(index, [origin[0] + (point[0] - drag.press[0]) / drag.extent[0],
                                 origin[1] - (point[1] - drag.press[1]) / drag.extent[1]]);
-                            if phase == ContactPhase::Up && crate::curve_editor::dragged_outside(point, drag.extent) && draft.remove(drag.index) {
-                                self.selected = None;
+                            if crate::curve_editor::dragged_outside(point, drag.extent) && draft.remove(index) {
+                                self.selected = None; drag.index = None;
                             }
                         }
                         if phase == ContactPhase::Up { self.point_drag = None; }

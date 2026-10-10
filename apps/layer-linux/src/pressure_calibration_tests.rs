@@ -72,8 +72,10 @@ fn native_pressure_calibration() {
         assert!(point_after[0]>point[0]+0.02 && point_after[1]<point[1]-0.1,"{device} moves the control");
         let at=graph_point(&w,&graph,[point_after[0],1.-point_after[1]]);
         let to=graph_point(&w,&graph,[point_after[0],-0.25]);
-        native.perform(json!([contact(device,"down",at),contact(device,"move",to),contact(device,"up",to)]));
-        assert_eq!(state(&w).pressure_calibration.unwrap().editor.points.len(),2,"{device} removes an interior point outside the graph");
+        native.perform(json!([contact(device,"down",at),contact(device,"move",to)]));
+        assert_eq!(state(&w).pressure_calibration.unwrap().editor.points.len(),2,"{device} removes an interior point before release outside the graph");
+        native.perform(json!([contact(device,"up",to)]));
+        assert_eq!(state(&w).pressure_calibration.unwrap().editor.points.len(),2,"{device} release keeps the point removed");
         let reset=find_named(panel,"pen-pressure-reset").unwrap();native.click(screen_point(&reset,&w.window,[0.5,0.5]));
         assert_eq!(state(&w).pressure_calibration.unwrap().editor.points,original.points());
         let at = screen_point(&title,&w.window,[0.5,0.5]); let to=[at[0]-140.,at[1]+40.];
@@ -203,7 +205,7 @@ fn measure_motion(w: &Rc<Workspace>, input: &mut RemoteInput, output: &std::path
             let mut events=vec![json!({"down":true})];
             for i in 1..=625 {
                 let t=i as f32/625.*std::f32::consts::TAU;
-                let [x,y]=if scenario=="panel" {[200.*t.sin(),100.*(t.cos()-1.)]} else {[4.*t.sin(),20.*(t.cos()-1.)]};
+                let [x,y]=if scenario=="panel" {[200.*t.sin(),100.*(t.cos()-1.)]} else {[4.*t.sin(),20.*(1.-t.cos())]};
                 events.push(json!({"point":[point[0]+x,point[1]+y]}));
             }
             events.push(json!({"down":false}));input.perform(json!(events));pump(300);observer.remove();clock.disconnect(after);

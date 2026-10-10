@@ -108,17 +108,37 @@ fn preferences_launch_closes_settings_on_every_platform() {
 }
 
 #[test]
-fn dragging_outside_removes_only_interior_points_on_release_and_cancel_restores() {
-    let mut s=session(Platform::Gtk);s.dispatch(UiAction::Invoke{command:CommandId::PenPressure}).unwrap();
-    let original=source(&s);let epoch=s.state.pressure_calibration.as_ref().unwrap().editor.controls.epoch;
-    let contact=|phase,point|CurveEditorAction::Contact{epoch,phase,point,extent:[100.,100.]};
-    edit(&mut s,contact(ContactPhase::Down,[25.,0.]));edit(&mut s,contact(ContactPhase::Move,[25.,-40.]));
-    assert_eq!(source(&s).points().len(),3);edit(&mut s,contact(ContactPhase::Cancel,[25.,-40.]));assert_eq!(source(&s),original);
-    for outside in [[25.,-23.],[25.,-40.]] {
-        edit(&mut s,contact(ContactPhase::Down,[25.,0.]));edit(&mut s,contact(ContactPhase::Up,outside));
-        assert_eq!(source(&s).points().len(),if outside[1] < -24. {2} else {3});edit(&mut s,CurveEditorAction::Reset);
-    }
-    for (point,outside) in [([0.,87.5],[-40.,87.5]),([100.,0.],[140.,0.])] {
-        edit(&mut s,contact(ContactPhase::Down,point));edit(&mut s,contact(ContactPhase::Up,outside));assert_eq!(source(&s).points().len(),3);
+fn dragging_outside_removes_interior_points_before_release_and_cancel_restores() {
+    for platform in Platform::ALL {
+        let mut s=session(platform);s.dispatch(UiAction::Invoke{command:CommandId::PenPressure}).unwrap();
+        let original=source(&s);let epoch=s.state.pressure_calibration.as_ref().unwrap().editor.controls.epoch;
+        let contact=|phase,point|CurveEditorAction::Contact{epoch,phase,point,extent:[100.,100.]};
+        for outside in [[25.,-25.],[25.,125.],[-25.,0.],[125.,0.]] {
+            edit(&mut s,contact(ContactPhase::Down,[25.,0.]));edit(&mut s,contact(ContactPhase::Move,[25.,-24.]));
+            assert_eq!(source(&s).points().len(),3);
+            edit(&mut s,contact(ContactPhase::Move,outside));
+            assert_eq!(source(&s).points(),&[[0.,0.125],[1.,1.]]);
+            let view=&s.state.pressure_calibration.as_ref().unwrap().editor;
+            assert_eq!(view.points,source(&s).points());assert!(view.controls.selected.is_none());
+            assert_eq!(s.state.settings.pressure_curve,original);
+            edit(&mut s,contact(ContactPhase::Cancel,outside));assert_eq!(source(&s),original);
+        }
+        edit(&mut s,contact(ContactPhase::Down,[10.,50.]));edit(&mut s,contact(ContactPhase::Up,[10.,50.]));
+        edit(&mut s,contact(ContactPhase::Down,[10.,50.]));edit(&mut s,contact(ContactPhase::Move,[10.,-40.]));
+        assert_eq!(source(&s),original);
+        for phase in [ContactPhase::Move,ContactPhase::Up] {
+            edit(&mut s,contact(phase,[40.,70.]));assert_eq!(source(&s),original);
+        }
+        edit(&mut s,contact(ContactPhase::Down,[25.,0.]));edit(&mut s,contact(ContactPhase::Move,[25.,-40.]));
+        assert_eq!(source(&s).points().len(),2);
+        edit(&mut s,CurveEditorAction::Key{epoch,key_event:"Escape".into(),pressed:true,repeat:false,modifiers:Modifiers::default()});
+        assert_eq!(source(&s),original);assert!(s.state.pressure_calibration.is_some());
+        edit(&mut s,contact(ContactPhase::Down,[25.,0.]));edit(&mut s,contact(ContactPhase::Up,[25.,-40.]));
+        assert_eq!(source(&s).points().len(),2);edit(&mut s,CurveEditorAction::Reset);
+        for (point,outside) in [([0.,87.5],[-40.,87.5]),([100.,0.],[140.,0.])] {
+            edit(&mut s,contact(ContactPhase::Down,point));edit(&mut s,contact(ContactPhase::Move,outside));
+            assert_eq!(source(&s).points().len(),3);edit(&mut s,contact(ContactPhase::Up,outside));
+            assert_eq!(source(&s).points().len(),3);
+        }
     }
 }
