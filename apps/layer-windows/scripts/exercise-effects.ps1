@@ -31,7 +31,9 @@ function Invoke([string]$Value,[switch]$Name){
     $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 function Edit([string]$Id,[string]$Text){
-    $entry=Control $Id;$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
+    $entry=Control $Id;$entry.SetFocus();Wait-Until {$entry.Current.HasKeyboardFocus} "Numeric editor did not receive focus: $Id"
+    $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Text)
+    Wait-Until {$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $Text} "Numeric editor did not receive text: $Id"
 }
 function Edit-Value([string]$Id,[string]$Text){
     Invoke $Id;Edit ($Id+'-entry') $Text;[CapyRowPointer]::Key([uint32]$review.Id,0x0D)
@@ -230,33 +232,61 @@ function Property-Theme {
     Wait-Until {!(Model).preferences} 'Property theme preferences did not close'
 }
 function Check-PropertyValueScrub {Pointer-Session {
-    foreach($device in @('mouse','pen','touch')){
+    foreach($device in @('pen','mouse','touch')){
         Edit 'property-opacity' '50';(Control 'property-opacity-slider').SetFocus()
         Wait-Until {[Math]::Abs((Property 'opacity').value.value-.5) -lt 1e-6} 'Value scrub seed did not commit'
+        try{Wait-Until {(Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -in @('50','50 %') -and [Math]::Abs((Control 'property-opacity-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value-.5) -lt 1e-6} 'Scrub origin did not reach native controls'}catch{throw "Scrub origin native text=$((Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value), slider=$((Control 'property-opacity-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value): $_"}
+        Write-Host "$device native seed acknowledged"
         $before=(Property 'opacity').value.value;$box=(Control 'property-opacity' -Arranged).Current.BoundingRectangle
         $x=[int]($box.Left+$box.Width/2);$y=[int]($box.Top+$box.Height/2)
-        [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x,$y-30)
-        Wait-Until {(Property 'opacity').value.value -gt $before} "$device value scrub did not preview"
+        $expected=[Math]::Round($before+30/([CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.)/4/100,3)
+        $scrubText=($expected*100).ToString('F1',[Globalization.CultureInfo]::InvariantCulture)+' %'
+        [CapyRowPointer]::Down($device,$x,$y);Start-Sleep -Milliseconds 60
+        for($step=1;$step -le 6;$step++){[CapyRowPointer]::Move($x,$y-5*$step);Start-Sleep -Milliseconds 35}
+        try{Wait-Until {[Math]::Abs((Property 'opacity').value.value-$expected) -lt 1e-6 -and (Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq $scrubText} "$device value scrub did not preview exact $expected with fixed readout $scrubText"}catch{throw "$device scrub actual=$((Property 'opacity').value.value), native=$((Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value), focus=$([System.Windows.Automation.AutomationElement]::FocusedElement.Current.AutomationId): $_"}
+        Write-Host "$device fine live=$((Property 'opacity').value.value), expected=$expected"
         [CapyRowPointer]::Up()
+        Start-Sleep -Milliseconds 250
+        Write-Host "$device fine after Up=$((Property 'opacity').value.value), native=$((Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value)"
+        try{Wait-Until {[Math]::Abs((Property 'opacity').value.value-$expected) -lt 1e-6} "$device fine release changed the value"}catch{throw "$device fine release actual=$((Property 'opacity').value.value), expected=${expected}: $_"}
         Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} "$device value scrub did not finish"
         Invoke 'Undo' -Name;Wait-Until {(Property 'opacity').value.value -eq $before} "$device value scrub needed more than one Undo"
-        [CapyRowPointer]::Down($device,$x,$y);[CapyRowPointer]::Move($x,$y-30)
-        Wait-Until {(Property 'opacity').value.value -gt $before} "$device canceled value scrub did not preview"
+        try{Wait-Until {(Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -in @('50','50 %') -and [Math]::Abs((Control 'property-opacity-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value-.5) -lt 1e-6} 'Scrub origin did not reach native controls'}catch{throw "Scrub origin native text=$((Control 'property-opacity').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value), slider=$((Control 'property-opacity-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value): $_"}
+        [CapyRowPointer]::Down($device,$x,$y);Start-Sleep -Milliseconds 60
+        for($step=1;$step -le 6;$step++){[CapyRowPointer]::Move($x,$y-5*$step);Start-Sleep -Milliseconds 35}
+        Wait-Until {[Math]::Abs((Property 'opacity').value.value-$expected) -lt 1e-6} "$device canceled value scrub did not preview exact $expected"
+        $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
+        Write-Host "$device scrub Escape focus=$($focused.Current.AutomationId), name=$($focused.Current.Name), before=$before, preview=$((Property 'opacity').value.value)"
         [CapyRowPointer]::Key(0x1B)
+        Wait-Until {(Property 'opacity').value.value -eq $before} "$device Escape did not cancel while the contact remained held"
+        Write-Host "$device scrub after held Escape=$((Property 'opacity').value.value)"
         [CapyRowPointer]::Up()
+        Start-Sleep -Milliseconds 250
         Wait-Until {(Property 'opacity').value.value -eq $before} "$device Escape did not cancel the value scrub"
     }
 }}
+function Check-PropertyLabelReset {Pointer-Session {
+        $before=(Property 'opacity').value.value
+        Edit 'property-opacity' 'invalid'
+        $caption=Control (Property 'opacity').label -Name -Within (Control 'layer-properties') -Type ([System.Windows.Automation.ControlType]::Text) -Arranged
+        $box=$caption.Current.BoundingRectangle;$x=[int]($box.Left+$box.Width/2);$y=[int]($box.Top+$box.Height/2)
+        for($tap=0;$tap -lt 2;$tap++){[CapyRowPointer]::Down('mouse',$x,$y);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 60}
+        Wait-Until {(Property 'opacity').value.value -eq 1} 'Double label reset did not discard the invalid numeric draft'
+        Invoke 'Undo' -Name;Wait-Until {(Property 'opacity').value.value -eq $before} 'Double label reset needed more than one Undo'
+    }}
 function Check-PropertyLayout {
     Property-Resize 960;Select-Panel 'properties'
     Property-Row 'opacity' 'opacity-compact-en'
+    Check-PropertyValueScrub
+    Check-PropertyLabelReset
     Property-Theme
     Property-Row 'opacity' 'opacity-compact-alternate-theme'
+    Check-PropertyValueScrub
+    Check-PropertyLabelReset
     Property-Theme
     $blend=Control 'property-blend' -Arranged;$panel=(Control 'layer-properties').Current.BoundingRectangle
     if(!$panel.Contains($blend.Current.BoundingRectangle)){throw 'Blend is not fully visible below the inline opacity row'}
     Check-PropertyScrub
-    Check-PropertyValueScrub
     Property-Typed 'opacity' '60' .6
     $document=(Model).state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=(Model).windows_gpu_generation
     $entryId=(Control 'property-opacity').GetRuntimeId() -join ':';$blendId=(Control 'property-blend').GetRuntimeId() -join ':';$blendValue=(Property 'blend').value.value

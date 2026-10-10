@@ -3771,7 +3771,7 @@ class AndroidInteractionTest {
                 val previewed = anchor()
                 val panel = bounds("selection-refine-panel")
                 assertTrue("$name: the panel stays clear of the selection", panel.top > selection.inside.y)
-                val slider = bounds("setting-slider-selection-refine")
+                val slider = bounds("number-slider-${refine()!!.getString("label")}")
                 fun along(f: Float) = Offset(slider.left + slider.width * f, slider.center.y)
                 val drawn = selectionPreviews()
                 val anchors = mutableSetOf<String?>()
@@ -4228,7 +4228,7 @@ class AndroidInteractionTest {
                 waitFor("$name: the Frequency Separation panel opens", 5_000) { separation() != null && shown("frequency-separation-panel") }
                 assertEquals("Frequency Separation", separation()!!.getString("title"))
                 assertNotNull("$name: the panel names the value", textBounds("Radius"))
-                val slider = settledBounds("setting-slider-frequency-separation")
+                val slider = settledBounds("number-slider-${separation()!!.getString("label")}")
                 fun along(f: Float) = Offset(slider.left + slider.width * f, slider.center.y)
                 drag(along(.19f), along(.45f), 20)
                 waitFor("$name: dragging the slider changes the radius", 5_000) { (separation()?.number("radius") ?: 0f) > 6f }
@@ -4391,8 +4391,8 @@ class AndroidInteractionTest {
                     }
                 }
                 fun text(value: Double) = if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
-                typeNumber("setting-number-canvas-size-width", text(values[0]))
-                typeNumber("setting-number-canvas-size-height", text(values[1]))
+                typeNumber("number-${panel()!!.getJSONArray("labels").getString(0)}", text(values[0]))
+                typeNumber("number-${panel()!!.getJSONArray("labels").getString(1)}", text(values[1]))
                 tap(settledBounds("canvas-size-anchor-$corner").center)
                 waitFor("$name: typed values are committed before the anchor changes", 5_000) {
                     val view = panel()!!
@@ -4628,7 +4628,7 @@ class AndroidInteractionTest {
             waitFor("the paper is ${if (shown) "shown" else "hidden"}", 5_000) { paperLayer().getBoolean("visible") == shown }
         }
         fun near(label: String, value: Int, expected: Double, tolerance: Int) = assertTrue("$label: $value vs $expected", kotlin.math.abs(value - expected) <= tolerance)
-        fun type(field: String, text: String) = typeNumber("setting-number-image-size-$field", text)
+        fun type(field: String, text: String) = typeNumber("number-${panel()!!.getJSONArray("labels").getString(if (field == "width") 0 else if (field == "height") 1 else 2)}", text)
         fun image(vararg path: String) = chooseFromApplicationMenu("image", path.toList())
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         popupInput = true

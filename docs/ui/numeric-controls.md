@@ -236,6 +236,9 @@ checks InputConnection composition and unchanged commits. Windows
 `exercise-effects.ps1` covers mouse, pen and touch contacts, double-click
 insertion and removal, held arrows, Delete, exact and unchanged Output text,
 Log HDR readouts in a float drawing and one Undo per property slider scrub.
+Its `-PropertyLayout` check also covers editor clearance, fixed-decimal mouse,
+pen and touch value drags in both themes, settled release, Escape cancellation,
+label reset after an invalid draft and one Undo per scrub.
 On macOS and iPadOS, `EditorLaunchTests/testFilterArtworkAndHistory` covers
 page changes, contacts, point selection, drags and double-click removal with
 history, and the `tests/property-slider-input.swift` fixture removes a selected

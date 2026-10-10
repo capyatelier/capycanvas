@@ -74,7 +74,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     });
     entry.TextAlignment(TextAlignment::Right);Grid::SetColumn(entry,1);
     weak_ref<TextBlock> readout;
-    Button valueSurface{nullptr};
+    ContentControl valueSurface{nullptr};
     if(ranged&&!valueOnly){
         // Read mode has the same text extent as the shared plain value. Keep
         // native text editing/accessibility while avoiding a hidden caret gutter.
@@ -88,8 +88,11 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         valueBox.Children().Append(entry);
         if(panel){
             valueBox.Width(80);valueBox.HorizontalAlignment(HorizontalAlignment::Right);entry.Width(80);
-            valueSurface=button(data,L"",[]{});valueSurface.Content(display);valueSurface.Padding({0});valueSurface.Height(34);
-            valueSurface.IsTabStop(false);AutomationProperties::SetAccessibilityView(valueSurface,Automation::Peers::AccessibilityView::Raw);
+            Border hit;hit.Background(clear());hit.ManipulationMode(ManipulationModes::None);hit.Child(display);
+            valueSurface=ContentControl();valueSurface.Content(hit);valueSurface.Padding({0});valueSurface.Height(34);
+            valueSurface.ManipulationMode(ManipulationModes::None);
+            valueSurface.IsTabStop(true);valueSurface.HorizontalContentAlignment(HorizontalAlignment::Stretch);valueSurface.VerticalContentAlignment(VerticalAlignment::Stretch);
+            AutomationProperties::SetAccessibilityView(valueSurface,Automation::Peers::AccessibilityView::Raw);
             valueBox.Children().Append(valueSurface);
         }else valueBox.Children().Append(display);
         header.Children().Append(valueBox);
@@ -205,8 +208,10 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     if(commits)commits->emplace_back([commit]{commit(false);});
     if(admissions)admissions->emplace_back(commit);
     if(panel){
-        auto restore=[local,spec,set,setText,finish]{
+        auto surfaceY=[weak=make_weak(valueSurface)](PointerRoutedEventArgs const& e){return e.GetCurrentPoint(weak.get().XamlRoot().Content().as<UIElement>()).Position().Y;};
+        auto restore=[local,spec,set,setText,finish,weak=make_weak(valueSurface)]{
             bool active=std::exchange(local->scrubbing,false);local->pointer.reset();local->dragging=false;
+            if(auto target=weak.get())target.ReleasePointerCaptures();
             if(active){bool transaction=local->gesture;finish(L"cancel");local->value=local->origin;if(!transaction)set(local->value);}
             setText(str(local->resolve(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
         };
@@ -218,29 +223,35 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
             auto next=local->resolve(spec,local->origin,O({{L"type",S(L"scrub")},{L"origin",N(local->origin)},{L"pixels",N(pixels)}}));
             local->value=num(next,L"value");setText(str(next,L"scrub_text"));set(local->value);
         };
-        valueSurface.PointerPressed([local,commit,weak=make_weak(valueSurface)](auto&&,PointerRoutedEventArgs const& e){
+        valueSurface.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([local,commit,surfaceY,weak=make_weak(valueSurface)](auto&&,PointerRoutedEventArgs const& e){
             if(local->pointer||!commit(false))return;auto target=weak.get();if(!target||!target.IsEnabled())return;
             if(e.GetCurrentPoint(target).Properties().IsCanceled())return;
-            local->pointer=e.Pointer().PointerId();local->origin=local->value;local->originY=e.GetCurrentPoint(nullptr).Position().Y;
+            local->pointer=e.Pointer().PointerId();local->origin=local->value;local->originY=surfaceY(e);
             if(!target.CapturePointer(e.Pointer())){local->pointer.reset();return;}
             local->dragging=true;target.Focus(FocusState::Pointer);e.Handled(true);
-        });
-        valueSurface.PointerMoved([local,move,restore,identity=presentation.identity](auto&&,PointerRoutedEventArgs const& e){
+        })),true);
+        valueSurface.AddHandler(UIElement::PointerMovedEvent(),box_value(PointerEventHandler([local,move,restore,surfaceY,identity=presentation.identity](auto&&,PointerRoutedEventArgs const& e){
             if(local->pointer!=e.Pointer().PointerId())return;
             if(e.GetCurrentPoint(nullptr).Properties().IsCanceled()||(identity&&local->identity!=identity())){restore();return;}
-            move(e.GetCurrentPoint(nullptr).Position().Y);e.Handled(true);
-        });
-        valueSurface.PointerReleased([local,move,finish,setText,showText,restore,weak=make_weak(entry)](auto&&,PointerRoutedEventArgs const& e){
+            move(surfaceY(e));e.Handled(true);
+        })),true);
+        valueSurface.AddHandler(UIElement::PointerReleasedEvent(),box_value(PointerEventHandler([local,move,finish,setText,showText,restore,surfaceY,weak=make_weak(entry),surface=make_weak(valueSurface)](auto&&,PointerRoutedEventArgs const& e){
             if(local->pointer!=e.Pointer().PointerId())return;
             if(e.GetCurrentPoint(nullptr).Properties().IsCanceled()){restore();return;}
-            bool scrub=local->scrubbing;if(scrub)move(e.GetCurrentPoint(nullptr).Position().Y);
+            bool scrub=local->scrubbing;if(scrub)move(surfaceY(e));
             local->pointer.reset();local->dragging=false;local->scrubbing=false;
+            if(auto target=surface.get())target.ReleasePointerCaptures();
             if(scrub){finish(L"up");setText(showText(L"text"));}else if(auto entry=weak.get())entry.Focus(FocusState::Pointer);
             e.Handled(true);
+        })),true);
+        valueSurface.AddHandler(UIElement::PointerCanceledEvent(),box_value(PointerEventHandler([restore](auto&&,auto&&){restore();})),true);
+        valueSurface.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([local,restore](auto&&,auto&&){if(local->pointer)restore();})),true);
+        root.PreviewKeyDown([local,restore](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Escape&&local->pointer){restore();e.Handled(true);}});
+        valueSurface.PreviewKeyDown([local,weak=make_weak(entry)](auto&&,KeyRoutedEventArgs const& e){
+            if(!local->pointer&&(e.Key()==Windows::System::VirtualKey::Enter||e.Key()==Windows::System::VirtualKey::Space)){
+                if(auto entry=weak.get())entry.Focus(FocusState::Keyboard);e.Handled(true);
+            }
         });
-        valueSurface.PointerCanceled([restore](auto&&,auto&&){restore();});
-        valueSurface.PointerCaptureLost([local,restore](auto&&,auto&&){if(local->pointer)restore();});
-        valueSurface.KeyDown([local,restore](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Escape&&local->pointer){restore();e.Handled(true);}});
         text.DoubleTapped([local,spec,set,commit,reset=presentation.reset](auto&&,DoubleTappedRoutedEventArgs const& e){
             commit(true);
             if(reset)reset();else if(spec.HasKey(L"default_value")&&spec.GetNamedValue(L"default_value").ValueType()==Windows::Data::Json::JsonValueType::Number){
@@ -288,6 +299,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     slider.ValueChanged([data,local,caption,spec,set,setText,phase,weak=make_weak(entry)](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
         if(data->updating||local->formatting)return;
         auto next=local->resolve(spec,local->value,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}}));
+        if(num(next,L"value")==local->value)return;
         local->value=num(next,L"value");local->editing=false;
         if(auto entry=weak.get()){
             showNumericError(entry,L"");caption->errorReason=J{};

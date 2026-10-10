@@ -55,13 +55,13 @@ class AndroidTextCompositionTest {
             fun width() = state().array("tabs").objects().first { it.getBoolean("active") }.getInt("width")
             val originalWidth = width()
             val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
-            val field = "setting-number-canvas-size-width"
-            fun literal(): String = findTag(field)!!.second.config.getOrNull(SemanticsProperties.EditableText)!!.text
+            fun field() = "number-${panel()!!.getJSONArray("labels").getString(0)}"
+            fun literal(): String = findTag(field())!!.second.config.getOrNull(SemanticsProperties.EditableText)!!.text
             fun replace(text: String, composing: Boolean = false): android.view.inputmethod.InputConnection {
-                compose.onNodeWithTag(field).performClick()
+                compose.onNodeWithTag(field()).performClick()
                 lateinit var connection: android.view.inputmethod.InputConnection
                 compose.runOnIdle {
-                    connection = findTag(field)!!.first.view.onCreateInputConnection(android.view.inputmethod.EditorInfo())!!
+                    connection = findTag(field())!!.first.view.onCreateInputConnection(android.view.inputmethod.EditorInfo())!!
                     assertTrue(connection.setSelection(0, literal().length))
                     assertTrue(if (composing) connection.setComposingText(text, 1) else connection.commitText(text, 1))
                 }
@@ -267,8 +267,8 @@ class AndroidTextCompositionTest {
             val originalWidth = drawing().getInt("width")
             val originalHeight = drawing().getInt("height")
             val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
-            val width = "setting-number-image-size-width"
-            val height = "setting-number-image-size-height"
+            fun widthField() = "number-${panel()!!.getJSONArray("labels").getString(0)}"
+            fun heightField() = "number-${panel()!!.getJSONArray("labels").getString(1)}"
             fun literal(field: String) = findTag(field)!!.second.config.getOrNull(SemanticsProperties.EditableText)!!.text
             fun replace(field: String, text: String, composing: Boolean = false) {
                 compose.onNodeWithTag(field).performClick()
@@ -288,12 +288,12 @@ class AndroidTextCompositionTest {
                 for (theme in listOf("light", "dark")) {
                     host.drain(obj("type" to "set_theme", "theme" to theme))
                     open()
-                    replace(width, "12+3")
+                    replace(widthField(), "12+3")
                     compose.waitUntil(10_000) { values().getDouble(0) == 15.0 && values().getDouble(1) == 11.0 }
-                    replace(width, "12", composing = true)
-                    compose.onNodeWithTag(height).performClick()
+                    replace(widthField(), "12", composing = true)
+                    compose.onNodeWithTag(heightField()).performClick()
                     compose.waitUntil(10_000) { values().getDouble(0) == 12.0 && values().getDouble(1) == 9.0 }
-                    compose.waitUntil(10_000) { literal(height) == "9 px" }
+                    compose.waitUntil(10_000) { literal(heightField()) == "9 px" }
                     compose.onNodeWithTag("image-size-apply").performTouchInput { click() }
                     compose.waitUntil(10_000) { panel() == null }
                     assertEquals(12, drawing().getInt("width"))
@@ -302,9 +302,9 @@ class AndroidTextCompositionTest {
                     compose.waitUntil(10_000) { drawing().getInt("width") == originalWidth }
 
                     open()
-                    replace(width, "12+3")
+                    replace(widthField(), "12+3")
                     compose.waitUntil(10_000) { values().getDouble(0) == 15.0 }
-                    replace(height, "6")
+                    replace(heightField(), "6")
                     compose.waitUntil(10_000) { values().getDouble(0) == 8.0 && values().getDouble(1) == 6.0 }
                     compose.onNodeWithTag("image-size-apply").performTouchInput { click() }
                     compose.waitUntil(10_000) { panel() == null }
@@ -315,12 +315,12 @@ class AndroidTextCompositionTest {
 
                     for (refused in listOf("12+", "２＋３")) {
                         open()
-                        replace(width, refused)
-                        compose.onNodeWithTag(height).performClick()
+                        replace(widthField(), refused)
+                        compose.onNodeWithTag(heightField()).performClick()
                         compose.onNodeWithTag("image-size-apply").performTouchInput { click() }
                         compose.runOnIdle {
                             assertNotNull(panel())
-                            assertEquals(refused, literal(width))
+                            assertEquals(refused, literal(widthField()))
                             assertEquals(originalWidth, drawing().getInt("width"))
                             assertEquals(originalHeight, drawing().getInt("height"))
                         }

@@ -3603,7 +3603,7 @@ fn native_tool_and_color_panels() {
             w.panel_widget(Panel::ToolSettings)
                 .measure(gtk::Orientation::Horizontal, -1)
                 .0
-                <= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32,
+                <= layer_ui::PANEL_MIN_WIDTH as i32,
             "{} settings are too wide: {}",
             choice.label,
             w.panel_widget(Panel::ToolSettings).measure(gtk::Orientation::Horizontal, -1).0

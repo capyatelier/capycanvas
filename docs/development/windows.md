@@ -516,14 +516,14 @@ header through customization, then narrows the window until that group overflows
 with injected mouse, pen and touch. Repeat with `-Theme light`.
 The VM fixture names are `tool-variations` and `tool-variations:light`.
 
-Properties sliders place the caption beside the inline slider and value field.
-They reuse the choice-row layout: when the remaining width is below
-`min(150, row width)`, the caption and control each occupy a full-width row.
-Long captions trim within the row and relabel without replacing the control.
+Properties sliders use the shared [compact numeric layout](../ui/numeric-controls.md),
+with the track beneath the caption and room for the value and its editor.
+Long captions trim and relabel without replacing the control.
 `exercise-effects.ps1 -Executable <path> -PropertyLayout -Theme dark` checks
-inline opacity and filter sliders, typed edits and drag history, narrow Russian
-captions and a return to wider English controls with retained values and identity.
-Repeat with `-Theme light` and review the composed captures.
+opacity and filter sliders, typed edits, fine mouse/pen/touch value drags,
+release, Escape while held, label reset and one Undo per drag in both themes.
+It also checks narrow Russian captions and a return to wider English controls
+with retained values and identity. Review the composed captures.
 
 Properties, Tool Settings and Tool Options share one gradient editor
 (`GradientView.cpp`); a worker thread rasterizes its dithered preview through the

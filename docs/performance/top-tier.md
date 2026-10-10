@@ -173,7 +173,7 @@ and 33.33 ms. Dropped reports remained zero and thermal status remained 0.
 
 Measured 2026-10-10 with displayed-unit slider snapping and fixed decimals
 during fine value dragging and the shared unchanged-position guard, based on
-`a72e2aff5` with platform ports, in a release build on NVIDIA
+`1283022fd` after rebasing the platform ports, in a release build on NVIDIA
 RTX PRO 6000 Blackwell Max-Q/Vulkan 615.71.09. The private Mutter display is 1600 × 1000 at a requested
 120 Hz, with a 2048 × 1536 empty drawing. `native_panel_slider_motion` uses
 native mouse input at requested 4 ms intervals, warms each field, and records
@@ -186,27 +186,28 @@ slider steps can leave some presentations unchanged at the sampled value.
 
 | Theme / handle / field | Moving presentations/s | Interval p99 |
 | --- | --- | --- |
-| Light / Slider / Size | 117.54–118.85 | 10.681–16.698 ms |
-| Light / Slider / Opacity | 115.38–115.73 | 16.723–16.730 ms |
-| Light / Slider / Flow | 115.89–116.37 | 16.698–16.715 ms |
-| Light / Value / Size | 119.68–120.00 | 8.553–8.597 ms |
-| Light / Value / Opacity | 119.67–120.00 | 8.569–8.640 ms |
-| Light / Value / Flow | 120.01–120.01 | 8.614–8.929 ms |
-| Dark / Slider / Size | 117.71–118.87 | 12.241–16.722 ms |
-| Dark / Slider / Opacity | 115.39–115.73 | 16.672–16.792 ms |
-| Dark / Slider / Flow | 116.04–116.54 | 16.670–16.728 ms |
-| Dark / Value / Size | 119.84–119.96 | 8.651–8.816 ms |
-| Dark / Value / Opacity | 119.83–120.01 | 8.527–8.569 ms |
-| Dark / Value / Flow | 119.29–119.84 | 8.555–8.574 ms |
+| Light / Slider / Size | 117.37–119.51 | 8.913–16.589 ms |
+| Light / Slider / Opacity | 111.92–113.25 | 16.720–16.782 ms |
+| Light / Slider / Flow | 111.76–112.41 | 16.755–16.799 ms |
+| Light / Value / Size | 119.84–120.05 | 8.530–8.593 ms |
+| Light / Value / Opacity | 119.84–120.01 | 8.542–8.637 ms |
+| Light / Value / Flow | 119.61–119.84 | 8.563–8.637 ms |
+| Dark / Slider / Size | 118.52–119.18 | 8.758–16.500 ms |
+| Dark / Slider / Opacity | 110.93–112.76 | 16.796–16.815 ms |
+| Dark / Slider / Flow | 110.42–112.42 | 16.778–16.938 ms |
+| Dark / Value / Size | 119.84–120.01 | 8.514–8.607 ms |
+| Dark / Value / Opacity | 119.84–119.84 | 8.595–8.842 ms |
+| Dark / Value / Flow | 119.63–120.01 | 8.554–8.584 ms |
+
 These are workstation diagnostics with a small drawing. They do not qualify
 any reference-tablet target.
-Raw records are in `artifacts/panel-sliders/port-web-gtk-motion-*.json`.
+Raw records are in `artifacts/panel-sliders/port-web-rebase-gtk-motion-*.json`.
 
 The Web port's four five-second Hue slider diagnostics, at 640 and 1100 pixels
-in both themes on the same GPU, recorded host callback CPU p95 of 0.8–1.0 ms
-and maxima of 1.2–1.6 ms. The drawing is 256 × 256. These callback measurements
+in both themes on the same GPU, recorded host callback CPU p95 of 0.9–1.0 ms
+and maxima of 1.2–1.4 ms. The drawing is 256 × 256. These callback measurements
 have no compositor presentation feedback and do not establish frame rate or
-input latency. Records are in `artifacts/panel-sliders/port-web-native/hue-motion.json`.
+input latency. Records are in `artifacts/panel-sliders/port-web-rebase-native/hue-motion.json`.
 Android functional checks use the available Huion tablet; the low, mid and top
 reference devices were reserved by other sessions. Apple native hardware and
 Windows hardware presentation were not measured.
