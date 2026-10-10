@@ -3421,7 +3421,7 @@ class AndroidHostTest {
         val rangeBounds = numericSlider.fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
         val valueBounds = valueNode.fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
         val density = compose.activity.resources.displayMetrics.density
-        assertTrue(valueBounds.width <= 80f * density + 1f)
+        assertTrue(valueBounds.width <= 64f * density + 1f)
         assertTrue(valueBounds.left - rangeBounds.right >= 8f * density - 1f)
         numericSlider.performTouchInput { swipe(center, centerRight, 300) }
         waitState { it.getJSONObject("brush").getDouble("diameter") > 1000.0 }
@@ -3499,7 +3499,7 @@ class AndroidHostTest {
                     field.performTextReplacement("12345678901234567890 +")
                     val editor = field.fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
                     val slider = compose.onAllNodesWithTag("number-slider-Brush size").onFirst().fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
-                    assertTrue(editor.width <= 80f * density + 1f)
+                    assertTrue(editor.width <= 64f * density + 1f)
                     assertTrue(editor.left - slider.right >= 8f * density - 1f)
                     field.performTextReplacement("42.5"); field.performImeAction()
                     waitState { it.getJSONObject("brush").getDouble("diameter") == 42.5 }

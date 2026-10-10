@@ -210,7 +210,7 @@ function Property-Row([string]$Key,[string]$Case){
     $outer=$bounds.panel;$outer.Inflate(1,1);$inner=$bounds.field;$inner.Inflate(1,1)
     if(!$outer.Contains($bounds.caption) -or !$outer.Contains($bounds.field) -or !$inner.Contains($bounds.entry) -or !$inner.Contains($bounds.track)){throw "Property controls are outside their visible panel: $Key"}
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
-    if([Math]::Abs($bounds.field.Height-36*$scale) -gt 1 -or [Math]::Abs($bounds.entry.Width-80*$scale) -gt 1 -or [Math]::Abs($bounds.entry.Height-34*$scale) -gt 1){throw "Compact property row or value dimensions differ: $Key"}
+    if([Math]::Abs($bounds.field.Height-36*$scale) -gt 1 -or [Math]::Abs($bounds.entry.Width-64*$scale) -gt 1 -or [Math]::Abs($bounds.entry.Height-34*$scale) -gt 1){throw "Compact property row or value dimensions differ: $Key"}
     if([Math]::Abs($bounds.track.Height-16*$scale) -gt 1 -or $bounds.track.Left-$bounds.field.Left -lt 24*$scale -or $bounds.entry.Left-$bounds.track.Right -lt 4*$scale -or $bounds.track.Width -lt 80*$scale){throw "Compact property slider dimensions differ: $Key"}
     if($bounds.caption.Right -gt $bounds.entry.Left+1 -or $bounds.track.Right -gt $bounds.entry.Left+1 -or $bounds.caption.Bottom -gt $bounds.track.Top+1){throw "Compact property caption, slider or value overlap: $Key"}
     Capture $Case -Composed

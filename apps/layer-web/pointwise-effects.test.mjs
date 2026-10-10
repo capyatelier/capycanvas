@@ -213,10 +213,10 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
         if(motion) {
           const field=selector('reds_hue'),origin=(await value('reds_hue')).value;
           const geometry=await evaluate(`(()=>{const n=document.querySelector('${field}'),r=n.getBoundingClientRect(),t=n.slider.getBoundingClientRect();return {panel:n.panel,height:r.height,steps:n.querySelectorAll('.number-step').length,left:t.left-r.left,right:r.right-t.right,thumb:getComputedStyle(n.slider).getPropertyValue('--thumb-size')}})()`);
-          assert.equal(geometry.panel,true);assert.equal(geometry.height,36);assert.equal(geometry.steps,0);assert.equal(geometry.left,36);assert.equal(geometry.right,88);assert.equal(geometry.thumb.trim(),'0px');
+          assert.equal(geometry.panel,true);assert.equal(geometry.height,36);assert.equal(geometry.steps,0);assert.equal(geometry.left,36);assert.equal(geometry.right,72);assert.equal(geometry.thumb.trim(),'0px');
           await click(`${field} .number-value`);
           const editor=await evaluate(`(()=>{const n=document.querySelector('${field}'),e=n.entry.getBoundingClientRect(),t=n.slider.getBoundingClientRect();return {width:e.width,height:e.height,gap:e.left-t.right}})()`);
-          assert.equal(editor.width,80);assert.equal(editor.height,34);assert.equal(editor.gap,8);await key('Escape',27);
+          assert.equal(editor.width,64);assert.equal(editor.height,34);assert.equal(editor.gap,8);await key('Escape',27);
           for(const device of ['mouse','pen','touch'])for(const cancel of [false,true]) {
             const p=await evaluate(`(()=>{const n=document.querySelector('${field} .number-value');n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`),end={x:p.x,y:p.y-9};
             const contact=async(type,point)=>device==='touch'?call('Input.dispatchTouchEvent',{type,touchPoints:type==='touchEnd'||type==='touchCancel'?[]:[{id:1,...point}]}):call('Input.dispatchMouseEvent',{type,...point,pointerType:device,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1,force:.7});

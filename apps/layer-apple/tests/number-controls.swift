@@ -93,8 +93,8 @@ import SwiftUI
                         let root = geometry.frames[key + ":root"]!, track = geometry.frames[key + ":track"]!
                         let value = geometry.frames[key + ":value"]!
                         precondition(abs(root.height - 36) < 0.5 && abs(track.height - 16) < 0.5)
-                        precondition(abs(track.minX - root.minX - 36) < 0.5 && abs(root.maxX - track.maxX - 88) < 0.5)
-                        precondition(abs(value.width - 80) < 0.5 && abs(value.height - 34) < 0.5 && value.minX - track.maxX >= 7.5)
+                        precondition(abs(track.minX - root.minX - 36) < 0.5 && abs(root.maxX - track.maxX - 72) < 0.5)
+                        precondition(abs(value.width - 64) < 0.5 && abs(value.height - 34) < 0.5 && value.minX - track.maxX >= 7.5)
                         precondition(geometry.frames[key + ":minus"] == nil && geometry.frames[key + ":plus"] == nil)
                     }
                 }

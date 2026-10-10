@@ -63,16 +63,16 @@ struct NumberControl: View {
                 ZStack {
                     Text(label).lineLimit(1).truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading).frame(height: 20)
-                        .padding(.leading, 6).padding(.trailing, 88)
+                        .padding(.leading, 6).padding(.trailing, 72)
                         .modifier(NumberControlMeasurement(id: key + ":label"))
                         .onTapGesture(count: 2, perform: resetValue)
                         .frame(maxHeight: .infinity, alignment: .top)
-                    sliderTrack.padding(.leading, 36).padding(.trailing, 88)
+                    sliderTrack.padding(.leading, 36).padding(.trailing, 72)
                         .frame(maxHeight: .infinity, alignment: .bottom)
                     Group {
                         if showsEntry || field.dirty { numericEntry }
                         else { valueButton }
-                    }.frame(width: 80).frame(maxWidth: .infinity, alignment: .trailing)
+                    }.frame(width: 64).frame(maxWidth: .infinity, alignment: .trailing)
                 }.frame(height: 36).modifier(NumberControlMeasurement(id: key + ":header"))
             } else {
                 HStack(spacing: 6) {
@@ -190,7 +190,7 @@ struct NumberControl: View {
             color: palette["text"], identifier: "number-entry-" + key,
             submit: finish, cancel: cancel, step: step)
             .focusedValue(\.editorTextCommit, { _ = commit() })
-            .frame(width: valueOnly || inline || toolbar != nil ? nil : compactPanel ? 68 : slider ? 80 : entryWidth)
+            .frame(width: valueOnly || inline || toolbar != nil ? nil : compactPanel ? 52 : slider ? 80 : entryWidth)
             .padding(.horizontal, 6).frame(height: compactPanel ? 34 : valueOnly || slider ? 24 : 32)
             .background(palette["input"], in: SquircleShape.control)
             .modifier(NumberControlMeasurement(id: key + ":entry"))

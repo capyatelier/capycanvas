@@ -232,7 +232,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
                 host.textComposition.update(requester, text, focused)
                 if (dirty) onText(it)
             }
-        }, Modifier.then(if (panel) Modifier.width(80.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(if (panel) 34.dp else height)
+        }, Modifier.then(if (panel) Modifier.width(64.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(if (panel) 34.dp else height)
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) { finish(); if (heldKey != null) endEdit() }
@@ -266,7 +266,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     }
     val valueControl: @Composable () -> Unit = {
         if (editing) field()
-        else Box(Modifier.then(if (panel) Modifier.widthIn(max = 80.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else Modifier).height(if (panel) 36.dp else height).clip(shape)
+        else Box(Modifier.then(if (panel) Modifier.widthIn(max = 64.dp) else if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else Modifier).height(if (panel) 36.dp else height).clip(shape)
             .onGloballyPositioned { valueBounds = it.boundsInRoot() }.then(fineDrag)
             .then(if (toolbar) Modifier.toolbarNumberScrub(control, shown.number("fill"), enabled,
                 { if (finish()) apply(obj("type" to "position", "position" to it)) },
@@ -278,14 +278,14 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     if (panel) {
         Column(modifier.fillMaxWidth()) {
             Box(Modifier.fillMaxWidth().height(36.dp)) {
-                Text(label, Modifier.fillMaxWidth().padding(start = 6.dp, end = 88.dp).align(Alignment.TopStart)
+                Text(label, Modifier.fillMaxWidth().padding(start = 6.dp, end = 72.dp).align(Alignment.TopStart)
                     .pointerInput(enabled, onReset, control.toString()) { if (enabled) detectTapGestures(onDoubleTap = {
                         finish(cancel = true)
                         if (onReset != null) onReset() else if (!control.isNull("default_value")) apply(obj("type" to "expression", "text" to ""))
                     }) }, color = if (enabled) colors.text else colors.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Box(Modifier.align(Alignment.CenterEnd)) { valueControl() }
                 EditorSlider(shown.number("fill"), { if (finish()) apply(obj("type" to "position", "position" to it)) },
-                    Modifier.fillMaxWidth().padding(start = 36.dp, end = 88.dp).align(Alignment.BottomStart).then(contact).testTag("number-slider-$label"),
+                    Modifier.fillMaxWidth().padding(start = 36.dp, end = 72.dp).align(Alignment.BottomStart).then(contact).testTag("number-slider-$label"),
                     enabled = enabled, label = label, height = 16.dp, inactiveTrackColor = colors.input, showThumb = false, activeTrackColor = colors.sliderFill)
             }
             errorCaption?.let { Text(it, Modifier.testTag("number-error-$id"), color = colors.accent, fontSize = 12.sp) }

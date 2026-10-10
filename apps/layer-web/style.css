@@ -360,11 +360,11 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .number-spin .number-entry { width: 60px; height: 32px; }
 .number-panel { position:relative; height:36px; --number-fill:color-mix(in srgb, var(--panel), var(--text)); }
 .number-panel .number-header { position:absolute; inset:0; align-items:flex-start; }
-.number-panel .number-labels { padding:0 88px 0 6px; line-height:20px; }
+.number-panel .number-labels { padding:0 72px 0 6px; line-height:20px; }
 .number-panel .number-value-box { position:absolute; inset:0 0 0 auto; align-items:center; }
 .number-panel .number-value { touch-action:none; cursor:ns-resize; }
-.number-panel .number-entry { width:80px; max-width:80px; height:34px; min-height:34px; box-sizing:border-box; }
-.number-panel .number-track { position:absolute; left:36px; right:88px; bottom:0; height:16px; }
+.number-panel .number-entry { width:64px; max-width:64px; height:34px; min-height:34px; box-sizing:border-box; }
+.number-panel .number-track { position:absolute; left:36px; right:72px; bottom:0; height:16px; }
 .number-panel .number-slider, .panel .number-panel .number-slider { --thumb-size:0px; height:16px; }
 .number-panel .number-slider::-webkit-slider-thumb { margin-top:2px; box-shadow:none; }
 .number-panel .number-slider::-moz-range-thumb { box-shadow:none; }
