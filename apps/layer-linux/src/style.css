@@ -180,7 +180,7 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .dock-panel .number-inline scale { margin: 0; }
 .number-panel .number-header { min-height: 24px; }
 .number-panel entry.number-entry { min-width: 0; }
-.number-panel .number-track { margin: -4px 84px 0 36px; }
+.number-panel .number-track { margin: -4px 80px 0 36px; }
 .number-panel.number-control scale { min-width: 0; min-height: 16px; padding: 0; margin: 0; }
 .number-panel.number-control scale highlight { background: mix(var(--panel-bg), var(--window-fg-color), .5); }
 .number-panel.number-control scale slider { min-width: 0; min-height: 0; padding: 0; border: 0; margin: 0; opacity: 0; }
