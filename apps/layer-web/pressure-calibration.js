@@ -24,7 +24,7 @@ export function createPressureCalibration({state,workspace,element,button,icon,n
     if(!panel){
       panel=element('div','dock-group floating-panel utility-panel');panel.id='pen-pressure-dialog';panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');
       const header=element('div','dock-tabs utility-header');heading=element('strong','utility-title');heading.id='pen-pressure-title';panel.setAttribute('aria-labelledby',heading.id);
-      close=button('',()=>send({kind:'cancel'}),'utility-close');close.append(icon('close'));header.append(heading,close);
+      close=button('',()=>send({kind:'cancel'}),'utility-close');close.append(icon('window-close'));header.append(heading,close);
       const body=element('div','panel utility-body');
       editor=createCurveEditor({element,button,icon,numberField,dispatch,target:{kind:'pressure'},initial:view.editor,label:view.title});
       const sensitivity=element('div','utility-sensitivity'),actions=element('div','utility-actions');

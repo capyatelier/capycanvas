@@ -85,7 +85,7 @@ struct PressureCalibration:std::enable_shared_from_this<PressureCalibration>{
         auto key=data->theme()+object(data->state,L"palette").Stringify();
         if(key!=built){built=key;bindings.clear();slot.Child(CapyEffects::PressureCurveField(data,bindings));}
         title.Text(str(model,L"title"));title.Foreground(data->brush(L"text"));strip.Fill(data->brush(L"tabbar"));surface.Fill(data->brush(L"panel"));
-        close.Content(icon(L"close",data->theme()));AutomationProperties::SetName(close,str(model,L"close"));tooltip(close,str(model,L"close"));
+        close.Content(icon(L"window-close",data->theme()));AutomationProperties::SetName(close,str(model,L"close"));tooltip(close,str(model,L"close"));
         AutomationProperties::SetName(frame,str(model,L"title"));
         for(auto [control,id]:{std::pair{firmer,L"firmer"},std::pair{lighter,L"lighter"},std::pair{reset,L"reset"},std::pair{cancel,L"cancel"},std::pair{apply,L"apply"}}){auto text=str(model,id);if(unbox_value_or<hstring>(control.Content(),L"")!=text)control.Content(box_value(text));AutomationProperties::SetName(control,text);}
         firmer.IsEnabled(flag(model,L"firmer_enabled"));lighter.IsEnabled(flag(model,L"lighter_enabled"));apply.Background(accent(data));apply.Foreground(data->brush(L"accent_foreground"));

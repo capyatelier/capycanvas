@@ -9,7 +9,8 @@ The command is also available in command search and toolbar customization. Its
 bold title and inset Close button distinguish it from dockable workspace panels.
 It has no tabs, docking targets, workspace persistence or workspace undo entry.
 Each client reuses its existing panel surfaces, theme roles and curve widget. The Close
-button has a compact squircle hover area with space around it in the title bar.
+button uses the shared window-close glyph in a 16px icon box, with a compact
+squircle hover area and space around it in the title bar.
 Its opaque background prevents inner controls from requesting canvas backdrops.
 
 The panel shows the curve, its control polygon, selectable handles and a live

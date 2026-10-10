@@ -72,7 +72,7 @@ import kotlin.math.roundToInt
                     Text(view.getString("title"), Modifier.weight(1f), fontWeight = FontWeight.Bold)
                     Box(Modifier.size(28.dp).clip(ControlShape).testTag("pen-pressure-close")
                         .semantics { contentDescription = current.getString("close") }
-                        .clickable { send(obj("kind" to "cancel")) }, contentAlignment = Alignment.Center) { SharedIcon("close", null, Modifier.size(16.dp)) }
+                        .clickable { send(obj("kind" to "cancel")) }, contentAlignment = Alignment.Center) { SharedIcon("window-close", null, Modifier.size(16.dp)) }
                 }
                 Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SharedCurveControl(host, state, view.getJSONObject("editor"), view.getString("title"), obj("kind" to "pressure"))

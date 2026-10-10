@@ -33,7 +33,7 @@ impl PressurePanel {
         let title = gtk::Label::builder().hexpand(true).xalign(0.).margin_start(12).ellipsize(gtk::pango::EllipsizeMode::End).build();
         title.set_widget_name("pen-pressure-title"); title.set_cursor_from_name(Some("grab"));
         title.add_css_class("utility-title");
-        let close = crate::icons::button("layer-close-symbolic"); close.add_css_class("flat"); close.set_widget_name("pen-pressure-close");
+        let close = crate::icons::button("layer-window-close-symbolic"); close.add_css_class("flat"); close.set_widget_name("pen-pressure-close");
         close.add_css_class("utility-close"); close.set_valign(gtk::Align::Center);
         close.set_margin_start(4); close.set_margin_end(6); close.set_margin_top(4); close.set_margin_bottom(4);
         header.append(&title); header.append(&close); column.append(&header);

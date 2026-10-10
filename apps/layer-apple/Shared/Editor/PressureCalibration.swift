@@ -37,7 +37,7 @@ struct PressureCalibration: View {
                                         "viewport": [viewport.size.width, viewport.size.height]])
                                     dragging = false
                                 })
-                        IconTile(icon: "close", label: view["close"].string) { send(["kind": "cancel"]) }
+                        IconTile(icon: "window-close", label: view["close"].string) { send(["kind": "cancel"]) }
                             .frame(width: 24, height: 24).accessibilityIdentifier("pen-pressure-close")
                     }.padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 4).background(palette["tabbar"])
                     EditorScrollView(.vertical) {
