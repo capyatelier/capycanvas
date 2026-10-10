@@ -1353,11 +1353,8 @@ pub unsafe extern "C" fn capy_glass(host: *mut CapyHost, json: *const c_char) ->
     guard(host, |host| {
         let layout = serde_json::from_str(unsafe { read_json(json) }?)
             .map_err(|_| "Invalid glass geometry".to_string());
-        match layout.and_then(|layout| host.glass.set(layout)) {
-            Ok(changed) => {
-                host.native.dirty |= changed;
-                Ok(0)
-            }
+        match layout.and_then(|layout| host.native.set_glass(&mut host.glass, layout)) {
+            Ok(()) => Ok(0),
             Err(error) => {
                 fail(error);
                 Ok(1)

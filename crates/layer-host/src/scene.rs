@@ -188,6 +188,14 @@ pub struct SceneDisplay {
 }
 
 impl NativeHost {
+    pub fn set_glass(&mut self, glass: &mut Glass, layout: GlassLayout) -> Result<(), String> {
+        if glass.set(layout)? {
+            self.dirty = true;
+            self.invalidate_snapshot();
+        }
+        Ok(())
+    }
+
     /// Applies this frame's cursor, color picker, proof, HDR view, tone guide,
     /// navigators and glass. Optional overview and backdrop pipelines wait for
     /// the first paper frame and a ready canvas.
@@ -274,6 +282,41 @@ mod tests {
 
     fn glass(value: serde_json::Value) -> Result<GlassLayout, serde_json::Error> {
         serde_json::from_value(value)
+    }
+
+    #[test]
+    fn glass_updates_publish_host_metadata_without_document_edits() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let mut layer = Glass::default();
+        assert!(host.take_update_bytes().unwrap().is_some());
+        assert!(host.take_update_bytes().unwrap().is_none());
+        let revision = host.session.state().revision;
+        for regions in [
+            vec![[10, 20, 100, 50, 8, 8, 8, 8]],
+            vec![[10, 20, 100, 50, 8, 8, 8, 8], [50, 80, 200, 40, 8, 8, 8, 8]],
+            vec![],
+        ] {
+            let layout = serde_json::json!({"regions": regions, "connections": []});
+            host.dirty = false;
+            host.set_glass(&mut layer, glass(layout.clone()).unwrap()).unwrap();
+            assert!(host.dirty);
+            let bytes = host.take_update_bytes().unwrap().expect("Changed glass publishes host metadata");
+            let metadata = serde_json::to_vec(&serde_json::json!({"windows_glass": {"regions": layer.count()}})).unwrap();
+            let update: serde_json::Value = serde_json::from_slice(&crate::extend_update(bytes, &metadata)).unwrap();
+            assert!(update["state"].is_object());
+            assert_eq!(update["windows_glass"]["regions"], regions.len());
+            assert_eq!(host.session.state().revision, revision);
+            host.dirty = false;
+            host.set_glass(&mut layer, glass(layout).unwrap()).unwrap();
+            assert!(!host.dirty);
+            assert!(host.take_update_bytes().unwrap().is_none());
+        }
+        let invalid = serde_json::json!({"regions": [[0, 0, -1, 10, 0, 0, 0, 0]], "connections": []});
+        assert!(host.set_glass(&mut layer, glass(invalid).unwrap()).is_err());
+        assert!(!host.dirty);
+        assert_eq!(layer.count(), 0);
+        assert!(host.take_update_bytes().unwrap().is_none());
+        assert_eq!(host.session.state().revision, revision);
     }
 
     #[test]

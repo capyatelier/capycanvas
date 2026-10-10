@@ -34,9 +34,6 @@ function Tap([string]$Id,[string]$Device){
  $item=@{value=$null};Wait-Until {$item.value=Find $Id;$item.value -and !$item.value.Current.IsOffscreen -and $item.value.Current.IsEnabled} "Missing bar control $Id" 10
  $at=Center (Control $Id -Arranged);[CapyRowPointer]::Down($Device,$at[0],$at[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
 }
-function Tool([string]$Command){
- Invoke-Id (Tool-Tile $Command)
-}
 function Subtool([string]$Command){
  $choice=Tool-Choice $Command;Invoke-Id $choice.id
  Wait-Until {@((Model).state.tool_set.($choice.list))[$choice.index].selected} "$Command did not activate"
@@ -69,7 +66,7 @@ try {
  $cx=[int]($canvas.X+$canvas.Width*.5);$cy=[int]($canvas.Y+$canvas.Height*.45)
  if(Bar){throw 'The bar showed before any selection or transform'}
 
- Tool 'lasso';Subtool 'rectangle_select'
+ $selectionTile=Tool-Tile 'lasso';Invoke-Id $selectionTile;Subtool 'rectangle_select'
  $glass=@{count=-1;stable=0}
  Wait-Until {$count=Glass;if($count -eq $glass.count){$glass.stable++}else{$glass.count=$count;$glass.stable=0};$glass.stable -ge 3} 'Selection tool glass did not settle'
  $glassBefore=$glass.count
@@ -192,7 +189,7 @@ try {
  Wait-Until {!(Model).state.workspace.zen_mode} 'Tab did not leave Zen' 5
  $checks.visible_in_zen='passed'
 
- Tool 'lasso';Subtool 'polygon_select'
+ Invoke-Id $selectionTile;Subtool 'polygon_select'
  foreach($point in @(@(($cx-120),($cy-80)),@(($cx+120),($cy-80)),@(($cx+140),($cy+90)))){
   [CapyRowPointer]::Down('mouse',$point[0],$point[1]);Start-Sleep -Milliseconds 30;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 120
  }

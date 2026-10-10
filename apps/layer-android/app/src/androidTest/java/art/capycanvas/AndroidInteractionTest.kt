@@ -106,12 +106,15 @@ class AndroidInteractionTest {
             else instrumentation.runOnMainSync {
                 if (action == MotionEvent.ACTION_DOWN) {
                     inputWindow = owner.view
-                    if (popupInput) android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { view ->
-                        view.descendant<ViewRootForTest>()?.let { it !== owner } == true
-                    }?.let { view ->
+                    if (popupInput) for (view in android.view.inspector.WindowInspector.getGlobalWindowViews().asReversed()) {
+                        if (view.descendant<ViewRootForTest>()?.let { it !== owner } != true) continue
+                        val flags = (view.layoutParams as? android.view.WindowManager.LayoutParams)?.flags ?: 0
+                        if (flags and android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0) continue
                         val p = IntArray(2); view.getLocationOnScreen(p)
-                        if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) inputWindow = view
-                        else MotionEvent.obtain(motion).also { outside -> outside.action = MotionEvent.ACTION_OUTSIDE; view.dispatchTouchEvent(outside); outside.recycle() }
+                        if (coords[0].x >= p[0] && coords[0].x < p[0]+view.width && coords[0].y >= p[1] && coords[0].y < p[1]+view.height) {
+                            inputWindow = view; break
+                        }
+                        MotionEvent.obtain(motion).also { outside -> outside.action = MotionEvent.ACTION_OUTSIDE; outside.offsetLocation(-p[0].toFloat(), -p[1].toFloat()); view.dispatchTouchEvent(outside); outside.recycle() }
                     }
                 }
                 val target = inputWindow ?: owner.view; val p = IntArray(2); target.getLocationOnScreen(p)
@@ -3535,8 +3538,9 @@ class AndroidInteractionTest {
         val curves = filterCategory("Curves")
         popupInput = true
         try {
-            for ((layout, workspace) in listOf("wide" to wide, "docked" to docked)) for (device in pointerTools) {
-                val name = "$layout ${listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]}"
+            for (theme in listOf("light", "dark")) for ((layout, workspace) in listOf("wide" to wide, "docked" to docked)) for (device in pointerTools) {
+                val name = "$theme $layout ${listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]}"
+                action(obj("type" to "set_theme", "theme" to theme))
                 action(obj("type" to "restore_workspace", "workspace" to workspace)); command("fit_canvas")
                 SystemClock.sleep(300)
                 tool = device

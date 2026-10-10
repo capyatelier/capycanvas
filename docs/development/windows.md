@@ -400,6 +400,12 @@ requiring the system-wide long-path setting.
 
 Drawer and expansion query lifecycle tests live in `layer-host`. Windows
 workspace tests cover native snapshot insets and the JSON/CPU packet boundary.
+Native glass geometry uses `NativeHost::set_glass`: a changed layout requests a
+redraw and republishes host metadata without editing the document. Identical or
+invalid layouts preserve the publication cache. The window-free
+`glass_updates_publish_host_metadata_without_document_edits` regression checks
+this contract; `exercise-canvas-bar.ps1` checks the selection bar's native glass
+registration and menu actions in both themes.
 
 | Where | Checks |
 | --- | --- |
@@ -635,6 +641,9 @@ the focused header journeys also check placement cancellation and keyboard input
 - **Use current menu identifiers.** `NativeMenuItems` uses the shared command ID
   for routed commands; other layer actions use `layer-menu-<op>`. Check the shared
   menu definition when an item cannot be found.
+- **Retain tool-slot identity.** Resolve a toolbar tile once and keep its ID
+  when returning after a variant change; `resolved_control` remembers the chosen
+  variant, so the original command may no longer identify that slot.
 - **Select the telemetry owner.** Use `Workspace-Root` from `CapyUia.ps1` for
   drag state and arranged workspace bounds. The outer window and inner workspace
   share an accessible name; only the inner workspace publishes this state.

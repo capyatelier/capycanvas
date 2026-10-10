@@ -205,6 +205,8 @@ Shared context menus use nested native popovers so legitimate repeated submenu
 labels do not become toolkit page identities. `native_localized_nested_menus`
 checks the actual Edit and Layer → Organize actions in every shipped language
 and both themes, including identical Turkish captions.
+Canvas-bar menu journeys follow each mapped nested popover and use
+`screen_point` for its rows; popup surfaces have their own native origins.
 
 `native_localization_callback_registration` checks subscriptions added during
 language publication. Existing subscribers keep their order; new subscribers

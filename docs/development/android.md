@@ -418,6 +418,9 @@ also save images under `Pictures/` through MediaStore.
   statistics, readbacks, file workers and recovery.
 - Between consecutive popup or held-contact journeys, wait for native window
   focus to settle.
+- Popup contacts choose the topmost touchable window containing the screen
+  point, send outside contacts in that window's coordinates, and retain the
+  chosen window through release. Tooltips can coexist with the active menu.
 - Test focus loss with a real window. Send keyboard events through system
   dispatch so Android leaves touch mode correctly.
 - `PixelCopy` cannot read the canvas: its shared front-buffer image stays

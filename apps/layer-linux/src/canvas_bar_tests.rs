@@ -601,11 +601,15 @@ pub(super) fn choose_from_bar_menu(w: &Workspace, native: &mut RemoteInput, devi
         popover.activate_action(&action, None).unwrap();
         return;
     }
+    let mut current = popover;
     for (index, label) in path.iter().enumerate() {
-        let item = until_some(|| mapped_label(w.canvas_bar.root.upcast_ref(), label), label);
-        tap(native, device, center(w, &item));
-        if index + 1 < path.len() {
-            until(|| !item.is_mapped(), &format!("{label} opens its submenu"));
+        let item = until_some(|| find_menu_item(current.upcast_ref(), label).filter(|item| item.is_mapped()), label);
+        let nested = (index + 1 < path.len()).then(|| item.property::<Option<gtk::PopoverMenu>>("popover").unwrap());
+        tap(native, device, screen_point(&item, &w.window, [0.5, 0.5]));
+        if let Some(nested) = nested {
+            until(|| nested.is_mapped() && nested.width() > 0 && nested.height() > 0
+                && mapped_label(nested.upcast_ref(), path[index + 1]).is_some(), &format!("{label} opens its submenu"));
+            current = nested;
         }
     }
 }
