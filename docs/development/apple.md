@@ -249,6 +249,15 @@ using open dialogs, and activating parked drawings in both themes. Run
 
 ### Navigation input
 
+Pen pressure uses the shared curve editor in a modeless utility above the canvas.
+`EditorLaunchTests/testPressureCalibrationLight` and `testPressureCalibrationDark`
+check the Preferences entry, draggable title, control insertion and drag-out
+removal, Reset, Firmer, Lighter, Apply, Cancel and Close. The macOS journey also
+checks painting while the utility stays open. On iPadOS, check that final drawing
+step with a physical Pencil; XCTest cannot synthesize Pencil pressure. These
+journeys require Xcode and native Apple hardware; Swift parsing alone does not
+establish UI behavior.
+
 Native cursors read the shared `navigation_cursor` snapshot, including command,
 modifier and restored-document changes. Toolbar and header double activation use
 the shared control metadata and action; Swift retains only native click timing.

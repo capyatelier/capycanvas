@@ -1,6 +1,8 @@
 //! Native control/lifecycle integration on a hardware desktop. Control signals
 //! exercise GTK bindings; pen records exercise scheduling and GPU presentation.
 //! Physical tablet/touch delivery remains a human test (not faked here).
+#[path = "pressure_calibration_tests.rs"]
+mod pressure_calibration;
 #[path = "native_penup_tests.rs"]
 mod native_penup;
 #[path = "prediction_tests.rs"]
@@ -7924,7 +7926,7 @@ fn native_preferences_and_shortcuts() {
                 assert_eq!(state(&w).settings.prediction_ms, 16.0);
                 assert_eq!(prediction.value(), 16.0);
                 let field =
-                    find_named(w.preferences.dialog.upcast_ref(), "setting-pressure").unwrap();
+                    find_named(w.preferences.dialog.upcast_ref(), "setting-prediction-horizon").unwrap();
                 let title = find_css(&field, "number-title").unwrap();
                 let feedback =
                     find_named(w.preferences.dialog.upcast_ref(), "setting-feedback").unwrap();
@@ -8081,12 +8083,12 @@ fn native_preferences_and_shortcuts() {
     defaults.dark_base = Theme::Dark.default_base();
     defaults.light_base = Theme::Light.default_base();
     w.dispatch(UiAction::RestoreSettings { settings: defaults });
-    click(&command(&w, CommandId::KeyboardShortcuts));
+    w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
     let search: gtk::SearchEntry = find_named(w.preferences.dialog.upcast_ref(), "settings-search")
         .unwrap()
         .downcast()
         .unwrap();
-    search.set_text("pressure response");
+    search.set_text("pan speed");
     pump(300);
     let results = ui_session(&w)
         .preferences()
@@ -8096,8 +8098,10 @@ fn native_preferences_and_shortcuts() {
     w.dispatch(UiAction::Preferences {
         action: results[0].action.clone(),
     });
+    assert_eq!(ui_session(&w).preferences().unwrap().page, SettingsPage::Canvas);
     search.set_text("");
     pump(300);
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
     let feedback: adw::SwitchRow =
         find_named(w.preferences.dialog.upcast_ref(), "setting-feedback")
             .unwrap()
@@ -8274,7 +8278,7 @@ fn native_slider_feedback() {
     for spec in [
         NumericControl::brush_size(),
         NumericControl::percent(),
-        NumericControl::pressure(),
+        NumericControl::number(0.25, 4., 0.05, 2).unit("×"),
         NumericControl::rotation(),
     ] {
         let control = crate::number_control::NumberControl::new(spec.clone(), "Value", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
@@ -8641,7 +8645,7 @@ fn native_number_controls() {
         .build();
     body.append(&narrow_container);
     let described = crate::number_control::NumberControl::new(
-        NumericControl::pressure(),
+        NumericControl::number(0.25, 4., 0.05, 2).unit("×"),
         "Pressure response",
         "Adjust how pen pressure affects your brush. The value centers against this complete label block.",
      layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
@@ -11797,12 +11801,12 @@ fn native_workspace_controls_docking_and_ink() {
         .size_buttons
         .borrow()
         .iter()
-        .find(|(v, _)| *v == 96.0)
+        .find(|(v, _)| *v == 100.0)
         .unwrap()
         .1
         .clone();
     click(&size);
-    assert_eq!(state(&w).brush.diameter, 96.0);
+    assert_eq!(state(&w).brush.diameter, 100.0);
     edit_number(&w.size_number, "84");
     assert_eq!(state(&w).brush.diameter, 84.0);
     assert_eq!(w.size_number.value(), 84.0);
@@ -11869,7 +11873,7 @@ fn native_workspace_controls_docking_and_ink() {
     w.changed(change);
     pump(150);
     assert_stroke_positions(&w, &crate::snapshot(&w), &stroke_points);
-    click(&command(&w, CommandId::FitCanvas));
+    click(&command(&w, CommandId::ResetView));
     click(&command(&w, CommandId::Undo));
     assert!(white_pixels(&w) > after_ink + 500);
     click(&command(&w, CommandId::Redo));
@@ -11905,18 +11909,20 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::Settings));
     assert!(state(&w).settings_open);
     assert!(w.preferences.dialog.root().is_some());
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
     let pressure: crate::number_control::NumberControl =
-        find_named(w.preferences.dialog.upcast_ref(), "setting-pressure")
+        find_named(w.preferences.dialog.upcast_ref(), "setting-pan-speed")
             .unwrap()
             .downcast()
             .unwrap();
     edit_number(&pressure, "1.45");
-    assert_eq!(state(&w).settings.pressure_gamma, 1.45);
+    assert_eq!(state(&w).settings.pan_speed, 1.45);
     w.preferences.dialog.close();
     pump(300);
     assert!(!state(&w).settings_open);
-    assert_eq!(state(&w).settings.pressure_gamma, 1.45);
+    assert_eq!(state(&w).settings.pan_speed, 1.45);
     click(&command(&w, CommandId::Settings));
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
     edit_number(&pressure, "1.5");
     let close = find_css(
         &find_named(w.preferences.dialog.upcast_ref(), "preferences-content").unwrap(),
@@ -11927,7 +11933,7 @@ fn native_workspace_controls_docking_and_ink() {
     .unwrap();
     click(&close);
     pump(300);
-    assert_eq!(state(&w).settings.pressure_gamma, 1.5);
+    assert_eq!(state(&w).settings.pan_speed, 1.5);
     assert!(!state(&w).settings_open);
     pump(300);
 
@@ -12110,7 +12116,7 @@ fn native_workspace_controls_docking_and_ink() {
     );
     for (slot, widget) in w.surface.imp().children.borrow().iter() {
         if !matches!(slot, Slot::Canvas | Slot::CanvasBar) {
-            assert!(!widget.can_target());
+            assert_eq!(widget.can_target(), widget.has_css_class("floating-panel"));
         }
     }
     crate::capture(&w, "../../artifacts/ui/gtk-zen.png");

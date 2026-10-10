@@ -568,3 +568,11 @@ native-screen-details = Bildschirmdetails
 native-color-inspection-hdr-help = Lineares Dokument-RGB und Leuchtdichte Y. Gestrichelte Linie: Referenzweiß (0 EV). Nullwerte und negative Werte werden getrennt gezählt. Einschließlich sichtbarem Papier; ohne transparente Pixel und Anzeigeüberlagerungen.
 common-failure-details = Fehlerdetails
 common-copy-failure-details = Fehlerdetails kopieren
+
+pressure-title = Stiftdruck
+pressure-firmer = Fester
+pressure-lighter = Leichter
+pressure-curve-help = Klicken, um einen Kontrollpunkt hinzuzufügen. Ziehen Sie Punkte, um die Kurve zu formen. Doppelklicken Sie auf einen inneren Punkt oder ziehen Sie ihn aus dem Diagramm, um ihn zu entfernen.
+pressure-description = Stiftdruck während des Zeichnens anpassen.
+
+common-adjust = Anpassen…

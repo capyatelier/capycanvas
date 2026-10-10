@@ -2,8 +2,6 @@ settings-language = Langue
 settings-language-system = Utiliser la langue du système
 
 settings-reset-to-default = Rétablir les valeurs par défaut
-settings-pressure-response = Réponse à la pression
-settings-lower-values-make-light-pen-pressure-stronger = Les valeurs faibles amplifient une légère pression du stylet.
 settings-enable-stroke-prediction = Activer la prédiction des traits
 settings-reduce-the-gap-between-your-pen-and-the-stroke = Réduire le décalage entre le stylet et le trait.
 settings-use-android-stroke-prediction = Utiliser la prédiction des traits d’Android

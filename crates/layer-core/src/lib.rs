@@ -40,6 +40,8 @@ mod selection;
 pub mod tonal;
 pub mod levels;
 pub mod curves;
+mod pressure;
+pub use pressure::PressureResponse;
 #[cfg(test)]
 mod curves_tests;
 #[cfg(test)]

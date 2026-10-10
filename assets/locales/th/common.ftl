@@ -337,3 +337,11 @@ native-screen-details = รายละเอียดหน้าจอ
 native-color-inspection-hdr-help = RGB เชิงเส้นของเอกสารและความส่องสว่าง Y เส้นประแสดงสีขาวอ้างอิง (0 EV) ค่าศูนย์และค่าลบจะนับแยกกัน รวมกระดาษที่มองเห็น ไม่รวมพิกเซลโปร่งใสและสิ่งซ้อนทับบนจอ
 common-failure-details = รายละเอียดข้อผิดพลาด
 common-copy-failure-details = คัดลอกรายละเอียดข้อผิดพลาด
+
+pressure-title = แรงกดปากกา
+pressure-firmer = หนักขึ้น
+pressure-lighter = เบาขึ้น
+pressure-curve-help = คลิกเพื่อเพิ่มจุดควบคุม ลากจุดเพื่อปรับรูปทรงเส้นโค้ง ดับเบิลคลิกจุดภายในหรือลากออกนอกกราฟเพื่อลบ
+pressure-description = ปรับแรงกดปากกาขณะวาดภาพ
+
+common-adjust = ปรับ…

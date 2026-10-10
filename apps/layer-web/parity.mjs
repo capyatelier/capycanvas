@@ -426,12 +426,12 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.equal(await evaluate("layerApp.state().layers.length"), 3);
   await evaluate("layerApp.dispatch({type:'layer',action:{op:'delete_selected'}})");
   await click('[data-command="settings"]');
-  await click('[data-settings-page="input"]');
-  await click('#setting-pressure .number-value');
-  await evaluate("document.querySelector('#setting-pressure .number-entry').value='1.5'");
+  await click('[data-settings-page="canvas"]');
+  await click('#setting-pan-speed .number-value');
+  await evaluate("document.querySelector('#setting-pan-speed .number-entry').value='1.5'");
   assert.equal(
     await evaluate(
-      "document.querySelector('#setting-pressure .number-entry').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))",
+      "document.querySelector('#setting-pan-speed .number-entry').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))",
     ),
     false,
   );
@@ -440,14 +440,14 @@ export async function checkParity({ call, evaluate, settle }) {
     true,
   );
   await click('#close-settings');
-  assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5);
+  assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 1.5);
   await click('[data-command="settings"]');
-  await click('[data-settings-page="input"]');
-  await click('#setting-pressure [aria-label="Increase Pressure response"]');
+  await click('[data-settings-page="canvas"]');
+  await click('#setting-pan-speed [aria-label="Increase Scroll pan speed"]');
   await click("#close-settings");
   assert.ok(
     Math.abs(
-      (await evaluate("layerApp.state().settings.pressure_gamma")) - 1.55,
+      (await evaluate("layerApp.state().settings.pan_speed")) - 1.55,
     ) < 0.001,
   );
 

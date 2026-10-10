@@ -567,3 +567,11 @@ native-screen-details = Screen details
 native-color-inspection-hdr-help = Linear document RGB and luminance Y. Dashed line: reference white (0 EV). Zero and negative values are counted separately. Includes visible paper; excludes transparent pixels and display overlays.
 common-failure-details = Failure details
 common-copy-failure-details = Copy failure details
+
+pressure-title = Pen pressure
+pressure-firmer = Firmer
+pressure-lighter = Lighter
+pressure-curve-help = Click to add a control point. Drag points to shape the curve. Double-click an interior point or drag it outside the graph to remove it.
+pressure-description = Adjust pen pressure while drawing.
+
+common-adjust = Adjust…

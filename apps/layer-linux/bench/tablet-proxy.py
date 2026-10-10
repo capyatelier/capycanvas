@@ -15,6 +15,7 @@ import struct
 import sys
 import time
 from pathlib import Path
+from wayland_objects import Objects
 
 runtime = Path(os.environ["XDG_RUNTIME_DIR"])
 display = os.environ["WAYLAND_DISPLAY"]
@@ -23,7 +24,7 @@ if not display.startswith("layer-bench-"):
 path = runtime / "layer-bench-tablet"
 events = Path(os.environ["LAYER_NATIVE_INPUT_DIR"])
 tablet, tool = 0xFF000000, 0xFF000001
-objects = {1: "wl_display"}
+objects = Objects(2)
 surfaces = {}
 target = None
 seat = None
@@ -52,19 +53,11 @@ def request(message):
     args = message[8:]
     if obj in (tablet, tool):
         return False  # Gtk's cursor/destroy requests for our synthetic objects.
-    kind = objects.get(obj)
-    if kind == "wl_display" and opcode == 1:
-        objects[struct.unpack_from("=I", args)[0]] = "wl_registry"
-    elif kind == "wl_registry" and opcode == 0:
-        length = struct.unpack_from("=I", args, 4)[0]
-        name = args[8:8 + length - 1].decode()
-        new_id = struct.unpack_from("=I", args, 8 + ((length + 3) & ~3) + 4)[0]
-        objects[new_id] = name
-    elif kind == "zwp_tablet_manager_v2" and opcode == 0:
+    kind = objects.kinds.get(obj)
+    if kind == "zwp_tablet_manager_v2" and opcode == 0:
         seat = struct.unpack_from("=I", args)[0]
     elif kind == "xdg_wm_base" and opcode == 2:
         new_id, surface = struct.unpack_from("=II", args)
-        objects[new_id] = "xdg_surface"
         surfaces[new_id] = surface
     elif kind == "xdg_surface" and opcode == 1 and target is None:
         target = surfaces[obj]
@@ -126,10 +119,10 @@ try:
                     # The compositor does not own the injected tool. Let GTK
                     # use tool.set_cursor rather than asking cursor-shape to
                     # create a compositor object referring to that tool.
-                    shape_global = source is server and objects.get(obj) == "wl_registry" \
+                    shape_global = source is server and objects.kinds.get(obj) == "wl_registry" \
                         and header & 0xFFFF == 0 and b"wp_cursor_shape_manager_v1\0" in message
                     if not shape_global and (source is not client or request(message)):
-                        data.extend(message)
+                        data.extend(objects.translate(message, source is server))
                 received = fds[source] if data else []
                 if data:
                     fds[source] = []

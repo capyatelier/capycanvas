@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag="kind",rename_all="snake_case")]
-pub enum CurveDomain { Encoded, LogHdr { stops:f32 } }
+pub enum CurveDomain { Encoded, Percent, LogHdr { stops:f32 } }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all="snake_case")]
 pub enum CurveAxis { Input, Output }
@@ -18,6 +18,9 @@ pub struct CurveCoordinateControl {
 pub struct CurveAxisView { pub label:String, pub minimum:String, pub maximum:String, pub white:Option<f32> }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CurveControls {
+    pub control_polygon:bool,
+    pub coordinate_readouts:bool,
+    pub inset:f32,
     pub epoch:u64,
     pub numeric:NumericControl,
     pub selected:Option<usize>,
@@ -31,18 +34,19 @@ pub struct CurveControls {
 impl CurveDomain {
     pub fn decode(self,x:f64)->f64 {
         match self {
-            Self::Encoded=>x,
+            Self::Encoded | Self::Percent=>x,
             Self::LogHdr{stops}=>layer_core::log_curve_decode(x,f64::from(stops))
         }
     }
     pub fn encode(self,value:f64)->f64 {
         match self {
-            Self::Encoded=>value,
+            Self::Encoded | Self::Percent=>value,
             Self::LogHdr{stops}=>layer_core::log_curve_encode(value,f64::from(stops))
         }
     }
     pub fn numeric(self)->NumericControl {
         match self {
+            Self::Percent=>{let mut n=NumericControl::percent();n.kind=NumericKind::Number;n},
             Self::Encoded=>{let mut n=NumericControl::number(0.,1.,1./255.,3);n.kind=NumericKind::Number;n.scale=255.;n.resolution=1./255000.;n},
             Self::LogHdr{stops}=>{let mut n=NumericControl::number(0.,f64::from(stops).exp2(),0.01,3);n.kind=NumericKind::Number;n.resolution=2f64.powi(-149);n}
         }
@@ -50,6 +54,7 @@ impl CurveDomain {
     pub fn axis_text(self,x:f32)->String {
         let value=self.decode(f64::from(x));
         match self {
+            Self::Percent=>format!("{:.0}%",value*100.),
             Self::Encoded=>format!("{:.0}",value*255.),
             Self::LogHdr{..}=>if value!=0. && (value.abs()<1e-4 || value.abs()>=1e6) {format!("{value:.3e}")}else{format!("{value:.3}").trim_end_matches('0').trim_end_matches('.').to_string()},
         }
@@ -57,20 +62,21 @@ impl CurveDomain {
     pub fn text(self,x:f32)->String {
         let value=self.decode(f64::from(x));
         match self {
+            Self::Percent=>format!("{:.1}%",value*100.),
             Self::Encoded=>format!("{:.3}",value*255.),
             Self::LogHdr{..}=>if value!=0. && (value.abs()<1e-4 || value.abs()>=1e6) {format!("{value:e}")}else{value.to_string()},
         }
     }
 }
 pub(super) use layer_core::curves::curve_point_between as point_between;
-pub(super) fn hit(points:&[[f32;2]],point:[f32;2],extent:[f32;2])->Option<usize> {
+pub(crate) fn hit(points:&[[f32;2]],point:[f32;2],extent:[f32;2])->Option<usize> {
     if extent.iter().any(|x|!x.is_finite() || *x<=0.) || point.iter().any(|x|!x.is_finite()) {return None;}
     points.iter().enumerate().filter_map(|(index,p)| {
         let dx=p[0]*extent[0]-point[0];let dy=(1.-p[1])*extent[1]-point[1];let distance=dx*dx+dy*dy;
         (distance<=64.).then_some((index,distance))
     }).min_by(|a,b|a.1.total_cmp(&b.1).then(a.0.cmp(&b.0))).map(|(index,_)|index)
 }
-pub(super) fn numeric_point(points:&[[f32;2]],index:usize,axis:CurveAxis,domain:CurveDomain,value:f64)->Option<[f32;2]> {
+pub(crate) fn numeric_point(points:&[[f32;2]],index:usize,axis:CurveAxis,domain:CurveDomain,value:f64)->Option<[f32;2]> {
     let mut point=*points.get(index)?;
     if !value.is_finite(){return None;}
     let graph=domain.encode(value);

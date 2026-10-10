@@ -2,8 +2,6 @@ settings-language = Ngôn ngữ
 settings-language-system = Dùng ngôn ngữ hệ thống
 
 settings-reset-to-default = Đặt lại về mặc định
-settings-pressure-response = Đáp ứng lực nhấn
-settings-lower-values-make-light-pen-pressure-stronger = Giá trị thấp giúp lực nhấn nhẹ của bút tạo hiệu ứng mạnh hơn.
 settings-enable-stroke-prediction = Bật dự đoán nét vẽ
 settings-reduce-the-gap-between-your-pen-and-the-stroke = Giảm khoảng cách giữa bút và nét vẽ.
 settings-use-android-stroke-prediction = Dùng dự đoán nét vẽ của Android

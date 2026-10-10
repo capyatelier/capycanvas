@@ -129,7 +129,7 @@ private final class State: @unchecked Sendable {
             // Rapid cross-window edits must converge to the final committed
             // settings, including after delayed notifications and write acks.
             for index in 0..<20 {
-                (index.isMultiple(of: 2) ? a : b).submit(0, JSON(["type":"preferences", "action":["type":"edit", "id":"pressure", "value":1.0 + Double(index) / 20]]))
+                (index.isMultiple(of: 2) ? a : b).submit(0, JSON(["type":"preferences", "action":["type":"edit", "id":"pan_speed", "value":1.0 + Double(index) / 20]]))
             }
             precondition(flush(a) && flush(b) && flush(a) && flush(restored))
             let disk = try JSON.decode(String(decoding: Data(contentsOf: persistence.locations!.settings), as: UTF8.self))

@@ -58,7 +58,7 @@ impl SelectionStroke {
         if event.phase == PenPhase::Down {
             self.start_ns = event.timestamp_ns;
         }
-        let point = to_stroke_point(event, self.transform, self.curve, self.start_ns);
+        let point = to_stroke_point(event, self.transform, self.curve.clone(), self.start_ns);
         if !point.position.x.is_finite() || !point.position.y.is_finite() {
             return Vec::new();
         }
@@ -99,7 +99,7 @@ impl SelectionStroke {
         Some(dabs)
     }
     pub fn cursor(&self, event: PenEvent) -> Vec<Dab> {
-        let mut point = to_stroke_point(event, self.transform, self.curve, self.start_ns);
+        let mut point = to_stroke_point(event, self.transform, self.curve.clone(), self.start_ns);
         if event.phase == PenPhase::Hover {
             point.pressure = 1.;
         }

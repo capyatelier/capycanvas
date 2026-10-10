@@ -361,7 +361,7 @@ export async function checkCurves({call,evaluate,settle}) {
         await pointer('mouseReleased',start);await settle();
         assert.deepEqual(curves(await properties()),before,'Escape cancels the held curve contact');
         assert.equal((await properties()).page,page,'Publishing curve edits retains the selected page');
-        const textWidth=await evaluate(`(()=>{const n=document.querySelector('[data-curve-axis="output"] .number-entry'),s=getComputedStyle(n),c=document.createElement('canvas').getContext('2d');c.font=[s.fontStyle,s.fontWeight,s.fontSize,s.fontFamily].join(' ');return{text:n.value,content:n.getBoundingClientRect().width-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight)-parseFloat(s.borderLeftWidth)-parseFloat(s.borderRightWidth),needed:c.measureText(n.value).width}})()`);
+        const textWidth=await evaluate(`(()=>{const n=document.querySelector('[data-curve-axis="output"] .number-value'),s=getComputedStyle(n),c=document.createElement('canvas').getContext('2d');c.font=[s.fontStyle,s.fontWeight,s.fontSize,s.fontFamily].join(' ');return{text:n.textContent,content:n.getBoundingClientRect().width-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight)-parseFloat(s.borderLeftWidth)-parseFloat(s.borderRightWidth),needed:c.measureText(n.textContent).width}})()`);
         assert.equal(textWidth.text,'102.000','The precise Output fixture includes all seven displayed characters');
         assert.ok(textWidth.content>=textWidth.needed,`Full Output text fits at ${width}px: ${JSON.stringify(textWidth)}`);
         console.log('Curves precise Output width',theme,width,textWidth);
@@ -384,18 +384,21 @@ export async function checkCurves({call,evaluate,settle}) {
     hdr=await properties();
     await send({type:'effect',action:{op:'curve_select_point',layer:hdr.layer,key:hdrControl.key,epoch:hdr.epoch,index:1}});
     const input='[data-curve-axis="output"] .number-entry';
+    await activateNumber('output');
     await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(input)});n.focus();n.value='1e-20';n.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
     const tiny=(await properties()).controls.find(c=>c.key===hdrControl.key);
     assert.ok(tiny.curve.output.value>0&&tiny.curve.output.value<1e-19,`Native expression commit preserves positive tiny HDR output: ${JSON.stringify(tiny.curve)}`);
     const exactTiny=curves(await properties());
+    await activateNumber('output');
     await evaluate(`document.querySelector(${JSON.stringify(input)}).focus()`);
     await call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});
     await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});await settle();
     assert.deepEqual(curves(await properties()),exactTiny,'Escape cancels numeric held-key edits through native release');
+    await activateNumber('output');
     await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
     assert.deepEqual(curves(await properties()),exactTiny,'Unchanged tiny HDR text does not quantize stored knot');
@@ -414,29 +417,36 @@ export async function checkCurves({call,evaluate,settle}) {
     try {
       await invoke('save_document_as');await wait('!layerApp.state().document_file.busy&&!layerApp.state().document_file.modified');
       await invoke('open_document');await wait('!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
+      await wait('!layerApp.documents.busy()');
+      const reopened=await evaluate("layerApp.state().layers.filter(layer=>layer.adjustment_effect).map(layer=>String(layer.id))");
+      assert.equal(reopened.length,1,'Archive restores the Curves adjustment layer');
+      await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(reopened[0])})})`);await settle();
+      await wait(`layerApp.state().layers.some(layer=>String(layer.id)===${JSON.stringify(reopened[0])}&&layer.selected)`);
       await wait('layerApp.state().layer_properties.controls.some(c=>c.curve)');
       assert.deepEqual(curves(await properties()),exactTiny,'Native archive reopen preserves precise HDR knots');
+      hdr=await properties();
     } finally {await evaluate('window.showOpenFilePicker=curvesFiles.open;window.showSaveFilePicker=curvesFiles.save;delete window.curvesFiles');}
     const hdrSlider='[data-property-key="hdr_stops"] .number-slider';
     await wait(`document.querySelector(${JSON.stringify(hdrSlider)})`);
     const stopsBefore=(await properties()).controls.find(c=>c.key==='hdr_stops').value;
     hdr=await properties();
     await send({type:'effect',action:{op:'curve_select_point',layer:hdr.layer,key:hdrControl.key,epoch:hdr.epoch,index:1}});
+    await activateNumber('output');
     await evaluate(`document.querySelector('[data-curve-axis="output"] .number-entry').focus()`);
     await call('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});
     const heldCurve=curves(await properties());
-    const otherSlider=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(hdrSlider)}).getBoundingClientRect();return{x:r.left+r.width*.6,y:r.top+r.height*.5}})()`);
+    const otherSlider=await evaluate(`(()=>{for(const n of document.querySelectorAll(${JSON.stringify(hdrSlider)})){const r=n.getBoundingClientRect(),p={x:r.left+r.width*.1,y:r.top+r.height*.5};if(document.elementFromPoint(p.x,p.y)===n)return p}throw Error('No exposed HDR slider')})()`);
     await pointer('mousePressed',otherSlider);await pointer('mouseReleased',otherSlider);
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowUp',code:'ArrowUp',windowsVirtualKeyCode:38});await settle();
     assert.notDeepEqual((await properties()).controls.find(c=>c.key==='hdr_stops').value,stopsBefore,'Held coordinate key yields native ownership to ordinary slider');
     await invoke('undo');assert.deepEqual((await properties()).controls.find(c=>c.key==='hdr_stops').value,stopsBefore);
     assert.deepEqual(curves(await properties()),heldCurve,'Slider Undo preserves the prior held coordinate edit');
     await invoke('undo');assert.deepEqual(curves(await properties()),exactTiny,'Prior held key has its own Undo');
-    const stopsPosition=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(hdrSlider)}),r=n.getBoundingClientRect();window.curvesStopsSlider=n;return{x:r.x+Number(n.value)*r.width,y:r.y+r.height/2,end:r.x+r.width*.65}})()`);
+    const stopsPosition=await evaluate(`(()=>{const n=[...document.querySelectorAll(${JSON.stringify(hdrSlider)})].find(n=>{const r=n.getBoundingClientRect();return document.elementFromPoint(r.x+r.width*.1,r.y+r.height/2)===n});if(!n)throw Error('No exposed HDR slider');const r=n.getBoundingClientRect();window.curvesStopsSlider=n;return{x:r.x+Number(n.value)*r.width,y:r.y+r.height/2,end:r.x+r.width*.65}})()`);
     await pointer('mousePressed',{x:stopsPosition.x,y:stopsPosition.y});
     for(const x of [stopsPosition.x+(stopsPosition.end-stopsPosition.x)*.5,stopsPosition.end]) {
       await pointer('mouseMoved',{x,y:stopsPosition.y});await settle();
-      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(hdrSlider)})===window.curvesStopsSlider`),true,'HDR domain publication preserves captured ordinary slider DOM identity');
+      assert.equal(await evaluate(`window.curvesStopsSlider.isConnected`),true,'HDR domain publication preserves captured ordinary slider DOM identity');
     }
     await pointer('mouseReleased',{x:stopsPosition.end,y:stopsPosition.y});await settle();
     assert.notDeepEqual((await properties()).controls.find(c=>c.key==='hdr_stops').value,stopsBefore,'Native HDR stops drag changes its shared parameter');
@@ -448,6 +458,7 @@ export async function checkCurves({call,evaluate,settle}) {
     assert.equal(await evaluate(`document.querySelector('[data-curve-axis="input"] .number-entry').disabled`),true,'Endpoint Input is readonly in native control');
     hdr=await properties();
     await send({type:'effect',action:{op:'curve_select_point',layer:hdr.layer,key:hdrControl.key,epoch:hdr.epoch,index:1}});
+    await activateNumber('output');
     await evaluate(`(()=>{const n=document.querySelector('[data-curve-axis="output"] .number-entry');n.focus();n.value='1/0';n.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
@@ -468,7 +479,7 @@ export async function checkCurves({call,evaluate,settle}) {
       console.log('Curves: generic theme',theme,await evaluate(`JSON.stringify({keys:layerApp.state().layer_properties.controls.map(c=>c.key),dom:[...document.querySelectorAll('[data-property-key]')].map(n=>n.dataset.propertyKey)})`));
       await wait(`document.querySelector(${JSON.stringify(numberSelector)})`);
       const original=await numberValue();
-      const slider=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(numberSelector)}),r=n.getBoundingClientRect();return{x:r.x+Number(n.value)*r.width,y:r.y+r.height/2,end:r.x+r.width*.8}})()`);
+      const slider=await evaluate(`(()=>{const n=[...document.querySelectorAll(${JSON.stringify(numberSelector)})].find(n=>{const r=n.getBoundingClientRect();return document.elementFromPoint(r.x+r.width*.1,r.y+r.height/2)===n});if(!n)throw Error('No exposed generic slider');const r=n.getBoundingClientRect();return{x:r.x+Number(n.value)*r.width,y:r.y+r.height/2,end:r.x+r.width*.8}})()`);
       await pointer('mousePressed',{x:slider.x,y:slider.y});
       for(const x of [slider.x+(slider.end-slider.x)*.4,slider.end])await pointer('mouseMoved',{x,y:slider.y});
       await pointer('mouseReleased',{x:slider.end,y:slider.y});await settle();
@@ -484,8 +495,8 @@ export async function checkCurves({call,evaluate,settle}) {
       await invoke('redo');assert.deepEqual(await numberValue(),edited,'Canceled generic slider preserves redo');await invoke('undo');
     }
     await send({type:'effect',action:{op:'insert',effect:'levels'}});
-    assert.equal((await properties()).pages.length,1,'Current Levels has only its implemented master page');
-    assert.equal(await evaluate(`document.querySelector('[data-properties-page]').hidden`),true,'A singleton Properties page has no redundant chooser');
+    assert.deepEqual((await properties()).pages.map(page=>page.id),['rgb','red','green','blue'],'Levels exposes its implemented RGB and channel pages');
+    assert.equal(await evaluate(`document.querySelector('[data-properties-page]').hidden`),false,'Levels channel pages remain selectable');
     console.log('PASS: focused Curves pages, exact unchanged numbers, native mouse/pen/touch contacts, one-step undo/redo, Escape, tiny HDR and native archive reopen in both themes at wide and narrow sizes');
   } finally {await call('Emulation.clearDeviceMetricsOverride');}
 }

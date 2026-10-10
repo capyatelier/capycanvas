@@ -640,3 +640,4 @@ command-center-zoom-clicks = Center on click
 menu-paste-special = Paste Special
 menu-rotate-and-flip = Rotate and Flip
 menu-color-management = Color Management
+command-pen-pressure = Pen pressure…

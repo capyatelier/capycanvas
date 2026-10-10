@@ -2,8 +2,6 @@ settings-language = 语言
 settings-language-system = 使用系统语言
 
 settings-reset-to-default = 恢复默认值
-settings-pressure-response = 压感响应
-settings-lower-values-make-light-pen-pressure-stronger = 值越低，轻压笔尖的效果越强。
 settings-enable-stroke-prediction = 启用笔迹预测
 settings-reduce-the-gap-between-your-pen-and-the-stroke = 缩短笔尖与笔迹之间的距离。
 settings-use-android-stroke-prediction = 使用 Android 笔迹预测

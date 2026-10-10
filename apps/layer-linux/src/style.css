@@ -424,3 +424,7 @@ button.edit-color-more.open image { -gtk-icon-transform: none; }
 .edit-color-strip .edit-color-pair { border-radius: calc(8px * var(--corner-fit)); }
 .edit-color-strip-hex { font-weight: 500; }
 .edit-color-number { font-feature-settings: "tnum"; }
+
+window.capy-workspace.glass .utility-panel { background: var(--panel-bg); }
+.utility-title { font-weight: 700; }
+.utility-header button.utility-close { min-width: 24px; min-height: 24px; padding: 0; border-radius: var(--control-radius); }

@@ -9,7 +9,8 @@ fn recorded_production_queries_replay_exactly() {
             ..Default::default()
         })
         .unwrap();
-    engine.set_pressure_curve(PressureCurve { gamma: 2. });
+    let pressure:PressureCurve=layer_core::PressureResponse::try_from(vec![[0.,0.],[0.5,0.],[1.,1.]]).unwrap().into();
+    engine.set_pressure_curve(pressure.clone());
     engine
         .recording
         .lock()
@@ -74,7 +75,8 @@ fn recorded_production_queries_replay_exactly() {
         .collect();
     assert_eq!(raw.len(), 41);
     assert_eq!(raw[0].pressure, 0.8);
-    assert!(records.iter().any(|r| matches!(r, crate::recording::Record::Predictor(crate::recording::Event::Sample(s)) if (s.3-0.64).abs()<1e-6)));
+    let mapped=pressure.map(raw[0].pressure);assert_ne!(mapped,raw[0].pressure);
+    assert!(records.iter().any(|r| matches!(r, crate::recording::Record::Predictor(crate::recording::Event::Sample(s)) if (s.3-mapped).abs()<1e-6)));
     let mut csv = Vec::new();
     let summary =
         crate::prediction_bench::replay(std::io::BufReader::new(bytes.as_slice()), &mut csv)

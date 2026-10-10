@@ -71,6 +71,9 @@ mod navigator;
 pub use navigator::NavigatorGeometry;
 pub use session::tonal_selection::{TonalAction, TonalOptions};
 pub use session::{ThumbnailRequests, occurrence_token, occurrence_handle, object_token, object_handle, SourceUse, FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
+mod curve_editor;
+pub use curve_editor::{CurveEditorView, CurveEditorTarget, CurveEditorAction};
+pub use session::pressure_calibration::{PressureCalibrationAction, PressureCalibrationView};
 mod color;
 mod tool_settings;
 mod toolbar_components;
@@ -419,6 +422,7 @@ macro_rules! command_ids {
 }
 command_ids! {
     SearchCommands,
+    PenPressure,
     DrawingBrush,
     Sculpt,
     SdrRendition,
@@ -710,6 +714,7 @@ impl CommandId {
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
             Self::SearchCommands => "search",
+            Self::PenPressure => "pen",
             Self::DrawingBrush => "drawing-tools",
             Self::Sculpt => "sculpt",
             Self::SdrRendition | Self::PreviewSdr | Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => "image",
@@ -965,6 +970,7 @@ impl CommandId {
     pub fn message_id(self) -> MessageId {
         match self {
             Self::SearchCommands => MessageId::COMMAND_SEARCH_COMMANDS,
+            Self::PenPressure => MessageId::COMMAND_PEN_PRESSURE,
             Self::DrawingBrush => MessageId::COMMAND_DRAWING_BRUSH,
             Self::Sculpt => MessageId::COMMAND_SCULPT,
             Self::SdrRendition => MessageId::COMMAND_SDR_RENDITION,
@@ -1308,6 +1314,7 @@ pub struct DocumentTab {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UiState {
+    pub pressure_calibration: Option<PressureCalibrationView>,
     #[serde(skip)]
     pub tool_slots: ToolSlotMemory,
     pub histogram: HistogramView,
@@ -1371,6 +1378,8 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    CurveEditor { target: CurveEditorTarget, action: CurveEditorAction },
+    PressureCalibration { action: PressureCalibrationAction },
     ChooseToolVariant { anchor: DrawerAnchor, variant: ToolVariant },
     Histogram { action: HistogramAction },
     CommandSearch { action: CommandSearchAction },
@@ -1693,7 +1702,8 @@ pub mod regions {
     pub const COMMAND_SEARCH: u32 = 512;
     pub const CANVAS_BAR: u32 = 1024;
     pub const HISTOGRAM: u32 = 2048;
-    pub const ALL: u32 = 4095;
+    pub const PRESSURE_CALIBRATION: u32 = 4096;
+    pub const ALL: u32 = 8191;
 }
 
 #[cfg(test)]

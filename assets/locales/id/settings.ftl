@@ -4,9 +4,7 @@ settings-language-system = Gunakan bahasa sistem
 
 settings-reset-to-default = Atur Ulang ke Bawaan
 
-settings-pressure-response = Respons tekanan
 
-settings-lower-values-make-light-pen-pressure-stronger = Nilai lebih rendah memperkuat tekanan pena ringan.
 
 settings-enable-stroke-prediction = Aktifkan prediksi goresan
 

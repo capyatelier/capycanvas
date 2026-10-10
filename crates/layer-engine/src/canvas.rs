@@ -424,7 +424,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let mut point = crate::input::to_stroke_point(
             event,
             *self.transforms.back().unwrap(),
-            self.settings.pressure,
+            self.pressure_for_event(event).clone(),
             hover_start_ns,
         );
         let ruler = self.active_stroke.as_ref().map_or_else(
@@ -1105,8 +1105,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .find(|t| t.revision == event.view_revision)
             .copied()
             .unwrap_or(transform);
-        self.recording.raw(event, transform, self.settings.pressure);
+        self.recording.raw(event, transform, self.pressure_for_event(event).clone());
     }
+    fn pressure_for_event(&self, event: PenEvent) -> &PressureCurve {
+        if event.flags.contains(SampleFlags::CORRECTION) {
+            self.estimates.get(&(event.device_id, event.sequence)).map(|e| &e.curve)
+        } else if event.phase != PenPhase::Hover {
+            self.queued_contacts.iter().rev().find(|((device, _), _)| *device == event.device_id).map(|(_, s)| &s.pressure)
+                .or_else(|| self.active_stroke.as_ref().and(self.contact_settings.as_ref()).map(|s| &s.pressure))
+        } else { None }.unwrap_or(&self.settings.pressure)
+    }
+
+    pub fn configured_pressure_curve(&self) -> &PressureCurve { &self.settings.pressure }
 
     pub fn set_pressure_curve(&mut self, pressure: PressureCurve) {
         self.settings.pressure = pressure;
@@ -1791,7 +1801,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
                 self.pending_smudge_dabs.clear();
                 self.finalized_real_points = 0;
-                self.builder.begin(event, transform, self.settings.pressure);
+                self.builder.begin(event, transform, self.settings.pressure.clone());
                 self.record_builder_sample(event);
                 self.track_estimate(event, transform);
                 let active = self.active_stroke.as_ref().expect("set above");
@@ -1817,7 +1827,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 if self.active_stroke.is_none() {
                     return Ok(());
                 }
-                self.builder.push(event, transform, self.settings.pressure);
+                self.builder.push(event, transform, self.settings.pressure.clone());
                 self.record_builder_sample(event);
                 let active = self.active_stroke.as_mut().unwrap();
                 if active.feedback.enabled {
@@ -1845,7 +1855,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 if self.active_stroke.is_none() {
                     return Ok(());
                 }
-                self.builder.push(event, transform, self.settings.pressure);
+                self.builder.push(event, transform, self.settings.pressure.clone());
                 self.record_builder_sample(event);
                 self.track_estimate(event, transform);
                 if !event.flags.contains(SampleFlags::PREDICTED) {
@@ -4815,17 +4825,43 @@ mod tests {
     }
 
     #[test]
+    fn calibration_changes_keep_contact_cursor_and_recorded_pressure_on_the_captured_curve() {
+        let (mut input,mut engine)=engine("pressure preview",512,512);
+        engine.settings.instant_feedback.enabled=false;
+        let original=layer_core::PressureResponse::default();engine.set_pressure_curve(original.clone().into());
+        engine.recording.lock().unwrap().start("pressure-test").unwrap();
+        let mut down=event(1,PenPhase::Down,20.);down.pressure=0.2;
+        engine.capture_queued_contact(down);input.push(down).unwrap();engine.record_raw_input(down,ViewTransform::IDENTITY);
+        engine.render_frame().unwrap();
+        let mut cursor=DabGenerator::new(layer_core::color::RgbSpace::Srgb);
+        let before=engine.cursor_contacts(down,&mut cursor,0);
+        assert!(!before.is_empty());
+        engine.set_pressure_curve(PressureCurve::default());
+        let after=engine.cursor_contacts(down,&mut cursor,0);
+        assert_eq!(before.iter().map(|d|d.radii).collect::<Vec<_>>(),after.iter().map(|d|d.radii).collect::<Vec<_>>());
+        let mut moved=event(2,PenPhase::Move,24.);moved.pressure=0.2;
+        engine.record_raw_input(moved,ViewTransform::IDENTITY);input.push(moved).unwrap();engine.render_frame().unwrap();
+        assert!(engine.builder.real_points().iter().all(|p|(p.pressure-original.map(0.2)).abs()<0.00101));
+        let mut recorder=engine.recording.lock().unwrap();recorder.stop(crate::recording::StopReason::Manual);
+        let records=crate::recording::read(recorder.bytes().unwrap().as_slice()).unwrap();
+        for record in records {if let crate::recording::Record::Raw {pressure,..}=record {assert_eq!(pressure,original);}}
+    }
+
+    #[test]
     fn queued_contacts_keep_their_brush_pressure_and_camera() {
         let (mut input, mut engine) = engine("queued contacts", 512, 512);
         engine.settings.instant_feedback.enabled = false;
         engine.settings.brush.diameter = 19.;
-        engine.settings.pressure.gamma = 2.;
+        engine.settings.pressure = layer_core::PressureResponse::try_from(vec![[0.,0.],[0.5,0.],[1.,1.]]).unwrap().into();
+        let first_pressure=engine.settings.pressure.map(event(1,PenPhase::Down,20.).pressure);
         for event in [event(1, PenPhase::Down, 20.), event(2, PenPhase::Up, 24.)] {
             input.push(event).unwrap();
             engine.capture_queued_contact(event);
         }
         engine.settings.brush.diameter = 43.;
-        engine.settings.pressure.gamma = 3.;
+        engine.settings.pressure = layer_core::PressureResponse::try_from(vec![[0.,0.],[1./3.,0.],[2./3.,0.],[1.,1.]]).unwrap().into();
+        let second_pressure=engine.settings.pressure.map(event(3,PenPhase::Down,30.).pressure);
+        assert!((first_pressure-second_pressure).abs()>0.01);
         for revision in 2..100 {
             engine.set_view(view(512, 512), ViewTransform { revision, surface_to_document: [1., 0., 0., 1., 100., 80.] });
         }
@@ -4835,19 +4871,19 @@ mod tests {
             engine.capture_queued_contact(event);
         }
         engine.settings.brush.diameter = 7.;
-        engine.settings.pressure.gamma = 1.;
+        engine.settings.pressure = PressureCurve::default();
         engine.render_frame().unwrap();
         let first = engine.completed_stroke.as_ref().unwrap();
         assert_eq!(first.brush.diameter, 19.);
         assert_eq!(first.points[0].position, Point { x: 20., y: 16. });
-        assert!((first.points[0].pressure - 0.64).abs() < 1e-6);
+        assert_eq!(first.points[0].pressure,first_pressure);
         engine.render_frame().unwrap();
         let second = engine.completed_stroke.as_ref().unwrap();
         assert_eq!(second.brush.diameter, 43.);
         assert_eq!(second.points[0].position, Point { x: 130., y: 96. });
-        assert!((second.points[0].pressure - 0.512).abs() < 1e-6);
+        assert_eq!(second.points[0].pressure,second_pressure);
         assert_eq!(engine.brush().diameter, 7.);
-        assert_eq!(engine.settings.pressure.gamma, 1.);
+        assert_eq!(engine.settings.pressure, PressureCurve::default());
         assert!(engine.queued_contacts.is_empty());
         assert!(engine.undo().unwrap());
         assert!(engine.undo().unwrap());
@@ -4898,7 +4934,7 @@ mod tests {
                     },
                 );
             }
-            engine.settings.pressure.gamma = 3.;
+            engine.settings.pressure = layer_core::PressureResponse::try_from(vec![[0.,0.],[1./3.,0.],[2./3.,0.],[1.,1.]]).unwrap().into();
             let mut correction = down;
             correction.flags = SampleFlags(SampleFlags::CORRECTION.0 | SampleFlags::ESTIMATED.0);
             correction.surface_position.x = 12.;
@@ -5605,9 +5641,9 @@ mod tests {
 
     #[test]
     fn native_lift_prediction_uses_raw_pressure_and_never_changes_commit_or_next_contact() {
-        for gamma in [0.5, 2.0] {
+        for floor in [0., 0.5] {
             let (mut producer, mut engine) = engine("lift", 128, 128);
-            engine.set_pressure_curve(PressureCurve { gamma });
+            engine.set_pressure_curve(layer_core::PressureResponse::try_from(vec![[0., floor], [1., 1.]]).unwrap().into());
             let mut inputs = Vec::new();
             for (i, pressure) in [0.8, 0.6, 0.4, 0.2].into_iter().enumerate() {
                 let mut sample = event(
@@ -5657,7 +5693,7 @@ mod tests {
             assert_eq!(stroke.points.len(), inputs.len());
             for (point, input) in stroke.points.iter().zip(inputs) {
                 assert_eq!(point.position, input.surface_position);
-                assert_eq!(point.pressure, input.pressure.powf(gamma));
+                assert_eq!(point.pressure, floor + (1. - floor) * input.pressure);
             }
             let mut replay = Vec::new();
             DabGenerator::generate(stroke, engine.document().composition().color.space, &mut replay);

@@ -17,6 +17,8 @@ fn curve_key_repeat_commits_one_undo_with_matching_key_release() {
     assert_eq!(app.engine.checkpoint(),checkpoint);
     app.dispatch(press("ArrowUp",false,false)).unwrap();
     let after=app.engine.document().clone();assert_ne!(after.artwork,before.artwork);
+    let layer_core::EffectValue::Curve(points)=after.scene().effect(occurrence_handle(layer).unwrap()).unwrap().value(&key).unwrap() else{unreachable!()};
+    assert!((points[1][1]-(0.5+6./255.)).abs()<1e-6);
     app.engine.undo().unwrap();assert_eq!(app.engine.document().artwork,before.artwork);
     app.engine.redo().unwrap();assert_eq!(app.engine.document().artwork,after.artwork);
 }

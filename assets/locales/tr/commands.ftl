@@ -637,3 +637,4 @@ command-center-zoom-clicks = Tıklayınca ortala
 menu-paste-special = Özel Yapıştır
 menu-rotate-and-flip = Döndür ve Çevir
 menu-color-management = Renk Yönetimi
+command-pen-pressure = Kalem basıncı…

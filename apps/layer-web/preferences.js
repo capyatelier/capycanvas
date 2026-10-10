@@ -292,13 +292,15 @@ export function createPreferences({ app, element, button, icon, numberField, pan
               input = element("input", "settings-switch"); input.type = "checkbox"; input.setAttribute("role", "switch"); widget = input; break;
             case "info":
               input = element("span", "settings-info", row.kind.value); widget = input; break;
+            case "action":
+              input = button(row.kind.label, () => dispatch(modelRow(row.id).kind.action)); widget = input; break;
             case "link":
               input = element("a", "settings-link", row.kind.label);
               input.href = row.kind.url; input.target = "_blank"; input.rel = "noopener noreferrer";
               widget = input; break;
           }
           input.id = id; input.setAttribute("aria-label", row.title);
-          if (!["number", "swatches"].includes(row.kind.type)) input.addEventListener("input", () => {
+          if (!["number", "swatches", "action", "info", "link"].includes(row.kind.type)) input.addEventListener("input", () => {
             if (input.type === "number" && input.value === "") return;
             send({ type: "edit", id: row.id, value: row.kind.type === "switch" ? input.checked : Number(input.value) });
           });
@@ -384,6 +386,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       if(row.kind.type==="number"){input.relabel(row.title);input.setDescription(row.description);}
       else if(row.kind.type==="info")input.textContent=row.kind.value;
       else if(row.kind.type==="link")input.textContent=row.kind.label;
+      else if(row.kind.type==="action")input.textContent=row.kind.label;
       if (line.hidden !== !row.visible) line.hidden = !row.visible;
       if (row.visible) visible.add(row.id);
       line.classList.toggle("disabled", !row.enabled);

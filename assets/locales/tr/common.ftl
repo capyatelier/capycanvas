@@ -561,3 +561,11 @@ native-screen-details = Ekran ayrıntıları
 native-color-inspection-hdr-help = Doğrusal belge RGB'si ve parlaklık Y. Kesikli çizgi: referans beyaz (0 EV). Sıfır ve negatif değerler ayrı sayılır. Görünür kâğıt dâhildir; saydam pikseller ve ekran kaplamaları hariçtir.
 common-failure-details = Hata ayrıntıları
 common-copy-failure-details = Hata ayrıntılarını kopyala
+
+pressure-title = Kalem basıncı
+pressure-firmer = Daha sert
+pressure-lighter = Daha hafif
+pressure-curve-help = Kontrol noktası eklemek için tıklayın. Eğriyi şekillendirmek için noktaları sürükleyin. İç noktayı silmek için çift tıklayın veya grafiğin dışına sürükleyin.
+pressure-description = Çizim yaparken kalem basıncını ayarlayın.
+
+common-adjust = Ayarla…

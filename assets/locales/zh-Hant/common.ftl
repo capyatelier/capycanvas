@@ -385,3 +385,11 @@ native-screen-details = 螢幕詳細資訊
 native-color-inspection-hdr-help = 文件的線性 RGB 與亮度 Y。虛線：參考白（0 EV）。零值與負值分別統計。包含可見紙張；不包含透明像素與顯示疊加層。
 common-failure-details = 故障詳細資訊
 common-copy-failure-details = 複製故障詳細資訊
+
+pressure-title = 筆壓
+pressure-firmer = 更用力
+pressure-lighter = 更輕柔
+pressure-curve-help = 按一下新增控制點。拖曳控制點調整曲線。按兩下中間控制點或將其拖出圖表即可刪除。
+pressure-description = 繪畫時調整筆壓。
+
+common-adjust = 調整…

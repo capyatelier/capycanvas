@@ -155,6 +155,7 @@ space. Intensity blends either kind with the original. Presets and imported
 tables share the same saved resource, renderer and undo path.
 Curves uses these pages for RGB and channel
 selection, with [precise point controls](numeric-controls.md#properties-and-curves).
+[Pen pressure](pen-pressure.md) reuses the curve widget in a modeless utility.
 The [Sketch, Paint and Photo defaults](default-workspaces.md)
 provide initial arrangements and remain editable workspaces.
 

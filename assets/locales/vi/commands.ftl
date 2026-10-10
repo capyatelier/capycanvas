@@ -638,3 +638,4 @@ command-center-zoom-clicks = Căn giữa khi nhấp
 menu-paste-special = Dán đặc biệt
 menu-rotate-and-flip = Xoay và lật
 menu-color-management = Quản lý màu
+command-pen-pressure = Lực nhấn bút…

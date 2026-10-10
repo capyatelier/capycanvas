@@ -640,3 +640,4 @@ command-center-zoom-clicks = Beim Klicken zentrieren
 menu-paste-special = Inhalte einfügen
 menu-rotate-and-flip = Drehen und spiegeln
 menu-color-management = Farbverwaltung
+command-pen-pressure = Stiftdruck…

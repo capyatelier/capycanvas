@@ -97,6 +97,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
 | Panel or column resize | 90 | Color resize unmeasured on reference hardware; GTK desktop diagnostic remains below target | [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04 |
+| Pen pressure utility and curve drag | 90 | Unmeasured on reference hardware | [Pen pressure measurement protocol](../ui/pen-pressure.md#validation); GTK desktop measurements do not qualify this tier |
 | Drawer open and close | 90 | | |
 | Grouped tool menus, drawer switching and tile drag | 90 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
 | Colour wheel or picker drag | 90 | Huion: frame CPU p50 4.6–5.1 ms, p95 under 9.6 ms; XP-Pen swatch comparison below is diagnostic only. Huion wheel drags (FrameMetrics, release benchmark, one 5 s mouse and one touch drag each, 90 Hz panel): Edit Color dialog 79.4 / 87.4 fps presented, panel wheel 77.1 / 79.2 fps; not met | [Colour picker](../ui/color-picker.md); [swatch comparison](#selected-swatch-comparison), 2026-10-03; `AndroidWorkspacePerformanceTest#editColorWheelFrameTiming`, 2026-10-04 |
@@ -985,3 +986,19 @@ builds miss this tier. The measured build includes upstream rendering changes
 as well as Zoom settings, so this comparison does not isolate their cost or
 establish no regression.
 Current per-gesture evidence: `artifacts/navigation-controls/zoom-audit-20261009/post-rebase-results.json`.
+
+## Pen pressure response diagnostic
+
+The 2026-10-10 build based on `12779d197` uses the authored soft pressure
+response on the MovinkPad 11, with release Rust, an optimized benchmark APK,
+the 6000 × 4000 reference photo and an empty paint layer at Fit. A pressure-varying
+G-Pen at 1536 px follows a 310 × 150 surface-pixel ellipse. After one primer,
+three five-second strokes measured 80.18, 81.40 and 81.27 GPU-completed updates/s.
+Fresh-input completion-gap p99 was 24.98, 25.72 and 24.98 ms. These miss the
+90/s and 22.2 ms completion criteria; they do not establish a regression against
+a matched baseline. Thermal status was zero before and after.
+
+The physical panel was running at 60 Hz and would not change refresh mode.
+These are GPU completion measurements, not scanout timestamps. The pressure
+utility's 90 Hz presentation target remains unmeasured. Raw reports, APK/JNI
+hashes and provenance are in `artifacts/pen-pressure/android-mid-20261010/`.

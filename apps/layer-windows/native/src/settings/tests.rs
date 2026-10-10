@@ -31,7 +31,7 @@ fn service_over(worker: Worker) -> SettingsService {
 }
 fn edited(gamma: f32) -> Settings {
     Settings {
-        pressure_gamma: gamma,
+        pan_speed: gamma,
         ..Default::default()
     }
 }
@@ -57,16 +57,16 @@ fn settings_round_trip_uses_shared_validation() {
     assert_eq!(file.load().unwrap(), Some(second));
     fs::write(
         directory.path.join("settings.json"),
-        br#"{"pressure_gamma":1.5}"#,
+        br#"{"pan_speed":1.5}"#,
     )
     .unwrap();
-    assert_eq!(file.load().unwrap().unwrap().pressure_gamma, 1.5);
+    assert_eq!(file.load().unwrap().unwrap().pan_speed, 1.5);
     fs::write(
         directory.path.join("settings.json"),
-        br#"{"pressure_gamma":1.5,"tip_lock":true,"zoom_speed":"fast"}"#,
+        br#"{"pan_speed":1.5,"tip_lock":true,"zoom_speed":"fast"}"#,
     )
     .unwrap();
-    assert_eq!(file.load().unwrap().unwrap().pressure_gamma, 1.5);
+    assert_eq!(file.load().unwrap().unwrap().pan_speed, 1.5);
     assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
     assert!(SettingsFile::new(PathBuf::from("relative")).is_err());
 }
@@ -94,7 +94,7 @@ fn failed_replace_preserves_last_good_file_and_retry_succeeds() {
         .open(directory.path.join("settings.json"))
         .unwrap();
     assert!(file.write(&encode(&edited(1.75)).unwrap()).is_err());
-    assert_eq!(file.load().unwrap().unwrap().pressure_gamma, 1.25);
+    assert_eq!(file.load().unwrap().unwrap().pan_speed, 1.25);
     assert_eq!(
         fs::read_dir(&directory.path).unwrap().count(),
         1,
@@ -102,7 +102,7 @@ fn failed_replace_preserves_last_good_file_and_retry_succeeds() {
     );
     drop(locked);
     file.write(&encode(&edited(1.75)).unwrap()).unwrap();
-    assert_eq!(file.load().unwrap().unwrap().pressure_gamma, 1.75);
+    assert_eq!(file.load().unwrap().unwrap().pan_speed, 1.75);
 }
 
 #[test]
@@ -185,13 +185,13 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
         page: layer_ui::SettingsPage::Appearance,
     })
     .unwrap();
-    host.dispatch(preference(layer_ui::PreferenceId::Pressure, 1.1))
+    host.dispatch(preference(layer_ui::PreferenceId::PanSpeed, 1.1))
         .unwrap();
     service.poll(&mut host).unwrap();
     wait.recv_timeout(Duration::from_secs(5)).unwrap();
     for i in 2..=100 {
         host.dispatch(preference(
-            layer_ui::PreferenceId::Pressure,
+            layer_ui::PreferenceId::PanSpeed,
             1. + i as f32 / 100.,
         ))
         .unwrap();
@@ -211,7 +211,7 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
             request: layer_ui::DocumentRequest::Open
         }
     ));
-    assert_eq!(storage(&directory).load().unwrap().unwrap().pressure_gamma, 2.);
+    assert_eq!(storage(&directory).load().unwrap().unwrap().pan_speed, 2.);
     assert!(host.session.state().host_error.is_none());
 }
 
@@ -233,12 +233,10 @@ fn windows_merge_unrelated_edits_and_share_current_preferences() {
         .unwrap();
     }
     first
-        .dispatch(preference(layer_ui::PreferenceId::Pressure, 1.25))
+        .dispatch(preference(layer_ui::PreferenceId::ZoomSpeed, 1.25))
         .unwrap();
     a.poll(&mut first).unwrap();
     assert!(wakes.load(Ordering::Relaxed) > 0);
-    // This owner has not consumed the notification yet: its edit is based on
-    // the original settings and must not undo the first owner's pressure edit.
     second
         .dispatch(preference(layer_ui::PreferenceId::PanSpeed, 1.5))
         .unwrap();
@@ -248,7 +246,7 @@ fn windows_merge_unrelated_edits_and_share_current_preferences() {
         first.session.state().settings,
         second.session.state().settings
     );
-    assert_eq!(first.session.state().settings.pressure_gamma, 1.25);
+    assert_eq!(first.session.state().settings.zoom_speed, 1.25);
     assert_eq!(first.session.state().settings.pan_speed, 1.5);
     let expected = first.session.state().settings.clone();
     a.finish(&mut first).unwrap();
@@ -271,13 +269,13 @@ fn new_window_inherits_pending_settings_and_stale_writes_cannot_replace_them() {
     assert!(Arc::ptr_eq(&hub, &again));
     let mut second = shared::Subscription::new(again, || {});
     assert_eq!(
-        second.adopt(&Settings::default()).unwrap().pressure_gamma,
+        second.adopt(&Settings::default()).unwrap().pan_speed,
         1.75
     );
     hub.write(&latest).unwrap();
     hub.write(&old).unwrap();
     assert_eq!(
-        storage(&directory).load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pan_speed,
         1.75
     );
 }
@@ -362,7 +360,7 @@ fn restoring_settings_does_not_echo_a_save_request() {
         .unwrap();
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     let mut service = SettingsService::at(&mut host, Ok(storage(&directory)), || {});
-    assert_eq!(host.session.state().settings.pressure_gamma, 1.5);
+    assert_eq!(host.session.state().settings.pan_speed, 1.5);
     assert!(host.session.state().requests.is_empty());
     service.finish(&mut host).unwrap();
 }
@@ -419,7 +417,7 @@ fn failed_save_is_reported_and_a_later_success_clears_the_error() {
     })
     .unwrap();
     for (gamma, failed) in [(1.25, true), (1.75, false)] {
-        host.dispatch(preference(layer_ui::PreferenceId::Pressure, gamma))
+        host.dispatch(preference(layer_ui::PreferenceId::PanSpeed, gamma))
             .unwrap();
         service.poll(&mut host).unwrap();
         completed.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -435,7 +433,7 @@ fn change_preferences(host: &mut NativeHost, gamma: f32) {
         page: layer_ui::SettingsPage::Appearance,
     })
     .unwrap();
-    host.dispatch(preference(layer_ui::PreferenceId::Pressure, gamma))
+    host.dispatch(preference(layer_ui::PreferenceId::PanSpeed, gamma))
         .unwrap();
     host.dispatch(UiAction::CloseSettings).unwrap();
 }
@@ -497,7 +495,7 @@ fn close_waits_for_the_latest_write_and_does_not_stop_the_worker() {
     release.send(()).unwrap();
     pump_close(&mut host, &mut service, &completed, false);
     assert_eq!(
-        storage(&directory).load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pan_speed,
         1.75
     );
     service.finish(&mut host).unwrap();
@@ -530,19 +528,19 @@ fn failed_close_retains_edits_and_retries_without_changing_a_preference() {
     pump_close(&mut host, &mut service, &completed, true);
     assert!(service.close_status().attempt > attempt);
     assert_eq!(
-        storage(&directory).load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pan_speed,
         1.25
     );
     service.keep_open(&mut host);
     service.poll(&mut host).unwrap();
     assert!(!host.session.state().document_file.close_ready);
     assert!(!service.close_status().requested);
-    assert_eq!(host.session.state().settings.pressure_gamma, 1.75);
+    assert_eq!(host.session.state().settings.pan_speed, 1.75);
     drop(locked);
     host.session.request_document_close().unwrap();
     pump_close(&mut host, &mut service, &completed, false);
     assert_eq!(
-        storage(&directory).load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pan_speed,
         1.75
     );
     assert!(host.session.state().host_error.is_none());
@@ -610,13 +608,13 @@ fn another_window_can_flush_shared_unsaved_preferences_when_closing() {
     let mut b = SettingsService::at(&mut second, Ok(storage(&directory)), move || {
         let _ = wake_b.send(());
     });
-    assert_eq!(second.session.state().settings.pressure_gamma, 1.75);
+    assert_eq!(second.session.state().settings.pan_speed, 1.75);
     assert!(second.session.state().requests.is_empty());
     drop(locked);
     second.session.request_document_close().unwrap();
     pump_close(&mut second, &mut b, &completed_b, false);
     assert_eq!(
-        storage(&directory).load().unwrap().unwrap().pressure_gamma,
+        storage(&directory).load().unwrap().unwrap().pan_speed,
         1.75
     );
     a.finish(&mut first).unwrap();
@@ -685,7 +683,7 @@ fn prepared_launch_restores_before_views_and_keeps_the_profile_context() {
     fs::write(directory.path.join("settings.json"), &saved).unwrap();
     let (first, prepared) = SettingsService::launch_at(Ok(storage(&directory)), &["ja-JP", "ko", "en"]).unwrap();
     assert_eq!(first.session.localization().language(), layer_ui::UiLanguage::English);
-    assert_eq!(first.session.state().settings.pressure_gamma, 1.5);
+    assert_eq!(first.session.state().settings.pan_speed, 1.5);
     assert_eq!(first.session.state().settings.new_document.presets[0].name, literal);
     assert_eq!(fs::read_to_string(directory.path.join("settings.json")).unwrap(), saved);
     let active = first.session.localization().clone();
@@ -706,7 +704,7 @@ fn prepared_launch_restores_before_views_and_keeps_the_profile_context() {
     drop(prepared);
     assert!(Arc::ptr_eq(later.session.localization(), &retained));
     assert_eq!(later.session.state().settings.language, layer_ui::LanguagePreference::System);
-    assert_eq!(later.session.state().settings.pressure_gamma, 1.5);
+    assert_eq!(later.session.state().settings.pan_speed, 1.5);
     assert_eq!(later.session.state().settings.new_document.presets[0].name, literal);
 }
 

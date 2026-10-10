@@ -1,4 +1,5 @@
 import {checkGradientDefinitions} from './gradient.test.mjs';
+import {checkPressureCalibration} from './pressure-calibration.test.mjs';
 import {checkScopes,checkScopesSmoke} from './scopes.test.mjs';
 import {checkTonalControls} from './tonal-controls.test.mjs';
 import {checkDocumentErrors} from './document-errors-journey.test.mjs';
@@ -340,6 +341,7 @@ try {
     [process.argv.includes('--gradients'), () => checkGradientDefinitions({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--tonal-controls"), () => checkTonalControls({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--curves"), () => checkCurves({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--pressure-calibration"), () => checkPressureCalibration({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pointwise-effects"), () => checkPointwiseEffects({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pointwise-effects-smoke"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,widths:[1100],effects:['threshold']}), checkErrors],
     [process.argv.includes("--local-adjustments"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,localAdjustments:true,widths:process.env.LAYER_LOCAL_WIDTH?[Number(process.env.LAYER_LOCAL_WIDTH)]:[640,1100]}), checkErrors],
@@ -558,16 +560,17 @@ try {
       true,
     );
     await click('[data-command="settings"]');
+    await click('[data-settings-page="canvas"]');
     await evaluate(
-      `(() => { document.querySelector('#setting-pressure .number-value').click(); const input=document.querySelector('#setting-pressure .number-entry'); input.value='1.5'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); })()`,
+      `(() => { document.querySelector('#setting-pan-speed .number-value').click(); const input=document.querySelector('#setting-pan-speed .number-entry'); input.value='1.5'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); })()`,
     );
     assert.equal(
-      await evaluate("layerApp.state().settings.pressure_gamma"),
+      await evaluate("layerApp.state().settings.pan_speed"),
       1.5,
     );
     await click("#close-settings");
     assert.equal(
-      await evaluate("layerApp.state().settings.pressure_gamma"),
+      await evaluate("layerApp.state().settings.pan_speed"),
       1.5,
     );
     assert.equal(

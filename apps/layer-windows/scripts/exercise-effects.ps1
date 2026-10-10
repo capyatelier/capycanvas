@@ -102,14 +102,31 @@ function Show-Graph([double]$Percent=0){
     $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent((Control 'property-rgb-curve'))
     while($node){$scroll=$null;if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll) -and $scroll.Current.VerticallyScrollable){break};$node=$walker.GetParent($node)}
     if($node -and $scroll.Current.VerticalScrollPercent -ne $Percent){$scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,$Percent)}
-    $settled=@{bounds=$null};Wait-Until {$bounds=(Control 'property-rgb-curve').Current.BoundingRectangle;$same=$bounds -eq $settled.bounds;$settled.bounds=$bounds;Start-Sleep -Milliseconds 100;$same} 'The curve graph did not settle after scrolling'
+    $settled=@{bounds=$null;scroll=-1;visible=$false;enabled=$false}
+    try{Wait-Until {
+        $graph=Control 'property-rgb-curve';$bounds=$graph.Current.BoundingRectangle
+        $visible=!$bounds.IsEmpty -and [double]::IsFinite($bounds.X) -and [double]::IsFinite($bounds.Y) -and [double]::IsFinite($bounds.Width) -and [double]::IsFinite($bounds.Height) -and $bounds.Width -gt 0 -and $bounds.Height -gt (6*[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.) -and !$graph.Current.IsOffscreen
+        $same=$visible -and $graph.Current.IsEnabled -and $bounds -eq $settled.bounds
+        if(!$visible -and $node -and $scroll.Current.VerticallyScrollable){
+            $currentPercent=$scroll.Current.VerticalScrollPercent
+            if($Percent -ge 50 -and $currentPercent -gt 0){$scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,[System.Windows.Automation.ScrollAmount]::SmallDecrement)}
+            elseif($Percent -lt 50 -and $currentPercent -lt 100){$scroll.Scroll([System.Windows.Automation.ScrollAmount]::NoAmount,[System.Windows.Automation.ScrollAmount]::SmallIncrement)}
+        }
+        $settled.bounds=$bounds;$settled.visible=$visible;$settled.enabled=$graph.Current.IsEnabled;if($scroll){$settled.scroll=$scroll.Current.VerticalScrollPercent}
+        Start-Sleep -Milliseconds 100;$same
+    } 'The visible curve graph did not settle after scrolling'}
+    catch{throw "Curve graph did not settle: bounds=$($settled.bounds), scroll=$($settled.scroll), visible=$($settled.visible), enabled=$($settled.enabled)"}
 }
 function Tap-Point([int]$Index){
     $point=(Property 'rgb').value.value[$Index];$low=$point[1] -lt .5;Show-Graph $(if($low){100}else{0})
-    $r=(Control 'property-rgb-curve').Current.BoundingRectangle;$height=Graph-Height;$top=if($low){$r.Bottom-$height}else{$r.Y}
-    $at=@([int][Math]::Min([Math]::Max($r.X+$point[0]*$r.Width,$r.Left+10),$r.Right-10),[int][Math]::Min([Math]::Max($top+(1-$point[1])*$height,$r.Top+10),$r.Bottom-10))
+    $graph=Control 'property-rgb-curve';$r=$graph.Current.BoundingRectangle;$height=Graph-Height;$top=if($low){$r.Bottom-$height}else{$r.Y}
+    $margin=3*[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
+    $at=@([int][Math]::Min([Math]::Max($r.X+$point[0]*$r.Width,$r.Left+$margin),$r.Right-$margin),[int][Math]::Min([Math]::Max($top+(1-$point[1])*$height,$r.Top+$margin),$r.Bottom-$margin))
+    $hit=[System.Windows.Automation.AutomationElement]::FromPoint([System.Windows.Point]::new($at[0],$at[1]))
+    $native=$hit.Current.AutomationId
+    if(!$hit -or $hit.Current.ProcessId -ne $review.Id -or $graph.Current.IsOffscreen -or !$graph.Current.IsEnabled -or !$r.Contains([System.Windows.Point]::new($at[0],$at[1]))){throw "Curve point $Index misses the owned visible graph: at=$at bounds=$r native=$native points=$((Property 'rgb').value.value|ConvertTo-Json -Compress)"}
     [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
-    Wait-Until {(Property 'rgb').curve.selected -eq $Index} "Tapping point $Index did not select it"
+    Wait-Until {(Property 'rgb').curve.selected -eq $Index} "Tapping point $Index did not select it: at=$at bounds=$r native=$native"
 }
 function Pointer-Session([scriptblock]$Body){
     [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
@@ -325,6 +342,7 @@ function Check-LogCurve {Pointer-Session {
     }
     if(!$grown){throw 'The window did not grow for the curve check'}
     Select-Filter 'curves' 'Curves'
+    Wait-Until {(Property 'domain').kind.options.Count -eq 2 -and (Find 'property-domain').Current.IsEnabled} 'Curve space did not reach the enabled native control'
     Choose 'property-domain' (Property 'domain').kind.options[1]
     Wait-Until {(Property 'rgb').curve.domain.kind -eq 'log_hdr' -and (Find 'property-hdr_stops')} 'Log HDR did not offer its stops'
     Tap-Point 0
@@ -412,8 +430,7 @@ function Check-CurveGestures {
         if(!(Find 'property-rgb-reset')){throw 'Modified curve hides its reset icon'}
         foreach($device in @('mouse','pen','touch')){
             $point=(Property 'rgb').value.value[1];$at=Curve-At $point[0] $point[1]
-            [CapyRowPointer]::Down($device,$at[0],$at[1]);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 60
-            [CapyRowPointer]::Down($device,$at[0],$at[1]);[CapyRowPointer]::Up()
+            [CapyRowPointer]::DoubleClick($device,$at[0],$at[1])|Out-Null
             Wait-Until {(Property 'rgb').value.value.Count -eq 2} "$device double tap did not remove the point"
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device double tap removal was not one Undo"
             $point=(Property 'rgb').value.value[1];$from=Curve-At $point[0] $point[1]
@@ -439,9 +456,10 @@ function Check-CurveGestures {
         Wait-Until {$p=(Property 'rgb').value.value;$p.Count -eq 3 -and [Math]::Abs($p[1][1]-200/255) -lt 1e-6 -and $p[1][0] -eq $point[0]} 'Typed Output did not move only the selected point'
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'Typed Output was not one Undo'
         Tap-Point 1;$graph=Control 'property-rgb-curve';$graph.SetFocus();Wait-Until {$graph.Current.HasKeyboardFocus} 'The curve graph did not take focus'
-        for($i=0;$i -lt 5;$i++){[CapyRowPointer]::Hold(0x26,$true);Start-Sleep -Milliseconds 60}
+        for($i=0;$i -lt 5;$i++){[CapyRowPointer]::Hold(0x26,$true);Start-Sleep -Milliseconds 30}
         [CapyRowPointer]::Hold(0x26,$false)
-        try{Wait-Until {[Math]::Abs((Property 'rgb').value.value[1][1]-$point[1]-5/255) -lt 1e-4} 'A held Up arrow did not step the point by 1/255 per repeat'}catch{throw "Held Up baseline=$($point[1]), current=$((Property 'rgb').value.value[1][1]), expected=$($point[1]+5/255): $_"}
+        try{Wait-Until {[Math]::Abs((Property 'rgb').value.value[1][1]-$point[1]-5/255) -lt 1e-4} 'A held Up arrow did not step the point by 1/255 per repeat'}
+        catch{throw "Held Up: initial=$($point[1]), expected=$($point[1]+5/255), actual=$((Property 'rgb').value.value[1][1]), count=$((Property 'rgb').value.value.Count), selected=$((Property 'rgb').curve.selected), step=$((Property 'rgb').curve.numeric.step)"}
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'A held arrow was not one Undo'
         Tap-Point 1;[CapyRowPointer]::Key(0x2E)
         Wait-Until {(Property 'rgb').value.value.Count -eq 2} 'Delete did not remove the selected point'
@@ -449,7 +467,7 @@ function Check-CurveGestures {
         Tap-Point 0
         Wait-Until {!(Field 'input').Current.IsEnabled -and (Field 'output').Current.IsEnabled} 'An endpoint Input was editable'
         $at=Curve-At .25 .6
-        for($i=0;$i -lt 2;$i++){[CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 60}
+        [CapyRowPointer]::DoubleClick('mouse',$at[0],$at[1])|Out-Null
         Start-Sleep -Milliseconds 400
         if((Property 'rgb').value.value.Count -ne 4){throw 'A double click on the empty graph did not insert exactly one point'}
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'The double-click insertion was not one Undo'
@@ -640,7 +658,7 @@ try {
         scope='isolated native UI and app-only GPU pixels; full workspace visual parity, physical input and presentation acceptance remain separate'
     }|ConvertTo-Json
 }catch{
-    try{Capture 'failure'}catch{}
+    try{Capture 'failure' -WithModel}catch{}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     Exit-CapyEnvironment

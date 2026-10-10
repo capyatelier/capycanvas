@@ -639,3 +639,4 @@ command-center-zoom-clicks = Centra al clic
 menu-paste-special = Incolla speciale
 menu-rotate-and-flip = Ruota e rifletti
 menu-color-management = Gestione del colore
+command-pen-pressure = Pressione della penna…

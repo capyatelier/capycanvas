@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Path
@@ -303,39 +304,50 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
 private data class CurveTap(val position: Offset, val time: Long, val epoch: Long, val points: Int)
 
 @Composable private fun CurveControl(host: CanvasHost, state: JSONObject, layer: Long, control: JSONObject, enabled: Boolean) {
+    val editor = obj("controls" to control.getJSONObject("curve"), "points" to control.getJSONObject("value").array("value"),
+        "plot" to control.array("plot"), "marker" to JSONObject.NULL, "modified" to control.optBoolean("modified"))
+    SharedCurveControl(host, state, editor, control.getString("label"), obj("kind" to "effect", "layer" to layer, "key" to control.getString("key")), enabled, histogram = true)
+}
+
+@Composable internal fun SharedCurveControl(host: CanvasHost, state: JSONObject, control: JSONObject, label: String, target: JSONObject,
+    enabled: Boolean = true, histogram: Boolean = false) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val current by rememberUpdatedState(control)
-    val key = control.getString("key")
-    val curve = control.getJSONObject("curve")
+    val key = target.optString("key", "pressure")
+    val curve = control.getJSONObject("controls")
     val axes = curve.array("axes").objects()
     val focus = remember { FocusRequester() }
     var origin by remember { mutableStateOf(Offset.Zero) }
     var contactOwner by remember { mutableStateOf<JSONObject?>(null) }
     var keyOwner by remember { mutableStateOf<Pair<Key, JSONObject>?>(null) }
     var lastTap by remember { mutableStateOf<CurveTap?>(null) }
-    fun owner() = obj("layer" to layer, "key" to key, "epoch" to current.getJSONObject("curve").getLong("epoch"))
+    fun owner() = obj("epoch" to current.getJSONObject("controls").getLong("epoch"))
+    fun dispatch(action: JSONObject) = host.dispatch(obj("type" to "curve_editor", "target" to target, "action" to action))
     fun send(owner: JSONObject, op: String, phase: String? = null, point: Offset = Offset.Zero, extent: Offset = Offset(1f, 1f)) {
-        val action = JSONObject(owner.toString()).put("op", op).put("point", JSONArray(listOf(point.x, point.y))).put("extent", JSONArray(listOf(extent.x, extent.y)))
-        phase?.let { action.put("phase", it) }; host.effect(action)
+        val action = JSONObject(owner.toString()).put("kind", op).put("point", JSONArray(listOf(point.x, point.y))).put("extent", JSONArray(listOf(extent.x, extent.y)))
+        phase?.let { action.put("phase", it) }; dispatch(action)
     }
     fun cancel() {
         val captured = contactOwner ?: keyOwner?.second
         contactOwner = null; keyOwner = null
-        if (captured != null) send(captured, "curve_contact", "cancel")
+        if (captured != null) send(captured, "contact", "cancel")
     }
     DisposableEffect(Unit) { onDispose { cancel(); if (host.pointControlFocus === focus) host.pointControlFocus = null } }
     Column(Modifier.fillMaxWidth().testTag("curve-$key"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Column(Modifier.height(200.dp), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(axes[1].getString("maximum"), color = colors.secondary)
-                Text(axes[1].getString("label"), color = colors.secondary)
+                if (curve.getBoolean("coordinate_readouts")) Text(axes[1].getString("label"), color = colors.secondary)
+                else Box(Modifier.width(40.dp).weight(1f), contentAlignment = Alignment.Center) {
+                    Text(axes[1].getString("label"), Modifier.wrapContentSize(unbounded = true).rotate(-90f), color = colors.secondary)
+                }
                 Text(axes[1].getString("minimum"), color = colors.secondary)
             }
             Column(Modifier.weight(1f)) {
                 Box(Modifier.fillMaxWidth().height(200.dp).background(colors.input)) {
-                    ScopeGraph(host, state, "tonal_histogram", Modifier.fillMaxSize())
-                    Canvas(Modifier.fillMaxSize().testTag("effect-curve").semantics { contentDescription = control.getString("label") }
+                    if (histogram) ScopeGraph(host, state, "tonal_histogram", Modifier.fillMaxSize())
+                    Canvas(Modifier.fillMaxSize().testTag("effect-curve").semantics { contentDescription = label }
                         .onGloballyPositioned { origin = it.positionInRoot() }.focusRequester(focus)
                         .onFocusChanged {
                             if (it.isFocused) host.pointControlFocus = focus
@@ -352,28 +364,29 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                             else {
                                 val target = keyOwner?.takeIf { it.first == event.key }?.second ?: owner()
                                 if (pressed) keyOwner = event.key to target
-                                host.effect(JSONObject(target.toString()).put("op", "curve_key").put("key_event", name).put("pressed", pressed)
+                                dispatch(JSONObject(target.toString()).put("kind", "key").put("key_event", name).put("pressed", pressed)
                                     .put("repeat", event.nativeKeyEvent.repeatCount > 0).put("modifiers", obj("command" to (event.isCtrlPressed || event.isMetaPressed), "shift" to event.isShiftPressed, "alt" to event.isAltPressed)))
                                 if ((!pressed && keyOwner?.first == event.key) || event.key == Key.Escape) keyOwner = null
                                 if (event.key == Key.Escape) contactOwner = null
                                 true
                             }
                         }.focusable(enabled)
-                        .pointerInput(layer, key, enabled) {
+                        .pointerInput(target.toString(), enabled) {
                             if (!enabled) return@pointerInput
                             awaitEachGesture {
                                 val down = awaitFirstDown(); down.consume(); focus.requestFocus(); cancel()
                                 val captured = owner(); val start = origin
-                                val count = current.getJSONObject("value").array("value").length()
-                                val extent = Offset(size.width / density, size.height / density)
-                                fun point(position: Offset) = (position + origin - start) / density
+                                val count = current.array("points").length()
+                                val inset = current.getJSONObject("controls").number("inset")
+                                val extent = Offset(size.width / density - 2 * inset, size.height / density - 2 * inset)
+                                fun point(position: Offset) = (position + origin - start) / density - Offset(inset, inset)
                                 val double = lastTap?.let { tap -> tap.epoch == captured.getLong("epoch") && down.uptimeMillis - tap.time in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis && (down.position + origin - tap.position).getDistance() <= viewConfiguration.touchSlop * 2 } == true
                                 if (currentEvent.buttons.isSecondaryPressed || double) {
                                     if (!currentEvent.buttons.isSecondaryPressed) captured.put("point_count", lastTap!!.points)
-                                    lastTap = null; send(captured, "curve_remove_at", point = point(down.position), extent = extent)
+                                    lastTap = null; send(captured, "remove_at", point = point(down.position), extent = extent)
                                     return@awaitEachGesture
                                 }
-                                contactOwner = captured; send(captured, "curve_contact", "down", point(down.position), extent)
+                                contactOwner = captured; send(captured, "contact", "down", point(down.position), extent)
                                 var released = false
                                 try {
                                     while (true) {
@@ -382,17 +395,20 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                                             released = true
                                             val tapped = (change.position + origin - down.position - start).getDistance() < viewConfiguration.touchSlop
                                             lastTap = if (tapped) CurveTap(change.position + origin, change.uptimeMillis, captured.getLong("epoch"), count) else null
-                                            if (contactOwner === captured) { contactOwner = null; send(captured, "curve_contact", "up", point(change.position), extent) }
+                                            if (contactOwner === captured) { contactOwner = null; send(captured, "contact", "up", point(change.position), extent) }
                                             break
                                         }
-                                        if (change.position != change.previousPosition && contactOwner === captured) { change.consume(); send(captured, "curve_contact", "move", point(change.position), extent) }
+                                        if (change.position != change.previousPosition && contactOwner === captured) { change.consume(); send(captured, "contact", "move", point(change.position), extent) }
                                     }
-                                } finally { if (!released && contactOwner === captured) { contactOwner = null; send(captured, "curve_contact", "cancel") } }
+                                } finally { if (!released && contactOwner === captured) { contactOwner = null; send(captured, "contact", "cancel") } }
                             }
                         }) {
+                        val inset = curve.number("inset").dp.toPx()
+                        val width = size.width - 2 * inset; val height = size.height - 2 * inset
+                        fun position(raw: JSONArray) = Offset(inset + raw.getDouble(0).toFloat() * width, inset + (1 - raw.getDouble(1).toFloat()) * height)
                         for (i in 1..3) {
-                            drawLine(colors.text.copy(alpha = .2f), Offset(size.width * i / 4, 0f), Offset(size.width * i / 4, size.height))
-                            drawLine(colors.text.copy(alpha = .2f), Offset(0f, size.height * i / 4), Offset(size.width, size.height * i / 4))
+                            drawLine(colors.text.copy(alpha = .2f), Offset(inset + width * i / 4, inset), Offset(inset + width * i / 4, inset + height))
+                            drawLine(colors.text.copy(alpha = .2f), Offset(inset, inset + height * i / 4), Offset(inset + width, inset + height * i / 4))
                         }
                         if (!axes[0].isNull("white")) {
                             val x = axes[0].number("white") * size.width; val y = (1 - axes[1].number("white")) * size.height
@@ -402,39 +418,47 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                         }
                         val path = Path()
                         control.array("plot").values().forEachIndexed { i, raw ->
-                            val p = raw as JSONArray; val x = p.getDouble(0).toFloat() * size.width; val y = (1 - p.getDouble(1).toFloat()) * size.height
+                            val p = position(raw as JSONArray); val x = p.x; val y = p.y
                             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                         }
                         drawPath(path, colors.text, style = Stroke(1.5.dp.toPx()))
-                        control.getJSONObject("value").array("value").values().forEachIndexed { index, raw ->
+                        if (curve.getBoolean("control_polygon")) {
+                            val polygon = Path()
+                            control.array("points").values().forEachIndexed { index, raw -> val p = position(raw as JSONArray); if (index == 0) polygon.moveTo(p.x, p.y) else polygon.lineTo(p.x, p.y) }
+                            drawPath(polygon, colors.secondary.copy(alpha = .4f), style = Stroke(1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()))))
+                        }
+                        control.optJSONArray("marker")?.let { drawCircle(colors.accent, 4.dp.toPx(), position(it)) }
+                        control.array("points").values().forEachIndexed { index, raw ->
                             val p = raw as JSONArray; val selected = !curve.isNull("selected") && curve.getInt("selected") == index
-                            drawCircle(colors.text, (if (selected) 5f else 3.5f).dp.toPx(), Offset(p.getDouble(0).toFloat() * size.width, (1 - p.getDouble(1).toFloat()) * size.height), style = if (selected) Stroke(1.5.dp.toPx()) else androidx.compose.ui.graphics.drawscope.Fill)
+                            drawCircle(colors.text, (if (selected) 5f else 3.5f).dp.toPx(), position(p), style = if (selected) Stroke(1.5.dp.toPx()) else androidx.compose.ui.graphics.drawscope.Fill)
                         }
                     }
-                    if (control.optBoolean("modified")) Box(Modifier.align(Alignment.BottomEnd).padding(2.dp).size(32.dp).testTag("curve-reset")
-                        .clickable(enabled = enabled) { lastTap = null; host.effect(obj("op" to "reset", "layer" to layer, "key" to key)) }, contentAlignment = Alignment.Center) {
+                    if (histogram && control.optBoolean("modified")) Box(Modifier.align(Alignment.BottomEnd).padding(2.dp).size(32.dp).testTag("curve-reset")
+                        .clickable(enabled = enabled) { lastTap = null; dispatch(obj("kind" to "reset")) }, contentAlignment = Alignment.Center) {
                         SharedIcon("reset", curve.getString("reset_label"), tint = colors.secondary)
                     }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    for (name in listOf("minimum", "label", "maximum")) Text(axes[0].getString(name), color = colors.secondary)
+                Box(Modifier.fillMaxWidth()) {
+                    Text(axes[0].getString("minimum"), Modifier.align(Alignment.CenterStart), color = colors.secondary)
+                    Text(axes[0].getString("label"), Modifier.align(Alignment.Center), color = colors.secondary)
+                    Text(axes[0].getString("maximum"), Modifier.align(Alignment.CenterEnd), color = colors.secondary)
                 }
             }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (curve.getBoolean("coordinate_readouts")) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("input", "output").forEachIndexed { index, axis ->
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     val coordinate = curve.optJSONObject(axis)
                     Text(axes[index].getString("label"), maxLines = 1)
                     EffectNumber(host, axes[index].getString("label"), coordinate?.getDouble("value") ?: 0.0, curve.getJSONObject("numeric"),
                         enabled && coordinate != null && !coordinate.getBoolean("read_only"), "curve-$key-$axis", coordinate?.getString("text") ?: "", valueOnly = true) {
-                        obj("op" to "curve_number", "layer" to layer, "key" to key, "epoch" to current.getJSONObject("curve").getLong("epoch"), "axis" to axis)
+                        obj("op" to "curve_number", "layer" to target.getLong("layer"), "key" to key, "epoch" to current.getJSONObject("controls").getLong("epoch"), "axis" to axis)
                     }
                     if (curve.getJSONObject("domain").getString("kind") == "log_hdr") Text(coordinate?.optString("ev") ?: "", Modifier.fillMaxWidth().heightIn(min = 18.dp).testTag("curve-$key-$axis-ev"), color = colors.secondary, textAlign = androidx.compose.ui.text.style.TextAlign.End)
                 }
             }
         }
-        ScopeFooter(host, state, "tonal_histogram")
+        if (histogram) ScopeFooter(host, state, "tonal_histogram")
     }
 }
 

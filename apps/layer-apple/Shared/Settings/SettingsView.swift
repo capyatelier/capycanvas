@@ -137,6 +137,11 @@ struct SettingsView: View {
                 PreferenceSwatches(row: row, palette: EditorPalette(source: store.state["palette"])) { edit(row, $0) }
             case "info":
                 LabeledContent(row["title"].string, value: kind["value"].string)
+            case "action":
+                LabeledContent(row["title"].string) {
+                    Button(kind["label"].string) { store.dispatch(kind["action"]) }
+                        .accessibilityIdentifier("preference-" + row["id"].string)
+                }
             case "link":
                 if let url = URL(string: kind["url"].string) {
                     LabeledContent(row["title"].string) {

@@ -1034,6 +1034,22 @@ impl NumberControl {
         }
         imp.updating.set(false);
     }
+    pub(crate) fn bind_edit<A: 'static>(&self, w: &std::rc::Rc<crate::workspace::Workspace>,
+        action: impl Fn(f64) -> A + 'static, gesture: impl Fn(layer_ui::ContactPhase,A) -> A + 'static,
+        publish: impl Fn(A) -> layer_ui::UiAction + 'static) {
+        use layer_ui::ContactPhase;
+        let action=std::rc::Rc::new(action);let gesture=std::rc::Rc::new(gesture);let publish=std::rc::Rc::new(publish);
+        let captured=std::rc::Rc::new(Cell::new(None));
+        self.connect_edit_phase(glib::clone!(#[weak] w, #[weak(rename_to=input)] self, #[strong] action, #[strong] gesture, #[strong] publish, #[strong] captured, move |phase| {
+            captured.set(match phase {ContactPhase::Down|ContactPhase::Move=>Some(ContactPhase::Move),ContactPhase::Cancel=>Some(ContactPhase::Cancel),ContactPhase::Up=>None});
+            w.dispatch(publish(gesture(phase,action(input.value()))));
+        }));
+        self.connect_value_changed(glib::clone!(#[weak] w, move |input| {
+            if captured.get()==Some(ContactPhase::Cancel) {return;}
+            let value=action(input.value());
+            w.dispatch(publish(if captured.get().is_some() {gesture(ContactPhase::Move,value)} else {value}));
+        }));
+    }
     pub fn connect_edit_phase(&self, callback: impl Fn(layer_ui::ContactPhase) + 'static) {
         use layer_ui::ContactPhase;
         let callback = std::rc::Rc::new(callback);

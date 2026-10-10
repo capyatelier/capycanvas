@@ -226,6 +226,12 @@ exports it as `$CAPY_APPLICATION_ID`. The commands below write
 
 ## Device tests
 
+`AndroidHostTest#penPressureCalibrationUsesNativeCurveAndPersistsAppliedResponse`
+checks the modeless pressure utility in both themes: opening from Preferences,
+touch, mouse and stylus graph input, drag-out removal, the live marker, painting
+and Apply/Cancel persistence. Pair it with the numeric settings fixtures after
+changing the shared curve widget or Preferences row presentations.
+
 Without a device, build both APKs and run lint:
 
 ```bash

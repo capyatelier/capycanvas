@@ -2,8 +2,6 @@ settings-language = 언어
 settings-language-system = 시스템 언어 사용
 
 settings-reset-to-default = 기본값으로 재설정
-settings-pressure-response = 필압 반응
-settings-lower-values-make-light-pen-pressure-stronger = 값이 낮을수록 약한 필압이 더 강하게 반영됩니다.
 settings-enable-stroke-prediction = 획 예측 사용
 settings-reduce-the-gap-between-your-pen-and-the-stroke = 펜 끝과 획 사이의 간격을 줄입니다.
 settings-use-android-stroke-prediction = Android 획 예측 사용

@@ -533,6 +533,16 @@ interpolation, Reverse and the current-color bucket, each as one Undo step.
 `exercise-tools.ps1` and `exercise-toolbar-components.ps1` cover the Gradient
 tool's editor in Tool Settings and the Tool Options popup.
 
+Pen pressure uses the same curve renderer with shared pressure controls and a
+modeless utility frame. Graph drawing clips to its native input bounds, including
+edge handles. Keyboard capture forwards every press in a combined key message's
+repeat count; Rust owns the step and gesture history.
+`exercise-pressure.ps1 -Executable <path> -Theme dark`
+checks opening from Preferences, curve contacts, drag-out removal, live pressure,
+canvas painting and calibration transactions. Repeat with `-Theme light`;
+the VM fixture names are `pressure` and `pressure:light`. Physical pen and frame
+performance require Windows hardware.
+
 Histogram, Waveform and the input statistics in Levels and Curves
 (`ScopesView.cpp`) draw the shared plots. The snapshot's `windows_scopes` revision
 changes when a view's counts, channel, Log counts or palette change; the views

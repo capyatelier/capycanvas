@@ -7,6 +7,7 @@ import { createDocumentStorage } from "./document-storage.js";
 import { workspaceStore, modulePromise, setWorkspaceWake } from "./workspace-preload.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
 import { createPreferences } from "./preferences.js";
+import {createPressureCalibration} from "./pressure-calibration.js";
 import { createCommandBar } from "./command-bar.js";
 import { showGpuNotice } from "./gpu.js";
 import { createGpuDiagnostics, gpuErrorText, gpuReportDetails, suspendGpuForReport } from './gpu-diagnostics.js';
@@ -69,7 +70,7 @@ let app,
   statusTimer,
   statusError = null,
   shownHostError = null;
-let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
+let pressureCalibration, refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
 let commandBar, paintPairView;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
@@ -349,7 +350,7 @@ function applyChange(change) {
           // the workspace behind it. Keep its controls and geometry intact.
           refreshPreferences(app.preferences_cached());
           updateZen();
-        } else update(languageChanged ? 4095 : change.regions | (moving ? 1 : 0));
+        } else update(languageChanged ? 8191 : change.regions | (moving ? 1 : 0));
         if (reopeningCanvas) {
           deferOptionalCompiler();
           wake();
@@ -872,6 +873,7 @@ function contentPanel(id, splitPicker=false, readToolSet=null) {
   panel.refreshPanel();return panel;
 }
 function update(regions) {
+  if(regions & (4096 | 16)) pressureCalibration?.refresh();
   commandBar?.refresh(state.command_search);
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) paintPairView = app.paint_pair();
   // Canvas-based controls read these colors while refreshing their pixels.
@@ -1835,6 +1837,7 @@ try {
   performance.mark("capy.startup.model");
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
   publishAppName();
+  pressureCalibration=createPressureCalibration({state:()=>state,workspace,element,button,icon,numberField,panelFrame,dispatch});
   refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
   commandBar = createCommandBar({element, button, icon, dispatch, style:catalog.command_search_style, nativeCopy:catalog.native_copy, canvas, layoutChanged:() => glass?.queue()});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));

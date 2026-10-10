@@ -139,6 +139,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
 | Panel, tab, column or toolbar drag and docking | 60 | Current lifecycle binary unmeasured. Earlier Web checkpoint: group/tab placements 47.38/60.22 Hz; Navigator assertion failed | Web workspace diagnostic below; no tier qualification |
 | Panel or column resize | 60 | **Unqualified.** TCL default-canvas diagnostic: 25.01–58.23 UI Hz, maximum p99 gap 50.08 ms; base 24.99–58.22 Hz. Retained-model assertion fails on both | 2026-10-09 sidebar-width comparison against `ee4805dfe`; `artifacts/sidebar-widths/android-resize{,-base}-logcat.txt`; no reference-canvas qualification |
+| Pen pressure utility and curve drag | 60 | Unmeasured on reference hardware | [Pen pressure measurement protocol](../ui/pen-pressure.md#validation); GTK desktop measurements do not qualify this tier |
 | Drawer open and close | 60 | | |
 | Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
 | Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 58.85–60.02 Hz, maximum p99 33.328 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |

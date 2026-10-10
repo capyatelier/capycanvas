@@ -655,6 +655,7 @@ impl WebApp {
             palette,
             settings_open,
             preferences,
+            pressure_calibration,
             customization,
             platform,
             requests,
@@ -710,6 +711,7 @@ impl WebApp {
         field!(palette);
         field!(settings_open);
         field!(preferences);
+        field!(pressure_calibration);
         field!(customization);
         field!(platform);
         field!(requests);

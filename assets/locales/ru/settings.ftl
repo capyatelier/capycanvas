@@ -2,8 +2,6 @@ settings-language = Язык
 settings-language-system = Использовать язык системы
 
 settings-reset-to-default = Сбросить к стандартному
-settings-pressure-response = Отклик на нажим
-settings-lower-values-make-light-pen-pressure-stronger = Меньшие значения усиливают лёгкий нажим пера.
 settings-enable-stroke-prediction = Включить предсказание мазка
 settings-reduce-the-gap-between-your-pen-and-the-stroke = Сократить расстояние между пером и мазком.
 settings-use-android-stroke-prediction = Предсказание мазка Android

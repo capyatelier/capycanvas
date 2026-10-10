@@ -438,6 +438,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                 }
             }
             when (type) {
+                "action" -> TextButton({ host.dispatch(kind.getJSONObject("action")) }, Modifier.testTag("setting-action-" + row.getString("id")), enabled = enabled, shape = ControlShape) { Text(kind.getString("label")) }
                 "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
                 "swatches" -> SwatchSelector(host, row, kind, enabled)
                 "choice" -> if (kind.getJSONObject("presentation").getString("type") == "circles") {

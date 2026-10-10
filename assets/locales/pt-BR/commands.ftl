@@ -641,3 +641,4 @@ command-center-zoom-clicks = Centralizar ao clicar
 menu-paste-special = Colar especial
 menu-rotate-and-flip = Girar e inverter
 menu-color-management = Gerenciamento de cores
+command-pen-pressure = Pressão da caneta…

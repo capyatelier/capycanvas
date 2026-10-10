@@ -385,3 +385,11 @@ native-screen-details = 画面の詳細
 native-color-inspection-hdr-help = ドキュメントのリニアRGBと輝度Y。破線は基準白（0 EV）を示します。ゼロと負の値は別々に集計します。表示中の用紙を含み、透明な画素と画面上のオーバーレイは含みません。
 common-failure-details = エラーの詳細
 common-copy-failure-details = エラーの詳細をコピー
+
+pressure-title = 筆圧
+pressure-firmer = 硬く
+pressure-lighter = 柔らかく
+pressure-curve-help = クリックして制御点を追加します。点をドラッグして曲線を調整します。中間の点をダブルクリックするか、グラフの外へドラッグすると削除できます。
+pressure-description = 描画しながら筆圧を調整します。
+
+common-adjust = 調整…

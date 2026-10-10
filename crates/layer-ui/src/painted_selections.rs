@@ -1,5 +1,6 @@
 //! Ordered selection gestures. Completed contacts survive asynchronous capture;
 //! subsequent contacts resolve their base only after preceding edits commit.
+use layer_engine::PressureCurve;
 use crate::localization::{Localizer, MessageId};
 use super::*;
 use layer_core::{BrushSnapshot, Selection, SelectionTarget};
@@ -221,9 +222,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 0,
                 self.selection_paint_brush(),
                 self.state.camera.input_transform(),
-                PressureCurve {
-                    gamma: self.state.settings.pressure_gamma,
-                },
+                self.engine.configured_pressure_curve().clone(),
                 None,
             )
             .cursor(event)
@@ -331,9 +330,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 id,
                 self.selection_paint_brush(),
                 self.state.camera.input_transform(),
-                PressureCurve {
-                    gamma: self.state.settings.pressure_gamma,
-                },
+                self.engine.configured_pressure_curve().clone(),
                 (!mask).then_some(
                     6. * self
                         .logical_viewport

@@ -643,3 +643,4 @@ command-center-zoom-clicks = Центрировать при щелчке
 menu-paste-special = Специальная вставка
 menu-rotate-and-flip = Поворот и отражение
 menu-color-management = Управление цветом
+command-pen-pressure = Нажим пера…

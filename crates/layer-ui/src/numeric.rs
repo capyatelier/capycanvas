@@ -244,9 +244,6 @@ impl NumericControl {
             ..Self::number(f64::from(crate::MIN_ZOOM), f64::from(crate::MAX_ZOOM), 0.1, 0)
         }
     }
-    pub fn pressure() -> Self {
-        Self::number(0.25, 4.0, 0.05, 2).unit("×")
-    }
     pub fn rotation() -> Self {
         Self {
             kind: NumericKind::Slider,
@@ -712,7 +709,6 @@ mod tests {
         for control in [
             NumericControl::brush_size(),
             NumericControl::percent(),
-            NumericControl::pressure(),
             NumericControl::number(0.0, 256.0, 1.0, 0),
         ] {
             assert_eq!(control.kind, NumericKind::Slider);
@@ -831,7 +827,7 @@ mod compact_tests {
             (NumericControl::brush_size(), 120., "120 px", "120.0 px"),
             (NumericControl::percent(), 0.5, "50 %", "50.0 %"),
             (NumericControl::number(-180., 180., 1., 0).unit("°"), 10., "10 °", "10.0 °"),
-            (NumericControl::pressure(), 1., "1 ×", "1.00 ×"),
+            (NumericControl::number(0.25, 4., 0.05, 2).unit("×"), 1., "1 ×", "1.00 ×"),
         ] {
             let result = spec.resolve(value, NumericOperation::Format).unwrap();
             assert_eq!(result.text, text);

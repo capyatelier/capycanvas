@@ -2,8 +2,6 @@ settings-language = Language
 settings-language-system = Use system language
 
 settings-reset-to-default = Reset to Default
-settings-pressure-response = Pressure response
-settings-lower-values-make-light-pen-pressure-stronger = Lower values make light pen pressure stronger.
 settings-enable-stroke-prediction = Enable stroke prediction
 settings-reduce-the-gap-between-your-pen-and-the-stroke = Reduce the gap between your pen and the stroke.
 settings-use-android-stroke-prediction = Use Android stroke prediction

@@ -47,10 +47,11 @@ internal class StrokeRecording(private val host: CanvasHost) {
                 // Only take the snapshot on the engine owner; compression and
                 // provider I/O run away from the render Looper and main thread.
                 val raw = host.withNative { Native.strokeRecordingData(it) }
+                val header = recording.status!!.getString("header")
                 withContext(Dispatchers.IO) {
                     val stream = resolver.openOutputStream(uri, "wt") ?: error("Could not open recording destination")
                     stream.use { output ->
-                        output.write("CAPYPEN3".toByteArray(Charsets.US_ASCII))
+                        output.write(header.toByteArray(Charsets.US_ASCII))
                         GZIPOutputStream(output).use { it.write(raw) }
                     }
                 }

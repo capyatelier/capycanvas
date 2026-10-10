@@ -41,6 +41,7 @@ struct EditorView<Canvas: View>: View {
                     }.placed(store.snapshot["layout"]["status"])
                 }
                 WorkspacePanels(store: store, workspace: store.workspace)
+                PressureCalibration(store: store)
                 if store.snapshot["keep_zen_button"].bool {
                     let command = store.command("zen_mode")
                     IconTile(icon: command["icon"].string, label: command["tooltip"].string,

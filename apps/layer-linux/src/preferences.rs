@@ -26,6 +26,7 @@ enum Field {
     Number(gtk::ListBoxRow, crate::number_control::NumberControl),
     Switch(adw::SwitchRow),
     Info(adw::ActionRow),
+    Action(adw::ActionRow, gtk::Button),
 }
 impl Field {
     fn widget(&self) -> &gtk::Widget {
@@ -38,6 +39,7 @@ impl Field {
             Self::Spin(w) => w.upcast_ref(),
             Self::Switch(w) => w.upcast_ref(),
             Self::Info(w) => w.upcast_ref(),
+            Self::Action(w, _) => w.upcast_ref(),
         }
     }
     fn update(&self, row: &PreferenceRow, localization: &std::sync::Arc<layer_ui::Localizer>) {
@@ -95,6 +97,7 @@ impl Field {
                 if w.value() != *value as f64 * control.scale { w.set_value(*value as f64 * control.scale); }
             }
             (Self::Switch(w), PreferenceKind::Switch { active }) => w.set_active(*active),
+            (Self::Action(_, button), PreferenceKind::Action { label, .. }) => button.set_label(label),
             _ => {}
         }
     }
@@ -884,6 +887,15 @@ impl Preferences {
                                 control.add_suffix(&text);
                             }
                             Field::Info(control)
+                        }
+                        PreferenceKind::Action { label, action } => {
+                            let control = text_row(&row.title, &row.description);
+                            let button = gtk::Button::with_label(label); button.set_valign(gtk::Align::Center);
+                            button.set_widget_name(&format!("setting-{}-action", id.key()));
+                            let action=action.clone();
+                            button.connect_clicked(glib::clone!(#[weak] w, move |_| { w.dispatch(*action.clone()); }));
+                            control.add_suffix(&button); control.set_activatable_widget(Some(&button));
+                            Field::Action(control, button)
                         }
                     };
                     field.widget().set_widget_name(&format!(

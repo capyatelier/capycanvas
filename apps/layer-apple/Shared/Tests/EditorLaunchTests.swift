@@ -29,6 +29,8 @@ final class EditorLaunchTests: XCTestCase {
     @MainActor func testNumericTextHistory() { checkNumericTextHistory(in: editorCaptureApplication()) }
     @MainActor func testNumericSettingsDone() { checkNumericSettingsDone(in: editorCaptureApplication()) }
     @MainActor func testSettingsNumericReset() { checkSettingsNumericReset(in: editorCaptureApplication()) }
+    @MainActor func testPressureCalibrationLight() { checkPressureCalibration(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testPressureCalibrationDark() { checkPressureCalibration(in: editorCaptureApplication(), theme: "dark") }
 
     @MainActor func testSettingsTextState() {
         #if os(iOS)

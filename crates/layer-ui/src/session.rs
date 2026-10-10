@@ -4,7 +4,7 @@ use crate::*;
 use layer_core::{DefaultBrushPreset, Document, LayerKind, StrokeTool};
 #[cfg(test)]
 use layer_core::default_brush;
-use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurve, input_queue};
+use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, input_queue};
 use layer_render::CanvasRenderer;
 use layer_core::authored::{OccurrenceHandle, OccurrenceContent, SourceTarget};
 
@@ -13,6 +13,8 @@ pub fn occurrence_handle(token: u64) -> Result<OccurrenceHandle, String> {
     let index = token.checked_sub(1).and_then(|index| u32::try_from(index).ok()).ok_or("Invalid layer identity")?;
     Ok(OccurrenceHandle::from_index(index))
 }
+#[path = "pressure_calibration.rs"]
+pub(crate) mod pressure_calibration;
 #[path = "art_layers.rs"]
 mod art_layers;
 #[path = "object_motion.rs"]
@@ -215,6 +217,8 @@ struct CustomizationCopy {
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
+    pressure_calibration: pressure_calibration::Calibration,
+    pressure_meter_changed: bool,
     screen_headroom: std::cell::RefCell<Option<(UiLanguage, u32, std::sync::Arc<str>)>>,
     histogram_captions: [Option<histogram::HistogramCaptionKey>; 3],
     histogram: histogram::Statistics,
@@ -345,7 +349,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn preferences_revision(&self) -> u64 { self.preferences_revision }
 
     pub fn localization_input_busy(&self) -> bool {
-        !self.canvas_idle() || self.input_pending || self.touch.is_active()
+        self.pressure_calibration.input_busy() || !self.canvas_idle() || self.input_pending || self.touch.is_active()
             || self.interaction.pointer.is_some() || self.interaction.facts.held
             || self.interaction.facts.dragging || self.interaction.axes.active()
             || self.operation.dragging() || self.operation.nudging() || self.navigator_drag.is_some()
@@ -362,6 +366,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         *self.customization_copy.get_mut() = CustomizationCopy::default();
         self.refresh_document_file_localization();
         self.refresh_size_localization();
+        self.refresh_pressure_calibration();
         self.state.preferences.set_localization(&self.state.settings, self.state.platform, &self.state.localization);
         self.state.customization.set_localization(&self.state.localization);
         self.state.filter_load.set_localization(&self.state.localization);
@@ -407,7 +412,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         effects::validate_catalog_labels(&effect_catalog, &localization)?;
+        engine.set_pressure_curve(Settings::default().pressure_curve.into());
         let mut session = Self {
+            pressure_calibration: Default::default(),
+            pressure_meter_changed: false,
             screen_headroom: Default::default(),
             histogram_captions: Default::default(),
             histogram: Default::default(),
@@ -482,6 +490,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             tool_origin: None,
             files: document_files::DocumentFiles::default(),
             state: UiState {
+                pressure_calibration: None,
                 tool_slots: ToolSlotMemory::default(),
                 localization: localization.clone(),
                 soft_proof: false,
@@ -1379,6 +1388,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled = true;
                         reply.chrome_hidden = false;
                         return Ok(reply);
+                    }
+                    if key == "escape" && !editing && self.canvas_idle() && !self.interaction.facts.popup_open && self.state.pressure_calibration.is_some() {
+                        let epoch=self.state.pressure_calibration.as_ref().unwrap().editor.controls.epoch;
+                        self.pressure_curve_action(CurveEditorAction::Key {epoch,key_event:"Escape".into(),pressed:true,repeat:false,modifiers});
+                        reply.change = self.changed(regions::PRESSURE_CALIBRATION, false);
+                        reply.handled = true; return Ok(reply);
                     }
                     if key == "escape" && !editing {
                         self.interaction.keyboard_chrome = true;
@@ -2700,6 +2715,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if let UiAction::CurveEditor { target: CurveEditorTarget::Effect { layer, key }, action } = action {
+            return self.dispatch(UiAction::Effect { action: action.effect(layer, &key) });
+        }
         self.engine.backend_mut().shader_input();
         if self.defer_document_action(&action) {
             return Ok(self.changed(regions::COMMANDS, true));
@@ -2867,6 +2885,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::CurveEditor { target: CurveEditorTarget::Effect { layer, key }, action } => {
+                self.effect_action(action.effect(layer, &key))?; (DOCUMENT, true)
+            }
+            UiAction::CurveEditor { target: CurveEditorTarget::Pressure, action } => {
+                self.pressure_curve_action(action); (PRESSURE_CALIBRATION, false)
+            }
+            UiAction::PressureCalibration { action } => {
+                save_settings = self.pressure_action(action); (PRESSURE_CALIBRATION | if save_settings { SETTINGS } else { 0 }, false)
+            }
             UiAction::Histogram { action } => { self.histogram_action(action)?; (HISTOGRAM, true) }
             UiAction::CommandSearch { .. } => unreachable!("handled above"),
             UiAction::ToolbarEdit { .. } | UiAction::CanvasBarEdit { .. } | UiAction::Notice { .. } => {
@@ -4031,6 +4058,14 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn pen_ready(&mut self, mut event: PenEvent) -> Result<(), PenEvent> {
         self.eraser_end(&mut event);
+        if let Some(view) = &mut self.state.pressure_calibration
+            && !event.flags.contains(layer_engine::SampleFlags::PREDICTED) && !event.flags.contains(layer_engine::SampleFlags::CORRECTION)
+            && matches!(event.tool, layer_engine::ToolKind::Pen | layer_engine::ToolKind::Eraser | layer_engine::ToolKind::Pencil | layer_engine::ToolKind::Brush | layer_engine::ToolKind::Airbrush) {
+            let marker = if !event.pressure.is_finite() || matches!(event.phase, PenPhase::Up | PenPhase::Cancel) { None } else {
+                let raw = event.pressure.clamp(0., 1.); Some([raw, self.pressure_calibration.curve().map(raw)])
+            };
+            if view.editor.marker != marker { view.editor.marker = marker; self.pressure_meter_changed = true; }
+        }
         if event.phase == PenPhase::Down
             && let Some(spring) = &mut self.interaction.spring
         {
@@ -4476,6 +4511,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let command_activity = (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());
         self.update_shader_idle();
         let mut changed = self.poll_filter_installation();
+        if std::mem::take(&mut self.pressure_meter_changed) { changed |= regions::PRESSURE_CALIBRATION; }
         let revision = self.engine.document().revision;
         let working_generation = self.engine.document().working.generation;
         changed |= self.poll_selection_paint()?;
@@ -5169,6 +5205,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.navigate_command(command)?;
                 Ok((CAMERA, true))
             }
+            CommandId::PenPressure => {
+                self.state.settings_open = false;
+                self.state.preferences = PreferencesState::default();
+                self.pressure_calibration.open(&self.state.settings.pressure_curve);
+                self.refresh_pressure_calibration();
+                Ok((SETTINGS | PRESSURE_CALIBRATION, false))
+            }
             CommandId::Settings | CommandId::KeyboardShortcuts | CommandId::About => {
                 let canceled = self
                     .state
@@ -5334,9 +5377,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 settings.feedback_config_for(self.state.platform, self.platform_prediction_available()),
             )
             .map_err(error)?;
-        self.engine.set_pressure_curve(PressureCurve {
-            gamma: settings.pressure_gamma,
-        });
+        if self.pressure_calibration.source().is_none() && self.state.settings.pressure_curve != settings.pressure_curve {
+            self.engine.set_pressure_curve(settings.pressure_curve.clone().into());
+        }
         let mask_mode_changed = self.state.settings.selection_painting != settings.selection_painting;
         let bindings_changed = self.state.settings.shortcuts != settings.shortcuts || self.state.settings.keymap != settings.keymap;
         self.state.settings = settings;
@@ -6050,6 +6093,10 @@ fn pen_phase(phase: ContactPhase) -> PenPhase {
 #[cfg(test)]
 #[path = "session_test_support.rs"]
 pub(crate) mod test_support;
+
+#[cfg(test)]
+#[path = "pressure_calibration_tests.rs"]
+mod pressure_calibration_tests;
 
 #[cfg(test)]
 #[path = "image_object_edit_tests.rs"]
@@ -15216,7 +15263,7 @@ mod tests {
         assert_eq!(cross.segments[0].marker, 4.0);
         s.cursor_input(None);
         assert!(s.canvas_cursor().is_none());
-        let old: Settings = serde_json::from_str(r#"{"theme":null,"pressure_gamma":1.0}"#).unwrap();
+        let old: Settings = serde_json::from_str(r#"{"theme":null,"pan_speed":1.0}"#).unwrap();
         assert_eq!(old.cursor, CursorMode::BrushSize);
     }
 
@@ -15572,6 +15619,8 @@ mod tests {
     #[test]
     fn contact_cursor_uses_live_pressure_without_depositing_another_dab() {
         let mut s = session(Platform::Gtk);
+        let mut settings=s.state.settings.clone();settings.pressure_curve=layer_core::PressureResponse::linear();
+        s.dispatch(UiAction::RestoreSettings{settings}).unwrap();
         s.dispatch(UiAction::SetBrushSize { value: 200.0 }).unwrap();
         let low = event(&s, 1, PenPhase::Down, 0.2);
         s.pen(low).unwrap();
@@ -16923,14 +16972,14 @@ mod tests {
                 .unwrap()
                 .enabled
         );
-        edit_preference(&mut s, PreferenceId::Pressure, PreferenceValue::Number(1.7));
+        edit_preference(&mut s, PreferenceId::PanSpeed, PreferenceValue::Number(1.7));
         invoke(&mut s, CommandId::KeyboardShortcuts);
         assert_eq!(s.preferences().unwrap().page, SettingsPage::Shortcuts);
-        assert_eq!(s.state.settings.pressure_gamma, 1.7);
+        assert_eq!(s.state.settings.pan_speed, 1.7);
         preference(
             &mut s,
             PreferenceAction::Search {
-                query: "pressure response".into(),
+                query: "pan speed".into(),
             },
         );
         let view = s.preferences().unwrap();
@@ -16940,9 +16989,9 @@ mod tests {
             "search does not replace the content page"
         );
         assert_eq!(view.search_results.len(), 1);
-        assert_eq!(view.search_results[0].title, "Pressure response");
+        assert_eq!(view.search_results[0].title, "Scroll pan speed");
         preference(&mut s, view.search_results[0].action.clone());
-        assert_eq!(s.preferences().unwrap().page, SettingsPage::Input);
+        assert_eq!(s.preferences().unwrap().page, SettingsPage::Canvas);
         preference(
             &mut s,
             PreferenceAction::Search {
@@ -16976,7 +17025,7 @@ mod tests {
         assert_eq!(s.state.settings, before);
         edit_preference(
             &mut s,
-            PreferenceId::Pressure,
+            PreferenceId::PanSpeed,
             PreferenceValue::Number(f32::NAN),
         );
         assert_eq!(s.state.settings, before);
@@ -17338,9 +17387,9 @@ mod tests {
     #[test]
     fn settings_json_is_versioned_validated_and_backwards_compatible() {
         let old: Settings =
-            serde_json::from_str(r#"{"theme":null,"pressure_gamma":1.5,"cursor":"brush_size"}"#)
+            serde_json::from_str(r#"{"theme":null,"pan_speed":1.5,"cursor":"brush_size"}"#)
                 .unwrap();
-        assert_eq!(old.pressure_gamma, 1.5);
+        assert_eq!(old.pan_speed, 1.5);
         let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::RestoreSettings {
             settings: old.clone(),

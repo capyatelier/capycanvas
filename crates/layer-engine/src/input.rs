@@ -81,21 +81,36 @@ pub struct PenEvent {
     pub flags: SampleFlags,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct PressureCurve {
-    pub gamma: f32,
-}
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "layer_core::PressureResponse", into = "layer_core::PressureResponse")]
+pub struct PressureCurve(Arc<PressureMapping>);
+
+#[derive(Debug, PartialEq)]
+struct PressureMapping { source: layer_core::PressureResponse, samples: [f32; 1025] }
 
 impl Default for PressureCurve {
     fn default() -> Self {
-        Self { gamma: 1.0 }
+        layer_core::PressureResponse::linear().into()
     }
 }
 
 impl PressureCurve {
-    pub fn map(self, raw: f32) -> f32 {
-        raw.clamp(0.0, 1.0).powf(self.gamma.max(0.01))
+    pub fn map(&self, raw: f32) -> f32 {
+        let x = if raw.is_finite() { raw.clamp(0., 1.) * 1024. } else { 0. };
+        let index = (x as usize).min(1023);
+        let [a, b] = [self.0.samples[index], self.0.samples[index + 1]];
+        if b - a > 0.001 { self.0.source.map(raw) } else { a + (b - a) * (x - index as f32) }
     }
+}
+
+impl From<layer_core::PressureResponse> for PressureCurve {
+    fn from(source: layer_core::PressureResponse) -> Self {
+        let samples = std::array::from_fn(|i| source.map(i as f32 / 1024.));
+        Self(Arc::new(PressureMapping { source, samples }))
+    }
+}
+impl From<PressureCurve> for layer_core::PressureResponse {
+    fn from(curve: PressureCurve) -> Self { curve.0.source.clone() }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -408,6 +423,21 @@ mod tests {
         assert_eq!(builder.finish().unwrap().len(), 2);
     }
 
+    #[test]
+    fn compiled_pressure_bounds_error_for_steep_and_collapsed_controls() {
+        for source in [layer_core::PressureResponse::default(),
+            layer_core::PressureResponse::try_from(vec![[0.,0.],[0.,1.],[0.,1.],[0.,1.],[1.,1.]]).unwrap(),
+            layer_core::PressureResponse::try_from(vec![[0.,0.],[1e-8,0.8],[0.001,0.9],[1.,1.]]).unwrap()] {
+            let curve=PressureCurve::from(source.clone());
+            for input in (0..=10000).map(|i|i as f32/10000.).chain([1e-9,1e-6,0.0009]) {
+                assert!((curve.map(input)-source.map(input)).abs()<=0.00101,"{input}");
+            }
+            assert_eq!(curve.map(0.),source.points()[0][1]); assert_eq!(curve.map(1.),1.);
+            assert!(curve.map(f32::NAN).is_finite());
+            let saved=serde_json::to_string(&curve).unwrap();
+            let restored:PressureCurve=serde_json::from_str(&saved).unwrap();assert_eq!(curve,restored);
+        }
+    }
     #[test]
     fn predictions_retain_only_the_latest_bounded_tail() {
         let mut builder = StrokeBuilder::with_capacity(8);

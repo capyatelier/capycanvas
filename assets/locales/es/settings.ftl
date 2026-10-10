@@ -2,8 +2,6 @@ settings-language = Idioma
 settings-language-system = Usar el idioma del sistema
 
 settings-reset-to-default = Restablecer valor predeterminado
-settings-pressure-response = Respuesta a la presión
-settings-lower-values-make-light-pen-pressure-stronger = Los valores más bajos intensifican la presión suave del lápiz.
 settings-enable-stroke-prediction = Activar predicción de trazos
 settings-reduce-the-gap-between-your-pen-and-the-stroke = Reducir la distancia entre el lápiz y el trazo.
 settings-use-android-stroke-prediction = Usar predicción de trazos de Android

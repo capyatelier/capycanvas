@@ -570,3 +570,11 @@ native-screen-details = Détails de l’écran
 native-color-inspection-hdr-help = RGB linéaire du document et luminance Y. Ligne en tirets : blanc de référence (0 EV). Les valeurs nulles et négatives sont comptées séparément. Inclut le papier visible ; exclut les pixels transparents et les superpositions d’affichage.
 common-failure-details = Détails de l’erreur
 common-copy-failure-details = Copier les détails de l’erreur
+
+pressure-title = Pression du stylet
+pressure-firmer = Plus ferme
+pressure-lighter = Plus léger
+pressure-curve-help = Cliquez pour ajouter un point de contrôle. Faites glisser les points pour modifier la courbe. Double-cliquez sur un point intérieur ou faites-le glisser hors du graphique pour le supprimer.
+pressure-description = Réglez la pression du stylet tout en dessinant.
+
+common-adjust = Ajuster…

@@ -23,8 +23,10 @@ The companion predictor log captures the exact processed real/native/stationary
 samples, corrections, pressure observations, resets, policy and physical-surface
 transform at each query, and actual frame/requested timestamps. It makes replay
 independent of brush settings, input batching and display cadence on the replay
-machine. Raw records retain the input view transform and pressure curve. Contact
-end markers distinguish cancellation from a recording interrupted mid-stroke.
+machine. Raw records retain the input view transform and authored pressure controls.
+Estimated corrections retain their original observation's pressure response,
+including corrections delivered before the engine processes that observation.
+Contact end markers distinguish cancellation from a recording interrupted mid-stroke.
 If capture starts during an existing contact, raw input is retained immediately;
 predictor replay begins with the next full contact. Empty recordings and contacts
 without prediction queries are valid.
@@ -32,9 +34,9 @@ without prediction queries are valid.
 No screenshot or rendered prediction is stored. Positions and pen input can
 still reveal what was drawn. There is no upload or automatic on-disk retention.
 
-## Binary format v3
+## Binary format v4
 
-`.capystrokes` starts with the eight ASCII bytes `CAPYPEN3`, followed by one gzip
+`.capystrokes` starts with the eight ASCII bytes `CAPYPEN4`, followed by one gzip
 member. The decompressed stream contains repeated `[u32 little-endian length,
 payload]` frames. Payloads use the pinned bincode 2.0.1 serde codec with its
 standard configuration: little endian, variable-length integers, exact IEEE
@@ -53,7 +55,9 @@ delivery order, repeated timestamps, backward timestamps and prediction flags.
 Never sort inputs before replay or use native predictions as ground truth.
 
 Capture allocates its bounded byte buffer when started, appends binary records
-without per-sample allocation, and performs no compression in input callbacks.
+and performs no compression in input callbacks. Estimated-pressure metadata
+is bounded to 8,192 pending tokens. Clients that compress outside Rust receive
+the format header in the shared recording status.
 GTK, Android and Windows compress on a worker when saving. Web uses asynchronous browser
 gzip compression.
 Once a successful save is acknowledged, the buffer is released.
@@ -185,7 +189,7 @@ capture naming, hash-bound baselines and adding recordings from other tablets.
   input, the real system save dialog, cancellation and retry.
 - Windows: `stroke_recordings_save_off_thread_and_release_only_after_delivery`
   and `apps/layer-windows/scripts/exercise-stroke-recording.ps1`, which records a
-  controlled pen stroke, saves through the owned picker, checks the CAPYPEN3 gzip
+  controlled pen stroke, saves through the owned picker, checks the CAPYPEN4 gzip
   file, and confirms that a cancelled save keeps the recording for a retry.
 - Web: desktop and device harnesses accept `--stroke-recording`; this covers
   browser pen delivery, cancellation, provider failure, retry and binary export.

@@ -636,3 +636,4 @@ command-center-zoom-clicks = 點擊時置中
 menu-paste-special = 選擇性貼上
 menu-rotate-and-flip = 旋轉與翻轉
 menu-color-management = 色彩管理
+command-pen-pressure = 筆壓…

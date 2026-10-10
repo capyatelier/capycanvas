@@ -218,7 +218,7 @@ mod allocation {
             for (slot, child) in self.children.borrow().iter() {
                 if matches!(
                     slot,
-                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0) | Slot::CanvasBar
+                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0) | Slot::CanvasBar | Slot::PressureCalibration
                 ) {
                     continue; // Allocate parents before measuring child origins.
                 }
@@ -293,7 +293,7 @@ mod allocation {
                         .find(|g| g.id == *group && expansion.is_none_or(|e| e.group != *group))
                         .and_then(|g| g.resize_handles.iter().find(|h| h.edge == *edge))
                         .map(|h| h.bounds),
-                    Slot::CanvasBar => unreachable!("allocated after its owner"),
+                    Slot::CanvasBar | Slot::PressureCalibration => unreachable!("allocated after its owner"),
                 };
                 child.set_child_visible(bounds.is_some());
                 if let Some(b) = bounds {
@@ -314,6 +314,7 @@ mod allocation {
                             .as_ref()
                             .and_then(|p| p.connection().map(|c| c.bounds)),
                         Slot::CanvasBar => owner.canvas_bar.bounds(),
+                        Slot::PressureCalibration => owner.pressure_calibration.bounds(),
                         _ => continue,
                     };
                     child.set_child_visible(bounds.is_some());
@@ -495,7 +496,7 @@ glib::wrapper! {
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl PanelColumns {
-    fn new(preview: &gtk::Box) -> Self {
+    pub(crate) fn new(preview: &gtk::Box) -> Self {
         let this: Self = glib::Object::new();
         this.add_css_class("dock-panel");
         this.set_overflow(gtk::Overflow::Hidden);
@@ -555,6 +556,7 @@ enum Slot {
     Column(u32),
     ColumnConnection(u32, Panel),
     CanvasBar,
+    PressureCalibration,
 }
 glib::wrapper! {
     pub struct DockSurface(ObjectSubclass<allocation::DockSurface>)
@@ -643,25 +645,17 @@ impl DockSurface {
             self.raise_canvas_bar();
         }
     }
-    /// Floating panels stay beneath the canvas action bar; open drawers stay above it.
     fn raise_canvas_bar(&self) {
         let mut children = self.imp().children.borrow_mut();
-        let Some(index) = children.iter().position(|(s, _)| *s == Slot::CanvasBar) else {
-            return;
-        };
-        let bar = children.remove(index);
-        let drawer = children.iter().position(|(s, w)| {
-            matches!(s, Slot::Drawer(_) | Slot::DrawerShadow(_) | Slot::DrawerConnection(_))
-                && w.is_child_visible()
-        });
-        match drawer {
-            Some(i) => {
-                bar.1.insert_before(self, Some(&children[i].1));
-                children.insert(i, bar);
-            }
-            None => {
-                bar.1.insert_after(self, children.last().map(|(_, w)| w));
-                children.push(bar);
+        for slot in [Slot::PressureCalibration, Slot::CanvasBar] {
+            let Some(index) = children.iter().position(|(s, _)| *s == slot) else { continue; };
+            let overlay = children.remove(index);
+            let drawer = children.iter().position(|(s, w)| {
+                matches!(s, Slot::Drawer(_) | Slot::DrawerShadow(_) | Slot::DrawerConnection(_)) && w.is_child_visible()
+            });
+            match drawer {
+                Some(i) => { overlay.1.insert_before(self, Some(&children[i].1)); children.insert(i, overlay); }
+                None => { overlay.1.insert_after(self, children.last().map(|(_, w)| w)); children.push(overlay); }
             }
         }
     }
@@ -673,6 +667,7 @@ impl DockSurface {
                     | Slot::Header
                     | Slot::Status
                     | Slot::CanvasBar
+                    | Slot::PressureCalibration
                     | Slot::Drawer(_)
                     | Slot::DrawerShadow(_)
                     | Slot::DrawerConnection(_)
@@ -950,6 +945,7 @@ pub struct Workspace {
     pub(crate) color_strip: crate::color_editor::Strip,
     tool_settings: crate::tool_panels::ToolSettings,
     pub(crate) canvas_bar: crate::canvas_bar::CanvasBar,
+    pub(crate) pressure_calibration: Rc<crate::pressure_calibration::PressurePanel>,
     selection_refine: crate::preview_dialog::PreviewDialog,
     frequency_separation: crate::preview_dialog::PreviewDialog,
     pub(crate) canvas_size: Rc<crate::canvas_size::CanvasSizeDialog>,
@@ -1166,6 +1162,8 @@ impl Workspace {
         surface.add(Slot::Status, &status_bar);
         let canvas_bar = crate::canvas_bar::CanvasBar::new();
         surface.add(Slot::CanvasBar, &canvas_bar.root);
+        let pressure_calibration = crate::pressure_calibration::PressurePanel::new();
+        surface.add(Slot::PressureCalibration, &pressure_calibration.root);
         let toolbar = TileStrip::new();
         toolbar.add_css_class("toolbar-controls");
         let brushes = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -1305,6 +1303,7 @@ impl Workspace {
             color_editors: RefCell::default(),
             color_strip,
             tool_settings,
+            pressure_calibration,
             canvas_bar,
             selection_refine: crate::preview_dialog::PreviewDialog::new("selection-refine-dialog", "selection-refine-value", |radius| {
                 UiAction::Selection { action: layer_ui::SelectionAction::ResizeRadius { radius: radius as f32 } }
@@ -2701,6 +2700,10 @@ impl Workspace {
         }
     }
     fn refresh(self: &Rc<Self>, regions: u32) {
+        if regions == regions::PRESSURE_CALIBRATION {
+            let view = self.gpu.borrow().as_ref().and_then(|g|g.session.state().pressure_calibration.clone());
+            self.pressure_calibration.refresh(self, view.as_ref()); return;
+        }
         if regions == regions::COMMAND_SEARCH {
             let view = self.gpu.borrow().as_ref().and_then(|g| g.session.state().command_search.clone());
             self.command_bar.refresh(self, view);
@@ -2754,6 +2757,9 @@ impl Workspace {
         };
         self.refreshing.set(true);
         self.command_bar.refresh(self, state.command_search.clone());
+        if regions & (regions::PRESSURE_CALIBRATION | regions::SETTINGS | regions::LAYOUT | regions::CAMERA) != 0 {
+            self.pressure_calibration.refresh(self, state.pressure_calibration.as_ref());
+        }
         if regions & (regions::DOCUMENT | regions::COMMANDS | regions::LAYOUT) != 0 {
             self.proof_panel.refresh(self, &state);
         }

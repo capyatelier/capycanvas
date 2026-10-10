@@ -175,7 +175,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         self.state.camera.revision.checked_sub(self.automatic_camera_revision).expect("Automatic camera revision exceeds camera revision")
     }
     fn session_document_state(&self)->SessionDocumentState {
-        let UiState {camera,document_file,tool_slots:_,histogram:_,waveform:_,tonal_histogram:_,localization:_,command_search:_,soft_proof:_,preview_sdr:_,hdr_display_available:_,screen:_,gamut_warning:_,revision:_,fullscreen:_,workspace:_,brush:_,colors:_,color_library:_,color_picker:_,tool_settings:_,tool_extra:_,toolbar_context_generation:_,tool_actions:_,tool_set:_,tool_panels:_,canvas_bar:_,layers:_,layer_tools:_,adjustments:_,filter_picker:_,filter_categories:_,filter_catalog_revision:_,filter_load:_,layer_properties:_,tabs:_,commands:_,settings:_,theme:_,palette:_,settings_open:_,preferences:_,customization:_,platform:_,requests:_,host_error:_,notice:_}=&self.state;
+        let UiState {pressure_calibration:_,camera,document_file,tool_slots:_,histogram:_,waveform:_,tonal_histogram:_,localization:_,command_search:_,soft_proof:_,preview_sdr:_,hdr_display_available:_,screen:_,gamut_warning:_,revision:_,fullscreen:_,workspace:_,brush:_,colors:_,color_library:_,color_picker:_,tool_settings:_,tool_extra:_,toolbar_context_generation:_,tool_actions:_,tool_set:_,tool_panels:_,canvas_bar:_,layers:_,layer_tools:_,adjustments:_,filter_picker:_,filter_categories:_,filter_catalog_revision:_,filter_load:_,layer_properties:_,tabs:_,commands:_,settings:_,theme:_,palette:_,settings_open:_,preferences:_,customization:_,platform:_,requests:_,host_error:_,notice:_}=&self.state;
         self.files.session_state(document_file,SessionCamera::capture(camera))
     }
     pub fn session_stamp(&self)->SessionStamp {
@@ -183,7 +183,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             working_generation:self.engine.document().working.generation,checkpoint:self.engine.checkpoint(),state:self.session_document_state()}
     }
     pub fn capture_session(&self)->Result<SessionCapture,String> {
-        let Self {engine,state,files:_,screen_headroom:_,histogram_captions:_,histogram:_,effect_analyses:_,
+        let Self {pressure_calibration:_,pressure_meter_changed:_,engine,state,files:_,screen_headroom:_,histogram_captions:_,histogram:_,effect_analyses:_,
             tonal_histogram:_,auto_levels:_,targeted_curve:_,localization_generation:_,renderer_generation:_,preferences_revision:_,
             panel_copy:_,customization_copy:_,command_search:_,last_toolbar_context:_,canvas_bar:_,notices:_,
             pen:_,input_pending:_,host_requests_changed:_,pen_contact:_,input_held:_,rendering_suspended:_,touch:_,navigation:_,navigator_drag:_,

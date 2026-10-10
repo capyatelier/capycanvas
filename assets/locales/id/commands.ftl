@@ -1220,3 +1220,4 @@ command-center-zoom-clicks = Pusatkan saat mengeklik
 menu-paste-special = Tempel khusus
 menu-rotate-and-flip = Putar dan balik
 menu-color-management = Manajemen warna
+command-pen-pressure = Tekanan pena…

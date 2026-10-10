@@ -2,8 +2,6 @@ settings-language = 言語
 settings-language-system = システムの言語を使用
 
 settings-reset-to-default = 初期設定に戻す
-settings-pressure-response = 筆圧の応答
-settings-lower-values-make-light-pen-pressure-stronger = 値を小さくすると、弱い筆圧が強く反映されます。
 settings-enable-stroke-prediction = ストローク予測を有効にする
 settings-reduce-the-gap-between-your-pen-and-the-stroke = ペン先とストロークのずれを減らします。
 settings-use-android-stroke-prediction = Androidのストローク予測を使用

@@ -176,6 +176,19 @@ private struct CurveProperty: View {
     @ObservedObject var store: EditorStore
     let layer: UInt64
     let control: JSON
+    var body: some View {
+        CurveEditor(store: store, control: JSON(["controls": control["curve"].raw, "points": control["value"]["value"].raw,
+            "plot": control["plot"].raw, "marker": NSNull(), "modified": control["modified"].bool]),
+            target: JSON(["kind": "effect", "layer": layer, "key": control["key"].string]), label: control["label"].string, histogram: true)
+    }
+}
+
+struct CurveEditor: View {
+    @ObservedObject var store: EditorStore
+    let control: JSON
+    let target: JSON
+    let label: String
+    var histogram = false
     @Environment(\.isEnabled) private var enabled
     @GestureState private var touching = false
     @FocusState private var focused: Bool
@@ -184,16 +197,17 @@ private struct CurveProperty: View {
     @State private var sequence: (time: Date, points: Int)?
     @State private var removal: [String: Any]?
     @State private var numberOwner: [String: Any]?
-    private var key: String { control["key"].string }
-    private var curve: JSON { control["curve"] }
-    private var points: [JSON] { control["value"]["value"].array }
+    private var key: String { target["key"].string }
+    private var curve: JSON { control["controls"] }
+    private var points: [JSON] { control["points"].array }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private var owner: [String: Any] { ["layer": layer, "key": key, "epoch": curve["epoch"].uint] }
+    private var owner: [String: Any] { ["epoch": curve["epoch"].uint] }
     private func send(_ owner: [String: Any], _ fields: [String: Any]) {
-        store.dispatch(["type": "effect", "action": owner.merging(fields) { $1 }])
+        store.dispatch(["type": "curve_editor", "target": target.raw, "action": owner.merging(fields) { $1 }])
     }
     private func send(_ owner: [String: Any], contact phase: String, at point: CGPoint = .zero, in size: CGSize = CGSize(width: 1, height: 1)) {
-        send(owner, ["op": "curve_contact", "phase": phase, "point": [point.x, point.y], "extent": [size.width, size.height]])
+        let inset = curve["inset"].number
+        send(owner, ["kind": "contact", "phase": phase, "point": [point.x - inset, point.y - inset], "extent": [max(1, size.width - 2 * inset), max(1, size.height - 2 * inset)]])
     }
     private func cancel() {
         let captured = contact ?? held?.owner
@@ -201,10 +215,10 @@ private struct CurveProperty: View {
         if let captured { send(captured, contact: "cancel") }
     }
     private func number(_ axis: String, phase: String?, value: Double) {
-        let request = (numberOwner ?? owner).merging(["op": "curve_number", "axis": axis, "operation": ["type": "value", "value": value]]) { $1 }
-        guard let phase else { store.dispatch(["type": "effect", "action": request]); return }
+        let request = (numberOwner ?? owner).merging(["kind": "number", "axis": axis, "operation": ["type": "value", "value": value]]) { $1 }
+        guard let phase else { store.dispatch(["type": "curve_editor", "target": target.raw, "action": request]); return }
         if phase == "down" { numberOwner = owner }
-        store.dispatch(["type": "effect", "action": ["op": "gesture", "phase": phase, "action": request]])
+        store.dispatch(["type": "curve_editor", "target": target.raw, "action": ["kind": "gesture", "phase": phase, "action": request]])
         if phase != "down" { numberOwner = nil }
     }
     private func keyName(_ key: KeyEquivalent) -> String? {
@@ -225,7 +239,7 @@ private struct CurveProperty: View {
         if pressed && !press.modifiers.isDisjoint(with: [.command, .option, .control]) { return .ignored }
         let target = held?.key == name ? held!.owner : owner
         if pressed { held = (name, target) }
-        send(target, ["op": "curve_key", "key_event": name, "pressed": pressed, "repeat": press.phase == .repeat,
+        send(target, ["kind": "key", "key_event": name, "pressed": pressed, "repeat": press.phase == .repeat,
             "modifiers": ["command": press.modifiers.contains(.command), "shift": press.modifiers.contains(.shift), "alt": press.modifiers.contains(.option)]])
         if (!pressed && held?.key == name) || name == "Escape" { held = nil }
         if name == "Escape" { contact = nil }
@@ -242,20 +256,19 @@ private struct CurveProperty: View {
                 VStack {
                     ForEach(Array(axisLabels(axes[1], reversed: true).enumerated()), id: \.offset) { index, text in
                         if index > 0 { Spacer(minLength: 0) }
-                        Text(text)
+                        Text(text).fixedSize().rotationEffect(.degrees(index == 1 && !curve["coordinate_readouts"].bool ? -90 : 0))
+                            .frame(width: curve["coordinate_readouts"].bool ? nil : 36)
                     }
                 }.font(.caption).foregroundStyle(palette["text"].opacity(0.7)).frame(height: 200)
                 VStack(spacing: 2) {
                     plot
-                    HStack {
-                        ForEach(Array(axisLabels(axes[0], reversed: false).enumerated()), id: \.offset) { index, text in
-                            if index > 0 { Spacer(minLength: 0) }
-                            Text(text)
-                        }
+                    ZStack {
+                        HStack { Text(axes[0]["minimum"].string); Spacer(); Text(axes[0]["maximum"].string) }
+                        Text(axes[0]["label"].string)
                     }.font(.caption).foregroundStyle(palette["text"].opacity(0.7))
                 }
             }
-            HStack(alignment: .top, spacing: 6) {
+            if curve["coordinate_readouts"].bool { HStack(alignment: .top, spacing: 6) {
                 ForEach(["input", "output"].indices, id: \.self) { index in
                     let axis = index == 0 ? "input" : "output", coordinate = curve[axis]
                     VStack(alignment: .leading, spacing: 2) {
@@ -273,7 +286,8 @@ private struct CurveProperty: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            ScopeFooter(store: store, kind: "tonal_histogram")
+            }
+            if histogram { ScopeFooter(store: store, kind: "tonal_histogram") }
         }.help(curve["help"].string)
             .onChange(of: focused) { _, now in if !now { cancel() } }
             .onDisappear(perform: cancel)
@@ -281,6 +295,9 @@ private struct CurveProperty: View {
     private var plot: some View {
         GeometryReader { geometry in
             Canvas(colorMode: .extendedLinear) { context, size in
+                let inset = curve["inset"].number
+                context.translateBy(x: inset, y: inset)
+                let size = CGSize(width: max(1, size.width - 2 * inset), height: max(1, size.height - 2 * inset))
                 var grid = Path()
                 for i in 1...3 {
                     let fraction = CGFloat(i) / 4
@@ -303,6 +320,18 @@ private struct CurveProperty: View {
                     if index == 0 { line.move(to: point) } else { line.addLine(to: point) }
                 }
                 context.stroke(line, with: .color(palette["text"]), lineWidth: 1.5)
+                if curve["control_polygon"].bool {
+                    var polygon = Path()
+                    for (index, p) in points.enumerated() {
+                        let point = CGPoint(x: p[0].number * size.width, y: (1 - p[1].number) * size.height)
+                        if index == 0 { polygon.move(to: point) } else { polygon.addLine(to: point) }
+                    }
+                    context.stroke(polygon, with: .color(palette["text"].opacity(0.35)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                }
+                if !control["marker"].isNull {
+                    let p = control["marker"]
+                    context.fill(Path(ellipseIn: CGRect(x: p[0].number * size.width - 4, y: (1 - p[1].number) * size.height - 4, width: 8, height: 8)), with: .color(palette["accent"]))
+                }
                 let selected = curve["selected"].isNull ? nil : Int(curve["selected"].uint)
                 for (index, p) in points.enumerated() {
                     let radius: CGFloat = selected == index ? 5 : 3.5
@@ -311,7 +340,7 @@ private struct CurveProperty: View {
                     if selected == index { context.stroke(dot, with: .color(palette["text"]), lineWidth: 1.5) }
                     else { context.fill(dot, with: .color(palette["text"])) }
                 }
-            }.background { ZStack { palette["text"].opacity(0.12); ScopeGraph(store: store, scopes: store.scopes, kind: "tonal_histogram") } }
+            }.background { ZStack { palette["text"].opacity(0.12); if histogram { ScopeGraph(store: store, scopes: store.scopes, kind: "tonal_histogram") } } }
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).updating($touching) { _, active, _ in active = true }.onChanged { event in
                     let size = geometry.size
@@ -331,20 +360,20 @@ private struct CurveProperty: View {
                     if let removal { send(owner, removal); self.removal = nil }
                 })
                 .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { tap in
-                    let request: [String: Any] = ["op": "curve_remove_at", "point": [tap.location.x, tap.location.y],
-                        "extent": [geometry.size.width, geometry.size.height], "point_count": sequence?.points ?? points.count]
+                    let request: [String: Any] = ["kind": "remove_at", "point": [tap.location.x - curve["inset"].number, tap.location.y - curve["inset"].number],
+                        "extent": [geometry.size.width - 2 * curve["inset"].number, geometry.size.height - 2 * curve["inset"].number], "point_count": sequence?.points ?? points.count]
                     if contact == nil { send(owner, request) } else { removal = request }
                 })
                 .allowsHitTesting(enabled)
                 .focusable(enabled).focused($focused).focusEffectDisabled()
                 .onKeyPress(phases: [.down, .repeat, .up], action: press)
                 .onChange(of: touching) { _, active in if !active, contact != nil { cancel() } }
-                .accessibilityLabel("\(control["label"].string), \(points.count) points")
+                .accessibilityLabel(label).accessibilityValue(String(points.count))
                 .accessibilityIdentifier("effect-curve")
         }.frame(height: 200)
             .overlay(alignment: .bottomTrailing) {
-                if control["modified"].bool {
-                    Button { store.effect(layer, epoch: store.state["document_file"]["epoch"].uint, key: key, action: ["op": "reset"]) } label: {
+                if histogram && control["modified"].bool {
+                    Button { store.dispatch(["type": "curve_editor", "target": target.raw, "action": ["kind": "reset"]]) } label: {
                         SharedIcon(name: "reset").frame(width: 28, height: 28).contentShape(Rectangle())
                     }.buttonStyle(.plain).foregroundColor(palette["text"].opacity(0.7)).padding(2)
                         .help(curve["reset_label"].string).accessibilityLabel(curve["reset_label"].string).accessibilityIdentifier("curve-reset")

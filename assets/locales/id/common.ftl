@@ -645,3 +645,11 @@ native-screen-details = Detail layar
 native-color-inspection-hdr-help = RGB dokumen linear dan luminans Y. Garis putus-putus: putih acuan (0 EV). Nilai nol dan negatif dihitung secara terpisah. Mencakup kertas terlihat; mengecualikan piksel transparan dan hamparan tampilan.
 common-failure-details = Detail kesalahan
 common-copy-failure-details = Salin detail kesalahan
+
+pressure-title = Tekanan pena
+pressure-firmer = Lebih kuat
+pressure-lighter = Lebih ringan
+pressure-curve-help = Klik untuk menambahkan titik kontrol. Seret titik untuk membentuk kurva. Klik dua kali titik di bagian dalam atau seret ke luar grafik untuk menghapusnya.
+pressure-description = Sesuaikan tekanan pena sambil menggambar.
+
+common-adjust = Sesuaikan…

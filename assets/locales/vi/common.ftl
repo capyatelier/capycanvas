@@ -561,3 +561,11 @@ native-screen-details = Chi tiết màn hình
 native-color-inspection-hdr-help = RGB tuyến tính của tài liệu và độ chói Y. Đường đứt nét: màu trắng tham chiếu (0 EV). Giá trị bằng không và giá trị âm được đếm riêng. Bao gồm giấy hiển thị; bỏ qua pixel trong suốt và các lớp phủ giao diện.
 common-failure-details = Chi tiết lỗi
 common-copy-failure-details = Sao chép chi tiết lỗi
+
+pressure-title = Lực nhấn bút
+pressure-firmer = Mạnh hơn
+pressure-lighter = Nhẹ hơn
+pressure-curve-help = Nhấp để thêm điểm điều khiển. Kéo các điểm để chỉnh đường cong. Nhấp đúp vào điểm bên trong hoặc kéo ra ngoài đồ thị để xóa.
+pressure-description = Điều chỉnh lực nhấn bút trong khi vẽ.
+
+common-adjust = Điều chỉnh…

@@ -636,3 +636,4 @@ command-center-zoom-clicks = จัดกึ่งกลางเมื่อค
 menu-paste-special = วางแบบพิเศษ
 menu-rotate-and-flip = หมุนและพลิก
 menu-color-management = การจัดการสี
+command-pen-pressure = แรงกดปากกา…

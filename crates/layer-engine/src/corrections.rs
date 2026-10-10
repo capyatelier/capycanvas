@@ -7,7 +7,7 @@ pub(super) struct EstimatedPoint {
     pub copies: Vec<(usize, layer_core::StrokePoint)>,
     point: layer_core::StrokePoint,
     transform: ViewTransform,
-    curve: PressureCurve,
+    pub(super) curve: PressureCurve,
 }
 
 impl<B: CanvasRenderer> CanvasEngine<B> {
@@ -43,7 +43,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 copies: Vec::new(),
                 point,
                 transform,
-                curve: self.settings.pressure,
+                curve: self.settings.pressure.clone(),
             },
         );
     }
@@ -54,7 +54,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return Ok(());
         };
         // All spatial/pressure policy belongs to the original observation.
-        let mut point = to_stroke_point(event, estimate.transform, estimate.curve, 0);
+        let mut point = to_stroke_point(event, estimate.transform, estimate.curve.clone(), 0);
         point.elapsed_micros = estimate.point.elapsed_micros;
         let mut changed = false;
         if point != estimate.point

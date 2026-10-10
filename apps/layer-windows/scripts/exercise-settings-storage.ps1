@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -133,6 +133,12 @@ try {
     if(Test-Path -LiteralPath $settingsFile){throw 'Missing settings must not cause an initial write'}
     $defaults=(Model).state.settings
     Open-Preferences
+    if((Model).state.theme -ne $Theme){
+        $themeControl=Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)
+        $themeControl.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        (Control $(if($Theme -eq 'light'){'Light'}else{'Dark'}) ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+        Wait-Until {(Model).state.theme -eq $Theme} 'Theme did not update'
+    }
     Edit 'Dark theme base color' '#203040'
     if((Model).state.settings.dark_base -eq '#203040'){throw 'Text draft was already committed; close-time commit was not exercised'}
     Close-App
@@ -144,14 +150,14 @@ try {
     if([IO.File]::GetLastWriteTimeUtc($settingsFile) -ne $stamp){throw 'Restore echoed a save'}
     if(@((Model).state.requests | Where-Object {$_.kind.type -eq 'save_settings'}).Count){throw 'Restore queued a save request'}
     Open-Preferences
-    Invoke-Control 'Pen & Input'
-    Edit 'Pressure response' '1.75'
-    if((Model).state.settings.pressure_gamma -eq 1.75){throw 'Numeric draft was already committed; close-time commit was not exercised'}
+    Invoke-Control 'Canvas'
+    Edit 'Scroll pan speed' '1.75'
+    if((Model).state.settings.pan_speed -eq 1.75){throw 'Numeric draft was already committed; close-time commit was not exercised'}
     Close-App
-    if((Saved).pressure_gamma -ne 1.75){throw 'Closing lost the active numeric draft'}
+    if((Saved).pan_speed -ne 1.75){throw 'Closing lost the active numeric draft'}
 
     Start-App
-    if((Model).state.settings.pressure_gamma -ne 1.75){throw 'Restart did not restore numeric settings'}
+    if((Model).state.settings.pan_speed -ne 1.75){throw 'Restart did not restore numeric settings'}
     Open-Preferences
     $locked=[IO.File]::Open($settingsFile,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
     Edit 'Dark theme base color' '#304050'
@@ -211,12 +217,12 @@ try {
     Check-Exit
     $locked.Dispose();$locked=$null
     if((Get-FileHash -LiteralPath $settingsFile).Hash -ne $savedHash){throw 'Explicit discard changed the last saved preferences'}
-    $stale='{"version":999,"dark_base":"#607080","pressure_gamma":"invalid","retain":"isolated recovery fixture"}'
+    $stale=@{version=999;theme=$Theme;dark_base='#607080';pan_speed='invalid';retain='isolated recovery fixture'}|ConvertTo-Json -Compress
     [IO.File]::WriteAllText($settingsFile,$stale)
     Start-App
     $restored=Model
     if($restored.error -or $restored.state.host_error){throw 'Stale preferences blocked startup'}
-    if($restored.state.settings.dark_base -ne '#607080' -or $restored.state.settings.pressure_gamma -ne $defaults.pressure_gamma){throw 'Restore did not retain valid preferences and default invalid ones'}
+    if($restored.state.settings.dark_base -ne '#607080' -or $restored.state.settings.pan_speed -ne $defaults.pan_speed){throw 'Restore did not retain valid preferences and default invalid ones'}
     if([IO.File]::ReadAllText($settingsFile) -ne $stale){throw 'Loading rewrote the stored preferences'}
     Open-Preferences
     Edit 'Dark theme base color' '#506070'
@@ -225,12 +231,12 @@ try {
     Close-App
 
     Start-App
-    $validGamma=(Saved).pressure_gamma
+    $validSpeed=(Saved).pan_speed
     Open-Preferences
-    Invoke-Control 'Pen & Input'
-    Edit 'Pressure response' '1 / 0'
+    Invoke-Control 'Canvas'
+    Edit 'Scroll pan speed' '1 / 0'
     Close-App
-    if((Saved).pressure_gamma -ne $validGamma){throw 'An invalid numeric draft replaced the valid saved setting'}
+    if((Saved).pan_speed -ne $validSpeed){throw 'An invalid numeric draft replaced the valid saved setting'}
     [pscustomobject]@{
         text_draft_on_close='passed'
         numeric_draft_on_close='passed'

@@ -14,7 +14,7 @@ pub use schema::{Event, Policy, Sample};
 
 pub const MAX_DURATION_SECS: u64 = 600;
 pub const MAX_BYTES: usize = 32 * 1024 * 1024;
-pub const MAGIC: &[u8; 8] = b"CAPYPEN3";
+pub const MAGIC: &[u8; 8] = b"CAPYPEN4";
 
 /// Parked drawings share their window's recorder. Disabled capture needs only
 /// an atomic load, with no locking, allocation, clock reads or serialization.
@@ -64,7 +64,7 @@ impl Recording {
     }
 }
 
-/// Append-only schema. Variant order and field order are part of version 3.
+/// Append-only schema. Variant order and field order are part of version 4.
 /// All clocks are monotonic, never wall time. Raw timestamps retain host units
 /// converted to ns; delivery_ns is relative to the start of the recording.
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,7 +74,7 @@ pub enum Record {
         delivery_ns: u64,
         event: PenEvent,
         transform: ViewTransform,
-        pressure: PressureCurve,
+        pressure: layer_core::PressureResponse,
     },
     Begin {
         id: u64,
@@ -103,6 +103,7 @@ pub enum StopReason {
 
 #[derive(Debug, Serialize)]
 pub struct Status {
+    pub header: &'static str,
     pub recording: bool,
     pub ready: bool,
     pub elapsed_seconds: u64,
@@ -121,6 +122,7 @@ pub struct Recorder {
     duration_ns: u64,
     records: u64,
     raw_events: u64,
+    estimated_pressure: std::collections::BTreeMap<(u64,u64),PressureCurve>,
     contacts: u64,
     contact_start: Option<u64>,
     query: u64,
@@ -210,7 +212,7 @@ impl Recorder {
         self.data = Vec::with_capacity(MAX_BYTES);
         self.started = Some(Instant::now());
         self.active.store(true, Ordering::Relaxed);
-        self.append(Record::Metadata(serde_json::json!({"format":"capy-pen-recording", "version":3, "platform":platform, "raw_input":true, "max_duration_seconds":MAX_DURATION_SECS}).to_string()));
+        self.append(Record::Metadata(serde_json::json!({"format":"capy-pen-recording", "version":4, "platform":platform, "raw_input":true, "max_duration_seconds":MAX_DURATION_SECS}).to_string()));
         Ok(())
     }
     fn append(&mut self, record: Record) {
@@ -231,11 +233,23 @@ impl Recorder {
         if !self.live() {
             return;
         }
+        let key = (event.device_id,event.sequence);
+        let pressure = if event.flags.contains(crate::SampleFlags::CORRECTION) {
+            let original = self.estimated_pressure.get(&key).cloned().unwrap_or(pressure);
+            if !event.flags.contains(crate::SampleFlags::ESTIMATED) { self.estimated_pressure.remove(&key); }
+            original
+        } else {
+            if event.flags.contains(crate::SampleFlags::ESTIMATED) {
+                if self.estimated_pressure.len() >= 8192 { self.estimated_pressure.pop_first(); }
+                self.estimated_pressure.entry(key).or_insert_with(||pressure.clone());
+            }
+            pressure
+        };
         self.append(Record::Raw {
             delivery_ns: self.started.unwrap().elapsed().as_nanos() as u64,
             event,
             transform,
-            pressure,
+            pressure: pressure.into(),
         });
         self.raw_events += 1;
     }
@@ -312,6 +326,7 @@ impl Recorder {
     pub fn status(&mut self) -> Status {
         self.live();
         Status {
+            header: std::str::from_utf8(MAGIC).unwrap(),
             recording: self.started.is_some(),
             ready: self.reason.is_some(),
             elapsed_seconds: self

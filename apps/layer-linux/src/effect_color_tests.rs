@@ -42,14 +42,27 @@ fn curve_graph(w: &Rc<Workspace>, key: &str) -> gtk::Widget {
     graph.grab_focus(); pump(100);
     graph
 }
-fn curve_spin(w: &Rc<Workspace>, key: &str, axis: &str) -> gtk::SpinButton {
-    let field = find_named(w.window.upcast_ref(), &format!("property-{key}-{axis}")).unwrap();
-    descendant::<gtk::SpinButton>(&field).unwrap()
+fn curve_number(w: &Rc<Workspace>, key: &str, axis: &str) -> crate::number_control::NumberControl {
+    named(w.window.upcast_ref(), &format!("property-{key}-{axis}"))
 }
-fn assert_curve_readout_visible(spin: &gtk::SpinButton) {
-    let text = descendant::<gtk::Text>(spin).unwrap();
-    let width = text.create_pango_layout(Some(&spin.text())).pixel_size().0;
-    assert!(text.width() >= width, "complete curve readout {}: text {}px in {}px", spin.text(), width, text.width());
+fn curve_readout(w: &Rc<Workspace>, key: &str, axis: &str) -> String {
+    find_css(curve_number(w,key,axis).upcast_ref(),"number-readout").unwrap().downcast::<gtk::Label>().unwrap().text().to_string()
+}
+fn edit_curve_number(w: &Rc<Workspace>, native: &mut RemoteInput, key: &str, axis: &str, text: Option<&str>) {
+    let field=curve_number(w,key,axis);
+    super::histogram::scroll_to(field.upcast_ref());pump(100);
+    let button:gtk::Button=descendant(&field).unwrap();
+    assert!(button.is_sensitive(),"selected curve coordinate remains editable");
+    let at=screen_point(button.upcast_ref(),&w.window,[0.5,0.5]);
+    let hit=w.window.pick(f64::from(at[0]),f64::from(at[1]),gtk::PickFlags::DEFAULT).unwrap();
+    assert!(hit==button || hit.is_ancestor(&button),"numeric hit {} at {at:?}",hit.widget_name());
+    native.click(at);
+    let entry:gtk::Entry=descendant(&field).unwrap();
+    assert!(entry.delegate().unwrap().has_focus());
+    if let Some(text)=text {
+        native.perform(json!([{"key":0xffe3,"down":true},{"key":97,"down":true},{"key":97,"down":false},{"key":0xffe3,"down":false}]));
+        for c in text.chars() {native.key(c as u32);}
+    }
 }
 pub(super) fn choose_curve_option(w: &Rc<Workspace>, native: &mut RemoteInput, drop: &gtk::DropDown, index: u32) {
     let point = curve_option_point(w, native, drop, index);
@@ -377,7 +390,7 @@ fn native_curve_graph_numbers_pages_and_history() {
     for axis in ["input", "output"] {
         let control = state(&w).layer_properties.controls.into_iter().find(|c| c.key == key).unwrap().curve.unwrap();
         let expected = if axis == "input" { control.input.unwrap() } else { control.output.unwrap() };
-        assert_eq!(curve_spin(&w, key, axis).text().as_str(), expected.text);
+        assert_eq!(curve_readout(&w, key, axis), expected.text);
     }
     set(&w, key, EffectValue::Curve(vec![[0., 0.], [1., 1.]]));
     ready(&w);
@@ -405,85 +418,15 @@ fn native_curve_graph_numbers_pages_and_history() {
     w.dispatch(UiAction::Invoke { command: CommandId::Redo }); ready(&w);
     assert_eq!(curve_points(&w, key), dragged);
 
-    let spin = curve_spin(&w, key, "output");
-    spin.grab_focus(); pump(50);
-    let initial = curve_points(&w, key);
-    let checkpoint = ui_session(&w).engine().checkpoint();
-    native.perform(json!([{"key":0xff52,"down":true},{"wait_ms":600}]));
-    assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
-    assert_ne!(curve_points(&w, key), initial);
-    native.perform(json!([{"key":0xff51,"down":false}]));
-    assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint, "unmatched release does not commit");
-    native.perform(json!([{"key":0xff52,"down":false}]));
-    let repeated = curve_points(&w, key);
-    w.dispatch(UiAction::Invoke { command: CommandId::Undo }); ready(&w);
-    assert_eq!(curve_points(&w, key), initial, "a held numeric key has one undo");
-    w.dispatch(UiAction::Invoke { command: CommandId::Redo }); ready(&w);
-    assert_eq!(curve_points(&w, key), repeated);
-
-    spin.grab_focus(); pump(30);
-    let initial = curve_points(&w, key);
-    native.perform(json!([{"key":0xff54,"down":true}]));
-    native.key(0xff1b);
-    native.perform(json!([{"key":0xff54,"down":false}]));
-    assert_eq!(curve_points(&w, key), initial, "Escape restores the gesture before native release");
-    assert!(!state(&w).host_error.is_some());
-
-    spin.grab_focus(); pump(30);
-    let initial = curve_points(&w, key);
-    native.perform(json!([{"key":0xff52,"down":true}]));
-    let first = curve_points(&w, key);
-    native.perform(json!([{"key":0xff54,"down":true}]));
-    native.perform(json!([{"key":0xff52,"down":false},{"key":0xff54,"down":false}]));
-    w.dispatch(UiAction::Invoke { command: CommandId::Undo }); ready(&w);
-    assert_eq!(curve_points(&w, key), first, "key change commits the preceding key gesture");
-    w.dispatch(UiAction::Invoke { command: CommandId::Undo }); ready(&w);
-    assert_eq!(curve_points(&w, key), initial);
-    w.dispatch(UiAction::Invoke { command: CommandId::Redo });
-    w.dispatch(UiAction::Invoke { command: CommandId::Redo }); ready(&w);
-
-    let spin = curve_spin(&w, key, "output");
-    spin.grab_focus(); pump(30);
-    let initial = curve_points(&w, key);
-    native.perform(json!([{"key":0xff52,"down":true}]));
-    let accepted = curve_points(&w, key);
-    assert_ne!(accepted, initial);
-    let input_spin = curve_spin(&w, key, "input");
-    native.perform(json!([{"point":screen_point(descendant::<gtk::Text>(&input_spin).unwrap().upcast_ref(),&w.window,[0.5,0.5]),"down":true},{"key":0xff52,"down":false},{"down":false}]));
-    assert!(input_spin.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN));
-    assert_eq!(curve_points(&w, key), accepted, "numeric focus loss commits before a later release");
-    w.dispatch(UiAction::Invoke { command: CommandId::Undo }); ready(&w);
-    assert_eq!(curve_points(&w, key), initial, "numeric focus loss has one undo");
-
-    let spin=curve_spin(&w,key,"output");
-    spin.grab_focus();pump(30);
     let initial=curve_points(&w,key);
-    native.perform(json!([{"key":0xff52,"down":true}]));
-    let accepted=curve_points(&w,key);
-    let input_spin=curve_spin(&w,key,"input");
-    let input_buttons=descendants::<gtk::Button>(input_spin.upcast_ref());
-    let increment=input_buttons.last().unwrap();
-    native.perform(json!([{"point":screen_point(increment.upcast_ref(),&w.window,[0.5,0.5]),"down":true},{"key":0xff52,"down":false},{"down":false}]));
-    let changed=curve_points(&w,key);
-    assert_ne!(changed[1][0],accepted[1][0],"native Input step starts after held Output is retired");
-    assert_eq!(changed[1][1],accepted[1][1]);
-    w.dispatch(UiAction::Invoke{command:CommandId::Undo});ready(&w);
-    assert_eq!(curve_points(&w,key),accepted,"step has its own undo");
-    w.dispatch(UiAction::Invoke{command:CommandId::Undo});ready(&w);
-    assert_eq!(curve_points(&w,key),initial,"prior held key has its own undo");
-
-    let spin = curve_spin(&w, key, "output");
-    let buttons = descendants::<gtk::Button>(spin.upcast_ref());
-    for increment in [buttons.last().unwrap(), buttons.first().unwrap()] {
-    let initial = curve_points(&w, key);
-    let checkpoint = ui_session(&w).engine().checkpoint();
-    native.perform(json!([{"point":screen_point(increment.upcast_ref(),&w.window,[0.5,0.5]),"down":true}]));
-    assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
-    native.perform(json!([{"down":false}]));
-    assert_ne!(curve_points(&w, key), initial, "native spin increment edits on release");
-    w.dispatch(UiAction::Invoke { command: CommandId::Undo }); ready(&w);
-    assert_eq!(curve_points(&w, key), initial, "release update belongs to the same gesture");
-    }
+    let graph=curve_graph(&w,key);let p=initial[1];native.click(screen_point(&graph,&w.window,[p[0],1.-p[1]]));
+    edit_curve_number(&w,&mut native,key,"output",Some("127.5"));
+    native.key(0xff0d);ready(&w);
+    let edited=curve_points(&w,key);assert!((edited[1][1]-0.5).abs()<1e-6);
+    w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(curve_points(&w,key),initial);
+    w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(curve_points(&w,key),edited);
+    edit_curve_number(&w,&mut native,key,"output",Some("60"));
+    native.key(0xff1b);ready(&w);assert_eq!(curve_points(&w,key),edited,"numeric Escape discards unfinished text");
 
     let graph = curve_graph(&w, key);
     let middle = curve_points(&w, key)[1];
@@ -509,7 +452,8 @@ fn native_curve_graph_numbers_pages_and_history() {
     assert_eq!(curve_points(&w, key), initial, "graph Escape retires the held key");
     graph.grab_focus(); pump(30);
     native.perform(json!([{"key":0xff52,"down":true}]));
-    curve_spin(&w, key, "output").grab_focus(); pump(50);
+    let field=curve_number(&w,key,"output");
+    descendant::<gtk::Button>(&field).unwrap().grab_focus();pump(50);
     native.perform(json!([{"key":0xff52,"down":false}]));
     assert_eq!(curve_points(&w, key), initial, "graph focus loss cancels the held key");
     graph.grab_focus(); pump(50);
@@ -544,11 +488,12 @@ fn native_curve_graph_numbers_pages_and_history() {
     native.click(screen_point(&graph, &w.window, [0.5, 1.-0.12345679]));
     let unchanged = curve_points(&w, key);
     let checkpoint = ui_session(&w).engine().checkpoint();
-    let spin = curve_spin(&w, key, "output");
-    spin.grab_focus(); native.key(0xff0d); graph.grab_focus(); pump(50);
+    edit_curve_number(&w,&mut native,key,"output",None);
+    native.key(0xff0d); graph.grab_focus(); pump(50);
     assert_eq!(curve_points(&w, key), unchanged, "Enter and focus loss preserve the precise knot behind rounded Encoded text");
     assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
-    assert_curve_readout_visible(&spin);
+    let control=state(&w).layer_properties.controls.into_iter().find(|c|c.key==key).unwrap();
+    assert_eq!(curve_readout(&w,key,"output"),control.curve.unwrap().output.unwrap().text);
     capture_ui(&w, &output, "curves-encoded-precise.png");
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"curves-encoded-precise"}])); }
 
@@ -558,17 +503,14 @@ fn native_curve_graph_numbers_pages_and_history() {
     let graph = curve_graph(&w, key);
     let middle = curve_points(&w, key)[1];
     native.click(screen_point(&graph, &w.window, [middle[0], 1.-middle[1]]));
-    let spin = curve_spin(&w, key, "output");
     for literal in ["1e-20", "8", "0"] {
-        spin.grab_focus();
-        native.perform(json!([{"key":0xffe3,"down":true},{"key":97,"down":true},{"key":97,"down":false},{"key":0xffe3,"down":false}]));
-        for c in literal.chars() { native.key(c as u32); }
+        edit_curve_number(&w,&mut native,key,"output",Some(literal));
         native.key(0xff0d);
         let control = state(&w).layer_properties.controls.into_iter().find(|c| c.key == key).unwrap();
         let coordinate = control.curve.as_ref().unwrap().output.as_ref().unwrap();
         let wanted = literal.parse::<f64>().unwrap();
         assert!(if wanted == 0. { coordinate.value == 0. } else { (coordinate.value / wanted - 1.).abs() < 1e-5 }, "exact HDR field {literal}: {}", coordinate.text);
-        assert_eq!(spin.text().as_str(), coordinate.text);
+        assert_eq!(curve_readout(&w,key,"output"), coordinate.text);
         if literal != "0" && std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
             native.perform(json!([{"wait_ms":250},{"capture":if literal == "8" { "curves-hdr-eight" } else { "curves-hdr-tiny" }}]));
         }

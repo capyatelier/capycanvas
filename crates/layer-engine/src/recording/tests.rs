@@ -109,7 +109,7 @@ fn idle_timeout_and_size_limit_finish_valid_interrupted_contacts() {
                     delivery_ns: 0,
                     event: pen(),
                     transform: ViewTransform::IDENTITY,
-                    pressure: PressureCurve::default(),
+                    pressure: layer_core::PressureResponse::linear(),
                 });
             }
         }
@@ -180,5 +180,36 @@ fn empty_and_queryless_recordings_replay_without_nan() {
         .unwrap();
         assert_eq!(summary.queries, 0);
         assert!(summary.prediction_coverage.is_finite());
+    }
+}
+
+#[test]
+fn correction_metadata_retains_curve_before_engine_observation_is_processed() {
+    let mut recorder=Recorder::default();recorder.start("test").unwrap();
+    let original:PressureCurve=layer_core::PressureResponse::default().into();
+    let event=PenEvent {phase:PenPhase::Down,flags:SampleFlags::ESTIMATED,..pen()};
+    recorder.raw(event,ViewTransform::IDENTITY,original.clone());
+    let correction=PenEvent {phase:PenPhase::Move,flags:SampleFlags::CORRECTION,pressure:0.8,..event};
+    recorder.raw(correction,ViewTransform::IDENTITY,PressureCurve::default());
+    recorder.stop(StopReason::Manual);
+    let records=read(recorder.bytes().unwrap().as_slice()).unwrap();
+    let raw:Vec<_>=records.iter().filter_map(|r|if let Record::Raw {event,pressure,..}=r {Some((event,pressure))} else {None}).collect();
+    assert_eq!(raw.len(),2);assert_eq!(raw[1].0.pressure,0.8);assert_eq!(raw[1].1,&layer_core::PressureResponse::from(original));
+    assert!(recorder.estimated_pressure.is_empty());
+}
+
+#[test]
+fn fixed_tablet_recordings_preserve_linear_calibration_and_raw_input_counts() {
+    for (data,count) in [(include_bytes!("../../tests/data/movink14.capystrokes").as_slice(),28245),
+        (include_bytes!("../../tests/data/wacom-pro-27.capystrokes").as_slice(),26444)] {
+        let records=read(data).unwrap();
+        let mut raw=0;
+        for record in records {
+            if let Record::Raw {event,pressure,..}=record {
+                assert_eq!(pressure.points(),&[[0.,0.],[1.,1.]]);
+                assert_eq!(pressure.map(event.pressure),event.pressure.clamp(0.,1.));raw+=1;
+            }
+        }
+        assert_eq!(raw,count);
     }
 }

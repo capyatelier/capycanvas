@@ -1,7 +1,8 @@
 import {createScope,scopeGraph,scopeFooter} from './histogram.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {composingKey} from "./text-input.js";
-import {captureSliderContacts} from "./numeric.js";
+import {gestureNumberField} from "./numeric.js";
+import {createCurveEditor} from "./curve-editor.js";
 import {strokeRecordingControl} from './stroke-recording.js';
 import {colorButton, colorCss} from './color-controls.js';
 import {filterPreviewView} from './filter-previews.js';
@@ -160,85 +161,17 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   },200);
   function row(label,input){const r=element("label","property-row"),text=element("span","",label);if(typeof label!=="function")text.title=label;r.append(text,input);return r;}
   function numberEditor(numeric,label,request,valueOnly=false){
-    let owner;
-    const action=value=>({...(owner??request()),operation:{type:"value",value}});
-    const number=numberField(numeric,label,value=>send(owner?{op:"gesture",phase:"move",action:action(value)}:action(value)),valueOnly,valueOnly);
-    number.onReset=()=>send({...request(),op:'reset'});
-    number.onEditPhase=phase=>{
-      if(phase==="down")owner=request();
-      const next=action(number.getValue());
-      if(phase!=="down")owner=null;
-      send({op:"gesture",phase,action:next});
-    };
-    if(!number.panel)captureSliderContacts(number);
+    const number=gestureNumberField({numberField,numeric,label,request,send,gesture:(phase,action)=>({op:"gesture",phase,action}),valueOnly});
+    number.onReset=()=>send({...request(),op:"reset"});
     return number;
   }
   function curveEditor(layer,key,initial){
-    let control=initial,drag,held,pressCount,clickCount;
-    const node=element("div","curve-field"),frame=element("div","curve-frame"),plot=element("div","curve-plot");
-    const graph=svg("svg",{viewBox:"0 0 200 200",preserveAspectRatio:"none",class:"curve-editor",role:"group",tabindex:0});
-    const grid=svg("path",{d:"M50 0V200M100 0V200M150 0V200M0 50H200M0 100H200M0 150H200",stroke:"currentColor",opacity:.2});
-    const path=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),points=svg("g");
-    const white=svg("path",{fill:"none",stroke:"currentColor","stroke-dasharray":"3 3",opacity:.7});graph.append(grid,white,path,points);
-    const reset=button("",()=>send({op:"reset",layer,key}));reset.append(icon("reset"));reset.dataset.action="curve-reset";
     const histogram=scopeGraph({state,element,kind:'tonal_histogram',height:200});
     const footer=scopeFooter({state,element,button,icon,dispatch,kind:'tonal_histogram'});
-    plot.append(histogram.node,graph,reset);
-    const axes=initial.curve.axes;
-    const vertical=element("div","curve-axis curve-axis-y"),horizontal=element("div","curve-axis curve-axis-x");
-    vertical.append(...[axes[1].maximum,axes[1].label,axes[1].minimum].map(text=>element("span","",text)));
-    horizontal.append(...[axes[0].minimum,axes[0].label,axes[0].maximum].map(text=>element("span","",text)));
-    frame.append(vertical,plot,element("span"),horizontal);const coordinateRow=element("div","curve-coordinates");node.append(frame,coordinateRow,footer.node);
-    const coordinates=["input","output"].map((axis,index)=>{
-      const number=numberEditor(initial.curve.numeric,axes[index].label,()=>({op:"curve_number",layer,key,epoch:control.curve.epoch,axis}),true);
-      number.dataset.curveAxis=axis;
-      const ev=element("div","curve-ev"),cell=element("div","curve-coordinate");cell.append(row(()=>control.curve.axes[index].label,number),ev);coordinateRow.append(cell);return{axis,number,ev};
-    });
-    const current=()=>({layer,key,epoch:control.curve.epoch});
-    const position=(e,rect=graph.getBoundingClientRect())=>[e.clientX-rect.left,e.clientY-rect.top];
-    const contact=(phase,e)=>{if(drag)send({op:"curve_contact",...drag.owner,phase,point:e?position(e,drag.rect):[0,0],extent:[drag.rect.width,drag.rect.height]});};
-    const cancel=()=>{
-      const owner=drag?.owner??held;
-      drag=null;held=null;
-      if(owner)send({op:"curve_contact",...owner,phase:"cancel",point:[0,0],extent:[1,1]});
-    };
-    graph.onpointerdown=e=>{
-      if(e.button)return;e.preventDefault();e.stopPropagation();graph.focus({preventScroll:true});
-      cancel();
-      pressCount=control.value.value.length;
-      drag={id:e.pointerId,rect:graph.getBoundingClientRect(),owner:current()};graph.setPointerCapture(e.pointerId);
-      contact("down",e);
-    };
-    graph.onpointermove=e=>{if(drag?.id===e.pointerId){e.preventDefault();contact("move",e);}};
-    graph.onpointerup=e=>{if(drag?.id===e.pointerId){contact("up",e);drag=null;graph.releasePointerCapture(e.pointerId);}};
-    graph.onpointercancel=graph.onlostpointercapture=cancel;
-    const remove=(e,point_count=null)=>{const rect=graph.getBoundingClientRect();send({op:"curve_remove_at",...current(),point:position(e,rect),extent:[rect.width,rect.height],point_count});};
-    graph.onclick=e=>{if(e.detail===1)clickCount=pressCount;};
-    graph.ondblclick=e=>{e.preventDefault();e.stopPropagation();remove(e,clickCount);};
-    graph.oncontextmenu=e=>{e.preventDefault();e.stopPropagation();cancel();remove(e);};
-    const keyEvent=(e,pressed)=>{
-      if(composingKey(e)||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Backspace','Escape'].includes(e.key))return;
-      if(pressed&&(e.ctrlKey||e.metaKey||e.altKey))return;
-      e.preventDefault();e.stopPropagation();
-      const owner=held?.key_event===e.key?held:current();
-      if(pressed)held={...owner,key_event:e.key};
-      send({op:"curve_key",...owner,key_event:e.key,pressed,repeat:e.repeat,modifiers:{command:e.ctrlKey||e.metaKey,shift:e.shiftKey,alt:e.altKey}});
-      if((!pressed&&held?.key_event===e.key)||e.key==='Escape'){held=null;if(e.key==='Escape')drag=null;}
-    };
-    graph.onkeydown=e=>keyEvent(e,true);graph.onkeyup=e=>keyEvent(e,false);graph.onblur=cancel;
-    window.addEventListener('blur',cancel);
-    function update(c){
-      control=c;histogram.refresh();footer.refresh();const curve=c.curve;reset.hidden=!c.modified;reset.title=curve.reset_label;node.title=curve.help;graph.setAttribute('aria-label',c.label);
-      for(const [index,axis] of curve.axes.entries()){const row=index?vertical:horizontal;[...row.children].forEach((label,i)=>label.textContent=(index?[axis.maximum,axis.label,axis.minimum]:[axis.minimum,axis.label,axis.maximum])[i]);}
-      for(const [index,{number}] of coordinates.entries())number.relabel(curve.axes[index].label);
-      const [x,y]=curve.axes.map(axis=>axis.white);
-      white.setAttribute('d',x==null?'':`M${200*x} 0V200M0 ${200-200*y}H200`);
-      path.setAttribute('d',c.plot.map(([x,y],i)=>`${i?'L':'M'}${x*200} ${(1-y)*200}`).join(' '));
-      points.replaceChildren(...c.value.value.map(([x,y],index)=>{const selected=BigInt(index)===curve.selected;return svg('circle',{cx:x*200,cy:(1-y)*200,r:selected?5:3.5,fill:selected?'none':'currentColor',stroke:'currentColor','stroke-width':1.5});}));
-      for(const {axis,number,ev} of coordinates){const value=curve[axis];number.update(value?.value??0,value?.text??'');number.setDisabled(!state().layer_properties.enabled||!value||value.read_only);ev.hidden=curve.domain.kind!=='log_hdr';ev.textContent=value?.ev??'';}
-    }
-    update(initial);
-    return {node,update,refreshHistogram(){histogram.refresh();footer.refresh();},dispose(){histogram.dispose();window.removeEventListener('blur',cancel);cancel();coordinates.forEach(({number})=>number.dispose());}};
+    const model=c=>({controls:c.curve,points:c.value.value,plot:c.plot,marker:null,modified:c.modified});
+    const editor=createCurveEditor({element,button,icon,numberField,dispatch,target:{kind:"effect",layer,key},
+      initial:model(initial),label:initial.label,enabled:()=>state().layer_properties.enabled,histogram,footer,reset:true});
+    return {...editor,update:c=>editor.update(model(c),c.label)};
   }
   function refresh(){
     refreshPicker();

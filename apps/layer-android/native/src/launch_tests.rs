@@ -9,7 +9,7 @@ fn packaged_language_tags_match_the_shared_shipped_inventory() {
 }
 #[test]
 fn android_launch_uses_supplied_preferences_before_first_view_without_gpu() {
-    for (saved, tag) in [("", "ja"), ("broken", "ja"), (r#"{"language":{"Explicit":"en"},"pressure_gamma":"broken"}"#, "en"),
+    for (saved, tag) in [("", "ja"), ("broken", "ja"), (r#"{"language":{"Explicit":"en"},"pan_speed":"broken"}"#, "en"),
         (r#"{"language":{"Explicit":"ja"}}"#, "ja")] {
         let host = layer_host::NativeHost::launch(layer_ui::Platform::Android, saved, &["ja-JP", "zh-Hant", "en-US"]).unwrap();
         let expected = layer_ui::launch_localization(saved, &["ja-JP", "zh-Hant", "en-US"]);

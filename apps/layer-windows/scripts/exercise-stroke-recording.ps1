@@ -59,7 +59,7 @@ function Recording-File([string]$Path){
  $file=@{bytes=$null}
  Wait-Until {(Test-Path -LiteralPath $Path) -and ($file.bytes=[IO.File]::ReadAllBytes($Path)).Length -ge 10} "Stroke recording was not written to $Path" 20
  $bytes=$file.bytes
- if([Text.Encoding]::ASCII.GetString($bytes,0,8) -ne 'CAPYPEN3' -or $bytes[8] -ne 0x1f -or $bytes[9] -ne 0x8b){throw 'Stroke recording is not CAPYPEN3 followed by gzip'}
+ if([Text.Encoding]::ASCII.GetString($bytes,0,8) -ne 'CAPYPEN4' -or $bytes[8] -ne 0x1f -or $bytes[9] -ne 0x8b){throw 'Stroke recording is not CAPYPEN4 followed by gzip'}
  $bytes.Length
 }
 try{

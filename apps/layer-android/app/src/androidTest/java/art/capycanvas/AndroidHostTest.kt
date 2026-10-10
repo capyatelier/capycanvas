@@ -1310,7 +1310,7 @@ class AndroidHostTest {
             set("domain", "choice", 0)
             selectPage(0)
             set("rgb", "curve", JSONArray("[[0,0],[0.5,0.5],[1,1]]"))
-            for (channel in 1..3) set("curve_$channel", "curve", JSONArray("[[0,0],[1,1]]"))
+            for (channel in listOf("red", "green", "blue")) set(channel, "curve", JSONArray("[[0,0],[1,1]]"))
             val sourceArchive = archive("before-actions")
             val sourceBacking = backing(sourceArchive)
             scopes(theme)
@@ -2895,23 +2895,139 @@ class AndroidHostTest {
         compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
         openSettings()
         compose.onAllNodes(isPopup()).assertCountEquals(0)
-        compose.onNodeWithTag("settings-category-input").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
-        val value = compose.onNodeWithTag("number-value-pressure", useUnmergedTree = true)
+        compose.onNodeWithTag("settings-category-canvas").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        val value = compose.onNodeWithTag("number-value-pan_speed", useUnmergedTree = true)
         value.performScrollTo()
-        val before = state().getJSONObject("settings").number("pressure_gamma")
+        val before = state().getJSONObject("settings").number("pan_speed")
         value.performClick()
-        compose.onNodeWithTag("setting-number-pressure").performTextReplacement("invalid")
-        compose.onNodeWithTag("setting-number-pressure").performImeAction()
+        compose.onNodeWithTag("setting-number-pan_speed").performTextReplacement("invalid")
+        compose.onNodeWithTag("setting-number-pan_speed").performImeAction()
         action(obj("type" to "close_settings"))
         compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
         assertFalse("Hidden settings release text input ownership", host.editingText)
         openSettings()
-        compose.onNodeWithTag("settings-category-input").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
-        compose.onNodeWithTag("number-value-pressure", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        assertEquals(before, state().getJSONObject("settings").number("pressure_gamma"))
+        compose.onNodeWithTag("settings-category-canvas").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        compose.onNodeWithTag("number-value-pan_speed", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        assertEquals(before, state().getJSONObject("settings").number("pan_speed"))
         compose.onNodeWithTag("settings-done").performClick()
+    }
+
+    @Test fun penPressureCalibrationUsesNativeCurveAndPersistsAppliedResponse() {
+        fun calibration() = state().getJSONObject("pressure_calibration")
+        fun points() = calibration().getJSONObject("editor").getJSONArray("points")
+        fun saved() = state().getJSONObject("settings").getJSONArray("pressure_curve").toString()
+        fun open() {
+            openSettings()
+            compose.onNodeWithTag("settings-category-input").performClick()
+            compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+            compose.onNodeWithTag("setting-action-pen_pressure").performScrollTo().performClick()
+            compose.waitUntil(10_000) { state().objectOrNull("pressure_calibration") != null }
+            compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
+            compose.onNodeWithTag("pen-pressure-dialog").assertIsDisplayed()
+            compose.onNodeWithTag("effect-curve").assertIsDisplayed()
+            compose.onAllNodesWithTag("setting-number-pressure").assertCountEquals(0)
+            compose.onAllNodesWithTag("setting-slider-pressure").assertCountEquals(0)
+        }
+        val original = saved()
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            open()
+            assertEquals(3, points().length())
+            val start = points().toString()
+            compose.onNodeWithTag("pen-pressure-firmer").performClick()
+            waitState { points().toString() != start }
+            val firmer = points().getJSONArray(0).getDouble(1)
+            compose.onNodeWithTag("pen-pressure-lighter").performClick()
+            waitState { kotlin.math.abs(points().getJSONArray(0).getDouble(1) - .125) < .001 }
+            assertTrue(firmer < points().getJSONArray(0).getDouble(1))
+            val curve = compose.onNodeWithTag("effect-curve")
+            curve.performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .55f, height * .04f)) }
+            waitState { points().length() == 4 }
+            assertEquals(.55, points().getJSONArray(2).getDouble(0), .03)
+            assertEquals(1.0, points().getJSONArray(2).getDouble(1), .03)
+            val graphForDrag = curve.fetchSemanticsNode().boundsInRoot
+            val screen = IntArray(2)
+            instrumentation.runOnMainSync { compose.activity.window.decorView.getLocationOnScreen(screen) }
+            val startX = screen[0] + graphForDrag.left + graphForDrag.width * .55f
+            val endX = screen[0] + graphForDrag.left - graphForDrag.width * .4f
+            val dragY = screen[1] + graphForDrag.top + graphForDrag.height * .04f
+            val downAt = SystemClock.uptimeMillis()
+            for (step in 0..12) {
+                val phase = when (step) { 0 -> MotionEvent.ACTION_DOWN; 12 -> MotionEvent.ACTION_UP; else -> MotionEvent.ACTION_MOVE }
+                val position = MotionEvent.PointerCoords().apply { x = startX + (endX - startX) * step / 12f; y = dragY; pressure = .7f }
+                val property = MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER }
+                val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), phase, 1,
+                    arrayOf(property), arrayOf(position), 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) }
+                finally { event.recycle() }
+                if (step != 12) SystemClock.sleep(16)
+            }
+            compose.waitForIdle()
+            assertEquals("Dragged control points: ${points()}", 3, points().length())
+            compose.onNodeWithTag("pen-pressure-reset").performClick()
+            waitState { points().toString() == start }
+            for (tool in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
+                val graph = compose.onNodeWithTag("effect-curve").fetchSemanticsNode().boundsInRoot
+                val location = IntArray(2)
+                instrumentation.runOnMainSync { compose.activity.window.decorView.getLocationOnScreen(location) }
+                val contact = MotionEvent.PointerCoords().apply {
+                    x = location[0] + graph.left + graph.width * .47f
+                    y = location[1] + graph.top + graph.height * .35f
+                    pressure = .7f
+                }
+                val property = MotionEvent.PointerProperties().apply { id = 0; toolType = tool }
+                val source = if (tool == MotionEvent.TOOL_TYPE_MOUSE) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_STYLUS
+                val down = SystemClock.uptimeMillis()
+                for (phase in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP)) {
+                    if (phase != MotionEvent.ACTION_DOWN) contact.x += graph.width * .02f
+                    val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), phase, 1,
+                        arrayOf(property), arrayOf(contact), 0,
+                        if (tool == MotionEvent.TOOL_TYPE_MOUSE) MotionEvent.BUTTON_PRIMARY else 0,
+                        1f, 1f, 0, 0, source, 0)
+                    try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) }
+                    finally { event.recycle() }
+                    SystemClock.sleep(30)
+                }
+                compose.waitForIdle()
+                assertEquals("Tool $tool curve points: ${points()}", 4, points().length())
+                compose.onNodeWithTag("pen-pressure-reset").performClick()
+                waitState { points().toString() == start }
+            }
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(androidx.compose.ui.geometry.Offset(.35f, .5f)), MotionEvent.TOOL_TYPE_STYLUS)
+            waitState { !calibration().getJSONObject("editor").isNull("marker") }
+            canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(.35f, .5f)), MotionEvent.TOOL_TYPE_STYLUS)
+            compose.onNodeWithTag("pen-pressure-lighter").performClick()
+            waitState { points().toString() != start }
+            compose.onNodeWithTag("pen-pressure-cancel").performClick()
+            waitState { it.objectOrNull("pressure_calibration") == null }
+            assertEquals(original, saved())
+            open()
+            compose.onNodeWithTag("pen-pressure-lighter").performClick()
+            compose.onNodeWithTag("pen-pressure-close").performClick()
+            waitState { it.objectOrNull("pressure_calibration") == null }
+            assertEquals(original, saved())
+            open()
+            compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            waitState { it.objectOrNull("pressure_calibration") == null }
+            assertEquals(original, saved())
+            open()
+            compose.onNodeWithTag("pen-pressure-lighter").performClick()
+            val applied = points().toString()
+            compose.onNodeWithTag("pen-pressure-apply").performClick()
+            waitState { it.objectOrNull("pressure_calibration") == null && saved() == applied }
+            penStroke(15)
+            waitState { it.array("commands").objects().first { command -> command.getString("id") == "undo" }.getBoolean("enabled") }
+            capture("pressure-calibration-$theme")
+            open()
+            assertEquals(applied, points().toString())
+            compose.onNodeWithTag("pen-pressure-reset").performClick()
+            compose.onNodeWithTag("pen-pressure-apply").performClick()
+            waitState { it.objectOrNull("pressure_calibration") == null && saved() == start }
+        }
+        assertNull(host.failure)
+        assertNull(host.actionError)
     }
 
     @Test fun settingsPanesShareTopEdgeAndUseAppScale() {
@@ -3062,35 +3178,35 @@ class AndroidHostTest {
 
     @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
         openSettings()
-        compose.onNodeWithText("Pen & Input").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
-        compose.onNodeWithTag("preference-prediction_horizon", useUnmergedTree = true).performScrollTo()
-        compose.onNodeWithTag("settings-content-page:input", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("settings-category-canvas").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        compose.onNodeWithTag("preference-pan_speed", useUnmergedTree = true).performScrollTo()
+        compose.onNodeWithTag("settings-content-page:canvas", useUnmergedTree = true).assertIsDisplayed()
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
-        val slider = compose.onNodeWithTag("setting-slider-pressure", useUnmergedTree = true).performScrollTo().assertTouchHeightIsEqualTo(48.dp)
+        val slider = compose.onNodeWithTag("setting-slider-zoom_speed", useUnmergedTree = true).performScrollTo().assertTouchHeightIsEqualTo(48.dp)
         val track = slider.captureToImage().toPixelMap()
         val trackX = track.width * 9 / 10
         assertTrue("Inactive slider track remains visible on the light settings surface",
             track[trackX, track.height / 4].red - track[trackX, track.height / 2].red > .05f)
         capture("32-inline-numbers")
-        val before = state().getJSONObject("settings").number("prediction_ms")
-        compose.onNodeWithTag("number-value-prediction_horizon", useUnmergedTree = true).performScrollTo().performClick()
-        compose.onNodeWithTag("setting-number-prediction_horizon", useUnmergedTree = true).performTextReplacement("1/0")
-        compose.onNodeWithTag("setting-number-prediction_horizon", useUnmergedTree = true).performImeAction()
-        compose.onNodeWithText("Enter a finite number", substring = true).assertExists()
-        assertEquals(before, state().getJSONObject("settings").number("prediction_ms"))
-        capture("33-number-invalid")
+        val before = state().getJSONObject("settings").number("pan_speed")
         slider.performTouchInput { swipe(center, androidx.compose.ui.geometry.Offset(width * .75f, center.y), 300) }
         compose.waitForIdle()
-        waitState { it.getJSONObject("settings").number("pressure_gamma") != 1f }
-        val dragged = state().getJSONObject("settings").number("pressure_gamma")
+        waitState { it.getJSONObject("settings").number("zoom_speed") != 1f }
+        val dragged = state().getJSONObject("settings").number("zoom_speed")
         assertTrue("A slider drag changes the value inside its range ($dragged)", dragged in .25f..4f)
-        compose.onNodeWithTag("setting-number-prediction_horizon", useUnmergedTree = true).performTextReplacement("32*2")
-        compose.onNodeWithTag("setting-number-prediction_horizon", useUnmergedTree = true).performImeAction()
-        waitState { it.getJSONObject("settings").number("prediction_ms") == 64f }
+        compose.onNodeWithTag("number-value-pan_speed", useUnmergedTree = true).performScrollTo().performClick()
+        compose.onNodeWithTag("setting-number-pan_speed", useUnmergedTree = true).performTextReplacement("1/0")
+        compose.onNodeWithTag("setting-number-pan_speed", useUnmergedTree = true).performImeAction()
+        compose.onNodeWithText("Enter a finite number", substring = true).assertExists()
+        assertEquals(before, state().getJSONObject("settings").number("pan_speed"))
+        capture("33-number-invalid")
+        compose.onNodeWithTag("setting-number-pan_speed", useUnmergedTree = true).performTextReplacement("1*2")
+        compose.onNodeWithTag("setting-number-pan_speed", useUnmergedTree = true).performImeAction()
+        waitState { it.getJSONObject("settings").number("pan_speed") == 2f }
         assertTrue(preferences().isNull("error"))
-        compose.onNode(hasText("64 ms") and hasAnyAncestor(hasTestTag("number-value-prediction_horizon")),
+        compose.onNode(hasText("2", substring = true) and hasAnyAncestor(hasTestTag("number-value-pan_speed")),
             useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("About").performClick()
         val collected = CountDownLatch(1)
@@ -3105,15 +3221,17 @@ class AndroidHostTest {
         assertTrue(result.await(10, TimeUnit.SECONDS))
         compose.onNodeWithTag("settings-done", useUnmergedTree = true).performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
-        assertEquals(64f, state().getJSONObject("settings").number("prediction_ms"))
+        assertEquals(2f, state().getJSONObject("settings").number("pan_speed"))
         openSettings()
-        compose.onNodeWithText("Pen & Input").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
-        compose.onNode(hasText("64 ms") and hasAnyAncestor(hasTestTag("number-value-prediction_horizon")),
+        compose.onNodeWithTag("settings-category-canvas").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        compose.onNode(hasText("2", substring = true) and hasAnyAncestor(hasTestTag("number-value-pan_speed")),
             useUnmergedTree = true).performScrollTo().assertIsDisplayed()
-        // Return this shared preference to its original accepted value.
-        compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "prediction_horizon", "value" to before)) }
-        waitState { it.getJSONObject("settings").number("prediction_ms") == before }
+        compose.runOnIdle {
+            host.preference(obj("type" to "edit", "id" to "pan_speed", "value" to before))
+            host.preference(obj("type" to "edit", "id" to "zoom_speed", "value" to 1.0))
+        }
+        waitState { it.getJSONObject("settings").number("pan_speed") == before }
         compose.onNodeWithTag("settings-done", useUnmergedTree = true).performClick()
     }
 

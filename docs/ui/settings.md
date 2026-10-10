@@ -71,6 +71,11 @@ default, so empty new groups use Normal. On, new groups use
 layers also uses Pass Through when their blend modes or standalone adjustments
 need the existing backdrop. The preference affects only groups made afterwards.
 
+**[Pen pressure](pen-pressure.md)** appears in Input's Pen response group, above
+Stroke prediction. **Adjust…** closes Preferences and opens a floating
+calibration utility so painters can test the curve on the canvas. Apply saves
+the preview; Cancel and Close discard it.
+
 ## Keyboard shortcuts
 
 [`shortcuts.rs`](../../crates/layer-ui/src/shortcuts.rs) associates key chords with

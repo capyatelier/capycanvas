@@ -4,6 +4,7 @@
 #include "CommandSearch.h"
 #include "CanvasActionBar.h"
 #include "PreviewPanel.h"
+#include "PressureCalibration.h"
 #include "ZoomReadout.h"
 #include "PanelBody.h"
 #include "PanelConfiguration.h"
@@ -104,6 +105,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<CanvasNotice> notice=std::make_shared<CanvasNotice>();
     std::shared_ptr<ColorStrip> colorStrip=std::make_shared<ColorStrip>();
     std::array<std::shared_ptr<PreviewPanel>,2> previewPanels{std::make_shared<PreviewPanel>(),std::make_shared<PreviewPanel>()};
+    std::shared_ptr<PressureCalibration> pressure=std::make_shared<PressureCalibration>();
     double cameraRevision=-1;
     hstring previousTheme,previousPalette;
     Flyout popup{nullptr};
@@ -140,6 +142,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         canvasBar->changed=[weak=weak_from_this()]{if(auto self=weak.lock()){self->gestures->ChromeChanged();self->placePreviews();if(self->glassChanged)self->glassChanged();}};
         canvasBar->init(root);
         notice->data=data;notice->init(root);
+        pressure->data=data;pressure->init(root);
         colorStrip->data=data;colorStrip->init(root);data->colorStrip=colorStrip;
         for(auto [panel,kind]:{std::pair{previewPanels[0],PreviewPanel::SelectionRefine},std::pair{previewPanels[1],PreviewPanel::FrequencySeparation}}){
             panel->data=data;panel->kind=kind;panel->moved=[weak=weak_from_this()]{if(auto self=weak.lock())self->placeNotice();};panel->init(root);
@@ -394,6 +397,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         commandSearch->Apply(data->state);
         canvasBar->Dragging(object(update,L"drag").Size()!=0);canvasBar->Apply(data->state);
         for(auto const& panel:previewPanels){panel->Place(layout);panel->Publish(data->state);}
+        pressure->attach();pressure->Publish();
         notice->Place(layout);notice->Publish(data->state);data->queueColors();
         expansion->Apply(configurationHeight());present();
         collapsed->Apply();drawers->Apply();gestures->Refresh();

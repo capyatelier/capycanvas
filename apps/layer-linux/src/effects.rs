@@ -1,4 +1,5 @@
 //! GTK views of the shared effect/property schemas. No filter-specific widgets.
+use crate::curve_editor::CurveEditor;
 #[path = "gradient_preview.rs"]
 mod gradient_preview;
 #[path = "gradient_editor.rs"]
@@ -919,7 +920,7 @@ impl EffectPanels {
                             Field::Color(input)
                         }
                         PropertyKind::Curve => {
-                            let input = CurveEditor::new(w, layer, control);
+                            let input = CurveEditor::new(w, layer_ui::CurveEditorTarget::Effect { layer, key: control.key.clone() }, &format!("property-{}", control.key), &control.label, &control.curve_editor().unwrap());
                             self.body.append(&input.root);
                             Field::Curve(input)
                         }
@@ -963,7 +964,7 @@ impl EffectPanels {
                 (Field::Color(i), EffectValue::Color(c)) => {
                     i.set_color(*c, w.view_color())
                 }
-                (Field::Curve(i), EffectValue::Curve(_)) => i.update(c, &w.localization()),
+                (Field::Curve(i), EffectValue::Curve(_)) => i.update(&c.curve_editor().unwrap(), &w.localization()),
                 (Field::Gradient(i), EffectValue::Gradient(gradient)) => i.update(gradient,c.gradient.as_ref().expect("shared gradient controls")),
                 _ => {}
             }
@@ -1145,229 +1146,7 @@ fn row(title: &str, input: &impl IsA<gtk::Widget>) -> gtk::Box {
     row
 }
 fn bind_number(input: &NumberControl, w: &Rc<Workspace>, action: impl Fn(f64) -> EffectAction + 'static) {
-    let action = Rc::new(action);
-    let captured = Rc::new(Cell::new(None));
-    input.connect_edit_phase(glib::clone!(#[weak] w, #[weak] input, #[strong] captured, #[strong] action, move |phase| {
-        captured.set(match phase { ContactPhase::Down | ContactPhase::Move => Some(ContactPhase::Move), ContactPhase::Cancel => Some(ContactPhase::Cancel), ContactPhase::Up => None });
-        w.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(action(input.value())) } });
-    }));
-    input.connect_value_changed(glib::clone!(#[weak] w, move |input| {
-        if captured.get() == Some(ContactPhase::Cancel) { return; }
-        let action = action(input.value());
-        w.dispatch(UiAction::Effect { action: if captured.get().is_some() {
-            EffectAction::Gesture { phase: ContactPhase::Move, action: Box::new(action) }
-        } else { action } });
-    }));
-}
-struct CurveEditor {
-    root: gtk::Box,
-    area: gtk::DrawingArea,
-    reset: gtk::Button,
-    view: Rc<RefCell<layer_ui::PropertyControl>>,
-    coordinates: [NumberControl; 2],
-    coordinate_labels: [gtk::Label; 2],
-    ev: [gtk::Label; 2],
-    axes: [[gtk::Label; 3]; 2],
-    histogram: Rc<RefCell<layer_ui::HistogramView>>,
-    histogram_colors: Rc<Cell<[[u8;3];4]>>,
-    footer: crate::histogram::Footer,
-}
-impl CurveEditor {
-    fn new(w: &Rc<Workspace>, layer: u64, control: &layer_ui::PropertyControl) -> Self {
-        let curve = control.curve.as_ref().expect("shared curve controls");
-        let histogram=Rc::new(RefCell::new(layer_ui::HistogramView::default()));
-        let histogram_colors=Rc::new(Cell::new([[0;3];4]));
-        let area = gtk::DrawingArea::builder().content_width(64).content_height(200)
-            .hexpand(true).focusable(true).build();
-        area.set_widget_name(&format!("property-{}-graph", control.key));
-        area.add_css_class("customizable-target");
-        area.add_css_class("curve-key-scope");
-        area.set_tooltip_text(Some(&curve.help));
-        area.update_property(&[gtk::accessible::Property::Label(&control.label)]);
-        let view = Rc::new(RefCell::new(control.clone()));
-        area.set_draw_func(glib::clone!(#[strong] view, #[strong] histogram, #[strong] histogram_colors, move |area, cr, width, height| {
-            let view = view.borrow();
-            let Some(curve) = &view.curve else { return; };
-            let EffectValue::Curve(points) = &view.value else { return; };
-            let (width, height) = (f64::from(width), f64::from(height));
-            let c = area.color();
-            let color = |alpha| cr.set_source_rgba(f64::from(c.red()), f64::from(c.green()), f64::from(c.blue()), alpha);
-            color(0.12); cr.paint().ok();
-            crate::histogram::draw(cr,&histogram.borrow(),histogram_colors.get(),width,height);
-            color(0.2); cr.set_line_width(1.);
-            for i in 1..4 {
-                let t = f64::from(i) / 4.;
-                cr.move_to(t * width, 0.); cr.line_to(t * width, height);
-                cr.move_to(0., t * height); cr.line_to(width, t * height);
-            }
-            cr.stroke().ok();
-            cr.set_dash(&[3., 3.], 0.);
-            if let Some(white) = curve.axes[0].white {
-                cr.move_to(f64::from(white) * width, 0.); cr.line_to(f64::from(white) * width, height);
-            }
-            if let Some(white) = curve.axes[1].white {
-                cr.move_to(0., (1. - f64::from(white)) * height); cr.line_to(width, (1. - f64::from(white)) * height);
-            }
-            cr.stroke().ok(); cr.set_dash(&[], 0.);
-            color(1.); cr.set_line_width(1.5);
-            for (index, [x, y]) in view.plot.iter().enumerate() {
-                let (x, y) = (f64::from(*x) * width, (1. - f64::from(*y)) * height);
-                if index == 0 { cr.move_to(x, y); } else { cr.line_to(x, y); }
-            }
-            cr.stroke().ok();
-            for (index, point) in points.iter().enumerate() {
-                let (x, y) = (f64::from(point[0]) * width, (1. - f64::from(point[1])) * height);
-                cr.arc(x, y, 3.5, 0., std::f64::consts::TAU); cr.fill().ok();
-                if curve.selected == Some(index) {
-                    cr.arc(x, y, 6., 0., std::f64::consts::TAU); cr.stroke().ok();
-                }
-            }
-        }));
-        let key: Rc<str> = control.key.as_str().into();
-        let capture = Rc::new(Cell::new(None::<(u64, [f64; 2], [f64; 2], [f32; 2])>));
-        let removing = Rc::new(Cell::new(false));
-        let drag = gtk::GestureDrag::new(); drag.set_button(1);
-        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
-        drag.connect_drag_begin(glib::clone!(#[weak] w, #[weak] area, #[strong] view, #[strong] key, #[strong] capture, #[strong] removing, move |gesture, x, y| {
-            if removing.get() { return; }
-            let Some((sx, sy)) = gesture.current_event().and_then(|event| event.position()) else { return; };
-            let epoch = view.borrow().curve.as_ref().unwrap().epoch;
-            let extent = [area.width() as f32, area.height() as f32];
-            area.grab_focus(); capture.set(Some((epoch, [x, y], [sx, sy], extent)));
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            w.dispatch(UiAction::Effect { action: EffectAction::CurveContact { layer, key: key.to_string(), epoch,
-                phase: ContactPhase::Down, point: [x as f32, y as f32], extent } });
-        }));
-        for (phase, ending) in [(ContactPhase::Move, false), (ContactPhase::Up, true)] {
-            let callback = glib::clone!(#[weak] w, #[strong] key, #[strong] capture, move |gesture: &gtk::GestureDrag, _: f64, _: f64| {
-                let Some((epoch, [x, y], [sx, sy], extent)) = (if ending { capture.take() } else { capture.get() }) else { return; };
-                let Some((px, py)) = gesture.current_event().and_then(|event| event.position()) else {
-                    if ending { w.dispatch(UiAction::Effect { action: EffectAction::CurveContact { layer, key: key.to_string(), epoch,
-                        phase: ContactPhase::Cancel, point: [0.; 2], extent: [0.; 2] } }); }
-                    return;
-                };
-                w.dispatch(UiAction::Effect { action: EffectAction::CurveContact { layer, key: key.to_string(), epoch,
-                    phase, point: [(x + (px - sx)) as f32, (y + (py - sy)) as f32], extent } });
-            });
-            if ending { drag.connect_drag_end(callback); } else { drag.connect_drag_update(callback); }
-        }
-        drag.connect_cancel(glib::clone!(#[weak] w, #[strong] key, #[strong] capture, move |_, _| {
-            if let Some((epoch, ..)) = capture.take() {
-                w.dispatch(UiAction::Effect { action: EffectAction::CurveContact { layer, key: key.to_string(), epoch,
-                    phase: ContactPhase::Cancel, point: [0.; 2], extent: [0.; 2] } });
-            }
-        }));
-        area.add_controller(drag.clone());
-        let click = gtk::GestureClick::new(); click.set_button(0);
-        let point_count = Rc::new(Cell::new(0));
-        click.set_propagation_phase(gtk::PropagationPhase::Capture);
-        click.connect_pressed(glib::clone!(#[weak] w, #[weak] area, #[strong] view, #[strong] key, #[strong] removing, #[strong] point_count, move |gesture, count, x, y| {
-            if count == 1 && let EffectValue::Curve(points) = &view.borrow().value {point_count.set(points.len());}
-            removing.set(gesture.current_button() == 3 || count == 2);
-            if !removing.get() { return; }
-            area.grab_focus();
-            let epoch = view.borrow().curve.as_ref().unwrap().epoch;
-            w.dispatch(UiAction::Effect { action: EffectAction::CurveRemoveAt { layer, key: key.to_string(), epoch,
-                point: [x as f32, y as f32], extent: [area.width() as f32, area.height() as f32],
-                point_count: (gesture.current_button() != 3).then(|| point_count.get()) } });
-        }));
-        area.add_controller(click.clone()); click.group_with(&drag);
-        let keys = gtk::EventControllerKey::new();
-        let dispatch_key = Rc::new(glib::clone!(#[weak] w, #[strong] view, #[strong] key, #[upgrade_or] false, move |native, pressed, modifiers| {
-            let layer_ui::UiInput::Key { key: key_event, repeat, modifiers, .. } = crate::input::key_input(native, pressed, modifiers, false, None) else { return false; };
-            if !matches!(key_event.as_str(), "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Delete" | "Backspace" | "Escape")
-                || pressed && key_event != "Escape" && (modifiers.command || modifiers.alt) { return false; }
-            let epoch = view.borrow().curve.as_ref().unwrap().epoch;
-            w.dispatch(UiAction::Effect { action: EffectAction::CurveKey { layer, key: key.to_string(), epoch, key_event, pressed, repeat, modifiers } });
-            true
-        }));
-        keys.connect_key_pressed(glib::clone!(#[strong] dispatch_key, move |_, key, _, modifiers| {
-            if dispatch_key(key, true, modifiers) { glib::Propagation::Stop } else { glib::Propagation::Proceed }
-        }));
-        keys.connect_key_released(move |_, key, _, modifiers| { dispatch_key(key, false, modifiers); });
-        area.add_controller(keys);
-        let focus = gtk::EventControllerFocus::new();
-        focus.connect_leave(glib::clone!(#[weak] w, #[strong] view, #[strong] key, #[strong] capture, move |_| {
-            let epoch = capture.take().map_or_else(|| view.borrow().curve.as_ref().unwrap().epoch, |(epoch, ..)| epoch);
-            w.dispatch(UiAction::Effect { action: EffectAction::CurveContact { layer, key: key.to_string(), epoch,
-                phase: ContactPhase::Cancel, point: [0.; 2], extent: [0.; 2] } });
-        }));
-        area.add_controller(focus);
-        let reset = crate::icons::button("layer-reset-symbolic");
-        reset.add_css_class("flat"); reset.add_css_class("circular");
-        reset.set_halign(gtk::Align::End); reset.set_valign(gtk::Align::End);
-        reset.set_widget_name("curve-reset");
-        reset.set_tooltip_text(Some(&curve.reset_label));
-        reset.connect_clicked(glib::clone!(#[weak] w, #[strong] key, move |_| {
-            w.dispatch(UiAction::Effect { action: EffectAction::Reset { layer, key: key.to_string() } });
-        }));
-
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        root.set_vexpand(false); root.set_valign(gtk::Align::Start);
-        let graph = gtk::Grid::builder().column_spacing(6).row_spacing(4).build();
-        let vertical = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        let maximum = gtk::Label::new(Some(&curve.axes[1].maximum));
-        let title = gtk::Label::new(Some(&curve.axes[1].label)); title.set_vexpand(true);
-        let minimum = gtk::Label::new(Some(&curve.axes[1].minimum));
-        title.set_text("");
-        vertical.add_css_class("dim-label"); vertical.append(&maximum); vertical.append(&title); vertical.append(&minimum);
-        let y_axis = [minimum.clone(), title.clone(), maximum.clone()];
-        graph.attach(&vertical, 0, 0, 1, 1); graph.attach(&area, 1, 0, 1, 1);
-        let horizontal = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        let minimum = gtk::Label::new(Some(&curve.axes[0].minimum));
-        let title = gtk::Label::new(Some(&curve.axes[0].label)); title.set_hexpand(true);
-        let maximum = gtk::Label::new(Some(&curve.axes[0].maximum));
-        title.set_text("");
-        horizontal.add_css_class("dim-label"); horizontal.append(&minimum); horizontal.append(&title); horizontal.append(&maximum);
-        let axes = [[minimum.clone(), title.clone(), maximum.clone()], y_axis];
-        graph.attach(&horizontal, 1, 1, 1, 1); root.append(&graph);
-        let ev = std::array::from_fn(|_| { let label = gtk::Label::new(None); label.set_xalign(1.); label.add_css_class("dim-label"); label });
-        let coordinate_labels = std::array::from_fn(|index| gtk::Label::builder().label(&curve.axes[index].label).xalign(0.).ellipsize(gtk::pango::EllipsizeMode::End).build());
-        let coordinate_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);coordinate_row.set_homogeneous(true);
-        let coordinates = std::array::from_fn(|index| {
-            let input = NumberControl::value_only(curve.domain.numeric(), &curve.axes[index].label, w.localization().clone());
-            input.set_widget_name(&format!("property-{}-{}", control.key, if index == 0 { "input" } else { "output" }));
-            bind_number(&input, w, glib::clone!(#[strong] view, #[strong] key, move |value| {
-                EffectAction::CurveNumber { layer, key: key.to_string(), epoch: view.borrow().curve.as_ref().unwrap().epoch,
-                    axis: if index == 0 { layer_ui::CurveAxis::Input } else { layer_ui::CurveAxis::Output },
-                    operation: layer_ui::NumericOperation::Value { value } }
-            }));
-            let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            input.set_halign(gtk::Align::Fill);input.set_hexpand(true);
-            column.set_hexpand(true);column.append(&coordinate_labels[index]);column.append(&input);column.append(&ev[index]);
-            coordinate_row.append(&column);input
-        });
-        root.append(&coordinate_row);
-        let footer = crate::histogram::Footer::new("curve");footer.root.append(&reset);root.append(&footer.root);
-        let editor = Self { root, area, reset, view, coordinates, coordinate_labels, ev, axes, histogram, histogram_colors, footer };
-        editor.update(control, &w.localization());editor
-    }
-    fn refresh_histogram(&self,w:&Rc<Workspace>,state:&UiState) {
-        *self.histogram.borrow_mut()=state.tonal_histogram.clone();
-        self.histogram_colors.set(state.palette.histogram_colors().map(|color|color.0));
-        self.footer.refresh(w,state,&state.tonal_histogram.status);self.area.queue_draw();
-    }
-    fn update(&self, control: &layer_ui::PropertyControl, localization: &std::sync::Arc<layer_ui::Localizer>) {
-        *self.view.borrow_mut() = control.clone();
-        let curve = control.curve.as_ref().unwrap();
-        self.area.set_tooltip_text(Some(&curve.help));
-        self.reset.set_tooltip_text(Some(&curve.reset_label));
-        for (labels, axis) in self.axes.iter().zip(&curve.axes) {
-            for (label, text) in labels.iter().zip([axis.minimum.as_str(), "", axis.maximum.as_str()]) { label.set_label(text); }
-        }
-        for (index, coordinate) in [&curve.input, &curve.output].into_iter().enumerate() {
-            let input = &self.coordinates[index];
-            self.coordinate_labels[index].set_label(&curve.axes[index].label);
-            self.coordinate_labels[index].set_tooltip_text(Some(&curve.axes[index].label));
-            input.set_caption(&curve.axes[index].label, "", localization.clone());
-            input.set_sensitive(coordinate.as_ref().is_some_and(|value| !value.read_only));
-            let (value, text) = coordinate.as_ref().map_or((0., ""), |value| (value.value, value.text.as_str()));
-            input.set_presented_value(value, text);
-            self.ev[index].set_label(coordinate.as_ref().and_then(|value| value.ev.as_deref()).unwrap_or(""));
-            self.ev[index].set_visible(matches!(curve.domain, layer_ui::CurveDomain::LogHdr { .. }));
-        }
-        self.reset.set_visible(control.modified); self.area.queue_draw();
-    }
+    input.bind_edit(w,action,|phase,action|EffectAction::Gesture {phase,action:Box::new(action)},|action|UiAction::Effect {action});
 }
 
 pub fn owns_native_key(focus: &gtk::Widget, key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType) -> bool {

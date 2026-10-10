@@ -1,8 +1,6 @@
 settings-language = ภาษา
 settings-language-system = ใช้ภาษาของระบบ
 settings-reset-to-default = คืนค่าเริ่มต้น
-settings-pressure-response = การตอบสนองแรงกด
-settings-lower-values-make-light-pen-pressure-stronger = ค่าที่ต่ำลงทำให้แรงกดปากกาเบาให้ผลแรงขึ้น
 settings-enable-stroke-prediction = เปิดใช้การคาดการณ์เส้น
 settings-reduce-the-gap-between-your-pen-and-the-stroke = ลดช่องว่างระหว่างปากกากับเส้นที่วาด
 settings-use-android-stroke-prediction = ใช้การคาดการณ์เส้นของ Android

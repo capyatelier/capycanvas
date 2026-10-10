@@ -15,12 +15,12 @@ Device names are provenance labels, not hardware IDs inferred from input events.
 
 | File | Capture | Contacts | Predictor samples | Queries | Compressed bytes |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `wacom-pro-27.capystrokes` | Wacom Pro 27, GTK; name supplied by the user | 81 | 22,029 | 10,985 | 1,337,795 |
-| `movink14.capystrokes` | Wacom Movink 14 (DTHA140), Android | 89 | 20,879 | 10,272 | 1,398,124 |
+| `wacom-pro-27.capystrokes` | Wacom Pro 27, GTK; name supplied by the user | 81 | 22,029 | 10,985 | 1,239,630 |
+| `movink14.capystrokes` | Wacom Movink 14 (DTHA140), Android | 89 | 20,879 | 10,272 | 1,307,325 |
 
-Both files were re-encoded once from their original `CAPYPEN2` captures to
-`CAPYPEN3`. The re-encoding dropped only policy and pressure-curve fields that
-held the fixed Smooth Motion constants; replay output is byte-identical.
+Both files use `CAPYPEN4`. Their raw calibration is the authored linear control
+polygon `(0, 0), (1, 1)`. Raw sensor values, processed samples, policies and query
+clocks are unchanged; the reviewed metric references remain unchanged.
 
 `wacom-pro-27` replaces the former `pen-20260921` fixture. The original
 capture's SHA256 is

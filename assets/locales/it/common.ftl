@@ -344,3 +344,11 @@ native-screen-details = Dettagli dello schermo
 native-color-inspection-hdr-help = RGB lineare del documento e luminanza Y. Linea tratteggiata: bianco di riferimento (0 EV). I valori zero e negativi vengono conteggiati separatamente. Include la carta visibile; esclude i pixel trasparenti e le sovrapposizioni dello schermo.
 common-failure-details = Dettagli dell’errore
 common-copy-failure-details = Copia dettagli dell’errore
+
+pressure-title = Pressione della penna
+pressure-firmer = Più forte
+pressure-lighter = Più leggera
+pressure-curve-help = Fai clic per aggiungere un punto di controllo. Trascina i punti per modellare la curva. Fai doppio clic su un punto interno o trascinalo fuori dal grafico per eliminarlo.
+pressure-description = Regola la pressione della penna mentre disegni.
+
+common-adjust = Regola…

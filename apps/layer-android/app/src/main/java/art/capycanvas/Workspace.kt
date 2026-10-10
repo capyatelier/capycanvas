@@ -191,6 +191,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     CommandSearch(host)
                     ColorEditorLayer(host)
                     PreferencesOverlay(host, snapshot?.objectOrNull("preferences"))
+                    PressureCalibration(host, state, state.objectOrNull("pressure_calibration"))
                     if (snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") != null)
                         ToolPicker(host, snapshot.getJSONObject("picker"))
                     if (snapshot?.objectOrNull("preferences") == null)

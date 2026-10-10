@@ -2,8 +2,6 @@ settings-language = Dil
 settings-language-system = Sistem dilini kullan
 
 settings-reset-to-default = Varsayılana sıfırla
-settings-pressure-response = Basınç tepkisi
-settings-lower-values-make-light-pen-pressure-stronger = Düşük değerler, hafif kalem basıncının etkisini artırır.
 settings-enable-stroke-prediction = Fırça darbesi tahminini etkinleştir
 settings-reduce-the-gap-between-your-pen-and-the-stroke = Kaleminizle fırça darbesi arasındaki mesafeyi azaltın.
 settings-use-android-stroke-prediction = Android fırça darbesi tahminini kullan

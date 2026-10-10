@@ -385,3 +385,11 @@ native-screen-details = 屏幕详情
 native-color-inspection-hdr-help = 文档的线性 RGB 和亮度 Y。虚线：参考白（0 EV）。零值和负值单独统计。包含可见纸张；不包含透明像素和显示叠加层。
 common-failure-details = 故障详情
 common-copy-failure-details = 复制故障详情
+
+pressure-title = 笔压
+pressure-firmer = 更用力
+pressure-lighter = 更轻柔
+pressure-curve-help = 单击添加控制点。拖动控制点调整曲线。双击中间控制点或将其拖出图表即可删除。
+pressure-description = 在绘画时调整笔压。
+
+common-adjust = 调整…

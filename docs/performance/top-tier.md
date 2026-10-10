@@ -125,6 +125,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
 | Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps | `dc27e04d`, 2026-09-23 |
 | Panel or column resize | 120 | **Unqualified.** GTK desktop Color column 12.88–44.61, floating panel 39.63–100.58 presents/s; reference tablet unmeasured | [GTK Color resize](#gtk-color-panel-resize), 2026-10-04 |
+| Pen pressure utility and curve drag | 120 | **Unqualified.** GTK desktop panel 119.2–119.4 presents/s, p99 up to 8.66 ms; curve p99 up to 16.712 ms exceeds the strict two-frame budget; reference tablet unmeasured | [GTK pen pressure utility](#gtk-pen-pressure-utility), 2026-10-10 UTC |
 | Drawer open and close | 120 | | |
 | Grouped tool menus, drawer switching and tile drag | 120 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
 | Colour wheel or picker drag | 120 | **Unqualified.** Current GTK 2× workstation picker diagnostic: docked SDR 75.00, HDR 62.96 canvas presents/s; reference tablet unmeasured | [GTK Color diagnostic](#gtk-color-panel-resize), 2026-10-04; earlier [swatch diagnostic](#gtk-selected-swatch-diagnostic) |
@@ -2481,3 +2482,55 @@ builds miss this tier. The measured build includes upstream rendering changes
 as well as Zoom settings, so this comparison does not isolate their cost or
 establish no regression.
 Current per-gesture evidence: `artifacts/navigation-controls/zoom-audit-20261009/post-rebase-results.json`.
+## GTK pen pressure utility
+
+Measured on 2026-10-10 UTC in the pen-pressure worktree based on `12779d197`,
+with release Rust, GTK 4.22.5 and an NVIDIA RTX PRO 6000 Blackwell Max-Q GPU
+(Vulkan, driver 615.71.09). The private Mutter display runs at 1100 × 800 and
+120 Hz, with a 256 × 256 F32 drawing at Fit and the default workspace. The
+pressure curve has three authored controls and no coordinate readouts. After
+the functional journey warms the controls, each theme runs three five-second
+panel drags and three curve drags. The panel follows a 200 × 100 logical-pixel
+ellipse; actual native allocations span x = 182–582 and y = 115–315, all snapped
+to device pixels. Each gesture observes 598–600 moving allocations. The curve
+handle moves horizontally at its upper bound. Pointer positioning settles before
+each press, and the test verifies the native target hit. Presentation timestamps
+are restricted to observed moving-state windows; idle frames are excluded.
+Screen recording is disabled during measurement, and visual captures run
+separately. Other verification builds, VM tests and GPU journeys are stopped
+during these measurements.
+
+| Motion | Light presents/s / maximum p99 gap | Dark presents/s / maximum p99 gap |
+| --- | --- | --- |
+| Utility frame | 119.20–119.40 / 8.522 ms | 119.20–119.41 / 8.659 ms |
+| Pressure curve | 116.21–116.41 / 16.712 ms | 116.02–116.21 / 16.712 ms |
+
+All twelve gestures meet the 114 presents/s floor. All six utility-frame
+gestures meet the two-frame gap limit. Five of six curve gestures narrowly
+exceed the strict 2000/120 = 16.6667 ms limit: light p99 is 16.668–16.712 ms and
+dark p99 is 16.663–16.712 ms. Curve pacing remains unqualified. This desktop
+comparison does not qualify the reference tablet or its 61 MP canvas.
+
+Moving only the utility frame updates shared bounds without rebuilding the
+curve plot. GTK retains content and measurement, and presents pending placement
+through the existing workspace frame callback with a draw request. Opaque frame
+coverage prevents inner translucent controls from requesting canvas backdrops;
+the native journey verifies zero utility backdrop regions and separately checks
+opaque, faded and translucent synthetic surfaces. Both theme journeys pass.
+
+Earlier 60 × 30 logical-pixel motion had a geometric ceiling near 64 changed
+pixel positions/s on this display, so its 56.9–60.8 presents/s cannot establish
+a 120 Hz panel regression. With the larger path before retained placement, panel
+rates were 93.09–116.41 presents/s with p99 up to 25.24 ms. That comparison also
+predates eight upstream commits and the separated-press fixture correction;
+it does not isolate the performance effect of one change.
+
+Current raw reports, native positions and executable/source identity are in
+`artifacts/pressure-calibration/corrected-native-perf/placement-separated-press/`.
+The corrected-path baseline remains in `artifacts/pressure-calibration/corrected-native-perf/`;
+the small-path reports and captures remain in `artifacts/pressure-calibration/revised-gtk/`.
+Diagnostic runs with concurrent VM work and failed uncaptured gestures are
+preserved separately under `placement-clock-wake/` and `placement-rebased/`.
+Run
+`native_pressure_calibration --tablet` with `LAYER_PRESSURE_MOTION=1` and
+`LAYER_NATIVE_EVENT_MS=8` to repeat the workload.

@@ -2,8 +2,6 @@ settings-language = Sprache
 settings-language-system = Systemsprache verwenden
 
 settings-reset-to-default = Auf Standard zurücksetzen
-settings-pressure-response = Druckreaktion
-settings-lower-values-make-light-pen-pressure-stronger = Niedrigere Werte verstärken leichten Stiftdruck.
 settings-enable-stroke-prediction = Strichvorhersage aktivieren
 settings-reduce-the-gap-between-your-pen-and-the-stroke = Den Abstand zwischen Stift und Pinselstrich verringern.
 settings-use-android-stroke-prediction = Strichvorhersage von Android verwenden

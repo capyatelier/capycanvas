@@ -1,7 +1,7 @@
 //! Effect catalog, properties and navigation policy shared by every native view.
 use super::*;
 #[path = "effects/curves.rs"]
-mod curves;
+pub(crate) mod curves;
 #[path = "effects/gradient.rs"]
 mod gradient;
 pub use gradient::{GradientDestination,GradientEdit,GradientControls};
@@ -718,7 +718,7 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
                 ev:matches!(domain,CurveDomain::LogHdr{..}).then(||if value==0.{l.text(MessageId::RESOURCES_PARAMETER_LEVELS_BLACK).to_string()}else{format!("{:.2} EV",value.log2())})}
         };
         let axis=|label|CurveAxisView{label:l.text(label).to_string(),minimum:domain.axis_text(0.),maximum:domain.axis_text(1.),white:matches!(domain,CurveDomain::LogHdr{..}).then(||domain.encode(1.) as f32)};
-        control.curve=Some(CurveControls{epoch:state.epoch,numeric:domain.numeric(),selected,input:selected.map(|index|coordinate(CurveAxis::Input,index)),output:selected.map(|index|coordinate(CurveAxis::Output,index)),
+        control.curve=Some(CurveControls{control_polygon:false,coordinate_readouts:true,inset:0.,epoch:state.epoch,numeric:domain.numeric(),selected,input:selected.map(|index|coordinate(CurveAxis::Input,index)),output:selected.map(|index|coordinate(CurveAxis::Output,index)),
             axes:[axis(MessageId::RESOURCES_SECTION_LEVELS_INPUT),axis(MessageId::RESOURCES_SECTION_LEVELS_OUTPUT)],domain,
             help:l.text(MessageId::RESOURCES_CURVES_HELP).to_string(),reset_label:l.text(MessageId::RESOURCES_CURVES_RESET).to_string()});
     }
@@ -1068,7 +1068,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 let Some(index)=self.property_editor.contact_index(&key) else{return Ok(());};
                 let Some(graph)=self.property_editor.contact_point(&key,point) else{return Ok(());};
-                self.effect_gesture_action(phase,EffectAction::CurvePoint{layer,key,index:Some(index),point:graph,remove:false})?;
+                let remove=phase==ContactPhase::Up && crate::curve_editor::dragged_outside(point,extent);
+                self.effect_gesture_action(phase,EffectAction::CurvePoint{layer,key,index:Some(index),point:graph,remove})?;
                 if phase==ContactPhase::Up {self.property_editor.end_contact();}return Ok(());
             }
             EffectAction::CurveKey{layer,key,epoch,key_event,pressed,repeat:_,modifiers}=> {

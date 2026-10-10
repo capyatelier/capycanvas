@@ -63,7 +63,7 @@ impl Clip {
 
 pub fn collect(node: &gsk::RenderNode, surfaces: &[GlassColor], out: &mut Vec<BackdropRegion>) {
     let place = Place { scale: [1.; 2], offset: [0.; 2] };
-    let context = Context { place, clip: None, cut: None, round: false };
+    let context = Context { place, clip: None, cut: None, round: false, opacity: 1. };
     visit(node, context, surfaces, out);
 }
 
@@ -73,6 +73,7 @@ struct Context {
     clip: Option<Clip>,
     cut: Option<[f32; 4]>,
     round: bool,
+    opacity: f32,
 }
 
 fn intersect(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
@@ -135,6 +136,7 @@ fn visit(
         visit(&n.child(), Context { cut: Some(cut), ..at }, surfaces, out)
     } else if let Some(n) = node.downcast_ref::<gsk::ColorNode>() {
         let color = n.color();
+        if color.alpha() * at.opacity == 1. { return Some(n.bounds()); }
         let rgba = [color.red(), color.green(), color.blue(), color.alpha()];
         if !surfaces.iter().any(|s| s.matches(rgba)) {
             return None;
@@ -151,7 +153,7 @@ fn visit(
         let round = at.round || n.message() == crate::squircle::KEEP_ROUND;
         visit(&n.child(), Context { round, ..at }, surfaces, out)
     } else if let Some(n) = node.downcast_ref::<gsk::OpacityNode>() {
-        visit(&n.child(), at, surfaces, out)
+        visit(&n.child(), Context { opacity: at.opacity * n.opacity(), ..at }, surfaces, out)
     } else if let Some(n) = node.downcast_ref::<gsk::ShadowNode>() {
         visit(&n.child(), at, surfaces, out)
     } else if let Some(n) = node.downcast_ref::<gsk::IsolationNode>() {

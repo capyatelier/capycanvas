@@ -54,7 +54,7 @@ impl Workspace {
         }
     }
 
-    fn queue_workspace_frame(self: &Rc<Self>) {
+    pub(crate) fn queue_workspace_frame(self: &Rc<Self>) {
         if self.publication.tick.borrow().is_none() {
             let weak = Rc::downgrade(self);
             let tick = self.surface.add_tick_callback(move |_, _| {
@@ -69,6 +69,7 @@ impl Workspace {
     }
 
     fn present_workspace(self: &Rc<Self>) {
+        self.pressure_calibration.present_motion(self);
         let Some(update) = self.publication.pending.borrow_mut().take() else {
             return;
         };

@@ -158,15 +158,15 @@ extension XCTestCase {
     }
 
     @MainActor func checkSettingsNumericReset(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"reveal","id":"pressure"}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"reveal","id":"pan_speed"}}]"#
         app.launch()
-        let value = app.buttons["number-value-Pressure response"]
-        let entry = app.textFields["number-entry-Pressure response"]
+        let value = app.buttons["number-value-Pan speed"]
+        let entry = app.textFields["number-entry-Pan speed"]
         XCTAssertTrue(value.waitForExistence(timeout: 20))
         let defaultDisplay = value.value as? String ?? ""
         XCTAssertFalse(defaultDisplay.isEmpty)
         for draft in ["", "2 + 0.25", "2 + ("] {
-            workspaceActivate(app.buttons["number-increase-Pressure response"])
+            workspaceActivate(app.buttons["number-increase-Pan speed"])
             expectation(for: NSPredicate(format: "value != %@", defaultDisplay), evaluatedWith: value)
             waitForExpectations(timeout: 5)
             if !draft.isEmpty {
@@ -175,7 +175,7 @@ extension XCTestCase {
                 entry.typeText(draft)
                 XCTAssertEqual(entry.value as? String, draft)
             }
-            let label = app.staticTexts["Pressure response"].firstMatch
+            let label = app.staticTexts["Pan speed"].firstMatch
             #if os(macOS)
             label.rightClick()
             let reset = app.menuItems["Reset to Default"]
@@ -185,7 +185,7 @@ extension XCTestCase {
             #endif
             XCTAssertTrue(reset.waitForExistence(timeout: 5)); XCTAssertTrue(reset.isEnabled)
             workspaceActivate(reset)
-            XCTAssertFalse(app.staticTexts["number-error-Pressure response"].exists,
+            XCTAssertFalse(app.staticTexts["number-error-Pan speed"].exists,
                 "Reset must discard an invalid draft's error")
             if !draft.isEmpty {
                 XCTAssertNotEqual(entry.exists ? entry.value as? String : nil, draft,
@@ -194,7 +194,7 @@ extension XCTestCase {
             workspaceActivate(app.buttons["settings-done"])
             XCTAssertTrue(app.buttons["settings-done"].waitForNonExistence(timeout: 5))
             workspaceActivate(app.buttons["settings-button"])
-            workspaceActivate(app.staticTexts["settings-page-input"])
+            workspaceActivate(app.staticTexts["settings-page-canvas"])
             XCTAssertTrue(value.waitForExistence(timeout: 10))
             XCTAssertEqual(value.value as? String, defaultDisplay,
                 "Done/reopen must retain Reset instead of restoring the discarded draft")
@@ -254,21 +254,21 @@ extension XCTestCase {
     }
 
     @MainActor func checkNumericSettingsDone(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"input"}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"canvas"}}]"#
         app.launch()
-        let value = app.buttons["number-value-Pressure response"]
-        let entry = app.textFields["number-entry-Pressure response"]
+        let value = app.buttons["number-value-Pan speed"]
+        let entry = app.textFields["number-entry-Pan speed"]
         XCTAssertTrue(value.waitForExistence(timeout: 20)); workspaceActivate(value)
         XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.typeText("1 + 0.25")
         workspaceActivate(app.buttons["settings-done"])
         XCTAssertTrue(entry.waitForNonExistence(timeout: 5))
         workspaceActivate(app.buttons["settings-button"])
         let search = app.textFields["settings-search"]
-        XCTAssertTrue(search.waitForExistence(timeout: 10)); workspaceActivate(search); search.typeText("Pressure response")
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); workspaceActivate(search); search.typeText("Pan speed")
         #if os(iOS)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         #endif
-        let result = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pressure response")).firstMatch
+        let result = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pan speed")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 5)); workspaceActivate(result)
         #if os(iOS)
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Opening a search result must dismiss the keyboard")

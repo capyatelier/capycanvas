@@ -10,6 +10,8 @@ mod screen_view;
 mod hdr;
 mod hdr_color_scale;
 mod effects;
+mod curve_editor;
+mod pressure_calibration;
 mod files;
 mod glass;
 mod histogram;

@@ -82,7 +82,7 @@ pub struct Settings {
     pub zen_reveal_at_edges: bool,
     /// Shared by Quick Mask and every saved selection, across documents.
     pub selection_painting: layer_core::SelectionPaintBehavior,
-    pub pressure_gamma: f32,
+    pub pressure_curve: layer_core::PressureResponse,
     pub cursor: CursorMode,
     pub hide_cursor_while_drawing: bool,
     pub pan_speed: f32,
@@ -128,7 +128,7 @@ impl Default for Settings {
             zen_show_capy: true,
             zen_reveal_at_edges: false,
             selection_painting: Default::default(),
-            pressure_gamma: 1.0,
+            pressure_curve: layer_core::PressureResponse::default(),
             cursor: CursorMode::default(),
             hide_cursor_while_drawing: true,
             pan_speed: 1.0,
@@ -229,7 +229,7 @@ impl Settings {
         if self.version != 1 {
             return Err("Unsupported settings version".into());
         }
-        for id in [PreferenceId::Pressure, PreferenceId::PanSpeed, PreferenceId::ZoomSpeed, PreferenceId::PredictionHorizon] {
+        for id in [PreferenceId::PanSpeed, PreferenceId::ZoomSpeed, PreferenceId::PredictionHorizon] {
             let (control, value, label) = self.numeric_field(id).unwrap();
             control.validate(value, label).map_err(|reason| reason.message(localization))?;
         }
@@ -350,7 +350,7 @@ pub enum PreferenceId {
     WheelBehavior,
     RotateWithTwoFingers,
     PassThroughGroups,
-    Pressure,
+    PenPressure,
     Feedback,
     PlatformPrediction,
     PredictionHorizon,
@@ -387,7 +387,7 @@ impl PreferenceId {
             Self::WheelBehavior => "wheel-behavior",
             Self::RotateWithTwoFingers => "rotate-with-two-fingers",
             Self::PassThroughGroups => "pass-through-groups",
-            Self::Pressure => "pressure",
+            Self::PenPressure => "pen-pressure",
             Self::Feedback => "feedback",
             Self::PlatformPrediction => "platform-prediction",
             Self::PredictionHorizon => "prediction-horizon",
@@ -469,6 +469,10 @@ pub enum PreferenceKind {
         label: String,
         url: String,
     },
+    Action {
+        label: String,
+        action: Box<UiAction>,
+    },
 }
 
 impl PreferenceKind {
@@ -478,7 +482,7 @@ impl PreferenceKind {
             Self::Choice { selected, .. } => PreferenceValue::Choice(*selected),
             Self::Swatches { value, .. } => PreferenceValue::Text(value.clone()),
             Self::Switch { active } => PreferenceValue::Bool(*active),
-            Self::Info { .. } | Self::Link { .. } => return None,
+            Self::Info { .. } | Self::Link { .. } | Self::Action { .. } => return None,
         })
     }
 
@@ -503,7 +507,7 @@ impl PreferenceKind {
                 swatch => swatch.label.clone(),
             },
             Self::Switch { active } => localizer.text(if *active { MessageId::SETTINGS_ON } else { MessageId::SETTINGS_OFF }).to_string(),
-            Self::Info { .. } | Self::Link { .. } => String::new(),
+            Self::Info { .. } | Self::Link { .. } | Self::Action { .. } => String::new(),
         }
     }
 }
@@ -933,7 +937,6 @@ impl Settings {
     fn numeric_field(&self, id: PreferenceId) -> Option<(NumericControl, f32, MessageId)> {
         use PreferenceId::*;
         Some(match id {
-            Pressure => (NumericControl::pressure(), self.pressure_gamma, MessageId::SETTINGS_PRESSURE_RESPONSE),
             PanSpeed => (NumericControl::number(0.25, 4., 0.05, 2).unit("×"), self.pan_speed, MessageId::SETTINGS_SCROLL_PAN_SPEED),
             ZoomSpeed => (NumericControl::number(0.25, 4., 0.05, 2).unit("×"), self.zoom_speed, MessageId::SETTINGS_SCROLL_ZOOM_SPEED),
             PredictionHorizon => (NumericControl { kind: NumericKind::Slider, ..NumericControl::number(0., 64., 1., 0).unit("ms") }, self.prediction_ms, MessageId::SETTINGS_PREDICTION_AMOUNT),
@@ -994,15 +997,10 @@ impl Settings {
     fn raw_pages(&self, platform: Platform, localizer: &Localizer) -> Vec<PreferencePage> {
         use PreferenceId::*;
         let mut input = vec![
-            row(
-                Pressure,
-                &localizer.text(MessageId::SETTINGS_PRESSURE_RESPONSE),
-                &localizer.text(MessageId::SETTINGS_LOWER_VALUES_MAKE_LIGHT_PEN_PRESSURE_STRONGER),
-                PreferenceKind::Number {
-                    control: self.numeric_field(Pressure).unwrap().0,
-                    value: self.pressure_gamma,
-                },
-            ),
+            row(PenPressure, &localizer.text(MessageId::PRESSURE_TITLE), "", PreferenceKind::Action {
+                label: localizer.text(MessageId::COMMON_ADJUST).to_string(),
+                action: Box::new(UiAction::Invoke { command: CommandId::PenPressure }),
+            }),
             row(
                 Feedback,
                 &localizer.text(MessageId::SETTINGS_ENABLE_STROKE_PREDICTION),
@@ -1463,7 +1461,6 @@ impl Settings {
                 }
                 .filter(|color| platform.system_accent() || *color != DEFAULT_ACCENT);
             }
-            Pressure => self.pressure_gamma = n,
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
             WheelBehavior => self.wheel_zoom = value.choice().unwrap() == 1,
@@ -1483,7 +1480,7 @@ impl Settings {
                 }
             }
             EraserErase => self.eraser_end.erase = matches!(value, PreferenceValue::Bool(true)),
-            Version | License | Renderer | Website | SourceCode | Dedication => {
+            PenPressure | Version | License | Renderer | Website | SourceCode | Dedication => {
                 return Err(localizer.text(MessageId::SETTINGS_THIS_INFORMATION_IS_READ_ONLY).to_string());
             }
         }
@@ -2502,7 +2499,7 @@ mod copy_tests {
                     }
                     PreferenceKind::Number { control, .. } => PreferenceValue::Number(control.max as f32),
                     PreferenceKind::Swatches { .. } => PreferenceValue::Text("#123456".into()),
-                    PreferenceKind::Info { .. } | PreferenceKind::Link { .. } => unreachable!(),
+                    PreferenceKind::Info { .. } | PreferenceKind::Link { .. } | PreferenceKind::Action { .. } => unreachable!(),
                 };
                 settings.edit(row.id, value, platform).unwrap();
                 let edited = settings.field(row.id, platform).unwrap().reset.unwrap();
@@ -2517,7 +2514,7 @@ mod copy_tests {
                     PreferenceId::DarkBase,
                     PreferenceValue::Text("#ABCDEF".into()),
                 ),
-                (PreferenceId::Pressure, PreferenceValue::Number(2.0)),
+                (PreferenceId::PanSpeed, PreferenceValue::Number(2.0)),
                 (
                     PreferenceId::PredictionHorizon,
                     PreferenceValue::Number(32.0),
@@ -2626,9 +2623,7 @@ mod copy_tests {
                     .title,
                 "Light theme base color"
             );
-            for id in [PreferenceId::Pressure, PreferenceId::Feedback] {
-                assert!(!settings.field(id, platform).unwrap().description.is_empty());
-            }
+            assert!(!settings.field(PreferenceId::Feedback, platform).unwrap().description.is_empty());
         }
     }
 
@@ -2718,22 +2713,22 @@ mod restore_tests {
     fn saved_settings_keep_every_field_this_build_reads() {
         let chosen = Settings {
             theme: Some(Theme::Dark),
-            pan_speed: 2.0,
+            zoom_speed: 2.0,
             zen_show_capy: false,
             zen_reveal_at_edges: true,
-            pressure_gamma: 1.5,
+            pan_speed: 1.5,
             ..Default::default()
         };
         let mut saved = serde_json::to_value(&chosen).unwrap();
         assert_eq!(Settings::restore(&saved.to_string()), chosen);
         saved["retired_setting"] = serde_json::json!(true);
         saved["zen_reveal_at_edges"] = serde_json::json!({});
-        saved["pressure_gamma"] = serde_json::json!(-1.0);
+        saved["pan_speed"] = serde_json::json!(-1.0);
         assert_eq!(
             Settings::restore(&saved.to_string()),
             Settings {
                 zen_reveal_at_edges: false,
-                pressure_gamma: 1.0,
+                pan_speed: 1.0,
                 ..chosen
             }
         );
@@ -2774,7 +2769,7 @@ mod localization_tests {
         let english = Localizer::shared(UiLanguage::English);
         let mut state = PreferencesState {
             page: SettingsPage::Input,
-            reveal: Some(PreferenceId::Pressure),
+            reveal: Some(PreferenceId::PanSpeed),
             query: "Literal 日本語 🖌".into(),
             searching: true,
             search_focus: 12,
@@ -2782,7 +2777,7 @@ mod localization_tests {
             ..Default::default()
         };
         let mut settings = Settings::default();
-        let action = PreferenceAction::Edit { id: PreferenceId::Pressure, value: PreferenceValue::Text("１．５".into()) };
+        let action = PreferenceAction::Edit { id: PreferenceId::PanSpeed, value: PreferenceValue::Text("１．５".into()) };
         state.edit(&mut settings, action.clone(), Platform::Gtk, &english);
         let error = state.error.clone().unwrap();
         let before = settings.clone();
@@ -2794,7 +2789,7 @@ mod localization_tests {
             assert_eq!(state.error, expected.error);
             assert_eq!(settings, before);
             assert_eq!(state.page, SettingsPage::Input);
-            assert_eq!(state.reveal, Some(PreferenceId::Pressure));
+            assert_eq!(state.reveal, Some(PreferenceId::PanSpeed));
             assert_eq!(state.query, "Literal 日本語 🖌");
             assert!(state.searching);
             assert_eq!(state.search_focus, 12);
@@ -2995,12 +2990,12 @@ mod launch_language_tests {
         for saved in ["", "broken", "[]", "{}", r#"{"language":"broken"}"#, r#"{"language":{"Explicit":"unknown"}}"#] {
             assert_eq!(Settings::language_preference(saved), LanguagePreference::System);
         }
-        for saved in [r#"{"language":{"Explicit":"en"},"pressure_gamma":"broken"}"#, r#"{"language":{"Explicit":"en"},"pressure_gamma":-5,"version":999}"#] {
+        for saved in [r#"{"language":{"Explicit":"en"},"pan_speed":"broken"}"#, r#"{"language":{"Explicit":"en"},"pan_speed":-5,"version":999}"#] {
             assert_eq!(Settings::language_preference(saved), LanguagePreference::Explicit(UiLanguage::English));
         }
         for language in UiLanguage::ALL {
             let expected = if crate::localization::SHIPPED_LANGUAGES.contains(&language) { LanguagePreference::Explicit(language) } else { LanguagePreference::System };
-            for other_fields in [serde_json::json!({}), serde_json::json!({"pressure_gamma": "broken", "pan_speed": -1, "new_document": null, "version": 999})] {
+            for other_fields in [serde_json::json!({}), serde_json::json!({"zoom_speed": "broken", "pan_speed": -1, "new_document": null, "version": 999})] {
                 let mut fields = other_fields;
                 fields["language"] = serde_json::to_value(LanguagePreference::Explicit(language)).unwrap();
                 let saved = fields.to_string();
@@ -3021,11 +3016,11 @@ mod numeric_input_tests {
         let mut settings = Settings::default();
         let before = settings.clone();
         for text in ["１．５", "２３", "１２３", "５", "１＋１", "１，５", "２ ×", "ＮａＮ", "ｉｎｆ", "ﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺﷺ"] {
-            assert!(settings.localized_edit(PreferenceId::Pressure, PreferenceValue::Text(text.into()), Platform::Gtk, &localization).is_err(), "{text}");
+            assert!(settings.localized_edit(PreferenceId::PanSpeed, PreferenceValue::Text(text.into()), Platform::Gtk, &localization).is_err(), "{text}");
             assert_eq!(settings, before);
         }
-        settings.localized_edit(PreferenceId::Pressure, PreferenceValue::Text("1.5".into()), Platform::Gtk, &localization).unwrap();
-        assert_eq!(settings.pressure_gamma, 1.5);
+        settings.localized_edit(PreferenceId::PanSpeed, PreferenceValue::Text("1.5".into()), Platform::Gtk, &localization).unwrap();
+        assert_eq!(settings.pan_speed, 1.5);
         settings.validate_localized(&localization).unwrap();
     }
 }

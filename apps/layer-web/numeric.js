@@ -1,4 +1,16 @@
 import { composingKey } from "./text-input.js";
+export function gestureNumberField({numberField,numeric,label,request,send,gesture,valueOnly=false}) {
+  let owner;
+  const action=value=>({...owner??request(),operation:{type:"value",value}});
+  const number=numberField(numeric,label,value=>send(owner?gesture("move",action(value)):action(value)),valueOnly,valueOnly);
+  number.onEditPhase=phase=>{
+    if(phase==="down")owner=request();
+    const next=action(number.getValue());
+    if(phase!=="down")owner=null;
+    send(gesture(phase,next));
+  };
+  if(!number.panel)captureSliderContacts(number);return number;
+}
 // Native text/range controls around Rust's numeric policy. No expression,
 // range-mapping, unit-formatting or rounding rules are duplicated here.
 export function createNumberField({ control, label, labels: captions, resolve, errorCaption, onChange, icon, inline = false, widthSamples, valueOnly = false, panel = true }) {
@@ -49,6 +61,11 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     const active=gesture&&!cancelled;
     gesture = cancelled = false; heldKey = null;
     if(active)root.onEditPhase?.(phase);
+    if(buttonValue && !editing && !entry.hidden){
+      const focused=document.activeElement===entry;
+      entry.hidden=true;valueButton.hidden=false;
+      if(focused)valueButton.focus();
+    }
   };
   const blurGesture = () => scrub ? finishScrub(true) : finishGesture();
   const beginGesture = () => {
@@ -119,7 +136,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     if (!cancel && (composingKey({target:entry}) || !apply({ type: "expression", text: entry.value }))) return false;
     editing = false;clearError();
     entry.value = ranged ? display.edit : display.text;
-    if (buttonValue) { entry.hidden = true; valueButton.hidden = false; }
+    if (buttonValue && !(gesture && heldKey && !cancelled)) { entry.hidden = true; valueButton.hidden = false; }
     return true;
   }
   valueButton.addEventListener("click", e => { if(suppressClick){suppressClick=false;e.preventDefault();}else begin(); });

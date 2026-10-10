@@ -385,3 +385,11 @@ native-screen-details = 화면 세부 정보
 native-color-inspection-hdr-help = 문서의 선형 RGB 및 휘도 Y. 점선: 기준 흰색(0 EV). 0과 음수 값은 따로 집계합니다. 보이는 용지를 포함하며, 투명한 픽셀과 화면 오버레이는 제외합니다.
 common-failure-details = 오류 세부 정보
 common-copy-failure-details = 오류 세부 정보 복사
+
+pressure-title = 필압
+pressure-firmer = 더 강하게
+pressure-lighter = 더 가볍게
+pressure-curve-help = 클릭하여 제어점을 추가합니다. 점을 드래그하여 곡선을 조정합니다. 내부 점을 두 번 클릭하거나 그래프 밖으로 드래그하면 삭제됩니다.
+pressure-description = 그리면서 필압을 조정합니다.
+
+common-adjust = 조정…

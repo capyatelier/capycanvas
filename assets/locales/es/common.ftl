@@ -570,3 +570,11 @@ native-screen-details = Detalles de la pantalla
 native-color-inspection-hdr-help = RGB lineal del documento y luminancia Y. Línea discontinua: blanco de referencia (0 EV). Los valores cero y negativos se cuentan por separado. Incluye el papel visible; excluye los píxeles transparentes y las superposiciones de visualización.
 common-failure-details = Detalles del error
 common-copy-failure-details = Copiar detalles del error
+
+pressure-title = Presión del lápiz
+pressure-firmer = Más firme
+pressure-lighter = Más suave
+pressure-curve-help = Haz clic para añadir un punto de control. Arrastra los puntos para dar forma a la curva. Haz doble clic en un punto interior o arrástralo fuera del gráfico para eliminarlo.
+pressure-description = Ajusta la presión del lápiz mientras dibujas.
+
+common-adjust = Ajustar…

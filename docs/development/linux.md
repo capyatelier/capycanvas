@@ -320,6 +320,13 @@ replacement and private recovery. Run in both themes with `--native-recovery`.
 default-button action and candidate-key retirement in both themes. Genuine
 engine composition is a separate acceptance check in a private display.
 
+Pen pressure changes use `native_pressure_calibration --tablet` in both themes,
+then `native_curve_graph_numbers_pages_and_history` for the shared widget.
+See [pen pressure](../ui/pen-pressure.md) for sustained-motion measurement.
+The tablet proxy reserves its injected object IDs and translates compositor
+object IDs using the installed Wayland protocol XML. Run its clipboard/offer
+regressions with `python3 -m unittest discover -s apps/layer-linux/bench -p 'test_*.py'`.
+
 Numeric widget changes use `native_number_controls`, `native_slider_feedback`
 and the toolbar component mouse/touch, pen and value-control journeys. They cover
 both themes, editing, slider feedback, popovers and toolbar allocation.
