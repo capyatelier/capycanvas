@@ -58,13 +58,12 @@ impl RefineKind {
     }
     fn numeric(self) -> NumericControl {
         match self {
-            Self::Feather => NumericControl::number(0.1, SelectionRefinement::MAX_FEATHER.into(), 1., 1),
-            Self::Smooth => NumericControl::number(1., Self::MAX_SMOOTH.into(), 1., 0),
+            Self::Feather => NumericControl::number(0.1, SelectionRefinement::MAX_FEATHER.into(), 1., 1).unit("px"),
+            Self::Smooth => NumericControl::whole_pixels(1., Self::MAX_SMOOTH.into()),
             Self::Grow | Self::Shrink | Self::Border => {
-                NumericControl::number(1., SelectionRefinement::MAX_RESIZE.into(), 1., 0)
+                NumericControl::whole_pixels(1., SelectionRefinement::MAX_RESIZE.into())
             }
         }
-        .unit("px")
     }
     fn steps(self, radius: f32) -> Vec<ModifyStep> {
         let r = radius as i32;

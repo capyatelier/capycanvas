@@ -130,6 +130,18 @@ pub enum NumericKind {
 
 pub use layer_core::NumericMapping;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumericSliderSnap {
+    #[default]
+    Resolution,
+    Pixels,
+    Percent,
+    Whole,
+}
+
+const FRACTIONAL_PIXEL_LIMIT: f64 = 32.;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NumericControl {
     pub kind: NumericKind,
@@ -142,9 +154,8 @@ pub struct NumericControl {
     pub step: f64,
     /// Smallest stored increment, separate from plus/minus stepping.
     pub resolution: f64,
-    /// Above this value edits use whole units; formatting never mutates state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub integer_above: Option<f64>,
+    #[serde(default)]
+    pub slider_snap: NumericSliderSnap,
     pub digits: u32,
     /// Displayed value = stored value * scale. E.g. opacity uses 100 and "%".
     pub scale: f64,
@@ -171,7 +182,7 @@ impl NumericControl {
             soft_min: min,
             soft_max: max,
             step,
-            integer_above: None,
+            slider_snap: NumericSliderSnap::Resolution,
             resolution: 10f64.powi(-(digits as i32)),
             digits,
             scale: 1.0,
@@ -182,6 +193,12 @@ impl NumericControl {
     }
     pub fn unit(mut self, unit: &str) -> Self {
         self.unit = unit.into();
+        self.slider_snap = match unit {
+            "px" => NumericSliderSnap::Pixels,
+            "%" => NumericSliderSnap::Percent,
+            "°" => NumericSliderSnap::Whole,
+            _ => NumericSliderSnap::Resolution,
+        };
         self
     }
     pub fn percent() -> Self {
@@ -189,6 +206,7 @@ impl NumericControl {
             kind: NumericKind::Slider,
             scale: 100.0,
             unit: "%".into(),
+            slider_snap: NumericSliderSnap::Percent,
             resolution: 0.001,
             digits: 1,
             ..Self::number(0.0, 1.0, 0.01, 2)
@@ -197,8 +215,13 @@ impl NumericControl {
     pub fn brush_size() -> Self {
         Self {
             mapping: NumericMapping::Log,
-            integer_above: Some(32.),
             ..Self::number(0.5, 2048.0, 1.0, 1).unit("px")
+        }
+    }
+    pub fn whole_pixels(min: f64, max: f64) -> Self {
+        Self {
+            slider_snap: NumericSliderSnap::Resolution,
+            ..Self::number(min, max, 1., 0).unit("px")
         }
     }
     /// Compact layer header: display 0–100 without a unit; keep stored precision.
@@ -216,6 +239,7 @@ impl NumericControl {
             mapping: NumericMapping::Log,
             scale: 100.0,
             unit: "%".into(),
+            slider_snap: NumericSliderSnap::Percent,
             resolution: 0.0001,
             ..Self::number(f64::from(crate::MIN_ZOOM), f64::from(crate::MAX_ZOOM), 0.1, 0)
         }
@@ -229,6 +253,7 @@ impl NumericControl {
             scale: 180.0 / std::f64::consts::PI,
             resolution: std::f64::consts::PI / 1800.0,
             unit: "°".into(),
+            slider_snap: NumericSliderSnap::Whole,
             ..Self::number(-std::f64::consts::PI, std::f64::consts::PI, std::f64::consts::PI / 180.0, 1)
         }
     }
@@ -259,7 +284,6 @@ impl NumericControl {
             || self.step <= 0.0
             || self.resolution <= 0.0
             || self.scale <= 0.0
-            || self.integer_above.is_some_and(|v| !v.is_finite())
             || self.digits > 9
             || self.unit.len() > 16
         {
@@ -295,12 +319,51 @@ impl NumericControl {
             NumericMapping::Power { exponent } => value.signum() * value.abs().powf(1.0 / exponent),
         }
     }
+    fn fine_resolution(&self) -> f64 {
+        if self.kind == NumericKind::Slider && self.slider_snap != NumericSliderSnap::Resolution {
+            self.resolution.min(0.1 / self.scale)
+        } else { self.resolution }
+    }
+    fn display_digits(&self) -> u32 {
+        if self.fine_resolution() * self.scale < 1. && self.slider_snap != NumericSliderSnap::Resolution {
+            self.digits.max(1)
+        } else { self.digits }
+    }
+    fn slider_resolution(&self, value: f64) -> f64 {
+        let shown = value * self.scale;
+        let increment = match self.slider_snap {
+            NumericSliderSnap::Resolution => return self.resolution,
+            NumericSliderSnap::Pixels if shown.abs() <= FRACTIONAL_PIXEL_LIMIT => 0.1,
+            NumericSliderSnap::Percent if shown <= self.soft_min * self.scale + 5.
+                || shown >= self.soft_max * self.scale - 5. => 0.1,
+            _ => 1.,
+        };
+        (increment / self.scale).max(self.fine_resolution())
+    }
+    fn quantized(&self, value: f64, slider: bool) -> f64 {
+        let resolution = if slider { self.slider_resolution(value) } else { self.fine_resolution() };
+        ((value / resolution).round() * resolution).clamp(self.min, self.max)
+    }
+    fn value_at_position(&self, position: f64) -> f64 {
+        self.unmapped(self.mapped(self.soft_min)
+            + position.clamp(0., 1.) * (self.mapped(self.soft_max) - self.mapped(self.soft_min)))
+    }
+    pub fn position_matches_value(&self, position: f64, value: f64) -> bool {
+        self.check().is_ok() && position.is_finite() && value.is_finite()
+            && self.quantized(self.value_at_position(position), false)
+                == self.quantized(value.clamp(self.soft_min, self.soft_max), false)
+    }
+    pub fn values_equal(&self, left: f64, right: f64) -> bool {
+        self.check().is_ok() && left.is_finite() && right.is_finite()
+            && self.quantized(left, false) == self.quantized(right, false)
+    }
     pub fn resolve(&self, value: f64, operation: NumericOperation) -> Result<NumericValue, NumericError> {
         self.check()?;
         if !value.is_finite() {
             return Err(NumericError::FiniteNumber);
         }
         let formatting = matches!(operation, NumericOperation::Format);
+        let slider = matches!(operation, NumericOperation::Position { .. });
         let mut resolved = match operation {
             NumericOperation::Format => value,
             NumericOperation::Step { steps } => {
@@ -318,11 +381,7 @@ impl NumericControl {
                 if !position.is_finite() {
                     return Err(NumericError::InvalidPosition);
                 }
-                self.unmapped(
-                    self.mapped(self.soft_min)
-                        + position.clamp(0.0, 1.0)
-                            * (self.mapped(self.soft_max) - self.mapped(self.soft_min)),
-                )
+                self.value_at_position(position)
             }
             NumericOperation::Expression { text } => {
                 let text = bounded_numeric_text(&text)?;
@@ -335,18 +394,15 @@ impl NumericControl {
         }
         // Formatting an externally supplied value must never change it.
         if !formatting {
-            resolved =
-                ((resolved / self.resolution).round() * self.resolution).clamp(self.min, self.max);
-            if self.integer_above.is_some_and(|limit| resolved > limit) {
-                resolved = resolved.round().clamp(self.min, self.max);
-            }
+            resolved = self.quantized(resolved, slider);
         }
         let shown = if resolved == 0.0 {
             0.0
         } else {
             resolved * self.scale
         };
-        let edit = format!("{:.*}", self.digits as usize, shown);
+        let fixed = format!("{:.*}", self.display_digits() as usize, shown);
+        let edit = trim_fractional_zeros(&fixed);
         let text = if let Some(labels) = &self.endpoint_labels
             && (resolved == self.min || resolved == self.max)
         {
@@ -356,18 +412,19 @@ impl NumericControl {
         } else {
             format!("{edit} {}", self.unit)
         };
+        let scrub_text = if self.unit.is_empty() { fixed } else { format!("{fixed} {}", self.unit) };
         Ok(NumericValue {
             value: resolved,
             text,
             edit,
+            scrub_text,
             fill: ((self.mapped(resolved.clamp(self.soft_min, self.soft_max))
                 - self.mapped(self.soft_min))
                 / (self.mapped(self.soft_max) - self.mapped(self.soft_min)))
             .clamp(0.0, 1.0),
         })
     }
-    /// Short toolbar readout. Omit fractional digits at three digits and above;
-    /// the editable expression and stored value retain their full precision.
+    /// Short toolbar readout with at most one fractional digit.
     pub fn compact_text(&self, value: f64) -> String {
         let text = self.compact_value(value);
         if self.unit.is_empty() {
@@ -381,15 +438,15 @@ impl NumericControl {
     /// these with their native font to reserve a stable input footprint.
     pub fn width_samples(&self, compact: bool) -> Vec<String> {
         let mut values = vec![self.min, self.max];
-        if self.digits > 0 {
+        if self.display_digits() > 0 {
             values.extend([
                 ((self.max * self.scale).ceil() - 0.1) / self.scale,
                 ((self.min * self.scale).floor() + 0.1) / self.scale,
                 99.9 / self.scale,
                 -99.9 / self.scale,
             ]);
-            if let Some(limit) = self.integer_above {
-                values.push(limit - 0.1 / self.scale);
+            if self.slider_snap == NumericSliderSnap::Pixels {
+                values.push((FRACTIONAL_PIXEL_LIMIT - 0.1) / self.scale);
             }
         }
         values
@@ -408,19 +465,9 @@ impl NumericControl {
     /// Value only, for hosts that present the unit separately.
     pub fn compact_value(&self, value: f64) -> String {
         let shown = value * self.scale;
-        let digits = if (shown * 10.).round().abs() >= 1000.
-            || self.integer_above.is_some_and(|v| value > v)
-        {
-            0
-        } else {
-            self.digits.min(1)
-        };
+        let digits = self.display_digits().min(1);
         let text = format!("{:.*}", digits as usize, shown);
-        if digits > 0 {
-            text.trim_end_matches('0').trim_end_matches('.').to_owned()
-        } else {
-            text
-        }
+        trim_fractional_zeros(&text)
     }
     fn expression(&self, source: &str) -> Result<f64, NumericError> {
         let text = bounded_numeric_text(source)?.trim();
@@ -446,12 +493,16 @@ impl NumericControl {
     }
 }
 
+fn trim_fractional_zeros(text: &str) -> String {
+    let trimmed = if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.') } else { text };
+    if trimmed == "-0" { "0".into() } else { trimmed.into() }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NumericOperation {
     Format,
-    /// Native spin buttons report a value; native sliders report a normalized
-    /// position. Both use the same rounding, bounds and mapping as typed input.
+    /// Native spin buttons report a value; sliders report a normalized position.
     Value {
         value: f64,
     },
@@ -474,6 +525,7 @@ pub struct NumericValue {
     pub value: f64,
     pub text: String,
     pub edit: String,
+    pub scrub_text: String,
     pub fill: f64,
 }
 #[derive(Deserialize)]
@@ -546,7 +598,7 @@ mod tests {
         control.default_value = Some(1.0);
         let result = control.resolve(0.5, empty()).unwrap();
         assert_eq!(result.value, 1.0);
-        assert_eq!(result.text, "100.0 %");
+        assert_eq!(result.text, "100 %");
         assert!(
             control
                 .resolve(
@@ -592,7 +644,7 @@ mod tests {
         assert!(expr(&spec, &"1+".repeat(200)).is_err());
         let percent = expr(&NumericControl::percent(), "25+25%").unwrap();
         assert_eq!(percent.value, 0.5);
-        assert_eq!(percent.text, "50.0 %");
+        assert_eq!(percent.text, "50 %");
     }
     #[test]
     fn slider_and_typed_limits_and_steps() {
@@ -681,7 +733,7 @@ mod tests {
 mod compact_tests {
     use super::*;
     #[test]
-    fn size_rounds_edits_above_32_and_compact_readouts_preserve_values() {
+    fn size_slider_uses_the_existing_32_pixel_threshold_and_fine_edits_keep_decimals() {
         let spec = NumericControl::brush_size();
         for (value, expected) in [
             (31.8, 31.8),
@@ -691,10 +743,14 @@ mod compact_tests {
             (517.6, 518.),
             (2047.9, 2048.),
         ] {
+            let fill = spec.resolve(value, NumericOperation::Format).unwrap().fill;
             let result = spec
-                .resolve(value, NumericOperation::Value { value })
+                .resolve(value, NumericOperation::Position { position: fill })
                 .unwrap();
             assert!((result.value - expected).abs() < 0.0001);
+            for operation in [NumericOperation::Value { value }, NumericOperation::Expression { text: value.to_string() }] {
+                assert!((spec.resolve(value, operation).unwrap().value - value).abs() < 0.0001);
+            }
             assert_eq!(
                 spec.resolve(value, NumericOperation::Format).unwrap().value,
                 value
@@ -704,7 +760,7 @@ mod compact_tests {
             (9.5, "9.5"),
             (32., "32"),
             (99., "99"),
-            (999.2, "999"),
+            (999.2, "999.2"),
             (2048., "2048"),
         ] {
             assert_eq!(spec.compact_text(value), format!("{expected} px"));
@@ -712,6 +768,65 @@ mod compact_tests {
         }
         assert_eq!(NumericControl::percent().compact_text(1.), "100 %");
         assert_eq!(NumericControl::percent().compact_text(0.999), "99.9 %");
+    }
+
+    #[test]
+    fn percentage_sliders_keep_tenths_within_five_displayed_points_of_soft_edges() {
+        let mut extended = NumericControl::percent(); extended.max = 10.;
+        for spec in [NumericControl::percent(), NumericControl::number(-100., 100., 1., 0).unit("%"), extended] {
+            let value_at = |shown: f64| shown / spec.scale;
+            for (shown, expected) in [(spec.soft_min * spec.scale + 4.3, spec.soft_min * spec.scale + 4.3),
+                (spec.soft_min * spec.scale + 5.6, spec.soft_min * spec.scale + 6.),
+                (spec.soft_max * spec.scale - 5.6, spec.soft_max * spec.scale - 6.),
+                (spec.soft_max * spec.scale - 4.3, spec.soft_max * spec.scale - 4.3)] {
+                let value = value_at(shown);
+                let fill = spec.resolve(value, NumericOperation::Format).unwrap().fill;
+                let slider = spec.resolve(value, NumericOperation::Position { position: fill }).unwrap();
+                assert!((slider.value * spec.scale - expected).abs() < 1e-8);
+                assert!((spec.resolve(value, NumericOperation::Expression { text: shown.to_string() }).unwrap().value - value).abs() < 1e-8);
+            }
+        }
+    }
+
+    #[test]
+    fn degree_sliders_snap_in_displayed_units_and_fine_scrubs_survive_model_echoes() {
+        let spec = NumericControl::rotation();
+        let value = 12.6 / spec.scale;
+        let fill = spec.resolve(value, NumericOperation::Format).unwrap().fill;
+        let slider = spec.resolve(value, NumericOperation::Position { position: fill }).unwrap();
+        assert!((slider.value * spec.scale - 13.).abs() < 1e-10);
+        assert!(spec.values_equal(slider.value, f64::from(slider.value as f32)));
+        let scrub = NumericControl::brush_size().resolve(120., NumericOperation::Scrub { origin: 120., pixels: 2. }).unwrap();
+        assert_eq!(scrub.value, 120.5);
+        assert_eq!(scrub.text, "120.5 px");
+        for (spec, value) in [(NumericControl::brush_size(), 120.5), (NumericControl::percent(), 0.355),
+            (spec.clone(), value)] {
+            let value = f64::from(value as f32);
+            let fill = spec.resolve(value, NumericOperation::Format).unwrap().fill;
+            assert!(spec.position_matches_value(fill, value));
+            assert!(!spec.position_matches_value(fill + 0.02, value));
+        }
+        let extended = NumericControl { max: 10., ..NumericControl::percent() };
+        assert!(extended.position_matches_value(1., 2.3456));
+        assert!(!extended.position_matches_value(0.98, 2.3456));
+    }
+
+    #[test]
+    fn settled_numbers_trim_zeroes_and_scrub_readouts_keep_their_fractional_width() {
+        for (spec, value, text, scrub_text) in [
+            (NumericControl::brush_size(), 120., "120 px", "120.0 px"),
+            (NumericControl::percent(), 0.5, "50 %", "50.0 %"),
+            (NumericControl::number(-180., 180., 1., 0).unit("°"), 10., "10 °", "10.0 °"),
+            (NumericControl::pressure(), 1., "1 ×", "1.00 ×"),
+        ] {
+            let result = spec.resolve(value, NumericOperation::Format).unwrap();
+            assert_eq!(result.text, text);
+            assert_eq!(result.scrub_text, scrub_text);
+            assert_eq!(result.value, value);
+        }
+        assert_eq!(NumericControl::brush_size().resolve(120.5, NumericOperation::Format).unwrap().text, "120.5 px");
+        let count = NumericControl::number(0., 16., 1., 0).unit("px");
+        assert_eq!(count.resolve(0., NumericOperation::Expression { text: "5.5".into() }).unwrap().value, 6.);
     }
 }
 

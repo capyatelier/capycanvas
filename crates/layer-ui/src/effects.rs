@@ -483,6 +483,7 @@ pub(super) fn number_control(p: &layer_core::EffectParameter) -> Option<NumericC
     };
     let (step,decimals)=if p.dimension==layer_core::authored::Dimension::Count {(1.,0)} else {(*step,*decimals)};
     let mut numeric = NumericControl::number(*min as f64, *max as f64, step as f64, decimals as u32).unit(unit);
+    if p.dimension == layer_core::authored::Dimension::Count { numeric.slider_snap = crate::NumericSliderSnap::Resolution; }
     numeric.mapping=p.mapping;
     if let Some([low,high])=p.soft_bounds {numeric.soft_min=low;numeric.soft_max=high;}
     // Percentages express an amount, not an item count, even when the

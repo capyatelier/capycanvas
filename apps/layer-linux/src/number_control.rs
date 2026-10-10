@@ -16,6 +16,7 @@ mod imp {
         pub(super) composition_keys: crate::input::CompositionKeys,
         pub error: RefCell<Option<layer_ui::NumericError>>,
         pub editing: Cell<bool>,
+        pub scrubbing: Cell<bool>,
         pub entry: OnceCell<gtk::Entry>,
         pub display: OnceCell<gtk::Button>,
         pub stack: OnceCell<gtk::Stack>,
@@ -582,9 +583,6 @@ impl NumberControl {
             spin.connect_input(glib::clone!(#[weak] control, #[upgrade_or] Some(Err(())), move |spin| {
                 Some(control.text_input(&spin.text()).map(|value| value.value * control.spec().scale))
             }));
-            spin.connect_output(glib::clone!(#[weak] control, #[upgrade_or] glib::Propagation::Proceed, move |_| {
-                if control.input_valid() { glib::Propagation::Proceed } else { glib::Propagation::Stop }
-            }));
             spin.connect_changed(glib::clone!(#[weak] control, move |spin| {
                 if !control.imp().updating.get() && !control.imp().composing.get() {
                     let _ = control.text_input(&spin.text());
@@ -607,11 +605,11 @@ impl NumberControl {
                 }
             ));
             spin.connect_output(glib::clone!(#[weak] control, #[upgrade_or] glib::Propagation::Proceed, move |spin| {
-                let text = control.imp().presented_text.borrow().clone();
-                if let Some(text) = text {
-                    spin.set_text(&text);
-                    glib::Propagation::Stop
-                } else { glib::Propagation::Proceed }
+                if !control.input_valid() { return glib::Propagation::Stop; }
+                let Ok(value) = control.spec().resolve(spin.value() / control.spec().scale, NumericOperation::Format) else { return glib::Propagation::Proceed; };
+                let text = control.imp().presented_text.borrow().clone().unwrap_or(value.edit);
+                spin.set_text(&text);
+                glib::Propagation::Stop
             }));
             header.append(&spin);
             control.imp().spin.set(spin).unwrap();
@@ -925,6 +923,7 @@ impl NumberControl {
                     return;
                 }
                 active.set(true);
+                if panel { control.set_scrubbing(true); }
                 g.set_state(gtk::EventSequenceState::Claimed);
                 control.apply(if panel { NumericOperation::Scrub { origin: origin.get(), pixels: -dy } }
                     else { NumericOperation::Position { position: origin.get() - dy / 200. } });
@@ -932,9 +931,13 @@ impl NumberControl {
         ));
         drag.connect_drag_end(glib::clone!(#[weak(rename_to=control)] self, #[strong] origin, #[strong] active, #[strong] offset, move |gesture, _, dy| {
             if active.replace(false) && panel { control.apply(NumericOperation::Scrub { origin: origin.get(), pixels: -offset(gesture, dy) }); }
+            control.set_scrubbing(false);
         }));
         drag.connect_cancel(glib::clone!(#[weak(rename_to=control)] self, #[strong] origin, #[strong] active, move |_, _| {
-            if panel && active.replace(false) && control.is_mapped() { control.cancel_value_drag(origin.get()); }
+            if panel && active.replace(false) {
+                control.set_scrubbing(false);
+                if control.is_mapped() { control.cancel_value_drag(origin.get()); }
+            }
         }));
         if panel {
             let keys = gtk::EventControllerKey::new();
@@ -964,10 +967,17 @@ impl NumberControl {
         display.add_controller(scroll);
     }
     fn cancel_value_drag(&self, value: f64) {
+        self.set_scrubbing(false);
         self.emit_by_name::<()>("edit-cancelled", &[]);
         let changed = self.value() != value;
         self.set_value(value);
         if changed { self.emit_by_name::<()>("value-changed", &[]); }
+    }
+    fn set_scrubbing(&self, scrubbing: bool) {
+        if self.imp().scrubbing.replace(scrubbing) != scrubbing {
+            let text = self.imp().presented_text.borrow().clone();
+            self.present_value(self.value(), text.as_deref());
+        }
     }
     fn spec(&self) -> &NumericControl {
         self.imp().spec.get().unwrap()
@@ -994,7 +1004,8 @@ impl NumberControl {
             editor.present_value(value, text);
         }
         if let Some(label) = imp.value_label.get() {
-            label.set_text(&if let Some(text) = text { text.to_string() } else if imp.compact.get() {
+            let readout = if imp.scrubbing.get() { result.scrub_text.clone() }
+            else if let Some(text) = text { text.to_string() } else if imp.compact.get() {
                 if imp.separate_unit.get() {
                     self.spec().compact_value(value)
                 } else {
@@ -1002,11 +1013,12 @@ impl NumberControl {
                 }
             } else {
                 result.text.clone()
-            });
+            };
+            label.set_text(&readout);
             imp.display
                 .get()
                 .unwrap()
-                .update_property(&[gtk::accessible::Property::ValueText(text.unwrap_or(&result.text))]);
+                .update_property(&[gtk::accessible::Property::ValueText(&readout)]);
         }
         if let Some(slider) = imp.slider.get() {
             slider.set_value(result.fill);
@@ -1228,6 +1240,9 @@ impl NumberControl {
         true
     }
     fn apply(&self, op: NumericOperation) -> bool {
+        if matches!(&op, NumericOperation::Position { position } if self.spec().position_matches_value(*position, self.value())) {
+            return true;
+        }
         if matches!(&op, NumericOperation::Expression { text } if self.imp().presented_text.borrow().as_deref() == Some(text.as_str())) {
             self.feedback(None);
             return true;
@@ -1235,20 +1250,7 @@ impl NumberControl {
         match self.spec().resolve(self.value(), op) {
             Ok(v) => {
                 self.feedback(None);
-                // GtkRange can re-emit after the synchronous updating guard has
-                // ended. Compare at the core's resolution: an f32 model echo is
-                // not a new edit of the f64 widget's rounded value.
-                let current = self
-                    .spec()
-                    .resolve(
-                        self.value(),
-                        NumericOperation::Value {
-                            value: self.value(),
-                        },
-                    )
-                    .unwrap()
-                    .value;
-                if v.value != current {
+                if !self.spec().values_equal(v.value, self.value()) {
                     self.set_value(v.value);
                     self.emit_by_name::<()>("value-changed", &[]);
                 }

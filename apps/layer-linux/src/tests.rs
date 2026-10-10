@@ -8274,6 +8274,7 @@ fn native_slider_feedback() {
         NumericControl::brush_size(),
         NumericControl::percent(),
         NumericControl::pressure(),
+        NumericControl::rotation(),
     ] {
         let control = crate::number_control::NumberControl::new(spec.clone(), "Value", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
         let scale = slider(&control);
@@ -8299,6 +8300,14 @@ fn native_slider_feedback() {
             notifications.borrow().is_empty(),
             "model refresh is not a user edit"
         );
+        let fine_value = f64::from((match spec.unit.as_str() {
+            "px" => 120.5, "%" => 0.355, "°" => 12.6 / spec.scale, _ => 1.25,
+        }) as f32);
+        control.set_value(fine_value);
+        scale.emit_by_name::<()>("value-changed", &[]);
+        pump(20);
+        assert_eq!(control.value(), fine_value, "a delayed slider notification preserves fractional text and scrub values");
+        assert!(notifications.borrow().is_empty(), "a delayed model notification emits no edit");
         for i in 1..100 {
             notifications.borrow_mut().clear();
             let position = i as f64 / 100.0;
@@ -8393,10 +8402,13 @@ fn native_panel_slider_input() {
             events.push(contact("mouse", "up", to));
             input.perform(serde_json::Value::Array(events));
             assert!(size.value() > 100., "dragging edge {edge} of the slider hit area changes size: {}", size.value());
+            assert_eq!(size.value().fract(), 0., "large sizes snap to whole pixels on the slider");
             assert!(!descendant::<gtk::Entry>(&size).unwrap().is_mapped(), "slider drag keeps the value editor closed");
         }
         for (field, default) in [(&size, defaults[0]), (&opacity, defaults[1])] {
-            edit_number(field, if field == &size { "123" } else { "35%" });
+            edit_number(field, if field == &size { "123.5" } else { "35.5%" });
+            assert!((field.value() - if field == &size { 123.5 } else { 0.355 }).abs() < 0.00001,
+                "text editing preserves fractional values independently of slider snapping");
             let title = find_css(field.upcast_ref(), "number-title").unwrap();
             let point = screen_point(&title, &w.window, [0.2, 0.5]);
             input.perform(serde_json::json!([
@@ -8470,11 +8482,20 @@ fn native_panel_value_scrub_input() {
                     contact(device, "move", [from[0], from[1] - 20.]), contact(device, "move", [from[0], from[1] - 4.])]));
                 assert!((field.value() - initial - (expected - initial) / 5.).abs() < 0.00001,
                     "{device} an active drag fine tunes inside the initial click threshold");
+                let readout = find_css(field.upcast_ref(), "number-readout").unwrap().downcast::<gtk::Label>().unwrap();
+                assert_eq!(readout.text(), if field == &size { "121.0 px" } else { "61.0 %" },
+                    "integer values keep their decimal during a drag");
+                input.perform(serde_json::json!([contact(device, "move", [from[0], from[1] - 2.])]));
+                assert!((field.value() - initial - (expected - initial) / 10.).abs() < 0.00001);
+                assert_eq!(readout.text(), if field == &size { "120.5 px" } else { "60.5 %" });
                 input.perform(serde_json::json!([contact(device, "move", from)]));
                 assert!((field.value() - initial).abs() < 0.00001, "{device} returning to the origin restores the value before release");
+                assert_eq!(readout.text(), if field == &size { "120.0 px" } else { "60.0 %" });
                 let mut events = vec![contact(device, "up", from)];
                 if device == "pen" { events.push(serde_json::json!({ "pen": "leave" })); }
                 input.perform(serde_json::Value::Array(events));
+                assert_eq!(readout.text(), if field == &size { "120 px" } else { "60 %" },
+                    "release trims the decimal zero without changing the value");
             }
         }
         if pen { continue; }
@@ -8677,12 +8698,13 @@ fn native_number_controls() {
     let entry: gtk::Entry = descendant(&size).unwrap();
     entry.set_text("85/2");
     entry.emit_activate();
-    assert_eq!(size.value(), 43.);
+    assert_eq!(size.value(), 42.5);
+    assert_eq!(value_label.text(), "42.5 px");
     click(&display);
     entry.set_text("1/0");
     entry.emit_activate();
     assert!(size.has_css_class("error"));
-    assert_eq!(size.value(), 43.);
+    assert_eq!(size.value(), 42.5);
     entry.set_text("2049");
     entry.emit_activate();
     assert_eq!(size.value(), 2048.0);

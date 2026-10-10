@@ -128,7 +128,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Drawer open and close | 120 | | |
 | Grouped tool menus, drawer switching and tile drag | 120 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
 | Colour wheel or picker drag | 120 | **Unqualified.** Current GTK 2× workstation picker diagnostic: docked SDR 75.00, HDR 62.96 canvas presents/s; reference tablet unmeasured | [GTK Color diagnostic](#gtk-color-panel-resize), 2026-10-04; earlier [swatch diagnostic](#gtk-selected-swatch-diagnostic) |
-| Slider and value scrub: size, opacity, flow | 120 | **Unqualified.** GTK workstation diagnostic only; reference tablet unmeasured | [GTK panel slider diagnostic](#gtk-panel-slider-diagnostic), 2026-10-09 |
+| Slider and value scrub: size, opacity, flow | 120 | **Unqualified.** GTK workstation diagnostic only; reference tablet unmeasured | [GTK panel slider diagnostic](#gtk-panel-slider-diagnostic), 2026-10-10 |
 | Canvas action bar show, hide and move | 120 | **Not met.** UI frame p50/p95: 63.2/90.0 ms moving the bar, 23.0/34.6 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
 | List scrolling: layers, brushes, filters | 120 | | |
@@ -171,38 +171,35 @@ and 33.33 ms. Dropped reports remained zero and thermal status remained 0.
 
 ## GTK panel slider diagnostic
 
-Measured 2026-10-09 with compact Properties fields and fine value dragging
-based on `1e94b39df`, in a release build on NVIDIA RTX PRO 6000 Blackwell
-Max-Q/Vulkan 615.71.09. The private Mutter display is 1600 × 1000 at a requested
+Measured 2026-10-10 with displayed-unit slider snapping and fixed decimals
+during fine value dragging, based on `1f8ef2d51`, in a release build on NVIDIA
+RTX PRO 6000 Blackwell Max-Q/Vulkan 615.71.09. The private Mutter display is 1600 × 1000 at a requested
 120 Hz, with a 2048 × 1536 empty drawing. `native_panel_slider_motion` uses
 native mouse input at requested 4 ms intervals, warms each field, and records
 three six-second scrubs each of brush size, opacity and flow in both themes,
 for both slider and value handles. Each scrub traverses sixteen legs: 60% of the
 track, or 240 logical pixels for size values and 120 for opacity/flow values.
 This requests enough distinct values to exercise 120 Hz presentation.
-Only GTK presentations whose numeric value changed are counted.
-
-The preceding centered-field track diagnostic ranged from 114.32 to 118.62
-moving presentations/s, with a maximum interval p99 of 17.004 ms.
+Only GTK presentations whose numeric value changed are counted. Whole-value
+slider steps can leave some presentations unchanged at the sampled value.
 
 | Theme / handle / field | Moving presentations/s | Interval p99 |
 | --- | --- | --- |
-| Light / Slider / Size | 118.03–118.20 | 16.667–16.669 ms |
-| Light / Slider / Opacity | 118.36–118.69 | 16.606–16.644 ms |
-| Light / Slider / Flow | 116.71–118.36 | 16.667–16.752 ms |
-| Light / Value / Size | 118.85–119.52 | 8.678–8.717 ms |
-| Light / Value / Opacity | 119.51–120.00 | 8.492–8.826 ms |
-| Light / Value / Flow | 119.84–120.01 | 8.484–8.506 ms |
-| Dark / Slider / Size | 117.87–118.36 | 16.553–16.704 ms |
-| Dark / Slider / Opacity | 118.36–118.52 | 8.615–16.671 ms |
-| Dark / Slider / Flow | 117.70–118.52 | 16.553–16.653 ms |
-| Dark / Value / Size | 118.85–119.18 | 8.647–10.520 ms |
-| Dark / Value / Opacity | 119.44–120.00 | 8.522–8.597 ms |
-| Dark / Value / Flow | 119.84–119.84 | 8.534–8.621 ms |
+| Light / Slider / Size | 117.53–118.86 | 10.610–16.711 ms |
+| Light / Slider / Opacity | 116.06–116.71 | 16.686–16.759 ms |
+| Light / Slider / Flow | 116.21–116.38 | 16.676–16.792 ms |
+| Light / Value / Size | 119.84–120.00 | 8.533–8.572 ms |
+| Light / Value / Opacity | 119.84–120.01 | 8.524–8.544 ms |
+| Light / Value / Flow | 119.84–120.01 | 8.530–8.968 ms |
+| Dark / Slider / Size | 118.20–119.36 | 8.836–16.695 ms |
+| Dark / Slider / Opacity | 115.90–116.71 | 16.669–16.698 ms |
+| Dark / Slider / Flow | 115.02–116.05 | 16.703–16.746 ms |
+| Dark / Value / Size | 119.84–120.01 | 8.559–8.600 ms |
+| Dark / Value / Opacity | 119.84–120.00 | 8.541–8.655 ms |
+| Dark / Value / Flow | 119.37–120.00 | 8.511–8.682 ms |
 
-The earlier four-leg diagnostic is limited by pointer-position changes and
-does not measure rendering capacity. These are workstation diagnostics with a
-small drawing. They do not qualify any reference-tablet target.
+These are workstation diagnostics with a small drawing. They do not qualify
+any reference-tablet target.
 Raw records are in `artifacts/ui/panel-sliders/`.
 
 ## GTK selected swatch diagnostic

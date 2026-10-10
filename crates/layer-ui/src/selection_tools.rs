@@ -106,7 +106,7 @@ fn ratio_control() -> NumericControl {
     NumericControl::number(0.01, 10000., 0.1, 2)
 }
 fn size_control() -> NumericControl {
-    NumericControl::number(1., 131072., 1., 0).unit("px")
+    NumericControl::whole_pixels(1., 131072.)
 }
 impl SelectionOptions {
     pub fn validate(&self) -> Result<(), WorkspaceValidationError> {

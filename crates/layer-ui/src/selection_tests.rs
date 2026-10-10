@@ -1,6 +1,23 @@
 mod selection_tools_checks {
     use super::*;
 
+    #[test]
+    fn whole_pixel_region_controls_accept_slider_scrub_and_text_results() {
+        let mut s = session(Platform::Gtk);
+        invoke(&mut s, CommandId::AutoSelect);
+        let controls: Vec<_> = s.state.tool_settings.iter().filter(|c| matches!(c.id, "gap_closing" | "expansion")).cloned().collect();
+        assert_eq!(controls.len(), 2);
+        for control in controls {
+            let fill = control.numeric.resolve(5.5, NumericOperation::Format).unwrap().fill;
+            for operation in [NumericOperation::Position { position: fill },
+                NumericOperation::Scrub { origin: 5., pixels: 2. }, NumericOperation::Expression { text: "5.5".into() }] {
+                let result = control.numeric.resolve(5., operation).unwrap();
+                assert_eq!(result.value, 6.);
+                s.dispatch(UiAction::SetToolSetting { id: control.id.into(), value: result.value as f32 }).unwrap();
+            }
+        }
+    }
+
     fn send(s: &mut UiSession<Recorder>, phase: PenPhase, p: [f32; 2]) {
         pen_at(s, 1, phase, p);
         s.frame(1, 1).unwrap();

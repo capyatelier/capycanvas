@@ -67,14 +67,14 @@ impl RegionTools {
                 "gap_closing",
                 MessageId::TOOL_CONTROL_GAP_CLOSING,
                 Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
-                NumericControl::number(0., distance, 1., 0).unit("px"),
+                NumericControl::whole_pixels(0., distance),
                 self.refinement.gap_closing as f32,
             ),
             (
                 "expansion",
                 MessageId::TOOL_CONTROL_EXPANSION,
                 Some(MessageId::TOOL_CONTROL_GROUP_EDGES),
-                NumericControl::number(-distance, distance, 1., 0).unit("px"),
+                NumericControl::whole_pixels(-distance, distance),
                 self.refinement.expansion as f32,
             ),
             (

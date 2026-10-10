@@ -167,7 +167,7 @@ pub use layout::{
     toolbar_tile_layout,
 };
 pub use numeric::{
-    NumericControl, NumericError, WorkspaceValidationError, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
+    NumericControl, NumericError, WorkspaceValidationError, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericSliderSnap, NumericValue,
 };
 pub use session::{Notice, NoticeAction, NoticeActionId};
 pub use session::{ScreenChip, ScreenDetails, ScreenState};

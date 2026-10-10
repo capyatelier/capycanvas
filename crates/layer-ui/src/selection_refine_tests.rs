@@ -65,6 +65,23 @@ mod selection_refine_checks {
     }
 
     #[test]
+    fn refinement_numeric_policy_preserves_whole_counts_and_fractional_feathering() {
+        for kind in RefineKind::ALL {
+            let mut s = session(Platform::Gtk);
+            select(&mut s, rectangle());
+            invoke(&mut s, kind.command());
+            let numeric = s.state.layer_tools.selection_resize.as_ref().unwrap().numeric.clone();
+            let fill = numeric.resolve(5.5, NumericOperation::Format).unwrap().fill;
+            for operation in [NumericOperation::Position { position: fill },
+                NumericOperation::Scrub { origin: 5., pixels: 2. }, NumericOperation::Expression { text: "5.5".into() }] {
+                let result = numeric.resolve(5., operation).unwrap();
+                assert!((result.value - if kind == RefineKind::Feather { 5.5 } else { 6. }).abs() < 1e-9);
+                selection_action(&mut s, SelectionAction::ResizeRadius { radius: result.value as f32 });
+            }
+        }
+    }
+
+    #[test]
     fn each_refinement_previews_then_amends_one_step_that_cancel_withdraws() {
         for kind in RefineKind::ALL {
             let mut s = session(Platform::Gtk);

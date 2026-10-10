@@ -53,7 +53,7 @@ Every host shares the same numeric policy and editable values.
 ## One numeric policy
 
 `layer-ui::NumericControl` owns the control kind, hard and soft bounds, step,
-resolution, digits, display scale/unit and range mapping. Its constructor
+resolution, slider snapping, digits, display scale/unit and range mapping. Its constructor
 defaults to a spin control for whole numbers with at most 64 step intervals,
 otherwise a slider; definitions can explicitly override the kind. Prediction
 time (0–64 ms) uses a slider, with the unit beside the value. Brush size is a
@@ -67,6 +67,17 @@ formatting happen in Rust; hosts never reproduce those formulas. Buttons and
 value scrubs operate in the field's units, independently of its slider curve.
 A signed power mapping is also supported: exponent 2 on brush diameter means equal increments
 of brush area, not quadratic diameter response.
+
+Pixel, percentage and angle sliders snap in displayed units. Pixels keep tenths
+through 32 px, matching the brush-size threshold, then snap to whole pixels.
+Percentages keep tenths within five percentage points of either soft-range edge
+and snap to whole percentages elsewhere. Angles snap to whole degrees.
+Other units retain their declared resolution; whole-count fields stay integers.
+Text entry and fine scrubbing retain fractional values independently of slider
+snapping. Settled readouts omit trailing fractional zeroes. GTK value drags use
+the shared fixed-decimal `scrub_text` until release or cancellation, then restore
+the settled readout without changing the value. Compact readouts keep at most
+one fractional digit, including for large pixel values.
 
 `fasteval` (MIT) evaluates bounded mathematical expressions such as `85/2`,
 `sqrt(2)` and `pi`. Unit suffixes are accepted. Nonfinite values, string
@@ -180,12 +191,16 @@ statistics; changes below the adjustment update them.
 review sheet to `artifacts/ui/numeric/`. `native_slider_feedback` sweeps brush
 size forward and back through the GTK session: model refreshes do not emit
 edits, and deferred GTK range changes compare values at the core's numeric
-resolution, avoiding f64/f32 rounding loops. `native_panel_slider_input` checks
+fine resolution before slider snapping, avoiding f64/f32 rounding loops and
+preserving fractional text/scrub values and values beyond the soft bounds.
+`native_panel_slider_input` checks
 native drags along both vertical edges of the panel slider hit area, value
-editing and label double-click reset in both themes, with workspace captures
+editing with fractions above the pixel threshold, whole-pixel slider snapping
+and label double-click reset in both themes, with workspace captures
 in `artifacts/ui/panel-sliders/`. `native_panel_value_scrub_input` checks mouse
-and touch value scrubs in both themes, precise Escape cancellation, click
-editing, Properties label reset and one Undo per
+and touch value scrubs in both themes, fixed decimals during motion and trimmed
+zeroes after release, precise Escape cancellation, click editing, Properties
+label reset and one Undo per
 scrub. Run it separately with `LAYER_PANEL_CONTACT=pen` and `--tablet` for pen
 contacts: the virtual tablet serials cannot authorize native clipboard selection.
 `native_panel_slider_motion` records moving GTK presentation rates and
@@ -193,6 +208,10 @@ p99 gaps for three sustained slider and value scrubs each of size, opacity
 and flow. Run it through the private-display runner with
 `LAYER_NATIVE_EVENT_MS=4`, setting `CAPY_NATIVE_TEST_THEME=light` or `dark`.
 Its desktop fixture is a diagnostic, not reference-tablet qualification.
+Shared numeric tests cover the 32 px transition, five-point percentage edges,
+degree scaling, fine edits and readout formatting. Selection tests also apply
+resolved slider, scrub and expression values to whole-pixel region/refinement
+controls, preserving their integer admission rules.
 Android instrumented tests cover
 native editing, expression evaluation, slider geometry and settings input
 isolation. `native_numeric_preedit_guard` covers both GTK widget branches and

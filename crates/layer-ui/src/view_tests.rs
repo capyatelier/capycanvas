@@ -106,7 +106,9 @@ fn zoom_field_types_percent_on_a_logarithmic_track() {
     assert_eq!(typed("0").value, f64::from(MIN_ZOOM));
     assert_eq!(zoom.resolve(1.0, NumericOperation::Format).unwrap().text, "100 %");
     let halfway = zoom.resolve(1.0, NumericOperation::Position { position: 0.5 }).unwrap().value;
-    assert!((halfway - (f64::from(MIN_ZOOM) * f64::from(MAX_ZOOM)).sqrt()).abs() < 1e-3, "{halfway}");
+    let midpoint_percent = ((f64::from(MIN_ZOOM) * f64::from(MAX_ZOOM)).sqrt() * 100.).round();
+    assert!((halfway * 100. - midpoint_percent).abs() < 1e-9, "{halfway}");
+    assert_eq!(typed("33.3 %").text, "33.3 %");
     let doubling = |v: f64| zoom.resolve(v, NumericOperation::Format).unwrap().fill;
     assert!(((doubling(2.0) - doubling(1.0)) - (doubling(1.0) - doubling(0.5))).abs() < 1e-9);
 }

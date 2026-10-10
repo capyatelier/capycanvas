@@ -688,6 +688,7 @@ impl Component {
                     else {
                         return;
                     };
+                    if field.numeric.position_matches_value(scale.value(), field.value as f64) { return; }
                     let Ok(value) = field.numeric.resolve(
                         field.value as f64,
                         NumericOperation::Position {
@@ -696,16 +697,7 @@ impl Component {
                     ) else {
                         return;
                     };
-                    let current = field
-                        .numeric
-                        .resolve(
-                            field.value as f64,
-                            NumericOperation::Value {
-                                value: field.value as f64,
-                            },
-                        )
-                        .unwrap();
-                    if value.value == current.value {
+                    if field.numeric.values_equal(value.value, field.value as f64) {
                         return;
                     }
                     if let Some(context) =
