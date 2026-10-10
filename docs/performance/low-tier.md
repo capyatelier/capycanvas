@@ -138,10 +138,10 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
 | Panel, tab, column or toolbar drag and docking | 60 | Current lifecycle binary unmeasured. Earlier Web checkpoint: group/tab placements 47.38/60.22 Hz; Navigator assertion failed | Web workspace diagnostic below; no tier qualification |
-| Panel or column resize | 60 | Color resize unmeasured on reference hardware. Earlier Web checkpoint: width changes 11.93–13.49 Hz; nine retained-resource/geometry checks pass | Web workspace diagnostic below; [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04; no tier qualification |
+| Panel or column resize | 60 | **Unqualified.** TCL default-canvas diagnostic: 25.01–58.23 UI Hz, maximum p99 gap 50.08 ms; base 24.99–58.22 Hz. Retained-model assertion fails on both | 2026-10-09 sidebar-width comparison against `ee4805dfe`; `artifacts/sidebar-widths/android-resize{,-base}-logcat.txt`; no reference-canvas qualification |
 | Drawer open and close | 60 | | |
 | Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
-| Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 58.68–59.52 Hz, maximum p99 33.32 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
+| Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 58.85–60.02 Hz, maximum p99 33.328 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
 | Colour wheel or picker drag | 60 | **Unqualified.** Committed-wheel diagnostic: mouse 48.24–51.16 UI Hz, touch 52.80–54.39; maximum p99 49.98 ms (2048 × 1536) | [Live paint icon diagnostic](#live-paint-icon-diagnostic) below |
 | Slider scrub: size, opacity, flow | 60 | | |
 | Canvas action bar show, hide and move | 60 | **Not met.** UI frame p50/p95: 32.9/41.7 ms moving the bar, 11.6/21.0 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
@@ -367,17 +367,17 @@ the tables. Mid and top tiers were not measured for this renderer revision.
 
 ## Grouped tool drawer scrolling
 
-Measured on the TCL reference tablet on 2026-10-03, thermal status 0 before and
+Measured on the TCL reference tablet on 2026-10-10 UTC, thermal status 0 before and
 after, 60 Hz default display settings. The 4248 × 2832 Sony photo has one empty
 paint layer at Fit (25.5508%), default Photo panels and glass. The grouped Drawing
 drawer receives one priming gesture and three six-second native finger gestures.
-Actual moving windows span 5.948–5.981 seconds.
+Actual moving windows span 5.964–5.981 seconds.
 
 | Run | Moving UI FrameMetrics, Hz | Interval p99, ms | Moving draws / matched distinct vsyncs | Maximum draw-to-vsync lag, ms |
 | --- | ---: | ---: | ---: | ---: |
-| 1 | 58.68 | 33.30 | 350 / 350 | 15.35 |
-| 2 | 59.52 | 16.77 | 357 / 357 | 6.31 |
-| 3 | 59.02 | 33.32 | 354 / 354 | 13.13 |
+| 1 | 60.02 | 16.739 | 359 / 359 | 13.84 |
+| 2 | 58.85 | 33.328 | 353 / 353 | 12.37 |
+| 3 | 58.85 | 33.319 | 352 / 352 | 8.70 |
 
 Only draws with changed scroll offsets count. Their monotonic timestamps match
 the nearest preceding `FrameMetrics` vsync; duplicate callbacks count once.
@@ -387,14 +387,11 @@ These UI FrameMetrics meet the 57 Hz floor and 33.333 ms p99 limit. No
 SurfaceFlinger trace was collected; drawer opening, sibling switching, menus,
 tile dragging and other tiers remain unqualified.
 
-The unminified benchmark variant uses release Rust from `613ff17a8` plus the
-all-tool-groups working tree, identified by exact source hashes in the evidence.
-App APK SHA-256:
-`81f2ee806046a4f8d70e55ef2b429d877b0e7306173188d781236d51075bdff7`.
-Raw gestures, thermal records, fixture, exact hashes and the reproducible report
-are retained in `artifacts/all-tool-groups/android/benchmark/`.
-The Sony downscale JPEG hash differs from the earlier tool-variations fixture;
-this run establishes current scrolling performance, not a matched comparison.
+The unminified benchmark uses release Rust from `ee4805dfe` plus the sidebar refactor.
+App APK SHA-256: `ea695ce0fdb968097e43e83b84b0cb68bd72a54ce0cae5aa25405df00f7d00a4`.
+The Android/shared diff SHA-256 is `1e5e883bfc5a4176dac853b6350d454d7fea80ac973056fba4de030a62139547`.
+Raw gestures, thermal records, photo/test hashes and the report are retained in
+`artifacts/sidebar-widths/grouped-drawer-benchmark/`.
 
 ## Live paint icon diagnostic
 

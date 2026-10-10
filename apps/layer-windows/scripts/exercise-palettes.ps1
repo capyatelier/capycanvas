@@ -98,15 +98,17 @@ try {
 
     foreach($workspace in @(@('Paint','builtin:workspace:illustrator'),@('Photo','builtin:workspace:photographer'))){
         Switch-Workspace $workspace[0] $workspace[1]
-        $group=@((Model).layout.groups|Where-Object {$_.panels -contains 'palettes'})[0]
-        if(!$group){throw "$($workspace[0]) has no Palettes tab"}
-        $index=[Array]::IndexOf(@($group.panels),'color')
-        if($index -lt 0 -or $group.panels[$index+1] -ne 'palettes'){throw "$($workspace[0]) does not place Palettes after Color"}
+        $first=if($workspace[0] -eq 'Paint'){'color'}else{'histogram'}
+        $next=if($workspace[0] -eq 'Paint'){'palettes'}else{'waveform'}
+        $group=@((Model).layout.groups|Where-Object {$_.panels -contains $first})[0]
+        $index=[Array]::IndexOf(@($group.panels),$first)
+        if($index -lt 0 -or $group.panels[$index+1] -ne $next){throw "$($workspace[0]) does not place $next after $first"}
     }
+    Switch-Workspace 'Paint' 'builtin:workspace:illustrator'
     if(@((Panel).palettes).Count -lt 10){throw 'Starter palettes were not installed'}
     Invoke 'panel-tab-palettes'
     $null=Control 'palettes-panel'
-    Wait-Until {@(Swatches).Count -gt 0 -and (Find ('palette-swatch-'+(Swatches)[0]))} 'Saved swatches did not render'
+    Wait-Until {@(Swatches).Count -gt 5 -and (Control ('palette-swatch-'+(Swatches)[0])).Current.BoundingRectangle.Y -eq (Control ('palette-swatch-'+(Swatches)[5])).Current.BoundingRectangle.Y} 'Six saved swatches did not render across the first row'
     Capture 'paint-palettes'
 
     $count=@(Swatches).Count

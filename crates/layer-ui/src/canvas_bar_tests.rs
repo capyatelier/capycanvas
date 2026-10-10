@@ -268,7 +268,7 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
     let bar = s.state.canvas_bar.clone().unwrap();
-    let layout = s.canvas_bar_layout(&measure(&bar, 100.)).expect("current context");
+    let layout = s.canvas_bar_layout(&measure(&bar, 80.)).expect("current context");
     assert_eq!(layout.items, bar.items.len());
     assert_eq!(layout.side, CanvasBarSide::Below);
     let lowest = s
@@ -280,7 +280,7 @@ fn canvas_bar_layout_fits_items_and_clears_the_transform_handles() {
     assert_eq!(s.canvas_bar_layout(&measure(&bar, 5000.)).unwrap().items, 0, "items that do not fit go to More");
     let stale = CanvasBarMeasure {
         context: CanvasBarContext { generation: bar.context.generation + 1, ..bar.context },
-        ..measure(&bar, 100.)
+        ..measure(&bar, 80.)
     };
     assert!(s.canvas_bar_layout(&stale).is_none());
     let menu = s.canvas_bar_menu(bar.context, 0).unwrap();

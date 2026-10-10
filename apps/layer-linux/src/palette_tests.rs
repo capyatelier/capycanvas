@@ -510,14 +510,17 @@ fn native_palette_panel_input() {
     assert!(state(&d.w).customization.drawer.is_some());
     assert!(state(&d.w).color_library.history.is_empty());
     capture_palette(&mut d, "palette-sketch.png");
+    d.click_name(&color_button);
+    assert!(state(&d.w).customization.drawer.is_none());
     // Native drawing appends usage; recalling that color does not duplicate it.
     d.w.dispatch(UiAction::Invoke {
         command: CommandId::Brush,
     });
+    super::new_photo::ready(&d.w);
     d.input.perform(
         serde_json::json!([{"point":[760,600],"down":true},{"point":[840,640]},{"down":false}]),
     );
-    assert_eq!(state(&d.w).color_library.history.len(), 1);
+    until(|| state(&d.w).color_library.history.len() == 1, "committed stroke records color usage");
     if state(&d.w).customization.drawer.is_none() {
         d.click_name(&color_button);
     }
@@ -670,7 +673,7 @@ fn native_palette_panel_input() {
             },
         )
         .unwrap();
-    for width in [280., 460.] {
+    for width in [242., 280., 460.] {
         for float in &mut layout.floating {
             if matches!(&float.root, DockNode::Tabs { panels, .. } if panels.contains(&Panel::Palettes))
             {
@@ -687,11 +690,13 @@ fn native_palette_panel_input() {
         pump(350);
         let palette = state(&d.w).color_library.active_palette().clone();
         let first = d.named(&format!("palette-swatch-{}", palette.swatches[0].id));
+        let sixth = d.named(&format!("palette-swatch-{}", palette.swatches[5].id));
         let seventh = d.named(&format!("palette-swatch-{}", palette.swatches[6].id));
         let a = first.compute_bounds(&d.w.window).unwrap();
         let b = seventh.compute_bounds(&d.w.window).unwrap();
-        assert!(a.width() >= 40. && a.width() < 44.);
-        if width == 280. {
+        assert!(a.width() >= 34. && a.width() < 44.);
+        assert_eq!(sixth.compute_bounds(&d.w.window).unwrap().y(), a.y());
+        if width <= 280. {
             assert!(b.y() > a.y());
         } else {
             assert_eq!(b.y(), a.y());
@@ -706,7 +711,7 @@ fn native_palette_panel_input() {
 #[ignore = "isolated native-input.js --native-test=native_adaptive_panel_tabs"]
 fn native_adaptive_panel_tabs() {
     let mut d = Driver::new("art.capycanvas.AdaptiveTabs");
-    let mut layout = WorkspacePreset::Photographer.layout(Platform::Gtk);
+    let mut layout = WorkspacePreset::Illustrator.layout(Platform::Gtk);
     let group = layout.panel_group(Panel::Color).unwrap();
     for panel in [Panel::Navigator, Panel::Proof, Panel::Stats] {
         layout
@@ -728,7 +733,7 @@ fn native_adaptive_panel_tabs() {
         .unwrap();
     // A manual resize releases the width fitted when joining tabs.
     layout.fit_tab_groups.retain(|id| *id != group);
-    for width in [700., 280., 460., 700.] {
+    for width in [700., 242., 280., 460., 700.] {
         layout
             .floating
             .iter_mut()
@@ -762,12 +767,12 @@ fn native_adaptive_panel_tabs() {
                 before.iter().all(|n| *n),
                 "wide strip retains every name: {before:?}"
             );
-        } else if width == 280. {
+        } else if width <= 280. {
             assert!(before[0]);
             assert!(before.iter().any(|n| !n));
             assert!(
-                before.iter().filter(|n| **n).count() >= 2,
-                "spare width restores later short names: {before:?}"
+                before.iter().filter(|n| **n).count() >= if width == 280. { 2 } else { 1 },
+                "available width retains complete names: {before:?}"
             );
         }
         d.click(buttons.first().unwrap().1.upcast_ref());

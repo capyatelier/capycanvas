@@ -2,7 +2,7 @@
 
 [Workspace and UI](README.md) · [Research](../history/color-palettes-research.md)
 
-Paint and Photo place the Palettes tab immediately after Color; Sketch shows
+Paint places the Palettes tab immediately after Color; Sketch shows
 the same component below the wheel in its color drawer. Customized layouts can
 show Palettes through the Window menu (GTK, Android and Windows also through the
 color swatch menu's Palettes action). GTK
@@ -22,8 +22,8 @@ a divider, and the saved palette. A second divider separates the footer, with th
 the left and the current color’s name, hex preview, and conditional EV on the
 right.
 
-- The minimum width is 280 logical pixels, fitting six 40-pixel tile targets.
-  Wider panels add columns. The saved grid grows to four rows, then scrolls;
+- The minimum width is 242 logical pixels, fitting six 34-pixel swatch targets.
+  They grow to 40 pixels at 280. Wider panels add columns; after four rows, the grid scrolls;
   two rows of minimum space keep the in-place chooser usable with empty palettes.
 - The last history cell expands recent colors over the saved grid. The final
   visible cell collapses it. Expansion fits at most four rows within the existing
@@ -80,7 +80,7 @@ The footer name and selector use the tool panels’ compact 24-pixel controls.
 Search and inline editing share their input background and padding; the + menu
 button is a 24-pixel square. Palette rows, color tiles and the + menu use native
 GTK menu rows, separators and disabled states, with the same arrow-free
-presentation as Layers. Swatches keep their 40-pixel targets. Radius, text, and
+presentation as Layers. Swatches grow from 34 to 40 pixels, with gaps of 4. Radius, text, and
 selection colors use existing panel theme values in both dock and drawer views.
 
 Fitted dock groups reserve the largest measured minimum body height among their

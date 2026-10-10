@@ -150,13 +150,14 @@ class AndroidPaletteTest {
     @Test fun defaultsPlacePalettesAfterColorAndInSketchDrawer() {
         for (id in listOf("builtin:workspace:illustrator", "builtin:workspace:photographer")) {
             switchWorkspace(id)
+            if (id.endsWith("photographer")) { assertTrue(group("histogram").array("panels").values().contains("waveform")); continue }
             fun fitted() = group("color").getJSONObject("bounds").let { b -> listOf("x", "y", "width", "height").map { b.getDouble(it) } }
-            fun assertFitted(label: String, expected: List<Double>) = expected.zip(fitted()).forEach { (e, a) -> assertEquals(label, e, a, .5) }
+            fun assertFitted(label: String, expected: List<Double>) = expected.zip(fitted()).forEach { (e, a) -> assertEquals("$label: expected $expected, actual ${fitted()}", e, a, .5) }
             val fitted = fitted()
             showPalettes()
             assertFitted("Choosing Palettes keeps the fitted group", fitted)
             assertTrue(exists("palette-history") && exists("palette-add-color") && exists("palette-chooser"))
-            assertTrue("minimum six columns", bounds("palette-swatches").width >= (6 * 44 - 4) * density - 1)
+            assertEquals("six swatches across", bounds("palette-swatch-${order()[0]}").top, bounds("palette-swatch-${order()[5]}").top, 1f)
             capture("${id.substringAfterLast(':')}-palettes")
             action(obj("type" to "select_panel_tab", "group" to group("color").getInt("id"), "panel" to "color"))
             assertFitted("Color keeps the fitted group", fitted)
@@ -165,6 +166,7 @@ class AndroidPaletteTest {
         val color = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values().flatMap { (it as JSONArray).objects() }
             .first { it.getJSONObject("item").objectOrNull("control")?.optString("kind") == "color" }.getInt("id")
         tool = MotionEvent.TOOL_TYPE_FINGER
+        waitFor("Sketch Color control") { exists("header-control-$color") }
         tap(center("header-control-$color"))
         waitFor("Sketch color drawer") { state().getJSONObject("customization").objectOrNull("drawer") != null }
         assertEquals("[[\"color\",\"palettes\"]]", state().getJSONObject("customization").getJSONObject("drawer").array("columns").toString())
@@ -465,17 +467,23 @@ class AndroidPaletteTest {
     }
 
     @Test fun colorSwatchMenuRevealsPalettes() {
-        switchWorkspace("builtin:workspace:photographer")
-        for ((kind, open) in listOf<Pair<Int, (Offset) -> Unit>>(MotionEvent.TOOL_TYPE_MOUSE to { at -> secondary(at) },
-            MotionEvent.TOOL_TYPE_STYLUS to { at -> tool = MotionEvent.TOOL_TYPE_STYLUS; hold(at); event(MotionEvent.ACTION_UP); settle() })) {
-            action(obj("type" to "select_panel_tab", "group" to group("color").getInt("id"), "panel" to "color"))
-            waitFor("Color page") { exists("color-swatch-background") }
-            open(center("color-swatch-background"))
-            waitFor("$kind swatch menu") { exists("color-library-menu") }
-            tool = kind; mouseButton = MotionEvent.BUTTON_PRIMARY
-            tap(center("color-library-menu"))
-            waitFor("$kind reveals Palettes") { group("color").getString("active") == "palettes" && exists("palette-panel") }
-            assertEquals("the chosen swatch becomes the paint slot", "background", state().getJSONObject("colors").getString("slot"))
+        switchWorkspace("builtin:workspace:illustrator")
+        for (width in listOf(280f, 242f)) {
+            val workspace = JSONObject(state().getJSONObject("workspace").toString())
+            workspace.getJSONObject("layout").array("bands").objects().first { it.getInt("id") == 3 }.put("extent", width + 6f)
+            action(obj("type" to "restore_workspace", "workspace" to workspace))
+            for ((kind, open) in listOf<Pair<Int, (Offset) -> Unit>>(MotionEvent.TOOL_TYPE_MOUSE to { at -> secondary(at) },
+                MotionEvent.TOOL_TYPE_STYLUS to { at -> tool = MotionEvent.TOOL_TYPE_STYLUS; hold(at); event(MotionEvent.ACTION_UP); settle() })) {
+                action(obj("type" to "select_panel_tab", "group" to group("color").getInt("id"), "panel" to "color"))
+                waitFor("Color page") { exists("color-swatch-background") }
+                action(obj("type" to "color", "action" to obj("op" to "select", "slot" to "transparent")))
+                open(center("color-swatch-foreground"))
+                waitFor("$width $kind swatch menu") { exists("color-library-menu") }
+                tool = kind; mouseButton = MotionEvent.BUTTON_PRIMARY
+                tap(center("color-library-menu"))
+                waitFor("$kind reveals Palettes") { group("color").getString("active") == "palettes" && exists("palette-panel") }
+                assertEquals("the chosen swatch becomes the paint slot", "foreground", state().getJSONObject("colors").getString("slot"))
+            }
         }
     }
 

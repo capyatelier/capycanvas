@@ -699,7 +699,7 @@ fn reopened_photo_content_panels_remain_usable_in_narrow_viewports() {
         let group=s.state.workspace.layout.panel_group(Panel::Histogram).unwrap();
         s.dispatch(UiAction::MoveGroup{group,target:DockTarget::Float{position:[180.,160.]},viewport:[640.,800.]}).unwrap();
         for panel in [Panel::Histogram,Panel::Waveform] {customize(&mut s,CustomizationAction::SetPanelVisible{panel,visible:false});}
-        for (panel,minimum) in [(Panel::Histogram,Panel::Histogram.default_width()),(Panel::Waveform,Panel::Waveform.default_width()),(Panel::Navigator,192.)] {
+        for (panel,minimum) in [(Panel::Histogram,crate::PANEL_MIN_WIDTH),(Panel::Waveform,crate::PANEL_MIN_WIDTH),(Panel::Navigator,192.)] {
             customize(&mut s,CustomizationAction::SetPanelVisible{panel,visible:false});
             customize(&mut s,CustomizationAction::SetPanelVisible{panel,visible:true});
             let resolved=s.state.workspace.layout.resolved([640.,800.]);

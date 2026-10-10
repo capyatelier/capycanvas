@@ -27,6 +27,7 @@ pub struct PalettePanel {
     history: PaletteGrid,
     expanded: PaletteGrid,
     swatches: PaletteGrid,
+    scroll: gtk::ScrolledWindow,
     add_color: gtk::Button,
     chooser: gtk::Box,
     search: gtk::SearchEntry,
@@ -68,10 +69,15 @@ fn button(icon: &str, label: &str, id: &str) -> gtk::Button {
     button
 }
 impl PalettePanel {
+    pub fn content_height(&self, width: i32) -> f32 {
+        let (_, pitch) = crate::palette_grid::cells(width - 2 * layer_ui::PANEL_CONTENT_INSET as i32);
+        self.scroll.set_min_content_height(2 * pitch - crate::palette_grid::GAP);
+        self.scroll.set_max_content_height(4 * pitch - crate::palette_grid::GAP);
+        self.root.measure(gtk::Orientation::Vertical, width).1 as f32
+    }
     pub fn new() -> Rc<Self> {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.add_css_class("palette-panel");
-        root.set_width_request(280);
         let body = gtk::Overlay::new();
         body.set_vexpand(true);
         let normal = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -90,8 +96,6 @@ impl PalettePanel {
             gtk::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk::PolicyType::Never)
                 .vscrollbar_policy(gtk::PolicyType::Automatic)
-                .min_content_height(84)
-                .max_content_height(172)
                 .propagate_natural_height(true)
                 .child(&swatches)
                 .build(),
@@ -194,7 +198,7 @@ impl PalettePanel {
         name_stack.add_named(&name, Some("label"));
         name_stack.add_named(&editor, Some("edit"));
         info.append(&name_stack);
-        let detail = gtk::Label::builder().xalign(1.).build();
+        let detail = gtk::Label::builder().xalign(1.).wrap(true).max_width_chars(1).build();
         detail.set_widget_name("palette-color-detail");
         detail.add_css_class("caption");
         detail.add_css_class("palette-detail");
@@ -218,6 +222,7 @@ impl PalettePanel {
             history,
             expanded,
             swatches,
+            scroll,
             add_color,
             chooser,
             search,

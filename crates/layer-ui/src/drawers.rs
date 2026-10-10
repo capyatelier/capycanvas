@@ -281,18 +281,6 @@ impl DrawerPlacement {
     }
 }
 
-impl Panel {
-    /// Roomier than ordinary dock defaults. Shared by tile and column drawers.
-    pub fn drawer_width(self) -> f32 {
-        match self {
-            Self::BrushSets | Self::SculptSets | Self::FilterTypes => 160.0,
-            Self::Color => 280.0,
-            Self::ToolSettings | Self::Properties | Self::Layers => 320.0,
-            _ => 272.0,
-        }
-    }
-}
-
 impl ResolvedLayout {
     pub(crate) fn tile_at(&self, layout: &DockLayout, point: [f32; 2]) -> Option<TileAnchor> {
         let group = self
@@ -448,7 +436,7 @@ impl ContentDrawer {
             self.dismissal = DrawerDismissal::Explicit;
         }
     }
-    pub fn column_widths(&self) -> Vec<f32> {
+    pub fn column_widths(&self, viewport_width: f32) -> Vec<f32> {
         if self.compact {
             return self.columns.iter().map(|panels| {
                 if panels.contains(&Panel::ToolSettings) { 240. } else { 184. }
@@ -458,13 +446,13 @@ impl ContentDrawer {
             return vec![
                 tabs.panels
                     .iter()
-                    .map(|p| p.drawer_width())
+                    .map(|p| p.default_width(viewport_width))
                     .fold(0., f32::max),
             ];
         }
         self.columns
             .iter()
-            .map(|panels| panels.iter().map(|p| p.drawer_width()).fold(0.0, f32::max))
+            .map(|panels| panels.iter().map(|p| p.default_width(viewport_width)).fold(0.0, f32::max))
             .collect()
     }
 
@@ -599,7 +587,7 @@ impl ContentDrawer {
                 }
             }
         };
-        let natural_widths = self.column_widths();
+        let natural_widths = self.column_widths(viewport[0]);
         let gaps = (natural_widths.len() - 1) as f32;
         let total = natural_widths.iter().sum::<f32>();
         let mut width = (total + gaps).min(available.width);
@@ -868,7 +856,7 @@ mod tests {
                 )
                 .unwrap();
             let d = drawer(&layout);
-            assert_eq!(d.column_widths(), [272.0, 320.0]);
+            assert_eq!(d.column_widths(VIEWPORT[0]), [242., 242.]);
             for viewport in [VIEWPORT, [640.0, 480.0], [320.0, 240.0]] {
                 for heights in [[80.0, 120.0], [700.0, 3000.0]] {
                     let Some(p) = d.placement(&layout, viewport, &heights) else {
@@ -1073,7 +1061,7 @@ mod tests {
                 .unwrap();
             let mut d = drawer(&layout);
             d.columns = vec![vec![Panel::Sizes, Panel::Layers], vec![Panel::Color]];
-            assert_eq!(d.column_widths(), [320.0, 280.0]);
+            assert_eq!(d.column_widths(VIEWPORT[0]), [242., 242.]);
             let p = d.placement(&layout, VIEWPORT, &[500.0, 200.0]).unwrap();
             contained(&p, VIEWPORT);
             if matches!(p.direction, Edge::Left | Edge::Top) {

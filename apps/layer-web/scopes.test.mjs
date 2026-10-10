@@ -56,7 +56,7 @@ export async function checkScopes({call,evaluate,settle}) {
       const start=await point(`.dock-group:has(.dock-tab[data-panel="${name}"]) .panel-grip`),end={x:width*.3,y:450};await call('Input.dispatchMouseEvent',{type:'mousePressed',...start,button:'left',buttons:1,clickCount:1});for(let step=1;step<=6;step++){await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:start.x+(end.x-start.x)*step/6,y:start.y+(end.y-start.y)*step/6,button:'left',buttons:1});await settle();}await call('Input.dispatchMouseEvent',{type:'mouseReleased',...end,button:'left',buttons:0,clickCount:1});await settle();await shot(`${name}-floating-${width}-${theme}`);await bounds(name,true);
       await scope.hide();await poll(`layerApp.state().${name}.data==null`);
       await send({type:'customize',action:{type:'set_panel_visible',panel:name,visible:true}});for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await focus(name);await ready(name);
-      const reopened=await bounds(name);assert.ok(reopened.container.width>=253,'Reopened scope retains its real minimum width');
+      const reopened=await bounds(name);assert.ok(reopened.container.width>=241,'Reopened scope retains its real minimum width');
       await choose(targets[name].channel,4);assert.equal((await state())[name].channel,4);await ready(name);await choose(targets[name].channel,0);await ready(name);await shot(`${name}-reopened-${width}-${theme}`);
     }
     await send({type:'restore_workspace',workspace});await scope.exact();

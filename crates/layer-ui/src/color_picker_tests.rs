@@ -462,7 +462,7 @@ fn color_picker_size_and_style_are_settings_and_navigator_stays_navigation() {
     let mut drawer = ContentDrawer::for_tile(&s.state.workspace.layout, anchor).unwrap();
     drawer.configure_picker(&s.state.workspace.layout);
     assert_eq!(drawer.columns, [vec![Panel::ToolSettings]]);
-    assert_eq!(drawer.column_widths(), [240.]);
+    assert_eq!(drawer.column_widths(1200.), [240.]);
     assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
     s.state.customization.drawer = Some(drawer.clone());
     chrome(
@@ -540,7 +540,7 @@ fn standalone_picker_restores_glass_and_categories_retain_both_tools() {
             drawer.columns,
             [vec![Panel::Brushes], vec![Panel::ToolSettings]]
         );
-        assert_eq!(drawer.column_widths(), [184., 240.]);
+        assert_eq!(drawer.column_widths(1200.), [184., 240.]);
         assert_eq!(drawer.dismissal, DrawerDismissal::Explicit);
         assert_eq!(s.command(CommandId::Eyedropper).icon, Some("eyedropper"));
         assert_eq!(s.command(CommandId::Eyedropper).label.as_ref(), "Eyedropper");

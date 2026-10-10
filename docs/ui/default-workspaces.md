@@ -57,11 +57,16 @@ colors, selection options, fill/auto-select options, gradients and figures.
 Switching layouts keeps that state and the document, camera and undo history.
 `EditingState` is saved separately in the same transactional store.
 
+Content columns and drawers default to 280 logical pixels (seven tiles) at window
+widths of at least 1600 logical pixels, and 242 (six tiles) below that; manual sizes stay as set.
+Palettes, Tool Settings, Histogram and Waveform have a 242-pixel minimum. Heights
+fit content measured at the allocated width, including inactive tabs.
+
 | Workspace | Arrangement |
 | --- | --- |
 | Sketch | Title bar with Capy, Main Menu, Filters, Select and Scale/rotate on the left, the workspace switcher in the center, and Brush, Sculpt, Eraser, Layers and Color on the right (Web adds Full Screen). A compact toolbar centered on the left edge holds the brush size and opacity sliders, the color picker, Undo and Redo. No docked panels; Medium tiles; no zoom readout. |
 | Paint | Tools toolbar on the left edge and Commands toolbar on top. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties/Filters and Layers, opened on load. |
-| Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform (Color/Palettes on Windows, which awaits the scope controls), Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
+| Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform, Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
 
 Paint keeps 18 tool positions: Pen, Pencil, Brush,
 Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,

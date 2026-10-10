@@ -375,8 +375,8 @@ report tile bounds, content measurements and input.
   its panel. Every built-in panel has a drawer tile in the toolbar picker.
 - A tool drawer holds the Tool Set and Tool columns; Color opens the Color panel
   and Opacity opens Tool. Columns stack ordinary panel bodies, without tabs or
-  grips, separated by vertical rules. Each panel declares a `drawer_width`,
-  wider than its docked default. Opening a drawer does not detach a docked copy
+  grips, separated by vertical rules. Drawers use the same responsive preferred width
+  as docked panels. Opening a drawer does not detach a docked copy
   of the panel or duplicate preview generation.
 - The drawer joins its tile across the panel gap: the tile extends toward the
   drawer with concave, tab-like joins, and only exposed corners are rounded.

@@ -103,9 +103,9 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   assert.equal(await evaluate(`document.querySelectorAll('${P} .palette-swatches > .palette-tile[data-id]').length`), initialOrder.length);
   assert.ok(await visible(`${P} .palette-swatches > .palette-add`), "trailing add tile");
   const panelRect = await rect(P);
-  assert.ok(panelRect.width >= 280, "minimum palette width");
+  assert.ok(panelRect.width >= 242, "minimum palette width");
   const columns = await evaluate(`getComputedStyle(document.querySelector('${P} .palette-swatches')).gridTemplateColumns.split(' ').length`);
-  assert.equal(columns, Math.floor((panelRect.width - 16 + 4) / 44));
+  assert.equal(columns, Math.max(6, Math.floor((panelRect.width - 16 + 4) / 44)));
   await shot("paint-dark");
 
   let view = await panelView();

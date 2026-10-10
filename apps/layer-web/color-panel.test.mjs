@@ -101,7 +101,7 @@ export async function checkColorPanel({call,evaluate,settle}) {
   const reports=[];
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:2,mobile:false});
   await settle();
-  for(const theme of ['dark','light'])for(const width of [144,160,200,280,360]) {
+  for(const theme of ['dark','light'])for(const width of [144,160,200,242,280,360]) {
     await send({type:'set_theme',theme});await resizePanel(width);
     await send({type:'set_color',rgba:[.2,.72,.58,1]});
     for(const shape of ['circle','square','triangle']) {

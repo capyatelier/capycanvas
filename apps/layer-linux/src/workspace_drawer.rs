@@ -636,6 +636,10 @@ impl Drawer {
                 .drawer_placement(state, &layout, viewport, heights)
         };
         let sizing = place(&vec![0.0; view.columns.len()])?;
+        if let (Some(panel), Some(column)) = (
+            view.bodies.iter().find_map(|body| if let Body::Palettes(panel) = body { Some(panel) } else { None }),
+            state.columns.iter().position(|panels| panels.contains(&Panel::Palettes)),
+        ) { panel.content_height(sizing.columns[column].width as i32); }
 
         let heights: Vec<_> = view
             .columns

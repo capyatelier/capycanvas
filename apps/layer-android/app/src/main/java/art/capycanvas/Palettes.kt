@@ -97,19 +97,22 @@ private const val GridRows = 4
 private fun JSONArray.paint() = Color(getDouble(0).toFloat().coerceIn(0f, 1f), getDouble(1).toFloat().coerceIn(0f, 1f),
     getDouble(2).toFloat().coerceIn(0f, 1f), optDouble(3, 1.0).toFloat().coerceIn(0f, 1f))
 
-internal class PaletteCells(val width: Float, val density: Float) {
-    val columns = (((width + Gap) / (Tile + Gap)).toInt()).coerceAtLeast(1)
+internal class PaletteCells(outerWidth: Int, val density: Float) {
+    val width = ((outerWidth - 2 * (8 * density).roundToInt()) / density).coerceAtLeast(Tile)
+    val columns = (((width + Gap) / (Tile + Gap)).toInt()).coerceAtLeast(6)
     private val cell = (width + Gap) / columns
+    val tile = (cell - Gap).coerceIn(1f, Tile).roundToInt().toFloat()
+    val pitch = tile + Gap
     fun x(index: Int) = ((index % columns) * cell).roundToInt()
     fun width(index: Int) = (((index % columns) + 1) * cell).roundToInt() - x(index) - Gap.roundToInt()
-    fun y(index: Int) = (index / columns) * (Tile + Gap).roundToInt()
+    fun y(index: Int) = (index / columns) * pitch.roundToInt()
     fun offset(index: Int) = IntOffset((x(index) * density).roundToInt(), (y(index) * density).roundToInt())
     fun rows(count: Int) = ((count + columns - 1) / columns).coerceAtLeast(1)
-    fun height(rows: Int) = rows * (Tile + Gap) - Gap
+    fun height(rows: Int) = rows * pitch - Gap
     fun slot(local: Offset, count: Int): Int? {
         val x = local.x / density; val y = local.y / density
         if (x < 0f || x >= width || y < 0f) return null
-        val index = (y / (Tile + Gap)).toInt() * columns + (x * columns / (width + Gap)).toInt()
+        val index = (y / pitch).toInt() * columns + (x * columns / (width + Gap)).toInt()
         return index.takeIf { it < count }
     }
 }
@@ -324,12 +327,12 @@ private fun Modifier.paletteKeys(activate: () -> Unit, menu: (() -> Unit)?): Mod
     val selected = controller.selection(view)
     BoxWithConstraints(modifier.fillMaxWidth().testTag("palette-panel").onGloballyPositioned { panelOrigin = it.positionInRoot() }) {
         val bounded = constraints.hasBoundedHeight
-        val cells = remember(maxWidth.value, density) { PaletteCells((maxWidth.value - 16f).coerceAtLeast(Tile), density) }
+        val cells = remember(constraints.maxWidth, density) { PaletteCells(constraints.maxWidth, density) }
         val count = swatches.size + 1
         val naturalGrid = cells.grid(count)
         SideEffect {
             geometry.cells = cells; geometry.count = count
-            paletteContent(cells, count, top, bottom)?.let(onContent)
+            if (top > 0f && bottom > 0f) onContent(cells.content(count, top + bottom))
         }
         val covered = controller.chooser || controller.expanded
         Column(Modifier.fillMaxWidth().then(if (bounded) Modifier.fillMaxHeight() else Modifier).padding(horizontal = 8.dp, vertical = 6.dp)) {
@@ -347,7 +350,7 @@ private fun Modifier.paletteKeys(activate: () -> Unit, menu: (() -> Unit)?): Mod
                 }
                 if (controller.expanded) Box(Modifier.matchParentSize().blockInput().testTag("palette-history-expanded")) {
                     HistoryRow(controller, view, cells, false, expanded = true,
-                        rows = (((bodyHeight + Gap) / (Tile + Gap)).toInt()).coerceIn(1, HistoryRows))
+                        rows = (((bodyHeight + Gap) / cells.pitch).toInt()).coerceIn(1, HistoryRows))
                 }
                 if (controller.chooser) PaletteChooser(controller, view, owner, Modifier.matchParentSize())
             }
@@ -391,8 +394,8 @@ private fun Modifier.paletteKeys(activate: () -> Unit, menu: (() -> Unit)?): Mod
 }
 
 private fun PaletteCells.grid(count: Int) = height(rows(count).coerceIn(2, GridRows))
-private fun paletteContent(cells: PaletteCells, count: Int, top: Float, bottom: Float): PanelContentSize? =
-    if (top <= 0f || bottom <= 0f) null else PanelContentSize(top + bottom + 12f + cells.grid(count))
+private fun PaletteCells.content(count: Int, fixed: Float) = PanelContentSize(
+    (fixed * density + 2 * (6 * density).roundToInt() + (grid(count) * density).roundToInt()).roundToInt() / density)
 
 @Composable internal fun PaletteMeasurement(host: CanvasHost, onContent: (PanelContentSize) -> Unit) {
     val controller = host.palettes
@@ -402,8 +405,8 @@ private fun paletteContent(cells: PaletteCells, count: Int, top: Float, bottom: 
     val report by rememberUpdatedState(onContent)
     Layout({
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val cells = remember(maxWidth.value, density) { PaletteCells((maxWidth.value - 16f).coerceAtLeast(Tile), density) }
-            Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
+            val cells = remember(constraints.maxWidth, density) { PaletteCells(constraints.maxWidth, density) }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
                 HistoryRow(controller, view, cells, covered = true, expanded = false, rows = 1)
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
@@ -413,8 +416,8 @@ private fun paletteContent(cells: PaletteCells, count: Int, top: Float, bottom: 
         }
     }) { measurables, constraints ->
         val fixed = measurables.maxOf { it.measure(Constraints(maxWidth = constraints.maxWidth)).height } / density
-        val cells = PaletteCells((constraints.maxWidth / density - 16f).coerceAtLeast(Tile), density)
-        report(PanelContentSize(fixed + cells.grid(count)))
+        val cells = PaletteCells(constraints.maxWidth, density)
+        report(cells.content(count, fixed))
         layout(0, 0) {}
     }
 }
@@ -437,7 +440,7 @@ private fun DrawScope.checker() {
     Layout(content, modifier) { measurables, constraints ->
         val placeables = measurables.mapIndexed { index, it ->
             val width = (cells.width(index) * cells.density).roundToInt().coerceAtLeast(1)
-            val height = (Tile * cells.density).roundToInt()
+            val height = (cells.tile * cells.density).roundToInt()
             it.measure(Constraints.fixed(width, height))
         }
         val height = (cells.height(cells.rows(count)) * cells.density).roundToInt()
@@ -601,8 +604,8 @@ private fun DrawScope.checker() {
     val paletteName=view.getString("name")
     val chooseCaption=remember(paletteName, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "choose_palette", "name" to paletteName).toString(), host.languageTag)).getString("text") }
     Row(Modifier.fillMaxWidth().testTag("palette-footer"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        HoverTip(chooseCaption) {
-            Row(Modifier.heightIn(min = 24.dp).widthIn(max = 150.dp).clip(ControlShape).paletteFocus(controller)
+        HoverTip(chooseCaption, Modifier.weight(1f)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 24.dp).clip(ControlShape).paletteFocus(controller)
                 .clickable(role = Role.Button, onClickLabel = host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("choose")) {
                     if (controller.editing) controller.commitName(controller.editText)
                     controller.expanded = false; controller.chooser = !controller.chooser
@@ -622,7 +625,7 @@ private fun DrawScope.checker() {
             }
             HoverTip("sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity") {
                 Text(view.getString("color_detail"), Modifier.padding(end = 2.dp).testTag("palette-color-detail"),
-                    color = colors.secondary, fontSize = LocalTextStyle.current.fontSize * .9f, maxLines = 1)
+                    color = colors.secondary, fontSize = LocalTextStyle.current.fontSize * .9f)
             }
         }
     }

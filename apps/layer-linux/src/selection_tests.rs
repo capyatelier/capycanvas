@@ -622,8 +622,8 @@ fn native_tonal_selection_input() {
     d.click_name("tool-choice-TonalSelect");wait_tonal(&d);
     assert!(selection(&d).is_none(),"opening the tool does not change the selection");
     let panel=d.named("drawer-panel-ToolSettings");
-    assert!(panel.width() >= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
-    assert!(panel.measure(gtk::Orientation::Horizontal, -1).0 <= layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
+    assert!(panel.width() >= layer_ui::PANEL_MIN_WIDTH as i32);
+    assert!(panel.measure(gtk::Orientation::Horizontal, -1).0 <= layer_ui::PANEL_MIN_WIDTH as i32);
     let modes=d.named("selection-mode-row").compute_bounds(&panel).unwrap();
     let tones=d.named("tool-choice-tonal-tones-0").compute_bounds(&panel).unwrap();
     assert!(modes.y()<tones.y(),"selection mode comes first");
@@ -683,7 +683,7 @@ fn native_tonal_selection_input() {
     assert!(custom_height<=170.,"custom controls use {custom_height}px");
     let range=d.named("tool-range-tonal");
     assert!(range.height()<=28);
-    assert!(d.named("drawer-panel-ToolSettings").measure(gtk::Orientation::Horizontal,-1).0<=layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32);
+    assert!(d.named("drawer-panel-ToolSettings").measure(gtk::Orientation::Horizontal,-1).0<=layer_ui::PANEL_MIN_WIDTH as i32);
     let low=d.named("tool-setting-tonal_lower").compute_bounds(&range).unwrap();
     let track=d.named("range-track-tonal").compute_bounds(&range).unwrap();
     let high=d.named("tool-setting-tonal_upper").compute_bounds(&range).unwrap();

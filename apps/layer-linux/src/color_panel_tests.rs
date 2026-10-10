@@ -238,7 +238,7 @@ fn native_color_panel_input() {
     let mut reports = Vec::new();
     let mut previous_guide = None;
     for theme in [Theme::Dark, Theme::Light] {
-        for width in [144., 160., 200., 280., 360.] {
+        for width in [144., 160., 200., 242., 280., 360.] {
             for float in &mut fixture.layout.floating {
                 if let DockNode::Tabs { panels, .. } = &float.root {
                     if panels.contains(&Panel::Color) {
@@ -681,7 +681,7 @@ fn native_color_swatch_overlap_input() {
         DockTarget::Float { position: [480., 120.] }).unwrap();
     input.ready();
     for theme in [Theme::Dark, Theme::Light] {
-        for width in [144., 160., 200., 280., 360.] {
+        for width in [144., 160., 200., 242., 280., 360.] {
             for float in &mut fixture.layout.floating {
                 if let DockNode::Tabs { panels, .. } = &float.root {
                     if panels.contains(&Panel::Color) {

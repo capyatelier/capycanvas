@@ -214,7 +214,7 @@ fn blur_rolls_back_a_crop_drag_and_keeps_the_crop() {
     let pen = layer_engine::ToolKind::Pen;
     crop_contact(&mut s, 5, PenPhase::Down, Point { x: 1000., y: 400. }, pen);
     crop_contact(&mut s, 6, PenPhase::Move, Point { x: 700., y: 400. }, pen);
-    assert_eq!(crop_frame(&s).size[0], 700.);
+    near_size(crop_frame(&s).size, [700., 800.]);
     s.input(UiInput::Blur).unwrap();
     assert!(s.cropping(), "the crop survives focus loss");
     assert_eq!(crop_frame(&s).size[0], 1000., "only the drag rolls back");

@@ -3032,6 +3032,7 @@ impl Workspace {
                 // minimum. GTK still requires a valid measure request.
                 let width = (width as i32).max(content.measure(gtk::Orientation::Horizontal, -1).0);
                 let (content_height, scroll) = match config.id {
+                    Panel::Palettes => (self.palette_panel.content_height(width), None),
                     Panel::Layers => {
                         let (height, scroll) = self.layer_panel.content_measurement(width);
                         (height, Some(scroll))
@@ -3042,7 +3043,7 @@ impl Workspace {
                     }
                     _ => (
                         content.measure(gtk::Orientation::Vertical, width).1 as f32,
-                        (!matches!(config.id, Panel::Color | Panel::Palettes | Panel::Histogram | Panel::Waveform)
+                        (!matches!(config.id, Panel::Color | Panel::Histogram | Panel::Waveform)
                             && self.panel_widget(config.id).is::<gtk::ScrolledWindow>())
                         .then_some(layer_ui::PanelScrollMeasurement {
                             fixed_height: 0.0,

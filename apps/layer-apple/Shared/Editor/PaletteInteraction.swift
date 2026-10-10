@@ -1,20 +1,22 @@
 import SwiftUI
 
 struct PaletteCells: Equatable {
-    static let tile: CGFloat = 40, gap: CGFloat = 4, pitch: CGFloat = 44
+    static let maxTile: CGFloat = 40, gap: CGFloat = 4, basePitch: CGFloat = 44
     let width: CGFloat
-    var columns: Int { max(1, Int((width + Self.gap) / Self.pitch)) }
+    var columns: Int { max(6, Int((width + Self.gap) / Self.basePitch)) }
     private var cell: CGFloat { (width + Self.gap) / CGFloat(columns) }
+    var tile: CGFloat { min(Self.maxTile, max(1, cell - Self.gap)) }
+    var pitch: CGFloat { tile + Self.gap }
     func x(_ index: Int) -> CGFloat { (CGFloat(index % columns) * cell).rounded() }
     func width(_ index: Int) -> CGFloat { (CGFloat(index % columns + 1) * cell).rounded() - x(index) - Self.gap }
-    func y(_ index: Int) -> CGFloat { CGFloat(index / columns) * Self.pitch }
-    func frame(_ index: Int) -> CGRect { CGRect(x: x(index), y: y(index), width: width(index), height: Self.tile) }
+    func y(_ index: Int) -> CGFloat { CGFloat(index / columns) * pitch }
+    func frame(_ index: Int) -> CGRect { CGRect(x: x(index), y: y(index), width: width(index), height: tile) }
     func rows(_ count: Int) -> Int { max(1, (count + columns - 1) / columns) }
-    func height(rows: Int) -> CGFloat { CGFloat(rows) * Self.pitch - Self.gap }
+    func height(rows: Int) -> CGFloat { CGFloat(rows) * pitch - Self.gap }
     func viewport(_ count: Int) -> CGFloat { height(rows: min(4, max(2, rows(count)))) }
     func slot(_ point: CGPoint, count: Int) -> Int? {
         guard point.x >= 0, point.x < width, point.y >= 0 else { return nil }
-        let index = Int(point.y / Self.pitch) * columns + Int(point.x * CGFloat(columns) / (width + Self.gap))
+        let index = Int(point.y / pitch) * columns + Int(point.x * CGFloat(columns) / (width + Self.gap))
         return index < count ? index : nil
     }
 }

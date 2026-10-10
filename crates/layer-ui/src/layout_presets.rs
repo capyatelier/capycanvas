@@ -198,9 +198,6 @@ impl WorkspacePreset {
     fn photo_layout(platform: crate::Platform) -> DockLayout {
         use crate::CommandId::*;
         let mut layout = Self::columns_layout(platform);
-        // Keep the primary column permanently expanded at the outer
-        // right edge. Secondary panels occupy the icon strip inward
-        // from it, in Tool Set / Tool + Brush size / Navigator order.
         if let Some(DockNode::Tabs { panels, active, .. }) = layout.node_mut(14) {
             *panels = vec![Panel::Color, Panel::Stats];
             *active = Panel::Color;
@@ -211,13 +208,12 @@ impl WorkspacePreset {
         }
         let mut secondary = layout.bands.remove(1);
         secondary.edge = Edge::Right;
-        let expanded_width = secondary.extent - WORKSPACE_SPACING;
         secondary.extent = TILE_SIZE + WORKSPACE_SPACING;
-        layout.bands[1].extent = Panel::Layers.default_width() + WORKSPACE_SPACING;
+        layout.bands[1].extent = 0.;
         layout.bands.insert(2, secondary);
         layout.collapsed = vec![CollapsedColumn {
             root: 4,
-            expanded_width,
+            expanded_width: 0.,
         }];
         insert_proof(&mut layout);
         let tiles = layout.panel(Panel::Toolbar).unwrap().tiles();
@@ -301,7 +297,7 @@ impl WorkspacePreset {
             }
             layout.collapsed.push(CollapsedColumn {
                 root: column,
-                expanded_width: band.extent - WORKSPACE_SPACING,
+                expanded_width: 0.,
             });
             band.extent = TILE_SIZE + WORKSPACE_SPACING;
         }
@@ -372,7 +368,7 @@ mod tests {
             assert!(crate::CommandId::DrawingBrush.available_on(platform));
             assert!(crate::CommandId::Sculpt.available_on(platform));
         }
-        assert!(Panel::BrushSets.default_width() < Panel::Tools.default_width());
+        assert!(Panel::BrushSets.default_width(1600.) < Panel::Tools.default_width(1600.));
         assert_eq!(Panel::BrushSets.canonical_label().as_ref(), "Brushes");
         assert_eq!(Panel::Tools.canonical_label().as_ref(), "Tools");
     }
@@ -556,10 +552,10 @@ mod tests {
             layout.open_default_columns(platform);
             layout.validate().unwrap();
             let scopes=preset==WorkspacePreset::Photographer;
-            let (anchor,selected,minimum_width)=if scopes {
+            let (anchor,selected)=if scopes {
                 for panel in [Panel::Color,Panel::Palettes] {assert!(layout.panel(panel).is_ok());assert!(layout.panel_group(panel).is_none());}
-                (Panel::Histogram,Panel::Waveform,254.)
-            } else {(Panel::Color,Panel::Palettes,280.)};
+                (Panel::Histogram,Panel::Waveform)
+            } else {(Panel::Color,Panel::Palettes)};
             for (panel, anchor) in [
                 (selected, anchor),
                 (Panel::Proof, Panel::Navigator),
@@ -573,14 +569,17 @@ mod tests {
             }
             let group = layout.panel_group(anchor).unwrap();
             layout.select_tab(group, selected).unwrap();
-            let colors = layout
-                .resolve(1600., 1000.)
-                .groups
-                .into_iter()
-                .find(|g| g.id == group)
-                .unwrap()
-                .bounds;
-            assert!(colors.width >= minimum_width);
+            for (width, preferred) in [(1280., 242.), (1599., 242.), (1600., 280.), (1920., 280.)] {
+                let geometry = layout.resolved([width, 1000.]);
+                for group in geometry.groups.iter().filter(|g| g.active.kind() == PanelKind::Content) {
+                    assert_eq!(group.bounds.width, preferred, "{preset:?} {platform:?} {group:?} at {width}");
+                }
+            }
+            let mut manual = layout.clone();
+            manual.bands.iter_mut().find(|b| b.root.find(group).is_some()).unwrap().extent = 306.;
+            for width in [1280., 1920.] {
+                assert_eq!(manual.resolved([width, 1000.]).groups.iter().find(|g| g.id == group).unwrap().bounds.width, 300.);
+            }
             let restored: DockLayout =
                 serde_json::from_slice(&serde_json::to_vec(&layout).unwrap()).unwrap();
             assert_eq!(
@@ -623,6 +622,15 @@ mod tests {
             // while another page is selected; it needs no remembered tab state.
             layout.measurements[0].content_height = 340.;
             assert_eq!(bounds(&layout).height, 340. + TAB_BAR_HEIGHT);
+            for width in [1280., 1920.] {
+                let content = first.default_width(width);
+                layout.measurements[0].content_height = content;
+                let fitted = layout.resolved([width, 1000.]).groups.into_iter().find(|g| g.id == group).unwrap().bounds;
+                assert_eq!(fitted.height, content + TAB_BAR_HEIGHT);
+                layout.select_tab(group, second).unwrap();
+                assert_eq!(layout.resolved([width, 1000.]).groups.into_iter().find(|g| g.id == group).unwrap().bounds, fitted);
+            }
+            layout.measurements[0].content_height = 340.;
             layout.add_panel_to_group(Panel::Layers, group).unwrap();
             layout.measurements.push(PanelMeasurement {
                 panel: Panel::Layers,

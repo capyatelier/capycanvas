@@ -140,7 +140,7 @@ impl DockLayout {
         next.detach(&panels);
         next.reclaim_removed_columns(self, &geometry);
         next.collapsed.push(collapsed);
-        next.insert_stack_member(moving, target, before)?;
+        next.insert_stack_member(moving, target, before, viewport[0])?;
         next.validate()?;
         *self = next;
         Ok(())
@@ -153,6 +153,7 @@ impl DockLayout {
         moving: DockNode,
         target: u32,
         before: bool,
+        viewport_width: f32,
     ) -> Result<(), String> {
         let source = moving.id();
         let mut stack = self.column_stack(target);
@@ -190,7 +191,7 @@ impl DockLayout {
         let width = stack
             .members
             .iter()
-            .map(|m| self.expanded_column_width(*m))
+            .map(|m| self.expanded_column_width(*m, viewport_width))
             .fold(128., f32::max);
         self.collapsed.push(CollapsedColumn {
             root,
@@ -246,18 +247,20 @@ impl DockLayout {
             && self.node(column)?.find(member).is_some())
         .then_some(member)
     }
-    pub(crate) fn expanded_column_width(&self, column: u32) -> f32 {
+    pub(crate) fn expanded_column_width(&self, column: u32, viewport_width: f32) -> f32 {
         self.collapsed
             .iter()
             .find(|c| c.root == column)
-            .map_or(240., |c| c.expanded_width)
+            .map(|c| c.expanded_width).filter(|width| *width > 0.)
+            .unwrap_or_else(|| self.node(column).map_or(0., |node|
+                expanded_node_width(node, self, |layout, group| layout.group_default_width(group, viewport_width))))
     }
-    pub(super) fn projected_column_bands(&self, base: &ResolvedLayout) -> Vec<DockBand> {
-        fn width(node: &mut DockNode, layout: &DockLayout, base: &ResolvedLayout) -> f32 {
+    pub(super) fn projected_column_bands(&self, base: &ResolvedLayout, viewport_width: f32) -> Vec<DockBand> {
+        fn width(node: &mut DockNode, layout: &DockLayout, base: &ResolvedLayout, viewport_width: f32) -> f32 {
             if layout.is_collapsed(node.id()) {
                 return TILE_SIZE
                     + layout.open_stack_column(node.id()).map_or(0., |c| {
-                        layout.expanded_column_width(c) + WORKSPACE_SPACING * 2.
+                        layout.expanded_column_width(c, viewport_width) + WORKSPACE_SPACING * 2.
                     });
             }
             match node {
@@ -273,8 +276,8 @@ impl DockLayout {
                     second,
                     ..
                 } => {
-                    let a = width(first, layout, base);
-                    let b = width(second, layout, base);
+                    let a = width(first, layout, base, viewport_width);
+                    let b = width(second, layout, base, viewport_width);
                     if *axis == Axis::Horizontal {
                         *fraction = a / (a + b).max(1.);
                         a + b + WORKSPACE_SPACING
@@ -289,7 +292,7 @@ impl DockLayout {
             if self.column_stacks.iter().any(|s| {
                 self.open_stack_column(s.column).is_some() && band.root.find(s.column).is_some()
             }) {
-                band.extent = width(&mut band.root, self, base) + WORKSPACE_SPACING;
+                band.extent = width(&mut band.root, self, base, viewport_width) + WORKSPACE_SPACING;
             }
         }
         bands

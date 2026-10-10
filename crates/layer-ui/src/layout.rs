@@ -27,8 +27,8 @@ pub const LAYERS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * TILE_GAP;
 pub const PANEL_CONTENT_INSET: f32 = 8.0;
 /// Three standard tiles, two gaps, and the tool list's two content insets.
 pub const TOOL_PANEL_MIN_WIDTH: f32 = 3.0 * TILE_SIZE + 2.0 * TILE_GAP + 2.0 * PANEL_CONTENT_INSET;
-/// Six standard tiles, five gaps, and the settings panel's two content insets.
-pub const TOOL_SETTINGS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * TILE_GAP + 2.0 * PANEL_CONTENT_INSET;
+/// Six standard tiles, five gaps, and two content insets.
+pub const PANEL_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * TILE_GAP + 2.0 * PANEL_CONTENT_INSET;
 /// A single icon/name row; labels may ellipsize at the minimum width.
 pub const BRUSH_SETS_MIN_WIDTH: f32 = 104.0;
 pub const TAB_BAR_HEIGHT: f32 = TILE_SIZE;
@@ -701,16 +701,12 @@ pub enum PanelKind {
 impl Panel {
     /// Normal starting column width, excluding its divider. Allocation may
     /// raise this to a measured minimum or fit it into a smaller viewport.
-    pub fn default_width(self) -> f32 {
+    pub fn default_width(self, viewport_width: f32) -> f32 {
         match self {
             Self::BrushSets | Self::SculptSets | Self::FilterTypes => 160.,
-            Self::Tools | Self::Brushes | Self::ToolSettings | Self::Color | Self::Sizes => 242.,
-            Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator | Self::Histogram | Self::Waveform => {
-                254.
-            }
-            Self::Palettes => 280.,
-            Self::Proof => 300.,
-            Self::Toolbar | Self::Commands | Self::CustomToolbar(_) => TILE_SIZE,
+            _ if self.kind() == PanelKind::Content => PANEL_MIN_WIDTH
+                + if viewport_width >= 1600. { TILE_SIZE + TILE_GAP } else { 0. },
+            _ => TILE_SIZE,
         }
     }
 
@@ -825,6 +821,12 @@ impl DockNode {
             }
         }
     }
+    fn has_content(&self) -> bool {
+        match self {
+            Self::Tabs { panels, .. } => panels.iter().any(|p| p.kind() == PanelKind::Content),
+            Self::Split { first, second, .. } => first.has_content() || second.has_content(),
+        }
+    }
     pub fn id(&self) -> u32 {
         match self {
             Self::Tabs { id, .. } | Self::Split { id, .. } => *id,
@@ -899,6 +901,7 @@ pub struct DockBand {
     pub alignment: Option<EdgeAlignment>,
     pub id: u32,
     pub edge: Edge,
+    /// Zero selects the responsive content width; positive values retain manual sizes.
     pub extent: f32,
     pub root: DockNode,
 }
@@ -1442,7 +1445,7 @@ impl DockLayout {
                 alignment: None,
                 id: 3,
                 edge: Edge::Left,
-                extent: Panel::Brushes.default_width() + WORKSPACE_SPACING,
+                extent: 0.,
                 root: stack(
                     4,
                     // Tool Set takes Brush size's former space; Settings and
@@ -1461,7 +1464,7 @@ impl DockLayout {
                 alignment: None,
                 id: 11,
                 edge: Edge::Right,
-                extent: Panel::Layers.default_width() + WORKSPACE_SPACING,
+                extent: 0.,
                 root: stack(
                     12,
                     // Navigator gains five percent of the column from Layers;
@@ -1665,7 +1668,7 @@ impl Default for DockLayout {
                     alignment: None,
                     id: 3,
                     edge: Edge::Left,
-                    extent: 232.0,
+                    extent: 0.,
                     root: DockNode::Split {
                         id: 4,
                         axis: Axis::Vertical,
@@ -1678,7 +1681,7 @@ impl Default for DockLayout {
                     alignment: None,
                     id: 7,
                     edge: Edge::Right,
-                    extent: 232.0,
+                    extent: 0.,
                     root: DockNode::Tabs {
                         id: 8,
                         panels: vec![Panel::Layers, Panel::Adjustments, Panel::Properties],
@@ -1747,7 +1750,7 @@ impl DockLayout {
             Ok(())
         }
         for band in &self.bands {
-            if !ids.insert(band.id) || !band.extent.is_finite() || band.extent <= 0.0 {
+            if !ids.insert(band.id) || !band.extent.is_finite() || band.extent < 0.0 {
                 return Err("Invalid workspace dock band".into());
             }
             if band.alignment.is_some() {
@@ -2025,7 +2028,7 @@ impl DockLayout {
             extent: if panel.kind() == PanelKind::Tiles {
                 next.panel(panel)?.tile_style.size()[1] + WORKSPACE_SPACING
             } else {
-                232.0
+                0.
             },
             root: DockNode::Tabs {
                 tab_style: crate::TabStyle::default(),
@@ -2456,11 +2459,9 @@ impl DockLayout {
                     Panel::Layers => LAYERS_MIN_WIDTH,
                     Panel::BrushSets | Panel::SculptSets | Panel::FilterTypes => BRUSH_SETS_MIN_WIDTH,
                     Panel::Tools | Panel::Brushes => TOOL_PANEL_MIN_WIDTH,
-                    Panel::ToolSettings => TOOL_SETTINGS_MIN_WIDTH,
+                    Panel::ToolSettings | Panel::Palettes | Panel::Histogram | Panel::Waveform => PANEL_MIN_WIDTH,
                     Panel::Navigator => 192.0,
-                    Panel::Histogram | Panel::Waveform => p.default_width(),
                     Panel::Color => 4.0 * TILE_SIZE,
-                    Panel::Palettes => 280.,
                     _ => 0.0,
                 })
                 .fold(0.0, f32::max)
@@ -2469,6 +2470,11 @@ impl DockLayout {
 
     fn group_preferred_width(&self, group: u32) -> f32 {
         self.group_min_width(group).max(self.tab_width(group))
+    }
+
+    fn group_default_width(&self, group: u32, viewport_width: f32) -> f32 {
+        self.group_panels(group).map_or(0., |panels| panels.iter()
+            .map(|p| p.default_width(viewport_width)).fold(self.group_preferred_width(group), f32::max))
     }
 
     pub fn move_panel(
@@ -2604,7 +2610,7 @@ impl DockLayout {
         let moved_width = if tiles {
             tile_size[0]
         } else {
-            source.map(|g| g.bounds.width).unwrap_or(246.0)
+            source.map_or(selected.default_width(viewport[0]), |g| g.bounds.width)
         };
         let moving = DockNode::Tabs {
             id: moving_id,
@@ -2626,7 +2632,7 @@ impl DockLayout {
             } => {
                 let width = self
                     .collapsed_column_for_group(source_group)
-                    .map_or(moved_width, |column| self.expanded_column_width(column))
+                    .map_or(moved_width, |column| self.expanded_column_width(column, viewport[0]))
                     .max(self.group_preferred_width(source_group))
                     .clamp(128., 800.);
                 next.reclaim_removed_columns(self, &before);
@@ -2634,7 +2640,7 @@ impl DockLayout {
                     root: moving_id,
                     expanded_width: width,
                 });
-                next.insert_stack_member(moving, stack_target.unwrap(), insert_before)?;
+                next.insert_stack_member(moving, stack_target.unwrap(), insert_before, viewport[0])?;
                 if was_fitted {
                     next.fit_tabs(moving_id);
                 }
@@ -2650,7 +2656,7 @@ impl DockLayout {
                     if tiles {
                         next.panel(selected).unwrap().tile_style.floating_width()
                     } else {
-                        source.map_or(232.0, |g| g.bounds.width).max(self.group_min_width(source_group).max(TILE_SIZE))
+                        source.map_or(selected.default_width(viewport[0]), |g| g.bounds.width).max(self.group_min_width(source_group).max(TILE_SIZE))
                     }
                 });
                 next.floating.push(FloatingGroup {
@@ -3125,7 +3131,7 @@ impl DockLayout {
             return Ok(());
         }
         let base = self.column_stacks.iter().any(|s| self.open_stack_column(s.column).is_some())
-            .then(|| self.resolve_bands(viewport[0], viewport[1], &self.bands, false));
+            .then(|| self.resolve_bands(viewport[0], viewport[1], &self.bands, false, viewport[0]));
         let original = base
             .as_ref()
             .and_then(|base| base.dividers.iter().find(|b| b.id == id))
@@ -3175,8 +3181,10 @@ impl DockLayout {
         }
         Ok(())
     }
-    pub fn resolve(&self, width: f32, height: f32) -> ResolvedLayout {
-        let base = self.resolve_bands(width, height, &self.bands, false);
+    pub fn resolve(&self, width: f32, height: f32) -> ResolvedLayout { self.resolve_available(width, height, width) }
+
+    fn resolve_available(&self, width: f32, height: f32, viewport_width: f32) -> ResolvedLayout {
+        let base = self.resolve_bands(width, height, &self.bands, false, viewport_width);
         if !self
             .column_stacks
             .iter()
@@ -3184,8 +3192,8 @@ impl DockLayout {
         {
             return base;
         }
-        let bands = self.projected_column_bands(&base);
-        self.resolve_bands(width, height, &bands, true)
+        let bands = self.projected_column_bands(&base, viewport_width);
+        self.resolve_bands(width, height, &bands, true, viewport_width)
     }
     fn resolve_bands(
         &self,
@@ -3193,6 +3201,7 @@ impl DockLayout {
         height: f32,
         bands: &[DockBand],
         open_columns: bool,
+        viewport_width: f32,
     ) -> ResolvedLayout {
         let mut remaining = Bounds {
             x: 0.0,
@@ -3264,7 +3273,10 @@ impl DockLayout {
             } else {
                 minimum
             };
-            let extent = band.extent.max(minimum).max(preferred).min(limit);
+            let requested = if band.extent == 0. {
+                node_width(&band.root, self, |layout, group| layout.group_default_width(group, viewport_width)) + WORKSPACE_SPACING
+            } else { band.extent };
+            let extent = requested.max(minimum).max(preferred).min(limit);
             let mut bounds = remaining.strip(band.edge, extent);
             // The inside six logical units are a generous native drag handle.
             let opposite = match band.edge {
@@ -3325,9 +3337,9 @@ impl DockLayout {
         let height = self.workspace_height(height);
         // The header already includes bottom padding. Keep the outer inset on
         // the sides/bottom only, rather than doubling the gap above the docks.
-        let mut result = self.resolve(
+        let mut result = self.resolve_available(
             (width - WORKSPACE_SPACING * 2.0).max(1.0),
-            (height - top - WORKSPACE_SPACING).max(1.0),
+            (height - top - WORKSPACE_SPACING).max(1.0), width,
         );
         result.viewport = viewport;
         let offset = |b: &mut Bounds| {
@@ -4219,14 +4231,14 @@ fn tab_preferred_width(node: &DockNode, layout: &DockLayout) -> f32 {
     node_width(node, layout, DockLayout::group_preferred_width)
 }
 
-fn node_width(node: &DockNode, layout: &DockLayout, group_width: fn(&DockLayout, u32) -> f32) -> f32 {
+fn node_width(node: &DockNode, layout: &DockLayout, group_width: impl Fn(&DockLayout, u32) -> f32 + Copy) -> f32 {
     if layout.is_collapsed(node.id()) {
         return TILE_SIZE;
     }
     expanded_node_width(node, layout, group_width)
 }
 
-fn expanded_node_width(node: &DockNode, layout: &DockLayout, group_width: fn(&DockLayout, u32) -> f32) -> f32 {
+fn expanded_node_width(node: &DockNode, layout: &DockLayout, group_width: impl Fn(&DockLayout, u32) -> f32 + Copy) -> f32 {
     match node {
         DockNode::Tabs { id, .. } => group_width(layout, *id),
         DockNode::Split {
@@ -4892,71 +4904,23 @@ mod tests {
     }
 
     #[test]
-    fn tool_panels_respect_their_tile_minimums_when_floating_or_docked() {
-        assert_eq!(
-            TOOL_SETTINGS_MIN_WIDTH - 2.0 * PANEL_CONTENT_INSET,
-            6.0 * TILE_SIZE + 10.0
-        );
-        for (panel, minimum) in [(Panel::Brushes, TOOL_PANEL_MIN_WIDTH), (Panel::ToolSettings, TOOL_SETTINGS_MIN_WIDTH)] {
+    fn content_panels_respect_their_tile_minimums_when_floating_or_docked() {
+        assert_eq!(PANEL_MIN_WIDTH - 2. * PANEL_CONTENT_INSET, 6. * TILE_SIZE + 5. * TILE_GAP);
+        for (panel, minimum) in [(Panel::Brushes, TOOL_PANEL_MIN_WIDTH),
+            (Panel::ToolSettings, PANEL_MIN_WIDTH), (Panel::Palettes, PANEL_MIN_WIDTH),
+            (Panel::Histogram, PANEL_MIN_WIDTH), (Panel::Waveform, PANEL_MIN_WIDTH)] {
+            let viewport = [1200., 900.];
             let mut layout = DockLayout::default();
+            let bounds = |layout: &DockLayout| layout.resolved(viewport).groups.into_iter()
+                .find(|g| g.panels.contains(&panel)).unwrap().bounds;
             layout.set_panel_visible(panel, true).unwrap();
-            layout
-                .move_panel(
-                    [1200., 900.],
-                    panel,
-                    DockTarget::Float {
-                        position: [400., 200.],
-                    },
-                )
-                .unwrap();
-            let row = layout
-                .workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
-                .groups
-                .into_iter()
-                .find(|g| g.active == panel)
-                .unwrap();
-            layout
-                .resize_floating(
-                    row.id,
-                    ResizeEdge::Right,
-                    row.bounds,
-                    [-1000., 0.],
-                    [1200., 900.],
-                )
-                .unwrap();
-            let row = layout
-                .workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
-                .groups
-                .into_iter()
-                .find(|g| g.active == panel)
-                .unwrap();
-            assert_eq!(row.bounds.width, minimum);
-            layout
-                .move_panel(
-                    [1200., 900.],
-                    panel,
-                    DockTarget::Edge {
-                        edge: Edge::Left,
-                        outer: false,
-                    },
-                )
-                .unwrap();
-            for band in &mut layout.bands {
-                if find_tab(&band.root, panel).is_some() {
-                    band.extent = 1.;
-                }
-            }
-            assert!(
-                layout
-                    .workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
-                    .groups
-                    .iter()
-                    .find(|g| g.active == panel)
-                    .unwrap()
-                    .bounds
-                    .width
-                    >= minimum
-            );
+            layout.move_panel(viewport, panel, DockTarget::Float { position: [400., 200.] }).unwrap();
+            let group = layout.panel_group(panel).unwrap();
+            layout.resize_floating(group, ResizeEdge::Right, bounds(&layout), [-1000., 0.], viewport).unwrap();
+            assert_eq!(bounds(&layout).width, minimum);
+            layout.move_panel(viewport, panel, DockTarget::Edge { edge: Edge::Left, outer: false }).unwrap();
+            layout.bands.iter_mut().find(|b| find_tab(&b.root, panel).is_some()).unwrap().extent = 1.;
+            assert_eq!(bounds(&layout).width, minimum);
         }
     }
 
@@ -6227,7 +6191,7 @@ mod tests {
                 let resolved = layout.workspace(width, 900., 48., 28.);
                 let leading = group(&resolved, Panel::ToolSettings);
                 let trailing = group(&resolved, Panel::Layers);
-                assert!(leading.width >= TOOL_SETTINGS_MIN_WIDTH, "{width} {text_scale} {leading:?}");
+                assert!(leading.width >= PANEL_MIN_WIDTH, "{width} {text_scale} {leading:?}");
                 assert!(trailing.width >= LAYERS_MIN_WIDTH, "{width} {text_scale} {trailing:?}");
                 assert!(group(&resolved, Panel::Navigator).width >= 192.);
                 assert!(leading.x + leading.width <= trailing.x);
@@ -6240,7 +6204,7 @@ mod tests {
             );
             layout.bands.swap(1, 2);
             let reversed = layout.workspace(744., 900., 48., 28.);
-            assert!(group(&reversed, Panel::ToolSettings).width >= TOOL_SETTINGS_MIN_WIDTH);
+            assert!(group(&reversed, Panel::ToolSettings).width >= PANEL_MIN_WIDTH);
             assert!(group(&reversed, Panel::Layers).width >= LAYERS_MIN_WIDTH);
             assert!(group(&reversed, Panel::Navigator).width >= 192.);
             layout.bands.swap(1, 2);
@@ -6363,7 +6327,7 @@ mod tests {
                 alignment: None,
                 id: 3,
                 edge,
-                extent: 232.0,
+                extent: 0.,
                 root: DockNode::Tabs {
                     tab_style: crate::TabStyle::default(),
                     id: 5,
@@ -6839,7 +6803,7 @@ mod tests {
         assert_eq!(layout.bands.last().unwrap().root, original);
         assert_eq!(
             layout.bands.last().unwrap().extent,
-            232.0,
+            Panel::Layers.default_width(VIEWPORT[0]) + WORKSPACE_SPACING,
             "a mixed tab group retains its width"
         );
         layout
@@ -7091,7 +7055,8 @@ mod tests {
                     [1200.0, 900.0],
                 )
                 .unwrap();
-            assert_eq!(layout.bands[0].extent, 232.0 + dx);
+            assert_eq!(layout.resolved([1200., 900.]).groups.iter()
+                .find(|g| g.panels.contains(&Panel::Brushes)).unwrap().bounds.width, PANEL_MIN_WIDTH + dx);
         }
     }
     #[test]

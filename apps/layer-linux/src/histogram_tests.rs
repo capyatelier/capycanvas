@@ -466,7 +466,7 @@ fn native_waveform_photo_sources_channels_and_layout() {
         invoke(&w,CommandId::Waveform);assert_eq!(*done(),*retained);pump(200);
         assert_eq!((state(&w).waveform.source,state(&w).waveform.channel),(1,4));
         let group=w.groups.borrow().iter().find(|group|group.panels.contains(&Panel::Waveform) && group.root.is_mapped()).unwrap().root.clone();
-        let bounds=group.compute_bounds(&w.window).unwrap();assert!(group.width() as f32>=Panel::Waveform.default_width(),"reopened Waveform remains usable: {bounds:?}");
+        let bounds=group.compute_bounds(&w.window).unwrap();assert!(group.width() as f32>=layer_ui::PANEL_MIN_WIDTH,"reopened Waveform remains usable: {bounds:?}");
         assert!(bounds.x()>=-1. && bounds.y()>=-1. && bounds.x()+bounds.width()<=w.window.width() as f32+1. && bounds.y()+bounds.height()<=w.window.height() as f32+1.,"reopened Waveform stays visible: {bounds:?} in {}x{}",w.window.width(),w.window.height());
         for name in ["waveform-source","waveform-channel","waveform-log","waveform-chart","waveform-status","waveform-shadows","waveform-highlights"] {
             let widget=histogram_widget::<gtk::Widget>(&w,name);let bounds=widget.compute_bounds(&group).unwrap();

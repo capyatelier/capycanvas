@@ -2468,7 +2468,7 @@ fn native_operation_tool() {
             .filter(|d| d.band && d.axis == Axis::Horizontal)
             .min_by(|a, b| (a.bounds.x - edge).abs().total_cmp(&(b.bounds.x - edge).abs()))
             .unwrap();
-        let minimum = layer_ui::TOOL_SETTINGS_MIN_WIDTH as i32;
+        let minimum = layer_ui::PANEL_MIN_WIDTH as i32;
         drag_divider(
             &w,
             divider.id,

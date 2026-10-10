@@ -9071,7 +9071,7 @@ mod tests {
             s.dispatch(UiAction::ActivateHeaderItem { id }).unwrap();
             let drawer = s.state.customization.drawer.clone().unwrap();
             assert_eq!(drawer.columns, [vec![Panel::BrushSets], vec![Panel::Tools], vec![Panel::ToolSettings]]);
-            assert_eq!(drawer.column_widths(), [160., 272., 320.]);
+            assert_eq!(drawer.column_widths(1200.), [160., 242., 242.]);
             let sets = s.state.tool_panels.brush_sets.groups.clone();
             assert_eq!(sets.len(), 10);
             assert!(sets.iter().all(|set| !matches!(set.label.as_ref(), "Eraser" | "Blend" | "Liquify")));
@@ -12650,8 +12650,8 @@ mod tests {
             app.dispatch(action.clone()).unwrap();
             let after = app.state.workspace.clone();
             assert_eq!(
-                after.layout.bands[0].extent,
-                Panel::Brushes.default_width() + WORKSPACE_SPACING
+                after.layout.resolved(viewport).groups.iter().find(|g| g.panels.contains(&Panel::Brushes)).unwrap().bounds.width,
+                Panel::Brushes.default_width(viewport[0])
             );
             assert!(after.layout.collapsed.is_empty());
             // A repeated reset is a no-op, not a second undo entry.
@@ -13765,14 +13765,14 @@ mod tests {
         open(&mut s, 8, Panel::Layers);
         open(&mut s, 5, Panel::Brushes);
         assert_eq!(s.state.customization.column_drawers.len(), 2);
-        let width = s.state.customization.column_drawers[0].column_widths();
+        let width = s.state.customization.column_drawers[0].column_widths(viewport[0]);
         assert_eq!(
             width,
             vec![
                 Panel::Layers
-                    .drawer_width()
-                    .max(Panel::Properties.drawer_width())
-                    .max(Panel::Adjustments.drawer_width())
+                    .default_width(viewport[0])
+                    .max(Panel::Properties.default_width(viewport[0]))
+                    .max(Panel::Adjustments.default_width(viewport[0]))
             ]
         );
         s.dispatch(UiAction::SelectPanelTab {
@@ -13782,7 +13782,7 @@ mod tests {
         .unwrap();
         let d = &s.state.customization.column_drawers[0];
         assert_eq!(d.tabs.as_ref().unwrap().active, Panel::Properties);
-        assert_eq!(d.column_widths(), width);
+        assert_eq!(d.column_widths(viewport[0]), width);
         assert_eq!(d.dismissal, DrawerDismissal::Explicit);
         s.input(UiInput::Chrome {
             event: ChromeEvent::Contact {

@@ -4,8 +4,13 @@ use gtk::{glib, prelude::*, subclass::prelude::*};
 use std::cell::{Cell, RefCell};
 
 const TILE: i32 = 40;
-const GAP: i32 = 4;
+pub(crate) const GAP: i32 = 4;
 const MIN_COLUMNS: i32 = 6;
+
+pub(crate) fn cells(width: i32) -> (i32, i32) {
+    let columns = ((width + GAP) / (TILE + GAP)).max(MIN_COLUMNS);
+    (columns, ((width + GAP) / columns).clamp(GAP + 1, TILE + GAP))
+}
 
 struct Slide {
     source: gtk::Widget,
@@ -23,16 +28,16 @@ impl Slide {
 }
 
 fn cell_bounds(width: i32, index: usize) -> gtk::graphene::Rect {
-    let columns = ((width + GAP) / (TILE + GAP)).max(1);
+    let (columns, pitch) = cells(width);
     let cell = (width + GAP) as f32 / columns as f32;
     let index = index as i32;
     let x = ((index % columns) as f32 * cell).round();
     let next = (((index % columns) + 1) as f32 * cell).round();
     gtk::graphene::Rect::new(
         x,
-        (index / columns * (TILE + GAP)) as f32,
+        (index / columns * pitch) as f32,
         next - x - GAP as f32,
-        TILE as f32,
+        (pitch - GAP) as f32,
     )
 }
 mod imp {
@@ -64,20 +69,21 @@ mod imp {
             gtk::SizeRequestMode::HeightForWidth
         }
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            let minimum = (layer_ui::PANEL_MIN_WIDTH - 2. * layer_ui::PANEL_CONTENT_INSET) as i32;
+            let (columns, pitch) = cells(for_size.max(minimum));
             let size = if orientation == gtk::Orientation::Horizontal {
-                MIN_COLUMNS * (TILE + GAP) - GAP
+                minimum
             } else {
-                let columns = ((for_size + GAP) / (TILE + GAP)).max(MIN_COLUMNS);
                 let rows = if self.history_rows.get() > 0 {
                     self.history_rows.get()
                 } else {
                     ((self.children.borrow().len() as i32 + columns - 1) / columns).max(1)
                 };
-                rows * (TILE + GAP) - GAP
+                rows * pitch - GAP
             };
             (
                 if orientation == gtk::Orientation::Vertical && self.history_rows.get() > 0 {
-                    TILE
+                    pitch - GAP
                 } else {
                     size
                 },
@@ -87,10 +93,10 @@ mod imp {
             )
         }
         fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
-            let columns = ((width + GAP) / (TILE + GAP)).max(1);
+            let (columns, pitch) = cells(width);
             let rows = self.history_rows.get();
             let capacity = if rows > 0 {
-                columns * rows.min(((height + GAP) / (TILE + GAP)).max(1))
+                columns * rows.min(((height + GAP) / pitch).max(1))
             } else {
                 i32::MAX
             };
@@ -106,7 +112,7 @@ mod imp {
                 let rect = cell_bounds(width, index as usize);
                 child.allocate(
                     rect.width() as i32,
-                    TILE,
+                    rect.height() as i32,
                     -1,
                     Some(
                         gtk::gsk::Transform::new()
@@ -180,9 +186,10 @@ impl PaletteGrid {
         if point.x() < 0. || point.x() >= self.width() as f32 || point.y() < 0. {
             return None;
         }
-        let columns = ((self.width() + GAP) / (TILE + GAP)).max(1) as usize;
+        let (columns, pitch) = cells(self.width());
+        let columns = columns as usize;
         let column = (point.x() * columns as f32 / (self.width() + GAP) as f32) as usize;
-        let row = (point.y() / (TILE + GAP) as f32) as usize;
+        let row = (point.y() / pitch as f32) as usize;
         let index = row * columns + column;
         (index < self.imp().children.borrow().len()).then_some(index)
     }

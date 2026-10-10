@@ -68,9 +68,10 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     val density = LocalDensity.current.density
     val report by rememberUpdatedState(onContent)
     Layout({}) { _, constraints ->
-        val size = (constraints.maxWidth / density - 16f).coerceAtLeast(128f)
+        val inset = (8 * density).roundToInt()
+        val size = ((constraints.maxWidth - 2 * inset) / density).coerceAtLeast(128f)
         val height = JSONObject(Native.colorUi(obj("type" to "layout", "size" to size, "hdr" to hdr).toString(), host.languageTag)).number("height")
-        report(PanelContentSize(((height * density).roundToInt() + 2 * (8 * density).roundToInt()) / density))
+        report(PanelContentSize(((height * density).roundToInt() + 2 * inset) / density))
         layout(0, 0) {}
     }
 }
@@ -108,7 +109,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
             Triple(fittedWidth.dp,fitted,natural.number("height"))
         }
         val density = LocalDensity.current.density
-        SideEffect {onHeight(naturalHeight,(layout.number("height")*density).roundToInt()/density)}
+        SideEffect {onHeight((naturalHeight*density).roundToInt()/density,(layout.number("height")*density).roundToInt()/density)}
         CompositionLocalProvider(LocalViewConfiguration provides compactConfig) {
             Box(Modifier.width(side).height(layout.number("height").dp).testTag("color-panel")
                 .then(if(hdr) Modifier.hdrIntensityInput(view, ::color) else Modifier)) {

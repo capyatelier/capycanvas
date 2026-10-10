@@ -118,7 +118,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     root.replaceChildren(body, divider(), footer, note);
 
     const tiles = new Map();
-    let editing = false, drag = null, columns = 6, historyKey, choicesKey, currentKey, swatchCount = -1, rendered = false, layoutFrame = 0;
+    let editing = false, drag = null, columns = 6, pitch = CELL, historyKey, choicesKey, currentKey, swatchCount = -1, rendered = false, layoutFrame = 0;
     const current = () => app.color_panel().definition;
     const selectedSwatch = () => view.swatches.find(s => s.current);
     function report(text, notice = false) {
@@ -236,7 +236,8 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     function layoutGrids() {
       if (!body.clientWidth) return;
       columns = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(" ").length);
-      for (const [target, rows] of [[history, 1], [expanded, Math.min(4, Math.max(1, Math.floor((expanded.clientHeight + GAP) / CELL)))]]) {
+      pitch = parseFloat(getComputedStyle(grid).gridAutoRows) + GAP;
+      for (const [target, rows] of [[history, 1], [expanded, Math.min(4, Math.max(1, Math.floor((expanded.clientHeight + GAP) / pitch)))]]) {
         if (target === expanded && target.hidden) continue;
         const children = [...target.children], capacity = rows * columns;
         children.forEach((node, index) => {
@@ -309,7 +310,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       if (!chooser.hidden || !expanded.hidden) return null;
       const clip = scroll.getBoundingClientRect(), g = grid.getBoundingClientRect();
       if (x < clip.left || x >= clip.right || y < clip.top || y >= clip.bottom || x < g.left || x >= g.right || y < g.top) return null;
-      const index = Math.floor((y - g.top) / CELL) * columns + Math.floor((x - g.left) * columns / (g.width + GAP));
+      const index = Math.floor((y - g.top) / pitch) * columns + Math.floor((x - g.left) * columns / (g.width + GAP));
       return index < grid.children.length ? index : null;
     }
     function update() {
@@ -323,7 +324,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       if (!preview) return;
       d.action = slot == null ? null : preview.action;
       const cells = [...grid.children], cell = (grid.clientWidth + GAP) / columns;
-      const position = index => [Math.round((index % columns) * cell), Math.floor(index / columns) * CELL];
+      const position = index => [Math.round((index % columns) * cell), Math.floor(index / columns) * pitch];
       preview.order.forEach((id, target) => {
         const node = tiles.get(String(id))?.node;
         if (!node) return;

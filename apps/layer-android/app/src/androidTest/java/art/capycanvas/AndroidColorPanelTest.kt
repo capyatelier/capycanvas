@@ -741,7 +741,7 @@ class AndroidColorPanelTest {
     }
     @Test fun compactGeometryAndRastersInBothThemes() {
         val report = JSONArray()
-        for (theme in listOf("light", "dark")) for (width in listOf(144, 160, 200, 280, 360)) {
+        for (theme in listOf("light", "dark")) for (width in listOf(144, 160, 200, 242, 280, 360)) {
             resize(width)
             action(obj("type" to "set_theme", "theme" to theme))
             action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.2, .72, .58, 1))))

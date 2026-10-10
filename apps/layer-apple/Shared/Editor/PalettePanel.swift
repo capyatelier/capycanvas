@@ -15,7 +15,7 @@ struct PalettePanel: View {
     var body: some View {
         let view = store.snapshot["palette_panel"]
         if !view.isNull {
-            let cells = PaletteCells(width: max(PaletteCells.tile, width))
+            let cells = PaletteCells(width: max(PaletteCells.maxTile, width))
             let count = view["swatches"].array.count + 1
             VStack(spacing: 0) {
                 ZStack(alignment: .topLeading) {
@@ -28,12 +28,12 @@ struct PalettePanel: View {
                         }.frame(minHeight: cells.height(rows: 2), maxHeight: cells.viewport(count))
                             .accessibilityIdentifier("palette-swatches")
                             .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid", intrinsicHeight: cells.viewport(count), kind: .scroll))
-                            .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid-unit", intrinsicHeight: PaletteCells.pitch, kind: .unit))
+                            .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid-unit", intrinsicHeight: cells.pitch, kind: .unit))
                     }.allowsHitTesting(!covered).accessibilityHidden(covered).opacity(covered ? 0 : 1)
-                        .modifier(PanelBodyMeasurement(panel: "palettes", part: "history", intrinsicHeight: PaletteCells.tile + 13))
+                        .modifier(PanelBodyMeasurement(panel: "palettes", part: "history", intrinsicHeight: cells.tile + 13))
                     if controller.expanded {
                         PaletteHistory(controller: controller, view: view, cells: cells,
-                            rows: min(4, max(1, Int((bodyHeight + PaletteCells.gap) / PaletteCells.pitch))), expanded: true, enabled: true,
+                            rows: min(4, max(1, Int((bodyHeight + PaletteCells.gap) / cells.pitch))), expanded: true, enabled: true,
                             hdr: hdr, viewing: store.colorViewing)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .accessibilityIdentifier("palette-history-expanded")
@@ -88,7 +88,7 @@ struct PalettePanel: View {
                     guard !grid.contact.consumeClick() else { return }
                     controller.use(id)
                 }
-                .frame(width: cells.width(index), height: PaletteCells.tile)
+                .frame(width: cells.width(index), height: cells.tile)
                 .offset(x: cells.x(target), y: cells.y(target))
                 .animation(PaletteSlide.animation, value: target)
                 .editorPopover(isPresented: controller.menuPresented(.color(id), owner: grid.owner), placement: .inward) { menu }
@@ -99,7 +99,7 @@ struct PalettePanel: View {
                 SharedIcon(name: "plus").frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(palette["input"], in: SquircleShape.control).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!view["can_name"].bool || covered).opacity(view["can_name"].bool ? 1 : 0.4)
-                .frame(width: cells.width(count - 1), height: PaletteCells.tile)
+                .frame(width: cells.width(count - 1), height: cells.tile)
                 .offset(x: cells.x(count - 1), y: cells.y(count - 1))
                 .help(controller.copy["add_current"].string).accessibilityLabel(controller.copy["add_current"].string)
                 .accessibilityIdentifier("palette-add-color")
@@ -183,7 +183,7 @@ private struct PaletteHistory: View {
                             .accessibilityElement().accessibilityLabel(controller.copy["history_empty"].string)
                             .accessibilityIdentifier("palette-empty-\(index)")
                     }
-                }.frame(width: cells.width(index), height: PaletteCells.tile).offset(x: cells.x(index), y: cells.y(index))
+                }.frame(width: cells.width(index), height: cells.tile).offset(x: cells.x(index), y: cells.y(index))
             }
             Button {
                 controller.focused = true; controller.chooser = false; controller.expanded = !expanded
@@ -191,7 +191,7 @@ private struct PaletteHistory: View {
                 SharedIcon(name: "chevron-down").rotationEffect(.degrees(expanded ? 180 : 0))
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle()).disabled(!enabled)
-                .frame(width: cells.width(capacity - 1), height: PaletteCells.tile)
+                .frame(width: cells.width(capacity - 1), height: cells.tile)
                 .offset(x: cells.x(capacity - 1), y: cells.y(capacity - 1))
                 .help(expanded ? controller.copy["collapse_history"].string : controller.copy["expand_history"].string)
                 .accessibilityLabel(expanded ? controller.copy["collapse_history"].string : controller.copy["expand_history"].string)
@@ -238,10 +238,9 @@ private struct PaletteFooter: View {
                     Text(view["name"].string).lineLimit(1).truncationMode(.tail)
                     SharedIcon(name: "chevron-down", size: 12).rotationEffect(.degrees(180))
                 }.padding(.horizontal, 4).frame(minHeight: 24).contentShape(Rectangle())
-            }.buttonStyle(EditorControlButtonStyle()).frame(maxWidth: 150, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+            }.buttonStyle(EditorControlButtonStyle()).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                 .help(chooseCaption).accessibilityLabel(controller.copy["choose"].string)
                 .accessibilityValue(view["name"].string).accessibilityIdentifier("palette-chooser")
-            Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 0) {
                 if controller.editing && !measuring {
                     TextField(controller.copy["name"].string, text: Binding(get: { controller.editText }, set: { controller.editText = String($0.prefix(64)) }))
@@ -263,10 +262,10 @@ private struct PaletteFooter: View {
                         .help(controller.copy["rename_help"].string).accessibilityLabel(name).accessibilityIdentifier("palette-color-name")
                 }
                 Text(view["color_detail"].string).font(.system(size: 12)).foregroundStyle(palette["text"].opacity(0.6))
-                    .lineLimit(1).padding(.trailing, 2)
+                    .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true).padding(.trailing, 2)
                     .help("sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity")
                     .accessibilityIdentifier("palette-color-detail")
-            }
+            }.frame(maxWidth: .infinity, alignment: .trailing)
         }.accessibilityElement(children: .contain).accessibilityIdentifier("palette-footer").onAppear { refreshCaption() }.onChange(of: view["name"].string) { _, _ in refreshCaption() }.onChange(of: controller.interfaceLanguage) { _, _ in refreshCaption() }
     }
 }
@@ -363,12 +362,12 @@ struct PaletteMeasurement: View {
         if !view.isNull {
             VStack(spacing: 0) {
                 GeometryReader { geometry in
-                    let cells = PaletteCells(width: max(PaletteCells.tile, geometry.size.width - 16))
+                    let cells = PaletteCells(width: max(PaletteCells.maxTile, geometry.size.width - 16))
                     Color.clear
-                        .modifier(PanelBodyMeasurement(panel: "palettes", part: "history", intrinsicHeight: PaletteCells.tile + 13))
+                        .modifier(PanelBodyMeasurement(panel: "palettes", part: "history", intrinsicHeight: cells.tile + 13))
                         .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid",
                             intrinsicHeight: cells.viewport(view["swatches"].array.count + 1), kind: .scroll))
-                        .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid-unit", intrinsicHeight: PaletteCells.pitch, kind: .unit))
+                        .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid-unit", intrinsicHeight: cells.pitch, kind: .unit))
                         .modifier(PanelBodyMeasurement(panel: "palettes", part: "padding", intrinsicHeight: 12))
                 }.frame(height: 1)
                 VStack(spacing: 0) {

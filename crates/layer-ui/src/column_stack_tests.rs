@@ -256,7 +256,7 @@ fn panels_groups_and_toolbars_become_independent_stack_members() {
                 );
                 let member = *stack.members.last().unwrap();
                 assert!(layout.is_collapsed(member));
-                assert!(layout.expanded_column_width(member) >= 128.);
+                assert!(layout.expanded_column_width(member, STACK_VIEW[0]) >= 128.);
                 let moving = layout.node(member).unwrap();
                 if kind == "panel" {
                     assert_eq!(layout.group_panels(member).unwrap(), [Panel::Adjustments]);
@@ -668,7 +668,7 @@ fn closed_multi_column_stacks_ignore_width_resize_without_expanding_their_tree()
 fn stacking_and_unstacking_preserve_member_trees_and_widths() {
     let (mut s, left, right) = stack_fixture();
     let trees = [left, right].map(|id| s.state.workspace.layout.node(id).unwrap().clone());
-    let widths = [left, right].map(|id| s.state.workspace.layout.expanded_column_width(id));
+    let widths = [left, right].map(|id| s.state.workspace.layout.expanded_column_width(id, STACK_VIEW[0]));
     stack_move(&mut s, right, left, false);
     let stack = s.state.workspace.layout.column_stack(left);
     assert_eq!(stack.members, [left, right]);
@@ -697,7 +697,7 @@ fn stacking_and_unstacking_preserve_member_trees_and_widths() {
     for (index, id) in [left, right].into_iter().enumerate() {
         assert_eq!(s.state.workspace.layout.node(id).unwrap(), &trees[index]);
         assert_eq!(
-            s.state.workspace.layout.expanded_column_width(id),
+            s.state.workspace.layout.expanded_column_width(id, STACK_VIEW[0]),
             widths[index]
         );
     }
@@ -1165,7 +1165,7 @@ fn resetting_open_member_width_preserves_stack_membership_and_open_state() {
         .open
         .as_ref()
         .unwrap();
-    assert!(open.bounds.width >= Panel::Brushes.default_width());
+    assert!(open.bounds.width >= Panel::Brushes.default_width(STACK_VIEW[0]));
     assert!(resolved.groups.iter().any(|g| g.active == Panel::Brushes));
 }
 

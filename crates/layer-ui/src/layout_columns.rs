@@ -687,9 +687,9 @@ impl DockLayout {
                 .filter(|o| o.column == member)).unwrap().bounds.height;
             let mut expanded = self.clone();
             expanded.collapsed.retain(|c| c.root != member);
-            let width = default_column_width(&mut tree, height, &expanded);
+            let width = default_column_width(&mut tree, height, viewport[0], &expanded);
+            self.collapsed.iter_mut().find(|c| c.root == member).unwrap().expanded_width = if tree.has_content() { 0. } else { width };
             *self.node_mut(member).unwrap() = tree;
-            self.collapsed.iter_mut().find(|c| c.root == member).unwrap().expanded_width = width;
             return Ok(());
         }
         if resolved.dividers.iter().find(|d| d.id == id)
@@ -700,9 +700,9 @@ impl DockLayout {
         let mut root = self.bands[index].root.clone();
         let bounds = subtree_bounds(&root, &resolved).ok_or("The column is not visible")?;
         self.collapsed.retain(|c| c.root != root.id());
-        let width = default_column_width(&mut root, bounds.height, self);
+        let width = default_column_width(&mut root, bounds.height, viewport[0], self);
+        self.bands[index].extent = if root.has_content() { 0. } else { width + WORKSPACE_SPACING };
         self.bands[index].root = root;
-        self.bands[index].extent = width + WORKSPACE_SPACING;
         Ok(())
     }
 
@@ -756,14 +756,18 @@ impl DockLayout {
             }
             self.collapsed.push(CollapsedColumn {
                 root,
-                expanded_width: bounds.width,
+                expanded_width: if self.bands.iter().any(|b| b.root.id() == root && b.extent == 0.) { 0. } else { bounds.width },
             });
             TILE_SIZE
         } else {
             let index = self.collapsed.iter().position(|c| c.root == root).unwrap();
-            let remembered = self.collapsed.remove(index).expanded_width;
+            let remembered = self.expanded_column_width(root, viewport[0]);
+            let automatic = self.collapsed.remove(index).expanded_width == 0.;
+            if automatic && !expand_to_minimum && let Some(band) = self.bands.iter_mut().find(|b| b.root.id() == root) {
+                band.extent = 0.;
+                return Ok(());
+            }
             if expand_to_minimum {
-                // Measure the ordinary expanded column after removing its strip.
                 let node = self.node(root).unwrap();
                 tab_preferred_width(node, self)
                     .max(ribbon_preferred_width(node, Axis::Vertical, bounds.height, self))
@@ -889,7 +893,7 @@ impl DockLayout {
     pub(super) fn validate_columns(&self) -> Result<(), String> {
         for (index, column) in self.collapsed.iter().enumerate() {
             if !column.expanded_width.is_finite()
-                || column.expanded_width <= 0.
+                || column.expanded_width < 0.
                 || self.collapsed[..index]
                     .iter()
                     .any(|c| c.root == column.root)
@@ -986,23 +990,12 @@ impl DockLayout {
     }
 }
 
-fn default_column_width(node: &mut DockNode, height: f32, layout: &DockLayout) -> f32 {
+fn default_column_width(node: &mut DockNode, height: f32, viewport_width: f32, layout: &DockLayout) -> f32 {
     if layout.is_collapsed(node.id()) {
         return TILE_SIZE;
     }
     match node {
-        DockNode::Tabs { id, panels, .. } => panels
-            .iter()
-            .map(|p| {
-                if p.kind() == PanelKind::Tiles {
-                    layout
-                        .panel(*p)
-                        .map_or(TILE_SIZE, |p| p.tile_style.size()[0])
-                } else {
-                    p.default_width()
-                }
-            })
-            .fold(layout.group_preferred_width(*id), f32::max)
+        DockNode::Tabs { id, .. } => layout.group_default_width(*id, viewport_width)
             .max(ribbon_preferred_width(node, Axis::Vertical, height, layout)),
         DockNode::Split {
             axis,
@@ -1012,15 +1005,15 @@ fn default_column_width(node: &mut DockNode, height: f32, layout: &DockLayout) -
             ..
         } => {
             if *axis == Axis::Horizontal {
-                let a = default_column_width(first, height, layout);
-                let b = default_column_width(second, height, layout);
+                let a = default_column_width(first, height, viewport_width, layout);
+                let b = default_column_width(second, height, viewport_width, layout);
                 // Restore each side's preferred share as well as the total.
                 *fraction = a / (a + b);
                 a + b + WORKSPACE_SPACING
             } else {
                 let usable = (height - WORKSPACE_SPACING).max(0.);
-                let a = default_column_width(first, usable * *fraction, layout);
-                let b = default_column_width(second, usable * (1. - *fraction), layout);
+                let a = default_column_width(first, usable * *fraction, viewport_width, layout);
+                let b = default_column_width(second, usable * (1. - *fraction), viewport_width, layout);
                 a.max(b)
             }
         }
@@ -1268,7 +1261,7 @@ mod tests {
         layout.next_id = 48;
         layout.validate().unwrap();
         layout.reset_column_width(40, VIEW).unwrap();
-        assert_eq!(layout.bands[0].extent, 242. + 254. + 2. * WORKSPACE_SPACING);
+        assert_eq!(layout.bands[0].extent, 0.);
         let widths = |layout: &DockLayout| {
             geometry(layout)
                 .groups
@@ -1278,20 +1271,19 @@ mod tests {
         };
         assert_eq!(
             widths(&layout),
-            vec![(42, 502.), (44, 242.), (46, 254.), (47, 254.)]
+            vec![(42, 566.), (44, 280.), (46, 280.), (47, 280.)]
         );
-        for (id, expected) in [(41, 0.4), (43, 242. / 496.), (45, 0.3)] {
+        for (id, expected) in [(41, 0.4), (43, 0.5), (45, 0.3)] {
             let DockNode::Split { fraction, .. } = layout.node(id).unwrap() else {
                 panic!()
             };
             assert_eq!(*fraction, expected);
         }
 
-        // The active Sizes tab is narrower than its inactive Layers sibling.
         let mut tab_only = layout.clone();
         tab_only.bands[0].root = tabs(42, &[Panel::Sizes, Panel::Layers]);
         tab_only.reset_column_width(40, VIEW).unwrap();
-        assert_eq!(tab_only.bands[0].extent, 254. + WORKSPACE_SPACING);
+        assert_eq!(widths(&tab_only), vec![(42, 280.)]);
 
         // Measured tab minimums can exceed the normal starting width.
         layout.fit_tab_groups.push(44);
@@ -1304,7 +1296,7 @@ mod tests {
         layout.reset_column_width(40, VIEW).unwrap();
         assert_eq!(
             widths(&layout),
-            vec![(42, 880.), (44, 620.), (46, 254.), (47, 254.)]
+            vec![(42, 906.), (44, 620.), (46, 280.), (47, 280.)]
         );
 
         // Inner columns remain ordinary groups when the outer column opens.
@@ -1312,7 +1304,7 @@ mod tests {
         layout.set_column_collapsed(41, true, VIEW).unwrap();
         layout.reset_column_width(40, VIEW).unwrap();
         assert!(layout.collapsed.is_empty());
-        assert_eq!(layout.bands[0].extent, 880. + WORKSPACE_SPACING);
+        assert_eq!(widths(&layout)[0], (42, 906.));
         layout.validate().unwrap();
     }
 
@@ -1360,7 +1352,7 @@ mod tests {
                     .unwrap();
                 // The editor's paint column also contains Tool settings and Color.
                 let minimum = if band.root.group_for(Panel::ToolSettings).is_some() {
-                    minimum.max(TOOL_SETTINGS_MIN_WIDTH)
+                    minimum.max(PANEL_MIN_WIDTH)
                 } else if band.root.group_for(Panel::Color).is_some() {
                     minimum.max(4.0 * TILE_SIZE)
                 } else {
