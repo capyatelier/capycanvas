@@ -178,7 +178,7 @@ impl CanvasSizeDialog {
             number.set_caption(view.labels[axis].as_ref(), "", localization.clone());
             return number.clone();
         }
-        let number = NumberControl::new(spec.clone(), view.labels[axis].as_ref(), "", localization.clone());
+        let number = NumberControl::panel(spec.clone(), view.labels[axis].as_ref(), localization.clone());
         let numbers = Rc::downgrade(&self.numbers);
         let can_apply = self.can_apply.clone();
         number.connect_input_changed(glib::clone!(#[weak(rename_to=dialog)] self.dialog, move |_| {

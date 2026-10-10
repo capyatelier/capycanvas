@@ -309,6 +309,10 @@ impl NumericControl {
                 }
                 value + steps * self.step
             }
+            NumericOperation::Scrub { origin, pixels } => {
+                if !origin.is_finite() || !pixels.is_finite() { return Err(NumericError::FiniteNumber); }
+                origin + pixels * self.step / 4.
+            }
             NumericOperation::Value { value } => value,
             NumericOperation::Position { position } => {
                 if !position.is_finite() {
@@ -457,6 +461,10 @@ pub enum NumericOperation {
     Step {
         steps: f64,
     },
+    Scrub {
+        origin: f64,
+        pixels: f64,
+    },
     Expression {
         text: String,
     },
@@ -483,6 +491,24 @@ impl NumericRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn value_scrubs_use_small_unit_steps_independently_of_slider_mapping() {
+        let brush = NumericControl::brush_size();
+        let scrub = |spec: &NumericControl, origin, pixels| spec.resolve(origin, NumericOperation::Scrub { origin, pixels }).unwrap().value;
+        assert_eq!(scrub(&brush, 120., 4.), 121.);
+        assert_eq!(scrub(&brush, 120., -4.), 119.);
+        let percent = NumericControl::percent();
+        assert_eq!(scrub(&percent, 0.5, 2.), 0.505);
+        assert_eq!(scrub(&percent, 0.5, 20.), 0.55);
+        let mut extended = percent.clone();
+        extended.min = -100.; extended.max = 100.;
+        assert!((scrub(&extended, 2., 4.) - 2.01).abs() < 1e-12);
+        assert_eq!(scrub(&percent, 0.999, 400.), 1.);
+        assert_eq!(scrub(&brush, 1., -400.), 0.5);
+        for (origin, pixels) in [(f64::NAN, 1.), (1., f64::INFINITY)] {
+            assert_eq!(percent.resolve(1., NumericOperation::Scrub { origin, pixels }).unwrap_err(), NumericError::FiniteNumber);
+        }
+    }
     #[test]
     fn endpoint_words_preserve_numeric_editing_and_slider_policy() {
         let mut spec = NumericControl::percent();

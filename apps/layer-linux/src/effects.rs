@@ -179,7 +179,7 @@ impl EffectPanels {
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         title.add_css_class("heading");
         title.set_widget_name("properties-layer-name");
-        let body = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let page = crate::panel_controls::dropdown(&[]);
         page.set_widget_name("properties-page");
         properties.append(&title);
@@ -862,11 +862,15 @@ impl EffectPanels {
                     ));
                     let field = match &control.kind {
                         PropertyKind::Number { numeric } => {
-                            let input = NumberControl::inline(numeric.clone(), &control.label, w.localization().clone());
+                            let input = NumberControl::panel(numeric.clone(), &control.label, w.localization().clone());
                             input.set_widget_name(&format!("property-{}", control.key));
+                            let reset_key = control.key.clone();
+                            input.connect_reset_requested(glib::clone!(#[weak] w, move || {
+                                w.dispatch(UiAction::Effect { action: EffectAction::Reset { layer, key: reset_key.clone() } });
+                            }));
                             let key = control.key.clone();
                             bind_number(&input, w, move |value| EffectAction::Set { layer, key: key.clone(), value: EffectValue::Number(value as f32) });
-                            self.append_property_row(index, &control.label, &input);
+                            self.body.append(&input);
                             Field::Number(input)
                         }
                         PropertyKind::Toggle => {

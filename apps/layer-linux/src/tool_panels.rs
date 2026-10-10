@@ -415,16 +415,16 @@ impl ToolSettings {
                 input.set_widget_name(&format!("tool-setting-{}", control.id));
                 let id = control.id;
                 input.connect_reset_requested(glib::clone!(#[weak] workspace, move || {
-                    workspace.dispatch(UiAction::ResetToolSetting { id: id.into() });
+                    workspace.dispatch(UiAction::ToolbarEdit { context, action: Box::new(UiAction::ResetToolSetting { id: id.into() }) });
                 }));
                 input.connect_value_changed(glib::clone!(
                     #[weak]
                     workspace,
                     move |input| {
-                        workspace.dispatch(UiAction::SetToolSetting {
+                        workspace.dispatch(UiAction::ToolbarEdit { context, action: Box::new(UiAction::SetToolSetting {
                             id: id.into(),
                             value: input.value() as f32,
-                        });
+                        }) });
                     }
                 ));
                 grouped.as_ref().unwrap_or(&self.form).append(&input);

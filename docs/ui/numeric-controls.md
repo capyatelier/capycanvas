@@ -7,10 +7,12 @@ Every host shares the same numeric policy and editable values.
 - Small-range integers: label left, a conventional spin control right. GTK
   uses `GtkSpinButton` in panels and `AdwSpinRow` in Preferences.
 - Wider integers and continuous values: label left and a plain, tappable value
-  right; a native slider underneath. Tapping
-  the value enters text editing. There are no hidden drag gestures on it,
-  except in Edit Color, whose numbers have no slider and adjust by vertical
-  drag ([color picking](color-picker.md#edit-color)).
+  right; a native slider underneath. Tapping the value enters text editing.
+  GTK panel values also accept vertical mouse, touch and pen drags for fine
+  adjustment: up increases, down decreases, and four logical pixels equal one
+  field step. Escape or native cancellation restores the starting value.
+  Edit Color numbers adjust by vertical drag without a slider
+  ([color picking](color-picker.md#edit-color)).
 - In Preferences the complete name/description/value header is above the
   slider. Rows expand for descriptions; the numeric content is capped at
   600 logical pixels. Surrounding groups share the same width so labels align.
@@ -19,11 +21,16 @@ Every host shares the same numeric policy and editable values.
   Values align right and center against the full title/description block.
   GTK stacked panel sliders sit just below the text, within a 36-pixel control.
   The 4-pixel track has a symmetric 16-pixel hit area starting just below the
-  visible bottom of the label. Its left inset is 36 pixels; its fixed 84-pixel
-  right inset reserves room for ordinary values and units. Panels have no step buttons.
+  visible bottom of the label. Its left inset is 36 pixels; its fixed 88-pixel
+  right inset reserves room for ordinary values and units. Panels have no step
+  buttons.
   The value and its text editor center vertically across the label and slider.
-  Double-clicking a tool setting's label restores the shared tool default.
-  Adjacent Tool Settings controls have a 2-pixel gap below that hit area.
+  Double-clicking a tool setting or property label restores its shared default.
+  Adjacent Tool Settings and Properties controls have a 2-pixel gap below that
+  hit area.
+  Ordinary size, export and preview dialogs and brush value popovers use this
+  same presentation. Layers opacity, toolbar tiles, view readouts, Curves point
+  coordinates, tonal ranges and color controls keep their specialized layouts.
   Other hosts retain a 24-pixel value row above a matching 24-pixel track/button
   row with minus and plus at its ends and no visible thumb (dp on Android).
   There is a 6-pixel gap between each step button and the bar.
@@ -51,12 +58,12 @@ time (0–64 ms) uses a slider, with the unit beside the value. Brush size is a
 logarithmic slider over 0.5–2048 px. Opacity is displayed as a percentage;
 the pressure slider uses a linear range.
 
-`NumericOperation` handles formatting, stepping, native values, normalized
-slider positions and typed expressions. Sliders send positions in 0–1.
+`NumericOperation` handles formatting, stepping, fine value scrubbing, native
+values, normalized slider positions and typed expressions. Sliders send positions in 0–1.
 Mapping, quantization, validation and
-formatting happen in Rust; hosts never reproduce those formulas. Buttons
-step in the field's units, independently of its slider curve. A signed power
-mapping is also supported: exponent 2 on brush diameter means equal increments
+formatting happen in Rust; hosts never reproduce those formulas. Buttons and
+value scrubs operate in the field's units, independently of its slider curve.
+A signed power mapping is also supported: exponent 2 on brush diameter means equal increments
 of brush area, not quadratic diameter response.
 
 `fasteval` (MIT) evaluates bounded mathematical expressions such as `85/2`,
@@ -98,6 +105,8 @@ A property scrub uses the existing shared gesture transaction: press begins a
 preview, release commits one undo step, and cancellation restores the original
 value and redo history. Hosts keep the gesture open through native release
 handling. Unchanged model publications preserve unfinished text and focus.
+GTK value drags measure native surface coordinates so focus scrolling does not
+change the fine adjustment distance.
 
 Curves keeps Input and Output in place, blank and disabled until a point is
 selected, so selecting a point does not move the graph. Encoded RGB
@@ -172,9 +181,14 @@ edits, and deferred GTK range changes compare values at the core's numeric
 resolution, avoiding f64/f32 rounding loops. `native_panel_slider_input` checks
 native drags along both vertical edges of the panel slider hit area, value
 editing and label double-click reset in both themes, with workspace captures
-in `artifacts/ui/panel-sliders/`. `native_panel_slider_motion` records moving
-GTK presentation rates and p99 gaps for three sustained scrubs each of size,
-opacity and flow. Run it through the private-display runner with
+in `artifacts/ui/panel-sliders/`. `native_panel_value_scrub_input` checks mouse
+and touch value scrubs in both themes, precise Escape cancellation, click
+editing, Properties label reset and one Undo per
+scrub. Run it separately with `LAYER_PANEL_CONTACT=pen` and `--tablet` for pen
+contacts: the virtual tablet serials cannot authorize native clipboard selection.
+`native_panel_slider_motion` records moving GTK presentation rates and
+p99 gaps for three sustained slider and value scrubs each of size, opacity
+and flow. Run it through the private-display runner with
 `LAYER_NATIVE_EVENT_MS=4`, setting `CAPY_NATIVE_TEST_THEME=light` or `dark`.
 Its desktop fixture is a diagnostic, not reference-tablet qualification.
 Android instrumented tests cover

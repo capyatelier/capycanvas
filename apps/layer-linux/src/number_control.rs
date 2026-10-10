@@ -62,6 +62,8 @@ mod imp {
                 vec![
                     glib::subclass::Signal::builder("value-changed").build(),
                     glib::subclass::Signal::builder("input-changed").build(),
+                    glib::subclass::Signal::builder("edit-cancelled").build(),
+                    glib::subclass::Signal::builder("reset-requested").build(),
                 ]
             })
         }
@@ -185,6 +187,14 @@ mod tests {
                         assert_eq!(control.value(), 8.);
                         assert_eq!(child.tooltip_text().as_deref(), Some(layer_ui::NumericError::InvalidExpression.message(&localization).as_str()));
                     }
+                    control.connect_reset_requested(glib::clone!(#[weak] control, move || control.set_value(4.)));
+                    child.cancel_edit();
+                    let label = child.imp().caption.get().unwrap();
+                    let point = screen_point(label.upcast_ref(), &window, [0.2, 0.5]);
+                    input.click(point);
+                    input.click(point);
+                    assert_eq!(control.value(), 4., "popover label forwards the parent reset");
+                    assert_eq!(child.value(), 4.);
                     control.imp().popover.get().unwrap().popdown();
                 }
                 content.remove(&control);
@@ -310,6 +320,7 @@ impl NumberControl {
         Self::build(spec, title, "", false, false, true, localization)
     }
     pub fn connect_reset_requested(&self, callback: impl Fn() + 'static) {
+        self.connect_closure("reset-requested", false, glib::closure_local!(move |_: Self| callback()));
         let label = self.imp().inline_caption.get().or_else(|| self.imp().caption.get()).unwrap();
         let click = gtk::GestureClick::new();
         click.set_button(1);
@@ -317,7 +328,7 @@ impl NumberControl {
             if count != 2 || control.composing() { return; }
             gesture.set_state(gtk::EventSequenceState::Claimed);
             control.cancel_edit();
-            callback();
+            control.emit_by_name::<()>("reset-requested", &[]);
         }));
         label.add_controller(click);
     }
@@ -824,12 +835,13 @@ impl NumberControl {
         let imp = self.imp();
         let popover = imp.popover.get_or_init(|| {
             let editor =
-                NumberControl::new(self.spec().clone(), &imp.editor_title.borrow(), "", imp.localization.borrow().as_ref().unwrap().clone());
+                NumberControl::panel(self.spec().clone(), &imp.editor_title.borrow(), imp.localization.borrow().as_ref().unwrap().clone());
             editor.set_size_request(240, -1);
             editor.set_margin_start(12);
             editor.set_margin_end(12);
             editor.set_margin_top(8);
             editor.set_margin_bottom(8);
+            editor.connect_reset_requested(glib::clone!(#[weak(rename_to=control)] self, move || control.emit_by_name::<()>("reset-requested", &[])));
             editor.connect_value_changed(glib::clone!(
                 #[weak(rename_to=control)]
                 self,
@@ -858,17 +870,29 @@ impl NumberControl {
         popover.present();
     }
     fn install_value_gestures(&self, display: &gtk::Button) {
+        let panel = self.has_css_class("number-panel");
+        if panel { display.set_cursor_from_name(Some("ns-resize")); }
         let drag = gtk::GestureDrag::new();
         drag.set_button(1);
         drag.set_propagation_phase(gtk::PropagationPhase::Capture);
         let origin = std::rc::Rc::new(Cell::new(0.));
+        let origin_y = std::rc::Rc::new(Cell::new(None));
+        let active = std::rc::Rc::new(Cell::new(false));
+        let offset = std::rc::Rc::new(glib::clone!(#[strong] origin_y, move |gesture: &gtk::GestureDrag, dy: f64| {
+            if panel { gesture.current_event().and_then(|event| event.position()).zip(origin_y.get()).map_or(dy, |((_, y), origin)| y - origin) }
+            else { dy }
+        }));
         drag.connect_drag_begin(glib::clone!(
             #[weak(rename_to=control)]
             self,
             #[strong]
             origin,
+            #[strong] origin_y,
+            #[strong] active,
             move |g, _, _| {
-                if !crate::input::touch_or_pen(g) {
+                active.set(false);
+                origin_y.set(g.current_event().and_then(|event| event.position()).map(|(_, y)| y));
+                if !panel && !crate::input::touch_or_pen(g) {
                     g.set_state(gtk::EventSequenceState::Denied);
                     return;
                 }
@@ -880,7 +904,7 @@ impl NumberControl {
                     .spec()
                     .resolve(control.value(), NumericOperation::Format)
                 {
-                    origin.set(value.fill);
+                    origin.set(if panel { control.value() } else { value.fill });
                 }
             }
         ));
@@ -889,18 +913,36 @@ impl NumberControl {
             self,
             #[strong]
             origin,
+            #[strong] active,
+            #[strong] offset,
             move |g, dx, dy| {
-                if !control.input_valid() || !control.drag_check_threshold(0, 0, dx as i32, dy as i32) {
+                let dy = offset(g, dy);
+                if !control.input_valid() || (!active.get() && !control.drag_check_threshold(0, 0, if panel { 0 } else { dx as i32 }, dy as i32)) {
                     return;
                 }
+                active.set(true);
                 g.set_state(gtk::EventSequenceState::Claimed);
-                // Native distance becomes normalized slider travel. The core
-                // applies the same log/power/linear mapping as the track.
-                control.apply(NumericOperation::Position {
-                    position: origin.get() - dy / 200.,
-                });
+                control.apply(if panel { NumericOperation::Scrub { origin: origin.get(), pixels: -dy } }
+                    else { NumericOperation::Position { position: origin.get() - dy / 200. } });
             }
         ));
+        drag.connect_drag_end(glib::clone!(#[weak(rename_to=control)] self, #[strong] origin, #[strong] active, #[strong] offset, move |gesture, _, dy| {
+            if active.replace(false) && panel { control.apply(NumericOperation::Scrub { origin: origin.get(), pixels: -offset(gesture, dy) }); }
+        }));
+        drag.connect_cancel(glib::clone!(#[weak(rename_to=control)] self, #[strong] origin, #[strong] active, move |_, _| {
+            if panel && active.replace(false) && control.is_mapped() { control.cancel_value_drag(origin.get()); }
+        }));
+        if panel {
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            keys.connect_key_pressed(glib::clone!(#[weak(rename_to=control)] self, #[weak] drag, #[strong] origin, #[strong] active, #[upgrade_or] glib::Propagation::Proceed, move |_, key, _, _| {
+                if key != gtk::gdk::Key::Escape || !active.replace(false) { return glib::Propagation::Proceed; }
+                drag.set_state(gtk::EventSequenceState::Denied);
+                control.cancel_value_drag(origin.get());
+                glib::Propagation::Stop
+            }));
+            display.add_controller(keys);
+        }
         display.add_controller(drag);
         let scroll = gtk::EventControllerScroll::new(
             gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::DISCRETE,
@@ -916,6 +958,12 @@ impl NumberControl {
             }
         ));
         display.add_controller(scroll);
+    }
+    fn cancel_value_drag(&self, value: f64) {
+        self.emit_by_name::<()>("edit-cancelled", &[]);
+        let changed = self.value() != value;
+        self.set_value(value);
+        if changed { self.emit_by_name::<()>("value-changed", &[]); }
     }
     fn spec(&self) -> &NumericControl {
         self.imp().spec.get().unwrap()
@@ -984,9 +1032,7 @@ impl NumberControl {
                 let finish = finish.clone(); glib::idle_add_local_once(move || finish());
             }
         }));
-        let events = gtk::EventControllerLegacy::new();
-        events.set_propagation_phase(gtk::PropagationPhase::Capture);
-        events.connect_event(glib::clone!(#[weak(rename_to=control)] self, #[strong] callback, #[strong] active, #[strong] held, #[strong] pending, #[strong] finish, #[strong] end, #[upgrade_or] glib::Propagation::Proceed, move |_, event| {
+        let event_handler = std::rc::Rc::new(glib::clone!(#[weak(rename_to=control)] self, #[strong] callback, #[strong] active, #[strong] held, #[strong] pending, #[strong] finish, #[strong] end, #[upgrade_or] glib::Propagation::Proceed, move |_: &gtk::EventControllerLegacy, event: &gtk::gdk::Event| {
             use gtk::gdk::{EventType, Key};
             if event.event_type() == EventType::KeyPress
                 && (control.imp().composing.get() || control.imp().composition_keys.active()) { return glib::Propagation::Proceed; }
@@ -1026,7 +1072,21 @@ impl NumberControl {
             }
             glib::Propagation::Proceed
         }));
-        self.add_controller(events);
+        let imp = self.imp();
+        let mut targets: Vec<gtk::Widget> = imp.slider.get().map(|widget| widget.clone().upcast()).into_iter().collect();
+        targets.extend(imp.display.get().map(|widget| widget.clone().upcast()));
+        targets.extend(imp.entry.get().map(|widget| widget.clone().upcast()));
+        targets.extend(imp.spin.get().map(|widget| widget.clone().upcast()));
+        if let Some(steps) = imp.steps.get() { targets.extend(steps.iter().map(|widget| widget.clone().upcast())); }
+        for target in targets {
+            let events = gtk::EventControllerLegacy::new();
+            events.set_propagation_phase(gtk::PropagationPhase::Capture);
+            events.connect_event(glib::clone!(#[strong] event_handler, move |controller, event| event_handler(controller, event)));
+            target.add_controller(events);
+        }
+        self.connect_closure("edit-cancelled", false, glib::closure_local!(#[strong] callback, #[strong] active, move |_: Self| {
+            if active.get() == 1 { active.set(2); callback(ContactPhase::Cancel); }
+        }));
         let focus = gtk::EventControllerFocus::new();
         focus.connect_leave(move |_| { pending.set(true); finish(); });
         self.add_controller(focus);

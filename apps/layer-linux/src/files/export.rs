@@ -198,7 +198,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     );
     let numeric = layer_ui::ExportNumericControls::default();
     let dimensions: [crate::number_control::NumberControl; 2] = std::array::from_fn(|i| {
-        let row = crate::number_control::NumberControl::new(numeric.dimension.clone(), [copy.maximum_width.as_ref(), copy.maximum_height.as_ref()][i], "", localization.clone());
+        let row = crate::number_control::NumberControl::panel(numeric.dimension.clone(), [copy.maximum_width.as_ref(), copy.maximum_height.as_ref()][i], localization.clone());
         row.set_widget_name(["export-width", "export-height"][i]);
         row.set_value(f64::from(extent[i]));
         row.set_visible(false);
@@ -217,7 +217,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         "export-resolution",
         &[copy.keep_resolution.as_ref(), copy.custom.as_ref(), copy.omit.as_ref()],
     );
-    let ppi = crate::number_control::NumberControl::new(numeric.ppi.clone(), copy.ppi.as_ref(), "", localization.clone());
+    let ppi = crate::number_control::NumberControl::panel(numeric.ppi.clone(), copy.ppi.as_ref(), localization.clone());
     ppi.set_widget_name("export-ppi");
     ppi.set_value(300.);
     group.add(&ppi);
@@ -390,7 +390,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             background.set_selected(draft.backgrounds.iter().position(|b| *b == draft.recipe.background).unwrap_or(0) as u32);
         }
     ));
-    let quality = crate::number_control::NumberControl::new(numeric.quality, copy.quality.as_ref(), "", localization.clone());
+    let quality = crate::number_control::NumberControl::panel(numeric.quality, copy.quality.as_ref(), localization.clone());
     quality.set_widget_name("export-jpeg-quality");
     quality.set_value(90.);
     quality.set_visible(false);
@@ -1321,7 +1321,7 @@ mod numeric_tests {
             adw::StyleManager::default().set_color_scheme(scheme);
             let specs = layer_ui::ExportNumericControls::default();
             for (spec, valid, invalid) in [(specs.dimension.clone(), "2048", "invalid"), (specs.dimension, "1080", "invalid"), (specs.ppi, "300", "１／０"), (specs.quality, "90", "NaN")] {
-                let row = crate::number_control::NumberControl::new(spec, "Export", "", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
+                let row = crate::number_control::NumberControl::panel(spec, "Export", layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
                 row.set_value(32.);
                 let window = gtk::Window::builder().child(&row).build();
                 window.present();

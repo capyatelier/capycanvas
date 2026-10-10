@@ -77,7 +77,7 @@ impl PreviewDialog {
         {
             return number.clone();
         }
-        let number = NumberControl::new(view.numeric.clone(), view.label, "", localization.clone());
+        let number = NumberControl::panel(view.numeric.clone(), view.label, localization.clone());
         number.set_widget_name(self.field);
         let workspace = self.workspace.borrow().clone();
         let value = self.value;

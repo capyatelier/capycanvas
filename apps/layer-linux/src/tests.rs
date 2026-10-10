@@ -8377,7 +8377,7 @@ fn native_panel_slider_input() {
         assert!(bar.y() - bottom <= 4., "hit area reaches the label's bottom");
         assert_eq!(size.height(), 36);
         assert_eq!(bar.x(), 36.);
-        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 84.);
+        assert_eq!(size.width() as f32 - bar.x() - bar.width(), 88.);
         let value = find_css(size.upcast_ref(), "number-value").unwrap().compute_bounds(&size).unwrap();
         assert!((value.y() + value.height() / 2. - size.height() as f32 / 2.).abs() <= 1.);
         assert_eq!(opacity.compute_bounds(&panel).unwrap().y() - size.compute_bounds(&panel).unwrap().y() - size.height() as f32, 2.);
@@ -8416,6 +8416,104 @@ fn native_panel_slider_input() {
 }
 
 #[test]
+#[ignore = "private Wayland display, native mouse/touch/pen value scrubs"]
+fn native_panel_value_scrub_input() {
+    let app = native_test_app("art.capycanvas.PanelValueScrubs");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    let mut input = RemoteInput::new();
+    input.ready();
+    until(|| w.window.is_maximized() && w.surface.width() > 0, "value scrub workspace allocated");
+    let mut workspace = tool_settings_workspace(&w, &[], true, true);
+    workspace.layout.set_panel_visible(Panel::Properties, true).unwrap();
+    workspace.layout.move_panel([w.surface.width() as f32, w.surface.height() as f32],
+        Panel::Properties, DockTarget::Edge { edge: Edge::Right, outer: false }).unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    assert!(!w.layer_panel.opacity.has_css_class("number-panel"));
+    let output = artifact_dir("../../artifacts/ui/panel-sliders");
+    let pen = std::env::var("LAYER_PANEL_CONTACT").as_deref() == Ok("pen");
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 });
+        let size = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-size");
+        let opacity = named::<crate::number_control::NumberControl>(w.effects.properties.upcast_ref(), "property-opacity");
+        until(|| size.is_mapped() && opacity.is_mapped(), "value scrubs allocated");
+        assert!(opacity.has_css_class("number-panel"));
+        pump(200);
+        for &device in if pen { &["pen"][..] } else { &["mouse", "touch"][..] } {
+            for (field, initial, expected) in [(&size, 120., 125.), (&opacity, 0.6, 0.65)] {
+                if field == &size { w.dispatch(UiAction::SetToolSetting { id: "size".into(), value: initial as f32 }); }
+                else { w.dispatch(UiAction::SetLayerOpacity { id: None, opacity: initial as f32 }); }
+                let display = find_css(field.upcast_ref(), "number-value").unwrap();
+                let from = screen_point(&display, &w.window, [0.5, 0.5]);
+                let to = [from[0], from[1] - 20.];
+                let mut events = vec![contact(device, "move", from), contact(device, "down", from)];
+                for step in 1..=10 { events.push(contact(device, "move", [from[0], from[1] - step as f32 * 2.])); }
+                events.push(contact(device, "up", to));
+                if device == "pen" { events.push(serde_json::json!({ "pen": "leave" })); }
+                input.perform(serde_json::Value::Array(events));
+                assert!((field.value() - expected).abs() < 0.00001, "{device} {theme:?} upward fine scrub: {}", field.value());
+                assert!(!descendant::<gtk::Entry>(field).unwrap().is_mapped(), "scrubbing keeps text editing closed");
+                if field == &opacity {
+                    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+                    assert!((field.value() - initial).abs() < 0.00001, "one Undo restores the entire value scrub");
+                    w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+                    assert!((field.value() - expected).abs() < 0.00001);
+                }
+                let mut events = vec![contact(device, "move", from), contact(device, "down", from),
+                    contact(device, "move", [from[0], from[1] + 20.]), contact(device, "up", [from[0], from[1] + 20.])];
+                if device == "pen" { events.push(serde_json::json!({ "pen": "leave" })); }
+                input.perform(serde_json::Value::Array(events));
+                assert!((field.value() - initial).abs() < 0.00001, "{device} downward scrub reduces the value");
+                input.perform(serde_json::json!([contact(device, "move", from), contact(device, "down", from),
+                    contact(device, "move", [from[0], from[1] - 20.]), contact(device, "move", [from[0], from[1] - 4.])]));
+                assert!((field.value() - initial - (expected - initial) / 5.).abs() < 0.00001,
+                    "{device} an active drag fine tunes inside the initial click threshold");
+                input.perform(serde_json::json!([contact(device, "move", from)]));
+                assert!((field.value() - initial).abs() < 0.00001, "{device} returning to the origin restores the value before release");
+                let mut events = vec![contact(device, "up", from)];
+                if device == "pen" { events.push(serde_json::json!({ "pen": "leave" })); }
+                input.perform(serde_json::Value::Array(events));
+            }
+        }
+        if pen { continue; }
+        let precise = 0.1234567f32;
+        w.dispatch(UiAction::SetLayerOpacity { id: None, opacity: precise });
+        let display = find_css(opacity.upcast_ref(), "number-value").unwrap();
+        let from = screen_point(&display, &w.window, [0.5, 0.5]);
+        input.perform(serde_json::json!([contact("mouse", "down", from), contact("mouse", "move", [from[0], from[1] - 20.])]));
+        assert_ne!(opacity.value() as f32, precise);
+        input.key(0xff1b);
+        input.perform(serde_json::json!([contact("mouse", "up", from)]));
+        assert_eq!(opacity.value() as f32, precise, "Escape restores the exact authored value");
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        assert!((opacity.value() - 0.6).abs() < 0.00001, "cancelled scrubs add no Undo step");
+        w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+        assert_eq!(opacity.value() as f32, precise, "cancelled scrubs preserve Redo");
+        let label = find_css(opacity.upcast_ref(), "number-title").unwrap();
+        let point = screen_point(&label, &w.window, [0.2, 0.5]);
+        input.perform(serde_json::json!([{ "point": point }, { "down": true }, { "down": false }, { "down": true }, { "down": false }]));
+        assert_eq!(opacity.value(), 1.);
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        assert_eq!(opacity.value() as f32, precise, "label reset is one Undo");
+        input.click(from);
+        assert!(descendant::<gtk::Entry>(&opacity).unwrap().is_mapped(), "clicking still edits the number");
+        opacity.cancel_edit();
+        capture_reference(&w, &format!("{output}/properties-{theme:?}.png"), 1.);
+        let display = find_css(size.upcast_ref(), "number-value").unwrap();
+        let from = screen_point(&display, &w.window, [0.5, 0.5]);
+        input.perform(serde_json::json!([contact("mouse", "down", from), contact("mouse", "move", [from[0], from[1] - 20.])]));
+        w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::WetWatercolor as u32 });
+        let current = state(&w).brush.diameter;
+        input.perform(serde_json::json!([contact("mouse", "move", [from[0], from[1] - 40.]), contact("mouse", "up", from)]));
+        assert_eq!(state(&w).brush.diameter, current, "a retired value contact cannot edit the next brush");
+    }
+    input.finish();
+    w.window.destroy();
+}
+
+#[test]
 #[ignore = "private Wayland display, sustained native panel slider motion"]
 fn native_panel_slider_motion() {
     let app = native_test_app("art.capycanvas.PanelSliderMotion");
@@ -8434,36 +8532,41 @@ fn native_panel_slider_motion() {
     for id in ["size", "opacity", "flow"] {
         let field = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), &format!("tool-setting-{id}"));
         let scale = descendant::<gtk::Scale>(&field).unwrap();
-        let point = |position| screen_point(scale.upcast_ref(), &w.window, [position, 0.5]);
-        input.perform(serde_json::json!([contact("mouse", "down", point(0.2)), contact("mouse", "move", point(0.8)), contact("mouse", "up", point(0.8))]));
-        pump(200);
-        for run in 0..3 {
-            input.perform(serde_json::json!([contact("mouse", "down", point(0.2))]));
-            pump(100);
-            let timings = Rc::new(RefCell::new(Vec::new()));
-            let value = Rc::new(Cell::new(field.value()));
-            let handler = clock.connect_after_paint(glib::clone!(#[strong] timings, #[strong] value, #[weak] field, move |clock| {
-                if value.replace(field.value()) != field.value() && let Some(timing) = clock.current_timings() {
-                    timings.borrow_mut().push(timing);
-                }
-            }));
-            let events: Vec<_> = (0..1250).map(|step| {
-                let phase = (step as f32 / 1250. * 12.) % 2.;
-                contact("mouse", "move", point(if phase < 1. { 0.2 + 0.6 * phase } else { 0.8 - 0.6 * (phase - 1.) }))
-            }).collect();
-            input.perform(serde_json::Value::Array(events));
-            clock.disconnect(handler);
-            input.perform(serde_json::json!([contact("mouse", "up", point(0.2))]));
-            pump(100);
-            let mut presented: Vec<_> = timings.borrow().iter().filter(|t| t.is_complete() && t.presentation_time() > 0).map(|t| t.presentation_time()).collect();
-            presented.sort_unstable(); presented.dedup();
-            assert!(presented.len() > 2, "slider produces native moving presentations");
-            let seconds = (presented.last().unwrap() - presented[0]) as f64 / 1_000_000.;
-            assert!(seconds >= 5., "sustained gesture duration: {seconds}");
-            let mut gaps: Vec<_> = presented.windows(2).map(|pair| (pair[1] - pair[0]) as f64 / 1000.).collect();
-            gaps.sort_by(f64::total_cmp);
-            let report = serde_json::json!({"field":id,"run":run,"theme":state(&w).theme,"moving_presentations":presented.len(),"seconds":seconds,"presentation_hz":(presented.len()-1) as f64/seconds,"gap_p99_ms":gaps[gaps.len()*99/100],"canvas":ui_session(&w).engine().document().composition().size});
-            eprintln!("{report}"); reports.push(report);
+        let display = find_css(field.upcast_ref(), "number-value").unwrap();
+        for target in ["slider", "value"] {
+            let point = |position| if target == "slider" { screen_point(scale.upcast_ref(), &w.window, [position, 0.5]) }
+                else { let origin = screen_point(&display, &w.window, [0.5, 0.5]); [origin[0], origin[1] - (position - 0.2) / 0.6 * if id == "size" { 240. } else { 120. }] };
+            input.perform(serde_json::json!([contact("mouse", "down", point(0.2)), contact("mouse", "move", point(0.8)), contact("mouse", "up", point(0.8))]));
+            pump(200);
+            for run in 0..3 {
+                if target == "value" { w.dispatch(UiAction::SetToolSetting { id: id.into(), value: if id == "size" { 120. } else { 0.5 } }); }
+                input.perform(serde_json::json!([contact("mouse", "down", point(0.2))]));
+                pump(100);
+                let timings = Rc::new(RefCell::new(Vec::new()));
+                let value = Rc::new(Cell::new(field.value()));
+                let handler = clock.connect_after_paint(glib::clone!(#[strong] timings, #[strong] value, #[weak] field, move |clock| {
+                    if value.replace(field.value()) != field.value() && let Some(timing) = clock.current_timings() {
+                        timings.borrow_mut().push(timing);
+                    }
+                }));
+                let events: Vec<_> = (0..1500).map(|step| {
+                    let phase = (step as f32 / 1500. * 16.) % 2.;
+                    contact("mouse", "move", point(if phase < 1. { 0.2 + 0.6 * phase } else { 0.8 - 0.6 * (phase - 1.) }))
+                }).collect();
+                input.perform(serde_json::Value::Array(events));
+                clock.disconnect(handler);
+                input.perform(serde_json::json!([contact("mouse", "up", point(0.2))]));
+                pump(100);
+                let mut presented: Vec<_> = timings.borrow().iter().filter(|t| t.is_complete() && t.presentation_time() > 0).map(|t| t.presentation_time()).collect();
+                presented.sort_unstable(); presented.dedup();
+                assert!(presented.len() > 2, "slider produces native moving presentations");
+                let seconds = (presented.last().unwrap() - presented[0]) as f64 / 1_000_000.;
+                assert!(seconds >= 5., "sustained gesture duration: {seconds}");
+                let mut gaps: Vec<_> = presented.windows(2).map(|pair| (pair[1] - pair[0]) as f64 / 1000.).collect();
+                gaps.sort_by(f64::total_cmp);
+                let report = serde_json::json!({"field":id,"target":target,"run":run,"theme":state(&w).theme,"moving_presentations":presented.len(),"seconds":seconds,"presentation_hz":(presented.len()-1) as f64/seconds,"gap_p99_ms":gaps[gaps.len()*99/100],"canvas":ui_session(&w).engine().document().composition().size});
+                eprintln!("{report}"); reports.push(report);
+            }
         }
     }
     let output = artifact_dir("../../artifacts/ui/panel-sliders");
@@ -8561,7 +8664,7 @@ fn native_number_controls() {
     assert!(find_css(size.upcast_ref(), "number-step").is_none());
     assert_eq!(bar.height(), 16.0);
     assert_eq!(bar.x(), 36.0);
-    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 84.0);
+    assert_eq!(size.width() as f32 - bar.x() - bar.width(), 88.0);
     assert_eq!(scale.range_rect().width(), scale.width());
     let (start, end) = scale.slider_range();
     assert_eq!(start, end, "compact slider reserves no thumb width");
@@ -12235,6 +12338,7 @@ pub(crate) fn screen_point(widget: &gtk::Widget, window: &impl IsA<gtk::Widget>,
 
 fn contact(device: &str, phase: &str, point: [f32; 2]) -> serde_json::Value {
     match (device, phase) {
+        ("pen", "up") => serde_json::json!({ "pen": "up" }),
         ("touch" | "pen", _) => serde_json::json!({ device: phase, "point": point }),
         (_, "down") => serde_json::json!({ "point": point, "down": true }),
         (_, "up") => serde_json::json!({ "down": false }),
