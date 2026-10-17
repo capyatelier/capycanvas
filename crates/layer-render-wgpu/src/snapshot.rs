@@ -291,6 +291,9 @@ impl SnapshotRenderer {
         if view.order().iter().any(|&h| view.object_layer(h).is_some()) {
             required.compute.extend(r.scene_pipelines.objects.pipelines().into_iter().cloned());
         }
+        if view.order().iter().any(|&h| view.vector_layer(h).is_some()) {
+            required.compute.push(r.scene_pipelines.vector.pipeline().clone());
+        }
         let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
         let prepared = (|| {
             if !matches!(self.scope, SceneScope::Raw(_)) {

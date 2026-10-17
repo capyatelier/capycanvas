@@ -35,7 +35,7 @@ pub struct GpuFrameTimingStats {
 // Metal can omit timestamp writes for empty passes. Keep a tiny storage write
 // in each marker pass. Created only when telemetry is enabled; its GPU overhead
 // is part of the measured span, and must be calibrated by the caller.
-enum TimestampMarker {
+pub(crate) enum TimestampMarker {
     Encoder,
     Pass { pipeline: crate::Deferred<wgpu::ComputePipeline>, bind_group: wgpu::BindGroup },
 }

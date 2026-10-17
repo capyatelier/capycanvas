@@ -1400,6 +1400,22 @@ impl Evaluator<'_> {
         let material = Target { view, slot: Some(Slot::Cache(slot)), plan }.value();
         self.draw(material, value, layer_core::LayerBlend::Normal, 128, None)
     }
+    fn vector(&mut self, owner: OccurrenceHandle, output: Option<Target>) -> Result<Value, GpuRasterError> {
+        self.commands.flush(self.r, self.encoder)?;
+        let mut target = self.target();
+        let side = 1u32 << target.plan.level;
+        let bounds = self.region.intersect(target.plan.doc_bounds).aligned(side);
+        let size = bounds.size().map_err(|_| GpuRasterError::ExtentUnsupported)?;
+        target.plan.doc_bounds = bounds; target.plan.size = size.map(|v| v.div_ceil(side)); target.plan.bounds = PixelRect::full(size);
+        let plan = target.plan;
+        let batch = self.scene.vectors.batch(self.packet.scene, owner, bounds.min, plan.level, plan.size, self.packet.document_extent, Scene::vector_palette(self.r, self.packet));
+        self.r.encode_clear(self.encoder, &target.view, "vector layer");
+        if batch.tile_count() > 0 {
+            self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: target.view.clone(), base: None })));
+            self.encode_scene_jobs()?;
+        }
+        self.materialize(Value::Image { view: target.view, slot: target.slot, opacity: 1., plan, preview: None, encode: false }, output)
+    }
     fn objects(&mut self,content:&object_spatial::Content,moving:bool,output:Option<Target>)->Result<Value,GpuRasterError> {
         self.commands.flush(self.r,self.encoder)?;
         let mut target=self.target();let side=1u32<<target.plan.level;

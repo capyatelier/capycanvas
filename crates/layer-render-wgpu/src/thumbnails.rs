@@ -393,7 +393,7 @@ impl PreviewPipeline {
         };
         let objects = match target {
             ThumbnailTarget::Occurrence(handle) => r.artwork_frame.as_ref()
-                .and_then(|frame| frame.scene.view().object_layer(handle).map(|_| handle)),
+                .and_then(|frame| (frame.scene.view().object_layer(handle).is_some() || frame.scene.view().vector_layer(handle).is_some()).then_some(handle)),
             _ => None,
         };
         let background = [gray, gray, gray, f32::from(mask.is_some())];

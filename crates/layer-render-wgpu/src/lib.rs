@@ -62,6 +62,7 @@ mod deferred;
 mod paint_transform;
 mod pixel_transform;
 mod object_sampling;
+mod vector;
 mod object_image_mips;
 mod moving_projection;
 use moving_projection::MovingProjection;

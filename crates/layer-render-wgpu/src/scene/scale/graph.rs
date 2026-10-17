@@ -7,6 +7,7 @@ pub(super) type Node = Arc<Expression>;
 pub(super) enum Expression {
     Color([u32; 4]),
     Objects {content:object_spatial::Content,preview:bool},
+    Vector { owner: OccurrenceHandle, offset: [u64; 2] },
     Source { id: SourceTarget, frame: SourceFrame, extent: [u32; 2], outside: u32 },
     Opacity { input: Node, opacity: u32 },
     Combine { front: Node, back: Node, blend: u32, flags: u32 },
@@ -36,6 +37,7 @@ impl Expression {
             Self::Color(color) => if color[3] == 0 { DocRect::default() } else { PixelRect::full(extent).into() },
             Self::Source { frame, extent, .. } => DocRect::from(PixelRect::full(*extent)).translated(frame.origin()),
             Self::Objects {content,..} => content.bounds_at(level),
+            Self::Vector { owner, .. } => super::super::vectors::Vectors::bounds(scene, *owner),
             Self::Opacity { input, .. } => input.support(scene, extent,level),
             Self::Combine { front, back, flags, .. } => {
                 if flags & 32 != 0 { front.support(scene, extent,level) }
@@ -53,6 +55,7 @@ impl Expression {
         match self {
             Self::Color(_) => (0, 0),
             Self::Objects {content,..} => (content.len() as u32*2, 3),
+            Self::Vector { .. } => (2, 3),
             Self::Source { frame, .. } => {
                 let work = u32::from(!frame.aligned());
                 (work, work)
@@ -81,6 +84,8 @@ impl Expression {
             Self::Color(_) => Vec::new(),
             Self::Objects {content,..} => [None, Some(content.owner())].into_iter().flat_map(|owner| sources.object_damage.get(&owner).into_iter()
                 .chain(sources.object_refinements.get(&(plan.level, owner)))).flat_map(|damage| damage.regions.iter()).copied().map(DocRect::from).collect(),
+            Self::Vector { owner, .. } => [None, Some(*owner)].into_iter().flat_map(|owner| sources.object_damage.get(&owner).into_iter())
+                .flat_map(|damage| damage.regions.iter()).copied().map(DocRect::from).collect(),
             Self::Source { id, frame, .. } => sources.entries.get(id).map_or_else(|| vec![plan.doc_bounds], |source| {
                 let local = if frame.aligned() { source.damage.clone() } else {
                     source.damage.expand(1 << source_level(plan.level, *frame), frame.extent(source.extent))
@@ -101,7 +106,7 @@ impl Expression {
     pub(super) fn required(&self, region: Damage, plan: display_mips::Plan) -> Damage {
         match self {
             Self::Color(_) => Damage::EMPTY,
-            Self::Objects {..} => region,
+            Self::Objects {..} | Self::Vector { .. } => region,
             Self::Source { .. } => region,
             Self::Opacity { input, .. } => input.required(region, plan),
             Self::Combine { front, back, .. } => front.required(region.clone(), plan).union(back.required(region, plan)),
@@ -120,7 +125,7 @@ impl Expression {
                     visit(input, scene, native, domains);
                     for mask in masks.iter().flatten() { visit(mask, scene, native, domains); }
                 }
-                Expression::Color(_) | Expression::Objects {..} => {}
+                Expression::Color(_) | Expression::Objects {..} | Expression::Vector { .. } => {}
             }
         }
         let mut domains = Default::default();
@@ -198,7 +203,7 @@ impl Graph {
         let mut all = HashSet::new();
         Expression::visit(&root, &mut all);
         let mut eligible: Vec<_> = all.into_iter().filter(|n| !Arc::ptr_eq(n, &root)
-            && matches!(n.as_ref(), Expression::Objects {..} | Expression::Combine { .. } | Expression::Effect { .. })).collect();
+            && matches!(n.as_ref(), Expression::Objects {..} | Expression::Vector { .. } | Expression::Combine { .. } | Expression::Effect { .. })).collect();
         eligible.sort_by_cached_key(|n| (n.damage(sources, plan).area(), std::cmp::Reverse(n.cost().0), n.clone()));
         eligible.truncate((budget / plan.level_bytes(plan.level)) as usize);
         let wanted: HashSet<_> = eligible.into_iter().collect();
@@ -286,6 +291,8 @@ impl stack::Compositor for Builder<'_> {
             let content=if let Some(cache)=&mut self.objects {cache.content(self.packet.scene,index)}
                 else {object_spatial::SpatialIndex::default().content(self.packet.scene,index)}.unwrap();
             vec![Arc::new(Expression::Objects {content,preview:self.sources.is_some_and(|sources|sources.object_moving==Some(index))})]
+        } else if self.packet.scene.vector_layer(index).is_some() {
+            vec![Arc::new(Expression::Vector { owner: index, offset: self.packet.scene.occurrence_offset64(index).map(f64::to_bits) })]
         } else { vec![self.source(index, false)] };
         if layer.mask.as_ref().is_some_and(|m| m.enabled) {
             Ok(vec![Expression::combine(Expression::over(&output), self.source(index, true), layer_core::LayerBlend::Normal, 32)])
@@ -316,7 +323,7 @@ impl stack::Compositor for Builder<'_> {
     }
     fn has_content(&self, index: OccurrenceHandle) -> bool {
         let layer = self.packet.scene.occurrence(index).unwrap();
-        matches!(layer.kind(), LayerKind::Group | LayerKind::Paint | LayerKind::Effect) || self.packet.scene.object_layer(index).is_some()
+        matches!(layer.kind(), LayerKind::Group | LayerKind::Paint | LayerKind::Effect) || self.packet.scene.object_layer(index).is_some() || self.packet.scene.vector_layer(index).is_some()
     }
 }
 
@@ -365,6 +372,7 @@ impl Evaluator<'_> {
         let result = self.with_region(evaluation,|compositor|Ok(match node.as_ref() {
             Expression::Color(c) => Value::Color(c.map(f32::from_bits)),
             Expression::Objects {content,preview} => compositor.objects(content,*preview,output)?,
+            Expression::Vector { owner, .. } => compositor.vector(*owner, output)?,
             Expression::Source { id, frame, extent, outside } => compositor.source(*id, *frame, *extent, f32::from_bits(*outside))?,
             Expression::Opacity { input, opacity } => compositor.evaluate(input)?.with_opacity(f32::from_bits(*opacity)),
             Expression::Combine { front, back, blend, flags } => {

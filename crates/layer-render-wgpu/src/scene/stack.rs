@@ -20,6 +20,7 @@ pub(super) fn has_content(r: &WgpuRasterizer, scene: layer_core::SceneView<'_>, 
     let occurrence = scene.occurrence(handle).unwrap();
     matches!(occurrence.kind(), LayerKind::Group | LayerKind::Effect)
         || scene.object_layer(handle).is_some()
+        || scene.vector_layer(handle).is_some()
         || scene.paint_source(handle).is_some_and(|paint| paint.base.is_some())
         || scene.source_target(handle).is_some_and(|target| {
             r.native_color_coordinates(target).next().is_some()

@@ -47,7 +47,7 @@ pub(super) fn object_bounds(scene: SceneView<'_>, key: &ObjectKey) -> DocRect {
     DocRect { min: std::array::from_fn(|axis| (min[axis] - halo[axis]).floor() as i64), max: std::array::from_fn(|axis| (max[axis] + halo[axis]).ceil() as i64) }
 }
 pub(super) fn edited_damage(before: SceneView<'_>, after: SceneView<'_>, extent: [u32; 2]) -> Option<scale::Damage> {
-    if before.artwork().objects.same_root(&after.artwork().objects) { return None; }
+    if before.artwork().objects.same_root(&after.artwork().objects) && before.artwork().vectors.same_root(&after.artwork().vectors) { return None; }
     if before.order() != after.order() || before.composition() != after.composition() { return None; }
     let mut damage = scale::Damage::EMPTY;
     let mut changed = false;
@@ -57,7 +57,19 @@ pub(super) fn edited_damage(before: SceneView<'_>, after: SceneView<'_>, extent:
         let old = metadata::Metadata::new(before, owner);
         let new = metadata::Metadata::new(after, owner);
         if old == new { continue; }
-        if after.object_layer(owner).is_none() || !old.same_object_layer(&new) { return None; }
+        if !old.same_object_layer(&new) { return None; }
+        if let (Some(previous), Some(next)) = (before.vector_layer(owner), after.vector_layer(owner)) {
+            changed = true;
+            if !after.visible(owner) && !before.visible(owner) { continue; }
+            let offset = after.occurrence_offset64(owner);
+            for rect in super::vectors::edit_damage(previous, next) {
+                let rect = [rect[0] + offset[0] - 16., rect[1] + offset[1] - 16., rect[2] + offset[0] + 16., rect[3] + offset[1] + 16.];
+                damage.regions.push(PixelRect::new(rect[0].floor().clamp(0., f64::from(extent[0])) as u32, rect[1].floor().clamp(0., f64::from(extent[1])) as u32,
+                    rect[2].ceil().clamp(0., f64::from(extent[0])) as u32, rect[3].ceil().clamp(0., f64::from(extent[1])) as u32));
+            }
+            continue;
+        }
+        if after.object_layer(owner).is_none() { return None; }
         changed = true;
         for scene in [before, after] {
             if !scene.visible(owner) { continue; }
@@ -229,6 +241,7 @@ impl Scene {
     ) -> Result<Option<(wgpu::Texture, wgpu::TextureView)>, GpuRasterError> {
         let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
         let packet = frame.packet(r.document_extent);
+        if packet.scene.vector_layer(owner).is_some() { return self.vector_thumbnail(r, packet, owner, grid, encoder).map(Some); }
         self.object_spatial.prepare(packet.scene);
         let content = self.object_spatial.content(packet.scene, owner).ok_or(GpuRasterError::InvalidExtent)?;
         self.object_query = true;

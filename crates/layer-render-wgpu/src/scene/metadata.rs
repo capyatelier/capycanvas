@@ -27,6 +27,7 @@ pub(super) struct Metadata {
     source: Option<Weak<layer_core::color::source::SourceImage>>,
     base: Option<([u32; 2], layer_core::authored::PaintBasePolicy)>,
     objects: Arc<[objects::ObjectKey]>,
+    vector: Option<usize>,
 }
 impl PartialEq for Metadata {
     fn eq(&self, other: &Self) -> bool {
@@ -40,7 +41,7 @@ impl PartialEq for Metadata {
                 (None, None) => true,
                 (Some(a), Some(b)) => Weak::ptr_eq(a, b),
                 _ => false,
-            } && self.base == other.base && self.objects == other.objects
+            } && self.base == other.base && self.objects == other.objects && self.vector == other.vector
     }
 }
 impl Metadata {
@@ -48,6 +49,7 @@ impl Metadata {
         let normalize = |metadata: &Self| {
             let mut metadata = metadata.clone();
             metadata.objects = Arc::default();
+            metadata.vector = None;
             metadata
         };
         normalize(self) == normalize(other)
@@ -87,6 +89,7 @@ impl Metadata {
             mask: mask_metadata(scene, handle), source: scene.paint_source(handle).and_then(|paint| paint.base.as_ref()).map(|base| Arc::downgrade(base.image.storage())),
             base: scene.paint_source(handle).and_then(|paint| paint.base.as_ref()).map(|base| (base.offset, base.policy)),
             objects,
+            vector: scene.vector_layer(handle).map(|object| object.chunks().as_ptr() as usize),
         }
     }
 }

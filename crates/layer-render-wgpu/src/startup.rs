@@ -62,6 +62,7 @@ struct DocumentKey {
     locked: bool,
     source: bool,
     objects: bool,
+    vectors: bool,
     operations: bool,
     transform: bool,
     mesh: bool,
@@ -81,6 +82,7 @@ impl DocumentKey {
             locked: document.working.occurrence.and_then(|h| scene.occurrence(h)).is_some_and(|o| o.alpha_locked),
             source: objects || scene.targets().any(|t| scene.original(t).is_some()),
             objects,
+            vectors: scene.order().iter().any(|&h| scene.vector_layer(h).is_some()),
             operations: scene.order().iter().any(|&h| scene.mask(h).is_some()) || operations().next().is_some(),
             transform: operations().any(|op| matches!(op.kind, layer_core::RasterOperationKind::Transform(_))),
             mesh: operations().any(|op| matches!(&op.kind, layer_core::RasterOperationKind::Transform(t) if t.placement.mesh.is_some())),
@@ -404,6 +406,9 @@ impl WgpuRasterizer {
             if shader.key.objects {
                 required.compute.extend(self.scene_pipelines.objects.pipelines().map(Clone::clone));
                 required.compute.extend(self.moving_images.pipelines(&self.device).map(Clone::clone));
+            }
+            if shader.key.vectors {
+                required.compute.push(self.scene_pipelines.vector.pipeline().clone());
             }
             if shader.key.operations {
                 required.render.push(self.layer_masks.initialize.clone());

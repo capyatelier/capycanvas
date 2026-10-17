@@ -29,6 +29,7 @@ mod placement;
 mod objects;
 mod object_cache;
 mod object_spatial;
+mod vectors;
 mod bake;
 pub(crate) mod resample;
 pub(crate) mod scale;
@@ -57,6 +58,7 @@ pub(super) enum Reduction { Pages, Phased }
 #[derive(Clone)]
 enum Job {
     Collection(Box<crate::object_sampling::CollectionPreview>),
+    Vector(Box<vectors::VectorJob>),
     PaintBase(Arc<crate::source_access::PaintBaseAssembly>),
     Positions(Arc<paint_transform::mesh::MeshGeometry>, [u32; 2]),
     Placement(Box<placement::PlacementJob>),
@@ -163,6 +165,7 @@ pub(super) struct Scene {
     object_results: object_cache::ObjectCache,
     exact_object_results: object_cache::ObjectCache,
     object_spatial: object_spatial::SpatialIndex,
+    vectors: vectors::Vectors,
     scale_commands: Option<scale::Commands>,
     pool: Vec<PageSurface>,
     used: Vec<bool>,
@@ -200,6 +203,7 @@ pub(super) struct Scene {
 #[derive(Clone)]
 pub(super) struct Pipelines {
     pub objects: crate::object_sampling::ObjectSampler,
+    pub vector: crate::vector::Kernel,
     pub scale: scale::Pipelines,
     pub resample: resample::Resample,
     uniforms: wgpu::BindGroupLayout,
@@ -402,6 +406,7 @@ impl Scene {
             scale_sources: Default::default(),
             object_results: object_cache::ObjectCache::live(),
             object_spatial: Default::default(),
+            vectors: Default::default(),
             exact_object_results: Default::default(),
             scale_commands: None,
             native_reverse: false,
@@ -1043,6 +1048,8 @@ impl Scene {
             self.effect(r, packet, &[index], tile, input)?
         } else if packet.scene.object_layer(index).is_some() {
             self.object_tile(r, packet, index, tile)?
+        } else if packet.scene.vector_layer(index).is_some() {
+            self.vector_tile(r, packet, index, tile)
         } else {
             let out = self.paint_tile(r, packet, index, tile)?;
             self.converted(r, out, Convert::layers(packet))
@@ -1766,6 +1773,7 @@ impl Scene {
         if !source.is_empty() { damage.entry(None).or_insert(scale::Damage::EMPTY).extend(&source); }
         self.scale_sources.object_refinements = refinements;
         self.scale_sources.object_damage = damage;
+        self.vector_damage(r, packet);
         self.object_results = objects;
         advanced?;
         let dirty = self.scale_sources.object_damage.values().fold(dirty, |dirty, damage| dirty.union(damage.bounds()));
@@ -2048,6 +2056,7 @@ impl Scene {
             }
             match job {
                 Job::Collection(job) => r.scene_pipelines.objects.clone().preview(&r.device,encoder,&mut r.uploads,job,&r.empty_view)?,
+                Job::Vector(job) => self.vectors.encode(r,encoder,job)?,
                 Job::PaintBase(assembly) => crate::source_access::encode_paint_base(assembly, encoder),
                 Job::Placement(_) | Job::Reduce { .. } => unreachable!(),
                 Job::Positions(geometry, tile) => {
@@ -2291,6 +2300,7 @@ impl Pipelines {
         };
         Self {
             objects: crate::object_sampling::ObjectSampler::new(device),
+            vector: crate::vector::Kernel::new(device),
             scale: scale::Pipelines::new(device),
             resample: resample::Resample::new(device),
             source: sources::Pipelines::new(device, &uniforms),
