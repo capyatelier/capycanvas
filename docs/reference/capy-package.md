@@ -101,6 +101,7 @@ as unsupported and is preserved; there is no conversion reader.
 | `capy.paint-source/2` | Required pixel `domain`; authored `color_mode` (`full_color`, `grayscale`, `two_tone`, default `full_color`), optional `base` image binding, sparse `tiles`, `material`. The binding owns its base offset and color policy. |
 | `capy.image/1` | Immutable sample `extent`, `interpretation`, complete `tiles`; optional physical `resolution`. |
 | `capy.image-object/1` | Required immutable `image` reference; optional F64 `affine`, `interpolation`. |
+| `capy.vector-object/1` | Optional `items`, an ordered array of `capy.vector-items/1` resource references whose record streams concatenate front to back. Absent means no items. See [vector records](#vector-records). |
 | `capy.coverage-source/2` | Required pixel `domain`; `default_coverage` and sparse `tiles`. A mask made from a selection stores that selection's coverage in tiles. |
 | `capy.effect/2` | Required inline `builtin`, parameter-data `version` and every keyed `values` entry. Effects consuming authored coordinates require F64 `spatial`. |
 | `capy.selection/1` | Required `shape`; optional `affine` and `inverted`. Pixels use coverage resources; contours keep their geometry. |
@@ -441,8 +442,9 @@ Pack partition and range changes never change source or resource identity.
 | `capy.photo-metadata/1` | `raw`; `kind` is `exif`, `xmp` or `iptc`; retain exact supplied bytes. |
 | `capy.wgsl/1` | `utf8`; resolved shader text for custom programs in the private formats, local dependency slots only. |
 | `capy.lut3d/1` | `capy.rgb-f32/1`; current immutable little-endian F32 cube block, red coordinate fastest, declared size/domain. Titles belong to individual parameter bindings. |
+| `capy.vector-items/1` | `capy.vector-records/1`; a record stream of at most 64 records with the integer `records` count in `data` ([vector records](#vector-records)). |
 
-ICC, photo metadata, WGSL and LUT resources may use `capy.lz4-bytes/1` instead
+ICC, photo metadata, WGSL, LUT and vector-item resources may use `capy.lz4-bytes/1` instead
 of their raw encoding. In that case `data.decoded_bytes` is required and gives
 the exact decoded length as a canonical decimal U64 string. It is absent for
 raw encodings. One raw LZ4 block preserves every decoded byte; the resource's
@@ -512,6 +514,65 @@ terminal for both interpreted reads and original copying. Save verifies every
 retained required payload, including hidden and unplaced content. Unknown
 ancillary-only payloads require bounded transport integrity, not knowledge of
 their decoder.
+
+### Vector records
+
+A vector object holds one item tree as a stream of binary records. The stream is
+split into `capy.vector-items/1` resources of at most 64 records each. A record
+never spans resources, and a resource boundary may fall inside an unknown
+container. Writers keep resource membership stable across edits, so unchanged
+resources keep their IDs and bytes. Items are front to back, as stack entries are.
+
+**Framing.** All integers are little-endian. A varuint is minimal unsigned LEB128.
+
+| Element | Encoding |
+| --- | --- |
+| Record | Kind word (varuint). Kind 0 is the End marker and nothing follows. Otherwise a `u64` item ID and a varuint byte length, then that many bytes of properties. |
+| Property | Tag word (varuint), varuint value length, value bytes. Tag numbers strictly ascend within a record. Every value is length-prefixed, so any reader can step over any property. |
+| Kind word | `number << 4` with flags ignorable (1), copy-safe (2), parent (4) and reserved (8). A parent's children and its End marker follow it. |
+| Tag word | `number << 5` with flags ignorable (1), copy-safe (2), a value class in bits 2–3 and reserved (16). |
+| Value class | Data (0) opaque bytes; Items (1) item IDs as `u64` values; Slots (2) slot references; Nested (3) a record stream with the same framing. |
+
+Flags belong to a number's identity: a known number with other flags is invalid.
+Numbers are listed, with their flags and owners, in
+[`vector_numbers.tsv`](../../crates/layer-core/src/package/vector_numbers.tsv),
+which only grows; retired numbers stay reserved.
+
+**Vocabulary.** Item records: Path (kind 1) with a nonzero layer-local ID that is
+never reused. Path tags: `geometry` (required), `fill_rule` (`u8`: 0 nonzero,
+1 even-odd; default nonzero), `style` (nested Fill and Stroke records painted
+first to last; default empty), `hidden` (`u8` flag), and the ignorable,
+copy-safe `name` (UTF-8) and `locked` (`u8` flag). Fill (kind 2) and Stroke
+(kind 3) records have ID 0 and a required nested `paint` holding one paint
+record; the only paint kind is Color (kind 4), whose `color` value is a `u8`
+space (`srgb`, `display_p3`, `adobe_rgb`, `pro_photo`), a `u8` form (0 encoded
+RGBA, 1 linear RGB) and four F32 values, as portable colors define them. Stroke
+tags are `width` (F64 layer pixels, default 1), `cap` (`u8` butt, round, square;
+default butt), `join` (`u8` miter, round, bevel; default miter), `miter_limit`
+(F64, at least 1, default 4) and `width_profile`.
+
+| Value | Encoding |
+| --- | --- |
+| Geometry | Varuint subpath count, at least one. Per subpath: varuint anchor count (at least one), `u8` flags (bit 0 closed), then per anchor a `u8` kind (0 corner, 1 smooth, 2 symmetric) and six F64 values: point, incoming handle offset, outgoing handle offset. Segment *i* is the cubic from anchor *i* through its outgoing handle and the next anchor's incoming handle; a closed subpath adds the closing segment. A single-anchor subpath is a dot. |
+| Width profile | Varuint knot count, at least one. Per knot: `u32` segment index counted across subpaths, F64 `t` in `[0,1]`, F64 left and right factors. Knots strictly ascend by (segment, `t`). Each side's offset is half the stroke width times its factor, interpolated linearly in segment plus `t` and held beyond the ends. |
+
+A reader treats an anchor kind it does not know as a corner when editing and
+keeps it otherwise.
+
+**Unknown data.** An unknown kind or tag that is not ignorable, or has a reserved
+bit set, makes the artwork unsupported. An ignorable one is kept byte for byte
+and ignored for rendering. A copy-safe one survives every edit. One that is not
+copy-safe is dropped when its record's required properties change. An unknown
+parent kind is atomic: its children are never interpreted and an ignorable one
+hides its subtree. A known tag on another kind, an unaccepted value of a known
+required tag and admission bounds (1,048,576 records per object and anchors per
+path, 16 MiB per property, depth 64) are unsupported.
+
+**Invalid** framing: truncated or trailing bytes, non-minimal varuints,
+unordered or repeated tags, unbalanced End markers across the object, a record
+count that disagrees with the stream, nonfinite F64 values, duplicate item IDs,
+a path without geometry or ID, a paint entry without a paint, negative widths
+or factors and width knots outside their path.
 
 ## Restricted ZIP64 transport
 

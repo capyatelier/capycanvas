@@ -11,6 +11,7 @@ pub enum Shape {
     Occurrence { content: Content, mask: Option<PortableId> },
     Paint { image: Option<PortableId> },
     ImageObject { image: PortableId },
+    VectorObject,
     Image,
     Coverage,
     Effect,
@@ -132,7 +133,7 @@ impl GraphShape {
                 Shape::Occurrence { content, mask } => {
                     let target = match content {
                         Content::Paint(id) => { expect(*id, |s| matches!(s, Shape::Paint { .. })); *id },
-                        Content::Objects(id) => { expect(*id, |s| matches!(s, Shape::ImageObject { .. })); *id },
+                        Content::Objects(id) => { expect(*id, |s| matches!(s, Shape::ImageObject { .. } | Shape::VectorObject)); *id },
                         Content::Group(id) => { expect(*id, |s| matches!(s, Shape::Stack { .. })); *id },
                         Content::Effect(id) => { expect(*id, |s| matches!(s, Shape::Effect)); *id },
                         Content::Selection(id) => { expect(*id, |s| matches!(s, Shape::Selection)); *id },

@@ -18,6 +18,9 @@ pub mod registry;
 pub mod values;
 pub mod effect_records;
 pub mod selection_records;
+pub mod vector_records;
+#[cfg(test)]
+mod vector_tests;
 pub mod resources;
 pub mod preview;
 pub mod artwork_records;

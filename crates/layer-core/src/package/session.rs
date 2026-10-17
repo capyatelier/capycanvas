@@ -249,7 +249,7 @@ pub(crate) fn validate_history_checkpoints(current:u64,next:u64,undo:impl IntoIt
 
 fn difference(before:&Document,after:&Document)->Result<Edit,String> {
     for artwork in [&before.artwork,&after.artwork] {
-        let Artwork {id:_,root:_,compositions:_,stacks:_,occurrences:_,paint:_,coverage:_,effects:_,objects:_,selections:_,guides:_,outputs:_,default_output:_,metadata:_,extensions:_}=artwork;
+        let Artwork {id:_,root:_,compositions:_,stacks:_,occurrences:_,paint:_,coverage:_,effects:_,objects:_,vectors:_,selections:_,guides:_,outputs:_,default_output:_,metadata:_,extensions:_}=artwork;
     }
     if before.artwork.id!=after.artwork.id || before.artwork.root!=after.artwork.root || before.artwork.default_output!=after.artwork.default_output
         || before.artwork.metadata!=after.artwork.metadata || before.artwork.extensions!=after.artwork.extensions {return Err("Inconsistent session history roots".into());}
@@ -266,7 +266,7 @@ fn difference(before:&Document,after:&Document)->Result<Edit,String> {
         }};
     }
     store!(compositions,Composition);store!(stacks,Stack);store!(occurrences,Occurrence);store!(paint,Paint);store!(coverage,Coverage);
-    store!(effects,Effect);store!(objects,ImageObject);store!(selections,SavedSelection);store!(guides,Guides);store!(outputs,Output);
+    store!(effects,Effect);store!(objects,ImageObject);store!(vectors,Vector);store!(selections,SavedSelection);store!(guides,Guides);store!(outputs,Output);
     let mut working=after.working.clone();working.generation=before.working.generation;
     if before.working!=working {edits.push(Edit::Working(after.working.clone()));}
     Ok(Edit::Batch(edits))
@@ -285,7 +285,7 @@ fn intern_artwork(art:&mut Artwork,state:&StateRecord,objects:&[ObjectVersion],d
             match object["type"].as_str().and_then(registry::descriptor).map(|record|record.kind) {
                 Some(RecordKind::Composition)=>reuse!(compositions),Some(RecordKind::Stack)=>reuse!(stacks),Some(RecordKind::Occurrence)=>reuse!(occurrences),
                 Some(RecordKind::PaintSource)=>reuse!(paint),Some(RecordKind::CoverageSource)=>reuse!(coverage),Some(RecordKind::Effect)=>reuse!(effects),
-                Some(RecordKind::ImageObject)=>reuse!(objects),Some(RecordKind::Image)=>{},
+                Some(RecordKind::ImageObject)=>reuse!(objects),Some(RecordKind::VectorObject)=>reuse!(vectors),Some(RecordKind::Image)=>{},
                 Some(RecordKind::Selection)=>reuse!(selections),Some(RecordKind::Guides)=>reuse!(guides),Some(RecordKind::Output)=>reuse!(outputs),_=>return Err("Unsupported interned session record".into()),
             }
         }else {owners[*index]=Some(documents.len());}

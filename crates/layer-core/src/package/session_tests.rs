@@ -57,7 +57,7 @@ fn fixture()->Editor {
 fn edit_family(edit:&Edit)->&'static str {
     match edit {
         Edit::Composition(_)=>"composition",Edit::Stack(_)=>"stack",Edit::Occurrence(_)=>"occurrence",
-        Edit::ImageObject(_)=>"image",Edit::Paint(_)=>"paint",Edit::Coverage(_)=>"coverage",Edit::Effect(_)=>"effect",
+        Edit::ImageObject(_)=>"image",Edit::Vector(_)=>"vector",Edit::Paint(_)=>"paint",Edit::Coverage(_)=>"coverage",Edit::Effect(_)=>"effect",
         Edit::SavedSelection(_)=>"selection",Edit::Guides(_)=>"guides",Edit::Output(_)=>"output",Edit::Working(_)=>"working",
         Edit::Batch(_)=>"batch",Edit::SetRaster{..}=>"raster",
     }

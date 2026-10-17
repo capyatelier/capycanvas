@@ -18,6 +18,10 @@ fn copy_occurrence(source: &Artwork, target: &mut Artwork, id: OccurrenceHandle,
             let change=insert(&mut target.objects,source.objects.get(h).ok_or(invalid("Unknown object source"))?.clone())?;
             let content=OccurrenceContent::Objects(change.handle);edits.push(Edit::ImageObject(change));content
         }
+        OccurrenceContent::Vector(h) => {
+            let change=insert(&mut target.vectors,source.vectors.get(h).ok_or(invalid("Unknown vector object"))?.clone())?;
+            let content=OccurrenceContent::Vector(change.handle);edits.push(Edit::Vector(change));content
+        }
         OccurrenceContent::Stack(h) => {
             let original = source.stacks.get(h).ok_or(invalid("Unknown stack"))?;
             let entries = original.entries.iter().map(|h| copy_occurrence(source, target, *h, edits, copies, effects)).collect::<Result<_, _>>()?;
@@ -128,7 +132,7 @@ impl Document {
     }
     pub(crate) fn attachment_target_below(&self,id:OccurrenceHandle,clip:bool)->Option<OccurrenceHandle> {
         let scene=self.scene();let siblings=scene.children(scene.parent(id));let at=siblings.iter().position(|h|*h==id)?;
-        siblings[at+1..].iter().copied().find(|h|scene.occurrence(*h).is_some_and(|o|o.is_artwork()&&if clip{o.attachment==Attachment::None}else{o.attachment!=Attachment::Effect})).filter(|h|scene.occurrence(*h).is_some_and(|o|matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Stack(_))))
+        siblings[at+1..].iter().copied().find(|h|scene.occurrence(*h).is_some_and(|o|o.is_artwork()&&if clip{o.attachment==Attachment::None}else{o.attachment!=Attachment::Effect})).filter(|h|scene.occurrence(*h).is_some_and(|o|matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Vector(_)|OccurrenceContent::Stack(_))))
     }
     pub fn content_insertion(&self,parent:Option<OccurrenceHandle>,index:usize)->(usize,Attachment) {
         let index=content_position(self.scene(),self.scene().children(parent),index);
@@ -152,7 +156,7 @@ impl Document {
         if self.is_locked(id){return Err(DocumentError::ProtectedOccurrence(id));}
         if self.is_locked(owner){return Err(DocumentError::ProtectedOccurrence(owner));}
         let target=scene.occurrence(owner).ok_or(DocumentError::MissingOccurrence(owner))?;
-        if !matches!(target.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Stack(_)){return Err(invalid("Choose paint or an isolated group"));}
+        if !matches!(target.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Vector(_)|OccurrenceContent::Stack(_)){return Err(invalid("Choose paint or an isolated group"));}
         let chain:Vec<_>=scene.attached_effects(owner).iter().copied().filter(|h|*h!=id).collect();
         if index>chain.len(){return Err(invalid("Invalid effect position"));}
         let old_stack=scene.stack(id).ok_or(DocumentError::MissingOccurrence(id))?;let stack=scene.stack(owner).ok_or(DocumentError::MissingOccurrence(owner))?;
@@ -294,7 +298,7 @@ impl Document {
         }
         let mut working = self.working.clone();
         working.occurrence = imported.iter().copied().find(|h| artwork.occurrences.get(*h).is_some_and(|o|
-            matches!(o.content, OccurrenceContent::Paint(_) | OccurrenceContent::Objects(_) | OccurrenceContent::Stack(_))))
+            matches!(o.content, OccurrenceContent::Paint(_) | OccurrenceContent::Objects(_) | OccurrenceContent::Vector(_) | OccurrenceContent::Stack(_))))
             .or_else(|| imported.first().copied());
         working.target = working.occurrence.and_then(|h| artwork.occurrences.get(h)).and_then(|o| match o.content { OccurrenceContent::Paint(h) => Some(SourceTarget::Paint(h)), OccurrenceContent::Selection(h) => Some(SourceTarget::Selection(h)), _ => None });
         working.inspect_mask = None;

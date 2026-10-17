@@ -42,7 +42,7 @@ fn changes(edit:&Edit,context:&Document,resources:&mut ResourceInventory,cancel:
         Edit::Composition(c)=>record!(c,Composition,compositions,Composition),Edit::Stack(c)=>record!(c,Stack,stacks,Stack),
         Edit::Occurrence(c)=>record!(c,Occurrence,occurrences,Occurrence),Edit::Paint(c)=>record!(c,PaintSource,paint,Paint),
         Edit::Coverage(c)=>record!(c,CoverageSource,coverage,Coverage),Edit::Effect(c)=>record!(c,Effect,effects,Effect),
-        Edit::ImageObject(c)=>record!(c,ImageObject,objects,ImageObject),Edit::SavedSelection(c)=>record!(c,Selection,selections,SavedSelection),
+        Edit::ImageObject(c)=>record!(c,ImageObject,objects,ImageObject),Edit::Vector(c)=>record!(c,VectorObject,vectors,Vector),Edit::SavedSelection(c)=>record!(c,Selection,selections,SavedSelection),
         Edit::Guides(c)=>record!(c,Guides,guides,Guides),Edit::Output(c)=>record!(c,Output,outputs,Output),
         Edit::Working(_)=>out.working=Some(WorkingRecord::capture(&context.working,resources)?),
         Edit::Batch(edits)=>for edit in edits {changes(edit,context,resources,cancel,chunks,versions,out)?;},
@@ -145,7 +145,7 @@ fn decode_history(current:&Artwork,current_working:&WorkingState,mut previous_ch
             Some(RecordKind::Composition)=>change!(record,compositions,Composition),Some(RecordKind::Stack)=>change!(record,stacks,Stack),
             Some(RecordKind::Occurrence)=>change!(record,occurrences,Occurrence),Some(RecordKind::PaintSource)=>change!(record,paint,Paint),
             Some(RecordKind::CoverageSource)=>change!(record,coverage,Coverage),Some(RecordKind::Effect)=>change!(record,effects,Effect),
-            Some(RecordKind::ImageObject)=>change!(record,objects,ImageObject),Some(RecordKind::Selection)=>change!(record,selections,SavedSelection),
+            Some(RecordKind::ImageObject)=>change!(record,objects,ImageObject),Some(RecordKind::VectorObject)=>change!(record,vectors,Vector),Some(RecordKind::Selection)=>change!(record,selections,SavedSelection),
             Some(RecordKind::Guides)=>change!(record,guides,Guides),Some(RecordKind::Output)=>change!(record,outputs,Output),
             _=>return Err("Unknown session history record type".into()),
         }}

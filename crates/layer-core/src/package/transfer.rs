@@ -9,18 +9,18 @@ use std::{collections::{BTreeMap, BTreeSet}, mem::MaybeUninit, sync::{Arc, atomi
 pub struct TransferLayout {
     compositions: Vec<PortableId>, stacks: Vec<PortableId>, occurrences: Vec<PortableId>,
     paint: Vec<PortableId>, coverage: Vec<PortableId>, effects: Vec<PortableId>,
-    objects:Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
+    objects:Vec<PortableId>, vectors:Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
 }
 impl TransferLayout {
     pub(crate) fn capture(art: &Artwork)->Self {
         fn slots<T>(store:&Store<T>)->Vec<PortableId>{(0..store.capacity()).map(|i|store.id(Handle::from_index(i as u32)).unwrap()).collect()}
-        Self {compositions:slots(&art.compositions),stacks:slots(&art.stacks),occurrences:slots(&art.occurrences),paint:slots(&art.paint),coverage:slots(&art.coverage),effects:slots(&art.effects),objects:slots(&art.objects),selections:slots(&art.selections),guides:slots(&art.guides),outputs:slots(&art.outputs)}
+        Self {compositions:slots(&art.compositions),stacks:slots(&art.stacks),occurrences:slots(&art.occurrences),paint:slots(&art.paint),coverage:slots(&art.coverage),effects:slots(&art.effects),objects:slots(&art.objects),vectors:slots(&art.vectors),selections:slots(&art.selections),guides:slots(&art.guides),outputs:slots(&art.outputs)}
     }
     pub(crate) fn install(&self,art:&mut Artwork)->super::values::DecodeResult<()> {
         fn slots<T>(store:&mut Store<T>,ids:&[PortableId])->super::values::DecodeResult<()>{for id in ids {store.reserve(*id)?;}Ok(())}
         slots(&mut art.compositions,&self.compositions)?;slots(&mut art.stacks,&self.stacks)?;slots(&mut art.occurrences,&self.occurrences)?;
         slots(&mut art.paint,&self.paint)?;slots(&mut art.coverage,&self.coverage)?;slots(&mut art.effects,&self.effects)?;
-        slots(&mut art.objects,&self.objects)?;slots(&mut art.selections,&self.selections)?;slots(&mut art.guides,&self.guides)?;slots(&mut art.outputs,&self.outputs)
+        slots(&mut art.objects,&self.objects)?;slots(&mut art.vectors,&self.vectors)?;slots(&mut art.selections,&self.selections)?;slots(&mut art.guides,&self.guides)?;slots(&mut art.outputs,&self.outputs)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,6 +33,7 @@ enum VerifiedResource {
     Tile {payload:usize,fingerprint:Option<[u8;32]>},
     Lut {payload:usize,encoded:Option<EncodedPayload>,digest:[u8;32],spaces:u8},
     Coverage {payload:Option<usize>},
+    Vector {payload:usize},
     Opaque {payload:usize},
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,14 +51,14 @@ pub struct TransferDescriptor {
     private_resources:BTreeMap<PortableId,(Value,usize)>,
 }
 #[derive(Clone)]
-enum TransferPayload {Bytes(Arc<[u8]>),Tile(Arc<crate::raster::TileBlob>),Code(Resource<str>),Words(Arc<[u32]>),Opaque(Arc<OpaqueResource>)}
+enum TransferPayload {Bytes(Arc<[u8]>),Tile(Arc<crate::raster::TileBlob>),Code(Resource<str>),Words(Arc<[u32]>),Vector(Resource<vector::VectorChunk>,Arc<[u8]>),Opaque(Arc<OpaqueResource>)}
 impl TransferPayload {
-    fn len(&self)->u64 {match self {Self::Bytes(v)=>v.len() as u64,Self::Tile(v)=>v.compressed_len() as u64,Self::Code(v)=>v.len() as u64,Self::Words(v)=>v.len() as u64*4,Self::Opaque(v)=>v.length}}
+    fn len(&self)->u64 {match self {Self::Bytes(v)=>v.len() as u64,Self::Tile(v)=>v.compressed_len() as u64,Self::Code(v)=>v.len() as u64,Self::Words(v)=>v.len() as u64*4,Self::Vector(_,v)=>v.len() as u64,Self::Opaque(v)=>v.length}}
     fn chunk(&self,offset:u64,length:usize)->Result<Vec<u8>,String>{
         if length>MAX_RANGE_BYTES||offset.checked_add(length as u64).is_none_or(|end|end>self.len()){return Err("Transfer chunk exceeds payload".into());}
         let start=usize::try_from(offset).map_err(|_|"Transfer offset overflow")?;
         Ok(match self {
-            Self::Bytes(v)=>v[start..start+length].to_vec(),Self::Tile(v)=>v.compressed()?[start..start+length].to_vec(),Self::Code(v)=>v.as_bytes()[start..start+length].to_vec(),
+            Self::Bytes(v)|Self::Vector(_,v)=>v[start..start+length].to_vec(),Self::Tile(v)=>v.compressed()?[start..start+length].to_vec(),Self::Code(v)=>v.as_bytes()[start..start+length].to_vec(),
             Self::Words(v)=>(start..start+length).map(|i|v[i/4].to_le_bytes()[i%4]).collect(),
             Self::Opaque(v)=>v.read_chunk(offset,length,&AtomicBool::new(false))?.to_vec(),
         })
@@ -101,11 +102,12 @@ impl PreparedTransfer {
                 Payload::Bytes(bytes)=>VerifiedResource::Bytes{payload:push(&mut payloads,TransferPayload::Bytes(bytes.storage().clone())),encoded:encoded(&mut payloads,bytes.encoded_if_ready())},
                 Payload::Code(code)=>VerifiedResource::Code{payload:push(&mut payloads,TransferPayload::Code(code.clone())),encoded:encoded(&mut payloads,code.encoded_if_ready())},
                 Payload::Encoded(bytes)=>VerifiedResource::Coverage{payload:(!bytes.is_empty()).then(||push(&mut payloads,TransferPayload::Bytes(bytes.storage().clone())))},
+                Payload::Vector(chunk)=>VerifiedResource::Vector{payload:push(&mut payloads,TransferPayload::Vector(chunk.clone(),super::vector_records::encode_chunk(chunk).into()))},
                 Payload::Opaque(resource)=>VerifiedResource::Opaque{payload:push(&mut payloads,TransferPayload::Opaque(resource.clone()))},
             };
             let length=match &state {
                 VerifiedResource::Coverage {payload:None}=>0,
-                VerifiedResource::Coverage {payload:Some(payload)}|VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload,..}|VerifiedResource::Lut{payload,..}|VerifiedResource::Opaque{payload}=>payloads[*payload].len(),
+                VerifiedResource::Coverage {payload:Some(payload)}|VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload,..}|VerifiedResource::Lut{payload,..}|VerifiedResource::Vector{payload}|VerifiedResource::Opaque{payload}=>payloads[*payload].len(),
             };
             records.push(json!({"id":id,"type":entry.kind,"data":entry.data,"encoding":entry.raw_encoding,"location":{"member":format!("data/{id}")},"bytes":length.to_string(),"crc32":"00000000"}));
             verification.insert(*id,state);
@@ -170,7 +172,7 @@ impl PreparedTransfer {
             VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}=>{add(*id,"raw",*payload,Value::Null)?;if let Some(encoded)=encoded {add(*id,"encoded",encoded.payload,json!(encoded.encoding))?;}},
             VerifiedResource::Lut{payload,encoded,digest,spaces}=>{add(*id,"raw",*payload,json!([digest,spaces]))?;if let Some(encoded)=encoded {add(*id,"encoded",encoded.payload,json!([encoded.encoding,digest,spaces]))?;}},
             VerifiedResource::Tile{payload,fingerprint}=>add(*id,"raw",*payload,json!(fingerprint))?,
-            VerifiedResource::Coverage{payload:Some(payload)}|VerifiedResource::Opaque{payload}=>add(*id,"raw",*payload,Value::Null)?,
+            VerifiedResource::Coverage{payload:Some(payload)}|VerifiedResource::Vector{payload}|VerifiedResource::Opaque{payload}=>add(*id,"raw",*payload,Value::Null)?,
             VerifiedResource::Coverage{payload:None}=>(),
         }}
         for (id,payload) in &self.descriptor.retained_resources {add(*id,"retained",*payload,Value::Null)?;}
@@ -195,7 +197,7 @@ impl PreparedTransfer {
         for (index,chunks) in chunks.into_iter().enumerate(){for chunk in chunks{receiver.push_chunk(index,&chunk)?;}}
         receiver.finish()
     }
-    fn bytes(&self,index:usize)->Result<Arc<[u8]>,String>{match self.payloads.get(index){Some(TransferPayload::Bytes(v))=>Ok(v.clone()),Some(TransferPayload::Tile(v))=>v.compressed(),Some(TransferPayload::Code(v))=>Ok(v.as_bytes().into()),_=>Err("Wrong transfer byte payload".into())}}
+    fn bytes(&self,index:usize)->Result<Arc<[u8]>,String>{match self.payloads.get(index){Some(TransferPayload::Bytes(v)|TransferPayload::Vector(_,v))=>Ok(v.clone()),Some(TransferPayload::Tile(v))=>v.compressed(),Some(TransferPayload::Code(v))=>Ok(v.as_bytes().into()),_=>Err("Wrong transfer byte payload".into())}}
     fn encoded(&self,payload:&Option<EncodedPayload>)->Result<Option<EncodedBytes>,String>{payload.as_ref().map(|v|Ok(EncodedBytes{encoding:v.encoding,bytes:self.bytes(v.payload)?})).transpose()}
     pub fn adopt_verified(&self,limits:ProjectLimits,cancel:&AtomicBool)->Result<ArtworkCapture,String>{
         self.adopt_verified_with_selection(limits,cancel).map(|(capture,_)|capture)
@@ -221,6 +223,12 @@ impl PreparedTransfer {
                 VerifiedResource::Code{payload,encoded}=>{if kind!="capy.wgsl/1"{return Err("Transfer shader type mismatch".into());}let code=match self.payloads.get(*payload){Some(TransferPayload::Code(code))=>code.clone(),_=>{let bytes=self.bytes(*payload)?;let text:Arc<str>=std::str::from_utf8(&bytes).map_err(|_|"Invalid verified shader text")?.into();match self.encoded(encoded)?{Some(encoded)=>Resource::with_id_and_encoded(*id,text,encoded),None=>Resource::with_id(*id,text)}}};if code.len()>4*1024*1024{return Err("Oversized transfer shader".into());}decoded=decoded.saturating_add(code.len() as u64);reader.texts.insert(*id,code);},
                 VerifiedResource::Lut{payload,encoded,digest,spaces}=>{if kind!="capy.lut3d/1"{return Err("Transfer lookup type mismatch".into());}let data=&record["data"];let size=super::values::u32_value(&data["size"]).map_err(|e|e.to_string())?;let domain: [[f32;3];2]=serde_json::from_value(data["domain"].clone()).map_err(|e|e.to_string())?;let bytes=resource(*payload,encoded)?;decoded=decoded.saturating_add(bytes.len() as u64);reader.bytes.insert(*id,bytes.clone());reader.luts.insert(*id,Arc::new(Lut3d::from_verified_resource(size,domain,Arc::from(""),*digest,bytes,*spaces).map_err(str::to_string)?));},
                 VerifiedResource::Coverage{payload}=>{if kind!="capy.selection-coverage/1"{return Err("Transfer selection type mismatch".into());}let bytes=payload.map(|p|self.bytes(p)).transpose()?.unwrap_or_else(||Arc::from([]));reader.bytes.insert(*id,Resource::with_id(*id,bytes));},
+                VerifiedResource::Vector{payload}=>{
+                    if kind!="capy.vector-items/1"{return Err("Transfer vector type mismatch".into());}
+                    let bytes=self.bytes(*payload)?;decoded=decoded.saturating_add(bytes.len() as u64);
+                    if let Some(TransferPayload::Vector(chunk,_))=self.payloads.get(*payload) && chunk.records().iter().all(|r|matches!(r,vector::Record::Path(_))) {reader.vectors.insert(*id,(0,0,chunk.clone()));}
+                    reader.bytes.insert(*id,Resource::with_id_and_encoded(*id,bytes.clone(),EncodedBytes{encoding:ResourceEncoding::Raw,bytes}));
+                },
                 VerifiedResource::Tile{..}|VerifiedResource::Opaque{..}=>(),
             }
         }
@@ -274,7 +282,7 @@ impl TransferReceiver {
         let mut bytes=BTreeSet::new();let mut words=BTreeSet::new();
         for resource in descriptor.resources.values() {match resource {
             VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}|VerifiedResource::Lut{payload,encoded,..}=>{bytes.insert(*payload);if let Some(encoded)=encoded {bytes.insert(encoded.payload);}},
-            VerifiedResource::Tile{payload,..}|VerifiedResource::Opaque{payload}|VerifiedResource::Coverage{payload:Some(payload)}=>{bytes.insert(*payload);},
+            VerifiedResource::Tile{payload,..}|VerifiedResource::Vector{payload}|VerifiedResource::Opaque{payload}|VerifiedResource::Coverage{payload:Some(payload)}=>{bytes.insert(*payload);},
             VerifiedResource::Coverage{payload:None}=>(),
         }}
         bytes.extend(descriptor.retained_resources.values().copied());bytes.extend(descriptor.private_resources.values().map(|(_,index)|*index));
@@ -538,7 +546,7 @@ mod tests {
         assert!(TransferReceiver::new(descriptor,ProjectLimits::default()).is_err());
         let mut descriptor=prepared.descriptor().clone();
         let payload=match descriptor.resources.values().next().unwrap() {
-            VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload,..}|VerifiedResource::Lut{payload,..}|VerifiedResource::Opaque{payload}=>*payload,
+            VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload,..}|VerifiedResource::Lut{payload,..}|VerifiedResource::Vector{payload}|VerifiedResource::Opaque{payload}=>*payload,
             VerifiedResource::Coverage{payload}=>payload.unwrap(),
         };
         descriptor.selections.push(SelectionTransfer {extent:[8,1],bounds:[0,0,8,1],bytes:false,chunks:vec![PortableId::random()],payload});

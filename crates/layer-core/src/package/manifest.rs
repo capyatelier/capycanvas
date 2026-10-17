@@ -122,6 +122,7 @@ fn shape(record: &Value, refs: &[PortableId], context: RecordContext, reasons: &
         RecordKind::PaintSource => Shape::Paint { image: data.get("base").map(|base| reference(required(object(base)?, "image")?)).transpose()? },
         RecordKind::Image => Shape::Image,
         RecordKind::ImageObject => Shape::ImageObject { image: reference(required(data, "image")?)? },
+        RecordKind::VectorObject => Shape::VectorObject,
         RecordKind::CoverageSource => Shape::Coverage,
         RecordKind::Effect => Shape::Effect,
         RecordKind::Selection => Shape::Selection,
@@ -153,13 +154,14 @@ pub(crate) fn resource_supported(record: &Value) -> Result<bool, String> {
     let name = kind(record)?;
     let compressed = encoding == "capy.lz4-bytes/1";
     if compressed { decimal_u64(required(data, "decoded_bytes")?)?; }
-    else if matches!(encoding, "raw" | "utf8" | "capy.rgb-f32/1" | "capy.lz4-tile/1" | "capy.lz4-coverage/1") && data.contains_key("decoded_bytes") {
+    else if matches!(encoding, "raw" | "utf8" | "capy.rgb-f32/1" | "capy.lz4-tile/1" | "capy.lz4-coverage/1" | "capy.vector-records/1") && data.contains_key("decoded_bytes") {
         return Err("Decoded length on an unwrapped resource".into());
     }
     let Some(descriptor) = registry::descriptor(name).filter(|record| record.role == RecordRole::Resource) else { return Ok(false); };
     let encoding_supported = match descriptor.kind {
         RecordKind::RasterTile => encoding == "capy.lz4-tile/1",
         RecordKind::SelectionCoverage => encoding == "capy.lz4-coverage/1",
+        RecordKind::VectorItems => compressed || encoding == "capy.vector-records/1",
         RecordKind::Icc => compressed || encoding == "raw",
         RecordKind::Wgsl => compressed || encoding == "utf8",
         RecordKind::PhotoMetadata => compressed || encoding == "raw",

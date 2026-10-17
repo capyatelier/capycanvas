@@ -10,6 +10,7 @@ pub struct SceneIndex {
     containing:Vec<Option<StackHandle>>,
     paint_uses:Vec<Option<OccurrenceHandle>>,
     object_uses:Vec<Option<OccurrenceHandle>>,
+    vector_uses:Vec<Option<OccurrenceHandle>>,
     coverage_uses:Vec<Option<OccurrenceHandle>>,
     selection_uses:Vec<Option<OccurrenceHandle>>,
     effect_owners:Vec<Option<OccurrenceHandle>>,
@@ -24,7 +25,7 @@ impl SceneIndex {
         if !matches!(shape.validate(root,Default::default())?,Support::Editable){return Err("Artwork is outside the editable subset".into());}
         let n=artwork.occurrences.capacity();
         let mut index=Self {order:Vec::with_capacity(artwork.occurrences.len()),positions:vec![None;n],parents:vec![None;n],containing:vec![None;n],
-            paint_uses:vec![None;artwork.paint.capacity()],object_uses:vec![None;artwork.objects.capacity()],coverage_uses:vec![None;artwork.coverage.capacity()],selection_uses:vec![None;artwork.selections.capacity()],effect_owners:vec![None;n],attached_effects:vec![Vec::new();n],clipping_bases:vec![None;n],
+            paint_uses:vec![None;artwork.paint.capacity()],object_uses:vec![None;artwork.objects.capacity()],vector_uses:vec![None;artwork.vectors.capacity()],coverage_uses:vec![None;artwork.coverage.capacity()],selection_uses:vec![None;artwork.selections.capacity()],effect_owners:vec![None;n],attached_effects:vec![Vec::new();n],clipping_bases:vec![None;n],
             authored_ids:shape.objects.keys().chain(artwork.extensions.records.keys()).copied().chain(std::iter::once(artwork.id)).collect()};
         fn visit(a:&Artwork,index:&mut SceneIndex,stack:StackHandle,parent:Option<OccurrenceHandle>)->Result<(),String>{
             for &h in &a.stacks.get(stack).ok_or("Missing stack")?.entries {
@@ -42,7 +43,7 @@ impl SceneIndex {
                 let o=artwork.occurrences.get(h).ok_or("Missing occurrence")?;
                 if !o.is_artwork(){if o.attachment!=Attachment::None{return Err("Selection Layers cannot attach".into());}owner=None;continue;}
                 let adjustment=match o.content {OccurrenceContent::Effect(e)=>artwork.effects.get(e).is_some_and(|d|d.program.kind==crate::EffectKind::Adjustment),_=>false};
-                let eligible=matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Stack(_))&&!o.passes_through();
+                let eligible=matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Vector(_)|OccurrenceContent::Stack(_))&&!o.passes_through();
                 match o.attachment {
                     Attachment::Effect=>{
                         if !adjustment{return Err("Only adjustments can attach effects".into());}
@@ -70,6 +71,7 @@ impl SceneIndex {
             match o.content {
                 OccurrenceContent::Paint(p)=>index.paint_uses[p.index() as usize]=Some(h),
                 OccurrenceContent::Objects(p)=>index.object_uses[p.index() as usize]=Some(h),
+                OccurrenceContent::Vector(p)=>index.vector_uses[p.index() as usize]=Some(h),
                 OccurrenceContent::Selection(p)=>index.selection_uses[p.index() as usize]=Some(h),_=>(),
             }
             if let Some(mask)=&o.mask {index.coverage_uses[mask.source.index() as usize]=Some(h);}
@@ -157,6 +159,10 @@ impl<'a> SceneView<'a> {
     pub fn object_layer(self,h:OccurrenceHandle)->Option<&'a ImageObject>{self.object(self.object_handle(h)?)}
     pub fn object_owner(self,h:ImageObjectHandle)->Option<OccurrenceHandle>{self.index.object_uses.get(h.index() as usize).copied().flatten()}
     pub fn object(self,h:ImageObjectHandle)->Option<&'a ImageObject>{self.artwork.objects.get(h)}
+    pub fn vector_handle(self,h:OccurrenceHandle)->Option<VectorHandle>{match self.occurrence(h)?.content{OccurrenceContent::Vector(h)=>Some(h),_=>None}}
+    pub fn vector_layer(self,h:OccurrenceHandle)->Option<&'a vector::VectorObject>{self.vector(self.vector_handle(h)?)}
+    pub fn vector_owner(self,h:VectorHandle)->Option<OccurrenceHandle>{self.index.vector_uses.get(h.index() as usize).copied().flatten()}
+    pub fn vector(self,h:VectorHandle)->Option<&'a vector::VectorObject>{self.artwork.vectors.get(h)}
     pub fn artwork(self)->&'a Artwork{self.artwork}
     #[inline]
     pub fn composition(self)->&'a Composition{self.artwork.compositions.get(self.artwork.root).expect("Admitted composition")}
@@ -202,7 +208,7 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn attachment_target(self,h:OccurrenceHandle)->Option<OccurrenceHandle>{self.effect_owner(h).or_else(||self.clipping_base(h))}
     #[inline]
-    pub fn eligible_target(self,h:OccurrenceHandle)->bool{self.occurrence(h).is_some_and(|o|matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Stack(_))&&!o.passes_through())}
+    pub fn eligible_target(self,h:OccurrenceHandle)->bool{self.occurrence(h).is_some_and(|o|matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Vector(_)|OccurrenceContent::Stack(_))&&!o.passes_through())}
     #[inline]
     pub fn effective_clipped(self,h:OccurrenceHandle)->bool{self.occurrence(h).is_some_and(|o|o.attachment.is_clip())&&self.clipping_base(h).is_some_and(|base|self.includes(base))}
     #[inline]
@@ -293,11 +299,11 @@ impl<'a> SceneView<'a> {
 }
 impl Occurrence {
     #[inline]
-    pub fn kind(&self)->LayerKind {match self.content{OccurrenceContent::Paint(_)=>LayerKind::Paint,OccurrenceContent::Objects(_)=>LayerKind::Object,OccurrenceContent::Stack(_)=>LayerKind::Group,OccurrenceContent::Effect(_)=>LayerKind::Effect,OccurrenceContent::Selection(_)=>LayerKind::Selection}}
+    pub fn kind(&self)->LayerKind {match self.content{OccurrenceContent::Paint(_)=>LayerKind::Paint,OccurrenceContent::Objects(_)|OccurrenceContent::Vector(_)=>LayerKind::Object,OccurrenceContent::Stack(_)=>LayerKind::Group,OccurrenceContent::Effect(_)=>LayerKind::Effect,OccurrenceContent::Selection(_)=>LayerKind::Selection}}
     #[inline]
     pub fn is_artwork(&self)->bool{!matches!(self.content,OccurrenceContent::Selection(_))}
     #[inline]
-    pub fn positioned(&self)->bool{matches!(self.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Stack(_))}
+    pub fn positioned(&self)->bool{matches!(self.content,OccurrenceContent::Paint(_)|OccurrenceContent::Objects(_)|OccurrenceContent::Vector(_)|OccurrenceContent::Stack(_))}
     #[inline]
     pub fn passes_through(&self)->bool{matches!(self.content,OccurrenceContent::Stack(_)) && self.blend==crate::LayerBlend::PassThrough}
 }
@@ -311,6 +317,10 @@ impl SourceTarget {
 impl super::Handle<super::ImageObject> {
     pub fn wire_id(self)->u64{(3u64<<32)|(u64::from(self.index())+1)}
     pub fn from_wire_id(value:u64)->Option<Self>{(value>>32==3).then(||u32::try_from(value&u64::from(u32::MAX)).ok()?.checked_sub(1)).flatten().map(Self::from_index)}
+}
+impl super::Handle<vector::VectorObject> {
+    pub fn wire_id(self)->u64{(4u64<<32)|(u64::from(self.index())+1)}
+    pub fn from_wire_id(value:u64)->Option<Self>{(value>>32==4).then(||u32::try_from(value&u64::from(u32::MAX)).ok()?.checked_sub(1)).flatten().map(Self::from_index)}
 }
 
 #[derive(Clone,Debug,PartialEq)]

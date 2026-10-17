@@ -7,8 +7,8 @@ pub enum RecordContext { Portable, Private }
 pub enum RecordRole { Object, Resource }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordKind {
-    Composition, Stack, Occurrence, PaintSource, Image, ImageObject,
-    CoverageSource, Effect, Selection, Guides, Output, RasterTile, SelectionCoverage, Icc, Wgsl, PhotoMetadata, Lut3d,
+    Composition, Stack, Occurrence, PaintSource, Image, ImageObject, VectorObject,
+    CoverageSource, Effect, Selection, Guides, Output, RasterTile, SelectionCoverage, VectorItems, Icc, Wgsl, PhotoMetadata, Lut3d,
 }
 pub struct RecordDescriptor {
     pub kind: RecordKind,
@@ -34,6 +34,7 @@ records! {
     PaintSource, "capy.paint-source/2", Object, ["domain", "tiles", "material", "base", "color_mode"], [];
     Image, "capy.image/1", Object, ["extent", "interpretation", "tiles", "resolution"], [];
     ImageObject, "capy.image-object/1", Object, ["image", "affine", "interpolation"], [];
+    VectorObject, "capy.vector-object/1", Object, ["items"], [];
     CoverageSource, "capy.coverage-source/2", Object, ["domain", "tiles", "material", "default_coverage"], [];
     Effect, "capy.effect/2", Object, ["builtin", "version", "program", "values", "spatial"], [];
     Selection, "capy.selection/1", Object, ["shape", "affine", "inverted"], [];
@@ -41,6 +42,7 @@ records! {
     Output, "capy.output/2", Object, ["source", "name", "context", "sdr", "proof", "representation"], ["representation"];
     RasterTile, "capy.raster-tile/1", Resource, ["channels", "depth", "transfer", "alpha", "profile"], [];
     SelectionCoverage, "capy.selection-coverage/1", Resource, ["depth", "extent", "bounds", "chunk"], [];
+    VectorItems, "capy.vector-items/1", Resource, ["records", "decoded_bytes"], [];
     Icc, "capy.icc/1", Resource, ["decoded_bytes"], [];
     Wgsl, "capy.wgsl/1", Resource, ["decoded_bytes"], [];
     PhotoMetadata, "capy.photo-metadata/1", Resource, ["kind", "decoded_bytes"], [];

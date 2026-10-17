@@ -21,6 +21,7 @@ pub use scene::{EffectBaseline, SceneIndex, SceneScope, SceneSnapshot, SceneView
 mod occurrence_edits;
 pub use occurrence_edits::{OccurrenceDropPlan, OccurrenceDropPosition};
 
+pub mod vector;
 mod objects;
 mod object_edits;
 pub use object_edits::{placed_bounds};

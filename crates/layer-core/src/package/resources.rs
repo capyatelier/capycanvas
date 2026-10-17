@@ -1,12 +1,15 @@
 use super::{ImmutableBacking, RangeState, MAX_RANGE_BYTES, manifest::{Manifest, decimal_u64}, values::{self, DecodeError, DecodeResult}};
 use super::RASTER_TILE_SIZE as TILE_SIZE;
-use crate::{authored::{PortableId, Resource, ResourceEncoding, EncodedBytes, EncodedIntegrity}, color::{PixelDescriptor, SampleType, TransferEncoding, AlphaAssociation, ColorProfile}, raster::{TileBlob}, Lut3d};
+use crate::{authored::{PortableId, Resource, ResourceEncoding, EncodedBytes, EncodedIntegrity, vector::{VectorChunk, VectorObject}}, color::{PixelDescriptor, SampleType, TransferEncoding, AlphaAssociation, ColorProfile}, raster::{TileBlob}, Lut3d};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 pub fn reference(id: PortableId) -> Value { json!({"ref":id}) }
 pub fn reference_id(value: &Value) -> DecodeResult<PortableId> {
     values::string(values::required(values::object(value, &["ref"])?, "ref")?)?.parse().map_err(DecodeError::from)
+}
+fn encode_vector(chunk: &Resource<VectorChunk>) -> &EncodedBytes {
+    chunk.encoded(|data| { let raw: Arc<[u8]> = super::vector_records::encode_chunk(data).into(); compress(&raw, || raw.clone()) })
 }
 fn compress(bytes: &[u8], raw: impl FnOnce() -> Arc<[u8]>) -> EncodedBytes {
     let compressed = lz4_flex::block::compress(bytes);
@@ -15,12 +18,12 @@ fn compress(bytes: &[u8], raw: impl FnOnce() -> Arc<[u8]>) -> EncodedBytes {
 }
 
 #[derive(Clone, Debug)]
-pub enum Payload { Tile(Arc<TileBlob>), Bytes(Resource<[u8]>), Code(Resource<str>), Encoded(Resource<[u8]>), Opaque(Arc<crate::authored::OpaqueResource>) }
+pub enum Payload { Tile(Arc<TileBlob>), Bytes(Resource<[u8]>), Code(Resource<str>), Encoded(Resource<[u8]>), Vector(Resource<VectorChunk>), Opaque(Arc<crate::authored::OpaqueResource>) }
 impl Payload {
-    pub fn id(&self) -> PortableId { match self { Self::Tile(tile) => tile.resource_id(), Self::Bytes(bytes) | Self::Encoded(bytes) => bytes.id(), Self::Code(code) => code.id(), Self::Opaque(resource) => resource.id } }
+    pub fn id(&self) -> PortableId { match self { Self::Tile(tile) => tile.resource_id(), Self::Bytes(bytes) | Self::Encoded(bytes) => bytes.id(), Self::Code(code) => code.id(), Self::Vector(chunk) => chunk.id(), Self::Opaque(resource) => resource.id } }
     pub fn same_owner(&self, other: &Self) -> bool { match (self, other) {
         (Self::Tile(a),Self::Tile(b)) => Arc::ptr_eq(&a.compressed,&b.compressed), (Self::Bytes(a),Self::Bytes(b)) | (Self::Encoded(a),Self::Encoded(b)) => a.same_owner(b),
-        (Self::Code(a),Self::Code(b)) => a.same_owner(b), (Self::Opaque(a),Self::Opaque(b)) => Arc::ptr_eq(a,b), _ => false,
+        (Self::Code(a),Self::Code(b)) => a.same_owner(b), (Self::Vector(a),Self::Vector(b)) => a.same_owner(b), (Self::Opaque(a),Self::Opaque(b)) => Arc::ptr_eq(a,b), _ => false,
     } }
     fn prepared(&self, cancelled:&AtomicBool) -> Result<(ResourceEncoding,EncodedIntegrity),String> {
         match self {
@@ -35,6 +38,10 @@ impl Payload {
                 let encoded=code.encoded(|data|compress(data.as_bytes(),||Arc::from(data.as_bytes())));
                 Ok((encoded.encoding,code.encoded_integrity(cancelled,||Ok(encoded.bytes.clone()))?))
             },
+            Self::Vector(chunk)=>{
+                let encoded=encode_vector(chunk);
+                Ok((encoded.encoding,chunk.encoded_integrity(cancelled,||Ok(encoded.bytes.clone()))?))
+            },
         }
     }
     fn digest(&self,cancelled:&AtomicBool)->Result<[u8;32],String> {
@@ -43,6 +50,7 @@ impl Payload {
             Self::Tile(tile)=>tile.compressed.digest(cancelled),
             Self::Bytes(bytes)|Self::Encoded(bytes)=>bytes.encoded_digest(cancelled,||Ok(self.encoded()?.bytes)),
             Self::Code(code)=>code.encoded_digest(cancelled,||Ok(self.encoded()?.bytes)),
+            Self::Vector(chunk)=>chunk.encoded_digest(cancelled,||Ok(self.encoded()?.bytes)),
         }
     }
     pub fn encoded(&self) -> Result<EncodedBytes, String> { Ok(match self {
@@ -51,6 +59,7 @@ impl Payload {
         Self::Encoded(bytes) => EncodedBytes { encoding:ResourceEncoding::Raw, bytes:bytes.storage().clone() },
         Self::Bytes(bytes) => bytes.encoded(|data| compress(data, || bytes.storage().clone())).clone(),
         Self::Code(code) => code.encoded(|data| compress(data.as_bytes(), || Arc::from(data.as_bytes()))).clone(),
+        Self::Vector(chunk) => encode_vector(chunk).clone(),
     }) }
 }
 #[derive(Clone, Debug)]
@@ -99,6 +108,9 @@ impl ResourceInventory {
         ColorProfile::Builtin(space) => json!({"builtin":values::encode_rgb_space(*space)}),
         ColorProfile::Icc(bytes) => json!({"resource":self.bytes("capy.icc/1",bytes,json!({}))?}),
     }) }
+    pub fn vector_chunk(&mut self, chunk: &Resource<VectorChunk>) -> Result<Value, String> {
+        self.insert(ResourceEntry { kind:"capy.vector-items/1", data:json!({"records":chunk.records().len()}), raw_encoding:"capy.vector-records/1", payload:Payload::Vector(chunk.clone()) })
+    }
     pub fn tile(&mut self, tile: Arc<TileBlob>) -> Result<Value, String> {
         let data = encode_descriptor(tile.descriptor)?;
         self.insert(ResourceEntry { kind:"capy.raster-tile/1", data, raw_encoding:"capy.lz4-tile/1", payload:Payload::Tile(tile) })
@@ -123,7 +135,8 @@ impl ResourceInventory {
             let (encoded,integrity) = entry.payload.prepared(cancelled)?;
             let mut data = entry.data.clone();
             let encoding = if encoded == ResourceEncoding::Lz4 {
-                let decoded = match &entry.payload { Payload::Bytes(bytes) => bytes.len(), Payload::Code(code) => code.len(), _ => return Err("Invalid resource compression owner".into()) };
+                let decoded = match &entry.payload { Payload::Bytes(bytes) => bytes.len(), Payload::Code(code) => code.len(),
+                    Payload::Vector(chunk) => chunk.encoded_len().ok_or("Missing vector chunk length")?, _ => return Err("Invalid resource compression owner".into()) };
                 data.as_object_mut().ok_or("Invalid resource descriptor")?.insert("decoded_bytes".into(), decoded.to_string().into());
                 "capy.lz4-bytes/1"
             } else { entry.raw_encoding };
@@ -240,6 +253,7 @@ pub struct ResourceReader<'a> {
     pub(crate) selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>,
     pub(crate) images: BTreeMap<PortableId, (Value, crate::authored::Image)>,
     pub(crate) programs: BTreeMap<Vec<u8>, Arc<crate::EffectProgram>>,
+    pub(crate) vectors: BTreeMap<PortableId, (u32, u32, Resource<VectorChunk>)>,
 }
 #[derive(Default)]
 pub(crate) struct ResourceCache {
@@ -248,18 +262,19 @@ pub(crate) struct ResourceCache {
     aliases: BTreeMap<(usize,u64,u64), (PortableId,Value)>, rasters: BTreeMap<PortableId, crate::raster::RasterTile>,
     selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>, images: BTreeMap<PortableId, (Value, crate::authored::Image)>,
     programs: BTreeMap<Vec<u8>, Arc<crate::EffectProgram>>,
+    vectors: BTreeMap<PortableId, (u32, u32, Resource<VectorChunk>)>,
 }
 impl<'a> ResourceReader<'a> {
     pub fn new(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits) -> Self {
-        Self {manifest,backing,cancelled,limits,private:false,bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new()}
+        Self {manifest,backing,cancelled,limits,private:false,bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new()}
     }
     pub(crate) fn install_cache(&mut self, cache: ResourceCache) {
         self.bytes=cache.bytes;self.texts=cache.texts;self.tiles=cache.tiles;self.luts=cache.luts;self.decoded=cache.decoded;
-        self.aliases=cache.aliases;self.rasters=cache.rasters;self.selections=cache.selections;self.images=cache.images;self.programs=cache.programs;
+        self.aliases=cache.aliases;self.rasters=cache.rasters;self.selections=cache.selections;self.images=cache.images;self.programs=cache.programs;self.vectors=cache.vectors;
     }
     pub(crate) fn into_cache(self)->ResourceCache {
         ResourceCache {bytes:self.bytes,texts:self.texts,tiles:self.tiles,luts:self.luts,decoded:self.decoded,
-            aliases:self.aliases,rasters:self.rasters,selections:self.selections,images:self.images,programs:self.programs}
+            aliases:self.aliases,rasters:self.rasters,selections:self.selections,images:self.images,programs:self.programs,vectors:self.vectors}
     }
     pub(crate) fn require_verified(&mut self) { self.verified = true; }
     fn alias(&self, id:PortableId) -> DecodeResult<Option<PortableId>> {
@@ -344,6 +359,37 @@ impl<'a> ResourceReader<'a> {
         result.set_encoded_integrity(integrity)?;
         self.decoded+=expected; self.remember_alias(id);
         self.bytes.insert(id,result.clone()); Ok(result)
+    }
+    pub fn vector_object(&mut self, items: &[Value]) -> DecodeResult<VectorObject> {
+        let mut open = 0u32;
+        let mut records = 0usize;
+        let mut ids = std::collections::HashSet::new();
+        let mut chunks = Vec::with_capacity(items.len());
+        for item in items {
+            let (id, record) = self.record(item, "capy.vector-items/1")?;
+            let count = usize::try_from(record["data"]["records"].as_u64().ok_or("Vector items require a record count")?).map_err(|_| DecodeError::Unsupported("Vector record count exceeds admission".into()))?;
+            records = records.saturating_add(count);
+            if records > super::vector_records::MAX_RECORDS { return Err(DecodeError::Unsupported("Vector object exceeds the admitted record count".into())); }
+            let chunk = match self.vectors.get(&id) {
+                Some((start, end, chunk)) if *start == open => { open = *end; chunk.clone() }
+                _ => {
+                    let start = open;
+                    let bytes = self.bytes(item, "capy.vector-items/1", super::vector_records::MAX_CHUNK_BYTES)?;
+                    let chunk = super::vector_records::decode_chunk(&bytes, count, &mut open)?;
+                    let encoded = bytes.encoded_if_ready().cloned().ok_or("Missing stored vector bytes")?;
+                    let resource = Resource::with_id_and_encoded(id, Arc::new(chunk), encoded);
+                    if let Some(integrity) = bytes.encoded_integrity_if_ready() { resource.set_encoded_integrity(integrity)?; }
+                    self.vectors.insert(id, (start, open, resource.clone()));
+                    resource
+                }
+            };
+            for id in chunk.records().iter().filter_map(|r| r.id()) {
+                if !ids.insert(id) { return Err("Invalid vector data: duplicate item identity".into()); }
+            }
+            chunks.push(chunk);
+        }
+        if open != 0 { return Err("Invalid vector data: unbalanced end marker".into()); }
+        Ok(VectorObject::from_chunks(chunks))
     }
     pub fn profile(&mut self, value: &Value) -> DecodeResult<ColorProfile> {
         let fields = values::object(value,&["builtin","resource"])?;

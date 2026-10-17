@@ -1,4 +1,4 @@
-use super::{Handle, PortableId, Store, Image, ImageObject, PaintBase};
+use super::{Handle, PortableId, Store, Image, ImageObject, PaintBase, vector::VectorObject};
 use crate::{BlendSpace, EffectProgram, EffectValue, ImageResolution, LayerBlend,
     PhotoMetadata, RulerGeometry, Selection, SelectionMaskProperties,
     color::{DocumentColor, ProofRecipe, hdr::SdrRendition}, raster::RasterRevision};
@@ -9,6 +9,7 @@ pub type StackHandle = Handle<Stack>;
 pub type OccurrenceHandle = Handle<Occurrence>;
 pub type PaintHandle = Handle<PaintSource>;
 pub type ImageObjectHandle = Handle<ImageObject>;
+pub type VectorHandle = Handle<VectorObject>;
 
 pub type CoverageHandle = Handle<CoverageSource>;
 pub type EffectHandle = Handle<EffectApplication>;
@@ -24,6 +25,7 @@ pub struct Artwork {
     pub occurrences: Store<Occurrence>,
     pub paint: Store<PaintSource>,
     pub objects: Store<ImageObject>,
+    pub vectors: Store<VectorObject>,
     pub coverage: Store<CoverageSource>,
     pub effects: Store<EffectApplication>,
     pub selections: Store<SavedSelection>,
@@ -45,7 +47,7 @@ pub struct Composition {
 pub struct Stack { pub entries: Vec<OccurrenceHandle> }
 #[derive(Clone, Debug, PartialEq)]
 pub enum OccurrenceContent {
-    Paint(PaintHandle), Objects(ImageObjectHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle),
+    Paint(PaintHandle), Objects(ImageObjectHandle), Vector(VectorHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle),
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Attachment { #[default] None, Clip, Effect }
@@ -210,7 +212,7 @@ impl Artwork {
         let default_output = outputs.insert(PortableId::random(), Output { composition:root, name:Arc::from(""), context:EvaluationContext::default(),
             sdr:SdrRendition::default(), proof:None })?;
         Ok(Self { id:PortableId::random(), root, compositions, stacks, outputs, default_output,
-            occurrences:Store::default(), paint:Store::default(), objects:Store::default(), coverage:Store::default(), effects:Store::default(),
+            occurrences:Store::default(), paint:Store::default(), objects:Store::default(), vectors:Store::default(), coverage:Store::default(), effects:Store::default(),
             selections:Store::default(), guides:Store::default(), metadata:Arc::new(PhotoMetadata::default()), extensions:Arc::default() })
     }
     pub fn capture(&self, checkpoint: CaptureCheckpoint) -> Result<ArtworkCapture, &'static str> {
@@ -243,6 +245,7 @@ impl Artwork {
             let content=match occurrence.content {
                 OccurrenceContent::Paint(handle)=>Content::Paint(id(&self.paint,handle)?),
                 OccurrenceContent::Objects(handle)=>Content::Objects(id(&self.objects,handle)?),
+                OccurrenceContent::Vector(handle)=>Content::Objects(id(&self.vectors,handle)?),
                 OccurrenceContent::Stack(handle)=>Content::Group(id(&self.stacks,handle)?),
                 OccurrenceContent::Effect(handle)=>Content::Effect(id(&self.effects,handle)?),
                 OccurrenceContent::Selection(handle)=>Content::Selection(id(&self.selections,handle)?),
@@ -255,6 +258,7 @@ impl Artwork {
             insert(identity,Shape::Paint { image:paint.base.as_ref().map(|base|base.image.id()) })?;
         }
         for (_,identity,object) in self.objects.iter() { collect_image(&mut images,&object.image)?; insert(identity,Shape::ImageObject { image:object.image.id() })?; }
+        for (_,identity,_) in self.vectors.iter() { insert(identity,Shape::VectorObject)?; }
         for identity in images.keys() { insert(*identity,Shape::Image)?; }
         for (_,identity,_) in self.coverage.iter() {insert(identity,Shape::Coverage)?;}
         for (_,identity,_) in self.effects.iter() {insert(identity,Shape::Effect)?;}

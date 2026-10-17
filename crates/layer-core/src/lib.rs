@@ -1272,7 +1272,7 @@ impl Stroke {
 }
 
 pub use authored::{
-    Affine64, Affine64Error, Image, ImageInterpolation, ImageObject, ImageObjectHandle, PaintBase, PaintBasePolicy, placed_bounds,
+    Affine64, Affine64Error, Image, ImageInterpolation, ImageObject, ImageObjectHandle, VectorHandle, PaintBase, PaintBasePolicy, placed_bounds,
     MAX_NAME_BYTES, MAX_NAME_CHARS, bounded_name,
     Attachment, Artwork, ArtworkCapture, CaptureCheckpoint, Composition, CompositionHandle, CoverageHandle,
     CoverageSource, EffectApplication, EffectHandle,
@@ -1462,6 +1462,7 @@ impl Document {
             return Ok(inverse);
         }
         if edit.presents_same_images(self) {
+            edit.validate_changed_vectors(self)?;
             let mut candidate = self.clone();
             let inverse = candidate.apply_records(edit.clone())?;
             edit.validate_presentation(&candidate)?;
@@ -1470,6 +1471,7 @@ impl Document {
             return Ok(inverse);
         }
         let resources=edit.requires_history_admission(self);
+        edit.validate_changed_vectors(self)?;
         let mut candidate = self.clone();
         let relationships = edit.changes_relationships(self);
         let before_working = self.working.clone();
@@ -1526,6 +1528,7 @@ impl Document {
             Edit::Occurrence(c) => change!(occurrences, Occurrence, c),
             Edit::Paint(c) => change!(paint, Paint, c),
             Edit::ImageObject(c) => change!(objects, ImageObject, c),
+            Edit::Vector(c) => change!(vectors, Vector, c),
             Edit::Coverage(c) => change!(coverage, Coverage, c),
             Edit::Effect(c) => change!(effects, Effect, c),
             Edit::SavedSelection(c) => change!(selections, SavedSelection, c),
@@ -1645,6 +1648,7 @@ impl Document {
             }
         }
         for (_,_,object) in self.artwork.objects.iter() {object.validate().map_err(DocumentError::InvalidArtwork)?;}
+        for (_,_,object) in self.artwork.vectors.iter() {object.validate().map_err(|e|DocumentError::InvalidArtwork(e.into()))?;}
         for (_, _, s) in self.artwork.coverage.iter() {
             extent(s.domain)?;
             s.validate()?;
@@ -1724,6 +1728,7 @@ pub enum Edit {
     Occurrence(RecordChange<Occurrence>),
     Paint(RecordChange<PaintSource>),
     ImageObject(RecordChange<ImageObject>),
+    Vector(RecordChange<authored::vector::VectorObject>),
     Coverage(RecordChange<CoverageSource>),
     Effect(RecordChange<EffectApplication>),
     SavedSelection(RecordChange<SavedSelection>),
@@ -1817,6 +1822,7 @@ impl Edit {
                 }),
             Self::Paint(c) => c.value.is_none() || document.artwork.paint.get(c.handle).is_none() || c.value.as_ref().and_then(|s|s.base.as_ref().map(|b|b.image.id()))!=document.artwork.paint.get(c.handle).and_then(|s|s.base.as_ref().map(|b|b.image.id())),
             Self::ImageObject(c)=>c.value.as_ref().zip(document.artwork.objects.get(c.handle)).is_none_or(|(a,b)|a.image.id()!=b.image.id()),
+            Self::Vector(c)=>c.value.is_none() || document.artwork.vectors.get(c.handle).is_none(),
             Self::Coverage(c) => {
                 c.value.is_none() || document.artwork.coverage.get(c.handle).is_none()
             }
@@ -1841,8 +1847,20 @@ impl Edit {
     fn presents_same_images(&self, document: &Document) -> bool {
         match self {
             Self::ImageObject(c) => c.value.as_ref().zip(document.artwork.objects.get(c.handle)).is_some_and(|(next, current)| next.same_image(current)),
-            Self::Batch(edits) => !edits.is_empty() && edits.iter().all(|edit| matches!(edit, Self::ImageObject(_)) && edit.presents_same_images(document)),
+            Self::Vector(c) => c.value.is_some() && document.artwork.vectors.get(c.handle).is_some(),
+            Self::Batch(edits) => !edits.is_empty() && edits.iter().all(|edit| matches!(edit, Self::ImageObject(_) | Self::Vector(_)) && edit.presents_same_images(document)),
             _ => false,
+        }
+    }
+    fn validate_changed_vectors(&self, before: &Document) -> Result<(), DocumentError> {
+        match self {
+            Self::Vector(c) => match (&c.value, before.artwork.vectors.get(c.handle)) {
+                (Some(next), Some(current)) => next.validate_changed(current).map_err(|e| DocumentError::InvalidArtwork(e.into())),
+                (Some(next), None) => next.validate().map_err(|e| DocumentError::InvalidArtwork(e.into())),
+                _ => Ok(()),
+            },
+            Self::Batch(edits) => edits.iter().try_for_each(|edit| edit.validate_changed_vectors(before)),
+            _ => Ok(()),
         }
     }
     fn validate_presentation(&self, document: &Document) -> Result<(), DocumentError> {
@@ -1873,6 +1891,7 @@ impl Edit {
             },
             Self::Paint(c)=>previous!(paint,Paint,c),
             Self::ImageObject(c)=>previous!(objects,ImageObject,c),
+            Self::Vector(c)=>previous!(vectors,Vector,c),
             Self::Coverage(c)=>previous!(coverage,Coverage,c),
             Self::Effect(c)=>previous!(effects,Effect,c),
             Self::Occurrence(c)=>previous!(occurrences,Occurrence,c),
@@ -1897,6 +1916,7 @@ impl Edit {
                 }
             }
             Self::ImageObject(c)=> {out.record_ids.push(c.id);if let Some(object)=&c.value {out.image(&object.image);}},
+            Self::Vector(c)=> {out.record_ids.push(c.id);if let Some(object)=&c.value {out.vectors.push(object);}},
             Self::Coverage(c) => {
                 out.record_ids.push(c.id);
                 if let Some(s) = &c.value {
@@ -1954,6 +1974,7 @@ pub(crate) struct RootInventory<'a> {
     pub sources: Vec<&'a Arc<color::source::SourceImage>>,
     pub metadata:Vec<&'a PhotoMetadata>,
     pub selections: Vec<&'a Selection>,
+    pub vectors: Vec<&'a authored::vector::VectorObject>,
     pub resources: Vec<&'a Arc<Lut3d>>,
     pub meshes: Vec<&'a Arc<MeshMap>>,
     pub profiles: Vec<&'a color::ColorProfile>,
@@ -1985,6 +2006,7 @@ impl<'a> RootInventory<'a> {
             if let SelectionShape::Pixels(pixels)=&selection.shape {ids.extend(pixels.transfer_chunk_ids());}
         }
         for extension in &self.extensions {ids.extend(extension.resources.keys().copied());}
+        for object in &self.vectors {ids.extend(object.chunks().iter().map(authored::Resource::id));}
         ids
     }
     fn validate_resources(&self)->Result<(),String> {
@@ -2029,6 +2051,13 @@ impl<'a> RootInventory<'a> {
         for (id,(_,data)) in &selections {
             if resources.entries.get(id).is_some_and(|resource|resource.kind!="capy.selection-coverage/1" || resource.data!=*data) {return Err("Conflicting immutable selection resource kind".into());}
         }
+        let mut chunks=BTreeMap::new();
+        for object in &self.vectors {
+            for chunk in object.chunks() {
+                if chunks.insert(chunk.id(),chunk.owner_identity()).is_some_and(|previous|previous!=chunk.owner_identity()) {return Err("Conflicting immutable vector chunk identity".into());}
+            }
+        }
+        if chunks.keys().any(|id|resources.entries.contains_key(id) || selections.contains_key(id)) {return Err("Conflicting immutable vector chunk identity".into());}
         let mut opaque=BTreeMap::new();
         for extension in &self.extensions {
             for (id,resource) in &extension.resources {
@@ -2036,7 +2065,7 @@ impl<'a> RootInventory<'a> {
                 if let Some(previous)=opaque.insert(*id,resource) && previous!=resource {return Err("Conflicting immutable preserved resource identity".into());}
             }
         }
-        if resources.entries.keys().chain(selections.keys()).chain(opaque.keys()).any(|id|self.has_authored_id(*id)) {return Err("Object and resource identities overlap".into());}
+        if resources.entries.keys().chain(selections.keys()).chain(opaque.keys()).chain(chunks.keys()).any(|id|self.has_authored_id(*id)) {return Err("Object and resource identities overlap".into());}
         let mut images=BTreeMap::new();
         for image in &self.images {if images.insert(image.id(),*image).is_some_and(|previous|!previous.identity_matches(image)) {return Err("Conflicting immutable image identity".into());}}
         Ok(())
@@ -2048,6 +2077,7 @@ impl<'a> RootInventory<'a> {
         owners.extend(self.operations.iter().map(|ops|(8,Arc::as_ptr(ops) as usize as u64)));
         owners.extend(self.sources.iter().map(|s|(1,Arc::as_ptr(s) as usize as u64)));
         owners.extend(self.images.iter().map(|image|(10,image.owner_identity() as u64)));
+        owners.extend(self.vectors.iter().flat_map(|o|o.chunks().iter().map(|c|(11,c.owner_identity() as u64))));
         owners.extend(self.resources.iter().filter_map(|r|r.storage().map(|s|(2,s.as_ptr() as usize as u64))));
         owners.extend(self.meshes.iter().map(|m|(3,Arc::as_ptr(m) as usize as u64)));
         owners.extend(self.programs.iter().map(|p|(4,Arc::as_ptr(p) as usize as u64)));
@@ -2073,6 +2103,7 @@ impl<'a> RootInventory<'a> {
             self.paint(s);
         }
         for (_,_,object) in artwork.objects.iter() {self.image(&object.image);}
+        self.vectors.extend(artwork.vectors.iter().map(|(_,_,object)|object));
         for (_, _, s) in artwork.coverage.iter() {
             self.coverage(s);
         }
@@ -2199,6 +2230,7 @@ fn edit_metadata(edit: &Edit) -> usize {
                 .sum()
         }),
         Edit::ImageObject(_)=>0,
+        Edit::Vector(c)=>c.value.as_ref().map_or(0,|o|o.chunks().len().saturating_mul(64)),
         Edit::Output(c) => c.value.as_ref().map_or(0, |o| {
             o.name.len()
                 + o.proof.as_ref().map_or(0, |p| p.name.len())

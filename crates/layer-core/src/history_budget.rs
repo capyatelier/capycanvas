@@ -20,6 +20,8 @@ pub(super) struct Accounting {
     extensions: HashSet<usize>,
     backings: HashSet<u64>,
     opaque_resources: HashSet<usize>,
+    vector_chunks: HashSet<usize>,
+    vector_parts: HashSet<usize>,
 }
 impl Accounting {
     pub fn new(document: &Document) -> Self {
@@ -37,6 +39,7 @@ impl Accounting {
         for resource in roots.resources { result.charge_resource(resource); }
         for mesh in roots.meshes { result.charge_mesh(mesh); }
         for image in roots.images {result.sources.charge_image(image);}
+        for object in roots.vectors {result.vector_chunks.extend(object.chunks().iter().map(|c|c.owner_identity()));}
         for source in roots.sources { result.sources.charge(source); }
         for profile in roots.profiles { result.charge_profile(profile); }
         for program in roots.programs { result.seed_program(program); }
@@ -57,6 +60,7 @@ impl Accounting {
         for mesh in inventory.meshes { bytes=bytes.saturating_add(self.charge_mesh(mesh)); }
         for selection in inventory.selections { bytes=bytes.saturating_add(self.charge_selection(selection)); }
         for image in inventory.images {bytes=bytes.saturating_add(self.sources.charge_image(image));}
+        for object in inventory.vectors {bytes=bytes.saturating_add(self.charge_vector(object));}
         for source in inventory.sources { bytes=bytes.saturating_add(self.sources.charge(source)); }
         for profile in inventory.profiles { bytes=bytes.saturating_add(self.charge_profile(profile)); }
         for program in inventory.programs { bytes=bytes.saturating_add(self.charge_program(program)); }
@@ -132,6 +136,36 @@ impl Accounting {
         let mut bytes=if self.meshes.insert(Arc::as_ptr(mesh) as usize){std::mem::size_of::<MeshMap>()}else{0};
         if self.mesh_arrays.insert(mesh.net.as_ptr() as usize){bytes=bytes.saturating_add(mesh.net.len()*std::mem::size_of::<Point>());}
         for b in &mesh.breakpoints{if self.mesh_arrays.insert(b.as_ptr() as usize){bytes=bytes.saturating_add(b.len()*std::mem::size_of::<f32>());}}
+        bytes
+    }
+    pub(super) fn charge_vector(&mut self, object: &authored::vector::VectorObject) -> usize {
+        use authored::vector::{PaintEntry, Record, Anchor, Subpath};
+        let mut bytes = 0usize;
+        for chunk in object.chunks() {
+            if !self.vector_chunks.insert(chunk.owner_identity()) { continue; }
+            bytes = bytes.saturating_add(128 + chunk.records().len() * std::mem::size_of::<Record>());
+            for record in chunk.records() {
+                match record {
+                    Record::Path(path) => {
+                        if self.vector_parts.insert(Arc::as_ptr(&path.geometry) as usize) {
+                            bytes = bytes.saturating_add(64 + path.geometry.subpaths().len() * std::mem::size_of::<Subpath>());
+                            for run in path.geometry.subpaths().iter().flat_map(|s| s.runs()) {
+                                if self.vector_parts.insert(run.as_ptr() as usize) { bytes = bytes.saturating_add(run.len() * std::mem::size_of::<Anchor>()); }
+                            }
+                        }
+                        if self.vector_parts.insert(Arc::as_ptr(&path.style) as usize) {
+                            bytes = bytes.saturating_add(path.style.entries.iter().map(|e| std::mem::size_of::<PaintEntry>() + match e {
+                                PaintEntry::Stroke(s) => s.profile.as_ref().map_or(0, |p| p.knots().len() * 32),
+                                PaintEntry::Opaque(o) => o.properties.len(),
+                                PaintEntry::Fill(_) => 0,
+                            }).sum::<usize>());
+                        }
+                    }
+                    Record::Opaque(opaque) => bytes = bytes.saturating_add(opaque.properties.len()),
+                    Record::End => {}
+                }
+            }
+        }
         bytes
     }
     pub(super) fn charge_selection(&mut self, selection: &Selection) -> usize {

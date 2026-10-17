@@ -1011,7 +1011,7 @@ impl Document {
 
     pub(crate) fn removal_edits(&self, ids: &BTreeSet<OccurrenceHandle>) -> Result<Vec<Edit>, DocumentError> {
         let mut paints = BTreeSet::new();
-        let mut objects=BTreeSet::new();
+        let mut objects=BTreeSet::new();let mut vectors=BTreeSet::new();
         let mut coverage = BTreeSet::new();
         let mut stacks = BTreeSet::new();
         let mut effects = BTreeSet::new();
@@ -1023,6 +1023,7 @@ impl Document {
                     paints.insert(h);
                 }
                 OccurrenceContent::Objects(h)=>{objects.insert(h);},
+                OccurrenceContent::Vector(h)=>{vectors.insert(h);},
                 OccurrenceContent::Stack(h) => {
                     stacks.insert(h);
                 }
@@ -1044,6 +1045,7 @@ impl Document {
                     paints.remove(&h);
                 }
                 OccurrenceContent::Objects(h)=>{objects.remove(&h);},
+                OccurrenceContent::Vector(h)=>{vectors.remove(&h);},
                 OccurrenceContent::Stack(h) => {
                     stacks.remove(&h);
                 }
@@ -1066,6 +1068,7 @@ impl Document {
             edits.push(Edit::Paint(RecordChange::remove(&self.artwork.paint, h)?));
         }
         for h in objects {edits.push(Edit::ImageObject(RecordChange::remove(&self.artwork.objects,h)?));}
+        for h in vectors {edits.push(Edit::Vector(RecordChange::remove(&self.artwork.vectors,h)?));}
         for h in coverage {
             edits.push(Edit::Coverage(RecordChange::remove(&self.artwork.coverage, h)?));
         }

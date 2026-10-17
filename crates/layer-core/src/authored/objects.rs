@@ -269,20 +269,33 @@ impl Document {
     }
     pub fn create_object_layer_edit(&self,name:impl Into<Arc<str>>,object:ImageObject,parent:Option<OccurrenceHandle>,at:usize)->Result<(OccurrenceHandle,Edit),DocumentError> {
         object.validate().map_err(DocumentError::InvalidArtwork)?;
+        let object=RecordChange::insert(&self.artwork.objects,object);
+        self.content_layer_edit(name,OccurrenceContent::Objects(object.handle),Edit::ImageObject(object),parent,at)
+    }
+    pub fn create_vector_layer_edit(&self,name:impl Into<Arc<str>>,object:super::vector::VectorObject,parent:Option<OccurrenceHandle>,at:usize)->Result<(OccurrenceHandle,Edit),DocumentError> {
+        object.validate().map_err(|e|DocumentError::InvalidArtwork(e.into()))?;
+        let object=RecordChange::insert(&self.artwork.vectors,object);
+        self.content_layer_edit(name,OccurrenceContent::Vector(object.handle),Edit::Vector(object),parent,at)
+    }
+    fn content_layer_edit(&self,name:impl Into<Arc<str>>,content:OccurrenceContent,record:Edit,parent:Option<OccurrenceHandle>,at:usize)->Result<(OccurrenceHandle,Edit),DocumentError> {
         let invalid=DocumentError::InvalidLayerOperation;
         let stack=match parent {
             Some(h)=>{if self.is_locked(h) {return Err(DocumentError::ProtectedOccurrence(h));} match self.scene().occurrence(h).map(|o|&o.content) {Some(OccurrenceContent::Stack(s))=>*s,_=>return Err(invalid("Choose a group"))}},
             None=>self.composition().result,
         };
         let mut entries=self.artwork.stacks.get(stack).ok_or(invalid("Missing destination stack"))?.clone();
-        let object=RecordChange::insert(&self.artwork.objects,object);
         let (at,attachment)=self.content_insertion(parent,at.min(entries.entries.len()));
-        let mut occurrence=Occurrence::new(OccurrenceContent::Objects(object.handle),name);occurrence.attachment=attachment;
+        let mut occurrence=Occurrence::new(content,name);occurrence.attachment=attachment;
         let occurrence=RecordChange::insert(&self.artwork.occurrences,occurrence);let handle=occurrence.handle;
         entries.entries.insert(at,handle);
-        let edit=Edit::Batch(vec![Edit::ImageObject(object),Edit::Occurrence(occurrence),Edit::Stack(RecordChange::replace(&self.artwork.stacks,stack,Some(entries))?)]);
+        let edit=Edit::Batch(vec![record,Edit::Occurrence(occurrence),Edit::Stack(RecordChange::replace(&self.artwork.stacks,stack,Some(entries))?)]);
         let mut candidate=self.clone();candidate.apply(edit.clone())?;
         Ok((handle,edit))
+    }
+    pub fn vector_object_edit(&self,layer:OccurrenceHandle,object:super::vector::VectorObject)->Result<Edit,DocumentError> {
+        if self.is_locked(layer) {return Err(DocumentError::ProtectedOccurrence(layer));}
+        let handle=self.scene().vector_handle(layer).ok_or(DocumentError::InvalidLayerOperation("Choose a vector layer"))?;
+        Ok(Edit::Vector(RecordChange::replace(&self.artwork.vectors,handle,Some(object))?))
     }
     pub fn set_image_object_affine_edit(&self,object:ImageObjectHandle,affine:Affine64)->Result<Edit,DocumentError> {
         let owner=self.scene().object_owner(object).ok_or(DocumentError::InvalidLayerOperation("Choose an image object"))?;

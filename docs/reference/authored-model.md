@@ -211,6 +211,17 @@ occurrence and object IDs while sharing immutable images. Foreign layer import
 assigns fresh image, tile and profile IDs across the dependency batch while
 preserving shared payloads. Object-only documents need no paint source.
 
+A vector layer is an Object layer whose occurrence refers to one `VectorObject`
+([`vector.rs`](../../crates/layer-core/src/authored/vector.rs)). It holds the
+layer's item records in immutable chunks of at most 64, each a resource that
+history, saves and duplicates share. Paths keep their geometry and style behind
+`Arc`, and a path longer than 256 anchors keeps them in runs of 256, so an edit
+copies only the chunk, path and run it changes. Item IDs are random nonzero
+`u64` values local to the layer, kept through edits and never reused. A vector
+edit that replaces an existing object validates only its new chunks and skips
+resource-closure admission. The wire form is in
+[vector records](capy-package.md#vector-records).
+
 Shared `Document` planners create one layer per imported source and replace
 placements through atomic reversible record edits. Ordinary layer planners own
 delete, duplicate, reorder, visibility and rename. Layer selection determines
