@@ -99,6 +99,7 @@ bool WorkspaceBubbles::Impl::join(PointerRoutedEventArgs const& e){
     auto c=contact;if(!c)return false;
     auto p=e.GetCurrentPoint(workspace);auto at=p.Position();
     if(p.Properties().IsCanceled()){cancel();e.Handled(true);return true;}
+    if(c->mode==L"native"&&c->nativeDrags&&kind(hit(*c->record,at))==L"card")return false;
     if(c->fingers.contains(p.PointerId())){if(c->paired)e.Handled(true);return c->paired;}
     if(c->device!=NativeInput::PointerDeviceType::Touch||p.PointerDeviceType()!=c->device||distance(at,c->record->center)>num(c->record->packet,L"reach")+90)return false;
     std::vector<weak_ref<UIElement>> path;

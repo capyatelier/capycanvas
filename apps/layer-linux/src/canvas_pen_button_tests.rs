@@ -224,6 +224,64 @@ fn native_canvas_touch_taps() {
 }
 
 #[test]
+#[ignore = "isolated native-input.js --native-test=native_canvas_quick_pinch_and_held_history --tablet"]
+fn native_canvas_quick_pinch_and_held_history() {
+    let mut d = Driver::new("art.capycanvas.CanvasQuickPinchHeldHistory");
+    let area = d.w.resolved().work_area;
+    let center = [area.x + area.width * 0.5, area.y + area.height * 0.5];
+    let pinch = |d: &mut Driver, outward: bool| {
+        let (from, to) = if outward { (50., 100.) } else { (100., 50.) };
+        d.input.perform(serde_json::json!([
+            {"touch":"down","slot":0,"point":[center[0] - from, center[1]]},
+            {"touch":"down","slot":1,"point":[center[0] + from, center[1]]},
+            {"wait_ms":60},
+            {"touch":"move","slot":0,"point":[center[0] - to, center[1]]},
+            {"touch":"move","slot":1,"point":[center[0] + to, center[1]]},
+            {"touch":"up","slot":0}, {"touch":"up","slot":1}
+        ]));
+    };
+    let count = |d: &Driver| state(&d.w).layers.len();
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        d.w.dispatch(UiAction::SetZoom { zoom: 2. });
+        d.w.dispatch(UiAction::SetRotation { rotation: 0.7 });
+        pump(150);
+        let before = state(&d.w).camera.view();
+        let revision = ui_session(&d.w).engine().document().revision;
+        pinch(&mut d, false);
+        let mut fitted = state(&d.w).camera;
+        assert_eq!(fitted.rotation, 0., "{theme:?}: quick pinch straightens");
+        fitted.fit(ui_session(&d.w).engine().document().composition().size);
+        assert_eq!(state(&d.w).camera.view(), fitted.view(), "{theme:?}: quick pinch fits");
+        pinch(&mut d, true);
+        for (actual, expected) in state(&d.w).camera.view().document_to_surface.into_iter().zip(before.document_to_surface) {
+            assert!((actual - expected).abs() < 0.001, "{theme:?}: reverse pinch restores {actual} != {expected}");
+        }
+        assert_eq!(ui_session(&d.w).engine().document().revision, revision);
+        let base = count(&d);
+        for _ in 0..3 { d.w.dispatch(UiAction::Invoke { command: CommandId::AddLayer }); }
+        pump(150);
+        assert_eq!(count(&d), base + 3);
+        for (fingers, expected) in [(2, base), (3, base + 3)] {
+            let down: Vec<_> = (0..fingers).map(|slot| serde_json::json!({
+                "touch":"down", "slot":slot, "point":[center[0] + (slot as f32 - 1.) * 70., center[1]]
+            })).collect();
+            d.input.perform(serde_json::Value::Array(down));
+            pump(1000);
+            assert_eq!(count(&d), expected, "{theme:?}: {fingers} held fingers repeat history before release");
+            let revision = ui_session(&d.w).engine().document().revision;
+            let up: Vec<_> = (0..fingers).map(|slot| serde_json::json!({"touch":"up","slot":slot})).collect();
+            d.input.perform(serde_json::Value::Array(up));
+            pump(200);
+            assert_eq!(ui_session(&d.w).engine().document().revision, revision, "{theme:?}: release adds no tap");
+        }
+        for _ in 0..3 { d.w.dispatch(UiAction::Invoke { command: CommandId::Undo }); }
+        pump(100);
+    }
+    d.finish();
+}
+
+#[test]
 #[ignore = "isolated native-input.js --native-test=native_three_finger_scrub --tablet"]
 fn native_three_finger_scrub() {
     let mut d = Driver::new("art.capycanvas.ThreeFingerScrub");

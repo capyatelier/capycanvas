@@ -64,6 +64,7 @@ export function createBubbleInput({app, workspace, records, send, wake, menu, di
     suppressClick=false;
     if(e.button!==0||e.target.closest?.('[popover]:popover-open,dialog[open],.popover'))return;
     const p=point(e);
+    if(contact?.mode==='native'&&native(e))return;
     if(contact&&e.pointerType==='touch') {
       const c=contact;
       if(distance(local(c.r,p),[0,0])>c.r.packet.reach+90)return;

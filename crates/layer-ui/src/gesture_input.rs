@@ -25,7 +25,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let indirect = matches!(input, UiInput::TrackpadTouch { .. });
                 if phase == ContactPhase::Down && !self.interaction.gestures.active() {
                     self.interaction.gestures.camera = Some(self.state.camera.clone());
-                    self.interaction.gestures.indirect = indirect;
                 }
                 let eligible = !self.workspace_transition
                     && !self.workspace_read_only
@@ -38,7 +37,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && (indirect || phase != ContactPhase::Down || !self.object_touch_hit(position));
                 let policy = self.interaction.touch_policy;
                 self.interaction.gestures.contact(id, phase, position, time_ns, policy, eligible)
-                    .filter(|gesture| !indirect || matches!(gesture, TouchGesture::Scrub))
+                    .filter(|gesture| !indirect || matches!(gesture, TouchGesture::Scrub | TouchGesture::QuickPinch { .. }))
             }
             UiInput::Pointer { phase: ContactPhase::Down, .. } | UiInput::ColorPickerHold { .. } => {
                 self.interaction.gestures.fail();

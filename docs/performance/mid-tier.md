@@ -68,6 +68,38 @@ timestamps agree exactly with the independent latency ring. All per-contact
 values, geometry, warnings, excluded setup attempts and provenance remain in
 `artifacts/nav-fix-qualification-20261024/mid-factory240/comparison.json`.
 
+### Touch gesture pinch diagnostic
+
+Measured 2026-10-25 on Wacom MovinkPad 11 using the private unminified
+`benchmark` APK, optimized Rust `release` profile, 6000 × 4000 reference photo
+at Fit, light theme and Low glass. Each condition primes once and records
+three five-second native two-finger pinches. Density is 240, font scale 1 and
+thermal status 0. The active display remains **60 Hz**; these results do not
+qualify the 90 Hz tier or establish a matched regression comparison.
+
+| Navigator | Canvas presents during each complete contact | Full-contact presents/s | Full-contact gap p99, ms | First canvas present after contact start, ms | Longest gap including contact edges, ms |
+| --- | --- | --- | --- | --- | --- |
+| Closed | 212 / 221 / 223 | 42.36 / 44.12 / 44.44 | 66.99 / 66.95 / 50.23 | 21.63 / 76.55 / 68.17 | 117.25 / 100.36 / 100.49 |
+| Open | 242 / 249 / 250 | 48.21 / 49.69 / 49.87 | 33.53 / 33.70 / 33.55 | 2.79 / 77.89 / 79.28 | 117.23 / 77.89 / 79.28 |
+
+Actual SurfaceFlinger canvas presents are counted only inside each contact's
+boot-clock start/end interval, including any previously queued frame presented
+there. The first-present onset is consequently not an input-to-visible latency
+measurement. Contact durations are 5.004–5.018 s closed and 5.011–5.019 s open.
+The collector's submission-attributed first-to-last rates are 42.42 / 44.63 /
+44.88 and 47.92 / 50.43 / 50.63; their gap p99 values are 66.99 / 66.99 / 66.98
+and 66.97 / 50.26 / 50.24 ms. These include presentations 24–42 ms after lift;
+full-contact accounting above retains the onset and excludes those tails.
+
+Evidence is retained in `artifacts/touch-performance-analysis/`, including raw
+run JSON, exact latch/display-present timestamps, extraction SQL, trace hashes
+and processor warnings. Vendor systrace parse failures remain; the presentation
+join uses FrameTimeline and SurfaceView buffer numbers. The build log records
+optimized `release`, but measured APK hashes and a build-time dirty-source
+snapshot were not retained before build scratch cleanup. The build uses `d141f10ba` plus the uncommitted gesture candidate; the
+separately captured analysis-time source manifest cannot prove the exact measured
+tree. Current-revision 90 Hz qualification remains unmeasured.
+
 ### Brush and pending-filter controls
 
 G-Pen 1536 px on the 24 MP photo at Fit, Navigator closed, pressure 1 and
@@ -177,9 +209,9 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
 | Tool cursor hover, with and without brush size | 90 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
 | Pan: Hand tool, one or two fingers | 90 | **Not met.** Two-finger pan 77.95 fps median, worst p99 22.345 ms, 24 MP photo, Navigator open | [Navigation presentation](#navigation-presentation), 2026-10-25 |
-| Pinch zoom | 90 | **Not met.** 73.63 fps median, 24 MP photo, Navigator open; default paper 77.76 fps | [Navigation presentation](#navigation-presentation), 2026-10-25 |
+| Pinch zoom | 90 | **Touch gesture revision unqualified (2026-10-25).** 60 Hz diagnostic: 42.36–44.44 presents/s closed, 48.21–49.87 open. Earlier: **Not met.** 73.63 fps median, 24 MP photo, Navigator open; default paper 77.76 fps | [Touch gesture pinch diagnostic](#touch-gesture-pinch-diagnostic); [earlier navigation presentation](#navigation-presentation), 2026-10-25 |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 90 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
-| Two-finger rotate | 90 | **Not met.** 70.39 fps median, 24 MP photo, Navigator open; default paper 86.08 fps with gap p99 22.332 ms | [Navigation presentation](#navigation-presentation), 2026-10-25 |
+| Two-finger rotate | 90 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** 70.39 fps median, 24 MP photo, Navigator open; default paper 86.08 fps with gap p99 22.332 ms | [Navigation presentation](#navigation-presentation), 2026-10-25 |
 | Rotation snapping: two fingers and Rotate View | 90 | **Unqualified diagnostic:** 59.698–59.706 total presents/s at 60 Hz, including stationary snap holds; moving-only rate unmeasured | [Rotation snapping](#rotation-snapping), 2026-10-24 |
 | Smooth Zoom tool, left/right | 90 | **Misses:** 50.20–50.33 presented fps, p99 67.00–83.73 ms, 24 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/mid/` |
 | Smooth Zoom tool, up/down | 90 | **Misses:** 50.03–50.28 presented fps, p99 66.99–117.22 ms, 24 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/mid/` |
@@ -212,13 +244,13 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation with proof or tone guide shown | 90 | | |
 | Gradient drag | 90 | | |
 | Figure or ruler drag | 90 | | |
-| Layer opacity scrub | 90 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
+| Layer opacity scrub | 90 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 90 | **Not met.** Android mouse-body drag: 58.8–59.6 window frames/s, interval p99 up to 33.49 ms, 24 MP photo, thermal 0, 60 Hz panel | `ded8453bf` + layer input port, release-profile benchmark; `artifacts/layer-input-port/android/motion-summary.json`, 2026-10-10 |
-| Layer row swipe | 90 | **Current handle fade unmeasured.** Earlier Android left reveal: 57.6–58.8 moving window frames/s, interval p99 up to 33.50 ms, 24 MP photo, thermal 0, 60 Hz panel; 90 Hz not met | `ded8453bf` + layer input port, 2026-10-10; [current measurements on other hardware](top-tier.md#layer-handle-fade), 2026-10-21–22 |
+| Layer row swipe | 90 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Current handle fade unmeasured.** Earlier Android left reveal: 57.6–58.8 moving window frames/s, interval p99 up to 33.50 ms, 24 MP photo, thermal 0, 60 Hz panel; 90 Hz not met | `ded8453bf` + layer input port, 2026-10-10; [current measurements on other hardware](top-tier.md#layer-handle-fade), 2026-10-21–22 |
 | Workspace-manager row swipe and reorder | 90 | Unmeasured on reference hardware; functional input checks do not qualify moving-frame timing | [Workspace manager](../ui/default-workspaces.md#workspace-manager) |
-| Layer thumbnail selection animation | 90 | **Not met.** 59.705–59.706 window frames/s; p99 gap 16.80–16.91 ms on the device's 60 Hz panel | Isolated outline; measurement below, 2026-10-05 |
+| Layer thumbnail selection animation | 90 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** 59.705–59.706 window frames/s; p99 gap 16.80–16.91 ms on the device's 60 Hz panel | Isolated outline; measurement below, 2026-10-05 |
 | Attached filter drag inside a clipping run | 90 | Unmeasured: both attempts timed out waiting for the 24 MP drawing's shaders before motion | `7f69a9356` + clipping-filter changes, benchmark APK; `artifacts/clipping-filter/mid-performance{,-retry}.log`, 2026-10-04 |
-| Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android relationship overlay 58.8–59.4 fps, interval p99 16.8–16.9 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | Android `00b2d6e73` + native port, 2026-10-04; Web `1d251ece`, 2026-09-27; details below |
+| Layer swipe right: alpha lock (24 MP photo) | 90 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** Android relationship overlay 58.8–59.4 fps, interval p99 16.8–16.9 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | Android `00b2d6e73` + native port, 2026-10-04; Web `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |
 | Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms; continuous-tab revisions unqualified on this reference device | `cbfad9e5`, 2026-09-26; [Web collector limits](#web-navigator-resize-diagnostic), 2026-10-19; [panel-tab compositing](top-tier.md#panel-tab-compositing), 2026-10-25 |

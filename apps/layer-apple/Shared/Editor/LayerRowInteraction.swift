@@ -74,7 +74,16 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
 
 /// Native pickup and measured feedback only. Rust owns context selection,
 /// menu capabilities, hierarchy edits and the single completed drop transaction.
-@MainActor final class LayerRowInteraction: ObservableObject, NativeReorderModel {
+@MainActor final class LayerRowInteraction: ObservableObject, NativeLayerTouchModel {
+    var layerTouchModel: (any NativeLayerTouchModel)? { self }
+    private static var nextTouchSurface: UInt64 = 0
+    let touchSurface: UInt64
+    init() { Self.nextTouchSurface &+= 1; touchSurface = Self.nextTouchSurface }
+    func touchRow(at point: CGPoint) -> UInt64? { row(at: point).map { $0["id"].uint } }
+    func layerTouch(_ id: UInt64, phase: String, point: CGPoint, row: UInt64, timestamp: TimeInterval, scale: CGFloat) {
+        store?.input(["type": "layer_touch", "surface": touchSurface, "id": id, "phase": phase,
+            "position": [point.x * scale, point.y * scale], "row": row, "time_ns": UInt64(max(0, timestamp) * 1_000_000_000)])
+    }
     struct DropHit: Equatable {
         let target: UInt64
         let fraction: Double

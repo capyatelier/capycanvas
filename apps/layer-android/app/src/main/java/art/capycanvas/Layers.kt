@@ -69,6 +69,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -128,6 +130,8 @@ internal class LayerSwipe {
         }
     }
     val bounds = remember { mutableMapOf<Long, Rect>() }
+    val touchSurface = remember { layerTouchSurfaces.incrementAndGet() }
+    var listOrigin by remember { mutableStateOf(Offset.Zero) }
     val thumbnails = remember { mutableStateMapOf<Long, LayerThumbnail>() }
     var dragGeneration by remember { mutableIntStateOf(0) }
     var filterPoint by remember { mutableStateOf(Offset.Zero) }
@@ -223,7 +227,11 @@ internal class LayerSwipe {
                 }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                LazyColumn(Modifier.fillMaxSize().mouseScrollbar(list).testTag("layer-rows"),state=list) {
+                LazyColumn(Modifier.fillMaxSize().mouseScrollbar(list).testTag("layer-rows")
+                    .onGloballyPositioned { listOrigin = it.boundsInRoot().topLeft }
+                    .layerTouchInput(host,touchSurface,epoch,{listOrigin},bounds) {
+                        host.layerSwipe.close();dragGeneration++;drag=null;menuGeneration++;menu=null;menuRequest=null;contactHeld=false
+                    },state=list) {
                     for (layer in layers) {
                     item(key=layer.getLong("id")) {
                         val id=layer.getLong("id")
@@ -265,6 +273,19 @@ internal class LayerSwipe {
                     val point = panelOrigin+Offset(0f,40f)
                     if (active != null) contextMenu(active,active.getBoolean("mask_selected"),point,overflow)
                     else { menuGeneration++; menuRequest = null; menu = obj("title" to copy.getString("actions"), "sections" to JSONArray().put(JSONArray(overflow.map { it.getJSONObject("item") }))); menuPoint = point - panelOrigin }
+                }
+            }
+        }
+        if (!view.isNull("opacity_popup") && view.optLong("opacity_surface") == touchSurface && active != null) {
+            val target = view.getLong("opacity_popup")
+            Popup(alignment=Alignment.Center,properties=PopupProperties(focusable=true),
+                onDismissRequest={host.layer(obj("op" to "close_opacity"))}) {
+                Surface(color=colors.panel,shadowElevation=8.dp,shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp)) {
+                    NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity"),
+                        active.number("opacity"),host.catalog.getJSONObject("layer_opacity"),
+                        Modifier.width(240.dp).padding(12.dp).testTag("layer-gesture-opacity"),enabled=controls.getBoolean("opacity")) {
+                        host.dispatch(obj("type" to "set_layer_opacity","id" to target,"opacity" to it))
+                    }
                 }
             }
         }

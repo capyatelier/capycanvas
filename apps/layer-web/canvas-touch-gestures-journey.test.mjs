@@ -33,6 +33,14 @@ export async function checkCanvasTouchGestures({call,evaluate,settle}) {
     await settle();
   };
   const layerIds=async()=>(await state()).layers.map(layer=>layer.id);
+  const releaseHold=async()=>{
+    await evaluate(`window.__historyRelease=[];window.__historyReleaseCapture=event=>{if(event.pointerType==='touch')window.__historyReleaseBefore=layerApp.state().layers.map(layer=>String(layer.id));};window.__historyReleaseBubble=event=>{if(event.pointerType==='touch')__historyRelease.push({before:__historyReleaseBefore,after:layerApp.state().layers.map(layer=>String(layer.id))});};layerApp.canvas.addEventListener('pointerup',__historyReleaseCapture,true);layerApp.canvas.addEventListener('pointerup',__historyReleaseBubble)`);
+    await touch('touchEnd');
+    const releases=await evaluate(`(()=>{layerApp.canvas.removeEventListener('pointerup',__historyReleaseCapture,true);layerApp.canvas.removeEventListener('pointerup',__historyReleaseBubble);return __historyRelease})()`);
+    assert.ok(releases.length>=2,'the browser delivers real touch releases');
+    for(const release of releases)assert.deepEqual(release.after,release.before,'releasing a history hold does not add a tap');
+    await settle();
+  };
   for(const theme of ['light','dark']) {
     await send({type:'set_theme',theme});
     await invoke('reset_view');
@@ -68,10 +76,8 @@ export async function checkCanvasTouchGestures({call,evaluate,settle}) {
     const undone=await layerIds();
     assert.ok(undone.length<=complete.length-2,`${theme}: stationary two-finger hold repeats Undo before lift`);
     assert.ok(undone.length>=complete.length-8,'hold does not exhaust the history fixture');
-    await touch('touchEnd');
-    await settle();
+    await releaseHold();
     const released=await layerIds();
-    assert.deepEqual(released,undone,'releasing a history hold does not add a tap');
     await pause(350);
     assert.deepEqual(await layerIds(),released,'Undo repeat stops after release');
     await expectCamera(view,'history hold preserves camera');
@@ -79,8 +85,7 @@ export async function checkCanvasTouchGestures({call,evaluate,settle}) {
     await touch('touchStart',points(3));
     await pause(760);
     assert.ok((await layerIds()).length>=released.length+2,`${theme}: stationary three-finger hold repeats Redo before lift`);
-    await touch('touchEnd');
-    await settle();
+    await releaseHold();
     const redone=await layerIds();
     await pause(350);
     assert.deepEqual(await layerIds(),redone,'Redo repeat stops after release');

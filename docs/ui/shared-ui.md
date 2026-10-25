@@ -623,6 +623,28 @@ target. Shift selects a range of visible rows. Collapsing a folder replaces
 concealed checks with the folder row. Undo and
 redo restore the checked set and reveal its rows.
 
+Layer lists use the same touch rules in full panels and simple tool bubbles.
+One-finger right swipes keep the row's published action: Alpha Lock for paint
+layers and Pass Through for groups. Two fingers swiping right on the same row
+toggle its checked selection without changing Alpha Lock or the painting target.
+The gesture remains available when the selection checkbox is hidden.
+
+A two-finger tap on a row opens that layer's opacity editor. Holding both fingers
+loads its painted content into the selection through the existing thumbnail
+coverage command. Pinching two rows together merges the inclusive range, including
+contained groups, in one Undo step. Locked layers, hidden range roots, saved
+selections and incomplete clipping or effect dependencies retain the shared merge
+refusals; a gesture cannot bypass them.
+
+Hosts forward list identity, stable contact IDs, row hits, physical positions and
+native timestamps through `UiInput::LayerTouch`. A second contact retires native
+single-contact pickup, menus and swipes. Shared Rust recognizes the gesture and
+uses the frame clock for holds. Cancellation, focus loss, document changes and
+list removal retire contacts. `LayersView::opacity_popup` and `opacity_surface`
+identify the editor's layer and originating list, so retained copies do not open
+duplicate editors. Bubble movement leaves contacts over native layer controls
+with their list.
+
 The sole selected editing reference uses the lighthouse icon for paint layers
 and groups, with or without a mask. Reference rows keep the lighthouse when
 unselected. Multiple checked rows and checked rows outside the editing target

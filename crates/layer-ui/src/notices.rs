@@ -516,7 +516,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn offer_rasterizing_merge(&mut self, kind: layer_core::MergeKind, names: Vec<std::sync::Arc<str>>) {
         let command = match kind {
-            layer_core::MergeKind::Down => CommandId::MergeDown,
+            layer_core::MergeKind::Down | layer_core::MergeKind::Range { .. } => CommandId::MergeDown,
             layer_core::MergeKind::Group => CommandId::MergeGroup,
             layer_core::MergeKind::Visible => CommandId::MergeVisible,
             layer_core::MergeKind::Flatten => CommandId::FlattenImage,

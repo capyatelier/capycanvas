@@ -49,6 +49,8 @@ pub use tool_slots::{ToolSlotId, ToolVariant, ToolSlotMemory};
 use tool_slots::ToolControlGroup;
 #[path = "gesture_input.rs"]
 mod gesture_input;
+#[path = "layer_gestures.rs"]
+pub(super) mod layer_gestures;
 #[path = "source_edit.rs"]
 pub(crate) mod source_edit;
 #[path = "document_color_edit.rs"]
@@ -1139,6 +1141,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
     fn route_input(&mut self, mut input: UiInput) -> Result<InputReply, String> {
+        if matches!(input, UiInput::LayerTouch { .. }) {
+            return self.layer_touch_input(input);
+        }
+        if matches!(input, UiInput::Blur) { self.layer_interaction.touches = Default::default(); }
         if let UiInput::Pointer {id,kind,phase,position,..}=&mut input
             && !position.iter().all(|v|v.is_finite()) {
             let previous=self.interaction.pointer.filter(|p|p.id==*id && p.kind==*kind).map(|p|p.position)
@@ -1207,6 +1213,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 reply.change = self.changed(if preview { regions::COLOR_PREVIEW } else { 0 }, true);
             }
             UiInput::ColorPickerHold { .. } => (),
+            UiInput::LayerTouch { .. } => unreachable!(),
             UiInput::Chrome {
                 event,
                 facts,
@@ -4710,6 +4717,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.input_ui_pending() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
             || self.interaction.axes.active()
             || self.touch_repeat_pending()
+            || self.layer_interaction.touches.pending()
             || self.paper_preview.active()
             || (!self.rendering_suspended && self.papers.pending.as_ref().is_some_and(|pending| pending.image.is_some()))
             || self.engine.wants_continuous_frames()
@@ -4836,6 +4844,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         changed |= std::mem::take(&mut self.interaction.hold_regions);
         changed |= self.advance_axes(now_ns)?;
         changed |= self.advance_touch_gestures(now_ns)?;
+        changed |= self.advance_layer_touches(now_ns)?;
         let tonal_changed = std::mem::take(&mut self.tonal_tools.changed)
             | std::mem::take(&mut self.selection_masks.refine_changed);
         if tonal_changed {self.refresh_tools();changed |= regions::DOCUMENT | regions::BRUSH | regions::COMMANDS;}
@@ -6329,6 +6338,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_id: l.mask.as_ref().map(|m| layer_core::authored::SourceTarget::Coverage(m.source).wire_id()),
         }};
         self.state.layer_tools.editing_layer = doc.working.occurrence.filter(|id| doc.scene().occurrence(*id).is_some()).map(layer_state);
+        if self.state.layer_tools.opacity_popup.is_some_and(|id| self.state.layer_tools.editing_layer.as_ref().is_none_or(|layer| layer.id != id)) {
+            self.state.layer_tools.opacity_popup = None;
+        }
         self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting, &self.papers, paths.as_ref(), self.localization());
         self.state.layer_tools.controls = doc.working.occurrence.and_then(|id| doc.scene().occurrence(id).map(|l| art_layers::LayerControls::for_layer(doc, id, l))).unwrap_or_default();
         self.state.layers = doc.ordered_layers().iter().copied().filter(|id| !self.layer_interaction.hidden_by_group(doc, *id)).map(layer_state).collect();

@@ -224,6 +224,29 @@ void LayersView::refresh(){
             [apply,captured](double value){apply(value,*captured?L"move":L"");},opacityBindings,nullptr,true,L"layer-opacity",true,presentation));
     }
     opacityGate.IsEnabled(flag(capabilities,L"opacity"));for(auto const& bind:opacityBindings)bind();
+    bool opacityRequested=num(view(),L"opacity_popup",-1)>=0
+        &&num(view(),L"opacity_surface",-1)==double(reinterpret_cast<uintptr_t>(get_abi(root)));
+    if(opacityRequested&&(!opacityPopup||opacityPopupKey!=nextKey)){
+        if(opacityPopup){auto previous=opacityPopup;opacityPopup=nullptr;previous.Hide();}
+        opacityPopupBindings.clear();opacityPopupKey=nextKey;
+        auto weak=weak_from_this();auto generation=epoch;
+        auto content=number(data,data->caption(L"layers",L"opacity"),object(data->catalog,L"layer_opacity"),
+            [weak]{if(auto self=weak.lock())return num(self->editing(),L"opacity",1);return 1.;},
+            [weak,generation,activeId](double value){if(auto self=weak.lock();self&&epochOf(self->data)==generation&&!self->data->updating
+                &&num(self->view(),L"opacity_popup",-1)==activeId){
+                self->data->dispatchDocument(O({{L"type",S(L"set_layer_opacity")},{L"id",N(activeId)},{L"opacity",N(value)}}),generation);
+            }},opacityPopupBindings,nullptr,false,L"layer-gesture-opacity");
+        content.Width(240);opacityPopup=Flyout();opacityPopup.Content(content);TrackPopup(opacityPopup,data);
+        auto opened=make_weak(opacityPopup);
+        opacityPopup.Closed([weak,opened,generation](auto&&,auto&&){if(auto self=weak.lock();self&&self->opacityPopup==opened.get()){
+            self->opacityPopup=nullptr;self->opacityPopupBindings.clear();
+            if(epochOf(self->data)==generation)self->data->dispatchDocument(O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"close_opacity")}})}}),generation);
+        }});
+        FrameworkElement anchor=root;
+        for(auto const& [element,row]:rows)if(row->id==activeId){anchor=row->root;break;}
+        opacityPopup.ShowAt(anchor);
+    }else if(!opacityRequested&&opacityPopup){auto previous=opacityPopup;opacityPopup=nullptr;opacityPopupBindings.clear();previous.Hide();}
+    for(auto const& bind:opacityPopupBindings)bind();
     for(auto const& bind:controls)bind(active,capabilities);
     auto paper=object(view(),L"add_paper");addPaper.Visibility(paper.Size()?Visibility::Visible:Visibility::Collapsed);
     auto nextPaperKey=data->theme()+paper.Stringify();

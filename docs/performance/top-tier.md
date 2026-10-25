@@ -128,9 +128,9 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Startup and first-use shader preparation | [Latency limits](responsiveness.md) | Unmeasured with required-only startup on this reference device | [Apple diagnostic](responsiveness.md#demand-driven-startup); no tier qualification |
 | Tool cursor hover, with and without brush size | 120 | Renderer 119.3–119.6 submissions/s; submission interval p99 15.0–15.6 ms. Presentation unqualified. | [Tool cursors](#tool-cursors) |
 | Pan: Hand tool, one or two fingers | 120 | **Met for two-finger pan.** 118.87–119.50 presented fps, worst p99 8.336 ms, 61 MP photo, Navigator open | [Navigation presentation](#navigation-presentation), 2026-10-24 |
-| Pinch zoom | 120 | **Not met.** 111.73–112.09 presented fps, p99 up to 16.668 ms, 61 MP photo, Navigator open; default paper 118.74–119.00 fps | [Navigation presentation](#navigation-presentation), 2026-10-24 |
+| Pinch zoom | 120 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** 111.73–112.09 presented fps, p99 up to 16.668 ms, 61 MP photo, Navigator open; default paper 118.74–119.00 fps | [Navigation presentation](#navigation-presentation), 2026-10-24 |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 120 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
-| Two-finger rotate | 120 | **Met.** 118.74–119.37 presented fps, worst p99 8.541 ms, 61 MP photo, Navigator open; default paper 119.00–119.37 fps | [Navigation presentation](#navigation-presentation), 2026-10-24 |
+| Two-finger rotate | 120 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Met.** 118.74–119.37 presented fps, worst p99 8.541 ms, 61 MP photo, Navigator open; default paper 119.00–119.37 fps | [Navigation presentation](#navigation-presentation), 2026-10-24 |
 | Rotation snapping: two fingers and Rotate View | 120 | Unmeasured on the reference tablet | [Shared behavior](../ui/shared-ui.md#drawing-and-navigation); [GTK diagnostic](#gtk-rotation-snapping-diagnostic) |
 | Smooth Zoom tool, left/right | 120 | **Misses:** 35.75–42.09 presented fps, p99 50.00–58.34 ms, 61 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/top/` |
 | Smooth Zoom tool, up/down | 120 | **Misses:** 34.56–43.73 presented fps, p99 50.00–58.34 ms, 61 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized 1.0.12 APK `ef20cbb3`, navigation `cbcee39a`, base `ee4805dfe`; `artifacts/navigation-controls/zoom-audit-20261009/post-rebase/top/` |
@@ -199,11 +199,11 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation with pending Auto statistics (61 MP) | 120 | **Not met.** 39.40–40.04 canvas presents/s; interval p99 33.33 ms | [Auto statistics worker](#auto-statistics-worker), 2026-10-03 |
 | Gradient drag | 120 | | |
 | Figure or ruler drag | 120 | | |
-| Layer opacity scrub | 120 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
+| Layer opacity scrub | 120 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 120 | **Met.** Native UI 117.20–119.41 fps; moving-frame gap p99 8.38–16.67 ms | [Layer reorder and retained photo translation](#layer-reorder-and-retained-photo-translation), 2026-10-04 |
-| Layer row swipe | 120 | **Unqualified for full reveal.** Android partial left fade: 116.57–120.00 moving window frames/s, p99 ≤16.667 ms; GTK desktop: 119.20–120.07 presents/s, p99 ≤8.952 ms | [Layer handle fade](#layer-handle-fade), 2026-10-21–22 |
+| Layer row swipe | 120 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Unqualified for full reveal.** Android partial left fade: 116.57–120.00 moving window frames/s, p99 ≤16.667 ms; GTK desktop: 119.20–120.07 presents/s, p99 ≤8.952 ms | [Layer handle fade](#layer-handle-fade), 2026-10-21–22 |
 | Workspace-manager row swipe and reorder | 120 | Unmeasured on reference hardware; functional input checks do not qualify moving-frame timing | [Workspace manager](../ui/default-workspaces.md#workspace-manager) |
-| Layer thumbnail selection animation | 120 | **Not met.** Repeated content/mask selection 77.08–79.86 window frames/s; worst moving-frame gap p99 33.33 ms | [Layer thumbnail selection](#layer-thumbnail-selection), 2026-10-05 |
+| Layer thumbnail selection animation | 120 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** Repeated content/mask selection 77.08–79.86 window frames/s; worst moving-frame gap p99 33.33 ms | [Layer thumbnail selection](#layer-thumbnail-selection), 2026-10-05 |
 | Attached filter drag inside a clipping run | 120 | **Not met.** 93.24–102.71 native UI fps; moving-frame gap p99 25.00–33.33 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |

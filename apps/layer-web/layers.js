@@ -3,6 +3,7 @@ import { composingKey } from "./text-input.js";
 import { chooseColor } from "./color-editor.js";
 import { chooseTexture, paperThumbnail } from "./paper-picker.js";
 import { addScrollbar } from "./scrollbars.js";
+import { layerTouchInput } from './layer-touch.js';
 let thumbnailRequest=0n;
 const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
@@ -117,6 +118,15 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   };
   const footerResize = new ResizeObserver(fitFooter); footerResize.observe(footer);
   panel.append(header, list, footer);
+  const opacityPopup=element('div','panel layer-opacity-popup');opacityPopup.popover='auto';
+  opacityPopup.style.cssText='position:fixed;inset:auto;margin:0;width:220px;padding:12px;';
+  const opacityEditor=numberField(catalog.layer_opacity,()=>copy.opacity,value=>{
+    const id=state().layer_tools.opacity_popup;if(id!=null)dispatch({type:'set_layer_opacity',id,opacity:value});
+  });
+  opacityEditor.id='layer-gesture-opacity';opacityPopup.append(opacityEditor);panel.append(opacityPopup);
+  opacityPopup.addEventListener('toggle',event=>{
+    if(event.newState==='closed'&&state().layer_tools.opacity_popup!=null&&Number(state().layer_tools.opacity_surface)===touchInput.surface)send({op:'close_opacity'});
+  });
   const nameIcon = value => value.replace(/^layer-/, "").replace(/-symbolic$/, "");
   const connectionNodes = new Map();
   let connectionFrame = 0, connectionAnimationUntil = 0;
@@ -378,6 +388,8 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     return record;
   }
   const cancelDrags = () => { for (const r of records.values()) { r.cancelDrag(); r.closeSwipe(); } };
+  const touchInput=layerTouchInput({list,app,applyChange,wake,cancelNative:cancelDrags,
+    rowAt:target=>{const row=target.closest('.layer-row');return row&&list.contains(row)?records.get(row.dataset.layer)?.layer.id:null;}});
   const closeSwipes = e => { for (const r of records.values()) if (!r.root.contains(e.target)) r.closeSwipe(); };
   document.addEventListener("pointerdown", closeSwipes, true);
   const closeOnClick = e => { if (!e.target.closest(".layer-swipe-actions")) for (const r of records.values()) r.closeSwipe(); };
@@ -387,10 +399,19 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   window.addEventListener("keydown", cancelOnEscape);
   function refresh() {
     const epoch=String(state().document_file.epoch);
-    if(epoch!==documentEpoch){cancelDrags();documentEpoch=epoch;thumbnails.dispose();
+    if(epoch!==documentEpoch){touchInput.cancel();cancelDrags();documentEpoch=epoch;thumbnails.dispose();
       for(const r of records.values())for(const c of [r.content.image,r.mask.image])if(c)c.width=c.width;
     }
     const view = state().layer_tools, current = view.editing_layer, controls = view.controls;
+    if(view.opacity_popup!=null&&Number(view.opacity_surface)===touchInput.surface&&current){
+      opacityEditor.update(current.opacity);opacityEditor.setDisabled(!controls.opacity);
+      if(!opacityPopup.matches(':popover-open')){
+        const rect=records.get(String(view.opacity_popup))?.row.getBoundingClientRect()??list.getBoundingClientRect();
+        opacityPopup.style.left=`${Math.max(8,Math.min(rect.x,innerWidth-236))}px`;
+        opacityPopup.style.top=`${Math.max(8,Math.min(rect.bottom,innerHeight-110))}px`;
+        opacityPopup.showPopover();
+      }
+    }else if(opacityPopup.matches(':popover-open'))opacityPopup.hidePopover();
     if (current) { opacity.update(current.opacity); blendLabel.textContent = current.blend_label; }
     opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask; more.disabled = !current && !overflow().length;
     fitFooter();
@@ -506,7 +527,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     } catch (error) { message(error); }
   }, 120);
-  return { refresh, dispose(){cancelDrags();cancelAnimationFrame(connectionFrame);connectionResize.disconnect();footerResize.disconnect();document.removeEventListener("pointerdown",closeSwipes,true);document.removeEventListener("click",closeOnClick);window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); thumbnails.dispose();} };
+  return { refresh, dispose(){touchInput.dispose();cancelDrags();opacityEditor.dispose?.();opacityPopup.remove();cancelAnimationFrame(connectionFrame);connectionResize.disconnect();footerResize.disconnect();document.removeEventListener("pointerdown",closeSwipes,true);document.removeEventListener("click",closeOnClick);window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); thumbnails.dispose();} };
 }
 
 export function createLayerThumbnails(app, wake) {

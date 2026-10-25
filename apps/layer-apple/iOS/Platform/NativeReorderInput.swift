@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 struct NativeReorderInput: View {
     let model: any NativeReorderModel
@@ -27,6 +28,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
     private var pan: UIPanGestureRecognizer!
     private var press: UILongPressGestureRecognizer!
     private var secondary: UITapGestureRecognizer!
+    private var layerTouches: LayerTouchRecognizer?
     private var link: CADisplayLink?
     private var lastTrack: CFTimeInterval?
     private var observer: NSObjectProtocol?
@@ -67,6 +69,10 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         super.didMoveToWindow()
         guard window !== attached else { return }
         detach(); attached = window
+        if let layer = model?.layerTouchModel {
+            let recognizer = LayerTouchRecognizer(marker: self, model: layer)
+            layerTouches = recognizer; attached?.addGestureRecognizer(recognizer)
+        }
         attached?.addGestureRecognizer(pan); attached?.addGestureRecognizer(press); attached?.addGestureRecognizer(secondary)
         attachBubbles()
         updateViewport()
@@ -78,9 +84,14 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         handledKeys.removeAll()
         cancel(detaching: true); attached?.removeGestureRecognizer(pan); attached?.removeGestureRecognizer(press)
         attached?.removeGestureRecognizer(secondary); attached = nil
+        if let layerTouches { layerTouches.isEnabled = false; layerTouches.view?.removeGestureRecognizer(layerTouches); self.layerTouches = nil }
         if let bubbles { bubbles.view?.removeGestureRecognizer(bubbles); self.bubbles = nil }
     }
     func validate() {
+        if layerTouches == nil, let layer = model?.layerTouchModel, attached != nil {
+            let recognizer = LayerTouchRecognizer(marker: self, model: layer)
+            layerTouches = recognizer; attached?.addGestureRecognizer(recognizer)
+        }
         updateViewport(); attachBubbles()
         if isFirstResponder, model?.bubbleInput?.acceptsIntensityKeys != true { releaseKeyboard() }
     }
@@ -144,6 +155,7 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         endKeyRepeat()
         guard !cancelling else { return }; cancelling = true
         defer { cancelling = false }
+        if all, let layerTouches { layerTouches.isEnabled = false; layerTouches.isEnabled = true }
         if detaching { model?.nativeInputDetached() } else if all { model?.cancel() } else { model?.cancelReorder() }
         if all { bubbles?.cancel() }
         touch = nil; link?.invalidate(); link = nil
@@ -154,6 +166,13 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         var node = superview
         while let view = node { if let scroll = view as? UIScrollView { return scroll }; node = view.superview }
         return nil
+    }
+    fileprivate func layerTouchRow(_ incoming: UITouch) -> (CGPoint, UInt64)? {
+        guard incoming.type == .direct, let model = model?.layerTouchModel,
+              let scroll, incoming.view?.isDescendant(of: scroll) == true else { return nil }
+        updateViewport()
+        let point = incoming.location(in: self)
+        return model.touchRow(at: point).map { (point, $0) }
     }
     private func scrollAt(_ point: CGPoint) -> UIScrollView? {
         var node = window?.hitTest(convert(point, to: window), with: nil)
@@ -281,4 +300,52 @@ final class ReorderInputView: UIView, UIGestureRecognizerDelegate {
         let next = CGPoint(x: scroll.contentOffset.x, y: max(top, min(bottom, scroll.contentOffset.y + delta)))
         return next == scroll.contentOffset ? nil : (scroll, next)
     }
+}
+
+private final class LayerTouchRecognizer: UIGestureRecognizer {
+    private weak var marker: ReorderInputView?
+    private weak var model: (any NativeLayerTouchModel)?
+    private struct Contact { let touch: UITouch; let id: UInt64; let row: UInt64 }
+    private var contacts: [ObjectIdentifier: Contact] = [:]
+    private var nextID: UInt64 = 0
+    init(marker: ReorderInputView, model: any NativeLayerTouchModel) {
+        self.marker = marker; self.model = model
+        super.init(target: nil, action: nil)
+        allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        cancelsTouchesInView = true; delaysTouchesBegan = false; delaysTouchesEnded = false
+    }
+    private func send(_ contact: Contact, phase: String, timestamp: TimeInterval) {
+        guard let marker else { return }
+        model?.layerTouch(contact.id, phase: phase, point: contact.touch.location(in: marker), row: contact.row,
+            timestamp: timestamp, scale: marker.window?.screen.scale ?? 1)
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches {
+            guard let (_, row) = marker?.layerTouchRow(touch) else { continue }
+            nextID &+= 1
+            let contact = Contact(touch: touch, id: nextID, row: row)
+            contacts[ObjectIdentifier(touch)] = contact; send(contact, phase: "down", timestamp: event.timestamp)
+        }
+        if contacts.count >= 2 && state == .possible { model?.cancel(); state = .began }
+        else if contacts.isEmpty { state = .failed }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches { if let contact = contacts[ObjectIdentifier(touch)] { send(contact, phase: "move", timestamp: event.timestamp) } }
+        if state == .began || state == .changed { state = .changed }
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        let claimed = state == .began || state == .changed
+        for touch in touches { if let contact = contacts.removeValue(forKey: ObjectIdentifier(touch)) { send(contact, phase: "up", timestamp: event.timestamp) } }
+        if contacts.isEmpty { state = claimed ? .ended : .failed }
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        cancelContacts(); state = .cancelled
+    }
+    private func cancelContacts() {
+        for contact in contacts.values { send(contact, phase: "cancel", timestamp: ProcessInfo.processInfo.systemUptime) }
+        contacts.removeAll()
+    }
+    override func reset() { cancelContacts(); super.reset() }
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { contacts.count >= 2 }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { contacts.count < 2 }
 }

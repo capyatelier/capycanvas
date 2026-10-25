@@ -148,6 +148,7 @@ import SwiftUI
         guard enabled, let bubbles else { return .ignore }
         generation &+= 1
         if let c = contact {
+            if c.mode == "native" && nativeRegions.values.contains(where: { $0.owner == c.item.id && $0.bounds.contains(point) }) { return .ignore }
             let center = c.item.placement.center
             guard device == .touch, c.fingers.count == 1,
                 hypot(point.x - center.x, point.y - center.y) <= c.item.model["reach"].number + 90 else { return .ignore }

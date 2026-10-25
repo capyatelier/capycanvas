@@ -41,6 +41,14 @@ struct LayerPanel: View {
                                     .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
                                     .overlay(alignment: .topLeading) { dropMark(row.layer) }
                                     .editorPopover(isPresented: menuPresented(at: .row(row.id)), placement: .inward) { menuContent }
+                                    .editorPopover(isPresented: Binding(get: {
+                                        view["opacity_popup"].optionalUInt == row.id && view["opacity_surface"].uint == interaction.touchSurface
+                                    }, set: { shown in if !shown && view["opacity_surface"].uint == interaction.touchSurface {
+                                        store.layer(["op": "close_opacity"])
+                                    } }), placement: .inward) {
+                                        LayerOpacityField(store: store, inline: false).frame(width: 240).padding(12)
+                                            .accessibilityIdentifier("layer-gesture-opacity")
+                                    }
                                     .onAppear { store.layerThumbnails.show(token: thumbnailToken, id: row.id) }
                                     .onDisappear {
                                         store.layerThumbnails.hide(thumbnailToken)

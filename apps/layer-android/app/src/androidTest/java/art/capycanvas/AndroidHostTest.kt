@@ -4830,6 +4830,138 @@ class AndroidHostTest {
         }
     }
 
+    @Test fun canvasQuickPinchAndHeldHistoryAcrossThemes() {
+        fun pinch(outward: Boolean) {
+            val from = if (outward) .05f else .1f
+            val to = if (outward) .1f else .05f
+            val a = androidx.compose.ui.geometry.Offset(.5f - from, .5f)
+            val b = androidx.compose.ui.geometry.Offset(.5f + from, .5f)
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(a))
+            canvasEvent(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), listOf(a, b))
+            SystemClock.sleep(60)
+            val end = listOf(androidx.compose.ui.geometry.Offset(.5f - to, .5f), androidx.compose.ui.geometry.Offset(.5f + to, .5f))
+            canvasEvent(MotionEvent.ACTION_MOVE, end)
+            canvasEvent(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), end)
+            canvasEvent(MotionEvent.ACTION_UP, listOf(end[0]))
+            settle()
+        }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "set_zoom", "zoom" to 2))
+            action(obj("type" to "set_rotation", "rotation" to .7))
+            pinch(false)
+            assertEquals(0f, state().getJSONObject("camera").number("rotation"), .001f)
+            pinch(true)
+            assertEquals(2f, state().getJSONObject("camera").number("zoom"), .001f)
+            assertEquals(.7f, state().getJSONObject("camera").number("rotation"), .001f)
+            val base = state().array("layers").length()
+            repeat(3) { action(obj("type" to "invoke", "command" to "add_layer")) }
+            for ((fingers, expected) in listOf(2 to base, 3 to base + 3)) {
+                val points = (0 until fingers).map { androidx.compose.ui.geometry.Offset(.4f + .08f * it, .5f) }
+                canvasEvent(MotionEvent.ACTION_DOWN, points.take(1))
+                for (index in 1 until fingers) canvasEvent(MotionEvent.ACTION_POINTER_DOWN or (index shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), points.take(index + 1))
+                SystemClock.sleep(1000)
+                waitState { it.array("layers").length() == expected }
+                for (index in fingers - 1 downTo 1) canvasEvent(MotionEvent.ACTION_POINTER_UP or (index shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), points.take(index + 1))
+                canvasEvent(MotionEvent.ACTION_UP, points.take(1))
+                settle()
+                assertEquals(expected, state().array("layers").length())
+            }
+            repeat(3) { action(obj("type" to "invoke", "command" to "undo")) }
+        }
+    }
+
+    @Test fun layerMultitouchActionsAcrossThemes() {
+        fun layers() = state().array("layers").objects()
+        val id = layers().first { it.getBoolean("editing") }.getLong("id")
+        penStroke()
+        fun row() = compose.onNodeWithTag("layer-row-$id")
+        fun pair(dx: Float = 0f, hold: Boolean = false) {
+            val center = screenBounds(row()).center
+            val started = SystemClock.uptimeMillis()
+            fun event(action: Int, count: Int, delta: Float = 0f) {
+                val properties = (0 until count).map { index -> MotionEvent.PointerProperties().apply { this.id = index; toolType = MotionEvent.TOOL_TYPE_FINGER } }.toTypedArray()
+                val coordinates = (0 until count).map { index -> MotionEvent.PointerCoords().apply {
+                    x = center.x + (if (index == 0) -25f else 25f) + delta; y = center.y; pressure = 1f; size = .2f
+                } }.toTypedArray()
+                val event = MotionEvent.obtain(started, SystemClock.uptimeMillis(), action, count, properties, coordinates, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+            }
+            event(MotionEvent.ACTION_DOWN, 1)
+            event(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2)
+            SystemClock.sleep(if (hold) 700 else 60)
+            if (hold) instrumentation.runOnMainSync {
+                assertNull("Two held layer contacts must not open a competing bubble menu", findTag("workspace-menu"))
+            }
+            if (dx != 0f) for (step in 1..4) { event(MotionEvent.ACTION_MOVE, 2, dx * step / 4); SystemClock.sleep(16) }
+            event(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 2, dx)
+            event(MotionEvent.ACTION_UP, 1, dx)
+            settle()
+        }
+        for (theme in listOf("light", "dark")) for (simple in listOf(false, true)) {
+            val workspace = JSONObject(defaultWorkspace)
+            workspace.getJSONObject("layout").put("header", obj("size" to "medium", "zones" to JSONArray().put(JSONArray()).put(JSONArray().put(obj(
+                "id" to 2, "item" to obj("kind" to "tool", "control" to obj("kind" to "panel", "panel" to "layers"))
+            ))).put(JSONArray()), "next_id" to 3))
+            action(obj("type" to "restore_workspace", "workspace" to workspace))
+            action(obj("type" to "set_theme", "theme" to theme))
+            if (simple) {
+                customize(obj("type" to "set_panel_visible", "panel" to "layers", "visible" to false))
+                val bubbleViewport = viewport()
+                compose.runOnIdle {
+                    for ((phase, position) in listOf("down" to listOf(200, 60), "move" to listOf(500, 300), "up" to listOf(500, 300))) {
+                        host.dispatch(obj("type" to "bubble", "action" to obj("type" to "drag", "grab" to obj("kind" to "header", "id" to 2),
+                            "phase" to phase, "position" to JSONArray(position), "viewport" to bubbleViewport)))
+                    }
+                }
+                settle()
+            } else floatPanel("layers", 350f, 180f)
+            pair()
+            assertEquals("$theme/$simple: layer touch opens shared opacity; error=${host.actionError}", id, state().getJSONObject("layer_tools").optLong("opacity_popup", -1))
+            compose.onNodeWithTag("layer-gesture-opacity").assertIsDisplayed()
+            compose.onNode(SemanticsMatcher("numeric value") { it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("number-value-") == true } and hasAnyAncestor(hasTestTag("layer-gesture-opacity")), useUnmergedTree = true).performClick()
+            compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("layer-gesture-opacity")), useUnmergedTree = true).performTextReplacement("42")
+            compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("layer-gesture-opacity")), useUnmergedTree = true).performImeAction()
+            waitState { it.array("layers").objects().first { l -> l.getLong("id") == id }.number("opacity") == .42f }
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            action(obj("type" to "invoke", "command" to "undo"))
+            assertEquals(1f, layers().first { it.getLong("id") == id }.number("opacity"), 0f)
+            pair(hold = true)
+            waitState { it.getJSONObject("layer_tools").getBoolean("has_selection") }
+            compose.onAllNodesWithTag("workspace-menu").assertCountEquals(0)
+            action(obj("type" to "invoke", "command" to "deselect"))
+            val selected = layers().first { it.getLong("id") == id }.getBoolean("selected")
+            pair(60f)
+            host.awaitMain("$theme/$simple two-finger row selection", 5_000,
+                { "error=${host.actionError}; row=${layers().first { it.getLong("id") == id }}; slop=${android.view.ViewConfiguration.get(compose.activity).scaledTouchSlop}" }, compose) {
+                layers().first { it.getLong("id") == id }.getBoolean("selected") != selected
+            }
+            assertFalse(layers().first { it.getLong("id") == id }.getBoolean("alpha_locked"))
+            pair(60f)
+            val swipeDistance = 80f * compose.activity.resources.displayMetrics.density
+            row().performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(swipeDistance, 0f), 200) }
+            host.awaitMain("$theme/$simple one-finger Alpha Lock", 5_000, { "error=${host.actionError}; row=${layers().first { it.getLong("id") == id }}" }, compose) {
+                layers().first { it.getLong("id") == id }.getBoolean("alpha_locked")
+            }
+            action(obj("type" to "invoke", "command" to "undo"))
+            repeat(2) { action(obj("type" to "invoke", "command" to "add_layer")) }
+            val top = layers().first { it.getBoolean("editing") }.getLong("id")
+            val a = bounds("layer-row-$top").center
+            val b = bounds("layer-row-$id").center
+            val list = bounds("layer-rows").topLeft
+            val count = layers().size
+            compose.onNodeWithTag("layer-rows").performTouchInput {
+                down(0, a - list); down(1, b - list)
+                moveTo(0, a + (b - a) * .35f - list); moveTo(1, b + (a - b) * .35f - list)
+                up(1); up(0)
+            }
+            waitState { it.array("layers").length() == count - 2 }
+            action(obj("type" to "invoke", "command" to "undo"))
+            assertEquals(count, layers().size)
+            repeat(2) { action(obj("type" to "invoke", "command" to "undo")) }
+        }
+    }
+
     @Test fun touchNavigationHistoryCancellationAndSurfaceRecovery() {
         val a = androidx.compose.ui.geometry.Offset(0.45f, 0.5f)
         val b = androidx.compose.ui.geometry.Offset(0.55f, 0.5f)

@@ -49,6 +49,15 @@ client, the same responsibilities run on one event loop; a thread is not require
 by the shared contract. Hosts must explicitly handle queue saturation and gesture
 cancellation rather than silently losing a stroke boundary.
 
+Touch timestamps are ordered within each contact. Coalesced histories for
+different fingers can overlap in time when a host delivers each pointer's batch
+separately. Canvas and layer gesture recognition validate each finger's timestamp
+independently and keep the greatest timestamp for group timing. Reversing time
+within one contact still cancels recognition.
+Hosts can omit unchanged layer-contact positions while preserving every changed
+position, press, release and cancellation. Holds use the shared frame clock;
+stationary native reports must not fill the command queue.
+
 ## Drawing and navigation
 
 `UiSession` determines whether an interaction belongs to a drawing tool, camera

@@ -8,6 +8,7 @@ import CoreGraphics
     var viewport: CGRect { get set }
     var enabled: Bool { get }
     var bubbleInput: BubbleInteraction? { get }
+    var layerTouchModel: (any NativeLayerTouchModel)? { get }
     func source(at point: CGPoint) -> ReorderTarget?
     func acceptsContext(at point: CGPoint) -> Bool
     func context(at point: CGPoint)
@@ -20,6 +21,11 @@ import CoreGraphics
     func moveSwipe(to point: CGPoint)
     func finishSwipe(cancelled: Bool)
     var edgeScroll: ReorderEdgeScroll? { get }
+}
+
+@MainActor protocol NativeLayerTouchModel: NativeReorderModel {
+    func touchRow(at point: CGPoint) -> UInt64?
+    func layerTouch(_ id: UInt64, phase: String, point: CGPoint, row: UInt64, timestamp: TimeInterval, scale: CGFloat)
 }
 
 struct ReorderEdgeScroll {
@@ -37,6 +43,7 @@ struct ReorderEdgeScroll {
 
 extension NativeReorderModel {
     var bubbleInput: BubbleInteraction? { nil }
+    var layerTouchModel: (any NativeLayerTouchModel)? { nil }
     func cancelReorder() { cancel() }
     var swiping: Bool { false }
     func beginSwipe(at point: CGPoint) -> Bool { false }

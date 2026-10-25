@@ -214,6 +214,7 @@ internal class BubbleInteraction(val host: CanvasHost, val dock: DockInteraction
         val point = change.position / dock.density
         val current = contact
         if (current != null) {
+            if (current.mode == "native" && current.record.hit(point) == "card") { current.hold?.cancel(); return false }
             if (current.device != PointerType.Touch || change.type != PointerType.Touch || (point - current.record.center).getDistance() > current.record.packet.number("reach") + 90f) return false
             current.fingers[change.id] = point
             if (current.fingers.size == 2 && !current.paired) {

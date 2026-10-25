@@ -4399,6 +4399,97 @@ fn native_sketch_layer_properties_transition() {
 #[ignore = "isolated native-input.js --native-test=native_layer_swipe_mouse"]
 fn native_layer_swipe_mouse() { layer_swipes(&["mouse"]); }
 
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_layer_multitouch_actions --tablet"]
+fn native_layer_multitouch_actions() {
+    let mut d = Driver::new("art.capycanvas.LayerMultitouchActions");
+    d.w.dispatch(UiAction::SetColor { rgba: [0., 1., 0., 1.] });
+    d.w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+    d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::FillSelection });
+    pump(300);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+    for theme in [Theme::Light, Theme::Dark] {
+        for simple in [false, true] {
+            d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            if simple {
+                d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
+                    layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default()
+                }) });
+                pump(250);
+                let opener = d.header_tool(ToolbarControl::Panel { panel: Panel::Layers });
+                d.click_name(&opener);
+                let stack = d.named("layer-properties-stack").downcast::<gtk::Stack>().unwrap();
+                layer_page_settled(&d, &stack, "multitouch simple Layers ready");
+            } else {
+                d.w.dispatch(UiAction::Invoke { command: CommandId::ResetLayout });
+                pump(300);
+            }
+            let row = d.named("art-layer-1");
+            let p = d.point(&row);
+            let pair = [[p[0] - 25., p[1]], [p[0] + 25., p[1]]];
+            let down = |d: &mut Driver| d.input.perform(serde_json::json!([
+                {"touch":"down","slot":0,"point":pair[0]}, {"touch":"down","slot":1,"point":pair[1]}
+            ]));
+            let up = |d: &mut Driver| d.input.perform(serde_json::json!([
+                {"touch":"up","slot":0}, {"touch":"up","slot":1}
+            ]));
+            down(&mut d); up(&mut d);
+            until(|| state(&d.w).layer_tools.opacity_popup == Some(1), "two fingers open opacity");
+            let editor = d.named("layer-gesture-opacity");
+            assert!(editor.is_mapped(), "{theme:?}/{simple}: opacity editor is native");
+            d.number(&editor, "42");
+            assert!((state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().opacity - 0.42).abs() < 0.001);
+            d.input.key(0xff1b);
+            d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            pump(150);
+            assert_eq!(state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().opacity, 1.);
+            down(&mut d);
+            pump(700);
+            until(|| ui_session(&d.w).engine().document().working.selection.is_some(), "held fingers select layer alpha");
+            up(&mut d);
+            assert!(state(&d.w).layer_tools.opacity_popup.is_none(), "hold cannot open opacity on release");
+            d.w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+            let selected = state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().selected;
+            for expected in [!selected, selected] {
+                down(&mut d);
+                d.input.perform(serde_json::json!([
+                    {"touch":"move","slot":0,"point":[pair[0][0] + 60., pair[0][1]]},
+                    {"touch":"move","slot":1,"point":[pair[1][0] + 60., pair[1][1]]}
+                ]));
+                up(&mut d);
+                assert_eq!(state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().selected, expected, "{theme:?}/{simple}: two fingers toggle selection");
+                assert!(!state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().alpha_locked);
+            }
+            d.input.perform(serde_json::json!([
+                contact("touch", "down", p), contact("touch", "move", [p[0] + 18., p[1]]),
+                contact("touch", "move", [p[0] + 60., p[1]]), contact("touch", "up", [p[0] + 60., p[1]])
+            ]));
+            assert!(state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().alpha_locked, "one finger retains Alpha Lock");
+            d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            for _ in 0..2 { d.w.dispatch(UiAction::Invoke { command: CommandId::AddLayer }); }
+            pump(200);
+            let top = state(&d.w).layers.iter().find(|l| l.editing).unwrap().id;
+            let a = d.point(&d.named(&format!("art-layer-{top}")));
+            let b = d.point(&d.named("art-layer-1"));
+            let count = state(&d.w).layers.len();
+            d.input.perform(serde_json::json!([
+                {"touch":"down","slot":0,"point":a}, {"touch":"down","slot":1,"point":b},
+                {"touch":"move","slot":0,"point":[a[0], a[1] + (b[1] - a[1]) * 0.35]},
+                {"touch":"move","slot":1,"point":[b[0], b[1] + (a[1] - b[1]) * 0.35]},
+                {"touch":"up","slot":0}, {"touch":"up","slot":1}
+            ]));
+            until(|| state(&d.w).layers.len() == count - 2, "pinch merges inclusive three-row range");
+            d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            pump(150);
+            assert_eq!(state(&d.w).layers.len(), count, "one Undo restores range");
+            for _ in 0..2 { d.w.dispatch(UiAction::Invoke { command: CommandId::Undo }); }
+            pump(150);
+            d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Select { id: 1, mask: false } });
+        }
+    }
+    d.finish();
+}
+
 fn layer_swipes(devices: &[&str]) {
     let mut d = Driver::new("art.capycanvas.LayerSwipeAlphaLock");
     d.w.dispatch(UiAction::Invoke { command: CommandId::ResetLayout });

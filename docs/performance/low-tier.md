@@ -168,11 +168,11 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | G-Pen 1024 px during private session checkpoints | 60 | Unqualified: 77.6–79.0 fresh completed updates/s, completion gap p99 23.36–24.07 ms; thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
 | G-Pen 1024 px, repeated short contacts during checkpoints | 60 | Diagnostic only: 11.02–14.27 MiB process writes per 50 contacts; observed head age max 3.52–4.37 s. Paused motion has no qualified frame rate | [Session checkpoints](#session-checkpoints) |
 | Pan: Hand tool, one or two fingers | 60 | **Met for two-finger pan.** 60.02 presented fps in all three contacts, 12 MP photo, Navigator open | [Navigation presentation](#navigation-presentation), 2026-10-25 |
-| Pinch zoom | 60 | **Not met.** 54.41 fps median, 12 MP photo, Navigator open; default paper 60.02 fps | [Navigation presentation](#navigation-presentation), 2026-10-25 |
+| Pinch zoom | 60 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** 54.41 fps median, 12 MP photo, Navigator open; default paper 60.02 fps | [Navigation presentation](#navigation-presentation), 2026-10-25 |
 | Mouse-wheel pan and Ctrl-wheel zoom, including held navigation buttons | 60 | Unmeasured on the reference tablet | [Wheel input contract](../ui/shared-ui.md); desktop correctness checks do not qualify this tier |
 | Pan: Hand tool, one or two fingers, M3 BUILD20 | 60 | **Unqualified on current M3.** 59.078–59.729 completed updates/s; completion gap p99 18.821–19.033 ms; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison); older actual presents below |
 | Pinch zoom, earlier retained-Navigator revision | 60 | Photo, Navigator open: screen 59.40 presents/s, p99 ≤16.83 ms; viewport 59.90 fresh completed updates/s | Retained-Navigator navigation below |
-| Two-finger rotate | 60 | **Not met.** 59.14 fps median, 12 MP photo, Navigator open; one gap p99 33.361 ms exceeds 33.333 ms | [Navigation presentation](#navigation-presentation), 2026-10-25 |
+| Two-finger rotate | 60 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** 59.14 fps median, 12 MP photo, Navigator open; one gap p99 33.361 ms exceeds 33.333 ms | [Navigation presentation](#navigation-presentation), 2026-10-25 |
 | Rotation snapping: two fingers and Rotate View | 60 | Unmeasured on the reference tablet | [Shared snapping behavior](../ui/shared-ui.md#drawing-and-navigation) |
 | Smooth Zoom tool, left/right | 60 | **Current binary unmeasured; earlier 1.0.11 missed:** 43.33–43.82 presented fps, p99 99.95–99.96 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized APK `10e734af`, navigation source `87b79f29`; `artifacts/navigation-controls/zoom-audit-20261009/final/low/` |
 | Smooth Zoom tool, up/down | 60 | **Current binary unmeasured; earlier 1.0.11 missed:** 43.43–43.56 presented fps, p99 99.96–116.21 ms, 12 MP photo, Navigator open, thermal 0 | Measured 2026-10-09, optimized APK `10e734af`, navigation source `87b79f29`; `artifacts/navigation-controls/zoom-audit-20261009/final/low/` |
@@ -223,11 +223,11 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation with proof or tone guide shown | 60 | | |
 | Gradient drag | 60 | | |
 | Figure or ruler drag | 60 | | |
-| Layer opacity scrub | 60 | **Not met.** Maskless Solid Color over photo: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s | [Solid Color fills](#solid-color-fills); baseline also misses |
+| Layer opacity scrub | 60 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Not met.** Maskless Solid Color over photo: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s | [Solid Color fills](#solid-color-fills); baseline also misses |
 | Layer reorder drag | 60 | | |
-| Layer row swipe | 60 | **Unqualified.** Partial left reveal: 57.8–59.6 moving window frames/s, maximum interval p99 33.392 ms; full reveal unmeasured | [Layer action reveal](#layer-action-reveal), 2026-10-24 |
+| Layer row swipe | 60 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: **Unqualified.** Partial left reveal: 57.8–59.6 moving window frames/s, maximum interval p99 33.392 ms; full reveal unmeasured | [Layer action reveal](#layer-action-reveal), 2026-10-24 |
 | Workspace-manager row swipe and reorder | 60 | Unmeasured on reference hardware; functional input checks do not qualify moving-frame timing | [Workspace manager](../ui/default-workspaces.md#workspace-manager) |
-| Layer thumbnail selection animation | 60 | Unmeasured on the reference tablet | [Selection benchmark](../development/android.md#benchmarks) |
+| Layer thumbnail selection animation | 60 | **Touch gesture revision unmeasured (2026-10-25).** Earlier: Unmeasured on the reference tablet | [Selection benchmark](../development/android.md#benchmarks) |
 | Attached filter drag inside a clipping run | 60 | **Not met.** 55.64–59.72 native UI fps; moving-frame gap p99 16.75–33.34 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |

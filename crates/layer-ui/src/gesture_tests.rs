@@ -141,6 +141,95 @@ fn held_history_stops_for_motion_blur_and_custom_tap_actions() {
     }
 }
 
+#[test]
+fn trackpad_quick_pinches_and_history_holds_keep_taps_native() {
+    let mut s = session(Platform::Mac);
+    invoke(&mut s, CommandId::AddLayer);
+    invoke(&mut s, CommandId::AddLayer);
+    let count = s.state.layers.len();
+    let raw = |s: &mut UiSession<Recorder>, id, phase, position, ms| {
+        s.input(UiInput::TrackpadTouch { id, phase, position, time_ns: 1_000_000_000 + ms * 1_000_000 }).unwrap()
+    };
+    for (id, x) in [(1, 300.), (2, 500.)] { raw(&mut s, id, ContactPhase::Down, [x, 400.], id * 10); }
+    for time in [1_030_000_000, 1_530_000_000, 1_610_000_000] { s.frame(time, time).unwrap(); }
+    for (id, x) in [(1, 300.), (2, 500.)] { raw(&mut s, id, ContactPhase::Up, [x, 400.], 700 + id * 10); }
+    assert_eq!(s.state.layers.len(), count - 2);
+    invoke(&mut s, CommandId::Redo);
+    let checkpoint = s.engine.checkpoint();
+    for (id, x) in [(1, 300.), (2, 500.)] { raw(&mut s, id, ContactPhase::Down, [x, 400.], 1000 + id * 10); }
+    for (id, x) in [(1, 300.), (2, 500.)] { raw(&mut s, id, ContactPhase::Up, [x, 400.], 1100 + id * 10); }
+    assert_eq!(s.engine.checkpoint(), checkpoint, "trackpad taps remain native");
+    s.gesture([400., 300.], [350., 280.], 2., 0.7).unwrap();
+    let previous = s.state.camera.view();
+    for (outward, start) in [(false, 2000), (true, 2500)] {
+        let (from, to) = if outward { ([350., 450.], [300., 500.]) } else { ([300., 500.], [350., 450.]) };
+        for i in 0..2 { raw(&mut s, 10 + i, ContactPhase::Down, [from[i as usize], 400.], start + i * 10); }
+        for i in 0..2 { raw(&mut s, 10 + i, ContactPhase::Move, [to[i as usize], 400.], start + 80 + i * 10); }
+        for i in 0..2 { raw(&mut s, 10 + i, ContactPhase::Up, [to[i as usize], 400.], start + 110 + i * 10); }
+        if !outward { assert_eq!(s.state.camera.rotation, 0.); }
+    }
+    for (actual, expected) in s.state.camera.view().document_to_surface.into_iter().zip(previous.document_to_surface) {
+        assert!((actual - expected).abs() < 0.001);
+    }
+}
+
+#[test]
+fn coalesced_finger_histories_keep_taps_and_history_holds_eligible() {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
+        for held in [false, true] {
+            let mut s = painted_session();
+            s.state.platform = platform;
+            let painted = s.engine.document().clone();
+            finger(&mut s, 10, ContactPhase::Down, [300., 400.], 0);
+            finger(&mut s, 11, ContactPhase::Down, [500., 400.], 10);
+            for (id, x, ms) in [(10, 300., 80), (10, 300., 120), (11, 500., 60), (11, 500., 100)] {
+                finger(&mut s, id, ContactPhase::Move, [x, 400.], ms);
+            }
+            if held {
+                s.frame(1_130_000_000, 1_130_000_000).unwrap();
+                s.frame(1_700_000_000, 1_700_000_000).unwrap();
+                assert_ne!(s.engine.document().artwork.paint, painted.artwork.paint, "{platform:?}: hold runs before release");
+            }
+            let end = if held { 800 } else { 150 };
+            finger(&mut s, 10, ContactPhase::Up, [300., 400.], end);
+            finger(&mut s, 11, ContactPhase::Up, [500., 400.], end + 10);
+            assert_ne!(s.engine.document().artwork.paint, painted.artwork.paint, "{platform:?} held={held}");
+        }
+    }
+}
+
+#[test]
+fn coalesced_finger_histories_keep_quick_fit_and_reverse_eligible() {
+    let mut s = session(Platform::Windows);
+    s.gesture([400., 300.], [350., 280.], 2., 0.7).unwrap();
+    let previous = s.state.camera.view();
+    finger(&mut s, 10, ContactPhase::Down, [300., 400.], 0);
+    finger(&mut s, 11, ContactPhase::Down, [500., 400.], 10);
+    for (id, x, ms) in [(10, 330., 60), (10, 350., 100), (11, 470., 50), (11, 450., 90)] {
+        finger(&mut s, id, ContactPhase::Move, [x, 400.], ms);
+    }
+    finger(&mut s, 10, ContactPhase::Up, [350., 400.], 110);
+    finger(&mut s, 11, ContactPhase::Up, [450., 400.], 120);
+    assert_eq!(s.state.camera.rotation, 0.);
+    quick_pinch(&mut s, true, 500, 80);
+    for (actual, expected) in s.state.camera.view().document_to_surface.into_iter().zip(previous.document_to_surface) {
+        assert!((actual - expected).abs() < 0.001);
+    }
+}
+
+#[test]
+fn coalesced_finger_history_reversal_within_one_contact_still_cancels() {
+    let mut s = painted_session();
+    let painted = s.engine.document().clone();
+    finger(&mut s, 10, ContactPhase::Down, [300., 400.], 0);
+    finger(&mut s, 11, ContactPhase::Down, [500., 400.], 10);
+    finger(&mut s, 10, ContactPhase::Move, [300., 400.], 100);
+    finger(&mut s, 10, ContactPhase::Move, [300., 400.], 90);
+    finger(&mut s, 10, ContactPhase::Up, [300., 400.], 150);
+    finger(&mut s, 11, ContactPhase::Up, [500., 400.], 160);
+    assert_live_artwork_eq(s.engine.document(), &painted);
+}
+
 fn scrub_contacts(s: &mut UiSession<Recorder>, phase: ContactPhase, offset: [f32; 2], ms: u64, count: u64) {
     for id in 0..count {
         finger(s, 10 + id, phase, [300. + 80. * id as f32 + offset[0], 400. + offset[1]], ms);

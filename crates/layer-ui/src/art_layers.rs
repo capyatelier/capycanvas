@@ -146,6 +146,8 @@ pub struct LayersView {
     pub reference_action_label: std::sync::Arc<str>,
     /// Header target remains available even inside a collapsed group.
     pub editing_layer: Option<LayerState>,
+    pub opacity_popup: Option<u64>,
+    pub opacity_surface: u64,
     pub rename_layer: Option<u64>,
     pub controls: LayerControls,
     pub attachment: LayerAttachmentControl,
@@ -244,6 +246,7 @@ enum NewPlacement { Above, Clipped, Below, Under }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum LayerAction {
+    CloseOpacity,
     New {
         group: bool,
         clipped: bool,
@@ -439,6 +442,7 @@ pub struct GradientToolSettings {
 }
 #[derive(Default)]
 pub(super) struct LayerInteraction {
+    pub touches: crate::session::layer_gestures::LayerTouches,
     pub tool: LayerCanvasTool,
     pub collapsed: BTreeSet<OccurrenceHandle>,
     pub clipboard_mask: Option<(CoverageSnapshot, [i64; 2])>,
@@ -881,6 +885,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(self.localization().text(MessageId::COMMANDS_PAPER_CANNOT_HAVE_A_MASK).to_string());
         }
         match action {
+            LayerAction::CloseOpacity => self.state.layer_tools.opacity_popup = None,
             LayerAction::RasterizeSource { id } => self.request_source_edit(SourceUse::Paint(occurrence_handle(id)?), DocumentRequest::RasterizeSource { layer: id })?,
             LayerAction::RepairSourceProfile { id } => self.request_source_edit(SourceUse::from_token(id)?, DocumentRequest::RepairSourceProfile { layer: id })?,
             LayerAction::Visibility { id, value } => {

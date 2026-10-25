@@ -5,6 +5,7 @@ use crate::authored::*;
 pub enum MergeKind {
     Down,
     Group,
+    Range { first: OccurrenceHandle, last: OccurrenceHandle },
     Visible,
     Flatten,
     Stamp,
@@ -279,6 +280,33 @@ impl Document {
             group: false,
         };
         match kind {
+            MergeKind::Range { first, last } => {
+                if first == last || scene.occurrence(first).is_none() || scene.occurrence(last).is_none() {
+                    return Err(MergeRefusal::NoLayerBelow);
+                }
+                let ancestors = |mut h| {
+                    let mut parents = vec![scene.parent(h)];
+                    while let Some(parent) = scene.parent(h) { h = parent; parents.push(scene.parent(h)); }
+                    parents
+                };
+                let other = ancestors(last);
+                let parent = ancestors(first).into_iter().find(|parent| other.contains(parent)).ok_or(MergeRefusal::NoLayer)?;
+                let root = |mut h| {
+                    while scene.parent(h) != parent { h = scene.parent(h).ok_or(MergeRefusal::NoLayer)?; }
+                    Ok::<_, MergeRefusal>(h)
+                };
+                let (first, last) = (root(first)?, root(last)?);
+                let siblings = scene.children(parent);
+                let a = siblings.iter().position(|h| *h == first).ok_or(MergeRefusal::NoLayer)?;
+                let b = siblings.iter().position(|h| *h == last).ok_or(MergeRefusal::NoLayer)?;
+                let roots = &siblings[a.min(b)..=a.max(b)];
+                if roots.iter().any(|h| scene.occurrence(*h).is_some_and(|o| !o.visible)) { return Err(MergeRefusal::Hidden); }
+                m.members = self.checked(self.layer_subtrees(roots))?;
+                if scene.order().iter().any(|h| scene.clipping_base(*h).into_iter().chain(scene.effect_owner(*h))
+                    .any(|owner| m.members.contains(h) != m.members.contains(&owner))) { return Err(MergeRefusal::BelowClipped); }
+                m.anchor = roots.last().copied();
+                m.group = roots.len() == 1 && scene.occurrence(first).is_some_and(|o| o.kind() == LayerKind::Group);
+            }
             MergeKind::Group => {
                 let h = self.working.occurrence.ok_or(MergeRefusal::NoLayer)?;
                 let o = scene.occurrence(h).ok_or(MergeRefusal::NoLayer)?;

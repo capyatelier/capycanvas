@@ -10,8 +10,10 @@ otherwise.
 | --- | --- | --- | --- | --- |
 | Pen down → first submitted canvas update | 2 frames: 33 / 22 / 17 ms | **Initial contact not met:** 31.9–43.2 ms to submit; resumed-contact medians 21.0–23.3 ms (release, 12 MP G-Pen 1024, 2026-09-29; comparison below) | | **Not met.** 29.4–40.7 ms across three 5 s G-Pen strokes after quick color changes on the 61 MP photo; 2048 px, release build (2026-09-27). Navigation → first pen submission 6.7–11.0 ms (2026-09-22) |
 | Tap or press → visible response: buttons, tools, menus | 100 ms | | | |
+| Quick pinch release → fitted or restored view | 100 ms | Unmeasured | Unmeasured | Unmeasured |
+| Layer touch gesture → first visible opacity or selection response | 100 ms after recognition | Unmeasured | Unmeasured | Unmeasured |
 | Transform or placement press → first moving frame | 100 ms | **Met** for vector Move: 63–77 ms for 1 path, 59–68 ms for 100, 53–85 ms for 5,000 ([vector layers](low-tier.md#vector-layers), 2026-10-20) | 22 ms for a selection Distort, 47 ms for a photo handle (`debff77d`, `fe605aa3`, 2026-09-27); vector Move 58–63 / 42–56 / 55–62 ms for 1 / 100 / 5,000 paths ([vector layers](mid-tier.md#vector-layers), 2026-10-20) | **Met** for vector Move: 43–80 ms for 1 path, 41–59 ms for 100, 40–53 ms for 5,000 on the round 3 tree ([vector layers](top-tier.md#vector-layers), 2026-10-20) |
-| Undo or redo of one 1024 px stroke | 250 ms | | | |
+| Undo or redo of one 1024 px stroke | 250 ms | Held touch history unmeasured | Held touch history unmeasured | Held touch history unmeasured |
 | Magic Wand or Color Select on the tier canvas | 250 ms | | | |
 | Tonal selection, warm mask on the tier canvas | 350 ms | | Huion: 244–266 ms on 61 MP ([tonal performance](../internals/tonal-performance.md), 2026-09-24) | |
 | Filter preview after a parameter change | 100 ms p95 | | | |

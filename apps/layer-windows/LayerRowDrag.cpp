@@ -23,6 +23,11 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     ScrollView list{nullptr};
     std::weak_ptr<LayerRow> source;
     Input::Pointer pointer{nullptr};
+    struct TouchContact { Input::Pointer pointer; double row; Point point; std::vector<weak_ref<UIElement>> path; };
+    std::map<uint32_t,TouchContact> touches;
+    bool multitouch=false;
+    uint64_t touchTimestamp=0;
+    hstring touchEpoch;
     std::optional<uint32_t> rejected;
     PointerGesture recognizer;
     NativeInput::PointerDeviceType device=NativeInput::PointerDeviceType::Mouse;
@@ -49,6 +54,73 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     bool owns(UIElement const& element)const{
         return pointer&&PointerGesture::Captured(element,pointer.PointerId());
     }
+    bool capture(Input::Pointer const& contact,std::vector<weak_ref<UIElement>> const& route){
+        for(auto const& entry:route)if(auto node=entry.get();node&&PointerGesture::Captured(node,contact.PointerId()))node.ReleasePointerCapture(contact);
+        return surface.CapturePointer(contact);
+    }
+    void sendTouch(uint32_t contact,hstring const& phase,TouchContact const& value){
+        auto owner=view.lock();if(!owner||!owner->data->input)return;
+        double scale=surface.XamlRoot()?surface.XamlRoot().RasterizationScale():1.;A coordinates;
+        coordinates.Append(N(value.point.X*scale));coordinates.Append(N(value.point.Y*scale));
+        owner->data->input(to_string(O({{L"type",S(L"layer_touch")},{L"surface",N(double(reinterpret_cast<uintptr_t>(get_abi(surface))))},
+            {L"id",N(contact)},{L"phase",S(phase)},{L"position",coordinates},{L"row",N(value.row)},{L"time_ns",N(double(touchTimestamp))}}).Stringify()));
+    }
+    bool cancelTouches(hstring reason=L"touch_cancel"){
+        if(touches.empty())return false;
+        if(trace)lastCancel=O({{L"reason",S(reason)},{L"generation",N(double(generation))},
+            {L"touch_contacts",N(double(touches.size()))},{L"multitouch",B(multitouch)}});
+        auto pending=std::move(touches);touches.clear();
+        for(auto const& [contact,value]:pending){
+            sendTouch(contact,L"cancel",value);
+            if(auto owner=view.lock())owner->data->pointerCancels.Forget(contact,this);
+        }
+        if(multitouch){multitouch=false;release();ignoreClick=true;deferClick();}
+        evidence();
+        return true;
+    }
+    bool touch(PointerRoutedEventArgs const& e,hstring const& phase){
+        auto point=e.GetCurrentPoint(surface);if(point.PointerDeviceType()!=NativeInput::PointerDeviceType::Touch)return false;
+        auto contact=e.Pointer().PointerId();touchTimestamp=point.Timestamp()*1000;
+        if(point.Properties().IsCanceled()){bool handled=multitouch;cancelTouches(L"pointer_canceled");if(handled)e.Handled(true);return handled;}
+        auto owner=view.lock();if(!owner)return false;
+        if(phase==L"down"){
+            if(touches.contains(contact)){if(multitouch)e.Handled(true);return multitouch;}
+            std::shared_ptr<LayerRow> row;
+            auto original=e.OriginalSource().try_as<DependencyObject>();
+            for(auto const& [element,candidate]:owner->rows)if(inside(original,candidate->root)&&!candidate->renaming){row=candidate;break;}
+            if(!row)return false;
+            if(touches.empty())touchEpoch=epochOf(owner->data);
+            TouchContact value{e.Pointer(),row->id,point.Position(),{}};
+            for(auto node=original;node;node=VisualTreeHelper::GetParent(node)){
+                if(auto element=node.try_as<UIElement>())value.path.push_back(make_weak(element));if(node==surface)break;
+            }
+            touches.emplace(contact,std::move(value));
+        }
+        auto found=touches.find(contact);if(found==touches.end())return false;
+        auto at=point.Position();
+        if(phase==L"move"&&at.X==found->second.point.X&&at.Y==found->second.point.Y){if(multitouch)e.Handled(true);return multitouch;}
+        found->second.point=at;sendTouch(contact,phase,found->second);
+        if(touches.size()>=2&&!multitouch){
+            cancel(L"multiple_contacts",true);multitouch=true;ignoreClick=true;suppressContext=true;
+            releasing=true;bool captured=true;
+            auto content=list.Content().as<UIElement>();scrollInput=ScrollClaim{content.ManipulationMode(),list.HorizontalScrollMode(),list.VerticalScrollMode()};
+            content.ManipulationMode(ManipulationModes::None);list.HorizontalScrollMode(ScrollingScrollMode::Disabled);list.VerticalScrollMode(ScrollingScrollMode::Disabled);
+            for(auto const& [contactId,value]:touches){
+                owner->data->pointerCancels.Observe(contactId,this,[weak=weak_from_this()]{if(auto self=weak.lock())self->cancel(L"touch_capture_handoff");});
+                captured=capture(value.pointer,value.path)&&captured;
+            }
+            releasing=false;
+            if(!captured){cancelTouches(L"capture_failed");e.Handled(true);return true;}
+            evidence();
+        }
+        bool handled=multitouch;
+        if(phase==L"up"){
+            owner->data->pointerCancels.Forget(contact,this);touches.erase(contact);
+            if(multitouch&&touches.empty()){multitouch=false;release();ignoreClick=true;deferClick();}
+        }
+        if(handled)e.Handled(true);
+        return handled;
+    }
     bool movable(J const& row)const{
         if(grip)return flag(row,L"drag_from_handle");
         auto kind=device==NativeInput::PointerDeviceType::Mouse?L"mouse":device==NativeInput::PointerDeviceType::Pen?L"pen":L"touch";
@@ -73,6 +145,8 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             {L"source",id>=0?N(id):JsonValue::CreateNullValue()},{L"generation",N(double(generation))},
             {L"device",S(device==NativeInput::PointerDeviceType::Mouse?L"mouse":device==NativeInput::PointerDeviceType::Pen?L"pen":L"touch")},
             {L"grip",B(grip)},{L"mask",B(mask)},{L"captured",B(owns(surface))},{L"ignore_click",B(ignoreClick)},
+            {L"touch_contacts",N(double(touches.size()))},{L"multitouch",B(multitouch)},
+            {L"touch_captures",N(double(std::count_if(touches.begin(),touches.end(),[&](auto const& entry){return PointerGesture::Captured(surface,entry.first);})))},
             {L"pickup",B(pickup)},{L"initial_swipe",N(initialSwipe)},
             {L"source_swipe",sourceRow?N(sourceRow->swipeOffset):JsonValue::CreateNullValue()},
             {L"source_grip_opacity",sourceRow?N(sourceRow->grip.Opacity()):JsonValue::CreateNullValue()},
@@ -117,10 +191,11 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         release();if(closeMenu)hideMenu();
         marks();deferClick();evidence();
     }
-    bool cancel(hstring reason=L"cancel"){
+    bool cancel(hstring reason=L"cancel",bool keepTouches=false){
+        bool touched=!keepTouches&&cancelTouches(reason);
         auto owner=view.lock();bool active=bool(pointer)||finishing;
         bool revealed=false;if(owner)for(auto const& [key,row]:owner->rows)if(row->swipeOffset!=0){row->swipe(0);revealed=true;}
-        if(!active&&!(owner&&owner->menuOwner.Active()))return revealed;
+        if(!active&&!(owner&&owner->menuOwner.Active()))return revealed||touched;
         if(active){
             rejected=pointer?std::optional<uint32_t>(pointer.PointerId()):std::nullopt;
             ignoreClick=true;
@@ -135,8 +210,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         auto content=list.Content().as<UIElement>();scrollInput=ScrollClaim{content.ManipulationMode(),list.HorizontalScrollMode(),list.VerticalScrollMode()};
         content.ManipulationMode(ManipulationModes::None);
         list.HorizontalScrollMode(ScrollingScrollMode::Disabled);list.VerticalScrollMode(ScrollingScrollMode::Disabled);
-        for(auto const& weak:path)if(auto node=weak.get();node&&owns(node))node.ReleasePointerCapture(pointer);
-        bool captured=surface.CapturePointer(pointer);releasing=false;
+        bool captured=capture(pointer,path);releasing=false;
         if(!captured)cancel(L"capture_failed");
         return captured;
     }
@@ -152,6 +226,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     }
     void down(PointerRoutedEventArgs const& e){
         auto owner=view.lock();if(owner&&owner->data->claimBubbleContact(e))return;
+        if(touch(e,L"down"))return;
         if(finishing)cancel(L"new_contact");
         if(pointer){if(pointer.PointerId()!=e.Pointer().PointerId())cancel(L"multiple_contacts");return;}
         rejected.reset();ignoreClick=false;suppressContext=false;++generation;
@@ -224,6 +299,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         query();
     }
     void motion(PointerRoutedEventArgs const& e){
+        if(touch(e,L"move"))return;
         if(trace&&pointer){auto point=e.GetCurrentPoint(surface);lastMove=O({{L"pointer_id",N(e.Pointer().PointerId())},
             {L"x",N(point.Position().X)},{L"y",N(point.Position().Y)}});}
         if(!pointer||pointer.PointerId()!=e.Pointer().PointerId()||finishing)return;
@@ -251,6 +327,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(dragging){target();e.Handled(true);evidence();}
     }
     void up(PointerRoutedEventArgs const& e){
+        if(touch(e,L"up"))return;
         if(rejected&&*rejected==e.Pointer().PointerId()){rejected.reset();deferClick();return;}
         if(!pointer||pointer.PointerId()!=e.Pointer().PointerId()||finishing)return;
         if(!focus()||e.GetCurrentPoint(surface).Properties().IsCanceled()){cancel(L"release_canceled");return;}
@@ -303,6 +380,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         inputMove=PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->motion(e);});
         inputUp=PointerEventHandler([weak=weak_from_this()](auto&&,auto&& e){if(auto self=weak.lock())self->up(e);});
         inputCancel=PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+            if(auto self=weak.lock();self&&!self->releasing&&self->touches.contains(e.Pointer().PointerId()))self->cancelTouches(L"pointer_canceled");
             if(auto self=weak.lock();self&&!self->releasing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId())self->cancel(L"pointer_canceled");
         });
         root.AddHandler(UIElement::PointerMovedEvent(),box_value(inputMove),true);
@@ -328,18 +406,21 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             }
         });
         surface.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
-            if(auto self=weak.lock();self&&!self->releasing&&self->pointer&&self->pointer.PointerId()==e.Pointer().PointerId()){
+            if(auto self=weak.lock();self&&!self->releasing){
+                auto contactId=e.Pointer().PointerId();bool paired=self->multitouch&&self->touches.contains(contactId);
+                if(!paired&&(!self->pointer||self->pointer.PointerId()!=contactId))return;
+                auto point=e.GetCurrentPoint(self->surface);bool captured=PointerGesture::Captured(self->surface,contactId);
                 if(self->trace){
                     auto original=e.OriginalSource();auto node=original.try_as<DependencyObject>();
-                    auto point=e.GetCurrentPoint(self->surface);
-                    self->lastCaptureLoss=O({{L"surface_owned",B(self->owns(self->surface))},
+                    self->lastCaptureLoss=O({{L"surface_owned",B(captured)},{L"multitouch",B(paired)},
                         {L"held",B(self->held)},{L"dragging",B(self->dragging)},{L"in_contact",B(point.IsInContact())},
                         {L"canceled",B(point.Properties().IsCanceled())},
                         {L"source_type",S(original?get_class_name(original):hstring{})},
                         {L"source_id",S(node?AutomationProperties::GetAutomationId(node):hstring{})}});
                 }
-                if(!self->held&&!self->dragging&&!self->swiping&&!self->grip&&!e.GetCurrentPoint(self->surface).IsInContact())self->up(e);
-                else if(e.GetCurrentPoint(self->surface).Properties().IsCanceled())self->cancel(L"pointer_canceled");
+                if(paired){if(!captured)self->cancelTouches(L"capture_lost");self->evidence();}
+                else if(!self->held&&!self->dragging&&!self->swiping&&!self->grip&&!point.IsInContact())self->up(e);
+                else if(point.Properties().IsCanceled())self->cancel(L"pointer_canceled");
                 else self->cancel(L"capture_lost");
             }
         })),true);
@@ -353,13 +434,14 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
 LayerRowDrag::LayerRowDrag(std::shared_ptr<LayersView> const& view):impl(std::make_shared<Impl>()){
     impl->view=view;impl->context=view->data;impl->surface=view->root;impl->list=view->list;impl->init();
 }
-LayerRowDrag::~LayerRowDrag(){impl->clear(true);}
+LayerRowDrag::~LayerRowDrag(){impl->cancelTouches();impl->clear(true);}
 void LayerRowDrag::Attach(std::shared_ptr<LayerRow> const& row){
     PointerGesture::OwnHolding(row->root);
     row->root.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler(
         [weak=std::weak_ptr(impl)](auto&&,auto&& e){if(auto self=weak.lock())self->down(e);})),true);
 }
 void LayerRowDrag::Refresh(){
+    if(auto owner=impl->view.lock();owner&&!impl->touches.empty()&&impl->touchEpoch!=epochOf(owner->data))impl->cancel(L"document_changed");
     if(impl->pointer){
         if(!impl->current())impl->cancel(L"source_invalid");
         else if(impl->dragging){++impl->revision;impl->answered.reset();impl->placement=L"";impl->normalizedTarget=-1;impl->effectOwner=-1;impl->marks();impl->query();}

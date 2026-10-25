@@ -75,7 +75,7 @@ pub(crate) enum TouchGesture {
 
 #[derive(Default)]
 pub(crate) struct TouchGestures {
-    contacts: std::collections::BTreeMap<u64, ([f32; 2], [f32; 2])>,
+    contacts: std::collections::BTreeMap<u64, ([f32; 2], [f32; 2], u64)>,
     first_ns: u64,
     last_ns: u64,
     peak: usize,
@@ -88,7 +88,6 @@ pub(crate) struct TouchGestures {
     first_lift_ns: u64,
     repeat_ns: Option<u64>,
     repeated: bool,
-    pub indirect: bool,
     pub scrubbed: bool,
     pub camera: Option<crate::Camera>,
 }
@@ -103,7 +102,7 @@ impl TouchGestures {
         self.contacts.len() >= 3 || ((self.scrubbed || self.repeated) && self.active())
     }
     pub fn repeat_pending(&self) -> bool {
-        !self.indirect && !self.failed && !self.tap_failed && !self.lifted && (2..=3).contains(&self.contacts.len())
+        !self.failed && !self.tap_failed && !self.lifted && (2..=3).contains(&self.contacts.len())
     }
     pub fn repeat_fingers(&self) -> usize { self.contacts.len() }
     pub fn advance(&mut self, now_ns: u64, policy: TouchPolicy) -> Option<TouchGesture> {
@@ -115,7 +114,7 @@ impl TouchGestures {
         self.scrub = None;
         Some(TouchGesture::Hold)
     }
-    pub(crate) fn contact_position(&self,id:u64)->Option<[f32;2]> {self.contacts.get(&id).map(|(_,current)|*current)}
+    pub(crate) fn contact_position(&self,id:u64)->Option<[f32;2]> {self.contacts.get(&id).map(|(_,current,_)|*current)}
     pub fn contact(
         &mut self,
         id: u64,
@@ -126,15 +125,17 @@ impl TouchGestures {
         eligible: bool,
     ) -> Option<TouchGesture> {
         if phase == ContactPhase::Down && !self.active() {
-            *self = Self { first_ns: time_ns, camera: self.camera.take(), indirect: self.indirect, ..Self::default() };
+            *self = Self { first_ns: time_ns, camera: self.camera.take(), ..Self::default() };
         }
-        self.failed |= !eligible || time_ns == 0 || time_ns < self.last_ns || !position.into_iter().all(f32::is_finite);
-        self.last_ns = time_ns;
+        self.failed |= !eligible || time_ns == 0 || self.contacts.get(&id).is_some_and(|(_, _, last)| time_ns < *last)
+            || !position.into_iter().all(f32::is_finite);
+        self.last_ns = self.last_ns.max(time_ns);
         match phase {
             ContactPhase::Down => {
                 self.repeat_ns = None;
                 self.failed |= self.lifted || self.contacts.contains_key(&id);
-                self.contacts.insert(id, (position, position));
+                self.first_ns = self.first_ns.min(time_ns);
+                self.contacts.insert(id, (position, position, time_ns));
                 self.peak = self.peak.max(self.contacts.len());
                 self.pinch = (self.peak == 2).then(|| ([self.positions()[0], self.positions()[1]], time_ns));
                 self.scrub = (self.peak == 3 && !self.failed && !self.tap_failed
@@ -142,8 +143,9 @@ impl TouchGestures {
                     .then(|| TouchScrub::new(self.positions()));
             }
             ContactPhase::Move | ContactPhase::Up => {
-                let (start, current) = self.contacts.get_mut(&id)?;
+                let (start, current, last) = self.contacts.get_mut(&id)?;
                 *current = position;
+                *last = time_ns;
                 self.tap_failed |= (position[0] - start[0]).hypot(position[1] - start[1]) > policy.slop;
                 if phase == ContactPhase::Up {
                     if !self.lifted {
@@ -167,7 +169,7 @@ impl TouchGestures {
                     self.contacts.remove(&id);
                     self.scrub = None;
                     self.lifted = true;
-                    self.tap_failed |= time_ns.saturating_sub(self.first_ns) > u64::from(policy.tap_ms) * 1_000_000;
+                    self.tap_failed |= self.last_ns.saturating_sub(self.first_ns) > u64::from(policy.tap_ms) * 1_000_000;
                     if !self.active() && !self.failed && time_ns.saturating_sub(self.first_lift_ns) <= 100_000_000
                         && let Some(outward) = self.quick_pinch.take() {
                         return Some(TouchGesture::QuickPinch { outward });
@@ -175,7 +177,7 @@ impl TouchGestures {
                     if !self.active() && !self.failed && !self.tap_failed && !self.repeated && (2..=4).contains(&self.peak) {
                         return Some(TouchGesture::Tap(self.peak as u8));
                     }
-                } else if !self.failed && time_ns.saturating_sub(self.first_ns) <= 2_000_000_000 {
+                } else if !self.failed && self.last_ns.saturating_sub(self.first_ns) <= 2_000_000_000 {
                     let positions = self.positions();
                     if self.scrub.as_mut().is_some_and(|scrub| scrub.update(positions, policy.slop * 2.)) {
                         self.scrub = None;
@@ -196,7 +198,7 @@ impl TouchGestures {
 
     fn positions(&self) -> [[f32; 2]; 3] {
         let mut positions = [[0.; 2]; 3];
-        for (position, (_, current)) in positions.iter_mut().zip(self.contacts.values()) {
+        for (position, (_, current, _)) in positions.iter_mut().zip(self.contacts.values()) {
             *position = *current;
         }
         positions
@@ -321,6 +323,14 @@ pub enum UiInput {
         id: u64,
         phase: ContactPhase,
         position: [f32; 2],
+        time_ns: u64,
+    },
+    LayerTouch {
+        surface: u64,
+        id: u64,
+        phase: ContactPhase,
+        position: [f32; 2],
+        row: Option<u64>,
         time_ns: u64,
     },
     PenButton {

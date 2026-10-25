@@ -9,6 +9,7 @@ use std::{
     rc::{Rc, Weak},
 };
 mod connections;
+mod touch;
 
 struct LayerCopy {
     layer: layer_ui::native_copy::LayerCopy,
@@ -41,6 +42,8 @@ pub struct LayerPanel {
     pub footer: gtk::Box,
     pub list: gtk::ScrolledWindow,
     pub opacity: NumberControl,
+    opacity_popup: gtk::Popover,
+    opacity_editor: NumberControl,
     model: gio::ListStore,
     blend: gtk::MenuButton,
     blend_label: gtk::Label,
@@ -421,6 +424,14 @@ impl LayerPanel {
         let context = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
         context.set_parent(&root);
         context.set_has_arrow(false);
+        let opacity_editor = NumberControl::panel(NumericControl::layer_opacity(), copy.borrow().layer.opacity.as_ref(), localization.clone());
+        opacity_editor.set_widget_name("layer-gesture-opacity");
+        opacity_editor.set_size_request(220, -1);
+        opacity_editor.set_margin_start(12); opacity_editor.set_margin_end(12);
+        opacity_editor.set_margin_top(12); opacity_editor.set_margin_bottom(12);
+        let opacity_popup = gtk::Popover::new();
+        opacity_popup.set_child(Some(&opacity_editor));
+        opacity_popup.set_parent(&root);
         let release = gtk::EventControllerLegacy::new();
         release.set_propagation_phase(gtk::PropagationPhase::Capture);
         release.connect_event(glib::clone!(
@@ -1028,6 +1039,7 @@ impl LayerPanel {
             .child(&view)
             .build());
         let overlay = gtk::Overlay::new();
+        touch::install(&list, owner.clone(), rows.clone());
         overlay.set_child(Some(&list));
         overlay.add_overlay(&connections);
         overlay.set_measure_overlay(&connections, false);
@@ -1056,6 +1068,8 @@ impl LayerPanel {
             add_paper,
             connections,
             opacity,
+            opacity_popup,
+            opacity_editor,
             model,
             blend,
             blend_label,
@@ -1145,6 +1159,16 @@ impl LayerPanel {
         let copy = self.copy.borrow();
         *self.owner.borrow_mut() = Rc::downgrade(w);
         w.watch_popover(self.context.upcast_ref());
+        w.watch_popover(self.opacity_popup.upcast_ref());
+        let surface = self.list.as_ptr() as usize as u64;
+        self.opacity_popup.connect_closed(glib::clone!(#[weak] w, move |_| {
+            let open = w.gpu.borrow().as_ref().is_some_and(|g| g.session.state().layer_tools.opacity_popup.is_some() && g.session.state().layer_tools.opacity_surface == surface);
+            if open { w.dispatch(UiAction::Layer { action: A::CloseOpacity }); }
+        }));
+        self.opacity_editor.connect_value_changed(glib::clone!(#[weak] w, move |control| {
+            let id = w.gpu.borrow().as_ref().and_then(|g| g.session.state().layer_tools.opacity_popup);
+            if let Some(id) = id { w.dispatch(UiAction::SetLayerOpacity { id: Some(id), opacity: control.value() as f32 }); }
+        }));
         if self.root == w.layer_panel.root {
             let click = gtk::GestureClick::new();
             click.set_button(0);
@@ -1433,10 +1457,14 @@ impl LayerPanel {
         }
         if let Some(l) = &state.layer_tools.editing_layer {
             self.opacity.set_value(l.opacity as f64);
+            if state.layer_tools.opacity_popup == Some(l.id) && state.layer_tools.opacity_surface == self.list.as_ptr() as usize as u64 && self.root.is_mapped() {
+                self.opacity_editor.set_value(l.opacity as f64);
+                if !self.opacity_popup.is_visible() { self.opacity_popup.popup(); }
+            } else { self.opacity_popup.popdown(); }
             self.blend_label.set_text(&l.blend_label);
             self.alpha.set_active(l.alpha_locked);
             self.lock.set_active(l.locked);
-        }
+        } else { self.opacity_popup.popdown(); }
         let attachment = &state.layer_tools.attachment;
         self.attachment.set_active(attachment.checked);
         self.attachment.set_sensitive(attachment.action.is_some());

@@ -24,6 +24,64 @@ fn merged(doc: &mut Document, kind: MergeKind) -> Edit {
 fn references(doc: &Document) -> BTreeSet<OccurrenceHandle> {
     doc.scene().references()
 }
+
+#[test]
+fn merge_range_bakes_only_the_inclusive_range_in_one_reversible_edit() {
+    for reverse in [false, true] {
+        let mut doc = document(&["Top", "Upper", "Middle", "Lower", "Bottom"]);
+        let (first, last) = (id(&doc, "Upper"), id(&doc, "Lower"));
+        let kind = if reverse { MergeKind::Range { first: last, last: first } } else { MergeKind::Range { first, last } };
+        assert_eq!(baked(&doc, kind), ["Upper", "Middle", "Lower"]);
+        let before = doc.clone();
+        let undo = merged(&mut doc, kind);
+        assert_eq!(names(&doc), ["Top", "Lower", "Bottom", "Paper"]);
+        doc.apply(undo).unwrap();
+        restored(&before, &doc);
+    }
+}
+
+#[test]
+fn merge_range_refuses_locked_hidden_selection_and_partial_clipping_roots() {
+    for case in 0..4 {
+        let mut doc = document(&["Top", "Middle", "Bottom"]);
+        let kind = MergeKind::Range { first: id(&doc, "Top"), last: id(&doc, "Middle") };
+        let expected = match case {
+            0 => { occurrence_mut(&mut doc, "Middle").locked = true; MergeRefusal::Locked }
+            1 => { occurrence_mut(&mut doc, "Middle").visible = false; MergeRefusal::Hidden }
+            2 => { saved(&mut doc, "Middle", Selection::empty()); MergeRefusal::SelectionLayersInside }
+            _ => { occurrence_mut(&mut doc, "Middle").attachment = Attachment::Clip; refresh(&mut doc); MergeRefusal::BelowClipped }
+        };
+        assert_eq!(doc.merge_refusal(kind), Some(expected));
+    }
+}
+#[test]
+fn merge_range_refuses_outside_clips_on_a_member() {
+    for reverse in [false, true] {
+        let mut doc = document(&["Clip", "Base", "Below"]);
+        occurrence_mut(&mut doc, "Clip").attachment = Attachment::Clip;
+        refresh(&mut doc);
+        let (clip, base, below) = (id(&doc, "Clip"), id(&doc, "Base"), id(&doc, "Below"));
+        assert_eq!(doc.scene().clipping_base(clip), Some(base));
+        let kind = if reverse { MergeKind::Range { first: below, last: base } } else { MergeKind::Range { first: base, last: below } };
+        assert_eq!(doc.merge_refusal(kind), Some(MergeRefusal::BelowClipped));
+    }
+}
+#[test]
+fn merge_range_bakes_attached_effects_of_a_member_outside_the_endpoints() {
+    let mut doc = document(&["Levels", "Base", "Below"]);
+    effect(&mut doc, "Levels", "levels");
+    occurrence_mut(&mut doc, "Levels").attachment = Attachment::Effect;
+    refresh(&mut doc);
+    let base = id(&doc, "Base");
+    assert_eq!(doc.scene().effect_owner(id(&doc, "Levels")), Some(base));
+    let kind = MergeKind::Range { first: base, last: id(&doc, "Below") };
+    assert_eq!(baked(&doc, kind), ["Levels", "Base", "Below"]);
+    let before = doc.clone();
+    let undo = merged(&mut doc, kind);
+    assert_eq!(names(&doc), ["Below", "Paper"]);
+    doc.apply(undo).unwrap();
+    restored(&before, &doc);
+}
 #[test]
 fn merge_down_replaces_both_layers_in_one_reversible_edit_and_transfers_references() {
     let mut doc = document(&["Top", "Upper", "Lower", "Bottom"]);

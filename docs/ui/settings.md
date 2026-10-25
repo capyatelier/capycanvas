@@ -279,7 +279,8 @@ Holding two or three fingers repeats the corresponding Undo or Redo binding
 after the platform's long-press time, once every 80 ms. Lifting any finger,
 moving beyond touch slop, cancellation, or opening a popup stops repetition.
 Releasing a repeated hold does not also invoke a tap. Other tap bindings do not
-repeat. Indirect trackpad contacts retain native navigation without history holds.
+repeat. Indirect trackpad contacts support these holds and quick pinches while
+leaving taps with the operating system.
 
 A quick inward pinch followed by lifting both fingers fits the canvas upright.
 An outward quick pinch from that fitted view restores the preceding view,
@@ -313,7 +314,8 @@ button and the inverted pen as the eraser end, in hover and in contact. Windows
 Ink has no upper button, so Windows lists only the lower one. iPadOS does not
 show the pen button or eraser end rows until its host delivers the same input.
 iPadOS and Windows deliver finger taps with native touch timestamps and list the
-tap rows; macOS trackpad contacts recognize scrubs only and list no taps. Windows keeps
+tap rows; macOS trackpad contacts recognize scrubs, quick pinches and history
+holds, and list no taps. Windows keeps
 three- and four-finger contacts for its own touch gestures while those are on
 in Windows Settings, so only two-finger taps reach the app by default.
 

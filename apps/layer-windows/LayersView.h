@@ -102,6 +102,9 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     TextBlock blendLabel{nullptr};
     ContentControl opacityGate;
     Bindings opacityBindings;
+    Flyout opacityPopup{nullptr};
+    Bindings opacityPopupBindings;
+    hstring opacityPopupKey;
     hstring opacityKey,epoch;
     double opacityLayer=-1;
     std::optional<double> revealTarget;
