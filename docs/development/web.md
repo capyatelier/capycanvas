@@ -587,8 +587,11 @@ Setup that some journeys need:
   `CAPY_STORE_CONTRACT_FIXTURE="$PWD/artifacts/store-contract.json" cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`,
   then run the journey with the same `CAPY_STORE_CONTRACT_FIXTURE`.
 - `--settings-audit` compares with GTK allocations. Run
-  `bash tools/performance/workspace-motion.sh gtk --native-test=native_settings_typography`
-  first; both write to `artifacts/ui/settings-audit`.
+  `bash tools/performance/workspace-motion.sh gtk --native-test=native_settings_typography --native-storage`
+  first from the same worktree. It generates the reference JSON and captures for
+  every settings page in both themes under `artifacts/ui/settings-audit`; the Web
+  audit reads those JSON files and writes its captures beside them. These generated
+  references are local artifacts and must be regenerated for the current GTK code.
 - `--palettes` imports its own exports unless `LAYER_PALETTE_SAMPLES` names a
   directory with `gpl`, `aco`, `ase`, `swatches` and `kpl` subdirectories of
   files from other applications.

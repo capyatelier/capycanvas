@@ -253,7 +253,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
                 circle.setAttribute("aria-label", swatch.label); circle.title = swatch.label;
                 circles.append(circle);
               });
-              const reveal=element("div","swatch-entry-reveal");reveal.append(input);
+              const reveal=element("div","swatch-entry-reveal"), clip=element("div");clip.append(input);reveal.append(clip);
               widget.append(...(kind.inline ? [reveal, circles] : [circles, reveal]));
               break;
             }

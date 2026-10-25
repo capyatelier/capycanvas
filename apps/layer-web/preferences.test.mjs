@@ -226,7 +226,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     assert.equal(await evaluate(`document.querySelector('${selector}').inert`), true, 'the hex entry waits for Custom');
     assert.ok(await evaluate(`(() => { const row=document.querySelector('[data-preference=${theme}_base]'), circle=document.querySelector('${custom}'); return circle.getBoundingClientRect().height < row.getBoundingClientRect().height; })()`), 'base circles share the title row');
     await click(custom);
-    assert.ok(await evaluate(`(()=>{const n=document.querySelector('${selector}'),reveal=n.parentElement;return !n.inert && getComputedStyle(n).visibility==='visible' && reveal.classList.contains('swatch-entry-reveal') && (matchMedia('(prefers-reduced-motion:reduce)').matches || reveal.getAnimations().length>0);})()`),'Custom reveals an interactive entry through the authored slide');
+    assert.ok(await evaluate(`(()=>{const n=document.querySelector('${selector}'),reveal=n.closest('.swatch-entry-reveal');return !n.inert && getComputedStyle(n).visibility==='visible' && (matchMedia('(prefers-reduced-motion:reduce)').matches || reveal.getAnimations().length>0);})()`),'Custom reveals an interactive entry through the authored slide');
     assert.equal(await evaluate(`document.activeElement===document.querySelector('${selector}')`), true);
     assert.equal(await evaluate(`document.querySelector('${selector}').value`), theme === 'dark' ? '#333333' : '#b8b8b8');
     await evaluate(`document.querySelector('${selector}').value='invalid'`); await key('Enter');

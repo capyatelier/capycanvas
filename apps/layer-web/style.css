@@ -667,7 +667,7 @@ body[data-theme="light"] .recording > svg.warning { color: #9c5700; }
 .preference-image-tiles { display: grid; grid-template-columns: repeat(var(--columns), 64px); justify-content: center; gap: 6px; }
 .preference-image-tiles button { width: 64px; height: 64px; padding: 8px; display: grid; place-items: center; border-radius: calc(32px * var(--corner-fit)); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .preference-image-tiles svg { width: 48px; height: 48px; }
-.preference-swatches { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.preference-swatches { display: flex; flex-direction: column; align-items: center; gap: 0; }
 .preference-swatches.inline { flex-direction: row; gap: 8px; }
 .swatch-circles { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .preference-swatches.inline .swatch-circles { flex-wrap: nowrap; }
@@ -1698,9 +1698,11 @@ button.new-drawing-preset.disabled { opacity:.4; }
 .bubble-intensity [role=slider] { pointer-events:stroke; touch-action:none; outline:0; }
 
 .swatch-entry-reveal { overflow:hidden; display:grid; grid-template-rows:0fr; opacity:0; transition:grid-template-rows 200ms ease-out,opacity 200ms ease-out; }
-.swatch-entry-reveal > input { min-width:0; width:100%; min-height:0; height:100%; box-sizing:border-box; overflow:hidden; visibility:hidden; }
+.swatch-entry-reveal > div { min-width:0; min-height:0; overflow:hidden; }
+.swatch-entry-reveal input { max-width:none; box-sizing:border-box; visibility:hidden; }
+.preference-swatches:not(.inline) .swatch-entry-reveal input { margin-top:12px; }
 .preference-swatches.custom-open > .swatch-entry-reveal { grid-template-rows:1fr; opacity:1; }
-.preference-swatches.custom-open > .swatch-entry-reveal > input { visibility:visible; }
+.preference-swatches.custom-open > .swatch-entry-reveal input { visibility:visible; }
 .preference-swatches.inline > .swatch-entry-reveal { grid-template-rows:1fr; grid-template-columns:0fr; transition:grid-template-columns 200ms ease-out,opacity 200ms ease-out; }
 .preference-swatches.inline.custom-open > .swatch-entry-reveal { grid-template-columns:1fr; }
 .color-footer-stack { display:grid; flex:1; min-width:0; }

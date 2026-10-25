@@ -34,6 +34,10 @@ a settings dialog dismisses the view; it is not a second Apply operation.
 Dependent fields are enabled or disabled by shared rules, so different clients
 cannot disagree about whether a setting is valid.
 
+Custom base and accent color editors slide open when Custom is selected. A
+collapsed editor occupies no space; the accent editor's 12-pixel top gap opens
+and closes with the field.
+
 About ends with a read-only two-column row, Dedicated to / Nagu, after Source
 code. Application license shows its value without a description.
 
