@@ -496,7 +496,7 @@ set, and passing `$null` to `[Environment]::SetEnvironmentVariable` can leave on
 | Variable | Effect |
 | --- | --- |
 | `CAPY_STORAGE_DIR` | Absolute folder replacing every [app folder](#where-files-live). Test and review runs use a fresh one under `artifacts/windows`; smoke-test hooks require it. |
-| `CAPY_TRACE_UI=1` | Writes `ui-state-<pid>-<window>.json`, `camera-state-<pid>-<window>.json`, `windows-<pid>.json` and `lifecycle.log` in the working directory, and adds gesture state to UI Automation. These files can contain private settings. |
+| `CAPY_TRACE_UI=1` | Writes `ui-state-<pid>-<window>.json`, `camera-state-<pid>-<window>.json`, `panel-metrics-<pid>-<window>.json`, `windows-<pid>.json` and `lifecycle.log` in the working directory, and adds gesture state to UI Automation. These files can contain private settings. |
 | `CAPY_SMOKE_TEST=1` | Adds test buttons: replayed stroke, pan, pen and backlog, filter reload and GPU device removal. Replay bypasses OS input delivery. |
 | `CAPY_TEST_HDR=1` | With `CAPY_SMOKE_TEST`, adds buttons that simulate HDR and SDR output. |
 | `CAPY_TEST_DISPLAY=1` | Opens the window on a display running at 120 Hz or more, or on the primary display with `CAPY_TEST_PRIMARY=1`. |
@@ -504,6 +504,11 @@ set, and passing `$null` to `[Environment]::SetEnvironmentVariable` can leave on
 | `CAPY_TRACE_SHADER_JOBS=1` | Logs pipeline compile durations to stderr. |
 | `CAPY_FILTERS_DIR`, `CAPY_FILTERS_MODE` | [Runtime filter package](#runtime-filter-packages) override. |
 | `LAYER_GPU_INDEX` | Adapter index for headless renderer tests. The default adapter can be Vulkan; select the D3D12 one explicitly. |
+
+The panel-metrics trace contains the shared catalog's layout metrics. Fixtures
+match its process and window IDs to the owned drawing before checking native
+control bounds. A background worker publishes it atomically; readers wait for
+the matching file before using its metrics.
 
 Turn tracing off for performance runs.
 
@@ -1644,19 +1649,40 @@ shared Rust retains shortcut steps and repeat policy.
 ### Control reviews
 
 Separate review builds replace the app's entry point with production controls
-or upload helpers. Number and Color use synthetic Rust models for comparison
-with the Web controls. Generate those models at the display's actual scale,
-then build and capture:
+or upload helpers. Number and Color use shared Rust models for comparison
+with the Web controls. Fixtures that create workspace data adopt the shared
+localization bootstrap before constructing controls.
+Generate those models at the display's actual scale,
+then build and capture. Number models include shared captions, both formatted
+range endpoints and panel metrics. Use a fresh model directory after changing
+that contract. Panel slider reports require the visible readout and track with
+no step buttons; spin rows retain both buttons and their bound and opacity checks.
+Reviews compare the actual caption text bounds and require visible value pixels
+in enabled and disabled spin rows:
 
 ```powershell
 cargo run --locked -p layer-windows --example number-fixture -- artifacts/windows/numeric-matrix
 ./apps/layer-windows/scripts/build.ps1 -ControlFixture Number -OutputDirectory artifacts/windows/NumberReview
 ./apps/layer-windows/scripts/capture-number-controls.ps1 -Executable artifacts/windows/NumberReview/CapyCanvas.exe -FixtureFile artifacts/windows/numeric-matrix/fixture-windows-light.json
 
-cargo run --locked -p layer-ui --example compact_color_fixture -- artifacts/windows/compact-color-parity 1.5
+cargo run --locked -p layer-host --example compact_color_fixture -- artifacts/windows/compact-color-parity 1.5
 ./apps/layer-windows/scripts/build.ps1 -ControlFixture Color -OutputDirectory artifacts/windows/ColorFixture
 ./apps/layer-windows/scripts/capture-compact-color.ps1 -Executable artifacts/windows/ColorFixture/CapyCanvas.exe -FixtureFile artifacts/windows/compact-color-parity/dark-160.json
 ```
+
+Color models come from an unattached shared session with U8 SDR document state.
+Regenerate both native and Web inputs together after changing its preview or
+query contract; the Web capture requires shared Layout/HueStops responses and
+completed field requests for every shape, including Square. Its fixed SDR test
+requests are checked through the production Web raster worker against the CPU
+RGBA files; they do not execute the Web App's metadata-selection method.
+
+Color and Number captures select a unique review surface from the owned process's
+top-level windows, checking both UI Automation and Win32 process ownership.
+A process can own an input overlay as well as its review window; its reported
+main window is not a control-surface identity. Keep the 45-second discovery bounds.
+Read fixture and native report JSON with `Read-Snapshot` so UTF-8 captions survive
+both supported PowerShell versions.
 
 Build `Bitmap` to check the common native uploader with owned pixel buffers and
 the same private context setup as the other control reviews:

@@ -313,8 +313,8 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
 };
 struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata;
-    std::shared_ptr<Fixture> fixture;std::shared_ptr<Frames> frames;NativeLocalization localization;
-    App(std::shared_ptr<Frames> data,NativeLocalization context):frames(std::move(data)),localization(std::move(context)){UnhandledException([this](auto&&,UnhandledExceptionEventArgs const& args){
+    std::shared_ptr<Fixture> fixture;std::shared_ptr<Frames> frames;ControlContext context;
+    App(std::shared_ptr<Frames> data,ControlContext source):frames(std::move(data)),context(std::move(source)){UnhandledException([this](auto&&,UnhandledExceptionEventArgs const& args){
         resultCode=1;args.Handled(true);if(fixture)fixture->upload->Close();Exit();
     });}
     Markup::IXamlType GetXamlType(winrt::Windows::UI::Xaml::Interop::TypeName const& type){return metadata.GetXamlType(type);}

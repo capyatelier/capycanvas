@@ -1,12 +1,31 @@
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
 
+export function numericLabelSlot(node) {
+  const rect=node.getBoundingClientRect(),style=getComputedStyle(node);
+  const inset=(border,padding)=>{
+    const values=[parseFloat(style.getPropertyValue(border)),parseFloat(style.getPropertyValue(padding))];
+    if(!values.every(Number.isFinite))throw Error('Invalid numeric label box inset');
+    return values[0]+values[1];
+  };
+  const left=inset('border-left-width','padding-left'),right=inset('border-right-width','padding-right');
+  const top=inset('border-top-width','padding-top'),bottom=inset('border-bottom-width','padding-bottom');
+  const x=rect.x+left,y=rect.y+top,width=rect.width-left-right,height=rect.height-top-bottom;
+  if(![x,y,width,height].every(Number.isFinite)||width<0||height<0)throw Error('Invalid numeric label content slot');
+  return {x,y,width,height,left:x,top:y,right:x+width,bottom:y+height};
+}
+
 // Production DOM numeric controls. All displayed values/fills come from the
 // same Rust resolver as the native fixture; this does not emulate numeric math.
 export async function captureNumberControls({fixture, width, height, scale, output, theme, evaluate, call}) {
   assert.equal(fixture.schema, 1);
   assert.equal(fixture.width, width); assert.equal(fixture.height, height);
   assert.equal(fixture.scale, scale); assert.equal(fixture.theme, theme);
+  assert.ok(fixture.panel_metrics && typeof fixture.panel_metrics === 'object', 'Missing shared panel metrics');
+  for (const item of fixture.rows) {
+    for (const key of ['edit', 'decrease', 'increase']) assert.equal(typeof item.labels?.[key], 'string', 'Missing shared numeric caption: '+key);
+    assert.equal(typeof item.maximum?.text, 'string', 'Missing shared maximum format');
+  }
   const frames = await evaluate(`(async()=>{
     const fixture=${JSON.stringify(fixture)};
     const {createNumberField}=await import('/numeric.js');
@@ -44,6 +63,7 @@ export async function captureNumberControls({fixture, width, height, scale, outp
     }
     await document.fonts.ready;
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    const labelSlot=${numericLabelSlot.toString()};
     const frames={};
     for(const {key,root} of controls) {
       const item=fixture.rows[Number(key.split('-')[1])], steps=root.querySelectorAll('.number-step');
@@ -55,7 +75,7 @@ export async function captureNumberControls({fixture, width, height, scale, outp
       for(const [part,selector] of Object.entries({root:null,header:'.number-header',label:'.number-labels',value:'.number-value',entry:'.number-entry',minus:'.number-step:first-of-type',plus:'.number-step:last-of-type',track:'.number-slider'})) {
         let node=selector?root.querySelector(selector):root;
         if(part==='minus'||part==='plus')node=root.querySelectorAll('.number-step')[part==='minus'?0:1];
-        if(node&&node.getBoundingClientRect().height)frames[key+':'+part]=node.getBoundingClientRect().toJSON();
+        if(node&&node.getBoundingClientRect().height)frames[key+':'+part]=part==='label'?labelSlot(node):node.getBoundingClientRect().toJSON();
       }
     }
     return frames;

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRasterWorker} from './raster-worker-client.js';
+import {observeColorWorkers,waitForColorCapture} from '../../tools/visual/color-panel.mjs';
 
 function fixture(module) {
   const original=Object.fromEntries(['Worker','setTimeout','clearTimeout','setInterval','clearInterval'].map(k=>[k,globalThis[k]]));
@@ -12,7 +13,8 @@ function fixture(module) {
     constructor(){this.messages=[];this.terminated=false;workers.push(this);}
     postMessage(message,transfer){assert.equal(this.terminated,false);if(this.postError)throw this.postError;this.messages.push(message);(this.transfers??=[]).push(transfer);}
     terminate(){this.terminated=true;}
-    reply(result,extra={}){this.onmessage({data:{id:this.messages.at(-1).id,result,...extra}});}
+    addEventListener(name,callback){(this.listeners??=[]).push([name,callback]);}
+    reply(result,extra={}){const event={data:{id:this.messages.at(-1).id,result,...extra}};for(const [name,callback]of this.listeners??[])if(name==='message')callback(event);this.onmessage(event);}
     error(){this.onerror({preventDefault(){},message:'worker failed'});}
   };
   const events=[],run=createRasterWorker(module,event=>events.push(event));
@@ -188,4 +190,37 @@ test('brush alpha transfers to image preparation and returns caller-owned bitmap
   const bitmap={closed:0,close(){this.closed++;}};worker.reply(bitmap);assert.equal(await pending,bitmap);assert.equal(bitmap.closed,0);
   const next=f.run(request('image-decode'));assert.equal(f.workers.length,1);worker.reply('image');assert.equal(await next,'image');
   bitmap.close();assert.equal(bitmap.closed,1);
+}));
+
+test('Color capture keeps duplicate metadata bound to each production worker module',()=>withFixture(async f=>{
+  const modules=new WeakMap(),pending=new Set(),failures=[],events=[],bytes=Uint8Array.of(20,40,60,255);
+  const first=new WebAssembly.Module(Uint8Array.of(0,97,115,109,1,0,0,0)),second=structuredClone(first);
+  const captures=[first,second].map(module=>{const capture={item:{field_request:'opaque-color-field',field_side:1},bytes,completed:0,lastRequested:'opaque-color-field',panels:{flushPaint(){}}};modules.set(module,capture);return capture;});
+  const observer=observeColorWorkers(globalThis.Worker,modules,pending,failures,events),raf=globalThis.requestAnimationFrame;
+  globalThis.Worker=observer.Worker;globalThis.requestAnimationFrame=callback=>queueMicrotask(callback);
+  try{
+    const one=createRasterWorker(first)(request('color-field',{metadata:'opaque-color-field'})),two=createRasterWorker(second)(request('color-field',{metadata:'opaque-color-field'}));
+    assert.equal(f.workers.length,2);assert.equal(f.workers[0].messages[0].module,first);assert.equal(f.workers[1].messages[0].module,second);
+    f.workers[1].reply(bytes);assert.strictEqual(await two,bytes);assert.equal(captures[0].completed,0);assert.equal(captures[1].completed,1);
+    const deliver=f.workers[0].onmessage;f.workers[0].onmessage=event=>{assert.equal(captures[0].completed,1);deliver(event);};
+    f.workers[0].reply(bytes);assert.strictEqual(await one,bytes);await waitForColorCapture(captures,pending,failures,events);
+    assert.equal(pending.size,0);assert.deepEqual(failures,[]);assert.equal(captures[0].lastCompleted,captures[0].lastRequested);
+  }finally{observer.close();globalThis.requestAnimationFrame=raf;}
+  assert(f.workers.every(worker=>worker.terminated));
+}));
+
+test('Color capture refuses wrong bytes without replacing the production result or admitting readiness',()=>withFixture(async f=>{
+  const module=new WebAssembly.Module(Uint8Array.of(0,97,115,109,1,0,0,0)),modules=new WeakMap(),pending=new Set(),failures=[],events=[];
+  const capture={item:{field_request:'opaque-color-field',field_side:1},bytes:Uint8Array.of(20,40,60,255),completed:0,lastRequested:'opaque-color-field',panels:{flushPaint(){}}};modules.set(module,capture);
+  const observer=observeColorWorkers(globalThis.Worker,modules,pending,failures,events),raf=globalThis.requestAnimationFrame;
+  globalThis.Worker=observer.Worker;globalThis.requestAnimationFrame=callback=>queueMicrotask(callback);
+  try{
+    const run=createRasterWorker(module),wrong=Uint8Array.of(21,40,60,255),result=run(request('color-field',{metadata:'opaque-color-field'}));
+    f.workers[0].reply(wrong);assert.strictEqual(await result,wrong);await f.flush();
+    assert.equal(capture.completed,0);assert.equal(pending.size,0);assert.match(failures[0],/differs at byte 0/);
+    await assert.rejects(waitForColorCapture([capture],pending,failures,events),/Color capture not ready/);
+    const next=run(request('color-field',{metadata:'opaque-color-field'}));assert.equal(f.workers[0].messages[1].module,undefined);
+    f.workers[0].reply(capture.bytes);assert.strictEqual(await next,capture.bytes);await f.flush();assert.equal(capture.completed,1);
+    await assert.rejects(waitForColorCapture([capture],pending,failures,events),/Color capture not ready/);
+  }finally{observer.close();globalThis.requestAnimationFrame=raf;}
 }));

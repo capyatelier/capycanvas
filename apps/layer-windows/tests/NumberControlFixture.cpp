@@ -11,7 +11,7 @@ namespace {
 int resultCode=0;
 struct Fixture : std::enable_shared_from_this<Fixture> {
     struct Item {hstring key;StackPanel root;J row;};
-    NativeLocalization localization;
+    ControlContext context;
     Window window;Canvas surface;ContentControl viewport;
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     Bindings bindings;std::vector<Item> items;J source;
@@ -34,22 +34,37 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
         for(auto const& item:items){
             if(!item.root.IsLoaded()||item.root.ActualWidth()==0)return;
             auto header=item.root.Children().GetAt(0).as<Grid>();
-            auto entry=findElement(item.root,item.key).as<TextBox>();
-            auto minus=findElement(item.root,item.key+L"-decrease").as<Button>();
-            auto plus=findElement(item.root,item.key+L"-increase").as<Button>();
-            auto spec=object(item.row,L"control");bool enabled=flag(item.row,L"enabled");
-            if(entry.Text()!=str(object(item.row,L"formatted"),L"text")||entry.IsEnabled()!=enabled||
-                minus.IsEnabled()!=(enabled&&num(item.row,L"value")>num(spec,L"min"))||
-                plus.IsEnabled()!=(enabled&&num(item.row,L"value")<num(spec,L"max")))
-                throw hresult_error(E_FAIL,L"Numeric display or step availability differs from the shared model");
-            if(std::abs(minus.Opacity()-(minus.IsEnabled()?1.:.36))>.001||std::abs(plus.Opacity()-(plus.IsEnabled()?1.:.36))>.001)
-                throw hresult_error(E_FAIL,L"Numeric disabled icon opacity differs at "+item.key);
+            auto entry=findElement(item.root,item.key).try_as<TextBox>();
+            auto minus=findElement(item.root,item.key+L"-decrease").try_as<Button>();
+            auto plus=findElement(item.root,item.key+L"-increase").try_as<Button>();
+            auto spec=object(item.row,L"control"),formatted=object(item.row,L"formatted"),labels=object(item.row,L"labels");bool enabled=flag(item.row,L"enabled");
+            if(!entry||entry.Text()!=str(formatted,L"text")||entry.IsEnabled()!=enabled||AutomationProperties::GetName(entry)!=str(labels,L"edit"))
+                throw hresult_error(E_FAIL,L"Numeric display or enabled state differs from the shared model");
+            if(str(spec,L"kind")==L"slider"){
+                if(minus||plus)throw hresult_error(E_FAIL,L"Panel slider retained step buttons at "+item.key);
+                auto track=findElement(item.root,item.key+L"-slider").try_as<Slider>();
+                if(!track||track.IsEnabled()!=enabled||track.Minimum()!=0||track.Maximum()!=1||track.Value()!=num(formatted,L"fill"))
+                    throw hresult_error(E_FAIL,L"Numeric slider state differs from the shared model at "+item.key);
+                auto box=entry.Parent().try_as<Grid>();
+                if(!box||box.Children().Size()!=2)throw hresult_error(E_FAIL,L"Numeric value host is missing at "+item.key);
+                auto value=box.Children().GetAt(1).try_as<ContentControl>();
+                auto border=value?value.Content().try_as<Border>():Border{nullptr};
+                auto readout=border?border.Child().try_as<TextBlock>():TextBlock{nullptr};
+                if(!value||!readout||value.Visibility()!=Visibility::Visible||readout.Visibility()!=Visibility::Visible||value.IsEnabled()!=enabled||readout.Text()!=str(formatted,L"text"))
+                    throw hresult_error(E_FAIL,L"Numeric visible readout differs from the shared model at "+item.key);
+                frames.Insert(item.key+L":value",frame(value));frames.Insert(item.key+L":track",frame(track));
+            }else{
+                if(!minus||!plus||AutomationProperties::GetName(minus)!=str(labels,L"decrease")||AutomationProperties::GetName(plus)!=str(labels,L"increase")||minus.IsEnabled()!=(enabled&&num(item.row,L"value")>num(spec,L"min"))||
+                    plus.IsEnabled()!=(enabled&&num(item.row,L"value")<num(spec,L"max")))
+                    throw hresult_error(E_FAIL,L"Numeric step availability differs from the shared model at "+item.key);
+                if(std::abs(minus.Opacity()-(minus.IsEnabled()?1.:.36))>.001||std::abs(plus.Opacity()-(plus.IsEnabled()?1.:.36))>.001)
+                    throw hresult_error(E_FAIL,L"Numeric disabled icon opacity differs at "+item.key);
+                frames.Insert(item.key+L":entry",frame(entry));frames.Insert(item.key+L":minus",frame(minus));frames.Insert(item.key+L":plus",frame(plus));
+            }
             frames.Insert(item.key+L":root",frame(item.root));
             frames.Insert(item.key+L":header",frame(header));
             frames.Insert(item.key+L":label",frame(header.Children().GetAt(0).as<FrameworkElement>()));
-            frames.Insert(item.key+(str(spec,L"kind")==L"slider"?L":value":L":entry"),frame(entry));
-            frames.Insert(item.key+L":minus",frame(minus));frames.Insert(item.key+L":plus",frame(plus));
-            if(str(spec,L"kind")==L"slider")frames.Insert(item.key+L":track",frame(findElement(item.root,item.key+L"-slider")));
+
         }
         std::wstring current(frames.Stringify());
         stable=current==previous?stable+1:0;previous=std::move(current);
@@ -71,7 +86,7 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
             (name!=L"windows-light"&&name!=L"windows-dark"))
             throw hresult_invalid_argument(L"Expected the synthetic Windows numeric fixture");
         output=path.parent_path()/(L"native-"+std::wstring(name)+L".json");
-        data->localization=localization;data->catalog=object(source,L"catalog");data->state=O({{L"theme",S(str(source,L"theme"))},{L"palette",object(source,L"palette")}});
+        context.apply(data,object(source,L"catalog"));data->state=O({{L"theme",S(str(source,L"theme"))},{L"palette",object(source,L"palette")}});
         surface.Width(num(source,L"width"));surface.Height(num(source,L"height"));
         surface.HorizontalAlignment(HorizontalAlignment::Left);surface.VerticalAlignment(VerticalAlignment::Top);
         surface.Background(data->brush(L"panel"));
@@ -118,8 +133,8 @@ struct Fixture : std::enable_shared_from_this<Fixture> {
 struct App : ApplicationT<App,Markup::IXamlMetadataProvider> {
     Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata;
     std::shared_ptr<Fixture> fixture;
-    NativeLocalization localization;
-    App(NativeLocalization context):localization(std::move(context)){
+    ControlContext context;
+    App(ControlContext source):context(std::move(source)){
         UnhandledException([this](auto&&,UnhandledExceptionEventArgs const& args){
             resultCode=1;args.Handled(true);
             if(fixture){std::ofstream error(fixture->output.parent_path()/L"numeric-fixture-error.log");error<<to_string(args.Message());}
@@ -133,13 +148,13 @@ struct App : ApplicationT<App,Markup::IXamlMetadataProvider> {
         Resources().MergedDictionaries().Append(XamlControlsResources());
         wchar_t path[32768];auto length=GetEnvironmentVariableW(L"CAPY_NUMBER_FIXTURE",path,32768);
         if(!length||length>=32768||!std::filesystem::path(path).is_absolute())throw hresult_invalid_argument(L"CAPY_NUMBER_FIXTURE must be an absolute fixture path");
-        fixture=std::make_shared<Fixture>();fixture->localization=localization;fixture->init(path);
+        fixture=std::make_shared<Fixture>();fixture->context=context;fixture->init(path);
     }
 };
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
-    auto localization=fixtureContext(L"CAPY_NUMBER_FIXTURE");
+    auto context=fixtureContext(L"CAPY_NUMBER_FIXTURE");
     init_apartment(apartment_type::single_threaded);
-    Application::Start([localization](auto&&){make<App>(localization);});
+    Application::Start([context](auto&&){make<App>(context);});
     return resultCode;
 }

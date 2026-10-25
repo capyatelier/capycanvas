@@ -6,10 +6,13 @@ use serde_json::{Value, json};
 use std::{fs, path::PathBuf};
 
 fn row(label: &str, control: &NumericControl, value: f64, enabled: bool) -> Value {
+    let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
     json!({
         "label": label, "control": control, "value": value, "enabled": enabled,
+        "labels": layer_ui::NumericLabels::new(label, &localization),
         "formatted": control.resolve(value, NumericOperation::Format).unwrap(),
-        "minimum": control.resolve(control.min, NumericOperation::Format).unwrap()
+        "minimum": control.resolve(control.min, NumericOperation::Format).unwrap(),
+        "maximum": control.resolve(control.max, NumericOperation::Format).unwrap()
     })
 }
 
@@ -54,7 +57,7 @@ fn main() {
             "require_geometry_parity":true,
             "column_widths":[160,226,320], "theme":theme, "palette":state["palette"],
             "text_size":catalog["text_size_pt"].as_f64().unwrap()*4./3.,
-            "catalog":catalog, "rows":rows,
+            "panel_metrics":catalog["panel_metrics"], "catalog":catalog, "rows":rows,
             "scope":"Synthetic shared numeric models for production WinUI control captures; no user storage or GPU painting."
         });
         fs::write(

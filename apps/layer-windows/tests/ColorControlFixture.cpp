@@ -9,7 +9,7 @@ namespace {
 int resultCode=0;
 struct Fixture:std::enable_shared_from_this<Fixture>{
     struct Item {hstring key;FrameworkElement root;std::shared_ptr<WorkspaceData> data;};
-    NativeLocalization localization;
+    ControlContext context;
     Window window;Canvas surface;ContentControl viewport;Bindings bindings;
     std::vector<Item> items;J source;std::filesystem::path output;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
@@ -57,7 +57,7 @@ struct Fixture:std::enable_shared_from_this<Fixture>{
         surface.RequestedTheme(str(source,L"theme")==L"light"?ElementTheme::Light:ElementTheme::Dark);
         AutomationProperties::SetName(surface,L"Compact color control review");AutomationProperties::SetAutomationId(surface,L"color-review-surface");
         for(auto value:array(source,L"items")){
-            auto item=value.GetObject();auto data=std::make_shared<WorkspaceData>();data->localization=localization;data->catalog=object(source,L"catalog");
+            auto item=value.GetObject();auto data=std::make_shared<WorkspaceData>();context.apply(data,object(source,L"catalog"));
             data->state=O({{L"theme",source.GetNamedValue(L"theme")},{L"palette",object(source,L"palette")},{L"colors",object(item,L"colors")}});
             data->model=O({{L"color_panel",object(item,L"model")}});
             data->send=[](auto&&){throw hresult_error(E_FAIL,L"Unexpected edit during static color capture");};
@@ -80,8 +80,8 @@ struct Fixture:std::enable_shared_from_this<Fixture>{
 struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata;
     std::shared_ptr<Fixture> fixture;
-    NativeLocalization localization;
-    App(NativeLocalization context):localization(std::move(context)){UnhandledException([this](auto&&,UnhandledExceptionEventArgs const& args){
+    ControlContext context;
+    App(ControlContext source):context(std::move(source)){UnhandledException([this](auto&&,UnhandledExceptionEventArgs const& args){
         resultCode=1;args.Handled(true);
         if(fixture){std::ofstream error(fixture->output.parent_path()/L"color-fixture-error.log");error<<to_string(args.Message());}Exit();
     });}
@@ -92,11 +92,11 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
         Resources().MergedDictionaries().Append(XamlControlsResources());
         wchar_t path[32768];auto length=GetEnvironmentVariableW(L"CAPY_COLOR_FIXTURE",path,32768);
         if(!length||length>=32768||!std::filesystem::path(path).is_absolute())throw hresult_invalid_argument(L"CAPY_COLOR_FIXTURE must be an absolute fixture path");
-        fixture=std::make_shared<Fixture>();fixture->localization=localization;fixture->init(path);
+        fixture=std::make_shared<Fixture>();fixture->context=context;fixture->init(path);
     }
 };
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
-    auto localization=fixtureContext(L"CAPY_COLOR_FIXTURE");
-    init_apartment(apartment_type::single_threaded);Application::Start([localization](auto&&){make<App>(localization);});return resultCode;
+    auto context=fixtureContext(L"CAPY_COLOR_FIXTURE");
+    init_apartment(apartment_type::single_threaded);Application::Start([context](auto&&){make<App>(context);});return resultCode;
 }

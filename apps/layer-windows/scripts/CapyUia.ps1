@@ -75,6 +75,31 @@ function Record-CapyFixtureClose([int]$ProcessId,[long]$WindowHandle,[bool]$Wind
     $entry=[ordered]@{process_id=$ProcessId;hwnd=$WindowHandle;contract=$Contract;result='pass';window_only=$WindowOnly;completed_utc=[DateTime]::UtcNow.ToString('o')}
     Update-CapyFixtureContext {param($context);$context.closes=@($context.closes)+@($entry)}
 }
+function Owned-ProcessWindows([Diagnostics.Process]$Process,[long]$WindowHandle){
+    $windows=if($WindowHandle){@([System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle))}
+        else{[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$Process.Id))}
+    foreach($window in $windows){
+        if(!$window){continue}
+        $current=$window.Current;$handle=[IntPtr]$current.NativeWindowHandle;$owner=[uint32]0
+        [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
+        if($handle -ne [IntPtr]::Zero -and $owner -eq $Process.Id -and $current.ProcessId -eq $Process.Id){
+            [pscustomobject]@{Root=$window;Handle=$handle}
+        }
+    }
+}
+function Owned-ProcessSurface([Diagnostics.Process]$Process,[string]$AutomationId){
+    $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$AutomationId)
+    $found=@(foreach($window in Owned-ProcessWindows $Process){
+        foreach($surface in $window.Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)){
+            if($surface.Current.ProcessId -eq $Process.Id -and $surface.Current.AutomationId -ceq $AutomationId){
+                [pscustomobject]@{Root=$window.Root;Handle=$window.Handle;Surface=$surface}
+            }
+        }
+    })
+    if($found.Count -gt 1){throw "The owned process has multiple $AutomationId surfaces"}
+    if($found.Count){$found[0]}
+}
 function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle,[string]$TraceDirectory=$script:CapyTraceDirectory){
     $directory=$TraceDirectory
     if(!$directory){$executable=$Process.Path;if(!$executable){return $null};$directory=Split-Path -Parent $executable}
@@ -86,16 +111,9 @@ function Owned-DrawingWindow([Diagnostics.Process]$Process,[long]$WindowHandle,[
             $registered=$trace.process_id -eq $Process.Id -and $WindowHandle -in $trace.windows.hwnd
         }
     }
-    $windows=if($WindowHandle){@([System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle))}
-        else{[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,
-            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$Process.Id))}
     $canvas=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas')
-    $found=@(foreach($window in $windows){
-        $handle=[IntPtr]$window.Current.NativeWindowHandle;$owner=[uint32]0
-        [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
-        if($handle -ne [IntPtr]::Zero -and $owner -eq $Process.Id -and ($registered -or $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$canvas))){
-            [pscustomobject]@{Root=$window;Handle=$handle}
-        }
+    $found=@(Owned-ProcessWindows $Process $WindowHandle|Where-Object {
+        $registered -or $_.Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$canvas)
     })
     if($found.Count -gt 1){throw 'The owned process has multiple drawing windows; specify a window handle'}
     if($WindowHandle -and $found.Count -ne 1){throw 'The specified window is not an owned drawing window'}

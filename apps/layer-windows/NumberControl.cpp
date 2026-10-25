@@ -18,7 +18,7 @@ struct NumberState {
     double scrubOrigin=0,scrubBase=0,scrubPixels=0,dialShown=0,sliderOrigin=0;
     uint64_t contactGeneration=0;
     hstring identity;
-    hstring measuredText;double measuredWidth=-1;
+    hstring measuredText;double measuredWidth=-1,measuredHeight=0;
     std::function<J(J const&,double,J const&)> resolve;
 };
 struct DialRange {
@@ -95,7 +95,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     auto numberId=identifier.empty()?title:identifier;
     AutomationProperties::SetAutomationId(root,L"number-root-"+numberId);
     AutomationProperties::SetName(root,title);
-    Grid header;header.UseLayoutRounding(false);header.ColumnSpacing(compact?data->panelMetric(L"control_spacing"):6);header.MinHeight(valueHeight);ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
+    Grid header;header.UseLayoutRounding(false);header.ColumnSpacing(panel?0.:compact?data->panelMetric(L"control_spacing"):6);header.MinHeight(valueHeight);ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
     ColumnDefinition right;right.Width({panel?76.:1.,panel?GridUnitType::Pixel:GridUnitType::Auto});header.ColumnDefinitions().Append(right);
     if(panel){
         header.MinHeight(data->panelMetric(L"slider_height"));
@@ -117,8 +117,8 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         labels.Children().Append(detail);
     }
     header.Children().Append(labels);
-    TextBox entry;entry.UseLayoutRounding(false);entry.Width(panel?68:ranged?72:60);entry.MinWidth(0);entry.MinHeight(0);entry.Height(valueHeight);entry.Padding(Thickness{preference?9.:6.,compact?0.:(valueHeight-20)/2,preference?9.:6.,compact?0.:(valueHeight-20)/2});
-    entry.VerticalAlignment(panel?VerticalAlignment::Bottom:VerticalAlignment::Center);entry.VerticalContentAlignment(VerticalAlignment::Center);
+    TextBox entry;entry.UseLayoutRounding(false);entry.Width(panel?68:ranged?72:60);entry.MinWidth(0);entry.MinHeight(0);entry.Height(valueHeight);
+    entry.VerticalAlignment(panel?VerticalAlignment::Bottom:VerticalAlignment::Center);
     inheritLanguage(entry,data);entry.FontSize(data->textSize());entry.FontFamily(FontFamily(L"Segoe UI"));entry.Foreground(data->brush(L"text"));
     entry.Background(data->brush(L"input"));entry.BorderThickness(Thickness{0});entry.CornerRadius(data->controlCorner());
     entry.Resources().Insert(box_value(L"TextControlBackgroundDisabled"),clear());
@@ -139,7 +139,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
         display.Margin({preference?9.:6.,0,preference?9.:6.,0});display.IsHitTestVisible(false);
         AutomationProperties::SetAccessibilityView(display,Automation::Peers::AccessibilityView::Raw);
         readout=make_weak(display);
-        entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),hiddenText);
+        if(inlineTrack||(!valueOnly&&ranged))entry.Resources().Insert(box_value(L"TextControlForegroundDisabled"),hiddenText);
         Grid valueBox;valueBox.UseLayoutRounding(false);Grid::SetColumn(valueBox,1);Grid::SetColumn(entry,0);
         valueBox.Children().Append(entry);
         if(panel){
@@ -226,10 +226,14 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& titl
     auto measureText=[data,local](hstring const& value){
         // Routine model updates retain the measured extent of unchanged text.
         if(local->measuredWidth>=0&&local->measuredText==value)return local->measuredWidth;
-        auto measure=label(data,value,false,false);measure.UseLayoutRounding(false);
-        measure.Measure({std::numeric_limits<float>::infinity(),32});
-        local->measuredText=value;local->measuredWidth=double(measure.DesiredSize().Width);return local->measuredWidth;
+        auto measure=label(data,value,false,false);measure.UseLayoutRounding(false);measure.LineHeight(0);
+        measure.Measure({std::numeric_limits<float>::infinity(),std::numeric_limits<float>::infinity()});
+        auto extent=measure.DesiredSize();local->measuredText=value;
+        local->measuredWidth=extent.Width;local->measuredHeight=extent.Height;return local->measuredWidth;
     };
+    measureText(L"0");
+    double textInset=std::max(0.,(valueHeight-local->measuredHeight)/2);
+    entry.Padding({preference?9.:6.,textInset,preference?9.:6.,textInset});
     auto surface=make_weak(valueSurface);
     auto setText=[data,local,measureText,readout,panelValueBox,surface,hiddenText,ranged,valueOnly,inlineTrack,preference,panel,dialWeak,dialDot,dialSize,scale=num(spec,L"scale",1),weak=make_weak(entry)](hstring const& value){
         bool previous=std::exchange(local->formatting,true);

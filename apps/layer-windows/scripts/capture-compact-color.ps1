@@ -21,7 +21,7 @@ public static class CapyColorCapture {
 [CapyColorCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $FixtureFile=(Resolve-Path -LiteralPath $FixtureFile).Path
-$fixture=Get-Content -LiteralPath $FixtureFile -Raw|ConvertFrom-Json
+$fixture=Read-Snapshot $FixtureFile
 if($fixture.schema -ne 2 -or $fixture.name -notmatch '^(dark|light)-(128|160|226|360)$'){throw 'Expected the synthetic color fixture'}
 $captureState=if($fixture.capture_state){[string]$fixture.capture_state}else{'default'}
 if($captureState -notin @('default','readout-focus','shape-focus','swatch-focus','swap-focus','shape-hover','swatch-hover','swap-hover')){throw 'Unknown color capture state'}
@@ -35,15 +35,31 @@ try{
 }finally{$env:CAPY_COLOR_FIXTURE=$previousFixture}
 $null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $output 'review-process.txt'),[string]$review.Id)
-Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'Color review window did not open'
-$handle=$review.MainWindowHandle
-Wait-Until {
-    try{$script:report=Get-Content -LiteralPath $metadata -Raw|ConvertFrom-Json;$report.process_id -eq $review.Id}catch{$false}
-} 'Color display, bounds and geometry did not settle'
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
-$surface=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'color-review-surface'))
-if(!$surface){throw 'Color review surface is missing from accessibility'}
+Wait-Until {@(Owned-ProcessWindows $review).Count -gt 0} 'Color review window did not open'
+$script:surfaceProjection=[ordered]@{}
+try{
+    Wait-Until {
+        try{
+            $script:report=Read-Snapshot $metadata
+            $script:surfaceProjection=[ordered]@{model_pid=$report.process_id;owned_pid=$review.Id;selected_hwnd=0;root=$null;surface=$null}
+            if($report.process_id -ne $review.Id){return $false}
+            $window=Owned-ProcessSurface $review 'color-review-surface'
+            if(!$window){return $false}
+            $candidate=$window.Handle;$candidateRoot=$window.Root;$candidateSurface=$window.Surface
+            $current=$candidateRoot.Current
+            $surfaceProjection.selected_hwnd=$candidate.ToInt64()
+            $surfaceProjection.root=[ordered]@{pid=$current.ProcessId;name=$current.Name;class=$current.ClassName;automation_id=$current.AutomationId;native_hwnd=$current.NativeWindowHandle;runtime_id=@($candidateRoot.GetRuntimeId());is_surface=($current.AutomationId -eq 'color-review-surface')}
+            $current=$candidateSurface.Current;$box=$current.BoundingRectangle
+            $surfaceProjection.surface=[ordered]@{pid=$current.ProcessId;automation_id=$current.AutomationId;runtime_id=@($candidateSurface.GetRuntimeId());enabled=$current.IsEnabled;offscreen=$current.IsOffscreen;bounds=@($box.X,$box.Y,$box.Width,$box.Height)}
+            if($current.ProcessId -ne $review.Id -or $current.AutomationId -ne 'color-review-surface' -or
+                !$current.IsEnabled -or $current.IsOffscreen -or $box.Width -le 0 -or $box.Height -le 0){return $false}
+            $script:handle=$candidate;$script:root=$candidateRoot;$script:surface=$candidateSurface
+            return $true
+        }catch{$script:surfaceProjection.error=$_.Exception.Message;return $false}
+    } 'Color display, bounds and geometry did not settle'
+}finally{
+    [IO.File]::WriteAllText((Join-Path $output 'surface-projection.json'),($surfaceProjection|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+}
 $surfaceBounds=$surface.Current.BoundingRectangle
 [CapyColorCapture]::SetForegroundWindow($handle)|Out-Null
 if([CapyColorCapture]::GetForegroundWindow() -ne $handle){throw 'Review does not own foreground input'}

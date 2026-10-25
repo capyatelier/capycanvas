@@ -69,20 +69,49 @@ function Center([long]$Id,$Presentation=$null){
     if($color){$b=(Control "tool-bubble-$Id" -Arranged).Current.BoundingRectangle;return @{x=[int][Math]::Round($b.X-$color.bounds.x*$scale);y=[int][Math]::Round($b.Y-$color.bounds.y*$scale)}}
     At "tool-bubble-$Id"
 }
+function Card-Metrics{
+    $path=State-File;$state=Read-Snapshot $path
+    $name=Split-Path -Leaf $path
+    if($name -notmatch '^ui-state-\d+-\d+\.json$'){throw 'Card metrics need the owned drawing trace'}
+    $sourcePath=Join-Path (Split-Path -Parent $path) ($name -replace '^ui-state-','panel-metrics-')
+    Wait-Until {[IO.File]::Exists($sourcePath)} 'Owned card metrics were not published'
+    $source=Read-Snapshot $sourcePath
+    if($state.process_id -ne $review.Id -or !$state.model.windows_isolated_settings -or $state.window_id -le 0 -or $source.process_id -ne $review.Id -or $source.window_id -ne $state.window_id){throw 'Card metrics are not from the owned drawing'}
+    $metrics=$source.panel_metrics;$values=@{}
+    foreach($key in @('control_height','group_spacing','inset')){
+        if(!$metrics -or $key -notin $metrics.PSObject.Properties.Name -or $null -eq $metrics.$key){throw 'Shared card metrics are missing'}
+        $value=[double]$metrics.$key
+        if([double]::IsNaN($value) -or [double]::IsInfinity($value) -or $value -lt 0 -or ($key -eq 'control_height' -and $value -eq 0)){throw 'Shared card metrics are invalid'}
+        $values[$key]=$value
+    }
+    return [pscustomobject]$values
+}
+function Card-FooterLeft($Bounds,[bool]$Full,[double]$Scale,$Metrics){
+    if($Full){return $Bounds.X}
+    $padding=6
+    $Bounds.X+($Metrics.control_height+2*$padding+$Metrics.group_spacing)*$Scale
+}
+function Card-RowInside($Row,$Bounds,[double]$Scale,$Metrics){
+    !($Row.X -lt $Bounds.X-2 -or $Row.Right -gt $Bounds.Right+2 -or $Row.Y -lt $Bounds.Y+$Metrics.inset*$Scale-2 -or $Row.Bottom -gt $Bounds.Bottom-49*$Scale+2)
+}
 function Card([long]$Id){
+    $metrics=Card-Metrics
     $ready=@{element=$null;expected=$null;actual=$null;footer=$null}
     try{Wait-Until {
         $ready.element=Find "bubble-card-$Id" -Visible;if(!$ready.element -or !(View $Id).card){return $false}
         $bounds=Card-Bounds $Id $ready.element;$size=(View $Id).card.size;$footer=(Control "bubble-properties-$Id" -Within $ready.element -Arranged).Current.BoundingRectangle
         $ready.expected=@(($size[0]*$scale),($size[1]*$scale));$ready.actual=@($bounds.X,$bounds.Y,$bounds.Width,$bounds.Height);$ready.footer=@($footer.X,$footer.Y,$footer.Width,$footer.Height)
-        $left=if((View $Id).card.full){$bounds.X}else{$bounds.X+49*$scale}
+        $left=Card-FooterLeft $bounds ([bool](View $Id).card.full) $scale $metrics
         [Math]::Abs($bounds.Width-$size[0]*$scale) -lt 2 -and [Math]::Abs($footer.Height-48*$scale) -lt 2 -and [Math]::Abs($footer.X-$left) -lt 2
-    } 'Native card footer did not match published geometry'}catch{@{id=$Id;expected=$ready.expected;inferred_viewport=$ready.actual;native_footer=$ready.footer}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'card-geometry-failure.json');throw}
+    } 'Native card footer did not match published geometry'}catch{@{id=$Id;expected=$ready.expected;inferred_viewport=$ready.actual;native_footer=$ready.footer;panel_metrics=$metrics;expected_footer_x=$left}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'card-geometry-failure.json');throw}
     $bounds=Card-Bounds $Id $ready.element;$rows=@()
     foreach($row in $ready.element.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){
         if($row.Current.AutomationId -notmatch '^layer-row-\d+$' -or $row.Current.IsOffscreen){continue}
         $r=$row.Current.BoundingRectangle;$rows+=@{id=$row.Current.AutomationId;bounds=@($r.X,$r.Y,$r.Width,$r.Height)}
-        if($r.X -lt $bounds.X+8*$scale-2 -or $r.Right -gt $bounds.Right-8*$scale+2 -or $r.Y -lt $bounds.Y+8*$scale-2 -or $r.Bottom -gt $bounds.Bottom-49*$scale+2){throw 'Visible native layer row exceeds the inset card viewport'}
+        if(!(Card-RowInside $r $bounds $scale $metrics)){
+            @{id=$Id;inferred_viewport=$ready.actual;native_footer=$ready.footer;panel_metrics=$metrics;bad_row=@{id=$row.Current.AutomationId;bounds=@($r.X,$r.Y,$r.Width,$r.Height)};rows=$rows}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'card-row-geometry-failure.json')
+            throw 'Visible native layer row exceeds the inset card viewport'
+        }
     }
     @{id=$Id;inferred_viewport=$ready.actual;native_footer=$ready.footer;rows=$rows;shared_height_used=$true}|ConvertTo-Json -Depth 8 -Compress|Add-Content (Join-Path $run 'card-geometry.jsonl')
     return $ready.element

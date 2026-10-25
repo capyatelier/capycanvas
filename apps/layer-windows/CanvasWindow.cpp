@@ -107,6 +107,12 @@ HWND CanvasWindow::Handle()const {
     check_hresult(window.as<IWindowNative>()->get_WindowHandle(&handle));
     return handle;
 }
+static winrt::fire_and_forget PublishPanelMetrics(std::filesystem::path name,std::string payload){
+    try{
+        co_await winrt::resume_background();
+        WriteTraceFile(name,payload);
+    }catch(...){co_return;}
+}
 void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
     WriteTraceFile(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json",value);
 }
@@ -419,6 +425,10 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     NativeString ownedCatalog(catalog,capy_string_free);
     auto catalogView=Windows::Data::Json::JsonObject::Parse(to_hstring(ownedCatalog.get()));
     catalogView.Insert(L"bootstrap",bootstrap);
+    if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)){
+        auto process=std::to_string(GetCurrentProcessId()),window=std::to_string(windowId);
+        PublishPanelMetrics("panel-metrics-"+process+"-"+window+".json","{\"process_id\":"+process+",\"window_id\":"+window+",\"panel_metrics\":"+to_string(CapyUi::object(catalogView,L"panel_metrics").Stringify())+"}");
+    }
     screenCopy=CapyUi::object(CapyUi::object(catalogView,L"native_copy"),L"color");
     screenFontSize=CapyUi::num(catalogView,L"text_size_pt",11)*4/3;
     workspace=std::make_unique<WorkspaceView>([weak=weak_from_this()](std::string json){
