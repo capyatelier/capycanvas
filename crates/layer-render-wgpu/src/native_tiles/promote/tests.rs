@@ -10,7 +10,6 @@ fn floats(values: impl Iterator<Item = f32>) -> Vec<u8> {
 fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let promoter = NativePromoter::with_device(&r.device);
-    let status = NativeEncodeStatus::new(&r.device);
     for format in [
         wgpu::TextureFormat::Rgba32Float,
         wgpu::TextureFormat::R32Float,
@@ -29,9 +28,8 @@ fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
             [0, 255, 256, 1],
             [256, 256, 0, 0],
         ] {
-            for invalid in [false, true] {
+            {
                 upload(&r, &working, &original);
-                r.queue.write_buffer(status.buffer(), 0, &u32::from(invalid).to_le_bytes());
                 let batch = promoter
                     .prepare(
                         &r.device,
@@ -40,7 +38,7 @@ fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
                             working: &working,
                             region,
                         }],
-                        &status, &mut Default::default(),
+                        &mut Default::default(),
                     )
                     .unwrap();
                 assert_eq!(batch.is_empty(), region[2] == 0 || region[3] == 0);
@@ -53,13 +51,12 @@ fn promotion_preserves_float32_bits_and_pixels_outside_each_region() {
                     for px in 0..256 {
                         let begin = (py * 256 + px) as usize * channels * 4;
                         let range = begin..begin + channels * 4;
-                        let changed =
-                            !invalid && px >= x && py >= y && px < x + width && py < y + height;
+                        let changed = px >= x && py >= y && px < x + width && py < y + height;
                         let expected = if changed { &replacement } else { &original };
                         assert_eq!(
                             actual[range.clone()],
                             expected[range],
-                            "{format:?} {region:?} invalid={invalid} at {px},{py}"
+                            "{format:?} {region:?} at {px},{py}"
                         );
                     }
                 }

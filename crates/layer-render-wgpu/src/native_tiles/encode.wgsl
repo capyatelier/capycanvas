@@ -1,11 +1,9 @@
 struct Settings { maximum:u32, scale:u32, curve:u32, straight:u32, region:vec4<u32>, weights:vec4<f32> }
-struct Status { invalid:STATUS_TYPE }
 struct ChangedCells {side:u32,enabled:u32,padding0:u32,padding1:u32,cells:array<atomic<u32>>}
 var<private> original:vec4<f32>;
 TEXTURES
 @group(0) @binding(TRANSFER_BINDING) var<storage,read> transfer:array<vec2<f32>>;
 @group(0) @binding(SETTINGS_BINDING) var<uniform> settings:Settings;
-@group(0) @binding(STATUS_BINDING) var<storage,STATUS_ACCESS> status:Status;
 fn load_working(tile:u32,pixel:vec2<i32>)->vec4<f32> {
     switch tile { LOADS default: { return vec4(0.); } }
 }
@@ -49,15 +47,13 @@ fn quantize(value:f32)->u32 {
     return low;
 }
 fn encode_pixel(invocation:vec3<u32>) {
-    PUBLICATION_GUARD
     if any(invocation.xy>=settings.region.zw) {return;}
     let pixel=invocation.xy+settings.region.xy;
-    var value=load_working(invocation.z,vec2<i32>(pixel));
-    original=value;
+    original=load_working(invocation.z,vec2<i32>(pixel));
+    var value=publishable(original);
     MODE_PROJECTION
     if settings.maximum==0u {
         if settings.scale==32u {
-            FLOAT32_VALIDATION
             if (bitcast<u32>(value.a)&0x7f800000u)==0u {store_outputs(invocation.z,pixel,vec4(0u),vec4(0.));return;}
             let finite=3.402823466e38;
             let limit=finite*value.a;
@@ -65,7 +61,6 @@ fn encode_pixel(invocation:vec3<u32>) {
             store_outputs(invocation.z,pixel,bitcast<vec4<u32>>(straight),vec4(straight.rgb*straight.a,straight.a));
             return;
         }
-        HALF_VALIDATION
         let alpha_bits=half_bits(value.a);
         if (alpha_bits&32767u)==0u {store_outputs(invocation.z,pixel,vec4(0u),vec4(0.));return;}
         let limit=65504.*value.a;
@@ -75,7 +70,6 @@ fn encode_pixel(invocation:vec3<u32>) {
         store_outputs(invocation.z,pixel,bits,vec4(vec3(half_value(bits.r),half_value(bits.g),half_value(bits.b))*alpha,alpha));
         return;
     }
-    SDR_VALIDATION
     let alpha=quantize_coverage(value.a,settings.maximum);
     if alpha==0u {store_result(invocation.z,pixel,vec4(0u));return;}
     var rgb=value.rgb;

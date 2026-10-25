@@ -1,6 +1,5 @@
 //! Bounded native SDR writeback primitives. Working pixels remain Float32 until
-//! a publication boundary. The caller checks the shared status before publishing
-//! any captured tiles and retains the previous revision if the batch failed.
+//! a publication boundary, which stores NaN as zero and clamps alpha to 0–1.
 use crate::{GpuRasterError, PipelineDevice};
 use layer_core::color::{AlphaAssociation, SampleDepth, PixelDescriptor, TransferEncoding};
 pub mod promote;
@@ -9,7 +8,6 @@ pub(crate) mod transfer;
 pub use transfer::NativeTransfer;
 
 pub const MAX_BATCH_TILES: usize = 16;
-pub const STATUS_BYTES: u64 = 4;
 
 /// Full default views shared only while recording one bounded publication.
 /// This owns no pixel allocation and is dropped before returning to input; it
@@ -120,8 +118,8 @@ impl<'a> From<&'a wgpu::Texture> for NativeEncoded<'a> { fn from(value: &'a wgpu
 impl<'a> From<&'a wgpu::Buffer> for NativeEncoded<'a> { fn from(value: &'a wgpu::Buffer) -> Self { Self::Buffer(value) } }
 
 /// A working tile and its two publication candidates. Only `region` is written.
-/// Initialize both destinations from their previous pixels to preserve others,
-/// and publish neither until the status succeeds. The canonical working result
+/// Initialize both destinations from their previous pixels to preserve others.
+/// The canonical working result
 /// agrees with decoding the native result, so save/reopen cannot reveal extra
 /// precision that survived only in a live cache.
 pub struct NativeTileRequest<'a> {
@@ -148,44 +146,6 @@ impl NativeTileRequest<'_> {
     }
 }
 
-/// Shared across every batch in a publication. Reset once before recording them,
-/// and read after their completion, before publishing any native tile.
-pub struct NativeEncodeStatus(wgpu::Buffer);
-impl NativeEncodeStatus {
-    pub fn new(device: &wgpu::Device) -> Self {
-        Self(device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("native tile publication status"),
-            size: STATUS_BYTES,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }))
-    }
-    pub fn reset(&self, commands: &mut wgpu::CommandEncoder) {
-        commands.clear_buffer(&self.0, 0, None);
-    }
-    pub fn buffer(&self) -> &wgpu::Buffer {
-        &self.0
-    }
-    pub fn decode(bytes: &[u8]) -> Result<(), GpuRasterError> {
-        if bytes.len() != STATUS_BYTES as usize {
-            return Err(GpuRasterError::Color(
-                "Invalid native encoding status".into(),
-            ));
-        }
-        if bytes != [0; 4] {
-            let status=u32::from_le_bytes(bytes.try_into().unwrap());
-            if status&!3!=0 {
-                return Err(GpuRasterError::Color(format!("Native tile publication returned an unknown status word {status:#010x}")));
-            }
-            return Err(GpuRasterError::Color(
-                format!("Color processing produced non-finite values, invalid coverage or RGB outside the selected storage range (status {status:#010x})"),
-            ));
-        }
-        Ok(())
-    }
-}
 struct Job {
     binding: wgpu::BindGroup,
     format: usize,
@@ -227,13 +187,10 @@ impl NativeTileEncoder {
     }
     #[cfg(test)]
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
-        Self::with_mode(device, false, false)
+        Self::new(device, false)
     }
-    pub(crate) fn prevalidated(device: &PipelineDevice, in_place: bool) -> Self {
+    pub(crate) fn new(device: &PipelineDevice, in_place: bool) -> Self {
         assert!(!in_place || device.features().contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES));
-        Self::with_mode(device, in_place, true)
-    }
-    fn with_mode(device: &PipelineDevice, in_place: bool, prevalidated: bool) -> Self {
         let tiles_per_dispatch = 2usize
             .min(device.limits().max_sampled_textures_per_shader_stage as usize)
             .min(device.limits().max_storage_textures_per_shader_stage as usize / 2)
@@ -254,7 +211,7 @@ impl NativeTileEncoder {
         ] {
             for tracked in [false, true] {
                 for count in 1..=if output_format.is_some() {tiles_per_dispatch} else {gray_tiles_per_dispatch} {
-                    let (entries,source)=Self::pipeline_source(in_place,prevalidated,tracked,count,output_format,output_name);
+                    let (entries,source)=Self::pipeline_source(in_place,tracked,count,output_format,output_name);
                     let layout = crate::bindings::layout(device, "native tile encoder inputs", &entries);
                     let pipeline_layout =
                         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -290,7 +247,7 @@ impl NativeTileEncoder {
             tiles_per_dispatch, gray_tiles_per_dispatch,
         }
     }
-    fn pipeline_source(in_place:bool,prevalidated:bool,tracked:bool,count:usize,output_format:Option<wgpu::TextureFormat>,output_name:&str)
+    fn pipeline_source(in_place:bool,tracked:bool,count:usize,output_format:Option<wgpu::TextureFormat>,output_name:&str)
         -> (Vec<wgpu::BindGroupLayoutEntry>,String) {
         let bindings=if in_place {2} else {3};
         let mut entries = Vec::new();
@@ -336,8 +293,8 @@ impl NativeTileEncoder {
         }
         let shared = count as u32 * bindings;
         for i in 0..if tracked {count as u32} else {0} {
-            entries.push(buffer_entry(shared+3+i,wgpu::BufferBindingType::Storage {read_only:false},false,20));
-            textures.push_str(&format!("@group(0) @binding({}) var<storage,read_write> changes{i}:ChangedCells;\n",shared+3+i));
+            entries.push(buffer_entry(shared+2+i,wgpu::BufferBindingType::Storage {read_only:false},false,20));
+            textures.push_str(&format!("@group(0) @binding({}) var<storage,read_write> changes{i}:ChangedCells;\n",shared+2+i));
         }
         let changed_cases=(0..if tracked {count} else {0}).map(|i|format!("case {i}u: {{if changes{i}.enabled!=0u && any(bitcast<vec4<u32>>(linear)!=bitcast<vec4<u32>>(original)) {{let c=pixel/changes{i}.side;atomicStore(&changes{i}.cells[c.y*(256u/changes{i}.side)+c.x],1u);}} }}")).collect::<String>();
         textures.push_str(&format!("fn mark_canonical(tile:u32,pixel:vec2<u32>,linear:vec4<f32>) {{switch tile {{{changed_cases} default: {{}} }} }}\n"));
@@ -349,32 +306,16 @@ impl NativeTileEncoder {
                 transfer::TABLE_BYTES,
             ),
             buffer_entry(shared + 1, wgpu::BufferBindingType::Uniform, true, 48),
-            buffer_entry(
-                shared + 2,
-                wgpu::BufferBindingType::Storage { read_only: prevalidated && output_format.is_some() },
-                false,
-                STATUS_BYTES,
-            ),
         ]);
-        let readonly=prevalidated && output_format.is_some();
         let mut body = include_str!("native_tiles/encode.wgsl")
-            .replace("STATUS_TYPE",if readonly {"u32"} else {"atomic<u32>"})
-            .replace("STATUS_ACCESS",if readonly {"read"} else {"read_write"})
-            .replace("PUBLICATION_GUARD",if readonly {"if status.invalid!=0u {return;}"} else if in_place {"if atomicLoad(&status.invalid)!=0u {return;}"} else {""})
-            .replace("FLOAT32_VALIDATION",if readonly {""} else {"let error=color_error(value); if error!=0u {atomicOr(&status.invalid,error);return;}"})
-            .replace("HALF_VALIDATION",if readonly {""} else {"let error=color_error(value); if error!=0u {atomicOr(&status.invalid,error);return;}"})
-            .replace("SDR_VALIDATION",if readonly {""} else {"let error=color_error(value); if error!=0u {atomicOr(&status.invalid,error);store_result(invocation.z,pixel,vec4(0u));return;}"})
             .replace("MODE_PROJECTION", if output_format.is_none() { "
-                let source_error=color_error(value);
-                if source_error!=0u {atomicOr(&status.invalid,source_error);return;}
-                value=layer_color(value,settings.weights.rgb,settings.weights.a,select(sdr_decode_component(0.5,settings.curve),0.5,settings.maximum==0u));
+                value=publishable(layer_color(value,settings.weights.rgb,settings.weights.a,select(sdr_decode_component(0.5,settings.curve),0.5,settings.maximum==0u)));
             " } else { "" })
             .replace("TEXTURES", &textures)
             .replace("LOADS", &loads)
             .replace("STORES", &stores)
             .replace("TRANSFER_BINDING", &shared.to_string())
-            .replace("SETTINGS_BINDING", &(shared + 1).to_string())
-            .replace("STATUS_BINDING", &(shared + 2).to_string());
+            .replace("SETTINGS_BINDING", &(shared + 1).to_string());
         body.push_str(&match output_format {
             Some(_) => include_str!("native_tiles/encode_main.wgsl").to_string(),
             None => include_str!("native_tiles/gray_alpha.wgsl").replace("PACKED_STORES", &packed_stores),
@@ -398,13 +339,12 @@ impl NativeTileEncoder {
         &self,
         device: &wgpu::Device,
         requests: &[NativeTileRequest<'_>],
-        status: &NativeEncodeStatus,
         views: &mut crate::native_tiles::PublicationViews,
     ) -> Result<NativeTileBatch, GpuRasterError> {
-        self.prepare_tracked(device,requests,status,views,&[])
+        self.prepare_tracked(device,requests,views,&[])
     }
     pub(crate) fn prepare_tracked(
-        &self, device:&wgpu::Device, requests:&[NativeTileRequest<'_>], status:&NativeEncodeStatus,
+        &self, device:&wgpu::Device, requests:&[NativeTileRequest<'_>],
         views:&mut PublicationViews, changes:&[Option<&wgpu::Buffer>],
     )->Result<NativeTileBatch,GpuRasterError> {
         if !changes.is_empty() && changes.len()!=requests.len() {return Err(GpuRasterError::InvalidExtent);}
@@ -527,13 +467,9 @@ impl NativeTileEncoder {
                         size: wgpu::BufferSize::new(48),
                     }),
                 },
-                wgpu::BindGroupEntry {
-                    binding: shared + 2,
-                    resource: status.0.as_entire_binding(),
-                },
             ]);
             if tracked {
-                entries.extend((0..count).map(|i|wgpu::BindGroupEntry {binding:shared+3+i as u32,
+                entries.extend((0..count).map(|i|wgpu::BindGroupEntry {binding:shared+2+i as u32,
                     resource:changes[first+i].unwrap().as_entire_binding()}));
             }
             let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {

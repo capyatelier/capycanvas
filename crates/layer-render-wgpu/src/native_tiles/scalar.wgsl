@@ -1,8 +1,6 @@
 struct Settings { maximum:u32, components:u32, reciprocal:f32, padding:u32, region:vec4<u32> }
-struct Status { invalid:atomic<u32> }
 TEXTURES
 @group(0) @binding(SETTINGS_BINDING) var<uniform> settings:Settings;
-@group(0) @binding(STATUS_BINDING) var<storage,read_write> status:Status;
 fn load_working(tile:u32,pixel:vec2<i32>)->f32 {
     switch tile { LOADS default: { return 0.; } }
 }
@@ -21,7 +19,6 @@ fn store_canonical(tile:u32,pixel:vec2<u32>,value:vec4<f32>) {
 // read/modify/write race with their neighboring pixels.
 @compute @workgroup_size(8,8)
 fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
-    PUBLICATION_GUARD
     let first=settings.region.x/settings.components;
     let end=(settings.region.x+settings.region.z+settings.components-1u)/settings.components;
     let word_x=first+invocation.x;
@@ -34,12 +31,7 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
         let x=word_x*settings.components+c;
         if x<settings.region.x || x>=settings.region.x+settings.region.z {continue;}
         let pixel=vec2(x,y);
-        let value=load_working(invocation.z,vec2<i32>(pixel));
-        let error=scalar_error(value);
-        var code=0u;
-        if error!=0u {atomicOr(&status.invalid,error);} else {
-            code=quantize_coverage(value,settings.maximum);
-        }
+        let code=quantize_coverage(unit_scalar(load_working(invocation.z,vec2<i32>(pixel))),settings.maximum);
         let shift=c*depth;
         word=(word&~(settings.maximum<<shift))|(code<<shift);
         store_canonical(invocation.z,pixel,vec4(f32(code)*settings.reciprocal,0.,0.,1.));

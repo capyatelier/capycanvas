@@ -65,16 +65,15 @@ impl NativeOutput {
 }
 pub(crate) struct NativeCapture {
     pub(super) outputs: Vec<NativeOutput>,
-    pub status: NativeEncodeStatus,
     pub pool: Arc<BufferPool>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
 }
 impl NativeCapture {
     pub fn storage_bytes(&self) -> u64 {
-        STATUS_BYTES + self.outputs.iter().map(|o| o.resource.bytes()).sum::<u64>()
+        self.outputs.iter().map(|o| o.resource.bytes()).sum::<u64>()
     }
-    fn next_transfer(&self, validated: bool, label: &str) -> Result<(usize, PreparedCapture, wgpu::CommandBuffer), String> {
+    fn next_transfer(&self, label: &str) -> Result<(usize, PreparedCapture, wgpu::CommandBuffer), String> {
         let mut count = 0;
         let mut size = 0;
         for output in &self.outputs {
@@ -86,16 +85,15 @@ impl NativeCapture {
         }
         let copies: Vec<_> = self.outputs[..count].iter().map(NativeOutput::capture).collect();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
-        let capture = prepare_capture(&self.device, &self.pool, &mut encoder, &copies, (!validated).then_some(&self.status))
+        let capture = prepare_capture(&self.device, &self.pool, &mut encoder, &copies)
             .map_err(|e| e.to_string())?;
         Ok((count, capture, encoder.finish()))
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn finish(mut self) -> Result<(), String> {
-        let mut validated = false;
         while !self.outputs.is_empty() {
             self.pool.priority.wait()?;
-            let (count, capture, commands) = self.next_transfer(validated, "background native raster readback")?;
+            let (count, capture, commands) = self.next_transfer("background native raster readback")?;
             let _transfer = Reserved::new(&self.pool.transfer, capture.staging_bytes);
             // Recheck after preparation. A frame can race this check, but only
             // this one bounded transfer can then precede it on the GPU queue.
@@ -104,7 +102,6 @@ impl NativeCapture {
             capture
                 .submitted_device(&self.device)
                 .finish()?;
-            validated = true;
             // Never recycle a writable output before its GPU readback completes.
             for output in self.outputs.drain(..count) {
                 self.pool.put_resource(output.resource);
@@ -146,15 +143,13 @@ impl PresentationPriority {
 #[cfg(target_arch = "wasm32")]
 impl NativeCapture {
     pub(crate) async fn finish_browser(mut self, worker: &browser::BrowserRasterEncoder) -> Result<(), String> {
-        let mut validated = false;
         while !self.outputs.is_empty() {
             self.pool.priority.wait_browser().await;
-            let (count, capture, commands) = self.next_transfer(validated, "browser native raster readback")?;
+            let (count, capture, commands) = self.next_transfer("browser native raster readback")?;
             let _transfer = Reserved::new(&self.pool.transfer, capture.staging_bytes);
             self.pool.priority.wait_browser().await;
             self.queue.submit([commands]);
             capture.submitted_device(&self.device).finish_browser(worker).await?;
-            validated = true;
             for output in self.outputs.drain(..count) { self.pool.put_resource(output.resource); }
         }
         Ok(())

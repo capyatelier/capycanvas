@@ -1,7 +1,7 @@
 //! Native linear coverage for masks, stroke coverage and wet-state planes.
 //! Packed buffers keep native payloads at one/two bytes per pixel without
 //! requiring optional single-channel integer storage texture formats.
-use super::{MAX_BATCH_TILES, NativeEncodeStatus, STATUS_BYTES, buffer_entry};
+use super::{MAX_BATCH_TILES, buffer_entry};
 use crate::{GpuRasterError, PipelineDevice};
 use layer_core::color::{AlphaAssociation, SampleDepth, PixelDescriptor, TransferEncoding};
 use layer_render::CanvasRenderer;
@@ -102,8 +102,7 @@ pub(crate) fn restore_upload(
 }
 
 /// Private publication candidates. Initialize both outputs from the previous
-/// revision before partial writes. Check the shared status before adopting any
-/// output; invalid scalar values reject the publication rather than clipping.
+/// revision before partial writes. NaN stores as zero; coverage clamps to 0–1.
 pub struct NativeScalarRequest<'a> {
     pub working: &'a wgpu::Texture,
     /// Exactly 256×256 native samples, little-endian, packed into storage words.
@@ -147,9 +146,8 @@ impl NativeScalarEncoder {
     pub(crate) fn with_device(device: &PipelineDevice) -> Self {
         Self::with_mode(device, false)
     }
-    /// The caller must first scan the complete publication with the same status.
-    /// Each invocation then owns every pixel of one complete packed native word.
-    pub(crate) fn validated_in_place(device: &PipelineDevice) -> Self {
+    /// Each invocation owns every pixel of one complete packed native word.
+    pub(crate) fn in_place(device: &PipelineDevice) -> Self {
         assert!(
             device
                 .features()
@@ -220,32 +218,15 @@ impl NativeScalarEncoder {
                 ));
             }
             let shared = count as u32 * bindings;
-            entries.extend([
-                buffer_entry(shared, wgpu::BufferBindingType::Uniform, true, 32),
-                buffer_entry(
-                    shared + 1,
-                    wgpu::BufferBindingType::Storage { read_only: false },
-                    false,
-                    STATUS_BYTES,
-                ),
-            ]);
+            entries.push(buffer_entry(shared, wgpu::BufferBindingType::Uniform, true, 32));
             let layout = crate::bindings::layout(device, "native scalar encoder inputs", &entries);
             let body = include_str!("scalar.wgsl")
-                .replace(
-                    "PUBLICATION_GUARD",
-                    if in_place {
-                        "if atomicLoad(&status.invalid)!=0u {return;}"
-                    } else {
-                        ""
-                    },
-                )
                 .replace("TEXTURES", &textures)
                 .replace("LOAD_WORDS", &load_words)
                 .replace("STORE_WORDS", &store_words)
                 .replace("LOADS", &loads)
                 .replace("STORES", &stores)
-                .replace("SETTINGS_BINDING", &shared.to_string())
-                .replace("STATUS_BINDING", &(shared + 1).to_string());
+                .replace("SETTINGS_BINDING", &shared.to_string());
             let source = format!(
                 "{}\n{}\n{}",
                 include_str!("coverage.wgsl"),
@@ -289,7 +270,6 @@ impl NativeScalarEncoder {
         &self,
         device: &wgpu::Device,
         requests: &[NativeScalarRequest<'_>],
-        status: &NativeEncodeStatus,
         views: &mut crate::native_tiles::PublicationViews,
     ) -> Result<NativeScalarBatch, GpuRasterError> {
         if requests.len() > MAX_BATCH_TILES {
@@ -388,20 +368,14 @@ impl NativeScalarEncoder {
                 }
             }
             let shared = count as u32 * bindings;
-            entries.extend([
-                wgpu::BindGroupEntry {
-                    binding: shared,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &parameters,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(32),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: shared + 1,
-                    resource: status.buffer().as_entire_binding(),
-                },
-            ]);
+            entries.push(wgpu::BindGroupEntry {
+                binding: shared,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &parameters,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(32),
+                }),
+            });
             let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("native scalar writeback"),
                 layout: &self.layouts[count - 1],

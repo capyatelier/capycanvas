@@ -1024,12 +1024,12 @@ wetness. Mask-only jobs omit color. Raw masks read authored scalar coverage
 directly, using their default coverage for absent pages, without scene composition.
 Preparation uses those same planes and only
 their publication variants. Immutable publication recipes share the device;
-scratch grows only to each capture batch, and validation status and results
-belong to each capture. Private outputs
-need no promotion back into their disposable source textures.
-Publication status rejects NaN samples and invalid coverage. Bits outside
-those flags are reported as an unknown status word; they do not establish an
-ordinary color-range error, and the candidate remains unpublished.
+scratch grows only to each capture batch, and results belong to each capture.
+Private outputs need no promotion back into their disposable source textures.
+Publication never refuses pixel values: NaN color stores as zero, alpha and
+coverage clamp to 0–1 (NaN to zero), and infinite color saturates at the
+edge of the storage range. One bad sample cannot fail a capture or
+stop painting.
 Affine captures use source occupancy and the existing conservative filter
 footprints to skip output pages that equal zero. Imported bases and raster
 overrides both contribute; nonzero-default masks and other mappings retain full

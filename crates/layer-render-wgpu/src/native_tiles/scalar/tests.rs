@@ -25,11 +25,9 @@ fn buffer(r: &WgpuRasterizer, depth: SampleDepth) -> wgpu::Buffer {
 fn submit(
     r: &WgpuRasterizer,
     encoder: &NativeScalarEncoder,
-    status: &NativeEncodeStatus,
     batch: &NativeScalarBatch,
 ) {
     let mut commands = r.device.create_command_encoder(&Default::default());
-    status.reset(&mut commands);
     {
         let mut pass = commands.begin_compute_pass(&Default::default());
         encoder.encode(&mut pass, batch);
@@ -40,7 +38,6 @@ fn capture(
     r: &WgpuRasterizer,
     buffer: &wgpu::Buffer,
     descriptor: PixelDescriptor,
-    status: &NativeEncodeStatus,
 ) -> Vec<u8> {
     let tile = RasterTile::pending(descriptor);
     r.capture_tiles(
@@ -48,7 +45,6 @@ fn capture(
             source: CaptureSource::Packed(buffer),
             tile: tile.clone(),
         }],
-        Some(status),
     )
     .unwrap()
     .finish()
@@ -69,8 +65,7 @@ fn scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words
 fn native_in_place_scalar_writeback_preserves_every_code_half_neighbors_and_partial_packed_words() { scalar_corpus(true); }
 fn scalar_corpus(in_place: bool) {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let encoder = if in_place { NativeScalarEncoder::validated_in_place(&r.device) } else { NativeScalarEncoder::with_device(&r.device) };
-    let status = NativeEncodeStatus::new(&r.device);
+    let encoder = if in_place { NativeScalarEncoder::in_place(&r.device) } else { NativeScalarEncoder::with_device(&r.device) };
     let working = texture(&r);
     let canonical = if in_place { working.clone() } else { texture(&r) };
     for depth in [SampleDepth::U8, SampleDepth::U16] {
@@ -112,9 +107,9 @@ fn scalar_corpus(in_place: bool) {
                     region,
                 };
                 let descriptor = request.descriptor();
-                let batch = encoder.prepare(&r.device, &[request], &status, &mut Default::default()).unwrap();
-                submit(&r, &encoder, &status, &batch);
-                let bytes = capture(&r, &encoded, descriptor, &status);
+                let batch = encoder.prepare(&r.device, &[request], &mut Default::default()).unwrap();
+                submit(&r, &encoder, &batch);
+                let bytes = capture(&r, &encoded, descriptor);
                 let canonical_bytes = page_bytes(&r, &canonical);
                 for (i, value) in values.iter().enumerate() {
                     let x = i as u32 % 256;
@@ -149,3 +144,18 @@ fn scalar_corpus(in_place: bool) {
     }
 }
 
+#[test]
+fn invalid_coverage_stores_its_nearest_defined_value() {
+    let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let encoder = NativeScalarEncoder::with_device(&r.device);
+    let working = texture(&r);
+    let canonical = texture(&r);
+    let encoded = buffer(&r, SampleDepth::U8);
+    let values = [f32::NAN, -f32::NAN, -0.1, -0., 1.1, f32::INFINITY, f32::NEG_INFINITY, 0.5];
+    upload(&r, &working, &(0..65536).map(|i| values[i % values.len()]).collect::<Vec<_>>());
+    let request = NativeScalarRequest { working: &working, encoded: &encoded, canonical: &canonical, depth: SampleDepth::U8, region: [0, 0, 256, 256] };
+    let descriptor = request.descriptor();
+    let batch = encoder.prepare(&r.device, &[request], &mut Default::default()).unwrap();
+    submit(&r, &encoder, &batch);
+    assert_eq!(capture(&r, &encoded, descriptor)[..values.len()], [0, 0, 0, 0, 255, 255, 0, 128]);
+}

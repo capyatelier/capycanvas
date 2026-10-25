@@ -1,7 +1,6 @@
-//! Queue-ordered adoption of canonical working samples. The publication-wide
-//! status is read on the GPU after every color/scalar encoding batch, so no
-//! input-owner readback is needed before subsequent edits see committed values.
-use super::{MAX_BATCH_TILES, NativeEncodeStatus, STATUS_BYTES};
+//! Queue-ordered adoption of canonical working samples, so no input-owner
+//! readback is needed before subsequent edits see committed values.
+use super::MAX_BATCH_TILES;
 use crate::{GpuRasterError, PipelineDevice};
 use wgpu::util::DeviceExt;
 
@@ -73,15 +72,9 @@ impl NativePromoter {
                     ));
                     copies.push_str(&format!("case {i}u: {{ textureStore(working{i},p,textureLoad(canonical{i},p,0)); }}\n"));
                 }
-                let status_binding = count as u32 * 2;
+                let region_binding = count as u32 * 2;
                 entries.push(super::buffer_entry(
-                    status_binding,
-                    wgpu::BufferBindingType::Storage { read_only: true },
-                    false,
-                    STATUS_BYTES,
-                ));
-                entries.push(super::buffer_entry(
-                    status_binding + 1,
+                    region_binding,
                     wgpu::BufferBindingType::Uniform,
                     false,
                     16,
@@ -90,8 +83,7 @@ impl NativePromoter {
                 let source = include_str!("promote.wgsl")
                     .replace("TEXTURES", &textures)
                     .replace("COPY_TILES", &copies)
-                    .replace("STATUS_BINDING", &status_binding.to_string())
-                    .replace("REGION_BINDING", &(status_binding + 1).to_string());
+                    .replace("REGION_BINDING", &region_binding.to_string());
                 let pipeline_layout =
                     device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("native canonical promotion"),
@@ -119,16 +111,12 @@ impl NativePromoter {
 
     /// Preflight the whole batch before recording writes. All canonical inputs
     /// and working destinations must have distinct ownership across the whole
-    /// publication; this checks aliases within this batch. Reset status once,
-    /// encode every color/scalar batch, then promote every batch before resetting
-    /// status again. A failed status leaves all destination pixels unchanged.
-    /// The caller still handles failure/recovery of the provisional edit and
-    /// publishes CPU backing only after the same status succeeds in capture.
+    /// publication; this checks aliases within this batch. Encode every
+    /// color/scalar batch, then promote every batch.
     pub(crate) fn prepare(
         &self,
         device: &wgpu::Device,
         requests: &[NativePromotion<'_>],
-        status: &NativeEncodeStatus,
         views: &mut crate::native_tiles::PublicationViews,
     ) -> Result<NativePromotionBatch, GpuRasterError> {
         if requests.len() > MAX_BATCH_TILES {
@@ -243,10 +231,6 @@ impl NativePromoter {
                 .collect();
             entries.push(wgpu::BindGroupEntry {
                 binding: count as u32 * 2,
-                resource: status.buffer().as_entire_binding(),
-            });
-            entries.push(wgpu::BindGroupEntry {
-                binding: count as u32 * 2 + 1,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &parameters,
                     offset: if full {

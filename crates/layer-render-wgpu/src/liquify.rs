@@ -379,7 +379,7 @@ impl Liquify {
     fn dispatch(&self, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder, batch_index: usize,
         batch: &DabBatch, jobs: &[Dispatch], map: bool) {
         if jobs.is_empty() { return; }
-        let phase = if map { 17 } else { 19 };
+        let phase = if map { 16 } else { 18 };
         let measured = r.telemetry.phase_begin(phase, &r.device, &r.queue, encoder);
         performance_trace::counter(if map { c"Capy Liquify map dispatches" } else { c"Capy Liquify reconstruct dispatches" }, jobs.len() as u64);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("liquify sparse tiles"), timestamp_writes: None });
@@ -504,9 +504,9 @@ impl Liquify {
                 Self::original(r, stroke, batch.target, coordinate, encoder, &mut reductions)?;
             }
         }
-        let measured = !reductions.is_empty() && r.telemetry.phase_begin(18, &r.device, &r.queue, encoder);
+        let measured = !reductions.is_empty() && r.telemetry.phase_begin(17, &r.device, &r.queue, encoder);
         display_mips::CompleteUpdates::flush_all(&mut reductions, encoder);
-        if measured { r.telemetry.phase_end(18, encoder); }
+        if measured { r.telemetry.phase_end(17, encoder); }
         if outputs.is_empty() { return Ok(()); }
         let mut current_tiles = BTreeMap::new();
         if preview {

@@ -1,17 +1,14 @@
 // Inspect bits before arithmetic: NaN comparisons and negative zero must not
-// depend on optimizer floating-point assumptions. Used by preflight and encode.
-fn scalar_error(value:f32)->u32 {
+// depend on optimizer floating-point assumptions.
+fn unit_scalar(value:f32)->f32 {
     let bits=bitcast<u32>(value);
-    let magnitude=bits&0x7fffffffu;
-    if magnitude>=0x7f800000u {return 1u;}
-    if magnitude>0x3f800000u || ((bits>>31u)!=0u && magnitude!=0u) {return 2u;}
-    return 0u;
+    if (bits>>31u)!=0u || (bits&0x7fffffffu)>0x7f800000u {return 0.;}
+    if bits>=0x3f800000u {return 1.;}
+    return value;
 }
-// Infinite color saturates when encoded; only NaN and invalid alpha fail.
-fn color_error(value:vec4<f32>)->u32 {
-    let bits=bitcast<vec4<u32>>(value);
-    if any((bits.rgb&vec3(0x7fffffffu))>vec3(0x7f800000u)) {return 1u;}
-    return scalar_error(value.a);
+fn publishable(value:vec4<f32>)->vec4<f32> {
+    let nan=(bitcast<vec4<u32>>(value).rgb&vec3(0x7fffffffu))>vec3(0x7f800000u);
+    return vec4(select(value.rgb,vec3(0.),nan),unit_scalar(value.a));
 }
 // IEEE binary16 ties-to-even, including subnormals. Integer operations avoid
 // implementation-dependent half arithmetic/denormal flushing.

@@ -3,13 +3,13 @@ use crate::frame_timing::{GpuFrameSample, GpuFrameTimer};
 use layer_render::{RendererTelemetry, TimingSamples};
 use std::sync::Mutex;
 
-const PHASE_NAMES: [&std::ffi::CStr; 20] = [
+const PHASE_NAMES: [&std::ffi::CStr; 19] = [
     c"Capy GPU paint ns", c"Capy GPU prediction ns", c"Capy GPU composition ns",
     c"Capy GPU heal candidates ns", c"Capy GPU heal seed ns", c"Capy GPU heal apply ns",
     c"Capy GPU heal pyramid ns", c"Capy GPU heal relaxation ns",
     c"Capy GPU display sources ns", c"Capy GPU main composition ns", c"Capy GPU overview composition ns",
     c"Capy GPU main mips ns", c"Capy GPU overview mips ns", c"Capy GPU Navigator ns",
-    c"Capy GPU native capture ns", c"Capy GPU native preflight ns", c"Capy GPU native encoding ns",
+    c"Capy GPU native capture ns", c"Capy GPU native encoding ns",
     c"Capy GPU Liquify map ns", c"Capy GPU Liquify originals ns", c"Capy GPU Liquify reconstruct ns",
 ];
 

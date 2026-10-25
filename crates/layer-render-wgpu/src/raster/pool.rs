@@ -100,15 +100,6 @@ impl BufferPool {
     pub(super) fn put_resource(&self, resource: Resource) {
         let mut resources = self.resources.lock().unwrap();
         let size = resource.bytes();
-        if size == STATUS_BYTES
-            && resources
-                .iter()
-                .filter(|r| r.bytes() == STATUS_BYTES)
-                .count()
-                >= 16
-        {
-            return;
-        }
         while self.bytes.load(Ordering::Relaxed) + size > 64 * 1024 * 1024 {
             if resources.is_empty() {
                 break;

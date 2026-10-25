@@ -144,13 +144,13 @@ Today:
 - the Web reports only out-of-memory after startup, so later validation errors
   reach the console only.
 
-The edit validator (`native_tiles/validity.wgsl`) rejects any non-finite value
-or alpha outside 0–1. On a Galaxy Tab S6 Lite (Mali-G68) a soft brush inside a
-selection produced black regions that spread while smudging, then painting
-stopped. Report which validator status fired, reproduce on the Mali reference
-tablets, and make every shader that writes working pages finish with one shared
-helper that maps non-finite values to zero and clamps alpha and colour to the
-storage range. The validator stays as the backstop.
+On a Galaxy Tab S6 Lite (Mali-G68) a soft brush inside a selection produced
+black regions that spread while smudging, then painting stopped. Publication
+(`native_tiles/validity.wgsl`) now stores NaN as zero and clamps alpha and
+coverage instead of refusing the edit, so painting continues and each commit
+replaces bad working samples. Bad values can still spread within one stroke
+before it commits: reproduce on the Mali reference tablets and fix the shader
+that produces them.
 
 ## Order of work
 

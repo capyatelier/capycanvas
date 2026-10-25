@@ -66,7 +66,7 @@ impl CaptureWorker {
     }
     pub(super) fn ready(&self) -> bool {
         self.pending.load(Ordering::Acquire) < 16
-            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK - STATUS_BYTES
+            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK
     }
     pub(super) fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {
         let size = captures.storage_bytes();
@@ -97,12 +97,6 @@ impl Drop for CaptureWorker {
 impl RasterCapture {
     pub(super) async fn finish_browser(mut self, encoder: &BrowserRasterEncoder) -> Result<(), String> {
         let result: Result<(), String> = async {
-            if let Some(validation) = &mut self.validation {
-                (&mut validation.ready)
-                    .await
-                    .map_err(|_| "Raster validation mapping was abandoned")??;
-                self.accept_validation()?;
-            }
             for chunk in &mut self.chunks {
                 (&mut chunk.ready)
                     .await

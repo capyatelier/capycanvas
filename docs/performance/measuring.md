@@ -401,12 +401,10 @@ restoration. These diagnostic runs do not qualify moving-frame rates.
 Idle exact refinement uses the main composition phase for native capture and
 the main mip phase for updating the resident hierarchy.
 Ordinary stroke publication has a separate `Capy GPU native capture ns` total.
-`Capy GPU native preflight ns` covers the complete working-source validation,
-including the initial shared status reset, before any native output writes.
 `Capy GPU native encoding ns` covers native color/scalar encoding and any
-canonical scratch promotion after that preflight. The total includes the split
+canonical scratch promotion. The total includes the split
 markers; CPU resource preparation and backing readback/compression are outside
-these GPU intervals. All six possible marker passes and the complete native job
+these GPU intervals. All four possible marker passes and the complete native job
 must fit the current encoder before timing starts. Instrumentation never forces
 a rotation or submission. Capacity or timer-slot omissions are explicit counters,
 not zero cost; compare only matching renderer IDs with complete split observations.

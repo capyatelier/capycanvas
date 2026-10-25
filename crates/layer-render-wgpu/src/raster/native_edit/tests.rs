@@ -536,7 +536,7 @@ fn restored_fixture(r: &mut WgpuRasterizer) -> Document {
     mask.source.raster = RasterRevision::backed(mask_data);
     set_mask(&mut layers,mask);
     paint_mut(&mut layers).raster = RasterRevision::backed(data);
-    r.submit(packet(&layers, true)).unwrap();
+    crate::test_support::submit_ready(r, packet(&layers, true)).unwrap();
     layers
 }
 fn mark_changed(r: &mut WgpuRasterizer, layers: &mut Document) {
@@ -571,7 +571,7 @@ fn native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changin
         while !r.raster_ready() {
             std::thread::yield_now();
         }
-        r.submit(packet(&layers, false)).unwrap();
+        crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
         assert_eq!(backing(&paint(&layers).raster), before);
         assert_eq!(
             backing(mask_raster(&layers)),
@@ -585,7 +585,7 @@ fn native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changin
     while !r.raster_ready() {
         std::thread::yield_now();
     }
-    r.submit(packet(&layers, false)).unwrap();
+    crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     let current = paint(&layers).raster.wait_data().unwrap();
     assert!(
         current
@@ -623,7 +623,7 @@ fn assert_native_bytes(actual:&[u8],expected:&[u8],context:&str) {
 }
 
 #[test]
-fn prevalidated_publication_matches_independent_native_encoding_at_every_depth() {
+fn publication_matches_independent_native_encoding_at_every_depth() {
     use crate::native_tiles::{NativeTileEncoder,NativeEncoded};
     use crate::test_support::{page_texture,upload_page};
     use layer_core::color::LayerColorMode;
@@ -642,14 +642,12 @@ fn prevalidated_publication_matches_independent_native_encoding_at_every_depth()
                     [rgb[0]*alpha,rgb[1]*alpha,rgb[2]*alpha,alpha]}
             }).flat_map(|pixel|pixel.into_iter().flat_map(f32::to_le_bytes)).collect::<Vec<_>>();
             upload_page(&r,&image,&pixels);
-            let status=NativeEncodeStatus::new(&r.device);
             let transfer=r.prepare_native_transfer(space).unwrap();
             let independent=NativeTileEncoder::with_device(&r.device);
             let batch=independent.prepare(&r.device,&[NativeTileRequest {working:&image,canonical:&canonical,
                 encoded:NativeEncoded::Texture(&output),mode:LayerColorMode::FullColor,space,transfer:&transfer,
-                depth,alpha:color.paint_descriptor().alpha,region:[0,0,256,256]}],&status,&mut Default::default()).unwrap();
+                depth,alpha:color.paint_descriptor().alpha,region:[0,0,256,256]}],&mut Default::default()).unwrap();
             let mut commands=r.device.create_command_encoder(&Default::default());
-            status.reset(&mut commands);
             {let mut pass=commands.begin_compute_pass(&Default::default());independent.encode(&mut pass,&batch);}
             r.queue.submit([commands.finish()]);
             let expected=crate::layer_tests::page_bytes(&r,&output);
@@ -700,7 +698,7 @@ fn snapshot_capture_keeps_private_samples_and_allocates_only_its_batch() {
 }
 
 #[test]
-fn prevalidated_late_invalid_color_or_scalar_rejects_siblings_without_canonical_adoption() {
+fn late_invalid_color_or_scalar_publishes_defined_values_with_its_siblings() {
     use crate::test_support::page_texture;
     use layer_core::color::LayerColorMode;
     for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
@@ -717,24 +715,23 @@ fn prevalidated_late_invalid_color_or_scalar_rejects_siblings_without_canonical_
                 set_pixel(&r,&scalar,&[-0.25]);
                 inputs.push((scalar,RasterTile::pending(color.coverage_descriptor()),LayerColorMode::FullColor));
             } else {set_pixel(&r,&inputs[16].0,&[f32::NAN,0.,0.,1.]);}
-            let first=inputs[0].0.clone();
             let bad=inputs.last().unwrap().0.clone();
-            let before=crate::layer_tests::page_bytes(&r,&first);
-            let bad_before=crate::layer_tests::page_bytes(&r,&bad);
             let tickets=inputs.iter().map(|(_,tile,_)|tile.clone()).collect::<Vec<_>>();
             let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
             let capture=r.encode_private_tiles(inputs,&mut commands).unwrap();
             commands.submit(&r.queue);
-            assert!(capture.finish().is_err(),"{depth:?} in_place={in_place} scalar_failure={scalar_failure}");
-            assert!(tickets.iter().all(|tile|tile.wait_backing().is_err()),"all siblings must fail");
-            assert_native_bytes(&crate::layer_tests::page_bytes(&r,&first),&before,"earlier working page");
-            assert_native_bytes(&crate::layer_tests::page_bytes(&r,&bad),&bad_before,"invalid working page");
+            let context=format!("{depth:?} in_place={in_place} scalar_failure={scalar_failure}");
+            capture.finish().unwrap();
+            assert!(tickets.iter().all(|tile|tile.wait_backing().is_ok()),"{context}: every sibling publishes");
+            let stored=tickets.last().unwrap().wait_backing().unwrap().decode().unwrap().to_vec();
+            assert!(stored[..if scalar_failure {2} else {depth.bytes()*3}].iter().all(|byte|*byte==0),"{context}: invalid sample stores as zero");
+            assert!(crate::layer_tests::page_bytes(&r,&bad).as_chunks::<4>().0.iter().all(|v|f32::from_le_bytes(*v).is_finite()),"{context}: invalid working page");
         }}
     }
 }
 
 #[test]
-fn prevalidated_mixed_tracking_marks_only_actual_canonical_changes() {
+fn mixed_tracking_marks_only_actual_canonical_changes() {
     use crate::test_support::page_texture;
     use layer_core::color::LayerColorMode;
     for in_place in [false,true] {
@@ -766,7 +763,7 @@ fn prevalidated_mixed_tracking_marks_only_actual_canonical_changes() {
 }
 
 #[test]
-fn invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adoption() {
+fn invalid_late_color_or_mask_publishes_defined_values_and_painting_continues() {
     for mask_failure in [false, true] {
         let color = DocumentColor {
             space: RgbSpace::DisplayP3,
@@ -774,63 +771,31 @@ fn invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adop
         };
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut layers = restored_fixture(&mut r);
-        let checkpoint = layers.clone();
-        let first = r.paint_layers[0]
-            .pages
-            .iter()
-            .find(|p| p.coordinate == [0, 0])
-            .unwrap()
-            .active()
-            .texture
-            .clone();
-        // A valid value deliberately between native codes exposes an early
-        // promotion even though a later page rejects the whole publication.
-        set_pixel(&r, &first, &[0.01234567, 0.2345678, 0.7890123, 1.]);
-        let bad = if mask_failure {
-            r.layer_masks.pages[&(mask_target(&layers), [16, 0])].texture.clone()
+        let (id, plane, bad) = if mask_failure {
+            (mask_target(&layers), RasterPlane::Mask, r.layer_masks.pages[&(mask_target(&layers), [16, 0])].texture.clone())
         } else {
-            r.paint_layers[0]
-                .pages
-                .iter()
-                .find(|p| p.coordinate == [16, 0])
-                .unwrap()
-                .active()
-                .texture
-                .clone()
+            (target(&layers), RasterPlane::Color, r.paint_layers[0].pages.iter().find(|p| p.coordinate == [16, 0]).unwrap().active().texture.clone())
         };
-        set_pixel(
-            &r,
-            &bad,
-            if mask_failure {
-                &[-0.25]
-            } else {
-                &[f32::NAN, 0., 0., 1.]
-            },
-        );
-        let before = working(&r, target(&layers));
-        let mask_before = working(&r, mask_target(&layers));
+        set_pixel(&r, &bad, if mask_failure { &[-0.25] } else { &[f32::NAN, 0., 0., 1.] });
         mark_changed(&mut r, &mut layers);
         while !r.raster_ready() {
             std::thread::yield_now();
         }
-        r.submit(packet(&layers, false)).unwrap();
+        crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
         for root in [&paint(&layers).raster, mask_raster(&layers)] {
             for tile in root.wait_data().unwrap().tiles.values() {
-                assert!(tile.wait_backing().is_err(), "all capture chunks must fail");
+                assert!(tile.wait_backing().is_ok(), "every capture chunk publishes");
             }
-            assert!(!root.host_backed());
         }
-        assert_eq!(working(&r, target(&layers)), before);
-        assert_eq!(working(&r, mask_target(&layers)), mask_before);
-        // The last host-backed checkpoint is independent of the failed frame.
-        assert!(paint(&checkpoint).raster.host_backed());
-        assert!(mask_raster(&checkpoint).host_backed());
-        let mut replacement = WgpuRasterizer::new_native_headless(color).unwrap();
-        replacement.submit(packet(&checkpoint, true)).unwrap();
-        assert_eq!(
-            backing(&paint(&checkpoint).raster),
-            backing(&replacement.raster.as_ref().unwrap().targets[&target(&checkpoint)].revision)
-        );
+        let stored = working(&r, id).into_iter().find(|(key, _)| key.plane == plane && key.coordinate == [16, 0]).unwrap().1;
+        let expected: &[f32] = if mask_failure { &[0.] } else { &[0., 0., 0., 1.] };
+        assert_eq!(stored[..expected.len() * 4], expected.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), "mask_failure={mask_failure}");
+        mark_changed(&mut r, &mut layers);
+        while !r.raster_ready() {
+            std::thread::yield_now();
+        }
+        crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
+        assert!(paint(&layers).raster.wait_data().unwrap().tiles.values().all(|tile| tile.wait_backing().is_ok()), "the following frame publishes");
     }
 }
 
@@ -861,16 +826,11 @@ fn native_capture_pass_budget_keeps_mixed_plane_jobs_in_one_encoder() {
         assert!(!insufficient.can_fit_passes(passes + markers));
         let before = encoder.pass_count();
         encoder.reserve_passes(markers);
-        let mut timers = [0,1,2].map(|_| crate::frame_timing::GpuFrameTimer::new(&r.device, &r.queue));
+        let mut timers = [0,1].map(|_| crate::frame_timing::GpuFrameTimer::new(&r.device, &r.queue));
         assert!(timers[0].begin_encoded(&mut encoder, 42));
         assert!(timers[1].begin_encoded(&mut encoder, 42));
-        while job.validated < job.inputs.len() { r.step_native_rasters(&mut job, &mut encoder).unwrap(); }
-        assert_eq!(job.encoded, 0);
-        assert!(job.frame.capture.as_ref().unwrap().outputs.is_empty());
-        timers[1].end_encoded(&mut encoder);
-        assert!(timers[2].begin_encoded(&mut encoder, 42));
         while r.step_native_rasters(&mut job, &mut encoder).unwrap() {}
-        timers[2].end_encoded(&mut encoder);
+        timers[1].end_encoded(&mut encoder);
         timers[0].end_encoded(&mut encoder);
         assert_eq!(encoder.pass_count() - before, (passes + markers) as u64);
         assert!(!encoder.can_fit_passes(1), "native capture rotated away from its starting encoder");
@@ -887,7 +847,7 @@ fn native_capture_pass_budget_keeps_mixed_plane_jobs_in_one_encoder() {
             assert_eq!(sample[0].frame, 42);
             sample[0].elapsed_ns
         });
-        assert!(samples[0] >= samples[1] + samples[2], "split phases must be inside the ordinary native total");
+        assert!(samples[0] >= samples[1], "the encoding phase is inside the ordinary native total");
 
     }
 }
@@ -962,7 +922,7 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
     });
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let submit = |r: &mut WgpuRasterizer, layers: &Document, reset| {
-        r.submit(FramePacket {
+        crate::test_support::submit_ready(r, FramePacket {
             document_extent: [256, 256],
             ..packet(layers, reset)
         })
@@ -1014,70 +974,7 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
 }
 
 #[test]
-fn batched_validation_scans_every_texture_slot_and_partial_tail() {
-    let r = WgpuRasterizer::new_native_headless(DocumentColor {
-        space: RgbSpace::ProPhoto,
-        depth: SampleDepth::U16,
-    }).unwrap();
-    let native = r.native_edit.as_ref().unwrap();
-    let textures: Vec<_> = [wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::R32Float]
-        .into_iter().flat_map(|format| (0..17).map(move |_| format))
-        .map(|format| r.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("validation slot fixture"),
-            size: wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        })).collect();
-    let inputs: Vec<_> = textures.iter().map(|texture| {
-        let plane = if texture.format() == wgpu::TextureFormat::Rgba32Float {
-            RasterPlane::Color
-        } else { RasterPlane::Mask };
-        (texture, RasterTile::pending(plane.descriptor(r.document_color())))
-    }).collect();
-    let readback = r.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("validation status fixture"), size: STATUS_BYTES,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let status = NativeEncodeStatus::new(&r.device);
-    let scan = || {
-        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-        status.reset(&mut encoder);
-        native.validator.encode(&r, &mut encoder, &inputs, &status, &mut Default::default()).unwrap();
-        encoder.copy_buffer_to_buffer(status.buffer(), 0, &readback, 0, STATUS_BYTES);
-        let submission = encoder.submit(&r.queue);
-        let (tx, rx) = mpsc::channel();
-        readback.map_async(wgpu::MapMode::Read, .., move |result| { tx.send(result).unwrap(); });
-        r.device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(READBACK_TIMEOUT) }).unwrap();
-        rx.recv_timeout(READBACK_TIMEOUT).unwrap().unwrap();
-        let result = NativeEncodeStatus::decode(&readback.get_mapped_range(..).unwrap());
-        readback.unmap();
-        result
-    };
-    assert!(scan().is_ok());
-    for (slot, texture) in textures.iter().enumerate() {
-        let color = texture.format() == wgpu::TextureFormat::Rgba32Float;
-        // The last invocation of each independently bound image must contribute
-        // to global failure, including both groups' one-tile trailing batches.
-        let write = |value: f32| r.queue.write_texture(
-            wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x: 255, y: 255, z: 0 }, ..texture.as_image_copy() },
-            &[value, 0., 0., 1.][..if color { 4 } else { 1 }].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(),
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: None, rows_per_image: None },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        );
-        write(f32::NAN);
-        assert!(scan().is_err(), "invalid slot {slot} was not visited");
-        write(0.);
-    }
-    assert!(scan().is_ok());
-}
-
-#[test]
-fn deferred_native_outputs_preserve_versions_and_status_during_following_frames() {
+fn deferred_native_outputs_preserve_versions_during_following_frames() {
     let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
@@ -1086,19 +983,18 @@ fn deferred_native_outputs_preserve_versions_and_status_during_following_frames(
     while !r.raster_ready() { std::thread::yield_now(); }
     let presentation = r.prioritize_raster_presentation();
     mark_changed(&mut r, &mut layers);
-    r.submit(packet(&layers, false)).unwrap();
+    crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     let first = layers.clone();
     let page = r.paint_layers[0].pages.iter().find(|p| p.coordinate == [0, 0]).unwrap().active().texture.clone();
     set_pixel(&r, &page, &[0.; 4]);
     let mask = r.layer_masks.pages[&(mask_target(&layers), [0, 0])].texture.clone();
     set_pixel(&r, &mask, &[0.5]);
     mark_changed(&mut r, &mut layers);
-    r.submit(packet(&layers, false)).unwrap();
+    crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     let second = layers.clone();
-    // A later failed publication must not poison either earlier status buffer.
     set_pixel(&r, &page, &[f32::NAN, 0., 0., 1.]);
     mark_changed(&mut r, &mut layers);
-    r.submit(packet(&layers, false)).unwrap();
+    crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     r.device.poll(wgpu::PollType::Wait { submission_index: r.last_submission.clone(), timeout: Some(READBACK_TIMEOUT) }).unwrap();
     for snapshot in [&first, &second, &layers] {
         for root in [&paint(snapshot).raster, mask_raster(snapshot)] {
@@ -1115,9 +1011,9 @@ fn deferred_native_outputs_preserve_versions_and_status_during_following_frames(
     mask_expected.get_mut(&TileKey { plane: RasterPlane::Mask, coordinate: [0, 0] }).unwrap()[..2].copy_from_slice(&32768u16.to_le_bytes());
     assert_eq!(backing(&paint(&second).raster), expected);
     assert_eq!(backing(mask_raster(&second)), mask_expected);
-    for root in [&paint(&layers).raster, mask_raster(&layers)] {
-        assert!(root.wait_data().unwrap().tiles.values().all(|t| t.wait_backing().is_err()));
-    }
+    expected.get_mut(&TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }).unwrap()[..8].copy_from_slice(&[0, 0, 0, 0, 0, 0, 255, 255]);
+    assert_eq!(backing(&paint(&layers).raster), expected);
+    assert_eq!(backing(mask_raster(&layers)), mask_expected);
 }
 
 #[test]
@@ -1169,7 +1065,7 @@ fn device_loss_before_deferred_native_backing_keeps_the_last_checkpoint() {
     while !r.raster_ready() { std::thread::yield_now(); }
     let presentation = r.prioritize_raster_presentation();
     mark_changed(&mut r, &mut layers);
-    r.submit(packet(&layers, false)).unwrap();
+    crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     r.device.poll(wgpu::PollType::Wait { submission_index: r.last_submission.clone(), timeout: Some(READBACK_TIMEOUT) }).unwrap();
     assert!(!paint(&layers).raster.host_backed());
     let snapshot = r.snapshot_gpu();
@@ -1184,7 +1080,7 @@ fn device_loss_before_deferred_native_backing_keeps_the_last_checkpoint() {
     }
     assert!(paint(&checkpoint).raster.host_backed());
     let mut replacement = WgpuRasterizer::new_native_headless(color).unwrap();
-    replacement.submit(packet(&checkpoint, true)).unwrap();
+    crate::test_support::submit_ready(&mut replacement, packet(&checkpoint, true)).unwrap();
     assert_eq!(backing(&paint(&checkpoint).raster), expected);
 }
 
@@ -1202,7 +1098,7 @@ fn native_in_place_runtime_matches_candidate_fallback_for_mixed_planes() {
             r.native_edit = Some(NativeEdit::with_mode(&r, transfer, in_place));
             mark_changed(&mut r, &mut layers);
             while !r.raster_ready() { std::thread::yield_now(); }
-            r.submit(packet(&layers, false)).unwrap();
+            crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
             assert_eq!(backing(&paint(&layers).raster), expected);
             assert_eq!(backing(mask_raster(&layers)), mask_expected);
         }

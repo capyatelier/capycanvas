@@ -1,6 +1,5 @@
 //! Queue-ordered exact tile capture; mapping/compression runs on a worker.
 use super::*;
-use crate::native_tiles::{NativeEncodeStatus, STATUS_BYTES};
 use layer_core::color::{AlphaAssociation, PixelDescriptor, TransferEncoding};
 use layer_core::raster::{
     RasterData, RasterPlane, RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey,
@@ -180,7 +179,7 @@ impl CaptureWorker {
         // The mapped-only path retains its 512 MiB ceiling. Spare pool memory
         // is accounted separately; these limits allocate nothing eagerly.
         self.pending.load(Ordering::Acquire) < 16
-            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK - STATUS_BYTES
+            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK
     }
     fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {
         let size = captures.storage_bytes();
@@ -317,7 +316,6 @@ impl TileCapture<'_> {
 /// that stream has been submitted; dropping an unsubmitted frame wakes waiters.
 pub(super) struct PreparedCapture {
     chunks: Vec<(wgpu::Buffer, Vec<Entry>)>,
-    validation: Option<wgpu::Buffer>,
     pub staging_bytes: u64,
     pool: Arc<BufferPool>,
 }
@@ -331,7 +329,6 @@ impl PreparedCapture {
                 .drain(..)
                 .map(|(b, e)| Chunk::map(b, e))
                 .collect(),
-            validation: self.validation.take().map(|b| Chunk::map(b, Vec::new())),
             pool: self.pool.clone(),
         }
     }
@@ -411,7 +408,6 @@ pub struct RasterCapture {
     #[cfg(not(target_arch = "wasm32"))]
     device: wgpu::Device,
     chunks: Vec<Chunk>,
-    validation: Option<Chunk>,
     pool: Arc<BufferPool>,
 }
 impl RasterCapture {
@@ -419,10 +415,6 @@ impl RasterCapture {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn finish(mut self) -> Result<(), String> {
         let result: Result<(), String> = (|| {
-            if let Some(validation) = &self.validation {
-                wait_mapping(&self.device, &validation.ready)?;
-                self.accept_validation()?;
-            }
             fn finish_chunk(device: &wgpu::Device, chunk: &Chunk, pool: &BufferPool, lanes: usize) -> Result<(), String> {
                 wait_mapping(device, &chunk.ready)?;
                 let mapped = chunk
@@ -495,20 +487,6 @@ impl RasterCapture {
             self.fail(error);
         }
         result
-    }
-    fn accept_validation(&self) -> Result<(), String> {
-        let Some(validation) = &self.validation else {
-            return Ok(());
-        };
-        let mapped = validation
-            .buffer
-            .get_mapped_range(..)
-            .map_err(|e| e.to_string())?;
-        let result = NativeEncodeStatus::decode(&mapped).map_err(|e| e.to_string());
-        drop(mapped);
-        validation.buffer.unmap();
-        self.pool.put(validation.buffer.clone());
-        result.map(|_| ())
     }
     fn fail(&self, error: &str) {
         for chunk in &self.chunks {
@@ -806,20 +784,18 @@ impl WgpuRasterizer {
 
     /// Capture already queue-ordered native candidates through the same bounded
     /// worker as ordinary paint. Validate every input and the actual rounded
-    /// staging allocation before recording copies. A publication-wide status,
-    /// when present, is checked before any tile backing is published.
+    /// staging allocation before recording copies.
     #[cfg(test)]
     pub fn capture_tiles(
         &self,
         copies: &[TileCapture<'_>],
-        status: Option<&NativeEncodeStatus>,
     ) -> Result<RasterCapture, GpuRasterError> {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("immutable raster revision capture"),
             });
-        let capture = prepare_capture(&self.device, &self.raster_buffers, &mut encoder, copies, status)?;
+        let capture = prepare_capture(&self.device, &self.raster_buffers, &mut encoder, copies)?;
         self.queue.submit([encoder.finish()]);
         Ok(capture.submitted_device(&self.device))
     }
@@ -1016,7 +992,6 @@ fn prepare_capture(
     pool: &Arc<BufferPool>,
     encoder: &mut wgpu::CommandEncoder,
     copies: &[TileCapture<'_>],
-    status: Option<&NativeEncodeStatus>,
 ) -> Result<PreparedCapture, GpuRasterError> {
     if copies.is_empty() || copies.len() as u64 > MAX_CAPTURE_BYTES / SCALAR_PAGE_BYTES {
         return Err(GpuRasterError::Color(
@@ -1037,7 +1012,7 @@ fn prepare_capture(
         .collect::<Result<_, _>>()?;
     let mut ranges = Vec::new();
     let mut start = 0;
-    let mut staging_bytes = if status.is_some() { STATUS_BYTES } else { 0 };
+    let mut staging_bytes = 0;
     while start < copies.len() {
         let mut end = start;
         let mut bytes = 0;
@@ -1091,14 +1066,8 @@ fn prepare_capture(
         }
         chunks.push((buffer, entries));
     }
-    let validation = status.map(|status| {
-        let buffer = pool.take(device, STATUS_BYTES);
-        encoder.copy_buffer_to_buffer(status.buffer(), 0, &buffer, 0, STATUS_BYTES);
-        buffer
-    });
     Ok(PreparedCapture {
         chunks,
-        validation,
         staging_bytes,
         pool: pool.clone(),
     })

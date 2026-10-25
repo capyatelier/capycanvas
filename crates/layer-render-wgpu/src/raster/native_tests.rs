@@ -46,7 +46,6 @@ fn mixed_native_capture_is_exact_across_chunks_and_later_writes() {
         contents: &mask,
         usage: wgpu::BufferUsages::COPY_SRC,
     });
-    let status = NativeEncodeStatus::new(&r.device);
     let mut copies: Vec<_> = (0..35)
         .map(|_| TileCapture {
             source: crate::raster::CaptureSource::Texture(&native16),
@@ -64,11 +63,11 @@ fn mixed_native_capture_is_exact_across_chunks_and_later_writes() {
         source: crate::raster::CaptureSource::Packed(&coverage),
         tile: RasterTile::pending(PixelDescriptor::COVERAGE8),
     });
-    let capture = r.capture_tiles(&copies, Some(&status)).unwrap();
+    let capture = r.capture_tiles(&copies).unwrap();
     assert_eq!(capture.chunks.len(), 2);
     assert_eq!(
-        capture.chunks.iter().chain(&capture.validation).map(|c| c.buffer.size()).sum::<u64>(),
-        20 * 1024 * 1024 + STATUS_BYTES
+        capture.chunks.iter().map(|c| c.buffer.size()).sum::<u64>(),
+        20 * 1024 * 1024
     );
     assert!(copies.iter().all(|c| c.tile.try_backing().is_none()));
     // Captures own the submitted snapshot even if the next edit overwrites GPU

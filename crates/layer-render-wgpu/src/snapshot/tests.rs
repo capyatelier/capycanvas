@@ -1433,7 +1433,7 @@ fn sparse_transform_capture_keeps_filter_edges_and_watercolor_metadata_without_e
         snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
         snapshot.renderer.ensure_document_metadata(plan.extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).unwrap();
         assert_eq!(snapshot.raw_planes, [RasterPlane::Color]);
-        assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(color.depth, Default::default(), &snapshot.raw_planes).len(), 2);
+        assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(color.depth, Default::default(), &snapshot.raw_planes).len(), 1);
         let coordinates = snapshot.raw_coordinates().unwrap();
         assert!(coordinates.len() < page_coordinates(PixelRect::full(plan.extent)).count() / 2, "{interpolation:?}: {coordinates:?}");
         let mut transformed = document.clone();
@@ -1482,7 +1482,7 @@ fn default_one_masks_keep_zero_tiles_and_skip_no_authored_coverage() {
     snapshot.renderer.ensure_document_metadata(plan.extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).unwrap();
     assert_eq!(snapshot.raw_planes, [RasterPlane::Mask]);
     assert_eq!(snapshot.raw_coordinates().unwrap().len(), page_coordinates(PixelRect::full(plan.extent)).count());
-    assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(document.composition().color.depth, Default::default(), &snapshot.raw_planes).len(), 2);
+    assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(document.composition().color.depth, Default::default(), &snapshot.raw_planes).len(), 1);
     for coordinate in [[0, 0], [2, 1]] {
         let region = page_rect(coordinate).intersect(PixelRect::full(plan.extent));
         let (tiles, capture) = pollster::block_on(snapshot.with_region_gpu([region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
