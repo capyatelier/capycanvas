@@ -126,7 +126,7 @@ struct ColorEditor: View {
                     fontSize: 14, color: palette["text"], identifier: "color-sheet-search",
                     submit: { _ in !NativeTextContext.composing }, cancel: escapeSearch)
                     .frame(height: 28).padding(.horizontal, 6)
-                    .background(palette["input"], in: SquircleShape.control)
+                    .background(palette.field, in: SquircleShape.control)
                     .onChange(of: search) { _, text in session.search(text) }
                 Button { setSheet(false) } label: { SharedIcon(name: "chevron-down").frame(width: 28, height: 28).contentShape(Rectangle()) }
                     .buttonStyle(EditorControlButtonStyle()).help(copy["close_swatches"].string)
@@ -153,7 +153,7 @@ struct ColorEditor: View {
                     if !sheet["empty"].isNull { Text(sheet["empty"].string).foregroundStyle(.secondary) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity).background(palette["panel"])
+        }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity).background(palette["settings"])
             .onKeyPress(.escape) { guard !NativeTextContext.composing else { return .ignored }; escapeSearch(); return .handled }
             .accessibilityElement(children: .contain).accessibilityIdentifier("color-sheet")
     }
@@ -223,7 +223,7 @@ struct ColorEditorForm: View {
                     .accessibilityAddTraits(choice["selected"].bool ? .isSelected : [])
                     .accessibilityIdentifier("color-editor-shape-" + choice["shape"].string)
             }
-        }.padding(2).background(Capsule().fill(palette["input"])).fixedSize()
+        }.padding(2).background(Capsule().fill(palette.field)).fixedSize()
     }
     private var head: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -568,7 +568,7 @@ private struct ColorPickStrip: View {
                 }.monospacedDigit()
             }.padding(.horizontal, 10).padding(.vertical, 8).fixedSize()
         }.buttonStyle(.plain)
-            .background(EditorPalette(source: store.state["palette"]).glassPanel, in: SquircleShape.surface)
+            .background(EditorPalette(source: store.state["palette"])["settings"], in: SquircleShape.surface)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
             .onContinuousHover { phase in
                 if case .active(let point) = phase { hover = CGPoint(x: point.x + placed["origin"][0].number, y: point.y + placed["origin"][1].number) }

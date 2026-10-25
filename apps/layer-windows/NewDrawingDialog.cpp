@@ -426,7 +426,7 @@ struct NewDrawingDialog::Impl:std::enable_shared_from_this<Impl>{
         for(auto const& node:{presets,cancel,create})footer.Children().Append(node);
     }
     void drawer(Drawer& target,hstring const& id){
-        auto& panel=target.root;panel.Background(data->brush(L"dialog"));panel.Visibility(Visibility::Collapsed);panel.RenderTransform(target.shift);
+        auto& panel=target.root;panel.Background(data->brush(L"settings"));panel.Visibility(Visibility::Collapsed);panel.RenderTransform(target.shift);
         AutomationProperties::SetAutomationId(panel,id);
         for(auto height:{GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star},GridLength{1,GridUnitType::Auto}}){RowDefinition row;row.Height(height);panel.RowDefinitions().Append(row);}
         target.head.Padding({PickerPadding,PickerPadding,PickerPadding,8});panel.Children().Append(target.head);

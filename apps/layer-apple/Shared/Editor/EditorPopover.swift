@@ -72,6 +72,7 @@ private struct EditorPopoverLayer: View {
     let passThrough: CGRect?
     @State private var size = CGSize(width: 340, height: 300)
     @Environment(\.scenePhase) private var phase
+    @Environment(\.editorPalette) private var palette
     private var maximumHeight: CGFloat {
         passThrough.map { max(0, viewport.height - max(source.maxY, $0.maxY) - 14) } ?? max(0, viewport.height - 16)
     }
@@ -97,7 +98,7 @@ private struct EditorPopoverLayer: View {
                 .fixedSize(horizontal: true, vertical: true)
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
                 .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8)))
-                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.15), lineWidth: 0.5).allowsHitTesting(false) }
+                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(palette.popoverBorder, lineWidth: 1).allowsHitTesting(false) }
                 .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
                 .offset(x: origin.x, y: origin.y)
                 .accessibilityAddTraits(.isModal)

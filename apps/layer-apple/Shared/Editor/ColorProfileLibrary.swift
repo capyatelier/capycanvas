@@ -82,6 +82,7 @@ struct ColorProfileLibrary: View {
     @State private var matching = Set<String>()
     @State private var searchGeneration = UUID()
     @Environment(\.editorPopupStore) private var store
+    private var palette: EditorPalette { EditorPalette(source: store?.state["palette"] ?? JSON()) }
     var body: some View {
         let entries = entryCopy.rows(metadata, language: language).filter { query.isEmpty || matching.contains($0["id"].string) }
         VStack(alignment: .leading, spacing: 16) {
@@ -110,7 +111,7 @@ struct ColorProfileLibrary: View {
                                 reload(showing: (entry["id"].string, $0))
                             })).accessibilityIdentifier("profile-visible-" + entry["id"].string)
                         }
-                        Divider()
+                        EditorLine(color: palette.settingsBorder)
                     }
                     if entries.isEmpty && !busy { Text(copy["empty"].string) }
                 }.frame(maxWidth: .infinity, alignment: .leading).disabled(busy)

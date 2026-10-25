@@ -269,16 +269,26 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
     mutable std::map<std::pair<std::wstring,uint8_t>,SolidColorBrush> tintBrushes;
     mutable std::map<std::wstring,SolidColorBrush> glassBrushes;
+    mutable std::map<std::pair<std::wstring,std::wstring>,SolidColorBrush> lineBrushes;
+    static Windows::UI::Color unitColor(A const& value){
+        auto channel=[&](uint32_t i){return uint8_t(std::lround(std::clamp(value.GetNumberAt(i),0.,1.)*255));};
+        return Windows::UI::Color{channel(3),channel(0),channel(1),channel(2)};
+    }
     Windows::UI::Color glassColor(wchar_t const* role)const{
         auto value=array(object(object(state,L"palette"),L"glass"),role);
         if(value.Size()!=4)return color(str(object(state,L"palette"),role,L"#414141"));
-        auto channel=[&](uint32_t i){return uint8_t(std::lround(std::clamp(value.GetNumberAt(i),0.,1.)*255));};
-        return Windows::UI::Color{channel(3),channel(0),channel(1),channel(2)};
+        return unitColor(value);
+    }
+    Windows::UI::Color lineColor(std::wstring const& surface,std::wstring const& role)const{
+        auto lines=object(object(state,L"palette"),L"lines");
+        auto value=array(surface.empty()?lines:object(lines,surface.c_str()),role.c_str());
+        return value.Size()==4?unitColor(value):Windows::UI::Color{};
     }
     void refreshPalette(){
         auto palette=object(state,L"palette");
         for(auto const& [role,brush]:paletteBrushes)brush.Color(color(str(palette,role.c_str(),L"#414141")));
         for(auto const& [role,brush]:glassBrushes)brush.Color(glassColor(role.c_str()));
+        for(auto const& [key,brush]:lineBrushes)brush.Color(lineColor(key.first,key.second));
         for(auto const& [key,brush]:tintBrushes){auto value=color(str(palette,key.first.c_str(),L"#414141"));value.A=key.second;brush.Color(value);}
     }
     hstring caption(J const& request)const{
@@ -325,6 +335,12 @@ struct WorkspaceData : std::enable_shared_from_this<WorkspaceData> {
         auto found=glassBrushes.find(role);if(found!=glassBrushes.end())return found->second;
         return glassBrushes.emplace(role,fill(glassColor(role))).first->second;
     }
+    SolidColorBrush line(wchar_t const* surface,wchar_t const* role)const{
+        auto key=std::make_pair(std::wstring(surface),std::wstring(role));
+        if(auto found=lineBrushes.find(key);found!=lineBrushes.end())return found->second;
+        return lineBrushes.emplace(key,fill(lineColor(key.first,key.second))).first->second;
+    }
+    SolidColorBrush line(wchar_t const* role)const{return line(L"",role);}
     bool transparent()const{return str(object(object(state,L"palette"),L"glass"),L"transparency",L"off")!=L"off";}
     SolidColorBrush tint(wchar_t const* role,uint8_t alpha)const{
         auto key=std::make_pair(std::wstring(role),alpha);

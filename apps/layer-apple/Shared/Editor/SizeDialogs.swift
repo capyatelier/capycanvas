@@ -97,7 +97,7 @@ private struct SizeForm: View {
         let selected = choice["anchor"].string == view["anchor"].string
         return Button { choose(["op": "anchor", "anchor": choice["anchor"].string]) } label: {
             SharedIcon(name: "rectangle-fill", size: 16).opacity(selected ? 1 : 0).frame(width: 40, height: 40)
-                .background(selected ? palette.active : palette["input"], in: SquircleShape.control).contentShape(Rectangle())
+                .background(selected ? palette.active : palette.field, in: SquircleShape.control).contentShape(Rectangle())
         }.buttonStyle(.plain).focusable(false)
             .accessibilityLabel(choice["label"].string).accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityIdentifier("canvas-size-anchor-" + choice["anchor"].string)

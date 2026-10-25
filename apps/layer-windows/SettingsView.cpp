@@ -76,6 +76,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             std::pair{L"ContentDialogMaxHeight",DialogHeight},std::pair{L"ContentDialogMinHeight",0.}})
             dialog.Resources().Insert(box_value(resource),box_value(value));
         dialog.Resources().Insert(box_value(L"ContentDialogPadding"),box_value(Thickness{0,0,0,0}));
+        dialog.Resources().Insert(box_value(L"ContentDialogTopOverlay"),clear());
         AutomationProperties::SetName(dialog,data->caption(L"shortcuts",L"preferences"));
         dialog.Closing([weak=weak_from_this()](auto&&,ContentDialogClosingEventArgs const& e){
             if(auto self=weak.lock()){
@@ -143,7 +144,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetLiveSetting(empty,Automation::Peers::AutomationLiveSetting::Polite);sidebar.Children().Append(empty);
         ScrollViewer navigationScroll;navigationScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);navigationScroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);navigationScroll.HorizontalScrollMode(ScrollMode::Disabled);navigationScroll.Content(sidebar);mouseScrollbars(navigationScroll);
         Grid::SetRow(navigationScroll,1);side.Children().Append(navigationScroll);
-        sidebarSurface=Border();sidebarSurface.Child(side);sidebarSurface.BorderThickness({0,0,1,0});body.Children().Append(sidebarSurface);
+        sidebarSurface=Border();sidebarSurface.Child(side);sidebarSurface.BorderThickness({0,0,1,0});sidebarSurface.BackgroundSizing(BackgroundSizing::OuterBorderEdge);body.Children().Append(sidebarSurface);
 
         Grid pane;Grid::SetColumn(pane,1);
         for(auto height:{GridLength{HeaderHeight,GridUnitType::Pixel},GridLength{1,GridUnitType::Auto},GridLength{1,GridUnitType::Star}}){RowDefinition row;row.Height(height);pane.RowDefinitions().Append(row);}
@@ -205,7 +206,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 A ids;
                 for(auto rowValue:array(group,L"rows")){
                     auto row=rowValue.GetObject();ids.Append(S(str(row,L"id")));
-                    if(list.Children().Size()){Border line;line.Height(1);line.Background(data->tint(L"text",20));list.Children().Append(line);}
+                    if(list.Children().Size()){Border line;line.Height(1);line.Background(data->line(L"settings",L"card_shade"));list.Children().Append(line);}
                     list.Children().Append(field(row));
                 }
                 bindings.emplace_back([data=data,section,ids]{
@@ -461,7 +462,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         bool restyle=!built||theme!=data->theme();theme=data->theme();
         if(!built)build(model);
         dialog.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
-        dialog.Background(data->brush(L"settings"));sidebarSurface.Background(data->brush(L"sidebar"));sidebarSurface.BorderBrush(data->tint(L"text",30));
+        dialog.Background(data->brush(L"settings"));sidebarSurface.Background(data->brush(L"sidebar"));sidebarSurface.BorderBrush(data->line(L"sidebar_border"));
         auto size=xamlRoot.Size();frame.Width(std::max(320.,std::min(DialogWidth,double(size.Width)-60)));
         auto insets=array(snapshot,L"titlebar_insets");
         auto captionHeight=insets.Size()==3?insets.GetAt(2).GetNumber():0.;

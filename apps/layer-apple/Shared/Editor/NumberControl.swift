@@ -34,7 +34,10 @@ struct NumberControl: View {
     @State private var inlineMeasure = ""
     @Environment(\.compactPanelControls) private var compact
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.onSettingsSurface) private var onSettings
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
+    private var inputFill: Color { onSettings ? palette.field : palette["input"] }
+    private var entryGrouped: Bool { toolbar == nil && !inline && !valueOnly && (affixes != nil || (!compactPanel && !slider)) }
     private var slider: Bool { control["kind"].string == "slider" }
     private var dial: Bool { control["kind"].string == "dial" }
     private var compactPanel: Bool { panel && (slider || dial) && !inline && !valueOnly && toolbar == nil }
@@ -108,7 +111,7 @@ struct NumberControl: View {
                             numericEntry
                             stepButton(-1)
                             stepButton(1)
-                        }.background(palette["input"], in: SquircleShape.control).fixedSize()
+                        }.background(inputFill, in: SquircleShape.control).fixedSize()
                     } else if showsEntry || field.dirty {
                         numericEntry.fixedSize()
                     } else {
@@ -208,7 +211,7 @@ struct NumberControl: View {
     private var sliderTrack: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Capsule().fill(palette["input"])
+                Capsule().fill(inputFill)
                 Rectangle().fill(palette["panel"])
                     .overlay(palette["text"].opacity(0.5))
                     .frame(width: max(0, geometry.size.width * formatted["fill"].number))
@@ -243,7 +246,7 @@ struct NumberControl: View {
     private var angleDial: some View {
         let diameter = store.panelMetrics.sliderHeight - 2 * store.panelMetrics.spacing
         let angle = CGFloat(formatted["value"].number * control["scale"].number) * .pi / 180
-        let face = palette["input"], panelColor = palette["panel"], ink: Color = palette["text"].opacity(0.5)
+        let face = inputFill, panelColor = palette["panel"], ink: Color = palette["text"].opacity(0.5)
         return Canvas { context, size in
             let radius = min(size.width, size.height) / 2
             let dot = CGPoint(x: size.width / 2 + cos(angle) * radius * 0.55, y: size.height / 2 + sin(angle) * radius * 0.55)
@@ -285,7 +288,7 @@ struct NumberControl: View {
             .focusedValue(\.editorTextCommit, { _ = commit() })
             .frame(width: valueOnly || inline || toolbar != nil || affixes != nil ? nil : compactPanel ? 56 : slider ? 80 : spinWidth)
             .padding(.horizontal, 6).frame(height: compact || toolbar != nil || valueOnly || slider || compactPanel ? store.panelMetrics.height : 32)
-            .background(palette["input"], in: SquircleShape.control)
+            .background(entryGrouped ? Color.clear : inputFill, in: SquircleShape.control)
             .modifier(NumberControlMeasurement(id: key + ":entry"))
             .accessibilityHint(field.error ?? "")
             .help(field.error ?? label)

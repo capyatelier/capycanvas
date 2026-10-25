@@ -60,17 +60,17 @@ import org.json.JSONObject
             NumericSetting(copy.getString("zoom"), zoom, host.catalog.getJSONObject("zoom"), Modifier.fillMaxWidth(), inline = true,
                 onTyping = { if (it) typing = true }) { host.dispatch(obj("type" to "set_zoom", "zoom" to it)) }
         }
-        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
+        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.menuSeparator)
         WorkspaceMenuItems(host, JSONArray(sections.take(rotationSection)), close)
-        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
+        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.menuSeparator)
         Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("rotation-field")) {
             NumericSetting(copy.getString("rotation"), rotation, host.catalog.getJSONObject("rotation"), Modifier.fillMaxWidth(), inline = true,
                 onPositionChange = { host.dispatch(obj("type" to "set_rotation_from_slider", "rotation" to it)) },
                 onTyping = { if (it) typing = true }) { host.dispatch(obj("type" to "set_rotation", "rotation" to it)) }
         }
-        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
+        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.menuSeparator)
         WorkspaceMenuItems(host, JSONArray(sections.drop(rotationSection)), close)
-        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
+        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.menuSeparator)
         NavigationButtons(host, menu.array("buttons").objects(), "zoom")
     }
 }

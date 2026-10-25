@@ -70,7 +70,7 @@ import org.json.JSONArray
                 if (toolbarMode) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for ((target, label) in listOf("this_workspace" to "this_workspace", "toolbar_library" to "saved_toolbars")) TextButton({ host.workspaceInput(obj("type" to "open", "page" to target)) }, enabled = !busy) { Text(copy.getString(label)) }
                 }
-                if (toolbarMode) CoreTextField(view.optString("query"), { host.workspaceInput(obj("type" to "search", "query" to it)) }, Modifier.fillMaxWidth().testTag("workspace-search"), placeholder = { Text(copy.getString("search")) })
+                if (toolbarMode) CoreTextField(view.optString("query"), { host.workspaceInput(obj("type" to "search", "query" to it)) }, Modifier.fillMaxWidth().testTag("workspace-search"), placeholder = { Text(copy.getString("search")) }, background = colors.dialogField)
                 if (page == "this_workspace") TextButton({ host.workspaceInput(obj("type" to "form", "action" to obj("type" to "new_toolbar", "value" to null))) }, enabled = !busy, modifier = Modifier.testTag("new-toolbar")) { Text(copy.getString("new_toolbar_action")) }
                 Column(Modifier.weight(1f,fill=false),verticalArrangement=Arrangement.spacedBy(if(page=="workspaces")6.dp else 4.dp)) {
                     WorkspaceRows(host, view, rowInteraction, Modifier.weight(1f, fill=false).height(if(page=="workspaces")workspaceRowHeight()*minOf(7,view.array("rows").length()) else 315.dp).fillMaxWidth())
@@ -113,9 +113,9 @@ import org.json.JSONArray
         AlertDialog(onDismissRequest = cancel, modifier = Modifier.testTag("workspace-form"), title = { Text(title) }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 form.getString("message").takeIf { it.isNotEmpty() }?.let { Text(it) }
-                if (named) CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("workspace-name"), label = { Text(host.bootstrap!!.getJSONObject("common").getString("name")) })
-                if (!form.isNull("description")) CoreTextField(description, { description = it }, Modifier.fillMaxWidth().testTag("workspace-description"), label = { Text(copy.getString("description")) })
-                if (choices.isNotEmpty()) PropertyChoice(form.getString("choice_label"), choices.map { it.getString("label") }, choices.indexOfFirst { it.getString("id") == choice }.coerceAtLeast(0), enabled = !busy) { choice = choices[it].getString("id") }
+                if (named) CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("workspace-name"), label = { Text(host.bootstrap!!.getJSONObject("common").getString("name")) }, background = LocalPalette.current.dialogField)
+                if (!form.isNull("description")) CoreTextField(description, { description = it }, Modifier.fillMaxWidth().testTag("workspace-description"), label = { Text(copy.getString("description")) }, background = LocalPalette.current.dialogField)
+                if (choices.isNotEmpty()) PropertyChoice(form.getString("choice_label"), choices.map { it.getString("label") }, choices.indexOfFirst { it.getString("id") == choice }.coerceAtLeast(0), enabled = !busy, fill = colors.dialogField) { choice = choices[it].getString("id") }
                 if (nameError != null || error != null) Text(nameError ?: error.orEmpty(), color = MaterialTheme.colorScheme.error)
             }
         }, dismissButton = { TextButton(cancel) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } }, confirmButton = {

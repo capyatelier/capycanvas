@@ -182,7 +182,7 @@ private val HiddenChromeShape=object:Shape {
         (if (colors.dark) darkColorScheme() else lightColorScheme()).copy(surface = colors.panel, background = colors.surround,
             onSurface = colors.text, onBackground = colors.text, primary = colors.accent,
             onPrimary = colors.accentForeground,
-            surfaceContainer = colors.panel, surfaceContainerHigh = colors.panel,
+            surfaceContainer = colors.panel, surfaceContainerHigh = colors.settingsBackground,
             surfaceContainerHighest = colors.tabs, surfaceContainerLow = colors.input,
             surfaceContainerLowest = colors.surround, surfaceTint = Color.Transparent,
             secondaryContainer = colors.active, onSecondaryContainer = colors.text,
@@ -259,7 +259,7 @@ private val HiddenChromeShape=object:Shape {
                             title = { Text(if (control == "brush_color") host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("color") else host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("opacity")) },
                             text = { Column {
                                 if (control == "brush_color") ColorControls(host)
-                                else NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("opacity"), state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
+                                else NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("opacity"), state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity"), fieldFill = colors.dialogField) {
                                     host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
                                 }
                             } }, confirmButton = { TextButton({ host.customize(obj("type" to "close_control")) }) { Text(host.bootstrap!!.getJSONObject("common").getString("done")) } })

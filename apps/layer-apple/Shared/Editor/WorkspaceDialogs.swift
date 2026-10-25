@@ -17,6 +17,7 @@ private struct WorkspaceDialog: View {
     @ObservedObject var store: EditorStore
     private var snapshot: SnapshotProjection { store.snapshot }
     private var common: JSON { store.bootstrap["common"] }
+    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         Group {
             if !snapshot["toolbar_prompt"].isNull { prompt(snapshot["toolbar_prompt"]) }
@@ -56,7 +57,7 @@ private struct WorkspaceDialog: View {
                             }.frame(minHeight: 50).padding(.horizontal, 8).contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("tool-choice-" + choice["label"].string)
                             .accessibilityAddTraits(choice["selected"].bool ? .isSelected : [])
-                        Divider()
+                        EditorLine(color: palette.settingsBorder)
                     }
                 }
             }.frame(minHeight: 120, idealHeight: 340, maxHeight: 400)
@@ -87,8 +88,8 @@ private struct WorkspaceDialog: View {
                     .keyboardShortcut(.cancelAction).accessibilityIdentifier("toolbar-prompt-cancel")
                 Button(view["confirm_label"].string, role: view["destructive"].bool ? .destructive : nil) { action("confirm_toolbar") }
                     .buttonStyle(.borderedProminent)
-                    .foregroundStyle(view["destructive"].bool ? .white : EditorPalette(source: store.state["palette"]).accentForeground)
-                    .tint(view["destructive"].bool ? .red : EditorPalette(source: store.state["palette"]).accent)
+                    .foregroundStyle(view["destructive"].bool ? .white : palette.accentForeground)
+                    .tint(view["destructive"].bool ? .red : palette.accent)
                     .keyboardShortcut(.defaultAction).disabled(!view["can_confirm"].bool)
                     .accessibilityIdentifier("toolbar-prompt-confirm")
             }
@@ -114,7 +115,7 @@ private struct WorkspaceDialog: View {
                         }.buttonStyle(EditorControlButtonStyle(selected: selected))
                             .accessibilityAddTraits(selected ? .isSelected : [])
                             .accessibilityIdentifier("managed-toolbar-" + toolbar["panel"].string)
-                        Divider()
+                        EditorLine(color: palette.settingsBorder)
                     }
                 }
             }.frame(minHeight: 120, idealHeight: 250, maxHeight: 340)

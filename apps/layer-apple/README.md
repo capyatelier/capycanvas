@@ -81,9 +81,14 @@ Setup, build, run and test commands are in the
   [shared shader readiness](../../docs/internals/shared-shader-readiness.md).
 - **Menus and chrome.** macOS top-level menus use the OS menu bar and target the
   focused editor window; the iPad keeps in-app menus. Both use the same shared
-  catalog and one menu implementation. Popups use opaque shared-theme surfaces
-  (`EditorPopupSurface`, `EditorPopupPresentation`); Settings keeps an opaque
-  native background.
+  catalog and one menu implementation. Popovers use the opaque `panel` surface
+  (`EditorPopupSurface`) and dialog sheets the `settings` surface
+  (`EditorPopupPresentation`). Their outlines, separators and row dividers use
+  `palette.lines` through `EditorPalette`. Fields and segments on sheets fill with
+  `EditorPalette.field` (text at 10%; New Drawing uses 7%, as on GTK and
+  Android), because `input` matches the `settings` surface; shared controls
+  follow the `onSettingsSurface` environment value that each surface sets.
+  Settings, native menus and alerts keep their native backgrounds and separators.
 - **Files and storage** run on workers off the render owner; see
   [Apple persistence](PERSISTENCE.md). Pencil, tablet and trackpad handling is in
   [Apple input](INPUT.md), and trace recording and workloads are in

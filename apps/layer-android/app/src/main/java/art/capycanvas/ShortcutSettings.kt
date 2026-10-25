@@ -15,9 +15,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -29,6 +31,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -67,12 +70,16 @@ private fun subtitle(row: JSONObject): String =
         fontSize = 14.sp, lineHeight = 20.sp, textAlign = align)
 }
 
-@Composable private fun Card(modifier: Modifier = Modifier, rows: List<@Composable () -> Unit>) {
+@Composable internal fun SettingsCard(modifier: Modifier = Modifier, rows: List<@Composable () -> Unit>) {
     val colors = LocalPalette.current
-    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = colors.settingsCard, shadowElevation = 1.dp) {
+    val shape = RoundedCornerShape(12.dp)
+    Surface(modifier.fillMaxWidth()
+        .dropShadow(shape, Shadow(6.dp, colors.cardFarShadow, spread = 2.dp, offset = DpOffset(0.dp, 2.dp)))
+        .dropShadow(shape, Shadow(3.dp, colors.cardShadow, spread = 1.dp, offset = DpOffset(0.dp, 1.dp)))
+        .dropShadow(shape, Shadow(0.dp, colors.cardRing, spread = 1.dp)), shape = shape, color = colors.settingsCard) {
         Column {
             rows.forEachIndexed { index, row ->
-                if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
+                if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.rowDivider)
                 row()
             }
         }
@@ -111,7 +118,7 @@ private fun subtitle(row: JSONObject): String =
     val colors = LocalPalette.current
     var open by remember { mutableStateOf(false) }
     Box {
-        Row(Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp)).background(colors.input)
+        Row(Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp)).background(colors.dialogField)
             .clickable(role = Role.Button) { open = true }.testTag(tag).padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(label, maxLines = 1)
@@ -132,7 +139,7 @@ private fun subtitle(row: JSONObject): String =
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         GroupTitle(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("title"))
         ShortcutFilters(host, view, page)
-        if (!page.getBoolean("filtering")) Card(Modifier.testTag("shortcut-categories"), page.array("categories").objects().map { category ->
+        if (!page.getBoolean("filtering")) SettingsCard(Modifier.testTag("shortcut-categories"), page.array("categories").objects().map { category ->
             @Composable {
                 val id = category.getString("id")
                 SettingRow(category.getString("label"), "shortcut-category-$id", onClick = { host.preference(obj("type" to "shortcut_category", "id" to id)) }) {
@@ -147,7 +154,7 @@ private fun subtitle(row: JSONObject): String =
         val modifiers = page.array("modifiers").objects().filter { it.getBoolean("visible") }
         if (modifiers.isNotEmpty()) Column(Modifier.testTag("modifier-results"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             GroupTitle(page.array("categories").objects().first { it.getString("id") == MODIFIER_SECTION }.getString("label"))
-            Card(rows = modifiers.map { @Composable { ModifierRow(host, it) } })
+            SettingsCard(rows = modifiers.map { @Composable { ModifierRow(host, it) } })
         }
         ShortcutResults(host, view, grouped = false)
     }
@@ -165,7 +172,8 @@ private fun subtitle(row: JSONObject): String =
                 host.preference(obj("type" to "search_shortcut_key", "chord" to chord))
                 true
             }, height = 48.dp, focusRequest = keySearch,
-            placeholder = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("search_or_press")) }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
+            placeholder = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("search_or_press")) }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) },
+            background = LocalPalette.current.dialogField)
         val contexts = page.array("contexts").objects()
         val context = page.nullableString("context")
         val selected = contexts.indexOfFirst { it.nullableString("category") == context }.coerceAtLeast(0)
@@ -197,7 +205,7 @@ private fun subtitle(row: JSONObject): String =
     }
     for ((title, rows) in groups) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (title.isNotEmpty()) GroupTitle(title)
-        Card(rows = rows.map { @Composable { ShortcutRow(host, it) } })
+        SettingsCard(rows = rows.map { @Composable { ShortcutRow(host, it) } })
     }
 }
 
@@ -226,7 +234,7 @@ private fun subtitle(row: JSONObject): String =
     if (category == MODIFIER_SECTION) {
         Column(Modifier.testTag("modifier-keys"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Description(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("hold_key_help"))
-            Card(rows = page.array("modifiers").objects().filter { it.getBoolean("visible") }.map { @Composable { ModifierRow(host, it) } } +
+            SettingsCard(rows = page.array("modifiers").objects().filter { it.getBoolean("visible") }.map { @Composable { ModifierRow(host, it) } } +
                 listOf(@Composable {
                     SettingRow(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("add_modifier"), "add-modifier-key", onClick = { host.preference(obj("type" to "add_modifier_key")) }) {
                         SharedIcon("plus", null, Modifier.size(20.dp))
@@ -246,7 +254,7 @@ private fun subtitle(row: JSONObject): String =
             if (editor.getBoolean("modified")) ResetButton("$prefix-reset") { host.preference(reset) }
         }
         val perTool = editor.getBoolean("per_tool")
-        Card(rows = listOf<@Composable () -> Unit>({
+        SettingsCard(rows = listOf<@Composable () -> Unit>({
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).toggleable(!perTool, role = Role.Switch) { host.preference(same(!it)) }
                 .testTag("$prefix-same").padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("same_all_tools"), Modifier.weight(1f))
@@ -261,7 +269,7 @@ private fun subtitle(row: JSONObject): String =
                 }
             }
         })
-        if (remove != null) Card(rows = listOf {
+        if (remove != null) SettingsCard(rows = listOf {
             SettingRow(remove.first, "$prefix-remove", onClick = { host.preference(remove.second) }, titleColor = MaterialTheme.colorScheme.error) {
                 SharedIcon("delete", null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
             }
@@ -330,13 +338,13 @@ private fun subtitle(row: JSONObject): String =
                 })
                 else -> emptyList()
             }
-            Card(rows = rows + last)
+            SettingsCard(rows = rows + last)
         }
         val gestures = editor.array("gestures").values()
         if (gestures.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             GroupTitle(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("pen_touch"))
             Description(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("pen_page_help"))
-            Card(rows = gestures.map { gesture -> @Composable { SettingRow(gesture.toString(), "shortcut-gesture-$gesture") } })
+            SettingsCard(rows = gestures.map { gesture -> @Composable { SettingRow(gesture.toString(), "shortcut-gesture-$gesture") } })
         }
     }
 }
@@ -345,7 +353,7 @@ private fun subtitle(row: JSONObject): String =
     val sections = view.getJSONObject("shortcut_page").array("triggers").objects().groupBy { it.getString("section") }
     for ((section, triggers) in sections) Column(Modifier.testTag("triggers-$section"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         GroupTitle(section)
-        Card(rows = triggers.map { trigger ->
+        SettingsCard(rows = triggers.map { trigger ->
             @Composable {
                 val id = trigger.getString("id")
                 SettingRow(trigger.getString("label"), "trigger-$id", trigger.optString("detail"), onClick = {
@@ -387,7 +395,7 @@ private fun subtitle(row: JSONObject): String =
             if (event.key == Key.Back) false else { host.key(event.nativeKeyEvent); true }
         }) {
             Description(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("press_hold_key"), Modifier.padding(horizontal = 16.dp), TextAlign.Center)
-            Box(Modifier.padding(horizontal = 16.dp)) { Card(rows = listOf { RecordingRow(host, capture) }) }
+            Box(Modifier.padding(horizontal = 16.dp)) { SettingsCard(rows = listOf { RecordingRow(host, capture) }) }
         }
     }
     val picker = view.getJSONObject("shortcut_page").objectOrNull("picker") ?: return
@@ -399,7 +407,7 @@ private fun subtitle(row: JSONObject): String =
         Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CoreTextField(picker.optString("query"), { host.preference(obj("type" to "search_action_picker", "query" to it)) },
                 Modifier.weight(1f).testTag("action-picker-search"), height = 48.dp, placeholder = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("search_actions")) },
-                leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
+                leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) }, background = LocalPalette.current.dialogField)
             if (picker.getBoolean("modified")) TextButton({ host.preference(obj("type" to "reset_trigger", "trigger" to picker.getString("trigger"))) },
                 Modifier.testTag("action-picker-reset")) { Text(host.bootstrap!!.getJSONObject("common").getString("reset")) }
         }
@@ -411,10 +419,10 @@ private fun subtitle(row: JSONObject): String =
                 }
             }
             val sections = picker.array("sections").objects()
-            if (picker.getBoolean("nothing_visible")) Card(rows = listOf(choice("", picker.getString("nothing_label"), "", picker.getBoolean("nothing"))))
+            if (picker.getBoolean("nothing_visible")) SettingsCard(rows = listOf(choice("", picker.getString("nothing_label"), "", picker.getBoolean("nothing"))))
             for (section in sections) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 GroupTitle(section.getString("title"))
-                Card(rows = section.array("actions").objects().map {
+                SettingsCard(rows = section.array("actions").objects().map {
                     choice(it.getString("id"), it.getString("label"), it.optString("detail"), it.getBoolean("selected"))
                 })
             }
@@ -459,7 +467,7 @@ private fun subtitle(row: JSONObject): String =
     val selected = presets.firstOrNull { it.getString("id") == keymap.getString("selected") }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         GroupTitle(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("keymap"))
-        Card(rows = listOf {
+        SettingsCard(rows = listOf {
             Box {
                 SettingRow(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("preset"), "keymap-preset", if (keymap.optBoolean("outdated")) host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("updated") else "", onClick = { choosing = true }) {
                     Value(selected?.getString("title") ?: "")
@@ -496,7 +504,7 @@ private fun subtitle(row: JSONObject): String =
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Description(keymap.getString("source"))
                 val differences = keymap.array("differences").objects()
-                Card(rows = if (differences.isEmpty()) listOf { SettingRow(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("no_differences"), "keymap-no-differences", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("defaults_help")) }
+                SettingsCard(rows = if (differences.isEmpty()) listOf { SettingRow(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("no_differences"), "keymap-no-differences", host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("defaults_help")) }
                     else differences.mapIndexed { index, item -> @Composable { SettingRow(item.getString("trigger"), "keymap-difference-$index", item.getString("note")) } })
             }
         }

@@ -216,7 +216,7 @@ private fun documentEpoch(state: JSONObject?) = state?.objectOrNull("document_fi
     AlertDialog(onDismissRequest = close, modifier = Modifier.testTag("paper-rename-dialog"),
         title = { Text(copy.getString("rename_title")) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("paper-rename-name"), maxLength = 64, focusRequest = 1)
+            CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("paper-rename-name"), maxLength = 64, focusRequest = 1, background = LocalPalette.current.dialogField)
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
         } },
         dismissButton = { TextButton(close) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },

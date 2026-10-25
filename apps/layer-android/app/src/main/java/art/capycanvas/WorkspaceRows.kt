@@ -287,7 +287,7 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                                                 drag.menu = null; host.workspaceInput(obj("type" to "action", "action" to action))
                                             })
                                     }
-                                    if(offered.isNotEmpty())HorizontalDivider()
+                                    if(offered.isNotEmpty())HorizontalDivider(color=colors.menuSeparator)
                                     val position=order.indexOf(id)
                                     DropdownMenuItem(text={Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("move_up"))},enabled=enabled&&position>0,modifier=Modifier.testTag("workspace-up"),onClick={drag.menu=null;edit(obj("type" to "move","id" to id,"before" to order.getOrNull(position-1)))})
                                     DropdownMenuItem(text={Text(host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("move_down"))},enabled=enabled&&position>=0&&position<order.lastIndex,modifier=Modifier.testTag("workspace-down"),onClick={drag.menu=null;edit(obj("type" to "move","id" to id,"before" to order.getOrNull(position+2)))})
@@ -304,7 +304,7 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                         }
                     }
                 }
-                if(index>0)HorizontalDivider(Modifier.align(Alignment.TopCenter),color=colors.divider)
+                if(index>0)HorizontalDivider(Modifier.align(Alignment.TopCenter),color=colors.rowDivider)
                 }
             } }
         }

@@ -38,15 +38,16 @@ struct EditorDialogFooter<Leading: View>: View {
     let cancel: () -> Void
     let apply: () -> Void
     @ViewBuilder let leading: () -> Leading
+    private var palette: EditorPalette { EditorPalette(source: store?.state["palette"] ?? JSON()) }
     var body: some View {
         VStack(spacing: 0) {
-            Divider()
+            EditorLine(color: palette.settingsBorder)
             HStack(spacing: 6) {
                 leading()
                 Button(commonCopy["cancel"].string, action: cancel).buttonStyle(.bordered)
                     .keyboardShortcut(cancelsOnEscape ? .cancelAction : nil).accessibilityIdentifier(identifiers.cancel)
                 Button(label, action: apply)
-                    .buttonStyle(.borderedProminent).tint(EditorPalette(source: store?.state["palette"] ?? JSON()).accent)
+                    .buttonStyle(.borderedProminent).tint(palette.accent)
                     .disabled(blocked).keyboardShortcut(.defaultAction).accessibilityIdentifier(identifiers.apply)
             }.padding(.horizontal, 20).padding(.vertical, 12)
         }
@@ -63,9 +64,9 @@ struct EditorPopupSurface<S: Shape>: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if !source["panel"].isNull && !source["text"].isNull {
             let palette = EditorPalette(source: source)
-            content.foregroundStyle(palette["text"]).background(palette["panel"], in: shape)
+            content.foregroundStyle(palette["text"]).background(palette["panel"], in: shape).environment(\.onSettingsSurface, false)
         } else {
-            content.foregroundStyle(.primary).background(.background, in: shape)
+            content.foregroundStyle(.primary).background(.background, in: shape).environment(\.onSettingsSurface, false)
         }
     }
 }
@@ -88,10 +89,10 @@ struct EditorPopupPresentation: ViewModifier {
     private var source: JSON { store?.state["palette"] ?? JSON() }
     func body(content: Content) -> some View {
         Group {
-            if !source["panel"].isNull && !source["text"].isNull {
+            if !source["settings"].isNull && !source["text"].isNull {
                 let palette = EditorPalette(source: source)
-                content.modifier(EditorPopoverHost()).foregroundStyle(palette["text"]).presentationBackground(palette["panel"])
-                    .modifier(EditorPresentationAppearance())
+                content.modifier(EditorPopoverHost()).foregroundStyle(palette["text"]).presentationBackground(palette["settings"])
+                    .environment(\.onSettingsSurface, true).modifier(EditorPresentationAppearance())
             } else {
                 content.modifier(EditorPopoverHost()).foregroundStyle(.primary).presentationBackground(.background)
             }

@@ -155,13 +155,13 @@ private fun CanvasHost.effect(action: JSONObject, moving: Boolean = false) = dis
     }
 }
 
-@Composable internal fun PropertyChoice(label: String, options: List<String>, selected: Int, enabled: Boolean = true, onOpenChanged: (Boolean) -> Unit = {}, modifier: Modifier = Modifier, optionEnabled: (Int) -> Boolean = { true }, optionTag: (Int) -> String = { "" }, select: (Int) -> Unit) {
+@Composable internal fun PropertyChoice(label: String, options: List<String>, selected: Int, enabled: Boolean = true, onOpenChanged: (Boolean) -> Unit = {}, modifier: Modifier = Modifier, optionEnabled: (Int) -> Boolean = { true }, optionTag: (Int) -> String = { "" }, fill: Color = LocalPalette.current.input, select: (Int) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val openChanged by rememberUpdatedState(onOpenChanged)
     fun close() { open=false;openChanged(false) }
     DisposableEffect(Unit) { onDispose { if(open)openChanged(false) } }
     Box {
-        PanelChoiceButton(options.getOrNull(selected) ?: label, modifier, enabled) { openChanged(true);open = true }
+        PanelChoiceButton(options.getOrNull(selected) ?: label, modifier, enabled, fill) { openChanged(true);open = true }
         DropdownMenu(open, ::close) {
             options.forEachIndexed { index, text -> DropdownMenuItem(text = { Text(text,maxLines=1,overflow=TextOverflow.Ellipsis) },
                 enabled=optionEnabled(index), modifier=Modifier.testTag(optionTag(index)), onClick = { close(); select(index) }) }

@@ -201,6 +201,7 @@ private struct CameraStatus: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var camera: CameraReadout
     @State private var menu: JSON?
+    @Environment(\.editorPalette) private var palette
     private var copy: JSON { store.catalog["native_copy"]["header"] }
     private var refreshKey: String {
         JSON([camera.value["zoom"].raw, camera.value["rotation"].raw, camera.value["zoom_locked"].raw,
@@ -234,10 +235,10 @@ private struct CameraStatus: View {
                             control: store.catalog["zoom"], identifier: "zoom", inline: true) { value, completion in
                             store.edit(["type": "set_zoom", "zoom": value], completion: completion)
                         }.padding(.horizontal, 10).padding(.top, 8)
-                        Divider()
+                        EditorLine(color: palette.panelBorder)
                         EditorActionMenu(model: sections(model, rotation: false), width: 240, identifier: "zoom-menu",
                             rootFocusesSelection: false, capturesKeys: false) { menu = nil }.fixedSize(horizontal: false, vertical: true)
-                        Divider()
+                        EditorLine(color: palette.panelBorder)
                         NumberControl(store: store, label: copy["rotation"].string, value: camera.value["rotation"].number,
                             control: store.catalog["rotation"], identifier: "rotation", inline: true,
                             positionChange: { value, completion in
@@ -245,10 +246,10 @@ private struct CameraStatus: View {
                             }) { value, completion in
                             store.edit(["type": "set_rotation", "rotation": value], completion: completion)
                         }.padding(.horizontal, 10)
-                        Divider()
+                        EditorLine(color: palette.panelBorder)
                         EditorActionMenu(model: sections(model, rotation: true), width: 240, identifier: "rotation-menu",
                             rootFocusesSelection: false, capturesKeys: false) { menu = nil }.fixedSize(horizontal: false, vertical: true)
-                        Divider()
+                        EditorLine(color: palette.panelBorder)
                         NavigationButtons(store: store, prefix: "zoom").padding([.horizontal, .bottom], 8)
                     }
                 }.frame(width: 240).frame(maxHeight: 640).fixedSize(horizontal: false, vertical: true)

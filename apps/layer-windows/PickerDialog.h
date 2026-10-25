@@ -11,7 +11,8 @@ inline ContentDialog pickerDialog(std::shared_ptr<WorkspaceData> const& data,Xam
     dialog.Resources().Insert(box_value(L"ContentDialogMinWidth"),box_value(300.));
     dialog.Resources().Insert(box_value(L"ContentDialogMaxHeight"),box_value(100000.));
     dialog.Resources().Insert(box_value(L"ContentDialogPadding"),box_value(Thickness{0,0,0,0}));
-    dialog.Background(data->brush(L"dialog"));dialog.Content(root);
+    dialog.Resources().Insert(box_value(L"ContentDialogTopOverlay"),clear());
+    dialog.Background(data->brush(L"settings"));dialog.Content(root);
     AutomationProperties::SetAutomationId(dialog,id);
     AutomationProperties::SetAutomationId(root,id+L"-frame");
     inheritLanguage(root,data);
@@ -26,7 +27,7 @@ inline void pickerTitle(std::shared_ptr<WorkspaceData> const& data,TextBlock con
 }
 inline void pickerFooter(std::shared_ptr<WorkspaceData> const& data,Grid const& footer,std::initializer_list<GridUnitType> columns){
     for(auto unit:columns){ColumnDefinition definition;definition.Width({1,unit});footer.ColumnDefinitions().Append(definition);}
-    footer.ColumnSpacing(8);footer.Padding({PickerPadding,16,PickerPadding,PickerPadding});footer.BorderThickness({0,1,0,0});footer.BorderBrush(data->tint(L"text",31));
+    footer.ColumnSpacing(8);footer.Padding({PickerPadding,16,PickerPadding,PickerPadding});footer.BorderThickness({0,1,0,0});footer.BorderBrush(data->line(L"settings",L"border"));
 }
 inline Button pickerButton(std::shared_ptr<WorkspaceData> const& data,hstring const& id,int column,bool primary,std::function<void()> action){
     auto result=button(data,L"",std::move(action));

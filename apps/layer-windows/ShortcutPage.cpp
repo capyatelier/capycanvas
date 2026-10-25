@@ -141,7 +141,7 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         return g;
     }
     void add(StackPanel const& list,UIElement const& row){
-        if(list.Children().Size()){Border line;line.Height(1);line.Background(data->tint(L"text",20));list.Children().Append(line);}
+        if(list.Children().Size()){Border line;line.Height(1);line.Background(data->line(L"settings",L"card_shade"));list.Children().Append(line);}
         list.Children().Append(row);
     }
     Grid line(){

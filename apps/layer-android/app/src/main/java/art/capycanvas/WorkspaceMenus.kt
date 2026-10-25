@@ -160,11 +160,11 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
             SharedIcon("down", host.bootstrap!!.getJSONObject("common").getString("back"), Modifier.rotate(90f))
             Text(currentPage.getString("label"), fontWeight = FontWeight.Bold)
         }
-        HorizontalDivider(color = colors.divider)
+        HorizontalDivider(color = colors.menuSeparator)
     } else if (title != null) Text(title, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = colors.secondary)
     (currentPage?.array("sections") ?: sections).values().mapIndexed { index, value -> index to (value as JSONArray) }
         .filter { it.second.length() > 0 }.forEachIndexed { index, (sectionIndex, section) ->
-        if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = colors.divider)
+        if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = colors.menuSeparator)
         section.objects().forEachIndexed { itemIndex, item ->
             val heading = item.optBoolean("is_heading")
             val enabled = item.optBoolean("enabled", true) && !heading
@@ -216,7 +216,7 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
                     }
                     Column(Modifier.clip(RoundedCornerShape(12.dp)).background(colors.settingsCard)) {
                         toolbars.forEachIndexed { index, toolbar ->
-                            if (index > 0) HorizontalDivider(color = colors.divider)
+                            if (index > 0) HorizontalDivider(color = colors.rowDivider)
                             val id = toolbar.getString("panel")
                             val selected = view.optString("selected") == id
                             Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).background(if (selected) colors.active else colors.settingsCard)
@@ -260,7 +260,7 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
                 }
                 if (!view.isNull("name")) CoreTextField(view.getString("name"), {
                     host.customize(obj("type" to "toolbar_name", "name" to it))
-                }, Modifier.testTag("toolbar-name"), label = { Text(view.getString("name_label")) })
+                }, Modifier.testTag("toolbar-name"), label = { Text(view.getString("name_label")) }, background = LocalPalette.current.dialogField)
                 view.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },

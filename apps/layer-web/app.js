@@ -138,8 +138,16 @@ function applyTheme(theme, palette) {
   if (palette) for (const [name, color] of Object.entries(palette)) {
     if (typeof color === "string") document.body.style.setProperty(`--${name.replaceAll("_", "-")}`, name === "button" ? `${color}0d` : color);
   }
+  const rgba = color => `rgb(${color.slice(0, 3).map(v => v * 255).join(" ")} / ${color[3]})`;
   if (palette) for (const [name, color] of Object.entries(palette.glass)) {
-    if (Array.isArray(color)) document.body.style.setProperty(`--glass-${name.replaceAll("_", "-")}`, `rgb(${color.slice(0, 3).map(v => v * 255).join(" ")} / ${color[3]})`);
+    if (Array.isArray(color)) document.body.style.setProperty(`--glass-${name.replaceAll("_", "-")}`, rgba(color));
+  }
+  if (palette) {
+    const { settings, panel, sidebar_border } = palette.lines;
+    for (const [name, color] of [["card-shade", settings.card_shade], ["sidebar-edge", sidebar_border], ["menu-divider", panel.border]]) {
+      document.body.style.setProperty(`--${name}`, rgba(color));
+    }
+    document.body.style.setProperty("--card-shadow", `0 0 0 1px ${rgba(settings.card_ring)}, 0 1px 3px 1px ${rgba(settings.card_shadow)}, 0 2px 6px 2px ${rgba(settings.card_far_shadow)}`);
   }
   glass?.queue();
   document.querySelector('meta[name="theme-color"]').content = palette?.bg || (theme === "dark" ? "#333333" : "#b8b8b8");

@@ -61,7 +61,7 @@ import androidx.compose.ui.window.DialogProperties
 }
 
 @Composable internal fun PickerFooter(tag: String, content: @Composable RowScope.() -> Unit) {
-    HorizontalDivider(Modifier.testTag("$tag-divider"), color = LocalPalette.current.divider)
+    HorizontalDivider(Modifier.testTag("$tag-divider"), color = LocalPalette.current.dialogSeparator)
     Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 20.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp), content = content)
 }

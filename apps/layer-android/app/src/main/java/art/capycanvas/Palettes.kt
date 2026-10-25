@@ -814,7 +814,7 @@ private fun DrawScope.checker(colors: Palette) {
     AlertDialog(onDismissRequest = close, modifier = Modifier.testTag("palette-name-dialog"),
         title = { Text(if (dialog.kind == "rename") host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("rename_title") else host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("new_title")) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("palette-library-name"), maxLength = 64, focusRequest = 1)
+            CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("palette-library-name"), maxLength = 64, focusRequest = 1, background = LocalPalette.current.dialogField)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         } },
         dismissButton = { TextButton(close) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },

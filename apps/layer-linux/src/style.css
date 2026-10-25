@@ -503,7 +503,7 @@ window.canvas-preview-dialog floating-sheet > dimming, window.canvas-preview-dia
 .edit-color-pair button.edit-color-revert { padding: 0; min-width: 0; min-height: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
 button.edit-color-pick { min-width: 48px; min-height: 48px; padding: 0; border-radius: var(--control-radius); }
 .picker-dialog button.number-value { min-width: 0; min-height: 28px; padding: 0 4px; border-radius: var(--control-radius); }
-.picker-dialog entry.number-entry { min-height: 28px; padding: 0 4px; border: 0; border-radius: var(--control-radius); background: var(--input-bg); box-shadow: none; }
+.picker-dialog entry.number-entry { min-height: 28px; padding: 0 4px; border: 0; border-radius: var(--control-radius); background: alpha(currentColor, .10); box-shadow: none; }
 .picker-dialog button.number-value.edit-color-hex, .picker-dialog entry.number-entry.edit-color-hex { min-height: 40px; }
 .edit-color-hex label, .edit-color-hex text { font-size: calc(var(--ui-text-size) * 1.6); font-weight: 500; font-feature-settings: "tnum"; }
 .edit-color-badge { padding: 0 5px; border-radius: calc(8px * var(--corner-fit)); background: alpha(currentColor, .08); }
@@ -515,7 +515,7 @@ button.edit-color-more image { -gtk-icon-transform: rotate(180deg); }
 button.edit-color-more.open image { -gtk-icon-transform: none; }
 .picker-dialog button.palette-add { border: 0; border-radius: var(--control-radius); background: alpha(var(--window-fg-color), .06); padding: 0; min-width: 0; min-height: 0; margin: 3px; }
 .edit-color-sheet flowboxchild { padding: 0; }
-.edit-color-sheet entry { min-height: 34px; border: 0; border-radius: var(--control-radius); background: var(--input-bg); box-shadow: none; }
+.edit-color-sheet entry { min-height: 34px; border: 0; border-radius: var(--control-radius); background: alpha(currentColor, .10); box-shadow: none; }
 .edit-color-strip { padding: 8px 12px; border-radius: var(--surface-radius); background: var(--dialog-bg-color); color: var(--dialog-fg-color); box-shadow: 0 2px 12px alpha(black, .25); font-weight: 400; font-feature-settings: "tnum"; }
 .edit-color-strip .edit-color-pair { border-radius: calc(8px * var(--corner-fit)); }
 .edit-color-strip-hex { font-weight: 500; }

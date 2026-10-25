@@ -74,13 +74,13 @@ struct EditorActionMenu: View {
                 Label(page?.label ?? "", systemImage: "chevron.left")
                     .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             }.buttonStyle(.plain).padding(.horizontal, 10).accessibilityIdentifier("editor-menu-back")
-            Divider()
+            EditorLine(color: palette.panelBorder)
         } else if !model.title.isEmpty {
             Text(model.title).foregroundStyle(.secondary).padding(10)
         }
     }
     @ViewBuilder private func sectionView(_ section: Int) -> some View {
-        if section > 0 { Divider().padding(.vertical, 4) }
+        if section > 0 { EditorLine(color: palette.panelBorder).padding(.vertical, 4) }
         ForEach(sections[section].indices, id: \.self) { row in
             itemView(sections[section][row], index: sections.prefix(section).reduce(0) { $0 + $1.count } + row)
         }

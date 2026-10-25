@@ -66,7 +66,7 @@ struct WorkspaceSwitcherRows: View {
                         if renaming {
                             TextField("",text:$workspaces.formName).textFieldStyle(.plain).focused($editing)
                                 .padding(.horizontal,metrics.padding).frame(minHeight:metrics.height)
-                                .background(palette["input"],in:SquircleShape.control)
+                                .background(palette.field,in:SquircleShape.control)
                                 .accessibilityIdentifier("workspace-name-"+id)
                                 .onSubmit {if !NativeTextContext.composing {workspaces.finishName()}}
                                 .onAppear {editing=true;workspaces.validateName(required:true)}
@@ -111,7 +111,7 @@ struct WorkspaceSwitcherRows: View {
                         .modifier(WorkspaceRowMeasurement(id: id, part: \.grip))
                 }.padding(.leading,12-metrics.padding).padding(.trailing,12)
                     .background(workspaces.view["selected"].string == id ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.035))
-                    .overlay(alignment:.top) {if id != rows.first?["id"].string {Divider()}}
+                    .overlay(alignment:.top) {if id != rows.first?["id"].string {EditorLine(color: palette.settingsCardShade)}}
                     .offset(x:interaction.swipe==id ? -interaction.swipeOffset : 0)
                     .background(alignment:.trailing) {
                         if interaction.swipe==id,let action=row["options"].array.first(where:{$0["action"]["type"].string=="delete"}) {

@@ -1134,6 +1134,32 @@ fn application_menu_hover_switches_only_an_open_neighbor_on_both_apple_platforms
 }
 
 #[test]
+fn apple_dialogs_publish_the_settings_surface_and_the_lines_they_draw_in_both_themes() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        for theme in ["light", "dark"] {
+            app.action(json!({"type":"set_theme","theme":theme}));
+            let published = app.full_snapshot()["state"]["palette"].clone();
+            let palette = app.borrow().host.session.state().palette;
+            assert_eq!(published["settings"], serde_json::to_value(palette.settings).unwrap());
+            assert!(published["settings"].as_str().is_some_and(|hex| hex.starts_with('#') && hex.len() == 7));
+            let lines = palette.lines;
+            for (value, line) in [
+                (&published["lines"]["settings"]["card_shade"], lines.settings.card_shade),
+                (&published["lines"]["settings"]["border"], lines.settings.border),
+                (&published["lines"]["panel"]["border"], lines.panel.border),
+                (&published["lines"]["popover_border"], lines.popover_border),
+            ] {
+                let channels: [f32; 4] = serde_json::from_value(value.clone()).unwrap();
+                assert!(line.matches(channels), "platform={platform}, theme={theme}: {value} is not {line}");
+                assert!(channels.iter().all(|v| (0.0..=1.0).contains(v)) && channels[3] > 0.0,
+                    "platform={platform}, theme={theme}: {value} must be a visible 0..1 line");
+            }
+        }
+    }
+}
+
+#[test]
 fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
     use layer_ui::CommandId;
     fn item(app: &App, command: CommandId) -> Value {

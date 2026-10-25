@@ -162,13 +162,13 @@ import org.json.JSONObject
                     }
                     ColorChoice(copy.getString("dither"), choices("dithers",listOf("None" to copy.getString("dither_none"), "Stochastic8" to copy.getString("dither_stochastic"))), encoding.getString("dither")) { change("encoding", JSONObject(encoding.toString()).put("dither", it)) }
                     }
-                    if (value.getString("format").startsWith("Jpeg") || value.getString("format").startsWith("AvifHdr")) CoreTextField(quality, { quality = it }, modifier = Modifier.testTag("export-quality"), label = { Text(copy.getString("quality")) })
+                    if (value.getString("format").startsWith("Jpeg") || value.getString("format").startsWith("AvifHdr")) CoreTextField(quality, { quality = it }, modifier = Modifier.testTag("export-quality"), label = { Text(copy.getString("quality")) }, background = LocalPalette.current.dialogField)
                     Row { Checkbox(fit, { fit = it }); Text(copy.getString("fit_bounds")) }
                     if (fit) {
                         Row { Checkbox(enlarge, { enlarge = it }, Modifier.testTag("export-enlarge")); Text(copy.getString("enlarge")) }
-                        CoreTextField(width, { width = it }, modifier = Modifier.testTag("export-width"), label = { Text(copy.getString("maximum_width")) }); CoreTextField(height, { height = it }, modifier = Modifier.testTag("export-height"), label = { Text(copy.getString("maximum_height")) }) }
+                        CoreTextField(width, { width = it }, modifier = Modifier.testTag("export-width"), label = { Text(copy.getString("maximum_width")) }, background = LocalPalette.current.dialogField); CoreTextField(height, { height = it }, modifier = Modifier.testTag("export-height"), label = { Text(copy.getString("maximum_height")) }, background = LocalPalette.current.dialogField) }
                     ColorChoice(copy.getString("resolution"), listOf("Master" to copy.getString("keep_resolution"), "Ppi" to copy.getString("ppi"), "Omit" to copy.getString("omit")), resolution) { resolution = it }
-                    if (resolution == "Ppi") CoreTextField(ppi, { ppi = it }, modifier = Modifier.testTag("export-ppi"), label = { Text(copy.getString("ppi")) })
+                    if (resolution == "Ppi") CoreTextField(ppi, { ppi = it }, modifier = Modifier.testTag("export-ppi"), label = { Text(copy.getString("ppi")) }, background = LocalPalette.current.dialogField)
                     val metadata = draft?.optJSONObject("metadata")
                     if (model.optBoolean("metadata") && metadata != null) {
                         val kept = value.getJSONObject("metadata")
@@ -183,7 +183,7 @@ import org.json.JSONObject
                         }
                         if (!metadata.isNull("note")) Text(metadata.getString("note"), Modifier.testTag("export-metadata-note"))
                     }
-                    CoreTextField(presetName,{presetName=it},modifier=Modifier.testTag("export-preset-name"),maxLength=80,label={Text(copy.getString("preset_name"))})
+                    CoreTextField(presetName,{presetName=it},modifier=Modifier.testTag("export-preset-name"),maxLength=80,label={Text(copy.getString("preset_name"))},background=LocalPalette.current.dialogField)
                     fun store(type:String)=scope.launch{try{preference(obj("type" to type,"index" to destination.toInt(),"name" to presetName,"recipe" to selectedRecipe()).apply{if(type!="save")remove("name");if(type=="save")remove("index");if(type=="remove"||type=="reset")remove("recipe")})}catch(e:Exception){error=e}}
                     Row {TextButton({store("save")}){Text(copy.getString("save_preset"))};TextButton({store("update")},enabled=destination.toInt()>=4){Text(copy.getString("update_preset"))}}
                     Row {TextButton({store("remove")},enabled=destination.toInt()>=4){Text(copy.getString("delete_preset"))};TextButton({store("reset")},enabled=destination.toInt()<4){Text(copy.getString("reset_destination"))}}

@@ -17,6 +17,10 @@ struct NewDrawingPresentation: ViewModifier {
     }
 }
 
+private extension EditorPalette {
+    var newDrawingField: Color { self["text"].opacity(0.07) }
+}
+
 private struct NewDrawingDialog: View {
     @ObservedObject var store: EditorStore
     @State private var error: String?
@@ -42,7 +46,7 @@ private struct NewDrawingDialog: View {
         ZStack(alignment: .bottom) {
             main.disabled(!drawer.isNull).accessibilityHidden(!drawer.isNull)
             if !drawer.isNull {
-                opened.frame(maxWidth: .infinity, maxHeight: .infinity).background(palette["panel"])
+                opened.frame(maxWidth: .infinity, maxHeight: .infinity).background(palette["settings"])
                     .transition(.move(edge: .bottom))
             }
         }.clipped()
@@ -145,7 +149,7 @@ private struct NewDrawingDialog: View {
             HStack(spacing: 10) {
                 Text(copy["name"].string)
                 TextField(view["untitled"].string, text: $name).textFieldStyle(.plain).autocorrectionDisabled()
-                    .padding(.horizontal, 10).frame(height: 34).background(palette["input"], in: SquircleShape.control)
+                    .padding(.horizontal, 10).frame(height: 34).background(palette.newDrawingField, in: SquircleShape.control)
                     #if os(iOS)
                     .onSubmit(create)
                     #endif
@@ -219,7 +223,7 @@ private struct NewDrawingDialog: View {
         let key = value.stableKey
         return EditorChoice(label: label, options: choices.map { $0["label"].string },
             selected: choices.firstIndex { $0["value"].stableKey == key } ?? -1, identifier: identifier,
-            background: palette["input"], height: 34) { index in
+            background: palette.newDrawingField, height: 34) { index in
             if choices.indices.contains(index) { send(action(choices[index]["value"])) }
         }
     }
@@ -230,7 +234,7 @@ private struct NewDrawingDialog: View {
             identifier: "new-drawing-" + op, affixes: (copy[op].string, ""),
             registerAdmission: { key, admission in admissions[key] = admission }) { value, completion in
             store.projectFiles.newDrawing(["op": op, "value": value]) { failure in error = failure; completion(failure) }
-        }.id(view["numeric"].stableKey).frame(width: 96, height: 34).background(palette["input"], in: SquircleShape.control)
+        }.id(view["numeric"].stableKey).frame(width: 96, height: 34).background(palette.newDrawingField, in: SquircleShape.control)
     }
 
     private var link: some View {
@@ -248,7 +252,7 @@ private struct NewDrawingDialog: View {
                     send(["op": "orientation", "orientation": side])
                 }.frame(width: 30, height: 30).accessibilityIdentifier("new-drawing-" + side)
             }
-        }.padding(2).background(palette["input"], in: SquircleShape.control).fixedSize()
+        }.padding(2).background(palette.newDrawingField, in: SquircleShape.control).fixedSize()
             .accessibilityElement(children: .contain).accessibilityIdentifier("new-drawing-orientation")
     }
 
@@ -263,7 +267,7 @@ private struct NewDrawingDialog: View {
                 SharedIcon(name: "chevron-down", size: 12).frame(width: 26, height: 34).contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle()).help(copy["common_resolutions"].string)
                 .accessibilityLabel(copy["common_resolutions"].string).accessibilityIdentifier("new-drawing-resolution-choices")
-        }.frame(height: 34).background(palette["input"], in: SquircleShape.control)
+        }.frame(height: 34).background(palette.newDrawingField, in: SquircleShape.control)
             .editorPopover(isPresented: $resolutions) {
                 EditorActionMenu(model: AppleContextMenu(JSON(["sections": [resolutionItems]])) {
                     send(["op": "resolution", "value": $0["value"].number])
@@ -291,7 +295,7 @@ private struct NewDrawingDialog: View {
                 }
                 Spacer(minLength: 0)
             }.padding(4).padding(.trailing, 6).frame(maxWidth: .infinity, minHeight: 44)
-                .background(palette["input"], in: SquircleShape.control).contentShape(Rectangle())
+                .background(palette.newDrawingField, in: SquircleShape.control).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.4)
             .help(help).accessibilityLabel(help).accessibilityValue([label, detail].compactMap { $0 }.joined(separator: ", "))
             .focused($focused, equals: identifier == "new-drawing-texture" ? "paper" : "paper_color")
@@ -318,7 +322,7 @@ private struct NewDrawingDialog: View {
                 TextField(copy["search"].string, text: $query).textFieldStyle(.plain).autocorrectionDisabled()
                     .onChange(of: query) { _, text in if text != drawer["query"].string { send(["op": "search", "query": text]) } }
                     .accessibilityLabel(copy["search"].string).accessibilityIdentifier("new-drawing-search").focused($focused, equals: "search")
-            }.padding(.horizontal, 10).frame(height: 34).background(palette["input"], in: SquircleShape.control)
+            }.padding(.horizontal, 10).frame(height: 34).background(palette.newDrawingField, in: SquircleShape.control)
                 .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 10)
             EditorScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -335,7 +339,7 @@ private struct NewDrawingDialog: View {
                     }
                 }.padding(.horizontal, 20).padding(.bottom, 20).frame(maxWidth: .infinity, alignment: .leading)
             }
-            Divider()
+            EditorLine(color: palette.settingsBorder)
             HStack(spacing: 10) {
                 summary
                 Spacer(minLength: 8)
@@ -358,7 +362,7 @@ private struct NewDrawingDialog: View {
         let selected = tab["selected"].bool
         return Button { send(["op": "tab", "index": index]) } label: {
             Text(tab["label"].string).lineLimit(1).padding(.horizontal, 10).frame(height: 28)
-                .background(selected ? palette.active : palette["input"], in: SquircleShape.control).contentShape(Rectangle())
+                .background(selected ? palette.active : palette.newDrawingField, in: SquircleShape.control).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : []).accessibilityIdentifier("new-drawing-tab-\(index)")
     }
 
@@ -424,7 +428,7 @@ private struct NewDrawingDialog: View {
     private func saveRow(_ save: JSON) -> some View {
         HStack(spacing: 6) {
             TextField(copy["preset_name"].string, text: $presetName).textFieldStyle(.plain).autocorrectionDisabled()
-                .padding(.horizontal, 8).frame(width: 150, height: 34).background(palette["input"], in: SquircleShape.control)
+                .padding(.horizontal, 8).frame(width: 150, height: 34).background(palette.newDrawingField, in: SquircleShape.control)
                 .overlay { if !save["can_save"].bool { SquircleShape.control.stroke(Color.red, lineWidth: 1) } }
                 .onChange(of: presetName) { _, text in if text != drawer["save"]["name"].string { send(["op": "preset_name", "text": text]) } }
                 .onSubmit { send(["op": "save_preset"]) }
@@ -469,7 +473,7 @@ private struct NewDrawingDialog: View {
                 identifier: Self.reliefField, affixes: ("", copy["relief_unit"].string),
                 registerAdmission: { key, admission in admissions[key] = admission }) { value, completion in
                 store.projectFiles.newDrawing(["op": "paper_relief", "value": value]) { failure in error = failure; completion(failure) }
-            }.frame(width: 62).padding(.trailing, 10).frame(height: 34).background(palette["input"], in: SquircleShape.control)
+            }.frame(width: 62).padding(.trailing, 10).frame(height: 34).background(palette.newDrawingField, in: SquircleShape.control)
         }.disabled(!enabled).opacity(enabled ? 1 : 0.4).padding(.trailing, 8)
             .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(-1)
     }
@@ -541,7 +545,7 @@ private struct NewDrawingPaperColor: View {
             modeButton("transparent", label: copy["transparent"].string, selected: transparent, identifier: "new-drawing-color-mode-transparent") {
                 send(["op": "transparent", "transparent": true])
             }
-        }.padding(2).background(palette["input"], in: SquircleShape.control).fixedSize()
+        }.padding(2).background(palette.newDrawingField, in: SquircleShape.control).fixedSize()
             .accessibilityElement(children: .contain).accessibilityLabel(copy["sheet_mode"].string)
             .accessibilityIdentifier("new-drawing-color-mode")
     }

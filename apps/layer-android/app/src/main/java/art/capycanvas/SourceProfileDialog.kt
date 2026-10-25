@@ -97,7 +97,7 @@ import org.json.JSONArray
     AlertDialog(onDismissRequest={ if (!busy && !importBusy) onDismiss() },title={Text(copy.getString("library_title"))},confirmButton={TextButton(onDismiss,Modifier.testTag("profile-library-done"),enabled=!busy&&!importBusy){Text(copy.getJSONObject("common").getString("done"))}},text={
         Column(Modifier.fillMaxWidth().heightIn(max=580.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
             Text(copy.getString("library_help"))
-            if (entries.size > 7 || query.isNotEmpty()) CoreTextField(query, { query = it }, Modifier.testTag("profile-library-search"), placeholder = { Text(copy.getString("search")) })
+            if (entries.size > 7 || query.isNotEmpty()) CoreTextField(query, { query = it }, Modifier.testTag("profile-library-search"), placeholder = { Text(copy.getString("search")) }, background = LocalPalette.current.dialogField)
             if(busy)CircularProgressIndicator()
             for(entry in entries.filter { it.getString("id") in matching }){
                 Text(entry.getString("name"),style=MaterialTheme.typography.titleSmall)

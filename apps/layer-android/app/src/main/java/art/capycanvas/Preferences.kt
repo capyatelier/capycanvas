@@ -232,24 +232,18 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                                 Text(group.getString("title"), Modifier.padding(horizontal = 4.dp).testTag("settings-group-title-" + group.getString("title")),
                                                     fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
-                                                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
-                                                    color = colors.settingsCard, shadowElevation = 1.dp) {
-                                                    Column {
-                                                        group.array("rows").objects().filter { it.optBoolean("visible", true) }.forEachIndexed { index, setting ->
-                                                            if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                                                            key(setting.getString("id")) {
-                                                                val bringIntoView = remember { BringIntoViewRequester() }
-                                                                LaunchedEffect(reveal) {
-                                                                    if (reveal == setting.getString("id")) {
-                                                                        withFrameNanos { }
-                                                                        bringIntoView.bringIntoView()
-                                                                    }
-                                                                }
-                                                                Box(Modifier.bringIntoViewRequester(bringIntoView)) { PreferenceRow(host, setting) }
+                                                SettingsCard(rows = group.array("rows").objects().filter { it.optBoolean("visible", true) }.map { setting -> @Composable {
+                                                    key(setting.getString("id")) {
+                                                        val bringIntoView = remember { BringIntoViewRequester() }
+                                                        LaunchedEffect(reveal) {
+                                                            if (reveal == setting.getString("id")) {
+                                                                withFrameNanos { }
+                                                                bringIntoView.bringIntoView()
                                                             }
                                                         }
+                                                        Box(Modifier.bringIntoViewRequester(bringIntoView)) { PreferenceRow(host, setting) }
                                                     }
-                                                }
+                                                } })
                                             }
                                         }
                                     }
@@ -594,18 +588,18 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
 
 @Composable internal fun ToolPicker(host: CanvasHost, picker: JSONObject) {
     Dialog({ host.customize(obj("type" to "cancel_tools")) }) {
-        Surface(shape = RoundedCornerShape(16.dp)) {
+        Surface(shape = RoundedCornerShape(16.dp), color = LocalPalette.current.settingsBackground) {
             Column(Modifier.widthIn(max = 560.dp).heightIn(max = 650.dp).padding(20.dp).testTag("tool-picker"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(picker.getString("title"), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 picker.optString("name").takeIf { !picker.isNull("name") }?.let { name ->
                     CoreTextField(name, { host.customize(obj("type" to "picker_name", "name" to it)) }, Modifier.fillMaxWidth().testTag("toolbar-name"),
-                        label = { Text(picker.getString("name_label")) })
+                        label = { Text(picker.getString("name_label")) }, background = LocalPalette.current.dialogField)
                 }
                 CoreTextField(picker.optString("query"), { host.customize(obj("type" to "picker_search", "query" to it)) }, Modifier.testTag("tool-picker-search"),
-                    placeholder = { Text(picker.getString("search_hint")) })
+                    placeholder = { Text(picker.getString("search_hint")) }, background = LocalPalette.current.dialogField)
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
                     picker.array("choices").objects().forEachIndexed { index, tool ->
-                        if (index > 0) HorizontalDivider(color = LocalPalette.current.divider)
+                        if (index > 0) HorizontalDivider(color = LocalPalette.current.dialogSeparator)
                         Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).testTag("tool-picker-choice-${tool.getString("label")}").toggleable(tool.optBoolean("selected"), role = Role.Checkbox) { selected ->
                             host.customize(obj("type" to "picker_select", "control" to tool.getJSONObject("control"), "selected" to selected))
                         }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {

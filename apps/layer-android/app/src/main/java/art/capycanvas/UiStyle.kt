@@ -85,11 +85,12 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupPositionProvider
 
+private fun org.json.JSONArray.rgba() = Color(getDouble(0).toFloat(), getDouble(1).toFloat(), getDouble(2).toFloat(), getDouble(3).toFloat())
+
 internal class Palette(val dark: Boolean, private val source: org.json.JSONObject, private val inGlass: Boolean = false) {
     private fun role(name: String) = Color(android.graphics.Color.parseColor(source.getString(name)))
-    private fun glass(name: String) = source.getJSONObject("glass").getJSONArray(name).let {
-        Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat(), it.getDouble(3).toFloat())
-    }
+    private fun glass(name: String) = source.getJSONObject("glass").getJSONArray(name).rgba()
+    private fun line(surface: String, role: String) = source.getJSONObject("lines").getJSONObject(surface).getJSONArray(role).rgba()
     val surround = role("bg")
     val headerSurface = glass("chip")
     val switcher = glass("switcher")
@@ -115,9 +116,16 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val checkerLight = role("checker_light")
     val checkerDark = role("checker_dark")
     val divider = text.copy(alpha = .12f)
+    val dialogField = text.copy(alpha = .1f)
     val settingsBackground = role("settings")
     val settingsCard = role("card")
     val settingsSecondary = role("settings_secondary")
+    val rowDivider = line("settings", "card_shade")
+    val cardRing = line("settings", "card_ring")
+    val cardShadow = line("settings", "card_shadow")
+    val cardFarShadow = line("settings", "card_far_shadow")
+    val dialogSeparator = line("settings", "border")
+    val menuSeparator = line("panel", "border")
     val onGlass by lazy { Palette(dark, source, true) }
 }
 
@@ -417,9 +425,9 @@ private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionP
 }
 
 /** Compact GTK panel choice: input surface, ellipsized value and trailing arrow. */
-@Composable internal fun PanelChoiceButton(label:String,modifier:Modifier=Modifier,enabled:Boolean=true,onClick:()->Unit) {
+@Composable internal fun PanelChoiceButton(label:String,modifier:Modifier=Modifier,enabled:Boolean=true,fill:Color=LocalPalette.current.input,onClick:()->Unit) {
     val colors=LocalPalette.current
-    Row(modifier.fillMaxWidth().heightIn(min=panelMetrics().height).clip(ControlShape).background(colors.input)
+    Row(modifier.fillMaxWidth().heightIn(min=panelMetrics().height).clip(ControlShape).background(fill)
         .clickable(enabled=enabled,role=Role.Button,onClick=onClick).padding(horizontal=6.dp),
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
         Text(label,Modifier.weight(1f),color=colors.text.copy(alpha=if(enabled)1f else .5f),maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)

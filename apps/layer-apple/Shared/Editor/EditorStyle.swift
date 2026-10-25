@@ -11,11 +11,18 @@ struct EditorPalette {
     var onGlass = false
     subscript(_ name: String) -> Color { Color(hex: source[name].string) }
     private func role(_ name: String, _ fallback: String) -> Color { Color(hex: source[name].isNull ? fallback : source[name].string) }
-    private func glass(_ name: String, _ fallback: @autoclosure () -> Color) -> Color {
-        let value = source["glass"][name].array
-        guard value.count == 4 else { return fallback() }
-        return Color(.sRGB, red: value[0].number, green: value[1].number, blue: value[2].number, opacity: value[3].number)
+    private func rgba(_ value: JSON) -> Color? {
+        let channels = value.array
+        guard channels.count == 4 else { return nil }
+        return Color(.sRGB, red: channels[0].number, green: channels[1].number, blue: channels[2].number, opacity: channels[3].number)
     }
+    private func glass(_ name: String, _ fallback: @autoclosure () -> Color) -> Color { rgba(source["glass"][name]) ?? fallback() }
+    private func line(_ value: JSON) -> Color { rgba(value) ?? .clear }
+    var settingsCardShade: Color { line(source["lines"]["settings"]["card_shade"]) }
+    var settingsBorder: Color { line(source["lines"]["settings"]["border"]) }
+    var panelBorder: Color { line(source["lines"]["panel"]["border"]) }
+    var popoverBorder: Color { line(source["lines"]["popover_border"]) }
+    var field: Color { self["text"].opacity(0.10) }
     var accent: Color { role("accent", "#3584e4") }
     var accentForeground: Color { role("accent_foreground", "#ffffff") }
     var active: Color { onGlass ? glass("selection", role("selection", "#c0d7f6")) : role("selection", "#c0d7f6") }
@@ -65,6 +72,11 @@ extension View {
         return frame(width: max(0, r.width), height: max(0, r.height), alignment: .topLeading).offset(x: r.minX, y: r.minY)
     }
 }
+struct EditorLine: View {
+    let color: Color
+    var body: some View { Rectangle().fill(color).frame(height: 1).accessibilityHidden(true) }
+}
+
 /// Shared grip orientation and inset for panel headers and column footers.
 struct PanelGrip: View {
     var vertical = false
@@ -330,10 +342,15 @@ extension EditorStore {
     }
 }
 private struct CompactPanelKey: EnvironmentKey { static let defaultValue = false }
+private struct SettingsSurfaceKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
     var compactPanelControls: Bool {
         get { self[CompactPanelKey.self] }
         set { self[CompactPanelKey.self] = newValue }
+    }
+    var onSettingsSurface: Bool {
+        get { self[SettingsSurfaceKey.self] }
+        set { self[SettingsSurfaceKey.self] = newValue }
     }
 }
 
