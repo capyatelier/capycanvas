@@ -2174,3 +2174,110 @@ fn native_source_pickup_flags_match_the_original_header_and_tile_controls() {
     }
     assert!(plain > 0 && blocked > 0, "both direct sources and controls that cannot tear are projected");
 }
+
+#[test]
+fn dither_cell_size_is_a_localized_whole_pixel_log_slider() {
+    let brush = layer_core::default_brush(DefaultBrushPreset::DitherBlender);
+    let english = Localizer::shared(UiLanguage::English);
+    let controls = tool_settings::controls(&brush, &english);
+    let cell = controls.iter().find(|c| c.id == "dither_cell_size").unwrap();
+    let smooth = controls.iter().find(|c| c.id == "smoothing_strength").unwrap();
+    let spread_index = controls.iter().position(|c| c.id == "spread").unwrap();
+    let cell_index = controls.iter().position(|c| c.id == cell.id).unwrap();
+    let spread = &controls[spread_index];
+    assert_eq!(cell_index, spread_index + 1);
+    assert_eq!(cell.group_id, spread.group_id);
+    assert_eq!(spread.numeric.mapping, NumericMapping::Log);
+    assert_eq!(spread.numeric.log_offset, smooth.numeric.log_offset);
+    let other = tool_settings::controls(&layer_core::default_brush(DefaultBrushPreset::CrystalBlender), &english);
+    assert_eq!(other.iter().find(|c| c.id == "spread").unwrap().numeric.mapping, NumericMapping::Linear);
+    for (position, expected) in [(0., 0.), (0.5, 0.09), (1., 1.)] {
+        let resolved = spread.numeric.resolve(0., NumericOperation::Position { position }).unwrap().value;
+        assert!((resolved - expected).abs() < 0.011);
+    }
+    assert_eq!(cell.value, 4.);
+    assert_eq!(cell.numeric.kind, NumericKind::Slider);
+    assert_eq!(cell.numeric.mapping, NumericMapping::Log);
+    assert_eq!((cell.numeric.min, cell.numeric.max), (1., 50.));
+    assert_eq!((cell.numeric.resolution, cell.numeric.step, cell.numeric.digits), (1., 1., 0));
+    assert_eq!(cell.numeric.unit, "px");
+    assert!((cell.numeric.log_offset - (49. * smooth.numeric.log_offset - 1.)).abs() < 1e-12);
+    for position in [0., 0.1, 0.25, 0.5, 0.75, 0.9, 1.] {
+        let value = cell.numeric.resolve(1., NumericOperation::Position { position }).unwrap().value;
+        assert_eq!(value.fract(), 0.);
+        assert!((1. ..=50.).contains(&value));
+        if position == 0.5 { assert!(value < 8., "small cells occupy most of the slider"); }
+    }
+    for value in 1..=layer_core::DITHER_CELL_SIZE_LIMIT {
+        let edited = tool_settings::edit(&brush, cell.id, value as f32, &english).unwrap();
+        assert_eq!(edited.blender.cell_size, value as f32);
+        let restored: layer_core::BrushSnapshot = serde_json::from_str(&serde_json::to_string(&edited).unwrap()).unwrap();
+        assert_eq!(restored, edited);
+        restored.validate().unwrap();
+    }
+    for value in [0., 51., 1.5, f32::NAN, f32::INFINITY] {
+        assert!(tool_settings::edit(&brush, cell.id, value, &english).is_err());
+        let mut invalid = brush.clone();
+        invalid.blender.cell_size = value;
+        assert!(invalid.validate().is_err());
+    }
+    let crystal = layer_core::default_brush(DefaultBrushPreset::CrystalBlender);
+    assert!(tool_settings::edit(&crystal, cell.id, 2., &english).is_err());
+    assert_eq!(tool_settings::edit(&crystal, "cell_size", 0.3, &english).unwrap().blender.scale, 0.3);
+    for language in UiLanguage::ALL {
+        let localized = tool_settings::controls(&brush, &Localizer::shared(language));
+        let localized = localized.iter().find(|c| c.id == cell.id).unwrap();
+        assert_eq!(localized.numeric, cell.numeric);
+        assert_eq!(localized.value, cell.value);
+        assert!(!localized.label.is_empty());
+    }
+}
+
+#[test]
+fn dither_bubble_exposes_cell_size_and_preserves_edits_on_every_platform() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        s.set_viewport(VIEW, [1200, 900]).unwrap();
+        let id = take(&mut s, brush(DefaultBrushPreset::DitherBlender), FAR);
+        let bubble = view(&s, id);
+        assert!(bubble.open);
+        assert_eq!(bubble.rings.iter().map(|r| r.setting).collect::<Vec<_>>(), ["spread", "dither_cell_size"]);
+        let spread = bubble.rings.iter().find(|r| r.setting == "spread").unwrap();
+        assert!(spread.arc.point(0.5)[0] < 0.);
+        let ring = bubble.rings.iter().find(|r| r.setting == "dither_cell_size").unwrap().clone();
+        assert!(ring.arc.point(0.5)[0] > 0.);
+        for (fraction, expected) in [(0., 0.), (0.5, 0.09), (1., 1.)] {
+            let position = spread.arc.point(fraction);
+            act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Down, position }).unwrap();
+            act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Up, position }).unwrap();
+            assert!((s.engine.configured_brush().blender.reach - expected).abs() < 0.011);
+        }
+        let value = |s: &UiSession<Recorder>| s.engine.configured_brush().blender.cell_size;
+        assert_eq!(value(&s), 4.);
+        for (fraction, expected) in [(1., 50.), (0., 1.)] {
+            let position = ring.arc.point(fraction);
+            act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Down, position }).unwrap();
+            act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Up, position }).unwrap();
+            assert_eq!(value(&s), expected, "{platform:?}");
+        }
+        s.dispatch(UiAction::SetToolSetting { id: ring.setting.into(), value: 12. }).unwrap();
+        act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Down, position: ring.arc.point(0.5) }).unwrap();
+        assert_ne!(value(&s), 12.);
+        act(&mut s, BubbleAction::Ring { id, phase: ContactPhase::Cancel, position: [0.; 2] }).unwrap();
+        assert_eq!(value(&s), 12.);
+        s.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::CrystalBlender as u32 }).unwrap();
+        s.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::DitherBlender as u32 }).unwrap();
+        assert_eq!(value(&s), 12.);
+        let workspace: WorkspaceState = serde_json::from_str(&serde_json::to_string(&s.state.workspace).unwrap()).unwrap();
+        workspace.layout.validate().unwrap();
+        let saved = serde_json::to_string(&s.editing_state()).unwrap();
+        let mut restored = session(platform);
+        restored.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) }).unwrap();
+        restored.restore_editing(serde_json::from_str(&saved).unwrap()).unwrap();
+        restored.dispatch(UiAction::SelectBrush { id: DefaultBrushPreset::DitherBlender as u32 }).unwrap();
+        assert_eq!(value(&restored), 12., "{platform:?}: saved editing state retains the cell size");
+        if view(&s, id).rings.is_empty() { tap(&mut s, id); }
+        act(&mut s, BubbleAction::ResetRing { id, position: ring.arc.point(0.5) }).unwrap();
+        assert_eq!(value(&s), 4.);
+    }
+}

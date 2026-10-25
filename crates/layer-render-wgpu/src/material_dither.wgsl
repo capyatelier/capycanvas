@@ -37,15 +37,48 @@ fn dither_point(index: u32, world: vec2<f32>) -> vec2<f32> {
     let swapped = select(point, point.yx, (seed & 65536u) != 0u);
     let offset = swapped * vec2<f32>(select(1.0, -1.0, (seed & 131072u) != 0u),
         select(1.0, -1.0, (seed & 262144u) != 0u));
-    return floor(world + offset * clamp(style.deformation.x * style.transport_b.y, 0.0, 112.0)) + 0.5;
+    let reach = clamp(style.deformation.x * style.transport_b.y, 0.0, 112.0);
+    if DITHER_CELLS {
+        let size = style.deformation.w;
+        let cell = floor(world / size);
+        return dither_cell_point(cell, floor((cell * size + size * 0.5 + offset * reach) / size));
+    }
+    return floor(world + offset * reach) + 0.5;
+}
+
+fn dither_hash_pair(value: vec2<u32>) -> vec2<u32> {
+    var v = value * 747796405u + 2891336453u;
+    v = ((v >> ((v >> vec2<u32>(28u)) + vec2<u32>(4u))) ^ v) * 277803737u;
+    return (v >> vec2<u32>(22u)) ^ v;
+}
+
+fn dither_cell_point(cell: vec2<f32>, source: vec2<f32>) -> vec2<f32> {
+    let key = bitcast<vec4<u32>>(vec4<i32>(vec4<f32>(cell, source)));
+    var salt = dither_hash_pair(vec2<u32>(u32(style.transport_b.z)) ^ vec2<u32>(0xa341316cu, 0xc8013ea4u));
+    for (var i = 0u; i < 4u; i += 1u) { salt = dither_hash_pair(salt ^ vec2<u32>(dither_hash(key[i]))); }
+    return source * style.deformation.w + vec2<f32>(salt % vec2<u32>(u32(style.deformation.w))) + 0.5;
+}
+
+fn dither_original(world: vec2<f32>) -> vec4<f32> {
+    var point = world;
+    if DITHER_CELLS {
+        let cell = floor(world / style.deformation.w);
+        point = clamp(dither_cell_point(cell, cell), vec2<f32>(0.5), render_target.document_extent.xy - 0.5);
+    }
+    var original = canvas_load(point);
+    if DITHER_CELLS && style.color.a > 0.5 && working_has_color(original.a) {
+        original = vec4<f32>(working_unassociate(original), 1.0);
+    }
+    return original;
 }
 
 fn dither_paint(index: u32, world: vec2<f32>, original: vec4<f32>) -> vec4<f32> {
     if (index & 8u) == 0u { return original; }
     var paint = canvas_load(dither_point(index, world));
     if style.color.a > 0.5 {
-        if !working_has_color(paint.a) || !working_has_color(original.a) { return original; }
-        if paint.a != original.a { paint = vec4<f32>(working_unassociate(paint) * original.a, original.a); }
+        if !working_has_color(paint.a) || (!DITHER_CELLS && !working_has_color(original.a)) { return original; }
+        if DITHER_CELLS { paint = vec4<f32>(working_unassociate(paint), 1.0); }
+        else if paint.a != original.a { paint = vec4<f32>(working_unassociate(paint) * original.a, original.a); }
     }
     return paint;
 }
@@ -57,7 +90,8 @@ fn dither_sample(index: u32, world: vec2<f32>, original: vec4<f32>) -> DitherSam
     }
     var paint = canvas_load(point);
     if style.color.a > 0.5 {
-        if !working_has_color(paint.a) || !working_has_color(original.a) { paint = original; }
+        if !working_has_color(paint.a) || (!DITHER_CELLS && !working_has_color(original.a)) { paint = original; }
+        else if DITHER_CELLS { paint = vec4<f32>(working_unassociate(paint), 1.0); }
         else if paint.a != original.a { paint = vec4<f32>(working_unassociate(paint) * original.a, original.a); }
     }
     return DitherSample(dot(paint.rgb, WORKING_LUMA), index | select(0u, 8u, any(paint != original)));
@@ -92,9 +126,37 @@ fn dither_weights(exposure: vec4<f32>) -> vec4<f32> {
 }
 
 fn dither_contact_dose(dab: Dab, world: vec2<f32>, field: vec2<f32>) -> f32 {
-    return contact_coverage_field(dab, world, field) * dab.flow
+    var coverage = 0.0;
+    if DITHER_CELLS { coverage = dither_cell_coverage(dab, world); }
+    else { coverage = contact_coverage_field(dab, world, field); }
+    return coverage * dab.flow
         * length(dab.motion) / max(min(dab.radii.x, dab.radii.y) * 2.0, 0.01)
         * max(style.deformation.y, 0.0);
+}
+
+fn dither_cell_coverage(dab: Dab, world: vec2<f32>) -> f32 {
+    let origin = floor(world / style.deformation.w) * style.deformation.w;
+    let end = min(origin + style.deformation.w, render_target.document_extent.xy);
+    if any(end <= origin) { return 0.0; }
+    let low = origin + 0.5;
+    let high = end - 0.5;
+    if brush_selection.info.y == 0u && style.flags.x > 0.5 && !bristles_enabled()
+        && !contact_feature(1u, style.contact_a.x > 0.5) && !contact_feature(64u, style.contact_a.z > 0.5) {
+        return min(min(contact_coverage(dab, low), contact_coverage(dab, high)),
+            min(contact_coverage(dab, vec2<f32>(low.x, high.y)), contact_coverage(dab, vec2<f32>(high.x, low.y))));
+    }
+    var coverage = 1.0;
+    var selected = false;
+    for (var y = low.y; y <= high.y; y += 1.0) {
+        for (var x = low.x; x <= high.x; x += 1.0) {
+            let point = vec2<f32>(x, y);
+            if brush_selection_at(point) <= 0.0 { continue; }
+            selected = true;
+            coverage = min(coverage, contact_coverage(dab, point));
+            if coverage <= 0.0 { return 0.0; }
+        }
+    }
+    return select(0.0, coverage, selected);
 }
 
 fn dither_sources_in_solid_core(dab: Dab, world: vec2<f32>) -> bool {
@@ -102,7 +164,8 @@ fn dither_sources_in_solid_core(dab: Dab, world: vec2<f32>) -> bool {
         || contact_feature(1u, style.contact_a.x > 0.5) || contact_feature(64u, style.contact_a.z > 0.5) { return false; }
     let radius = max(min(dab.radii.x, dab.radii.y), 0.005);
     let solid = max(1.0 - max(1.0 - clamp(dab.hardness, 0.0, 1.0), 1.0 / radius), 0.0);
-    let reach = clamp(style.deformation.x * style.transport_b.y, 0.0, 112.0) + 1.0;
+    let reach = clamp(style.deformation.x * style.transport_b.y, 0.0, 112.0)
+        + select(1.0, 2.0 * style.deformation.w, DITHER_CELLS);
     let core = solid - reach / radius;
     if core <= 0.0 { return false; }
     let local = rotate(world - dab.center, dab.rotation.x, -dab.rotation.y) / max(dab.radii, vec2<f32>(0.005));
@@ -166,7 +229,7 @@ fn smudge_fragment(fragment_position: vec2<f32>, world: vec2<f32>, first: u32, c
 }
 
 fn dither_palette(world: vec2<f32>) -> f32 {
-    let original = canvas_load(world);
+    let original = dither_original(world);
     var s0 = DitherSample(dot(original.rgb, WORKING_LUMA), 0u);
     var s1 = dither_sample(1u, world, original);
     var s2 = dither_sample(2u, world, original);
@@ -175,7 +238,7 @@ fn dither_palette(world: vec2<f32>) -> f32 {
     var s5 = dither_sample(5u, world, original);
     var s6 = dither_sample(6u, world, original);
     var s7 = dither_sample(7u, world, original);
-    if ((s1.index | s2.index | s3.index | s4.index | s5.index | s6.index | s7.index) & 8u) == 0u {
+    if !DITHER_CELLS && ((s1.index | s2.index | s3.index | s4.index | s5.index | s6.index | s7.index) & 8u) == 0u {
         return -1.0;
     }
     dither_order(&s0, &s1, world, original);
@@ -204,6 +267,8 @@ fn dither_palette(world: vec2<f32>) -> f32 {
 fn dither_source_weight(index: u32, world: vec2<f32>, weight: f32) -> f32 {
     let point = dither_point(index, world);
     if any(point < vec2<f32>(0.0)) || any(point >= render_target.document_extent.xy) { return 0.0; }
+    if DITHER_CELLS && (all(floor(point / style.deformation.w) == floor(world / style.deformation.w))
+        || (style.color.a > 0.5 && !working_has_color(canvas_load(point).a))) { return 0.0; }
     return weight * brush_selection_at(point);
 }
 
@@ -214,9 +279,8 @@ fn dither_weight(index: u32, weights: vec4<f32>, pairs: vec4<f32>) -> f32 {
     return select(pair.x, pair.y, (index & 1u) != 0u);
 }
 
-fn dither_color(world: vec2<f32>, state: MaterialOutput) -> vec4<f32> {
-    let original = canvas_load(world);
-    if state.coverage.x <= 0.0 || style.canvas_opacity.z <= 0.0 { return original; }
+fn dither_choice(world: vec2<f32>, state: MaterialOutput) -> u32 {
+    if state.coverage.x <= 0.0 || style.canvas_opacity.z <= 0.0 { return 0u; }
     var weights = dither_weights(vec4<f32>(0.0, state.coverage.yzw));
     let pairs = dither_weights(state.wetness);
     let w1 = dither_source_weight(1u, world, weights[1u]);
@@ -229,7 +293,7 @@ fn dither_color(world: vec2<f32>, state: MaterialOutput) -> vec4<f32> {
     weights = vec4<f32>(max(1.0 - (w1 + w2 + w3 + w4 + w5 + w6 + w7), 0.0), w1, w2, w3);
     let selected_pairs = vec4<f32>(w4, w5, w6, w7);
     let order = u32(state.coverage.x);
-    let threshold = dither_rank(world, dither_hash(u32(style.transport_b.z)));
+    let threshold = dither_rank(select(world, floor(world / style.deformation.w), DITHER_CELLS), dither_hash(u32(style.transport_b.z)));
     var cumulative = 0.0;
     var chosen = 0u;
     for (var slot = 0u; slot < 8u; slot += 1u) {
@@ -241,5 +305,10 @@ fn dither_color(world: vec2<f32>, state: MaterialOutput) -> vec4<f32> {
         cumulative += weight;
         if threshold < cumulative { break; }
     }
-    return dither_paint(chosen | select(0u, 8u, chosen != 0u), world, original);
+    return chosen;
+}
+
+fn dither_color(world: vec2<f32>, state: MaterialOutput) -> vec4<f32> {
+    let chosen = dither_choice(world, state);
+    return dither_paint(chosen | select(0u, 8u, chosen != 0u), world, dither_original(world));
 }

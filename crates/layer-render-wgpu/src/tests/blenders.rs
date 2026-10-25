@@ -22,6 +22,7 @@ fn dither_only_picks_up_texels_inside_the_actual_contact() {
         ([0.8, 0.8], 0., 1., [64.2, 64.2], 0.01), ([32., 32.], 0., 1., [64., 64.], 0.08),
         ([40., 10.], 0.7, 0.9, [64.3, 63.7], 0.08)] {
         let mut brush = brush(P::DitherBlender, 64.);
+        brush.blender.cell_size = 1.;
         brush.blender.reach = reach;
         let mut dab = test_dab(center, [1.; 4], 1.);
         dab.radii = radii;
@@ -54,7 +55,8 @@ fn dither_only_picks_up_texels_inside_the_actual_contact() {
 fn dither_reclassifies_uniform_pages_after_new_paint() {
     let mut canvas = canvas();
     canvas.fill(canvas.base, BLUE);
-    let brush = brush(P::DitherBlender, 48.);
+    let mut brush = brush(P::DitherBlender, 48.);
+    brush.blender.cell_size = 1.;
     let dabs = contacts(&brush, &line([64., 8.], [64., 120.]));
     let uniform = canvas.composite();
     canvas.stroke(100, &brush, &dabs, 6, false);
@@ -78,6 +80,7 @@ fn dither_new_sources_only_receive_their_own_contact_exposure() {
         halves(&mut canvas, BLUE, RED);
         let before = canvas.composite();
         let mut brush = brush(P::DitherBlender, 64.);
+        brush.blender.cell_size = 1.;
         brush.blender.reach = 0.5;
         let mut narrow = test_dab([45., 64.], [1.; 4], 1.);
         narrow.radii = [10.; 2];
@@ -100,6 +103,7 @@ fn dither_new_sources_only_receive_their_own_contact_exposure() {
     halves(&mut canvas, BLUE, RED);
     let before = canvas.composite();
     let mut brush = brush(P::DitherBlender, 64.);
+    brush.blender.cell_size = 1.;
     brush.blender.reach = 0.5;
     let mut wide = test_dab([45., 64.], [1.; 4], 1.);
     wide.radii = [36.; 2];
@@ -119,6 +123,7 @@ fn dither_preserves_source_rgba_across_colors_transparency_and_partial_controls(
         let before = canvas.composite();
         let colors = palette(&before);
         let mut brush = brush(P::DitherBlender, 48.);
+        brush.blender.cell_size = 1.;
         brush.opacity = opacity;
         for pass in 1..=3 {
             canvas.stroke(100 + pass, &brush, &contacts(&brush, &line([66., 12.], [66., 116.])), 6, false);
@@ -143,6 +148,7 @@ fn dither_does_not_expand_a_thin_intermediate_shade_into_a_blurred_band() {
     let before = canvas.composite();
     let intermediate = |pixels: &[[f64; 4]]| pixels.iter().filter(|p| p[0] > 0.01 && p[0] < 0.99).count();
     let mut brush = brush(P::DitherBlender, 64.);
+    brush.blender.cell_size = 1.;
     brush.flow = 1.;
     let path = line([66., 4.], [66., 124.]);
     let dabs: Vec<_> = contacts(&brush, &path).into_iter().cycle().take(1000).collect();
@@ -161,6 +167,7 @@ fn dither_is_identical_across_contact_batches_and_weak_final_contacts() {
             let mut canvas = canvas();
             halves(&mut canvas, BLUE, RED);
             let mut brush = brush(P::DitherBlender, 48.);
+            brush.blender.cell_size = 1.;
             brush.opacity = opacity;
             let mut dabs = contacts(&brush, &line([66., 8.], [66., 120.]));
             for (i, dab) in dabs.iter_mut().enumerate() {
@@ -189,7 +196,8 @@ fn dither_alpha_lock_preserves_destination_coverage_and_source_hues() {
     mark.radii = [5., 20.];
     canvas.paint(canvas.base, test_style(BrushExecution::Dry), mark);
     let before = canvas.composite();
-    let brush = brush(P::DitherBlender, 48.);
+    let mut brush = brush(P::DitherBlender, 48.);
+    brush.blender.cell_size = 1.;
     let mut style = layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush);
     style.alpha_locked = true;
     canvas.styled_stroke(100, style, &contacts(&brush, &line([66., 8.], [66., 120.])), 6);
@@ -212,6 +220,7 @@ fn dither_moves_black_and_transparency_as_whole_samples() {
     let before = canvas.composite();
     let colors = palette(&before);
     let mut brush = brush(P::DitherBlender, 48.);
+    brush.blender.cell_size = 1.;
     brush.blender.reach = 0.5;
     let dabs: Vec<_> = contacts(&brush, &line([66., 4.], [66., 124.])).into_iter().cycle().take(1000).collect();
     canvas.stroke(100, &brush, &dabs, 6, false);
@@ -232,6 +241,7 @@ fn dither_keeps_extended_and_perceptual_source_colors_and_zero_controls() {
         let before = canvas.composite();
         let colors = palette(&before);
         let mut brush = brush(P::DitherBlender, 48.);
+        brush.blender.cell_size = 1.;
         for (flow, opacity) in [(0., 1.), (1., 0.), (1., 0.3)] {
             brush.flow = flow;
             brush.opacity = opacity;
@@ -258,6 +268,7 @@ fn dither_selection_weights_samples_without_mixing_or_crossing_excluded_paint() 
         }))).collect();
         let selection = Arc::new(Selection::pixels(Arc::new(SelectionPixels::new([128, 128], [0, 0, 128, 128], words).unwrap())));
         let mut brush = brush(P::DitherBlender, 48.);
+        brush.blender.cell_size = 1.;
         brush.blender.reach = 0.5;
         let mut style = DabStyle::for_brush(&brush, StrokeTool::Brush);
         style.selection = Some(selection);
@@ -279,6 +290,7 @@ fn dither_poststroke_edges_decode_exposure_without_darkening_the_interior() {
     canvas.fill(canvas.base, [0.6, 0.5, 0.4, 1.]);
     let before = canvas.composite();
     let mut brush = brush(P::DitherBlender, 48.);
+    brush.blender.cell_size = 1.;
     brush.rendering.edge_after_stroke = true;
     brush.rendering.burnt_edge = 1.;
     brush.rendering.edge_width = 4.;
@@ -657,6 +669,7 @@ fn dither_uses_document_luminance_in_every_profile() {
         });
         halves(&mut canvas, colors[0], colors[1]);
         let mut brush = brush(P::DitherBlender, 40.);
+        brush.blender.cell_size = 1.;
         brush.wet_mix.mix_space = layer_core::ColorMixSpace::LinearRgb;
         canvas.stroke(1, &brush, &contacts(&brush, &line([30., 64.], [98., 64.])), 6, false);
         let inverse = space.linear_transform(RgbSpace::Srgb);
@@ -728,4 +741,172 @@ fn painterly_blends_high_contrast_hdr_without_a_variance_ceiling() {
     }
     eprintln!("Painterly HDR scale worst {worst:?}");
     assert!(worst.0 < 0.001, "Painterly HDR scale mismatch: {worst:?}");
+}
+
+fn dither_cell_pattern(canvas: &mut Canvas, color: impl Fn(u32, u32) -> [f32; 4]) {
+    let mut dab = test_dab([128.; 2], [1.; 4], 1.);
+    dab.radii = [10000.; 2];
+    canvas.paint(canvas.base, test_style(BrushExecution::Dry), dab);
+    let layer = canvas.r.paint_layers.iter().find(|l| l.id == canvas.base).unwrap();
+    for page in &layer.pages {
+        let bytes: Vec<_> = (0..PAGE_SIZE).flat_map(|y| (0..PAGE_SIZE).flat_map({
+            let color = &color;
+            move |x| color(page.coordinate[0] * PAGE_SIZE + x, page.coordinate[1] * PAGE_SIZE + y)
+                .into_iter().flat_map(f32::to_le_bytes)
+        })).collect();
+        crate::test_support::upload_page(&canvas.r, &page.active().texture, &bytes);
+    }
+}
+
+fn dither_cell_coherence(before: &[[f64; 4]], after: &[[f64; 4]], width: usize, size: usize) -> usize {
+    let height = after.len() / width;
+    let mut changed = 0;
+    for y in (0..height).step_by(size) { for x in (0..width).step_by(size) {
+        let indices: Vec<_> = (y..(y + size).min(height)).flat_map(|y|
+            (x..(x + size).min(width)).map(move |x| y * width + x)).collect();
+        if indices.iter().any(|&i| before[i] != after[i]) {
+            changed += 1;
+            assert!(indices.iter().all(|&i| after[i] == after[indices[0]]), "cell ({x},{y}) size={size} contains mixed donor colors");
+        }
+    }}
+    changed
+}
+
+#[test]
+fn dither_cells_keep_native_tuples_and_square_cells() {
+    for size in [2, 3, 4, 50] {
+        let mut canvas = canvas();
+        dither_cell_pattern(&mut canvas, |x,y| match (x + 3*y) % 5 {
+            0 => [0.;4], 1 => [0.,0.,0.,1.], 2 => [0.14,0.02,0.01,0.35], 3 => BLUE, _ => RED,
+        });
+        let before = canvas.composite();
+        let colors = palette(&before);
+        let mut brush = brush(P::DitherBlender, 128.);
+        brush.blender.cell_size = size as f32;
+        brush.blender.reach = 0.5;
+        let mut dab = test_dab([64.;2], [1.;4], 1.);
+        dab.radii = [100.;2]; dab.motion = [200.,0.]; dab.hardness = 1.;
+        canvas.stroke(100, &brush, &[dab;16], 4, false);
+        let after = canvas.composite();
+        assert!(after.iter().all(|p| colors.contains(&p.map(f64::to_bits))), "size={size}: invented RGBA");
+        assert!(dither_cell_coherence(&before,&after,128,size)>2, "size={size}: fixture must transfer paint");
+    }
+}
+
+#[test]
+fn dither_cells_sample_minority_native_texels_without_center_bias() {
+    let mut canvas = canvas();
+    dither_cell_pattern(&mut canvas, |x,y| if x%2==1 && y%2==1 {BLUE} else {RED});
+    let mut brush = brush(P::DitherBlender,128.);
+    brush.blender.cell_size = 2.;
+    brush.blender.reach = 0.2;
+    let mut dab = test_dab([64.;2],[1.;4],1.);
+    dab.radii=[100.;2]; dab.motion=[200.,0.]; dab.hardness=1.;
+    canvas.stroke(100,&brush,&[dab;24],6,false);
+    let after=canvas.composite();
+    let blue=(24..104).flat_map(|y|(24..104).map(move|x|y*128+x)).filter(|&i|after[i]==BLUE.map(f64::from)).count();
+    let fraction=blue as f64/6400.;
+    assert!((fraction-0.25).abs()<0.055,"3R1B native area fraction became {fraction}");
+}
+
+#[test]
+fn dither_cells_global_three_pixel_grid_crosses_pages_and_contact_batches() {
+    let mut reference=None;
+    for chunk in [1,usize::MAX] {
+        let mut canvas=Canvas::at(DocumentColor {depth:SampleDepth::F32,..Default::default()},BlendSpace::Linear,None,[263,131]);
+        dither_cell_pattern(&mut canvas,|x,y|if (x/5+y/7)%2==0 {BLUE} else {RED});
+        let before=canvas.composite();
+        let mut brush=brush(P::DitherBlender,128.); brush.blender.cell_size=3.;
+        let mut dabs=Vec::new();
+        for (radii,angle,flow) in [([80.,60.],0.3f32,1.),([95.,23.],-0.4,0.8),([2.,2.],0.,0.0000001)] {
+            let mut dab=test_dab([255.5,64.5],[1.;4],1.);
+            dab.radii=radii; dab.rotation=[angle.cos(),angle.sin()]; dab.motion=[160.,0.]; dab.flow=flow;
+            dabs.extend([dab;6]);
+        }
+        canvas.stroke(100,&brush,&dabs,chunk,false);
+        let after=canvas.composite();
+        assert!(dither_cell_coherence(&before,&after,263,3)>5);
+        assert!((24..105).any(|y| (254..258).any(|x| before[y*263+x]!=after[y*263+x])),"the fixture must change paint across page256");
+        if let Some(expected)=&reference {assert_eq!(&after,expected,"N3 page crossing depends on contact batches");}
+        else {reference=Some(after);}
+    }
+}
+
+#[test]
+fn dither_cells_selection_and_alpha_lock_preserve_destination_coverage() {
+    use layer_core::{Selection,SelectionPixels};
+    for locked in [false,true] {
+        let mut canvas=canvas();
+        dither_cell_pattern(&mut canvas,|x,y|if (x/3+y/4)%2==0 {[0.2,0.01,0.03,0.35]} else {BLUE});
+        let before=canvas.composite();
+        let words:Vec<u32>=(0..128).flat_map(|_|(0..16).map(|word|(0..8).fold(0u32,|v,bit| {
+            let x=word*8+bit;v | (if x<61 {4} else if x<71 {2} else {0}) << (bit*4)
+        }))).collect();
+        let selection=Arc::new(Selection::pixels(Arc::new(SelectionPixels::new([128,128],[0,0,128,128],words).unwrap())));
+        let mut brush=brush(P::DitherBlender,128.);brush.blender.cell_size=3.;
+        let mut style=DabStyle::for_brush(&brush,StrokeTool::Brush);style.selection=Some(selection);style.alpha_locked=locked;
+        let mut dab=test_dab([64.;2],[1.;4],1.);dab.radii=[100.;2];dab.motion=[200.,0.];dab.hardness=1.;
+        canvas.styled_stroke(100,style,&[dab;16],4);
+        let after=canvas.composite();
+        assert!(changed(&before,&after)>0.01,"selection/alpha fixture must change pigment");
+        for (i,(a,b)) in after.iter().zip(&before).enumerate() {
+            if i%128>=71 {assert_eq!(a,b,"excluded destination {i}");}
+            if locked {
+                assert_eq!(a[3],b[3],"locked destination alpha {i}");
+                assert!([before[0],before[3]].iter().any(|source|(0..3).all(|c|(a[c]/a[3]-source[c]/source[3]).abs()<1e-5)),"invented hue {i}");
+            }
+        }
+        if !locked {let colors=palette(&before);assert!(after.iter().all(|p|colors.contains(&p.map(f64::to_bits))));}
+    }
+}
+
+#[test]
+#[ignore]
+fn dither_cells_synthetic_completion_observations() {
+    for size in [1, 2, 3, 4, 50] {
+        let mut canvas=Canvas::at(DocumentColor {depth:SampleDepth::F32,..Default::default()},BlendSpace::Linear,None,[512,512]);
+        dither_cell_pattern(&mut canvas,|x,y|if (x/7+y/11)%2==0 {BLUE} else {RED});
+        let original=canvas.composite();
+        if let Ok(directory)=std::env::var("DITHER_CELLS_ARTIFACTS") {
+            dither_cell_observation_png(&directory,"original",&original);
+        }
+        let mut brush=brush(P::DitherBlender,512.);brush.blender.cell_size=size as f32;brush.blender.reach=0.2;
+        let mut dab=test_dab([256.;2],[1.;4],1.);dab.radii=[220.;2];dab.motion=[440.,0.];dab.hardness=0.8;
+        for repetition in 0..4 {
+            let start=std::time::Instant::now();
+            canvas.stroke(100+repetition,&brush,&[dab;8],8,false);
+            let submit=start.elapsed();
+            let output=canvas.composite();
+            if repetition==0 { if let Ok(directory)=std::env::var("DITHER_CELLS_ARTIFACTS") {
+                dither_cell_observation_png(&directory,&format!("cell-{size}"),&output);
+            }}
+            eprintln!("DITHER_CELLS_OBSERVATION size={size} repetition={repetition} first={} submit_us={} completed_with_readback_us={} pixels={}",
+                repetition==0,submit.as_micros(),start.elapsed().as_micros(),output.len());
+        }
+    }
+}
+
+fn dither_cell_observation_png(directory: &str, name: &str, pixels: &[[f64;4]]) {
+    std::fs::create_dir_all(directory).unwrap();
+    let file=std::fs::File::create(std::path::Path::new(directory).join(format!("{name}.png"))).unwrap();
+    let mut encoder=png::Encoder::new(file,512,512);
+    encoder.set_color(png::ColorType::Rgba);encoder.set_depth(png::BitDepth::Eight);
+    let bytes:Vec<_>=pixels.iter().flat_map(|p|p.map(|v|(v.clamp(0.,1.)*255.+0.5) as u8)).collect();
+    encoder.write_header().unwrap().write_image_data(&bytes).unwrap();
+}
+
+#[test]
+fn dither_cells_only_pick_up_native_texels_inside_the_same_actual_contact() {
+    let mut dab=test_dab([64.3,63.7],[1.;4],1.);
+    dab.radii=[80.,65.];dab.rotation=[0.7f32.cos(),0.7f32.sin()];dab.hardness=0.2;dab.motion=[160.,0.];
+    let mut mask=canvas();mask.paint(mask.base,test_style(BrushExecution::Dry),dab);
+    let covered=mask.composite();
+    for size in [2,3,50] {
+        let mut canvas=canvas();
+        dither_cell_pattern(&mut canvas,|x,y|if x<128 && y<128 && covered[(y*128+x) as usize][3]>0. {BLUE} else {RED});
+        let before=canvas.composite();
+        let mut brush=brush(P::DitherBlender,128.);brush.blender.cell_size=size as f32;brush.blender.reach=0.5;
+        canvas.stroke(100,&brush,&[dab;24],6,false);
+        assert_eq!(canvas.composite(),before,"N{size}: outside-contact pigment entered a covered destination");
+    }
 }

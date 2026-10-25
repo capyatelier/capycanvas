@@ -820,6 +820,8 @@ impl BlenderKind {
 /// page job's neighbourhood.
 pub const BLENDER_REACH_LIMIT: f32 = 112.0;
 
+pub const DITHER_CELL_SIZE_LIMIT: u32 = 50;
+
 /// Longest path, in document pixels, that one Smudge chunk covers, and so the
 /// farthest it can pull paint.
 pub const SMUDGE_CHUNK_TRAVEL_LIMIT: f32 = 128.0;
@@ -836,6 +838,8 @@ pub struct BrushBlender {
     pub character: f32,
     /// Bristle, cell or texture size as a fraction of the contact diameter.
     pub scale: f32,
+    /// Whole document pixels along a Dither cell's side.
+    pub cell_size: f32,
     /// How far pen pressure presses the tip into the paper's tooth, as the
     /// dry-media approach gain.
     pub pressure_gain: f32,
@@ -851,7 +855,7 @@ pub struct BrushBlender {
 
 impl Default for BrushBlender {
     fn default() -> Self {
-        Self { kind: BlenderKind::Soft, reach: 0.15, rate: 3.0, character: 0.0, scale: 0.0,
+        Self { kind: BlenderKind::Soft, reach: 0.15, rate: 3.0, character: 0.0, scale: 0.0, cell_size: 1.0,
             pressure_gain: 1.4, engagement: 0.1, recess: 0.4, lift: 0.0 }
     }
 }
@@ -1182,6 +1186,8 @@ impl BrushSnapshot {
             || !(0.0..=self.bounds.maximum_opacity).contains(&self.bounds.minimum_opacity)
             || self.bounds.maximum_opacity > 1.0
             || !(self.blender.engagement > 0.0 && self.blender.engagement <= 1.0)
+            || !(1.0..=DITHER_CELL_SIZE_LIMIT as f32).contains(&self.blender.cell_size)
+            || self.blender.cell_size.fract() != 0.0
         {
             return Err(BrushError::InvalidAdvanced);
         }

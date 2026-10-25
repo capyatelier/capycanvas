@@ -157,6 +157,21 @@ the drawing remain valid samples with their local area weight; Dither cannot
 distinguish them from deliberately painted intermediate colors. Alpha lock
 keeps each destination pixel's opacity and chooses existing source hues.
 
+Cell size chooses whole squares from 1 to 50 document pixels per side. Its
+slider follows Smoothing's logarithmic curve and starts at 4 px. Larger cells
+share one source-color choice. A source cell that crosses a color boundary
+contributes its native colors through stable sampling, without averaging them.
+The grid stays fixed while painting, zooming and crossing rendering pages.
+Only contacts covering a cell's selected pixels add influence, so larger cells
+leave an untouched rim and need a tip wide enough to cover them. Spread below
+roughly half a cell produces no transfer. Selection boundaries clip squares;
+alpha lock keeps each native destination pixel's opacity. Unchanged cells keep
+their original detail.
+
+Dither shows Spread above Cell size in Tool Settings and on the left side of
+its bubble, with Cell size on the right. Spread follows Smoothing's logarithmic
+curve over its percentage range.
+
 Each set lists its blenders from the most to the least broadly useful, and
 Smudge is the Blend tool's default. Sets are tool groups of the Blend tool.
 Sculpting presets show their tool's icon in Tools, on toolbar buttons and as

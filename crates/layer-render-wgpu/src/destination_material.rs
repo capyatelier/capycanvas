@@ -63,10 +63,11 @@ pub(super) struct Blender {
     pub kind: layer_core::BlenderKind,
     pub paper: bool,
     pub lift: bool,
+    pub cells: bool,
 }
 
 /// The blender of operations that do not blend.
-pub(super) const PLAIN: Blender = Blender { kind: layer_core::BlenderKind::Soft, paper: false, lift: false };
+pub(super) const PLAIN: Blender = Blender { kind: layer_core::BlenderKind::Soft, paper: false, lift: false, cells: false };
 
 /// The blenders an operation compiles a module for: for Smudge, every kind,
 /// with and without the paper for kinds that touch it and with and without
@@ -77,7 +78,9 @@ pub(super) fn blenders(operation: MaterialOperation) -> Vec<Blender> {
     BlenderKind::ALL.into_iter().flat_map(|kind| {
         let papers = if kind.touches_paper() { &[false, true][..] } else { &[false][..] };
         let lifts = if kind.lifts() { &[false, true][..] } else { &[false][..] };
-        papers.iter().flat_map(move |&paper| lifts.iter().map(move |&lift| Blender { kind, paper, lift }))
+        let cells = if kind == BlenderKind::Dither { &[false, true][..] } else { &[false][..] };
+        papers.iter().flat_map(move |&paper| lifts.iter().flat_map(move |&lift|
+            cells.iter().map(move |&cells| Blender { kind, paper, lift, cells })))
     }).collect()
 }
 
@@ -90,6 +93,7 @@ pub(super) fn blender(style: &layer_render::DabStyle) -> Blender {
         kind,
         paper: kind.touches_paper() && style.grain.is_some_and(|grain| grain.depth > 0.0),
         lift: kind.lifts() && style.blender.lift > 0.0,
+        cells: ordered_dither(style) && style.blender.cell_size > 1.,
     }
 }
 
@@ -116,7 +120,7 @@ pub(super) fn blended(operation: MaterialOperation) -> bool {
     matches!(operation, MaterialOperation::Wet | MaterialOperation::Watercolor)
 }
 
-type KernelKey = (u32, usize, Entry, u8, bool, bool);
+type KernelKey = (u32, usize, Entry, u8, bool, bool, bool);
 
 pub(super) struct Pipelines {
     layouts: [wgpu::BindGroupLayout; 4],
@@ -142,7 +146,7 @@ impl Pipelines {
                 let transport = dry_material::material_shader(device, module(operation, blend, blender), flags, operation);
                 for &entry in entries(operation) {
                     let outputs = if blender.kind == layer_core::BlenderKind::Dither && entry == Entry::Coverage { 3 } else { entry.outputs() };
-                    kernels.insert((operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift), Deferred::compute(device,
+                    kernels.insert((operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells), Deferred::compute(device,
                         format!("destination material {} operation={} contact={flags:#x} blend={blend} {blender:?}", entry.name(), operation as u32),
                         &pipeline_layouts[outputs], &transport, entry.name()));
                 }
@@ -156,7 +160,7 @@ impl Pipelines {
         let slot = if blended(operation) { dry_material::material_slot(style) }
             else { dry_material::material_contact_slot(style) * MATERIAL_BLENDS.len() };
         let blender = if operation == MaterialOperation::Smudge { blender(style) } else { PLAIN };
-        &self.kernels[&(operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift)]
+        &self.kernels[&(operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells)]
     }
 
     fn output(&self, r: &WgpuRasterizer, color: &PageSurface, coverage: Option<&PageSurface>, wetness: Option<&PageSurface>) -> wgpu::BindGroup {
@@ -289,7 +293,11 @@ impl WgpuRasterizer {
             pass.set_bind_group(1, self.paint_target_binding(&batch.style), &[self.layer_target_offset(batch.target, dispatch.coordinate)]);
             pass.set_bind_group(2, &dispatch.sources, &[dispatch.record_offset]);
             let size = if dispatch.entry == Entry::Reservoir { RESERVOIR_SIZE } else { PAGE_SIZE };
-            pass.dispatch_workgroups(size / width, size / height, 1);
+            let extent = if blender(&batch.style).cells {
+                let cell = batch.style.blender.cell_size as u32;
+                dispatch.coordinate.map(|coordinate| ((coordinate * PAGE_SIZE) % cell + PAGE_SIZE).div_ceil(cell))
+            } else { [size; 2] };
+            pass.dispatch_workgroups(extent[0].div_ceil(width), extent[1].div_ceil(height), 1);
         }
         self.metrics.material_cpu_ms[3] += elapsed(started);
     }

@@ -23,7 +23,7 @@ impl Canvas {
         Self::at(color,space,blend,EXTENT)
     }
 
-    fn at(color:DocumentColor,space:BlendSpace,blend:Option<LayerBlend>,extent:[u32;2])->Self {
+    pub(super) fn at(color:DocumentColor,space:BlendSpace,blend:Option<LayerBlend>,extent:[u32;2])->Self {
         let mut artwork = Artwork::new(extent).unwrap();
         let composition = artwork.compositions.get_mut(artwork.root).unwrap();
         composition.color = color;
@@ -854,6 +854,7 @@ fn dither_sparse_contact_pages_match_rectangular_evaluation() {
             canvas.paint(canvas.base, test_style(BrushExecution::Dry), soft([1256., 256.], [0.9, 0.1, 0.05, 1.], 1000., 1.));
             let before = canvas.composite();
             let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::DitherBlender);
+            brush.blender.cell_size = 1.;
             brush.diameter = 128.;
             brush.blender.reach = if bristles { 0.06 } else { 0.25 };
             brush.contact = Some(layer_core::BrushContact { edge_roughness: 0.9, pooling: 1.,
@@ -924,7 +925,9 @@ fn dither_and_uniform_brushes_can_share_a_queued_frame() {
 
 #[test]
 fn dither_prediction_forks_committed_exposure_and_preserves_prior_tiles() {
+    for cell_size in [1.,3.] {
     let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::DitherBlender);
+    brush.blender.cell_size = cell_size;
     brush.diameter = 48.;
     brush.opacity = 0.4;
     brush.blender.reach = 0.5;
@@ -969,6 +972,7 @@ fn dither_prediction_forks_committed_exposure_and_preserves_prior_tiles() {
     assert_eq!(preview.composite(), committed, "cancel prediction restores committed paint");
     send(&mut preview, &dabs[split..], DabBatchKind::Persistent, false, true);
     assert_eq!(preview.pixels(), expected, "prediction leaves committed exposure untouched");
+    }
 }
 
 #[test]

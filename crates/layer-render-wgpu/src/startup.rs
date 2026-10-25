@@ -224,6 +224,7 @@ struct ShaderBrushKey {
     erase: BrushPassPlan,
     blend: BrushBlendMode,
     dry_material: u32,
+    blender: destination_material::Blender,
     reach: dry_material::Reach,
 }
 fn brush_style(document: &Document, brush: &BrushSnapshot, tool: StrokeTool) -> layer_render::DabStyle {
@@ -250,6 +251,7 @@ impl ShaderBrushKey {
             erase,
             blend: style.rendering.blend_mode,
             dry_material: dry_material::contact_flags(style.contact) | if style.rendering.accumulation == BrushAccumulation::Uniform { 128 } else { 0 },
+            blender: if style.execution == BrushExecution::Smudge { destination_material::blender(&style) } else { destination_material::PLAIN },
             reach: dry_material::Reach::of(brush),
         }
     }
@@ -645,6 +647,47 @@ mod tests {
         };
         assert!(key != ShaderBrushKey::new(&document, &brush));
     }
+
+    #[test]
+    fn dither_cell_sizes_prepare_one_shared_coarse_family() {
+        let document = Document::new(layer_core::authored::PortableId::random(), 64, 64,
+            layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::DitherBlender);
+        brush.blender.cell_size = 1.;
+        let pixel = ShaderBrushKey::new(&document, &brush);
+        brush.blender.cell_size = 2.;
+        let cells = ShaderBrushKey::new(&document, &brush);
+        assert!(pixel != cells);
+        for size in 3..=layer_core::DITHER_CELL_SIZE_LIMIT {
+            brush.blender.cell_size = size as f32;
+            assert!(cells == ShaderBrushKey::new(&document, &brush));
+        }
+    }
+    #[test]
+    fn dither_cells_prepare_prediction_and_commit_before_pen_down() {
+        let color=layer_core::color::DocumentColor::default();
+        let reference=WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut renderer=crate::test_support::staged_renderer(&reference,color);
+        let document=Document::new(layer_core::authored::PortableId::random(),128,128,
+            layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::DitherBlender);
+        brush.blender.cell_size=2.;
+        renderer.prepare_startup(&document,&brush,false).unwrap();
+        let deadline=std::time::Instant::now()+Duration::from_secs(60);
+        crate::test_support::wait_startup(&mut renderer,deadline,|progress|progress.brush_ready,
+            format_args!("coarse Dither prediction and commit"));
+        for size in [2.,50.] {
+            brush.blender.cell_size=size;
+            assert!(!renderer.startup_needs_update(&document,&brush,false),"all coarse sizes share prepared kernels");
+            let style=brush_style(&document,&brush,StrokeTool::Brush);
+            let kernels=&renderer.pipelines.destination_material;
+            assert!(kernels.kernel(&style,destination_material::Entry::Color).ready(),"N{size} prediction Color kernel is ready");
+            assert!(kernels.kernel(&style,destination_material::Entry::Coverage).ready(),"N{size} commit Coverage kernel is ready");
+            renderer.prepare_startup(&document,&brush,false).unwrap();
+            assert!(renderer.poll_startup().unwrap().brush_ready,"N{size} reuses both coarse kernels immediately");
+        }
+    }
+
     #[test]
     fn readiness_waits_for_every_batch_texture_and_pipeline() {
         let color = layer_core::color::DocumentColor::default();

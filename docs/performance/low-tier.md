@@ -63,6 +63,14 @@ navigation during filtering. Native witnesses and all raw values remain in
 
 ## Operations
 
+### Dither cell sizes
+
+| Cell size, 512 px brush | Completed updates/s on the tier canvas | 60/s target |
+| --- | --- | --- |
+| 2–50 px | Unmeasured | Open |
+
+Existing Dither measurements use 1 px cells.
+
 ### Checked upload comparison
 
 Measured 2026-10-25: `e038e3361` baseline, `c1b215667` checked dab/style upload

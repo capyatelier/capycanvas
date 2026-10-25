@@ -5356,6 +5356,7 @@ impl StyleGpu {
         // every style upload solely for one material-stage lifecycle bit.
         result.color[3] = f32::from(style.alpha_locked);
         if ordered_dither(style) {
+            result.deformation[3] = style.blender.cell_size;
             result.transport_b[1] = style.diameter;
             result.transport_b[3] = f32::from(style.rendering.edge_after_stroke);
         }

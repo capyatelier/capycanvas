@@ -132,6 +132,9 @@ everything rests.
 - **Which settings:** each brush starts with its primary settings. Its hold menu
   lists every Tool Settings row as a check item, at most six checked. The choice
   belongs to the brush and is part of the workspace.
+  Dither starts with Spread on the left and Cell size on the right. Cell size
+  uses whole pixels from 1 to 50 and starts at 4 px. Both sliders follow
+  Smoothing's normalized logarithmic curve.
 - **Chooser:** a dial rings its media (or, for tools like Select, its tools) in
   44 px circles 84 px out, from the top clockwise. The current medium is
   highlighted with its name, set radially outward beside its icon (as wide as

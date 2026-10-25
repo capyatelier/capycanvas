@@ -1295,3 +1295,51 @@ fn native_tool_bubble_frames() {
     }
     d.finish();
 }
+
+#[test]
+#[ignore = "private display: workspace-motion.sh gtk --native-test=native_dither_cell_size_bubble"]
+fn native_dither_cell_size_bubble() {
+    let mut d = Driver::new("art.capycanvas.DitherCellSizeBubble");
+    for theme in [Theme::Light, Theme::Dark] {
+        for device in ["mouse", "touch"] {
+            d.w.dispatch(UiAction::RestoreWorkspace {
+                workspace: Box::new(WorkspaceState { layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..WorkspaceState::default() }),
+            });
+            d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            d.w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::DitherBlender as u32 });
+            d.w.dispatch(UiAction::ResetToolSetting { id: "dither_cell_size".into() });
+            pump(300);
+            let spot = canvas_spot(&d, 0.45, 0.5);
+            let id = take(&mut d, BubbleGrab::Variant { variant: ToolVariant::BrushPreset { id: layer_core::DefaultBrushPreset::DitherBlender as u32 } }, spot);
+            let bubble = find_id(&d, id).unwrap();
+            assert!(bubble.selected && bubble.open);
+            assert_eq!(bubble.rings.iter().map(|ring| ring.setting).collect::<Vec<_>>(), ["spread", "dither_cell_size"]);
+            let ring = bubble.rings.iter().find(|ring| ring.setting == "dither_cell_size").unwrap();
+            let spread = bubble.rings.iter().find(|ring| ring.setting == "spread").unwrap();
+            assert!(spread.arc.point(0.5)[0] < 0. && ring.arc.point(0.5)[0] > 0.);
+            let at = center(&d, id);
+            let spread_arc = |fraction| { let point = spread.arc.point(fraction); [at[0] + point[0], at[1] + point[1]] };
+            for (fraction, expected) in [(0.5, 0.09), (1., 1.), (0., 0.)] {
+                stroke(&mut d, device, &[spread_arc(0.2), spread_arc(fraction)]);
+                let value = ui_session(&d.w).engine().configured_brush().blender.reach;
+                assert!((value - expected).abs() < 0.011, "{theme:?}/{device}: Spread at {fraction}: {value}");
+            }
+            capture(&mut d, &format!("dither-spread-{theme:?}-{device}").to_lowercase());
+            let arc = |fraction| { let point = ring.arc.point(fraction); [at[0] + point[0], at[1] + point[1]] };
+            let value = |d: &Driver| ui_session(&d.w).engine().configured_brush().blender.cell_size;
+            assert_eq!(value(&d), 4.);
+            stroke(&mut d, device, &[arc(0.1), arc(0.5)]);
+            let midpoint = value(&d);
+            assert_eq!(midpoint.fract(), 0.);
+            assert!((2. ..8.).contains(&midpoint), "{theme:?}/{device}: nonlinear slider emphasizes small cells: {midpoint}");
+            stroke(&mut d, device, &[arc(0.5), arc(1.)]);
+            assert_eq!(value(&d), 50., "{theme:?}/{device}: maximum cell size");
+            capture(&mut d, &format!("dither-cell-size-{theme:?}-{device}-50").to_lowercase());
+            stroke(&mut d, device, &[arc(0.8), arc(0.)]);
+            assert_eq!(value(&d), 1., "{theme:?}/{device}: minimum cell size");
+            capture(&mut d, &format!("dither-cell-size-{theme:?}-{device}-1").to_lowercase());
+        }
+    }
+    assert!(state(&d.w).host_error.is_none());
+    d.finish();
+}

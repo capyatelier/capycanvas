@@ -185,12 +185,18 @@ impl Definition {
             numeric.max = 2.;
             numeric.soft_max = 2.;
         }
+        if self.id == "spread" && brush.execution == BrushExecution::Smudge && brush.blender.kind == BlenderKind::Dither {
+            numeric.mapping = crate::NumericMapping::Log;
+            numeric.log_offset = SMOOTHING_LOG_OFFSET;
+        }
         numeric
     }
 }
 
 fn primary(brush: &BrushSnapshot) -> &'static [&'static str] {
-    if brush.contact.is_some_and(|c| c.dry.is_some()) {
+    if brush.execution == BrushExecution::Smudge && brush.blender.kind == BlenderKind::Dither {
+        &["spread", "dither_cell_size"]
+    } else if brush.contact.is_some_and(|c| c.dry.is_some()) {
         &["grain_depth", "material_hardness"]
     } else if brush.contact.is_some_and(|c| c.bristles.is_some()) {
         &["bristle_load", "bristle_scale"]
@@ -210,6 +216,8 @@ const BLENDER_RING: &[&str] = &[
     "swirl", "edge_keeping", "persistence", "pull", "momentum", "distortion",
 ];
 
+const SMOOTHING_LOG_OFFSET: f64 = 0.00886269125382811;
+
 pub(crate) fn defined(id: &str) -> bool {
     DEFINITIONS.iter().any(|d| d.id == id)
 }
@@ -217,6 +225,7 @@ pub(crate) fn defined(id: &str) -> bool {
 pub(crate) fn ring_defaults(brush: &BrushSnapshot, controls: &[ToolSetting]) -> Vec<&'static str> {
     let shown = |id: &&str| controls.iter().any(|c| c.id == *id);
     match brush.execution {
+        BrushExecution::Smudge if brush.blender.kind == BlenderKind::Dither => primary(brush).iter().copied().filter(shown).collect(),
         BrushExecution::Smudge | BrushExecution::Liquify => BLENDER_RING.iter().copied().find(|id| shown(id)).into_iter().collect(),
         _ => primary(brush).iter().copied().filter(shown).collect(),
     }
@@ -511,6 +520,18 @@ const DEFINITIONS: &[Definition] = &[
         field: |b| blender(b, |kind| kind == BlenderKind::Crystal).then_some(&mut b.blender.scale),
     },
     Definition {
+        id: "dither_cell_size",
+        label: MessageId::TOOL_SETTING_CELL_SIZE,
+        group: Some(MessageId::TOOL_SETTING_GROUP_BLENDER),
+        numeric: || NumericControl {
+            kind: crate::NumericKind::Slider,
+            mapping: crate::NumericMapping::Log,
+            log_offset: (f64::from(layer_core::DITHER_CELL_SIZE_LIMIT) - 1.) * SMOOTHING_LOG_OFFSET - 1.,
+            ..NumericControl::whole_pixels(1., f64::from(layer_core::DITHER_CELL_SIZE_LIMIT))
+        },
+        field: |b| blender(b, |kind| kind == BlenderKind::Dither).then_some(&mut b.blender.cell_size),
+    },
+    Definition {
         id: "swirl_size",
         label: MessageId::TOOL_SETTING_SWIRL_SIZE,
         group: Some(MessageId::TOOL_SETTING_GROUP_BLENDER),
@@ -581,7 +602,7 @@ const DEFINITIONS: &[Definition] = &[
         group: None,
         numeric: || NumericControl {
             mapping: crate::NumericMapping::Log,
-            log_offset: 0.00886269125382811,
+            log_offset: SMOOTHING_LOG_OFFSET,
             step: 0.01, resolution: 0.01, digits: 0,
             slider_snap: crate::NumericSliderSnap::Resolution,
             ..NumericControl::percent().unit("")

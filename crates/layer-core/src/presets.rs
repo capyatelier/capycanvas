@@ -479,7 +479,7 @@ pub fn default_brush(preset: DefaultBrushPreset) -> BrushSnapshot {
         }),
         DefaultBrushPreset::NaturalBlender => BrushSnapshot {
             blender: BrushBlender { kind: BlenderKind::Soft, reach: 0.12, rate: 5.5, character: 0.55, scale: 0.6,
-                pressure_gain: Tip::BRUSH.pressure_gain, engagement: Tip::BRUSH.engagement, recess: Tip::BRUSH.recess, lift: 0.0 },
+                cell_size: 1.0, pressure_gain: Tip::BRUSH.pressure_gain, engagement: Tip::BRUSH.engagement, recess: Tip::BRUSH.recess, lift: 0.0 },
             ..painter_brush(PainterBrushSpec {
                 diameter: 440.0,
                 aspect: 0.64,
@@ -548,6 +548,7 @@ fn blender(kind: BlenderKind, spec: BlenderSpec) -> BrushSnapshot {
         },
         grain: spec.paper.map(paper_grain),
         blender: BrushBlender { kind, reach: spec.reach, rate: spec.rate, character: spec.character, scale: spec.scale,
+            cell_size: if kind == BlenderKind::Dither { 4.0 } else { 1.0 },
             pressure_gain: spec.tip.pressure_gain, engagement: spec.tip.engagement, recess: spec.tip.recess, lift: spec.lift },
         mappings: Arc::from([pressure_flow(0.15, 0.85)]),
         ..BrushSnapshot::default()
