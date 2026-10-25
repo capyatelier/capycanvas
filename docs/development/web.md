@@ -379,7 +379,7 @@ reloading its corrupted workspace and preference fixtures.
 | Bubble menus, thumbnails and Zen keep/peek | `--bubble-release`, `--bubble-release-cold` |
 | Retained configuration and translated dialog layout | `--bubble-release-localization` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--workspace-constraints`, `--drawer-drag`, `--drawer-style` |
-| Workspaces | `--workspace-manager`, `--workspace-manager-visual`, `--workspace-grips`, `--workspace-held-name`, `--workspace-switcher`, `--workspace-options`, `--workspace-options-refresh`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
+| Workspaces | `--workspace-manager`, `--workspace-manager-visual`, `--toolbar-manager`, `--workspace-grips`, `--workspace-held-name`, `--workspace-switcher`, `--workspace-options`, `--workspace-options-refresh`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
 | Settings and retained copy | `--preferences`, `--settings-audit`, `--pressure-calibration`, `--tilt-calibration`, `--language-switching`, `--live-language-color`, `--live-language-proof`, `--live-language-delivery`, `--live-language-surfaces`, `--live-language-toolbar`, `--live-language-effects` |
 
 `--touch-scrub` runs in both browser runners. It clears the active painted layer

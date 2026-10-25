@@ -66,24 +66,43 @@ export async function checkToolPicker({ call, evaluate, settle }) {
 }
 
 export async function checkToolbarManager({ call, evaluate, settle }) {
-  const dir = 'artifacts/ui/toolbar-manager'; await mkdir(dir, { recursive: true });
+  const dir = process.env.LAYER_TEST_ARTIFACTS || 'artifacts/ui/toolbar-manager'; await mkdir(dir, { recursive: true });
   await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
-  const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await settle(); };
+  const model = () => evaluate('JSON.parse(layerApp.app.workspace_view())');
+  const wait = async predicate => {
+    for (const deadline = Date.now() + 15000; Date.now() < deadline; await new Promise(resolve => setTimeout(resolve, 50))) {
+      if (await evaluate(predicate)) return;
+    }
+    assert.fail(`Toolbar manager timeout: ${predicate}\n${JSON.stringify(await model())}`);
+  };
+  const idle = () => wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).saving');
+  const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await settle(); await idle(); };
   const edit = action => send({ type: 'customize', action });
-  // Native dialog dismissal groups depend on real user activation, not DOM click().
-  const click = async selector => {
-    const point = await evaluate(`(() => { const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+  const locate = async expression => {
+    await evaluate(`${expression}.scrollIntoView({block:'nearest'})`); await settle();
+    return evaluate(`(() => { const r=${expression}.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+  };
+  const clickNode = async expression => {
+    const point = await locate(expression);
     await call('Input.dispatchMouseEvent', {type:'mouseMoved',...point});
     await call('Input.dispatchMouseEvent', {type:'mousePressed',...point,button:'left',clickCount:1});
     await call('Input.dispatchMouseEvent', {type:'mouseReleased',...point,button:'left',clickCount:1}); await settle();
   };
-  const menuItem = async label => {
-    const point = await evaluate(`(() => { const r=[...document.querySelectorAll('#workspace-menu button')].find(n=>n.querySelector('.menu-label')?.textContent===${JSON.stringify(label)}).getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
-    await call('Input.dispatchMouseEvent', {type:'mouseMoved',...point});
-    await call('Input.dispatchMouseEvent', {type:'mousePressed',...point,button:'left',clickCount:1});
-    await call('Input.dispatchMouseEvent', {type:'mouseReleased',...point,button:'left',clickCount:1}); await settle();
+  const click = selector => clickNode(`document.querySelector(${JSON.stringify(selector)})`);
+  const menuItem = label => clickNode(`[...document.querySelectorAll('#workspace-menu button')].find(n=>n.querySelector('.menu-label')?.textContent===${JSON.stringify(label)})`);
+  const rowSelector = id => `.workspace-choice[data-id=${JSON.stringify(id)}]`;
+  const open = async () => {
+    await click('[data-menu="window"] > summary'); await menuItem('Quick Access Toolbars');
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('#workspace-menu .menu-label')].slice(-2).map(n=>n.textContent)"), ['New Toolbar…','Manage Toolbars…']);
+    await menuItem('Manage Toolbars…');
+    await wait('document.querySelector(".workspace-manager").open && JSON.parse(layerApp.app.workspace_view()).page === "this_workspace"');
+    await idle();
+    assert.equal(await evaluate('document.querySelector(".workspace-manager-tabs [data-page=this_workspace]").getAttribute("aria-pressed")'), 'true');
   };
-  const model = () => evaluate('layerApp.app.toolbar_manager() ?? null');
+  const noSelection = async () => {
+    assert.equal((await model()).selected, null);
+    assert.equal(await evaluate('document.querySelector(".workspace-details [data-action=delete_toolbar]")'), null);
+  };
   const shot = async name => { const image = await call('Page.captureScreenshot', { format: 'png' }); await writeFile(`${dir}/web-${name}.png`, Buffer.from(image.data, 'base64')); };
   const initial = await evaluate('layerApp.state().workspace');
   const builtins = initial.layout.panels.filter(p=>p.content.kind==='toolbar').length;
@@ -96,42 +115,46 @@ export async function checkToolbarManager({ call, evaluate, settle }) {
     const hidden = await evaluate("layerApp.state().workspace.layout.panels.at(-1).id");
     await edit({ type: 'set_panel_visible', panel: hidden, visible: false });
     const before = await evaluate('layerApp.state().workspace');
-    await click('[data-menu="window"] > summary'); await menuItem('Quick Access Toolbars');
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('#workspace-menu .menu-label')].slice(-2).map(n=>n.textContent)"), ['New Toolbar…','Manage Toolbars…']);
-    await click('#workspace-menu button:last-child');
-    assert.equal(await evaluate("document.querySelector('#toolbar-manager').open"), true);
-    assert.equal(await evaluate("document.querySelector('#delete-managed-toolbar').disabled"), true);
-    assert.equal((await model()).toolbars.length, builtins + 2);
+    await open(); await noSelection();
+    assert.equal((await model()).rows.length, builtins + 2);
+    const hiddenRow = (await model()).rows.find(row=>row.id===JSON.stringify(hidden));
+    assert.equal(hiddenRow.subtitle, 'Hidden');
     await shot(`${theme}-initial`);
-    await click(`.managed-toolbars button[data-panel="${hidden}"]`);
-    assert.equal((await model()).selected, hidden);
-    const selectionColor = () => evaluate("getComputedStyle(document.querySelector('.managed-toolbars [aria-pressed=true]')).backgroundColor");
-    const hoveredSelection = await selectionColor();
+    await click(rowSelector(hiddenRow.id));
+    assert.equal((await model()).selected, hiddenRow.id);
+    assert.deepEqual(await evaluate('layerApp.state().workspace'), before, 'Selecting a toolbar leaves its layout unchanged');
+    await call('Input.dispatchMouseEvent', {type:'mouseMoved',...await locate(`document.querySelector(${JSON.stringify(rowSelector(hiddenRow.id))})`)}); await settle();
+    const highlighted = () => evaluate("(() => { const selected=document.querySelector('.workspace-row[data-selected=true]'), other=document.querySelector('.workspace-row[data-selected=false]'); return selected.querySelector('.workspace-choice').getAttribute('aria-selected')==='true' && getComputedStyle(selected).backgroundColor!==getComputedStyle(other).backgroundColor; })()");
+    assert.equal(await highlighted(), true, 'Hovered selection stays highlighted');
     await call('Input.dispatchMouseEvent', {type:'mouseMoved',x:640,y:700}); await settle();
-    assert.equal(await selectionColor(), hoveredSelection, 'Selection stays highlighted while hovered');
+    assert.equal(await highlighted(), true, 'Resting selection stays highlighted');
     await shot(`${theme}-selected`);
-    await click('#delete-managed-toolbar'); await shot(`${theme}-confirm`);
+    await click('.workspace-details [data-action=delete_toolbar]');
+    await wait('document.querySelector("#toolbar-prompt").open && !document.querySelector(".workspace-manager").open');
+    await shot(`${theme}-confirm`);
     await call('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
     await call('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}); await settle();
     assert.equal(await evaluate("document.querySelector('#toolbar-prompt').open"), false);
-    assert.ok(await model(), 'Escape dismisses only the confirmation');
-    assert.equal((await model()).selected, hidden);
     assert.deepEqual(await evaluate('layerApp.state().workspace'), before);
-    await click('#delete-managed-toolbar'); await click('#confirm-toolbar');
-    assert.equal((await model()).toolbars.length, builtins + 1);
-    assert.equal(await evaluate("document.querySelector('#delete-managed-toolbar').disabled"), true);
+    await open(); await click(rowSelector(hiddenRow.id));
+    await click('.workspace-details [data-action=delete_toolbar]'); await click('#confirm-toolbar'); await idle();
+    assert.equal(await evaluate(`layerApp.state().workspace.layout.panels.some(p=>p.id===${JSON.stringify(hidden)})`), false);
+    await open(); await noSelection();
+    assert.equal((await model()).rows.length, builtins + 1);
     await shot(`${theme}-deleted`);
-    while ((await model()).toolbars.length) {
-      await click('.managed-toolbars button'); await click('#delete-managed-toolbar'); await click('#confirm-toolbar');
+    while ((await model()).rows.length) {
+      await click(rowSelector((await model()).rows[0].id)); await click('.workspace-details [data-action=delete_toolbar]'); await click('#confirm-toolbar'); await idle();
+      await open();
     }
-    assert.equal(await evaluate("document.querySelector('#delete-managed-toolbar').disabled"), true);
-    await shot(`${theme}-empty`); await click('#toolbar-manager .dialog-close');
-    assert.equal(await model(), null);
+    await noSelection();
+    assert.equal(await evaluate('document.querySelectorAll(".workspace-list .workspace-choice").length'), 0);
+    await shot(`${theme}-empty`); await click('.workspace-manager .dialog-close');
+    assert.equal((await model()).page, null);
     await send({type:'invoke',command:'undo_workspace'});
     assert.equal(await evaluate("layerApp.state().workspace.layout.panels.filter(p=>p.content.kind==='toolbar').length"), 1);
   }
   assert.equal(await evaluate("document.querySelector('#status').textContent"), '');
-  console.log('PASS: toolbar manager selection, hidden toolbars, cancellation, deletion, empty state, dismissal and undo in both themes');
+  console.log('PASS: Window > Quick Access Toolbars > Manage Toolbars, selection, hidden toolbars, cancellation, deletion, empty state, dismissal and undo in both themes');
 }
 
 export async function checkTabStyles({ call, evaluate, settle }) {

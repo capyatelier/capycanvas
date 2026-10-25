@@ -106,12 +106,14 @@ picker's availability rules.
   toolbar visibility, **New Toolbar…** and **Manage Toolbars…**. Hiding removes
   placement, not configuration; checking the item shows it again. A content panel
   opens floating when the dock cannot provide its minimum width.
-- **Manage Toolbars…** opens a single-selection list of all toolbars, including
-  hidden ones. Select a row, then **Delete Toolbar…** to open the existing
-  confirmation. Cancel returns to the selected row; successful deletion clears
-  selection and keeps the manager open. Delete is disabled without a selection.
-  The empty list shows **No toolbars**. Workspace Undo restores deleted toolbars.
-  Rust owns this list, copy, selection, eligibility and actions; hosts only
+- **Manage Toolbars…** opens **This Workspace** in the workspace manager, listing
+  all toolbars, including hidden ones. Selecting a row shows its visibility,
+  rename, duplicate, save, replace and delete actions without changing the layout.
+  Rename, duplicate and delete close the manager and open their existing prompts.
+  Cancel leaves the layout unchanged; Workspace Undo restores deleted toolbars.
+  Reopening the manager clears selection, so no toolbar actions appear until a
+  row is selected. **Saved Toolbars** opens the reusable toolbar library.
+  Rust owns these lists, copy, selection, eligibility and actions; hosts only
   render them. Manager selection is transient, not saved workspace data.
 - A built-in-panel tab or body opens **Configure Tool Set panel…** and
   **Hide Tool Set panel** (using its actual
