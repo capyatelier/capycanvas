@@ -80,10 +80,12 @@ Paint keeps 18 tool positions: Pen, Pencil, Brush,
 Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,
 Gradient; Operation, Figure, Ruler, Hand, Zoom and Eyedropper. The color selector is
 separate. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
-Selection; Auto select includes Select by Color; Fill includes the Lasso Fill
-category, containing Lasso Fill and Enclose and Fill; Blend
-includes Clone. Operation, Figure, Ruler and Gradient expose their existing
-variations in the same positions. Pen and Pencil remain separate. Pen exposes
+Selection; Auto select includes Select by Color and Tonal range; Fill includes
+the Lasso Fill category, containing Lasso Fill and Enclose and Fill. Blend
+exposes Blend, Wet paint, Effects and Retouch, with Clone Stamp, Healing Brush
+and Spot Healing Brush in Retouch. Operation contains Move, Scale/rotate,
+Edit points and Crop. Figure, Ruler and Gradient expose their variations in the
+same positions. Pen and Pencil remain separate. Pen exposes
 Pen and Marker; Pencil exposes Pencil and Pastel; Brush exposes Paint,
 Watercolor and Oil; Airbrush exposes Airbrush and Spray. The other brush
 categories expose their presets. Hand groups Rotate View; Zoom is a separate button beside it.
@@ -100,8 +102,8 @@ Gradient/Fill; Hand, Zoom and Eyedropper, followed by the color selector. Marque
 Rectangle and Ellipse, Lasso holds Lasso and Polygon, and Drawing holds Brush,
 Pen, Pencil, Airbrush and Decoration. Healing starts with Spot Heal and includes
 Heal. Gradient/Fill includes all existing gradient variations, Fill and Lasso
-Fill. Figure and Ruler remain available in Add Tools. Tonal Selection and Quick
-Mask keep their existing selection entry points.
+Fill. Auto select includes Tonal range. Figure and Ruler remain available in
+Add Tools, and Quick Mask stays in Select.
 
 These arrangements use shared tool groups described in
 [toolbar customization](panel-customization.md#tool-variations).

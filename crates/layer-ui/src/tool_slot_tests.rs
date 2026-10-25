@@ -212,6 +212,59 @@ fn blend_offers_its_sets_and_keeps_its_own_icon() {
 }
 
 #[test]
+fn paint_groups_keep_all_blenders_and_retouch_tools_at_their_origin() {
+    let mut s = session(Platform::Gtk);
+    let layout = WorkspacePreset::Illustrator.layout(Platform::Gtk);
+    let tiles = layout.panel(Panel::Toolbar).unwrap().tiles().to_vec();
+    let tile = tiles.iter().find(|tile| tile.control == ToolbarControl::ToolSlot { slot: ToolSlotId::Blend }).unwrap().id;
+    let anchor = DrawerAnchor::Tile { panel: Panel::Toolbar, tile };
+    s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState { layout, ..WorkspaceState::default() }) }).unwrap();
+    let groups = [(ToolGroup::Blend, 8), (ToolGroup::WetPaint, 5), (ToolGroup::Effects, 7), (ToolGroup::Retouch, 3)];
+    let variants = groups.map(|(group, _)| ToolVariant::BrushGroup { group });
+    assert_eq!(slot_menu(&s, anchor).into_iter().map(|item| item.action.unwrap()).collect::<Vec<_>>(),
+        variants.map(|variant| UiAction::ChooseToolVariant { anchor, variant }));
+    for (group, count) in groups {
+        let variant = ToolVariant::BrushGroup { group };
+        s.dispatch(slot_choice(&s, anchor, variant)).unwrap();
+        activate_slot(&mut s, anchor);
+        let presets: Vec<_> = tools::group_presets(group).collect();
+        assert_eq!(presets.len(), count);
+        for id in presets {
+            let view = s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap();
+            assert_eq!(view.groups.iter().map(|item| item.label.to_string()).collect::<Vec<_>>(),
+                variants.map(|variant| variant.label(s.localization())));
+            assert!(view.subtools.iter().all(|item| matches!(item.action, UiAction::SelectBrush { .. })));
+            let action = view.subtools.iter().find(|item| item.preview == Some(id)).unwrap().action.clone();
+            s.dispatch(action).unwrap();
+            assert_eq!(s.state().customization.drawer.as_ref().unwrap().anchor, anchor);
+            assert_eq!(selected_slot_variant(&s, anchor), variant);
+            let choice = &s.panel_view(Panel::Toolbar).unwrap().tiles.into_iter().find(|item| item.id == tile).unwrap().choice;
+            assert!(choice.selected);
+            assert_eq!(choice.icon, tools::icon(id));
+        }
+        activate_slot(&mut s, anchor);
+        let remembered = s.state().brush.preset;
+        invoke(&mut s, CommandId::Pen);
+        let choice = &s.panel_view(Panel::Toolbar).unwrap().tiles.into_iter().find(|item| item.id == tile).unwrap().choice;
+        assert!(!choice.selected);
+        assert_eq!(choice.icon, tools::icon(remembered));
+        assert_eq!(selected_slot_variant(&s, anchor), variant);
+        activate_slot(&mut s, anchor);
+        assert_eq!(s.state().brush.preset, remembered);
+    }
+    assert_eq!(s.state().workspace.layout.panel(Panel::Toolbar).unwrap().tiles(), tiles);
+    assert!(ToolSlotId::AutomaticSelection.variants().contains(&ToolVariant::Command { command: CommandId::TonalSelect }));
+    assert!(ToolSlotId::Operation.variants().contains(&ToolVariant::Command { command: CommandId::Crop }));
+    let editing = s.editing_state();
+    editing.validate().unwrap();
+    let mut restored = session(Platform::Gtk);
+    restored.restore_editing(editing).unwrap();
+    restored.adopt_workspace(PreparedWorkspace::new(s.capture_workspace().unwrap()).unwrap()).unwrap();
+    assert_eq!(selected_slot_variant(&restored, anchor), ToolVariant::BrushGroup { group: ToolGroup::Retouch });
+    assert_eq!(restored.state().brush.preset, DefaultBrushPreset::SpotHealingBrush as u32);
+}
+
+#[test]
 fn tool_group_presets_leave_pinned_brushes_as_leaf_controls() {
     for command in [CommandId::Eraser, CommandId::Decoration, CommandId::Clone, CommandId::Heal, CommandId::SpotHeal, CommandId::Liquify] {
         let control = ToolbarControl::Command { command };
@@ -325,7 +378,7 @@ fn tool_group_sketch_markers_memory_and_drawer_origins() {
 #[test]
 fn tool_group_selection_scopes_agree_without_overlap() {
     let manual = [CommandId::Lasso, CommandId::RectangleSelect, CommandId::EllipseSelect, CommandId::PolygonSelect, CommandId::SelectionBrush];
-    let automatic = [CommandId::AutoSelect, CommandId::ColorSelect];
+    let automatic = [CommandId::AutoSelect, CommandId::ColorSelect, CommandId::TonalSelect];
     assert!(!manual.iter().any(|command| automatic.contains(command)));
     for (control, commands) in [
         (ToolbarControl::ToolSlot { slot: ToolSlotId::ManualSelection }, &manual[..]),
@@ -483,7 +536,9 @@ fn slot_menus_publish_only_member_choices_and_activate_their_leaf_tools() {
                 if item.enabled {
                     s.dispatch(item.action.unwrap()).unwrap();
                     crate::session::test_support::finish_fixture_content_bounds(&mut s);
-                    if variant.command() == CommandId::ScaleRotate {
+                    if let ToolVariant::BrushGroup { group } = variant {
+                        assert_eq!(tools::group(s.state().brush.preset), *group);
+                    } else if variant.command() == CommandId::ScaleRotate {
                         assert_eq!(s.state().layer_tools.tool, LayerCanvasTool::Transform);
                     } else {
                         assert!(s.command(variant.command()).selected, "{platform:?} {slot:?} {variant:?}");

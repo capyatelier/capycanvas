@@ -87,7 +87,7 @@ impl ToolControlGroup {
     }
     fn active(self, state: &UiState) -> bool {
         match self {
-            Self::Slot(slot) => ToolVariant::active(state).is_some_and(|v| slot.variants().contains(&v)),
+            Self::Slot(slot) => slot.active(state).is_some(),
             Self::Navigation => matches!(state.layer_tools.tool, LayerCanvasTool::Hand | LayerCanvasTool::RotateView),
             Self::Selection => state.layer_tools.tool.selection_tool().is_some(),
             Self::Brush(tool) => state.layer_tools.tool == LayerCanvasTool::Paint && state.brush.tool == tool,
@@ -100,6 +100,16 @@ const fn command(command: CommandId) -> ToolVariant {
     ToolVariant::Command { command }
 }
 impl ToolSlotId {
+    pub(crate) fn member(self, variant: ToolVariant) -> Option<ToolVariant> {
+        let variant = if let ToolVariant::BrushPreset { id } = variant {
+            preset(id).ok()?;
+            ToolVariant::BrushGroup { group: tools::group(id) }
+        } else { variant };
+        self.variants().iter().copied().find(|member| *member == variant)
+    }
+    fn active(self, state: &UiState) -> Option<ToolVariant> {
+        self.variants().iter().copied().find(|variant| variant.is_active(state))
+    }
     pub fn variants(self) -> &'static [ToolVariant] {
         use CommandId as C;
         use ToolVariant as V;
@@ -118,7 +128,7 @@ impl ToolSlotId {
             Self::Marquee => const { &[command(C::RectangleSelect), command(C::EllipseSelect)] },
             Self::Lasso => const { &[command(C::Lasso), command(C::PolygonSelect)] },
             Self::AutomaticSelection => {
-                const { &[command(C::AutoSelect), command(C::ColorSelect)] }
+                const { &[command(C::AutoSelect), command(C::ColorSelect), command(C::TonalSelect)] }
             }
             Self::ManualSelection => {
                 const {
@@ -146,8 +156,13 @@ impl ToolSlotId {
             }
             Self::Fill => const { &[command(C::Fill), command(C::LassoFill), command(C::EncloseFill)] },
             Self::LassoFill => const { &[command(C::LassoFill), command(C::EncloseFill)] },
-            Self::Blend => const { &[command(C::Blend), command(C::Clone)] },
-            Self::Operation => const { &[command(C::Move), command(C::ScaleRotate), command(C::EditPoints)] },
+            Self::Blend => const { &[
+                V::BrushGroup { group: ToolGroup::Blend },
+                V::BrushGroup { group: ToolGroup::WetPaint },
+                V::BrushGroup { group: ToolGroup::Effects },
+                V::BrushGroup { group: ToolGroup::Retouch },
+            ] },
+            Self::Operation => const { &[command(C::Move), command(C::ScaleRotate), command(C::EditPoints), command(C::Crop)] },
             Self::Figure => {
                 const {
                     &[
@@ -202,6 +217,7 @@ impl ToolSlotId {
             Self::ManualSelection => CommandId::Select.localized_label(localization).to_string(),
             Self::Figure => CommandId::Figure.localized_label(localization).to_string(),
             Self::Ruler => CommandId::Ruler.localized_label(localization).to_string(),
+            Self::Blend => CommandId::Blend.localized_label(localization).to_string(),
             Self::LassoFill => CommandId::LassoFill.localized_label(localization).to_string(),
             Self::Gradient => CommandId::Gradient
                 .localized_label(localization)
@@ -390,9 +406,8 @@ impl DockLayout {
 }
 impl UiState {
     pub(crate) fn slot_variant(&self, slot: ToolSlotId) -> ToolVariant {
-        ToolVariant::active(self)
-            .filter(|v| slot.variants().contains(v))
-            .or_else(|| self.tool_slots.get(slot))
+        slot.active(self)
+            .or_else(|| self.tool_slots.get(slot).and_then(|variant| slot.member(variant)))
             .unwrap_or(slot.variants()[0])
     }
     pub(crate) fn resolve_slot(
@@ -400,25 +415,32 @@ impl UiState {
         slot: ToolSlotId,
     ) -> (ToolChoice, bool, String, ToolbarControl) {
         let variant = self.slot_variant(slot);
-        let mut choice = tool_choice_localized(variant.control(), &self.localization);
+        let resolved = if matches!(variant, ToolVariant::BrushGroup { .. }) {
+            let preset = if variant.is_active(self) { Some(ToolVariant::BrushPreset { id: self.brush.preset }) }
+                else { self.tool_slots.get(slot) };
+            preset.filter(|preset| slot.member(*preset) == Some(variant)).map_or(variant.control(), ToolVariant::control)
+        } else { variant.control() };
+        let mut choice = tool_choice_localized(resolved, &self.localization);
+        let tool_label = choice.label.clone();
         choice.control = ToolbarControl::ToolSlot { slot };
         choice.label = variant.label(&self.localization);
-        choice.icon = variant.icon_in(self);
-        choice.selected = ToolVariant::active(self) == Some(variant);
-        let enabled = tool_state(self, variant.control()).0;
+        if !matches!(variant, ToolVariant::BrushGroup { .. }) { choice.icon = variant.icon_in(self); }
+        choice.selected = variant.is_active(self);
+        let command = if let ToolbarControl::Brush { id } = resolved { tools::tool(id).command() } else { variant.command() };
+        let enabled = tool_state(self, ToolbarControl::Command { command }).0;
         let shortcut = self
             .commands
             .iter()
-            .find(|c| c.id == variant.command())
+            .find(|c| c.id == command)
             .map(|c| c.shortcut.as_str())
             .unwrap_or("");
-        let title = format!("{} · {}", choice.label, slot.label(&self.localization));
+        let title = format!("{} · {}", if matches!(resolved, ToolbarControl::Brush { .. }) { &tool_label } else { &choice.label }, slot.label(&self.localization));
         let tooltip = if shortcut.is_empty() {
             title
         } else {
             format!("{title} ({shortcut})")
         };
-        (choice, enabled, tooltip, variant.control())
+        (choice, enabled, tooltip, resolved)
     }
     pub(crate) fn resolve_group(&self, control: ToolbarControl) -> Option<(ToolChoice, bool, String, ToolbarControl)> {
         let (mut choice, enabled, tooltip, resolved) = match control.tool_group()? {
@@ -501,8 +523,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             view.subtools = self.group_choices(lasso, anchor).into_iter().map(|(_, item)| item).collect();
         }
         match group {
-            ToolControlGroup::Slot(_) => {
+            ToolControlGroup::Slot(slot) => {
                 if self.layer_interaction.tool == LayerCanvasTool::Paint {
+                    view.groups.retain(|item| !matches!(item.action, UiAction::SelectToolGroup { group }
+                        if slot.variants().contains(&ToolVariant::BrushGroup { group })));
                     view.subtools.splice(0..0, std::mem::take(&mut view.groups));
                 } else if self.layer_interaction.tool.selection_tool().is_some() {
                     view.subtools.clear();
@@ -607,11 +631,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return;
         }
-        let Some(variant) = ToolVariant::active(&self.state) else {
-            return;
-        };
         for slot in ToolSlotId::ALL {
-            if slot.variants().contains(&variant) {
+            if let Some(variant) = slot.active(&self.state) {
+                let variant = if matches!(variant, ToolVariant::BrushGroup { .. }) {
+                    ToolVariant::BrushPreset { id: self.state.brush.preset }
+                } else { variant };
                 self.state.tool_slots.remember(slot, variant);
             }
         }
@@ -651,7 +675,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => return false,
         };
         let (columns, tool_set) = if let Some((origin, slot)) = slot {
-            if active.is_none_or(|v| !slot.variants().contains(&v)) {
+            if slot.active(&self.state).is_none() {
                 if !self.interaction.applying_hold && self.interaction.hold_base.is_none() {
                     self.state.customization.drawer = None;
                     return true;

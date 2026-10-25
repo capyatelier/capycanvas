@@ -54,6 +54,12 @@ sibling updates the retained drawer at the same origin.
 Sketch's Brush and Sculpt retain their three-column drawers. Tool Options uses
 the same complete projection through More tool options.
 
+Paint's Blend group presents Blend, Wet paint, Effects and Retouch as sibling
+sets in its menu, drawer and Tool Set panel. The presets of the selected set
+appear below them. Choosing any preset, including Healing or Spot Healing,
+keeps the drawer open and the originating tile selected. The tile remembers
+the set and its last preset when another tool is active.
+
 Tool Set category buttons fill their grid cells, so hover, selection and input
 cover the whole category. Tool rows keep the icon at the leading edge and
 right-align the name, as brush rows do; only the Color Picker and Eyedropper
@@ -67,8 +73,9 @@ shows the same action tooltip.
 
 `EditingState.tool_slots` remembers one choice per tool slot across layouts,
 outside document and layout history. Brush groups use `ToolMemory` for presets
-and parameter overrides. Permanent selections through shortcuts, drawers and
-panels update matching slots. Temporary held tools preserve these choices and
+and parameter overrides; slots containing brush sets retain the concrete preset
+and project its parent set in their menus. Permanent selections through shortcuts,
+drawers and panels update matching slots. Temporary held tools preserve these choices and
 the saved permanent tool. Moving, duplicating or restoring controls keeps the
 shared choice.
 
@@ -78,6 +85,8 @@ there is no separate group editor. Opening an existing workspace preserves its
 layout. Fresh workspaces and Restore Starting Layout use the current defaults.
 
 GTK coverage is `workspace-motion.sh gtk --native-test=native_toolbar_variations_input`;
+`--native-test=native_paint_toolbar_variations_input` checks Paint's grouped
+blenders, retouch presets, Crop and Tonal range in both themes;
 `--native-test=native_toolbar_variations_overflow_input` focuses on title-bar
 sizes and overflow. `--native-test=native_panel_preview_input` checks tool and
 filter row compression and expansion; `--tooltips` checks captions across the whole row.

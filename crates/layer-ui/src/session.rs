@@ -9412,7 +9412,7 @@ mod tests {
         invoke(&mut s, CommandId::ScaleRotate);
         assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Transform);
         assert_eq!(s.state.tool_settings.len(), 6);
-        assert_eq!(s.state.tool_set.groups.len(), 3);
+        assert_eq!(s.state.tool_set.groups.len(), 4);
         for (id, value) in [
             ("transform_x", 30.),
             ("transform_width", 1.5),

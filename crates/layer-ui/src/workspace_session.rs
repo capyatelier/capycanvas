@@ -34,7 +34,7 @@ impl EditingState {
         if self.version != 1 { return Err("Unsupported editing-state version".into()); }
         self.tools.validate()?;
         for (slot, variant) in &self.tool_slots.choices {
-            if !slot.variants().contains(variant) { return Err("Invalid remembered tool variant".into()); }
+            if slot.member(*variant).is_none() { return Err("Invalid remembered tool variant".into()); }
         }
         self.selection.validate()?;
         if let Some(gradient)=&self.gradient.definition {gradient.validate()?;}
