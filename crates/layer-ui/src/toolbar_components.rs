@@ -578,7 +578,7 @@ pub fn tool_setting_icon(id: &str) -> &'static str {
         "swirl" => "swirl",
         "edge_keeping" => "edge-keeping",
         "detail_size" => "high-pass",
-        "cell_size" | "dither_cell_size" => "mosaic",
+        "cell_size" | "dither_cell_size" | "scatter_cell_size" => "mosaic",
         "swirl_size" => "swirl-size",
         "average_pickup" => "average-pickup",
         "persistence" => "persistence",

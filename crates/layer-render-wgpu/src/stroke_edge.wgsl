@@ -69,7 +69,7 @@ fn coverage_at(document_position: vec2<f32>) -> f32 {
     }
     let local = vec2<i32>(floor(relative - vec2<f32>(page_offset) * 256.0));
     let coordinate = clamp(local, vec2<i32>(0), vec2<i32>(255))
-        + select(vec2<i32>(0), vec2<i32>(0, 512), style.color_mode.w > 0.5);
+        + select(vec2<i32>(0), vec2<i32>(0, 512), style.color_mode.w == 1.0);
     let coverage = load_coverage((page_offset.y + 1) * 3 + page_offset.x + 1, coordinate);
     if style.color_mode.w > 0.5 {
         return select(1.0 - exp(-coverage / 1048576.0), 1.0, coverage >= 16777216.0) * style.canvas_opacity.z;

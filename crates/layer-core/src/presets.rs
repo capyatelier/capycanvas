@@ -548,7 +548,7 @@ fn blender(kind: BlenderKind, spec: BlenderSpec) -> BrushSnapshot {
         },
         grain: spec.paper.map(paper_grain),
         blender: BrushBlender { kind, reach: spec.reach, rate: spec.rate, character: spec.character, scale: spec.scale,
-            cell_size: if kind == BlenderKind::Dither { 4.0 } else { 1.0 },
+            cell_size: if matches!(kind, BlenderKind::Dither | BlenderKind::Scatter) { 4.0 } else { 1.0 },
             pressure_gain: spec.tip.pressure_gain, engagement: spec.tip.engagement, recess: spec.tip.recess, lift: spec.lift },
         mappings: Arc::from([pressure_flow(0.15, 0.85)]),
         ..BrushSnapshot::default()

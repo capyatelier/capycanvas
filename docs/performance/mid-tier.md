@@ -125,6 +125,16 @@ filter performance; raw witnesses remain in
 
 Existing Dither measurements use 1 px cells.
 
+### Scatter cell sizes
+
+| Cell size, 512 px brush | Completed updates/s on the tier canvas | 90/s target |
+| --- | --- | --- |
+| 1–50 px | Unmeasured | Open |
+
+Scatter now uses stable staggered cells and retained stroke-start pickup.
+Earlier Scatter measurements do not qualify this algorithm.
+
+
 ### Smoothing
 
 Measured 2026-10-25 on the reference MovinkPad 11 with speed adjustment removed,

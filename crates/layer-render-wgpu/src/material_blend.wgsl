@@ -6,7 +6,6 @@ const BLEND_GRAINY: u32 = 4u;
 const BLEND_TEXTURE: u32 = 5u;
 const BLEND_HUE: u32 = 6u;
 const BLEND_KNIFE: u32 = 7u;
-const BLEND_SCATTER: u32 = 8u;
 const BLEND_PAINTERLY: u32 = 9u;
 const BLEND_CRYSTAL: u32 = 10u;
 const BLEND_MARBLING: u32 = 11u;
@@ -193,10 +192,6 @@ fn disc(center: vec2<f32>, radius: f32, count: u32, rotation: f32) -> vec4<f32> 
 
 fn chunk_rotation(contact: BlendContact) -> f32 {
     return f32(contact.salt & 1023u) * 0.00614;
-}
-
-fn pixel_rotation(world: vec2<f32>, contact: BlendContact) -> f32 {
-    return (gradient_noise(world) + f32(contact.salt & 255u) / 256.0) * 6.2831853;
 }
 
 fn paper_at(point: vec2<f32>) -> f32 {
@@ -461,11 +456,6 @@ fn blended_by(world: vec2<f32>, original: vec4<f32>, contact: BlendContact) -> B
         }
         case BLEND_KNIFE: {
             return Blended(mix_space_tap(cubic_canvas_sample(contact.trace)) * brush_selection_at(contact.trace), amount);
-        }
-        case BLEND_SCATTER: {
-            let angle = pixel_rotation(world, contact);
-            let offset = vec2<f32>(cos(angle), sin(angle)) * sqrt(hash_unit(vec2<i32>(floor(world)), contact.salt ^ 0x51ed27u)) * radius;
-            return Blended(blend_tap(contact.trace + offset), select(0.0, mix(amount, 1.0, min(blender_character(), 1.0)), random < amount));
         }
         case BLEND_PAINTERLY: {
             return Blended(painterly_field(contact, world), amount);

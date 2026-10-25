@@ -148,6 +148,7 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
             let [width,height]=crate::destination_material::workgroup(operation);
             let dither=matches!(entries,Entries::Blend(blender) if blender.kind==layer_core::BlenderKind::Dither);
             let cells=matches!(entries,Entries::Blend(blender) if blender.cells);
+            let scatter=matches!(entries,Entries::Blend(blender) if blender.kind==layer_core::BlenderKind::Scatter);
             let mut source=format!("const DITHER_BLENDER: bool = {dither};\nconst DITHER_CELLS: bool = {cells};\n{}\n\
                 const TRANSPORT_WORKGROUP_X: u32 = {width}u;\nconst TRANSPORT_WORKGROUP_Y: u32 = {height}u;\n\
                 fn operation_fragment(p:vec2<f32>,w:vec2<f32>,f:u32,c:u32)->MaterialOutput {{return {name}_fragment(p,w,f,c);}}\n\
@@ -156,7 +157,9 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
                     "working_clamp(layer_color(dither_color(w,r),WORKING_LUMA,style.color_mode.x,style.color_mode.y))"
                 } else { "r.color" });
             if let Entries::Blend(blender)=entries {
+                if dither || scatter { source+=include_str!("material_cells.wgsl"); }
                 if dither { source+=include_str!("material_dither.wgsl"); }
+                else if scatter { source+=include_str!("material_scatter.wgsl"); }
                 else { source+=&format!("const BLENDER: u32 = {}u;\nconst BLEND_PAPER: bool = {};\nconst BLEND_LIFT: bool = {};\nconst BLEND_TAPS: u32 = {}u;\n{}",
                     blender.kind as u8, blender.paper, blender.lift, if blender.paper {11} else {12}, include_str!("material_blend.wgsl"));
                 }
@@ -167,6 +170,7 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
     };
     let entry=match entries {
         Entries::Kernel(..) => include_str!("material_compute.wgsl"),
+        Entries::Blend(blender) if blender.kind == layer_core::BlenderKind::Scatter => include_str!("material_scatter_cells.wgsl"),
         Entries::Blend(blender) if blender.cells => include_str!("material_dither_cells.wgsl"),
         Entries::Transport(_) | Entries::Blend(..) => include_str!("material_destination.wgsl"),
     };
@@ -176,8 +180,8 @@ pub(super) fn material_source(space:layer_core::color::RgbSpace,float_sampling:&
         &destination(start),include_str!("brush_types.wgsl"),include_str!("brush_textures.wgsl"),&clone,
         include_str!("material_common.wgsl"),&operation_source,leaf,entry,&coverage_source(flags),
         if flags!=u32::MAX && flags&AGGREGATE!=0 {include_str!("selection_absent.wgsl")} else {include_str!("selection_clip.wgsl")}]);
-    let dither=matches!(entries,Entries::Blend(blender) if blender.kind==layer_core::BlenderKind::Dither);
-    let source=if dither {source.replace("var material_coverage_output: texture_storage_2d<r32float, write>",
+    let state=matches!(entries,Entries::Blend(blender) if matches!(blender.kind, layer_core::BlenderKind::Dither | layer_core::BlenderKind::Scatter));
+    let source=if state {source.replace("var material_coverage_output: texture_storage_2d<r32float, write>",
         "var material_coverage_output: texture_storage_2d<rgba32float, write>").into()} else {source};
     let absent=if kernel {0} else {64};
     let normal=blend_code==0;

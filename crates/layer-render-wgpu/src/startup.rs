@@ -658,7 +658,7 @@ mod tests {
         brush.blender.cell_size = 2.;
         let cells = ShaderBrushKey::new(&document, &brush);
         assert!(pixel != cells);
-        for size in 3..=layer_core::DITHER_CELL_SIZE_LIMIT {
+        for size in 3..=layer_core::BLENDER_CELL_SIZE_LIMIT {
             brush.blender.cell_size = size as f32;
             assert!(cells == ShaderBrushKey::new(&document, &brush));
         }
@@ -685,6 +685,30 @@ mod tests {
             assert!(kernels.kernel(&style,destination_material::Entry::Coverage).ready(),"N{size} commit Coverage kernel is ready");
             renderer.prepare_startup(&document,&brush,false).unwrap();
             assert!(renderer.poll_startup().unwrap().brush_ready,"N{size} reuses both coarse kernels immediately");
+        }
+    }
+
+    #[test]
+    fn scatter_cell_sizes_reuse_prepared_prediction_and_commit_kernels() {
+        let color=layer_core::color::DocumentColor::default();
+        let reference=WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut renderer=crate::test_support::staged_renderer(&reference,color);
+        let document=Document::new(layer_core::authored::PortableId::random(),128,128,
+            layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::ScatterBlender);
+        brush.blender.cell_size=1.;
+        let key=ShaderBrushKey::new(&document,&brush);
+        renderer.prepare_startup(&document,&brush,false).unwrap();
+        let deadline=std::time::Instant::now()+Duration::from_secs(60);
+        crate::test_support::wait_startup(&mut renderer,deadline,|progress|progress.brush_ready,format_args!("Scatter cells"));
+        for size in [1.,4.,50.] {
+            brush.blender.cell_size=size;
+            assert!(key==ShaderBrushKey::new(&document,&brush));
+            assert!(!renderer.startup_needs_update(&document,&brush,false));
+            let style=brush_style(&document,&brush,StrokeTool::Brush);
+            let kernels=&renderer.pipelines.destination_material;
+            assert!(kernels.kernel(&style,destination_material::Entry::Color).ready());
+            assert!(kernels.kernel(&style,destination_material::Entry::Coverage).ready());
         }
     }
 

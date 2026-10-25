@@ -910,3 +910,157 @@ fn dither_cells_only_pick_up_native_texels_inside_the_same_actual_contact() {
         assert_eq!(canvas.composite(),before,"N{size}: outside-contact pigment entered a covered destination");
     }
 }
+
+fn scatter_solid_dab(center: [f32;2], radius: f32) -> Dab {
+    let mut dab=test_dab(center,[1.;4],1.);
+    dab.radii=[radius;2];dab.motion=[2.*radius,0.];dab.hardness=1.;dab
+}
+
+#[test]
+fn scatter_cells_preserve_opaque_native_palette_and_staggered_squares() {
+    for size in [1,3,4,50] {
+        let mut canvas=canvas();
+        dither_cell_pattern(&mut canvas,|x,y|if (x+3*y)%5==0 {BLUE} else {RED});
+        let before=canvas.composite();let colors=palette(&before);
+        let mut brush=brush(P::ScatterBlender,128.);brush.blender.cell_size=size as f32;
+        brush.blender.reach=0.5;brush.blender.character=1.;
+        canvas.stroke(100,&brush,&[scatter_solid_dab([64.;2],100.);16],4,false);
+        let after=canvas.composite();
+        assert!(after.iter().all(|p|colors.contains(&p.map(f64::to_bits))),"Scatter N{size} invented an opaque native color");
+        assert!(changed(&before,&after)>0.01,"Scatter N{size} must move pigment");
+        assert!(scatter_cell_coherence(&before,&after,128,size,100)>0,"Scatter N{size} must change whole staggered cells");
+    }
+}
+
+#[test]
+fn scatter_cells_sample_minority_native_colors() {
+    let mut canvas=canvas();
+    dither_cell_pattern(&mut canvas,|x,y|if x%2==1 && y%2==1 {BLUE} else {RED});
+    let mut brush=brush(P::ScatterBlender,128.);brush.blender.cell_size=4.;brush.blender.reach=0.3;
+    canvas.stroke(100,&brush,&[scatter_solid_dab([64.;2],100.);24],6,false);
+    let after=canvas.composite();
+    let blue=(24..104).flat_map(|y|(24..104).map(move|x|y*128+x)).filter(|&i|after[i]==BLUE.map(f64::from)).count();
+    let fraction=blue as f64/6400.;
+    assert!((fraction-0.25).abs()<0.07,"Scatter 3R1B native area fraction became {fraction}");
+}
+
+#[test]
+fn scatter_cells_cross_pages_without_chronological_chunk_dependence() {
+    let mut reference=None;
+    for chunk in [1,6,usize::MAX] {
+        let mut canvas=Canvas::at(DocumentColor {depth:SampleDepth::F32,..Default::default()},BlendSpace::Linear,None,[263,131]);
+        dither_cell_pattern(&mut canvas,|x,y|if (x/5+y/7)%2==0 {BLUE} else {RED});
+        let before=canvas.composite();
+        let mut brush=brush(P::ScatterBlender,128.);brush.blender.cell_size=3.;brush.blender.reach=0.5;
+        let mut dabs=Vec::new();
+        for (radii,angle,flow,pull) in [([80.,60.],0.3f32,1.,0.1),([95.,23.],-0.4,0.8,0.3),([2.,2.],0.,0.0000001,0.5)] {
+            let mut dab=scatter_solid_dab([255.5,64.5],80.);dab.radii=radii;
+            dab.rotation=[angle.cos(),angle.sin()];dab.flow=flow;dab.material[1]=pull;dabs.extend([dab;6]);
+        }
+        canvas.stroke(100,&brush,&dabs,chunk,false);
+        let after=canvas.composite();
+        assert!(scatter_cell_coherence(&before,&after,263,3,100)>5);
+        assert!((24..105).any(|y|(254..258).any(|x|before[y*263+x]!=after[y*263+x])),"Scatter fixture must transfer across page256");
+        if let Some(expected)=&reference {assert_eq!(&after,expected,"Scatter must preserve cumulative state across chronological chunks");}
+        else {reference=Some(after);}
+    }
+}
+
+#[test]
+fn scatter_cells_selection_transparency_alpha_lock_and_zero_controls() {
+    use layer_core::{Selection,SelectionPixels};
+    for locked in [false,true] {
+        let mut canvas=canvas();
+        dither_cell_pattern(&mut canvas,|x,y|match (x/3+y/4)%3 {0=>[0.;4],1=>[0.2,0.01,0.03,0.35],_=>BLUE});
+        let before=canvas.composite();
+        let words:Vec<u32>=(0..128).flat_map(|_|(0..16).map(|word|(0..8).fold(0u32,|v,bit| {
+            let x=word*8+bit;v | (if x<61 {4} else if x<71 {2} else {0}) << (bit*4)
+        }))).collect();
+        let selection=Arc::new(Selection::pixels(Arc::new(SelectionPixels::new([128,128],[0,0,128,128],words).unwrap())));
+        let mut brush=brush(P::ScatterBlender,128.);brush.blender.cell_size=4.;brush.blender.reach=0.5;
+        let mut style=DabStyle::for_brush(&brush,StrokeTool::Brush);style.selection=Some(selection);style.alpha_locked=locked;
+        canvas.styled_stroke(100,style,&[scatter_solid_dab([64.;2],100.);16],4);
+        let after=canvas.composite();
+        assert!(changed(&before,&after)>0.01,"Scatter selection/alpha fixture must move pigment");
+        for (i,(a,b)) in after.iter().zip(&before).enumerate() {
+            if i%128>=71 {assert_eq!(a,b,"Scatter excluded destination {i}");}
+            if locked {assert_eq!(a[3],b[3],"Scatter locked alpha {i}");}
+            else {assert!(a[3]>=b[3],"Scatter transparent donor erased pixel{i}");}
+            if a[3]>0. {
+                assert!([[0.2f64/0.35,0.01/0.35,0.03/0.35],[f64::from(BLUE[0]),f64::from(BLUE[1]),f64::from(BLUE[2])]].iter()
+                    .any(|h|(0..3).all(|c|(a[c]/a[3]-h[c]).abs()<1e-5)),"Scatter invented native hue {i}");
+            }
+        }
+    }
+    let mut canvas=canvas();dither_cell_pattern(&mut canvas,|x,_|if x<64 {BLUE} else {RED});
+    let before=canvas.composite();let mut brush=brush(P::ScatterBlender,128.);brush.blender.cell_size=4.;brush.blender.reach=0.;brush.wet_mix.pull=0.;
+    let dab=scatter_solid_dab([64.;2],100.);
+    canvas.stroke(100,&brush,&[dab;16],4,false);
+    assert_eq!(canvas.composite(),before,"zero reach and Pull are identity");
+    let mut pulled=dab;pulled.material[1]=0.25;
+    canvas.stroke(101,&brush,&[pulled],1,false);
+    assert!(changed(&before,&canvas.composite())>0.01,"Pull remains active when reach is zero");
+}
+
+#[test]
+#[ignore]
+fn scatter_cells_synthetic_completion_observations() {
+    for size in [1,4,50] {
+        let mut canvas=Canvas::at(DocumentColor {depth:SampleDepth::F32,..Default::default()},BlendSpace::Linear,None,[512,512]);
+        dither_cell_pattern(&mut canvas,|x,y|if (x/7+y/11)%2==0 {BLUE} else {RED});
+        let original=canvas.composite();
+        if let Ok(directory)=std::env::var("SCATTER_CELLS_ARTIFACTS") {dither_cell_observation_png(&directory,"original",&original);}
+        let mut brush=brush(P::ScatterBlender,512.);brush.blender.cell_size=size as f32;brush.blender.reach=0.2;
+        let mut dab=scatter_solid_dab([256.;2],220.);dab.hardness=0.8;
+        for repetition in 0..4 {
+            let start=std::time::Instant::now();canvas.stroke(100+repetition,&brush,&[dab;8],8,false);
+            let submit=start.elapsed();let output=canvas.composite();let completed=start.elapsed();
+            if repetition==0 {if let Ok(directory)=std::env::var("SCATTER_CELLS_ARTIFACTS") {dither_cell_observation_png(&directory,&format!("cell-{size}"),&output);}}
+            eprintln!("SCATTER_CELLS_OBSERVATION size={size} repetition={repetition} first={} submit_us={} completed_with_readback_us={} pixels={}",
+                repetition==0,submit.as_micros(),completed.as_micros(),output.len());
+        }
+    }
+}
+
+fn scatter_cell_hash(mut value: u32) -> u32 {
+    value=value.wrapping_mul(747796405).wrapping_add(2891336453);
+    value=((value>>((value>>28)+4))^value).wrapping_mul(277803737);
+    (value>>22)^value
+}
+
+fn scatter_cell_coherence(before: &[[f64;4]], after: &[[f64;4]], width: usize, size: i32, seed: u32) -> usize {
+    let phase_y=(scatter_cell_hash(seed^0x243f6a88) % size as u32) as i32;
+    let mut cells=std::collections::BTreeMap::<(i32,i32),Vec<usize>>::new();
+    for i in 0..after.len() {
+        let row=(i as i32/width as i32-phase_y).div_euclid(size);
+        let phase_x=(scatter_cell_hash(row as u32^scatter_cell_hash(seed^0x85a308d3))%size as u32) as i32;
+        let col=(i as i32%width as i32-phase_x).div_euclid(size);
+        cells.entry((col,row)).or_default().push(i);
+    }
+    cells.values().filter(|indices| {
+        if !indices.iter().any(|&i|before[i]!=after[i]) {return false;}
+        assert!(indices.iter().all(|&i|after[i]==after[indices[0]]),"Scatter staggered cell beginningpixel{} has mixed donor colors",indices[0]);
+        true
+    }).count()
+}
+
+#[test]
+fn scatter_cells_grit_controls_color_mixing_and_strokes_have_independent_seeds() {
+    let draw=|grit,id| {
+        let mut canvas=canvas();
+        dither_cell_pattern(&mut canvas,|x,_|if x<64 {BLUE} else {RED});
+        let before=canvas.composite();
+        let mut brush=brush(P::ScatterBlender,128.);brush.blender.cell_size=4.;brush.blender.reach=0.5;brush.blender.character=grit;
+        let mut dab=scatter_solid_dab([64.;2],100.);dab.flow=0.15;
+        canvas.stroke(id,&brush,&[dab],1,false);
+        (before,canvas.composite())
+    };
+    let (before,solid)=draw(1.,100);let (_,mixed)=draw(0.,100);let (_,next)=draw(1.,101);
+    let colors=palette(&before);
+    assert!(solid.iter().all(|p|colors.contains(&p.map(f64::to_bits))),"full Grit picks whole native opaque colors");
+    assert!(changed(&before,&solid)>0.005,"partial exposure must activate Scatter cells");
+    assert!(mixed.iter().any(|p|!colors.contains(&p.map(f64::to_bits))),"lower Grit must produce intermediate colors");
+    assert_ne!(solid,mixed,"Grit must change partial-exposure output");
+    assert_ne!(solid,next,"subsequent stroke seeds change the scatter pattern");
+    assert!(mixed.iter().all(|p|p[3]==1. && p.iter().all(|v|v.is_finite())),"lower Grit keeps opaque pixels finite and opaque");
+}

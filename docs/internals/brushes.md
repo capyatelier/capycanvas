@@ -172,6 +172,25 @@ Dither shows Spread above Cell size in Tool Settings and on the left side of
 its bubble, with Cell size on the right. Spread follows Smoothing's logarithmic
 curve over its percentage range.
 
+Scatter uses square cells from 1 to 50 document pixels per side, starting at
+4 px. Each stroke offsets its rows independently: squares tile the canvas
+without gaps or overlaps, while their columns do not form a continuous grid.
+The row offsets, random pickup and replacement thresholds stay fixed for that
+stroke. Crossing a rendering page or splitting contacts between frames keeps
+the same result.
+
+Each cell picks one native pixel from the paint present at stroke start. Spread
+sets its random pickup radius from the captured brush size; Pull adds the
+accumulated motion under the cell's contacts. Grit at full strength replaces
+whole hues without averaging. Lower Grit mixes the picked hue with the original
+paint. Strength, Opacity and soft contacts change the density of chosen cells.
+Transparent pickup leaves paint alone; destination opacity can increase but
+cannot decrease. Alpha lock preserves each destination pixel's opacity.
+Selections clip squares and exclude pickup outside the selection. Whole-cell
+contact admission matches Dither, including its untouched rim for large cells.
+Scatter shows Spread then Cell size in Tool Settings and on the left and right
+of its bubble, with the same logarithmic slider curves as Dither.
+
 Each set lists its blenders from the most to the least broadly useful, and
 Smudge is the Blend tool's default. Sets are tool groups of the Blend tool.
 Sculpting presets show their tool's icon in Tools, on toolbar buttons and as

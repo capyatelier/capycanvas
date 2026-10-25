@@ -73,6 +73,16 @@ response failure in both builds and does not establish sustained filter FPS.
 
 Existing Dither measurements use 1 px cells.
 
+### Scatter cell sizes
+
+| Cell size, 512 px brush | Completed updates/s on the tier canvas | 120/s target |
+| --- | --- | --- |
+| 1–50 px | Unmeasured | Open |
+
+Scatter now uses stable staggered cells and retained stroke-start pickup.
+Earlier Scatter measurements do not qualify this algorithm.
+
+
 ### Checked upload setup failure
 
 The 2026-10-25 comparison of `e038e3361` with checked upload growth at

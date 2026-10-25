@@ -373,7 +373,7 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
     if dabs.is_empty() || damage.is_empty() {
         return Vec::new();
     }
-    if (!pointwise(&batch.style) && !ordered_dither(&batch.style)) || batch.style.rendering.edge_after_stroke {
+    if (!pointwise(&batch.style) && !stable_blender(&batch.style)) || batch.style.rendering.edge_after_stroke {
         // Nonlocal materials retain their complete dependency sequence/region.
         return page_coordinates(damage)
             .map(|coordinate| BrushTile {

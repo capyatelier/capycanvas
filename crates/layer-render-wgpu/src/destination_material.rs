@@ -78,7 +78,7 @@ pub(super) fn blenders(operation: MaterialOperation) -> Vec<Blender> {
     BlenderKind::ALL.into_iter().flat_map(|kind| {
         let papers = if kind.touches_paper() { &[false, true][..] } else { &[false][..] };
         let lifts = if kind.lifts() { &[false, true][..] } else { &[false][..] };
-        let cells = if kind == BlenderKind::Dither { &[false, true][..] } else { &[false][..] };
+        let cells = match kind { BlenderKind::Dither => &[false, true][..], BlenderKind::Scatter => &[true][..], _ => &[false][..] };
         papers.iter().flat_map(move |&paper| lifts.iter().flat_map(move |&lift|
             cells.iter().map(move |&cells| Blender { kind, paper, lift, cells })))
     }).collect()
@@ -93,7 +93,7 @@ pub(super) fn blender(style: &layer_render::DabStyle) -> Blender {
         kind,
         paper: kind.touches_paper() && style.grain.is_some_and(|grain| grain.depth > 0.0),
         lift: kind.lifts() && style.blender.lift > 0.0,
-        cells: ordered_dither(style) && style.blender.cell_size > 1.,
+        cells: kind == layer_core::BlenderKind::Scatter || (ordered_dither(style) && style.blender.cell_size > 1.),
     }
 }
 
@@ -145,7 +145,7 @@ impl Pipelines {
             for blender in blenders(operation) {
                 let transport = dry_material::material_shader(device, module(operation, blend, blender), flags, operation);
                 for &entry in entries(operation) {
-                    let outputs = if blender.kind == layer_core::BlenderKind::Dither && entry == Entry::Coverage { 3 } else { entry.outputs() };
+                    let outputs = if matches!(blender.kind, layer_core::BlenderKind::Dither | layer_core::BlenderKind::Scatter) && entry == Entry::Coverage { 3 } else { entry.outputs() };
                     kernels.insert((operation as u32, slot, entry, blender.kind as u8, blender.paper, blender.lift, blender.cells), Deferred::compute(device,
                         format!("destination material {} operation={} contact={flags:#x} blend={blend} {blender:?}", entry.name(), operation as u32),
                         &pipeline_layouts[outputs], &transport, entry.name()));
@@ -295,7 +295,8 @@ impl WgpuRasterizer {
             let size = if dispatch.entry == Entry::Reservoir { RESERVOIR_SIZE } else { PAGE_SIZE };
             let extent = if blender(&batch.style).cells {
                 let cell = batch.style.blender.cell_size as u32;
-                dispatch.coordinate.map(|coordinate| ((coordinate * PAGE_SIZE) % cell + PAGE_SIZE).div_ceil(cell))
+                if batch.style.blender.kind == layer_core::BlenderKind::Scatter { [PAGE_SIZE.div_ceil(cell) + 1; 2] }
+                else { dispatch.coordinate.map(|coordinate| ((coordinate * PAGE_SIZE) % cell + PAGE_SIZE).div_ceil(cell)) }
             } else { [size; 2] };
             pass.dispatch_workgroups(extent[0].div_ceil(width), extent[1].div_ceil(height), 1);
         }

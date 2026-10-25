@@ -522,6 +522,11 @@ fn ordered_dither(style: &layer_render::DabStyle) -> bool {
     style.execution == BrushExecution::Smudge && style.blender.kind == layer_core::BlenderKind::Dither
 }
 
+fn stable_blender(style: &layer_render::DabStyle) -> bool {
+    style.execution == BrushExecution::Smudge
+        && matches!(style.blender.kind, layer_core::BlenderKind::Dither | layer_core::BlenderKind::Scatter)
+}
+
 fn stroke_coverage_slabs(style: &layer_render::DabStyle) -> u32 {
     if ordered_dither(style) { 2 + u32::from(style.rendering.edge_after_stroke) } else { 1 }
 }
@@ -598,7 +603,7 @@ impl BrushPassPlan {
                 || (style.opacity < 1. && !grouped)
                 || style.rendering.edge_after_stroke
                 || style.execution == BrushExecution::Watercolor
-                || ordered_dither(style),
+                || stable_blender(style),
             watercolor_wetness: style.execution == BrushExecution::Watercolor,
         };
         let needs_destination = style.execution != BrushExecution::Dry
@@ -659,6 +664,7 @@ struct StrokeCoveragePage {
 impl StrokeCoveragePage {
     fn matches(&self, coordinate: [u32; 2], style: &layer_render::DabStyle) -> bool {
         self.coordinate == coordinate && self.primary.texture.height() == PAGE_SIZE * stroke_coverage_slabs(style)
+            && (self.primary.texture.format() == wgpu::TextureFormat::Rgba32Float) == stable_blender(style)
     }
 
     fn release_color_bindings(&self) {
@@ -1996,9 +2002,9 @@ impl WgpuRasterizer {
         )
     }
 
-    fn create_stroke_coverage_page(&self, coordinate: [u32; 2], slabs: u32) -> StrokeCoveragePage {
+    fn create_stroke_coverage_page(&self, coordinate: [u32; 2], slabs: u32, rgba: bool) -> StrokeCoveragePage {
         let extent = [PAGE_SIZE, PAGE_SIZE * slabs];
-        let format = if slabs > 1 { wgpu::TextureFormat::Rgba32Float } else { self.device.scalar_format() };
+        let format = if rgba { wgpu::TextureFormat::Rgba32Float } else { self.device.scalar_format() };
         let [primary, secondary] = ["layer stroke coverage page A", "layer stroke coverage page B"].map(|label|
             create_page_surface(&self.device, &self.float_texture_layout, &self.sampler, extent, format, label));
         StrokeCoveragePage { coordinate, primary, secondary, active_secondary: false, owner: None }
@@ -2072,8 +2078,8 @@ impl WgpuRasterizer {
         let in_place = self.in_place_dry_material(batch);
         let offsets = self.material_offsets(batch);
         self.prepare_raw_neighborhood(batch.target, coordinate, offsets, preview, encoder)?;
-        let dither = ordered_dither(&batch.style);
-        if (pointwise(&batch.style) && batch.style.opacity < 1.) || dither {
+        let retained = stable_blender(&batch.style);
+        if (pointwise(&batch.style) && batch.style.opacity < 1.) || retained {
             let committed_start = self.paint_layers.iter().find(|l| l.id == batch.target)
                 .and_then(|l| l.pages.iter().find(|p| p.coordinate == coordinate))
                 .and_then(|p| p.stroke_start.as_ref()).is_some_and(|(id, _)| *id == batch.stroke_id);
@@ -2099,7 +2105,7 @@ impl WgpuRasterizer {
         let sources = self.source_tiles.borrow();
         let mut views = self.raw_layer_neighborhood(&sources, layer, coordinate, offsets, preview);
         let current = views[4];
-        if dither {
+        if retained {
             for (index, view) in views.iter_mut().enumerate() {
                 let [x, y] = [coordinate[0] as i32 + index as i32 % 3 - 1,
                     coordinate[1] as i32 + index as i32 / 3 - 1];
@@ -2131,7 +2137,7 @@ impl WgpuRasterizer {
                 .find(|p| p.matches(coordinate, &batch.style) && p.owner == Some(batch.stroke_id))
         })
         .map(|p| p.active());
-        let coverage = coverage_page.map_or(if dither { &self.empty_view } else { &self.empty_scalar_view }, |p| &p.view);
+        let coverage = coverage_page.map_or(if retained { &self.empty_view } else { &self.empty_scalar_view }, |p| &p.view);
         let auxiliary = if BrushPassPlan::for_device(&batch.style, &self.device).state.watercolor_wetness {
             let pages = if preview {
                 &self.preview_watercolor_wetness_pages
@@ -2144,7 +2150,7 @@ impl WgpuRasterizer {
                 .expect("watercolor wetness page is prepared before binding")
                 .active()
                 .view
-        } else if dither {
+        } else if retained {
             current
         } else if pointwise(&batch.style) {
             let start = layer.pages.iter().find(|p| p.coordinate == coordinate)
@@ -2251,7 +2257,7 @@ impl WgpuRasterizer {
                 if plan.state.coverage {
                     let slabs = stroke_coverage_slabs(&batch.style);
                     if self.paint_layers[layer_index].coverage_pages.iter().all(|page| !page.matches(coordinate, &batch.style)) {
-                        let page = self.create_stroke_coverage_page(coordinate, slabs);
+                        let page = self.create_stroke_coverage_page(coordinate, slabs, stable_blender(&batch.style));
                         self.paint_layers[layer_index].coverage_pages.push(page);
                     }
                 }
@@ -2324,15 +2330,16 @@ impl WgpuRasterizer {
         }) {
             let damage = batch_pixel_rect(batch, self.target_extent(batch.target));
             if !damage.is_empty() {
-                coordinates.extend(page_coordinates(damage).map(|c| (c, stroke_coverage_slabs(&batch.style))));
+                coordinates.extend(page_coordinates(damage).map(|c| (c, stroke_coverage_slabs(&batch.style), stable_blender(&batch.style))));
             }
         }
         let missing = coordinates
             .iter()
-            .filter(|&&(coordinate, slabs)| {
+            .filter(|&&(coordinate, slabs, rgba)| {
                 self.preview_coverage_pages
                     .iter()
-                    .all(|page| page.coordinate != coordinate || page.primary.texture.height() != PAGE_SIZE * slabs)
+                    .all(|page| page.coordinate != coordinate || page.primary.texture.height() != PAGE_SIZE * slabs
+                        || (page.primary.texture.format() == wgpu::TextureFormat::Rgba32Float) != rgba)
             })
             .copied()
             .collect::<Vec<_>>();
@@ -2340,18 +2347,19 @@ impl WgpuRasterizer {
             .preview_coverage_pages
             .iter()
             .enumerate()
-            .filter(|(_, page)| !coordinates.contains(&(page.coordinate, page.primary.texture.height() / PAGE_SIZE)))
+            .filter(|(_, page)| !coordinates.contains(&(page.coordinate, page.primary.texture.height() / PAGE_SIZE, page.primary.texture.format() == wgpu::TextureFormat::Rgba32Float)))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        for (coordinate, slabs) in missing {
+        for (coordinate, slabs, rgba) in missing {
             if let Some(index) = reusable.pop() {
-                if self.preview_coverage_pages[index].primary.texture.height() == PAGE_SIZE * slabs {
+                if self.preview_coverage_pages[index].primary.texture.height() == PAGE_SIZE * slabs
+                    && (self.preview_coverage_pages[index].primary.texture.format() == wgpu::TextureFormat::Rgba32Float) == rgba {
                     self.preview_coverage_pages[index].coordinate = coordinate;
                     self.preview_coverage_pages[index].owner = None;
                     self.preview_coverage_pages[index].active_secondary = false;
-                } else { self.preview_coverage_pages[index] = self.create_stroke_coverage_page(coordinate, slabs); }
+                } else { self.preview_coverage_pages[index] = self.create_stroke_coverage_page(coordinate, slabs, rgba); }
             } else {
-                let page = self.create_stroke_coverage_page(coordinate, slabs);
+                let page = self.create_stroke_coverage_page(coordinate, slabs, rgba);
                 self.preview_coverage_pages.push(page);
             }
         }
@@ -2504,7 +2512,7 @@ impl WgpuRasterizer {
     }
 
     fn reorders_dabs(&self,batch:&DabBatch)->bool {
-        batch.dab_count!=0 && (pointwise(&batch.style)||ordered_dither(&batch.style))
+        batch.dab_count!=0 && (pointwise(&batch.style)||stable_blender(&batch.style))
             && BrushPassPlan::for_device(&batch.style,&self.device).direct.is_none()
     }
     fn prepare_uploads(
@@ -2580,7 +2588,7 @@ impl WgpuRasterizer {
                 record.material_b[..3].copy_from_slice(&source[0].color_rgba_linear[..3]);
             }
             record.color_mode = layer_color_parameters(packet.scene.color_mode(batch.target), self.document_color());
-            record.color_mode[3] = f32::from(ordered_dither(&batch.style));
+            record.color_mode[3] = if ordered_dither(&batch.style) { 1. } else if stable_blender(&batch.style) { 2. } else { 0. };
             record.color_mode[2] = f32::from(batch.style.blend_space == layer_core::BlendSpace::Perceptual);
             let offset = index * self.style_stride as usize;
             let bytes = style_bytes(&record);
@@ -5255,7 +5263,7 @@ impl StyleGpu {
         let mut style = Self::for_brush(extent, &batch.style, batch.first_dab, batch.dab_count, device, paper);
         style.canvas_opacity[3] = f32::from(batch.stroke_start);
         style.operation[2] = block;
-        if ordered_dither(&batch.style) { style.transport_b[2] = (batch.stroke_id.0 & 0xffffff) as f32; }
+        if stable_blender(&batch.style) { style.transport_b[2] = (batch.stroke_id.0 & 0xffffff) as f32; }
         style
     }
 
@@ -5355,7 +5363,7 @@ impl StyleGpu {
         // This lane is unused by dry and composite shaders and avoids growing
         // every style upload solely for one material-stage lifecycle bit.
         result.color[3] = f32::from(style.alpha_locked);
-        if ordered_dither(style) {
+        if stable_blender(style) {
             result.deformation[3] = style.blender.cell_size;
             result.transport_b[1] = style.diameter;
             result.transport_b[3] = f32::from(style.rendering.edge_after_stroke);

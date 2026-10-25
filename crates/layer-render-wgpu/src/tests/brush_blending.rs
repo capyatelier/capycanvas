@@ -925,8 +925,9 @@ fn dither_and_uniform_brushes_can_share_a_queued_frame() {
 
 #[test]
 fn dither_prediction_forks_committed_exposure_and_preserves_prior_tiles() {
-    for cell_size in [1.,3.] {
-    let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::DitherBlender);
+    for (preset,cell_size) in [(layer_core::DefaultBrushPreset::DitherBlender,1.),
+        (layer_core::DefaultBrushPreset::DitherBlender,3.),(layer_core::DefaultBrushPreset::ScatterBlender,4.)] {
+    let mut brush = layer_core::default_brush(preset);
     brush.blender.cell_size = cell_size;
     brush.diameter = 48.;
     brush.opacity = 0.4;
