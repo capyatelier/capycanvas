@@ -4450,14 +4450,14 @@ fn native_layer_multitouch_actions() {
             assert!(state(&d.w).layer_tools.opacity_popup.is_none(), "hold cannot open opacity on release");
             d.w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
             let selected = state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().selected;
-            for expected in [!selected, selected] {
+            for _ in 0..2 {
                 down(&mut d);
                 d.input.perform(serde_json::json!([
                     {"touch":"move","slot":0,"point":[pair[0][0] + 60., pair[0][1]]},
                     {"touch":"move","slot":1,"point":[pair[1][0] + 60., pair[1][1]]}
                 ]));
                 up(&mut d);
-                assert_eq!(state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().selected, expected, "{theme:?}/{simple}: two fingers toggle selection");
+                assert_eq!(state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().selected, selected, "{theme:?}/{simple}: two-finger swipe leaves selection unchanged");
                 assert!(!state(&d.w).layers.iter().find(|l| l.id == 1).unwrap().alpha_locked);
             }
             d.input.perform(serde_json::json!([

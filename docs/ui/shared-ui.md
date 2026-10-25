@@ -625,9 +625,8 @@ redo restore the checked set and reveal its rows.
 
 Layer lists use the same touch rules in full panels and simple tool bubbles.
 One-finger right swipes keep the row's published action: Alpha Lock for paint
-layers and Pass Through for groups. Two fingers swiping right on the same row
-toggle its checked selection without changing Alpha Lock or the painting target.
-The gesture remains available when the selection checkbox is hidden.
+layers and Pass Through for groups. Two-finger row swipes have no action in
+either panel style.
 
 A two-finger tap on a row opens that layer's opacity editor. Holding both fingers
 loads its painted content into the selection through the existing thumbnail

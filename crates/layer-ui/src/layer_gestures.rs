@@ -13,7 +13,6 @@ struct Contact {
 pub(super) enum LayerGesture {
     Opacity(u64),
     Contents(u64),
-    Selection(u64),
     Merge(u64, u64),
 }
 
@@ -101,10 +100,6 @@ impl LayerTouches {
             if !self.moved && self.last_ns.saturating_sub(self.first_ns) <= u64::from(policy.tap_ms) * 1_000_000 {
                 return Some(LayerGesture::Opacity(origins[0].row));
             }
-            if delta.iter().all(|p| p[0] > policy.slop * 2. && p[1].abs() < policy.slop * 2.)
-                && (delta[0][0] - delta[1][0]).abs() < policy.slop * 2. {
-                return Some(LayerGesture::Selection(origins[0].row));
-            }
         } else {
             let before = [origins[1].origin[0] - origins[0].origin[0], origins[1].origin[1] - origins[0].origin[1]];
             let after = [current[1].position[0] - current[0].position[0], current[1].position[1] - current[0].position[1]];
@@ -155,7 +150,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             LayerGesture::Contents(id) => self.dispatch(UiAction::Selection { action: SelectionAction::LoadThumbnail {
                 id, mask: false, shift: false, alt: false,
             } }),
-            LayerGesture::Selection(id) => self.dispatch(UiAction::Layer { action: LayerAction::ToggleSelection { id } }),
             LayerGesture::Merge(first, last) => {
                 self.require_idle()?;
                 self.merge(layer_core::MergeKind::Range { first: occurrence_handle(first)?, last: occurrence_handle(last)? })?;

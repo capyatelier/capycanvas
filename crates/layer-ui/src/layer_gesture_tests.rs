@@ -6,14 +6,14 @@ fn contact(t: &mut LayerTouches, id: u64, phase: ContactPhase, point: [f32; 2], 
 }
 
 #[test]
-fn layer_two_finger_tap_hold_swipe_and_pinch_have_distinct_actions() {
+fn layer_two_finger_gestures_distinguish_actions_from_swipes() {
     for case in 0..4 {
         let mut t = LayerTouches::default();
         let row = if case == 3 { 20 } else { 10 };
         assert!(!contact(&mut t, 1, ContactPhase::Down, [50., 50.], 10, 0).0);
         assert!(contact(&mut t, 2, ContactPhase::Down, [100., if case == 3 { 250. } else { 50. }], row, 10).0);
         let expected = match case {
-            0 => LayerGesture::Opacity(10),
+            0 => Some(LayerGesture::Opacity(10)),
             1 => {
                 assert!(t.advance(1, TouchPolicy::default()).is_none());
                 assert_eq!(t.advance(500_000_001, TouchPolicy::default()), Some(LayerGesture::Contents(10)));
@@ -25,17 +25,17 @@ fn layer_two_finger_tap_hold_swipe_and_pinch_have_distinct_actions() {
             2 => {
                 contact(&mut t, 1, ContactPhase::Move, [110., 50.], 10, 80);
                 contact(&mut t, 2, ContactPhase::Move, [160., 50.], row, 90);
-                LayerGesture::Selection(10)
+                None
             }
             _ => {
                 contact(&mut t, 1, ContactPhase::Move, [65., 130.], 10, 80);
                 contact(&mut t, 2, ContactPhase::Move, [85., 170.], row, 90);
-                LayerGesture::Merge(10, 20)
+                Some(LayerGesture::Merge(10, 20))
             }
         };
         let points = match case { 2 => [[110., 50.], [160., 50.]], 3 => [[65., 130.], [85., 170.]], _ => [[50., 50.], [100., 50.]] };
         assert!(contact(&mut t, 1, ContactPhase::Up, points[0], 10, 110).1.is_none());
-        assert_eq!(contact(&mut t, 2, ContactPhase::Up, points[1], row, 120).1, Some(expected));
+        assert_eq!(contact(&mut t, 2, ContactPhase::Up, points[1], row, 120).1, expected);
     }
 }
 
@@ -65,7 +65,7 @@ fn input(s: &mut UiSession<Recorder>, id: u64, phase: ContactPhase, point: [f32;
 }
 
 #[test]
-fn layer_tap_opens_opacity_and_two_finger_swipe_toggles_selection_on_every_host() {
+fn layer_tap_opens_opacity_and_two_finger_swipes_leave_layers_unchanged_on_every_host() {
     for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios, Platform::Windows] {
         let mut s = session(platform);
         let id = s.state.layers.iter().find(|l| l.editing).unwrap().id;
@@ -76,12 +76,16 @@ fn layer_tap_opens_opacity_and_two_finger_swipe_toggles_selection_on_every_host(
         assert_eq!(s.engine.document().revision, revision);
         layer(&mut s, LayerAction::CloseOpacity);
         for start in [500, 1000] {
+            layer(&mut s, LayerAction::ToggleSelection { id });
             let selected = s.state.layers.iter().find(|l| l.id == id).unwrap().selected;
+            let checkpoint = s.engine.checkpoint();
             for (finger, x) in [(1, 50.), (2, 100.)] { input(&mut s, finger, ContactPhase::Down, [x, 50.], id, start + finger * 10); }
             for (finger, x) in [(1, 110.), (2, 160.)] { input(&mut s, finger, ContactPhase::Move, [x, 50.], id, start + 80 + finger * 10); }
             for (finger, x) in [(1, 110.), (2, 160.)] { input(&mut s, finger, ContactPhase::Up, [x, 50.], id, start + 120 + finger * 10); }
-            assert_ne!(s.state.layers.iter().find(|l| l.id == id).unwrap().selected, selected);
+            assert_eq!(s.state.layers.iter().find(|l| l.id == id).unwrap().selected, selected);
             assert!(!s.state.layers.iter().find(|l| l.id == id).unwrap().alpha_locked);
+            assert!(s.state.layer_tools.opacity_popup.is_none());
+            assert_eq!(s.engine.checkpoint(), checkpoint, "{platform:?}: swiping leaves history unchanged");
         }
     }
 }

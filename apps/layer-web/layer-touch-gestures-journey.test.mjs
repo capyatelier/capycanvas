@@ -87,10 +87,10 @@ export async function checkLayerTouchGestures({call,evaluate,settle}) {
       assert.equal((await layer(top)).alpha_locked,true,`${label}: one finger right locks alpha`);
       const selected=(await layer(top)).selected;
       await gesture(await contacts(row(top),2),{dx:65});
-      assert.equal((await layer(top)).selected,!selected,`${label}: two fingers right toggle selection`);
+      assert.equal((await layer(top)).selected,selected,`${label}: two-finger swipe leaves selection unchanged`);
       assert.equal((await layer(top)).alpha_locked,true,'two-finger swipe preserves Alpha Lock');
       await gesture(await contacts(row(top),2),{dx:65});
-      assert.equal((await layer(top)).selected,selected,'second two-finger swipe restores selection');
+      assert.equal((await layer(top)).selected,selected,'repeated two-finger swipe leaves selection unchanged');
       await gesture(await contacts(row(top),1),{dx:65});assert.equal((await layer(top)).alpha_locked,false);
       await gesture(await contacts(row(top),2),{hold:700});
       await wait('layerApp.state().layer_tools.has_selection');
@@ -102,7 +102,7 @@ export async function checkLayerTouchGestures({call,evaluate,settle}) {
       for(const options of [{},{dx:65}]) {
         await gesture(await contacts(row(top),2),{...options,cancel:true});await pause(650);
         assert.equal((await state()).layer_tools.opacity_popup??null,null,'cancelled tap cannot open opacity');
-        assert.equal((await layer(top)).selected,initial.selected,'cancelled swipe cannot toggle row selection');
+        assert.equal((await layer(top)).selected,initial.selected,'cancelled swipe leaves row selection unchanged');
         assert.equal((await state()).layer_tools.has_selection,false,'cancelled hold cannot load coverage');
       }
       const a=(await contacts(row(top),1))[0],b=(await contacts(row(bottom),1))[0];

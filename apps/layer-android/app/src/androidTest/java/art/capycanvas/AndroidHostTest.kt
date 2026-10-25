@@ -4932,12 +4932,10 @@ class AndroidHostTest {
             action(obj("type" to "invoke", "command" to "deselect"))
             val selected = layers().first { it.getLong("id") == id }.getBoolean("selected")
             pair(60f)
-            host.awaitMain("$theme/$simple two-finger row selection", 5_000,
-                { "error=${host.actionError}; row=${layers().first { it.getLong("id") == id }}; slop=${android.view.ViewConfiguration.get(compose.activity).scaledTouchSlop}" }, compose) {
-                layers().first { it.getLong("id") == id }.getBoolean("selected") != selected
-            }
+            assertEquals("$theme/$simple two-finger swipe leaves selection unchanged", selected, layers().first { it.getLong("id") == id }.getBoolean("selected"))
             assertFalse(layers().first { it.getLong("id") == id }.getBoolean("alpha_locked"))
             pair(60f)
+            assertEquals(selected, layers().first { it.getLong("id") == id }.getBoolean("selected"))
             val swipeDistance = 80f * compose.activity.resources.displayMetrics.density
             row().performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(swipeDistance, 0f), 200) }
             host.awaitMain("$theme/$simple one-finger Alpha Lock", 5_000, { "error=${host.actionError}; row=${layers().first { it.getLong("id") == id }}" }, compose) {

@@ -110,12 +110,11 @@ try{
  Begin-Pair $p
  for($i=1;$i -le 8;$i++){[CapyCanvasTouch]::Pair(($p.ax+$i*7),$p.y,($p.bx+$i*7),$p.y);Start-Sleep -Milliseconds 10}
  End-Pair
- Wait-Until {(Row $id).selected -ne $selected} 'Two-finger right swipe did not toggle row selection'
- if((Row $id).alpha_locked -ne $alpha){throw 'Two-finger selection swipe toggled Alpha Lock'}
- Record 'two-finger right swipe toggles selection'
  $p=Point "layer-$id-name";[CapyCanvasTouch]::Down(1,$p.x,$p.y)
  for($i=1;$i -le 8;$i++){[CapyCanvasTouch]::Move(1,($p.x+$i*7),$p.y);Start-Sleep -Milliseconds 10};[CapyCanvasTouch]::Up(1)
  Wait-Until {(Row $id).alpha_locked -ne $alpha} 'One-finger right swipe did not toggle Alpha Lock'
+ if((Row $id).selected -ne $selected){throw 'Two-finger right swipe changed row selection'}
+ Record 'two-finger right swipe leaves selection unchanged'
  Undo-To {(Row $id).alpha_locked -eq $alpha} 'Undo did not restore Alpha Lock';Record 'one-finger Alpha Lock remains available'
  $all=@((Model).state.layers.id);$upper=Pair-OnRow $id;$lower=Pair-OnRow $base
  $x=$upper.ax;$ay=$upper.y;$by=$lower.y;$distance=$by-$ay
