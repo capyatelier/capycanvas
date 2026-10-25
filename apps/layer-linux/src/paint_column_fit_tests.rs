@@ -3,6 +3,43 @@ use super::*;
 use layer_core::color::SampleDepth;
 
 #[test]
+#[ignore = "private Wayland display, GPU and native input"]
+fn native_default_workspace_panel_groups() {
+    let app = native_test_app("art.capycanvas.DefaultPanelGroups");
+    let w = Workspace::new(&app);
+    w.window.maximize();w.window.present();ready(&w);
+    let mut input = RemoteInput::new();input.ready();
+    for preset in [layer_ui::WorkspacePreset::Illustrator, layer_ui::WorkspacePreset::Photographer] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: Box::new(layer_ui::WorkspaceState { layout: preset.layout(Platform::Gtk), ..Default::default() }),
+        });
+        pump(800);
+        let layout = state(&w).workspace.layout;
+        let group = layout.panel_group(Panel::Layers).unwrap();
+        assert_eq!(layout.group_panels(group).unwrap(), [Panel::Layers, Panel::Adjustments]);
+        let bounds = || {
+            let resolved = w.resolved();
+            [Panel::Properties, Panel::Layers].map(|panel| {
+                resolved.groups.iter().find(|g| g.panels.contains(&panel)).unwrap().bounds
+            })
+        };
+        let original = bounds();
+        let fraction = original[0].height / (original[0].height + original[1].height);
+        assert!((fraction - 0.4).abs() < 0.01, "{preset:?}: {original:?}");
+        for panel in [Panel::Adjustments, Panel::Layers] {
+            let tab = w.groups.borrow().iter().flat_map(|group| &group.tabs)
+                .find(|(candidate, button)| *candidate == panel && button.is_mapped()).unwrap().1.clone();
+            input.click(screen_point(tab.upcast_ref(), &w.window, [0.5, 0.5]));
+            pump(200);
+            assert_eq!(state(&w).workspace.layout.active_panel(panel), Some(panel));
+            assert!(w.panel_widget(Panel::Properties).is_mapped());
+            assert_eq!(bounds(), original);
+        }
+    }
+    w.window.destroy();pump(100);
+}
+
+#[test]
 #[ignore = "private Wayland display and GPU"]
 fn native_paint_fitted_columns() {
     let app = native_test_app("art.capycanvas.PaintFittedColumns");

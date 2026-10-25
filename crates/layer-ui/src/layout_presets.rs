@@ -42,6 +42,7 @@ impl WorkspacePreset {
             (Panel::Palettes, Panel::Color),
             (Panel::Proof, Panel::Navigator),
             (Panel::Stats, Panel::Brushes),
+            (Panel::Adjustments, Panel::Layers),
         ] {
             if let Some(group) = layout.panel_group(anchor) {
                 let index = layout
@@ -71,15 +72,12 @@ impl WorkspacePreset {
         }
         self.group_tools(&mut layout);
         let group = layout.panel_group(Panel::Color).unwrap();
-        if !layout.fit_height_groups.contains(&group) {
-            layout.fit_height_groups.push(group);
-        }
         if self == Self::Photographer {
             if let Some(DockNode::Tabs {panels,active,..})=layout.node_mut(group) {
                 *panels=vec![Panel::Histogram,Panel::Waveform];
                 *active=Panel::Histogram;
             }
-            fit_right_column(&mut layout, 0.6);
+            fit_right_column(&mut layout);
         }
         layout
     }
@@ -346,14 +344,14 @@ fn fit_paint_columns(layout: &mut DockLayout) {
     };
     let left = stack(4, 0.6528, stack(5, 0.5, group(6), group(7)), group(10));
     layout.bands.iter_mut().find(|b| b.id == 3).expect("Paint default column").root = left;
-    fit_right_column(layout, 0.4);
+    fit_right_column(layout);
     layout.fit_height_groups = vec![10, 14];
 }
 
-fn fit_right_column(layout: &mut DockLayout, properties_fraction: f32) {
+fn fit_right_column(layout: &mut DockLayout) {
     let group = |id| Box::new(layout.node(id).cloned().expect("default primary panel"));
     let root = DockNode::Split {id:12,axis:Axis::Vertical,fraction:0.25,first:group(14),
-        second:Box::new(DockNode::Split {id:13,axis:Axis::Vertical,fraction:properties_fraction,first:group(15),second:group(16)})};
+        second:Box::new(DockNode::Split {id:13,axis:Axis::Vertical,fraction:0.4,first:group(15),second:group(16)})};
     layout.bands.iter_mut().find(|b| b.id == 11).expect("default primary column").root = root;
 }
 
@@ -476,8 +474,8 @@ mod tests {
                 [Edge::Top, Edge::Left, Edge::Right, Edge::Right]);
             for (id, expected) in [
                 (14, vec![Panel::Histogram,Panel::Waveform]),
-                (15, vec![Panel::Properties, Panel::Adjustments]),
-                (16, vec![Panel::Layers]),
+                (15, vec![Panel::Properties]),
+                (16, vec![Panel::Layers, Panel::Adjustments]),
                 (6, vec![Panel::Brushes, Panel::Stats]),
                 (7, vec![Panel::ToolSettings, Panel::Sizes]),
                 (10, vec![Panel::Navigator, Panel::Proof]),
@@ -494,7 +492,7 @@ mod tests {
                 let color = group(Panel::Histogram);
                 let properties = group(Panel::Properties);
                 let layers = group(Panel::Layers);
-                assert_eq!(properties, group(Panel::Adjustments));
+                assert_eq!(layers, group(Panel::Adjustments));
                 assert_eq!(color.x, properties.x);
                 assert_eq!(properties.x, layers.x);
                 assert!(color.y + color.height < properties.y);
@@ -565,6 +563,7 @@ mod tests {
                 (selected, anchor),
                 (Panel::Proof, Panel::Navigator),
                 (Panel::Stats, Panel::Brushes),
+                (Panel::Adjustments, Panel::Layers),
             ] {
                 let group = layout.panel_group(anchor).unwrap();
                 let panels = layout.group_panels(group).unwrap();
@@ -655,7 +654,34 @@ mod tests {
     }
 
     #[test]
-    fn photo_scopes_fit_and_remainder_preserves_visible_rows() {
+    fn paint_and_photo_share_primary_column_proportions() {
+        for platform in Platform::ALL {
+            let mut paint = WorkspacePreset::Illustrator.layout(platform);
+            paint.open_default_columns(platform);
+            let photo = WorkspacePreset::Photographer.layout(platform);
+            assert!(photo.fit_height_groups.is_empty());
+            for [width, height] in [[1200., 800.], [1600., 1000.], [1920., 1600.]] {
+                let proportions = |layout: &DockLayout, panels: [Panel; 3]| {
+                    let resolved = layout.resolve(width, height);
+                    let [top, properties, layers] = panels.map(|panel| {
+                        resolved.groups.iter().find(|g| g.panels.contains(&panel)).unwrap().bounds.height
+                    });
+                    [top / (top + properties + layers + WORKSPACE_SPACING), properties / (properties + layers)]
+                };
+                for layout_proportions in [
+                    proportions(&paint, [Panel::Navigator, Panel::Properties, Panel::Layers]),
+                    proportions(&photo, [Panel::Histogram, Panel::Properties, Panel::Layers]),
+                ] {
+                    for (actual, expected) in layout_proportions.into_iter().zip([0.25, 0.4]) {
+                        assert!((actual - expected).abs() < 0.001, "{platform:?} {width}x{height}: {layout_proportions:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn photo_column_proportions_preserve_visible_rows() {
         for platform in Platform::ALL {
             let mut layout=WorkspacePreset::Photographer.layout(platform);layout.open_default_columns(platform);
             layout.measurements=[
@@ -666,19 +692,19 @@ mod tests {
                 PanelMeasurement{panel:Panel::Layers,content_height:172.,tab_width:85.,scroll:Some(PanelScrollMeasurement{fixed_height:92.,unit_height:40.})},
             ].to_vec();
             for width in [744.,960.,1200.] {
-                for height in [600.,660.,800.,1000.] {
+                for height in [600.,660.,800.,1000.,1600.] {
                     let resolved=layout.workspace(width,height,crate::HEADER_HEIGHT,0.);
                     let bounds=|panel|resolved.groups.iter().find(|g|g.panels.contains(&panel)).unwrap().bounds;
                     let scopes=bounds(Panel::Histogram);let properties=bounds(Panel::Properties);let layers=bounds(Panel::Layers);
                     let row_minimum = if height >= 800. { 132. } else { TILE_SIZE };
                     assert!(layers.height-TAB_BAR_HEIGHT>=row_minimum,"{platform:?} {width}x{height}: {layers:?}");
-                    assert!(properties.height-TAB_BAR_HEIGHT>=if height >= 800. {104.} else {TILE_SIZE},"{platform:?} {width}x{height}: {properties:?}");
+                    assert!(properties.height-TAB_BAR_HEIGHT>=TILE_SIZE,"{platform:?} {width}x{height}: {properties:?}");
                     assert_eq!(scopes,bounds(Panel::Waveform));
                     assert!(scopes.y+scopes.height<properties.y);assert!(properties.y+properties.height<layers.y);assert_eq!(properties.x,layers.x);
                     assert!(layers.y+layers.height<=height);
-                    if height>=800. {assert_eq!(scopes.height,260.+TAB_BAR_HEIGHT);}
+                    if height>=800. {assert!(scopes.height>=260.+TAB_BAR_HEIGHT);}
                     if height==1000. {
-                        assert!((properties.height/(properties.height+layers.height)-0.6).abs()<0.01,"{platform:?} {width}x{height}: {properties:?} {layers:?}");
+                        assert!((properties.height/(properties.height+layers.height)-0.4).abs()<0.01,"{platform:?} {width}x{height}: {properties:?} {layers:?}");
                         assert!(properties.height-TAB_BAR_HEIGHT>=160.);
                     }
                 }
@@ -711,7 +737,7 @@ mod tests {
         for platform in Platform::ALL {
             let mut layout = measured_panel_layout(WorkspacePreset::Illustrator, platform);
             let navigator_group = layout.panel_group(Panel::Navigator).unwrap();
-            let properties_group = layout.panel_group(Panel::Properties).unwrap();
+            let layers_group = layout.panel_group(Panel::Layers).unwrap();
             for rows in [0., 0.175, 1., 2., 200.] {
                 layout.measurements.iter_mut().find(|m| m.panel == Panel::Layers).unwrap().content_height = 92. + rows * 40.;
                 for properties_height in [7., 157., 3000.] {
@@ -725,7 +751,7 @@ mod tests {
                             assert!(g.body().height + 0.001 >= g.min_body_height, "{platform:?} height={height} rows={rows} {panel:?}: {:?}", g.bounds);
                         }
                         assert_eq!(group(Panel::Navigator).min_body_height, 44. + TILE_SIZE);
-                        for (id, panel) in [(navigator_group, Panel::Proof), (properties_group, Panel::Adjustments)] {
+                        for (id, panel) in [(navigator_group, Panel::Proof), (layers_group, Panel::Adjustments)] {
                             layout.select_tab(id, panel).unwrap();
                             let switched = layout.workspace(1257., height, 48., 0.);
                             for g in &resolved.groups {
@@ -733,7 +759,7 @@ mod tests {
                             }
                         }
                         layout.select_tab(navigator_group, Panel::Navigator).unwrap();
-                        layout.select_tab(properties_group, Panel::Properties).unwrap();
+                        layout.select_tab(layers_group, Panel::Layers).unwrap();
                         assert_eq!(crate::durable_layout(&layout), durable);
                     }
                 }
@@ -760,7 +786,7 @@ mod tests {
                         }
                         for pair in groups.windows(2) { assert!(pair[0].bounds.y + pair[0].bounds.height <= pair[1].bounds.y); }
                         assert_eq!(groups[0].min_body_height, if preset == WorkspacePreset::Illustrator { 80. } else { 260. });
-                        assert_eq!(groups[1].min_body_height, 104.);
+                        assert_eq!(groups[1].min_body_height, 36.);
                         assert_eq!(groups[2].min_body_height, 132.);
                         assert_eq!(crate::durable_layout(&layout), durable);
                     }

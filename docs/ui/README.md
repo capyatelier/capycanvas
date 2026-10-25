@@ -64,7 +64,10 @@ Their command-search actions reveal the existing panel wherever it was placed. B
 Visible, Selected layer, Reference or Selection. Their channel menus independently
 choose RGB, individual channels or luminance. Waveform retains the image's
 left-to-right position, with brighter values toward the top; it initially shows
-RGB. Histogram shows how often each value occurs.
+RGB. Histogram shows how often each value occurs. Counts start on a linear scale,
+so graph heights remain proportional to pixel populations. Log counts is an
+optional view for revealing small populations beneath large peaks, especially
+in artwork with broad areas of one color.
 
 Source and channel selectors occupy one toolbar above the graph. Log counts
 changes Histogram's height or Waveform's trace brightness. Its toggle has its
