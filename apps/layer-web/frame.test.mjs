@@ -48,6 +48,36 @@ test('live preferences publish while document dialogs retain exclusive editing i
   assert.deepEqual(received,[restore,invoke]);assert.deepEqual(published,[change,change]);
 });
 
+test('nested dialogs own keys after recording even without a focused descendant', () => {
+  const received = [];
+  let modal = {};
+  class Element { closest() { return null; } }
+  const context = {Element, document:{querySelector:() => modal}, state:{preferences:{capture:null}},
+    composingKey:() => false, updateZen() {}, keyboardFocused:new WeakSet(),
+    app:{control_takes_key:() => false}, documents:{allowNativePaste:() => false},
+    input:event => { received.push(event); return {handled:true}; }};
+  runInNewContext(source.slice(source.indexOf('function keyInput('), source.indexOf('const keyboardFocused =')), context);
+  const key = pressed => {
+    const event = {target:new Element(), key:'Escape', defaultPrevented:false, stopped:false,
+      preventDefault() { this.defaultPrevented=true; }, stopPropagation() { this.stopped=true; }};
+    context.keyInput(event, pressed);
+    return event;
+  };
+  assert.equal(key(true).defaultPrevented, false);
+  assert.equal(received.length, 0, 'The visible sheet owns Escape when focus has been blurred');
+  context.state.preferences.capture = {};
+  assert.equal(key(true).defaultPrevented, true);
+  assert.equal(received.length, 1, 'Recording still receives and consumes the chord');
+  context.state.preferences.capture = null;
+  key(false);
+  assert.equal(received.at(-1).pressed, false, 'Release retires the shared recording key');
+  assert.equal(key(true).defaultPrevented, false);
+  assert.equal(received.length, 2, 'The next Escape returns to native dismissal');
+  modal = null;
+  assert.equal(key(true).defaultPrevented, true);
+  assert.equal(received.length, 3, 'Main Preferences retains shared key handling');
+});
+
 function harness(moving = false) {
   const calls = [];
   const events = [];

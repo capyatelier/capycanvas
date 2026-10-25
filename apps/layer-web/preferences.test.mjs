@@ -13,13 +13,11 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     await settle();
   };
   const escape = async () => {
-    await evaluate(`(() => {
-      const down = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
-      document.activeElement.dispatchEvent(down);
-      const top = [...document.querySelectorAll('dialog[open]')].at(-1);
-      if (!down.defaultPrevented && top) top.dispatchEvent(new Event('cancel', { cancelable: true }));
-      document.activeElement.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true, cancelable: true }));
-    })()`);
+    await call('Input.setIgnoreInputEvents', { ignore: false });
+    try {
+      await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    } finally { await call('Input.setIgnoreInputEvents', { ignore: true }); }
     await settle();
   };
   const reload = async (gpu) => {
@@ -62,7 +60,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   })()`);
   for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
   assert.equal(metrics.panelSteps, 0, "panel readouts have no step buttons");
-  assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 16); assert.equal(metrics.layerIconButton, 24);
+  assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 16); assert.equal(metrics.layerIconButton, 26);
   assert.ok(await evaluate("(() => { const button = document.querySelector('#zen-capy'); return Math.abs(button.querySelector('svg').getBoundingClientRect().width - Math.round(button.getBoundingClientRect().height * 440 / 512)) < .02; })()"), 'Capy button uses the enlarged favicon proportions');
   assert.equal(await evaluate("document.querySelector('#zen-capy svg').dataset.asset"), 'zen-looking-up');
   assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='zen_mode').shortcut"), 'Tab');
@@ -155,7 +153,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   // Values are plain editing buttons. The slider uses the
   // exact Rust mapping and stepping keeps using display units.
   await click('#size-number .number-value');
-  assert.ok(await evaluate(`(() => {const n=document.querySelector('#size-number .number-entry');const r=parseFloat(getComputedStyle(n).borderRadius);return n.getBoundingClientRect().width<100 && r>4 && r<=12;})()`), 'short values use compact rounded editors');
+  assert.ok(await evaluate(`(() => {const n=document.querySelector('#size-number .number-entry'),s=getComputedStyle(n),r=n.getBoundingClientRect();return r.width===68 && r.height===26 && Math.abs(parseFloat(s.borderRadius)-13*parseFloat(s.getPropertyValue('--corner-fit')))<.02;})()`), 'panel editors use the documented 68 by 26px size and fitted 13px control radius');
   await evaluate("document.querySelector('#size-number .number-entry').value='45/2'"); await key('Enter');
   assert.equal(await evaluate('layerApp.state().brush.diameter'), 22.5);
   const readout=await evaluate(`(()=>{const r=document.querySelector('#size-number .number-value').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
@@ -372,7 +370,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await click('#setting-feedback');
   await click('[data-settings-page="canvas"]');
   await click('#setting-pan-speed .number-value');
-  assert.ok(await evaluate(`(() => { const field=document.querySelector('#setting-pan-speed .number-entry'), css=getComputedStyle(field); return field.getBoundingClientRect().height===34 && css.paddingLeft==='9px' && css.paddingRight==='9px' && parseFloat(css.borderRadius)===(CSS.supports('corner-shape','squircle')?12:6.48); })()`), 'settings editors use full-size Adwaita spacing with control squircles');
+  assert.ok(await evaluate(`(() => { const field=document.querySelector('#setting-pan-speed .number-entry'), css=getComputedStyle(field); return field.getBoundingClientRect().height===34 && css.paddingLeft==='9px' && css.paddingRight==='9px' && Math.abs(parseFloat(css.borderRadius)-13*parseFloat(css.getPropertyValue('--corner-fit')))<.02; })()`), 'settings editors use full-size Adwaita spacing with the fitted 13px control radius');
   await evaluate("document.querySelector('#setting-pan-speed .number-entry').value='1.5'");
   await key("Enter");
   await click('#setting-pan-speed .number-value');
@@ -432,14 +430,16 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   assert.deepEqual(await prefs("view.shortcut_editor.bindings"), ["B", "E"], "adding keeps the existing shortcut");
   assert.equal(await evaluate(`document.querySelector('[data-shortcut="tools.paint"] .shortcut-hint').textContent`), "B / E");
   await capture("shortcut-editor");
-  await click('#add-shortcut');
-  await escape();
-  assert.equal(await prefs("view.capture ?? null"), null, "Escape cancels recording");
-  assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), true, "and keeps the editor");
-  await escape();
-  assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), false);
+  await click('#shortcut-editor-close');
   for (const theme of ["light", "dark"]) {
     await action({ type: "set_theme", theme });
+    await click('[data-shortcut="tools.paint"] .shortcut-choose');
+    await click('#add-shortcut');
+    await escape();
+    assert.equal(await prefs("view.capture ?? null"), null, "Escape cancels recording");
+    assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), true, "and keeps the editor");
+    await escape();
+    assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), false);
     await capture(`shortcut-modified-${theme}`);
   }
   await click('#shortcut-category-back');

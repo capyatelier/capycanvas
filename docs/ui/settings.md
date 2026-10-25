@@ -90,6 +90,9 @@ runtime values; hosts receive the shortcut page and row views.
 The host translates native keyboard events and preserves normal widget behavior.
 Typing in a text field must not accidentally trigger a canvas shortcut. Platform
 modifiers and reserved OS interactions also need native testing.
+Nested shortcut sheets own their keys except during recording, when shared Rust
+captures the chord. Escape cancels recording first; the next Escape closes the
+sheet through its native dismissal.
 
 Each binding has a scope: Application, Canvas, or specific tool categories.
 Canvas and tool scopes apply only while no chrome control such as a divider owns

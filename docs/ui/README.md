@@ -179,6 +179,7 @@ set the density of compact workspace forms. Single-line controls have a 26-unit
 base height and may grow for system text scaling; icon-only actions stay square.
 Ordinary numeric readouts and editors use the same 26-unit height. Control
 surfaces follow the [13-unit squircle rule](squircle-corners.md#radii).
+Layers flag and footer buttons use the same 26-unit square targets.
 
 ### Properties
 

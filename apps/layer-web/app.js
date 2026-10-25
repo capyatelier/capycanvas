@@ -1649,7 +1649,7 @@ window.addEventListener(
 );
 function keyInput(e, pressed, divider = null) {
   if (pressed && (e.defaultPrevented || composingKey(e))) return;
-  const nativeDialog=e.target instanceof Element && e.target.closest("dialog[open]:not(#settings, #shortcut-editor, #modifier-key)");
+  const nativeDialog=!!document.querySelector("dialog:modal:not(#settings)") && !state.preferences.capture;
   if (pressed && nativeDialog) return;
   updateZen();
   const reply = input({
