@@ -267,6 +267,10 @@ footer menu's Snap rotation checkbox, settings restoration, live menu refresh,
 and native two-finger and Rotate View contacts in both themes. It covers the
 3° hold, escape beyond the 10° attraction range, and exact explicit angles.
 
+`AndroidSurfaceTeardownTest` backgrounds the app while a worker task outlasts the
+10 s surface teardown wait. Teardown stops frames at once and returns without
+crashing; the canvas presents again after resuming.
+
 `AndroidInteractionTest#zoomReadoutMenuAndFieldAcrossDevices` checks rotation
 slider snapping with mouse, touch and pen in both themes, including the displayed
 angle during a stationary hold, exact typed angles, keyboard steps and configured button steps.

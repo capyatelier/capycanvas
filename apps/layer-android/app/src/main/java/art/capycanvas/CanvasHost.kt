@@ -374,7 +374,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     private var attached = false
     private var currentSurface: Surface? = null
     private var awaitingSurfaceFrame = false
-    private var surfaceGeneration = 0
+    @Volatile private var surfaceGeneration = 0
     @Volatile private var firstUiDraw = 0L
     @Volatile private var firstSurfaceReady = 0L
     private var disposed = false
@@ -732,7 +732,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             }
             finally { stopped.countDown() }
         }) return // The owning thread has already destroyed the native session.
-        check(stopped.await(10, TimeUnit.SECONDS)) { "Canvas surface did not detach" }
+        if (!stopped.await(10, TimeUnit.SECONDS)) Log.w("CapyCanvas", "Canvas surface detach is waiting for a long worker task")
     }
     fun pointerBuffer(size: Int): DoubleArray {
         val buffer = pointerBuffers.poll()
@@ -790,7 +790,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     private val renderFrame = Runnable {
         renderQueued = false
         renderDelayed = false
-        if (attached && !disposed && renderGeneration == activeSurfaceGeneration) {
+        if (attached && !disposed && renderGeneration == activeSurfaceGeneration && activeSurfaceGeneration == surfaceGeneration) {
             val now = System.nanoTime()
             draw(now, now + frameInterval)
         }
