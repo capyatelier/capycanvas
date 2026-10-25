@@ -155,11 +155,14 @@ fn object_read_mapping_preserves_f64_relative_coordinates_and_requested_density(
     for side in [0.25, 0.5, 1., 2.] {
         let request = canonical_request(&r, &mut scene, &doc, owner, ObjectWindow { origin: [1_048_576.125, 0.], side, size: [8; 2] });
         let mut cache = super::super::object_cache::ObjectCache::default();
+        let deadline = std::time::Instant::now() + crate::READBACK_TIMEOUT;
         let view = loop {
             if let Some(view) = cache.resolve_collection(&r, doc.scene(), &request).unwrap() { break view; }
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            r.drain_image_decodes(&mut encoder).unwrap();
             cache.advance(&mut r, &mut scene, &mut encoder, true).unwrap();
             r.uploads.finish(&encoder); encoder.submit(&r.queue); r.wait_idle().unwrap();
+            assert!(std::time::Instant::now() < deadline, "object sampling at side {side} must finish through the decode queue");
         };
         let pixels = float_pixels(&r, view.texture());
         assert!(pixels[0][0] > 0. && pixels[0][3] > 0.);
