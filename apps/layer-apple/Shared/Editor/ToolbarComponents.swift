@@ -512,7 +512,10 @@ struct ToolbarDivider: View {
         let widest = choice["items"].array.map { text($0["label"].string) }.max() ?? 0
         return boxed(captionPadding * 2 + bar.icon + captionGap * 2 + widest + chevronSize, height: tile.height)
     }
-    if !choice.isNull { return boxed(168, height: bar.control) }
+    if !choice.isNull {
+        let widest = choice["items"].array.map { text($0["label"].string) }.max() ?? 0
+        return boxed(choicePadding * 2 + bar.icon + captionGap * 2 + widest + chevronSize, height: bar.control)
+    }
     let field = option["Numeric"]
     let samples = ToolbarUI.cached(["type": "numeric_info", "id": field["id"].raw, "control": field["numeric"].raw,
         "compact": true, "units": true], language: language)["samples"].array
@@ -711,7 +714,7 @@ struct SegmentedChoiceBar: View {
                     if captions && !choice["labeled"].bool { Text(item["label"].string).lineLimit(1).fixedSize() }
                 }.padding(.horizontal, captions && !choice["labeled"].bool ? choicePadding : 0)
                     .frame(maxWidth: captions && !choice["labeled"].bool ? nil : .infinity, maxHeight: .infinity)
-                    .background(item["selected"].bool ? surface.active : palette["input"],
+                    .background(item["selected"].bool ? surface.active : palette.controlFill,
                         in: shape.segment(index, of: items.count, stacked: stacked))
                     .contentShape(Rectangle())
                     .frame(width: cellSize?.width, height: cellSize?.height)
@@ -762,7 +765,7 @@ private struct ToolbarChoiceField: View {
                     if !vertical { SharedIcon(name: "chevron-down", size: chevronSize) }
                 }.padding(.horizontal, vertical && !labeled ? 2 : captions ? captionPadding : choicePadding)
                     .frame(maxWidth: .infinity, maxHeight: vertical || captions ? .infinity : store.panelMetrics.height)
-                    .background(vertical || captions ? Color.clear : palette["input"], in: SquircleShape.control)
+                    .background(vertical || captions ? Color.clear : palette.controlFill, in: SquircleShape.control)
                     .contentShape(Rectangle())
             }.buttonStyle(.plain)
                 .accessibilityLabel(choice["label"].string).accessibilityValue(selected["label"].string)

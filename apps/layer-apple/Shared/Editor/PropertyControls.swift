@@ -37,7 +37,7 @@ struct LayerPropertiesPanel: View {
                         if pages.count > 1 {
                             EditorChoice(label: view["title"].string, options: pages.map { $0["label"].string },
                                 selected: pages.firstIndex { $0["id"].string == view["page"].string } ?? 0, identifier: "properties-page",
-                                background: palette["input"], height: store.panelMetrics.height) {
+                                background: palette.controlFill, height: store.panelMetrics.height) {
                                 store.dispatch(["type": "effect", "action": ["op": "select_page", "layer": layer, "page": pages[$0]["id"].string]])
                             }
                         }
@@ -95,7 +95,7 @@ struct LayerPropertiesPanel: View {
         let importer = actions.first { $0["action"]["op"].string == "import_lookup" }
         return HStack(spacing: store.panelMetrics.spacing) {
             EditorChoice(label: view["resource_label"].string, options: labels, selected: selected ?? presets.count,
-                identifier: "property-resource-choice", background: palette["input"], ellipsis: true, height: store.panelMetrics.height) { index in
+                identifier: "property-resource-choice", background: palette.controlFill, ellipsis: true, height: store.panelMetrics.height) { index in
                 if presets.indices.contains(index) { effect(presets[index]["action"]) }
             }.help(view["resource_name"].string)
             if let importer {

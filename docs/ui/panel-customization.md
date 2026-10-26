@@ -53,7 +53,9 @@ selection groups stay separate, Photo keeps its Marquee and Lasso pairs, and
 Sketch's single Select group contains all eight selection tools. Choosing a
 sibling updates the retained drawer at the same origin.
 Sketch's Brush and Sculpt retain their three-column drawers. Tool Options uses
-the same complete projection through More tool options.
+the same complete projection through More tool options. Horizontal dropdowns fit
+their widest item, including the icon and menu arrow; hosts measure localized
+text again when the choice items change.
 
 Paint's Blend group presents Blend, Paint mixing and Effects as sibling
 sets in its menu, drawer and Tool Set panel. The presets of the selected set

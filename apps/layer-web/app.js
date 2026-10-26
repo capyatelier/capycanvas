@@ -143,6 +143,7 @@ function applyTheme(theme, palette) {
     if (Array.isArray(color)) document.body.style.setProperty(`--glass-${name.replaceAll("_", "-")}`, rgba(color));
   }
   if (palette) {
+    document.body.style.setProperty("--control-fill", rgba(palette.control_fill));
     const { settings, panel, sidebar_border } = palette.lines;
     for (const [name, color] of [["card-shade", settings.card_shade], ["sidebar-edge", sidebar_border], ["menu-divider", panel.border]]) {
       document.body.style.setProperty(`--${name}`, rgba(color));

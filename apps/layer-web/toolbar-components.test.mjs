@@ -165,6 +165,21 @@ export async function checkToolbarComponents({ call, evaluate, settle }) {
   await assertActionIconsCentred('horizontal Rectangle select', 4);
   const segments = await rect('[data-toolbar-choice=selection-mode]'), dropdown = await rect('[data-toolbar-choice=variant] > button');
   assert.deepEqual([segments.y, segments.height], [dropdown.y, dropdown.height], 'segments match the dropdown height');
+  for (const theme of ['light', 'dark']) {
+    await send({ type: 'set_theme', theme });
+    const faces = await evaluate(`(() => {
+      const color = layerApp.state().palette.control_fill;
+      const probe = document.body.appendChild(document.createElement('i'));
+      probe.style.backgroundColor = 'rgb(' + color.slice(0, 3).map(v => v * 255).join(' ') + ' / ' + color[3] + ')';
+      const expected = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return { expected, actual: [
+        document.querySelector('[data-toolbar-choice=variant] > button'),
+        document.querySelector('[data-toolbar-choice=selection-mode] > button:not([aria-pressed=true])')
+      ].map(node => getComputedStyle(node).backgroundColor) };
+    })()`);
+    assert.deepEqual(faces.actual, [faces.expected, faces.expected], `${theme} dropdown and unselected segment use the shared face fill`);
+  }
   for (const [i, device] of ['mouse', 'touch', 'pen'].entries()) {
     await click(`[data-toolbar-segment=selection-mode-${i + 1}]`, device);
     assert.ok(await evaluate(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(['selection_add', 'selection_subtract', 'selection_intersect'][i])}).selected`));

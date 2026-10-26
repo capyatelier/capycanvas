@@ -315,6 +315,7 @@ pub struct ThemePalette {
     pub text: HexColor,
     pub settings_secondary: HexColor,
     pub button: HexColor,
+    pub control_fill: crate::GlassColor,
     pub accent: HexColor,
     pub accent_foreground: HexColor,
     pub relationship: HexColor,
@@ -381,6 +382,7 @@ impl Settings {
             text,
             settings_secondary: HexColor(if dark { [188; 3] } else { [102; 3] }),
             button: HexColor([if dark { 255 } else { 0 }; 3]),
+            control_fill: line(text.0.map(f64::from), if dark { 0.06 } else { 0.16 }),
             accent,
             accent_foreground: accent.contrasting(),
             relationship: accent.relationship(),
@@ -437,6 +439,24 @@ mod tests {
                 HexColor([if theme == Theme::Dark { 65 } else { 237 }; 3])
             );
             assert!(p.tabbar.0[0] < p.panel.0[0]);
+        }
+    }
+
+    #[test]
+    fn control_faces_share_text_overlay_across_hosts_and_bases() {
+        for theme in [Theme::Dark, Theme::Light] {
+            let alpha = if theme == Theme::Dark { 0.06 } else { 0.16 };
+            for platform in Platform::ALL {
+                for base in theme.base_choices() {
+                    let mut settings = Settings::default();
+                    match theme { Theme::Dark => settings.dark_base = base, Theme::Light => settings.light_base = base }
+                    let palette = settings.palette(theme, platform, None);
+                    let [r, g, b, a] = palette.control_fill.0;
+                    assert_eq!([r, g, b], palette.text.0.map(|v| v as f32 / 255.));
+                    assert_eq!(a, alpha);
+                    assert_eq!(serde_json::to_value(palette).unwrap()["control_fill"], serde_json::json!([r, g, b, a]));
+                }
+            }
         }
     }
 

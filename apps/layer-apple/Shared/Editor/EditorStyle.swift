@@ -22,6 +22,7 @@ struct EditorPalette {
     var settingsBorder: Color { line(source["lines"]["settings"]["border"]) }
     var panelBorder: Color { line(source["lines"]["panel"]["border"]) }
     var popoverBorder: Color { line(source["lines"]["popover_border"]) }
+    var controlFill: Color { line(source["control_fill"]) }
     var field: Color { self["text"].opacity(0.10) }
     var accent: Color { role("accent", "#3584e4") }
     var accentForeground: Color { role("accent_foreground", "#ffffff") }

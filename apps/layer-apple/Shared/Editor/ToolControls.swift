@@ -228,7 +228,7 @@ private extension ToolSettingsControls {
         return PropertyChoiceRow(labelWidth: store.panelLabelWidth(labels)) {
             Text(label).lineLimit(1)
             EditorChoice(label: label, options: commands.map { $0["label"].string }, selected: commands.firstIndex { $0["selected"].bool } ?? 0,
-                identifier: "tool-action-group-" + group.id, background: palette["input"], height: store.panelMetrics.height, menu: { open in
+                identifier: "tool-action-group-" + group.id, background: palette.controlFill, height: store.panelMetrics.height, menu: { open in
                     open(AppleContextMenu(JSON(["sections": [commands.map { command in
                         ["label": command["label"].raw, "enabled": command["enabled"].raw, "selected": command["selected"].raw,
                          "identifier": "tool-action-" + command["id"].string, "action": ["type": "invoke", "command": command["id"].raw]]

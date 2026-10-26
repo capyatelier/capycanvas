@@ -60,7 +60,7 @@ struct PanelConfiguration: View {
             let layers = store.state["layers"].array
             EditorChoice(label: item["label"].string, options: layers.map { $0["label"].string },
                 selected: layers.firstIndex { $0["selected"].bool } ?? 0,
-                identifier: "configuration-layer", background: palette["input"], height: store.panelMetrics.height) {
+                identifier: "configuration-layer", background: palette.controlFill, height: store.panelMetrics.height) {
                 store.dispatch(["type": "select_layer", "id": layers[$0]["id"].raw])
             }
         case "layer_opacity":

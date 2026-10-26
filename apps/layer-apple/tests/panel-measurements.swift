@@ -57,6 +57,24 @@ import SwiftUI
         }
         try await wait("Initial editor") { !store.state.isNull && !store.catalog.isNull }
         do {
+            let bar = store.barMetrics, textSize: CGFloat = 16
+            func size(_ labels: [String], selected: Int = 0) -> CGSize {
+                let option = JSON(["Choice": ["items": labels.enumerated().map {
+                    ["label": $0.element, "selected": $0.offset == selected] as [String: Any]
+                }]])
+                return toolOptionSize(option, vertical: false, width: 600,
+                    tile: CGSize(width: bar.tile, height: bar.tile), preferences: JSON(), textSize: textSize, bar: bar)
+            }
+            let labels = ["Short", "A much wider localized dropdown choice"]
+            let measured = size(labels)
+            let expected = ceil(toolbarTextWidth(labels[1], size: textSize)) + 16 + bar.icon + 12 + 12 + 2 * bar.clear
+            precondition(measured.width == expected, "Dropdown fits its widest item, icon, arrow, gaps and padding")
+            precondition(size(labels, selected: 1) == measured, "Changing selection retains room for every item")
+            precondition(size(["Short"]).width < measured.width, "Changed choice items refit the control")
+            precondition(size(labels + ["An even wider localized dropdown choice that needs more room"]).width > measured.width,
+                "A replacement choice grows to fit its new items")
+        }
+        do {
             let unitStore = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
             try await wait("Unit measurement editor") {
                 precondition(unitStore.failure == nil, String(describing: unitStore.failure))
