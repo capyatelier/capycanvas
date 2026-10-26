@@ -1,5 +1,6 @@
 import unittest
-from apple_trace import analyze, calibrate_gpu, motion_windows, canvas_update_progress, workload_contact_intervals
+from apple_trace import analyze, calibrate_gpu, motion_windows, canvas_update_progress, workload_contact_intervals, camera_contacts
+from copy import deepcopy
 from collections import defaultdict
 
 
@@ -416,6 +417,235 @@ class ReportChecks(unittest.TestCase):
         self.assertEqual(result["presentation"]["first_associated_present_per_owner_receipt_proxy_ms"]["count"], 1)
         self.assertEqual(result["presentation"]["first_associated_present_per_correction_receipt_proxy_ms"]["count"], 1)
         self.assertEqual(result["correction_owner_queue_ms"]["count"], 1)
+
+
+class EncodedCameraChecks(unittest.TestCase):
+    def events(self, revision=0, outcome=1):
+        time, presented = 10_000_000, 13_000_000
+        return [frame(time), record(15, time, 0, 0, revision, outcome),
+                record(3, time, time + 10, time + 20, 7, 1),
+                record(4, time, presented, presented + 1, 7)]
+
+    def report(self, events, **changes):
+        return analyze(header(encoded_camera_revision=True, **changes), events)["encoded_camera"]
+
+    def test_old_metadata_is_unavailable_and_zero_revision_is_valid(self):
+        self.assertEqual(analyze(header(), self.events())["encoded_camera"]["availability"], "unavailable")
+        result = self.report(self.events())
+        self.assertEqual(result["availability"], "observed")
+        self.assertEqual(result["presentations"][0]["camera_revision"], 0)
+
+    def test_again_requires_actual_presentation_but_is_not_a_timeout_flag(self):
+        result = self.report(self.events(revision=4, outcome=2))
+        self.assertEqual(len(result["presentations"]), 1)
+        self.assertEqual(result["presentations"][0]["native_frame_result"], 1)
+        result = self.report(self.events(revision=4, outcome=2)[:2])
+        self.assertEqual(result["presentations"], [])
+        self.assertEqual(result["counts"]["metadata_without_drawable"], 1)
+
+    def test_invalid_result_never_inherits_a_later_successful_camera(self):
+        for outcome in [0, 3, True]:
+            with self.subTest(outcome=outcome):
+                result = self.report(self.events(revision=12, outcome=outcome))
+                self.assertEqual(result["presentations"], [])
+                self.assertEqual(result["errors"]["invalid_camera_metadata"], 1)
+
+    def test_duplicate_frame_metadata_drawable_and_callback_are_ambiguous(self):
+        for index in range(4):
+            with self.subTest(duplicated_kind=index):
+                events = self.events()
+                result = self.report(events + [events[index]])
+                self.assertEqual(result["availability"], "invalid")
+                self.assertEqual(result["presentations"], [])
+
+    def test_zero_noncausal_and_conflicting_presentations_are_rejected(self):
+        for presented, callback in [(0, 13_000_001), (10_000_010, 13_000_001), (13_000_000, 12_000_000)]:
+            with self.subTest(presented=presented, callback=callback):
+                result = self.report(self.events()[:3] + [record(4, 10_000_000, presented, callback, 7)])
+                self.assertEqual(result["presentations"], [])
+                self.assertEqual(result["availability"], "invalid")
+        result = self.report(self.events() + [record(4, 10_000_000, 14_000_000, 14_000_001, 7)])
+        self.assertEqual(result["presentations"], [])
+
+    def test_callback_identity_must_match_the_acquired_drawable(self):
+        result = self.report(self.events()[:3] + [record(4, 10_000_000, 13_000_000, 13_000_001, 8)])
+        self.assertEqual(result["presentations"], [])
+        self.assertEqual(result["errors"]["missing_or_duplicate_callback"], 1)
+        self.assertEqual(result["counts"]["callbacks_without_camera_join"], 1)
+
+    def test_camera_is_attached_to_encoded_frame_not_latest_model_state(self):
+        early = self.events(revision=2)
+        later = [frame(20_000_000), record(15, 20_000_000, 0, 0, 9, 2)]
+        result = self.report(early + later)
+        self.assertEqual([r["camera_revision"] for r in result["presentations"]], [2])
+        self.assertEqual(result["counts"]["metadata_without_drawable"], 1)
+
+    def test_different_drawables_at_one_presentation_time_do_not_inflate_count(self):
+        second = frame(11_000_000)
+        second[3:5] = [12_001_000, 12_500_000]
+        events = self.events() + [second, record(15, 11_000_000, 0, 0, 2, 1),
+            record(3, 11_000_000, 12_010_000, 12_100_000, 8, 1),
+            record(4, 11_000_000, 13_000_000, 13_000_001, 8)]
+        result = self.report(events)
+        self.assertEqual(result["presentations"], [])
+        self.assertEqual(result["errors"]["nonunique_presentation_time"], 1)
+
+
+class CameraWitnessChecks(unittest.TestCase):
+    def fixture(self):
+        events = []
+        for index, (time, revision) in enumerate([(5_000_000, 0), (10_000_000, 1), (20_000_000, 2), (30_000_000, 3)], 1):
+            events += [frame(time), record(15, time, 0, 0, revision, 2),
+                       record(3, time, time + 10, time + 20, index, 1),
+                       record(4, time, time + 3_000_000, time + 3_000_001, index)]
+        h = header(encoded_camera_revision=True, clock="CACurrentMediaTime nanoseconds", process_identifier=42)
+        poses = []
+        for revision, time, x in [(0, 1_000_000, 0), (1, 11_000_000, 0), (2, 21_000_000, 10), (3, 31_000_000, 10)]:
+            poses.append({"time_ns": time, "drawing_identity": "1:4", "camera": {
+                "revision": revision, "viewport": [1200, 900], "translation": [x, 0],
+                "zoom": 1, "rotation": 0, "flipped": [False, False]}})
+        witness = {"process_identifier": 42, "clock": h["clock"], "poses": poses,
+            "contacts": [{"id": "pan1", "drawing_identity": "1:4", "baseline_revision": 0,
+                          "full_contact_begin_ns": 9_000_000, "full_contact_end_ns": 40_000_000}]}
+        return h, events, witness
+
+    def report(self, witness=None, events=None):
+        h, original_events, original_witness = self.fixture()
+        return camera_contacts(h, analyze(h, original_events if events is None else events)["encoded_camera"],
+                               original_witness if witness is None else witness)
+
+    def test_exact_contact_denominator_and_edges_are_preserved(self):
+        result = self.report()
+        self.assertEqual(result["availability"], "observed")
+        contact = result["contacts"][0]
+        self.assertEqual(contact["actual_presentations"], 3)
+        self.assertAlmostEqual(contact["actual_presentations_per_s"], 3 / .031)
+        self.assertEqual(contact["leading_gap_ms"], 4)
+        self.assertEqual(contact["trailing_gap_ms"], 7)
+        self.assertEqual(contact["longest_gap_including_contact_edges_ms"], 10)
+        self.assertEqual(contact["known_baseline_pose_presentations"], 1)
+        self.assertEqual(contact["known_nonbaseline_pose_presentations"], 2)
+        self.assertEqual(contact["successive_geometry_changes"], 1)
+        self.assertEqual(contact["static_geometry_presentations"], 2)
+        self.assertEqual(contact["same_geometry_new_revision_presentations"], 2)
+        self.assertEqual(contact["timely_witness_geometry_progress_presentations"], 1)
+        self.assertEqual(contact["geometry_progress_trailing_gap_ms"], 17)
+        self.assertEqual(contact["first_proven_changed_pose_upper_bound_ms"], 14)
+
+    def test_identity_revision_does_not_prove_onset(self):
+        _, _, witness = self.fixture()
+        for pose in witness["poses"]: pose["camera"]["translation"] = [0, 0]
+        contact = self.report(witness)["contacts"][0]
+        self.assertEqual(contact["known_baseline_pose_presentations"], 3)
+        self.assertIsNone(contact["first_proven_changed_pose_upper_bound_ms"])
+
+    def test_unmapped_pose_is_unknown_and_onset_remains_an_upper_bound(self):
+        _, _, witness = self.fixture()
+        witness["poses"] = [pose for pose in witness["poses"] if pose["camera"]["revision"] != 2]
+        result = self.report(witness)
+        self.assertEqual(result["availability"], "partial")
+        self.assertEqual(result["contacts"][0]["unknown_geometry_reasons"], {"unmapped_revision": 1})
+        self.assertEqual(result["contacts"][0]["first_proven_changed_pose_upper_bound_ms"], 24)
+
+    def test_conflicting_geometry_cannot_be_replaced_by_latest_model(self):
+        _, _, witness = self.fixture()
+        later = deepcopy(witness["poses"][2]); later["time_ns"] = 35_000_000
+        later["camera"]["translation"] = [999, 0]
+        witness["poses"].append(later)
+        result = self.report(witness)
+        self.assertEqual(result["availability"], "invalid")
+        self.assertEqual(result["errors"]["conflicting_revision_geometry"], 1)
+        self.assertEqual(result["contacts"][0]["unknown_geometry_reasons"], {"conflicting_revision_geometry": 1})
+
+    def test_later_unpresented_model_revision_does_not_relabel_earlier_frame(self):
+        _, _, witness = self.fixture()
+        later = deepcopy(witness["poses"][-1]); later["time_ns"] = 35_000_000
+        later["camera"]["revision"] = 99; later["camera"]["translation"] = [999, 0]
+        witness["poses"].append(later)
+        self.assertEqual(self.report(witness)["contacts"][0]["first_proven_changed_pose_upper_bound_ms"], 14)
+
+    def test_pid_clock_and_drawing_must_match(self):
+        for field, value, error in [("process_identifier", 43, "witness_process_mismatch"),
+                                    ("clock", "wall clock", "witness_clock_mismatch")]:
+            with self.subTest(field=field):
+                _, _, witness = self.fixture(); witness[field] = value
+                self.assertEqual(self.report(witness)["errors"], {error: 1})
+        _, _, witness = self.fixture()
+        witness["contacts"][0]["drawing_identity"] = "different:4"
+        result = self.report(witness)
+        self.assertEqual(result["contacts"][0]["unknown_geometry_presentations"], 3)
+        self.assertIn("unknown_contact_baseline", result["errors"])
+
+    def test_missing_baseline_up_and_overlapping_contacts_are_invalid(self):
+        for field in ["baseline_revision", "full_contact_end_ns"]:
+            with self.subTest(field=field):
+                _, _, witness = self.fixture(); del witness["contacts"][0][field]
+                self.assertEqual(self.report(witness)["availability"], "invalid")
+        _, _, witness = self.fixture(); extra = deepcopy(witness["contacts"][0])
+        extra.update(id="pan2", full_contact_begin_ns=20_000_000)
+        witness["contacts"].append(extra)
+        self.assertEqual(self.report(witness)["errors"]["invalid_or_overlapping_contact"], 1)
+
+    def test_invalid_geometry_and_unobserved_baseline_remain_unknown(self):
+        _, _, witness = self.fixture()
+        witness["poses"][2]["camera"]["zoom"] = float("nan")
+        result = self.report(witness)
+        self.assertEqual(result["errors"]["invalid_pose"], 1)
+        self.assertEqual(result["contacts"][0]["unknown_geometry_presentations"], 1)
+        _, _, witness = self.fixture()
+        witness["poses"][0]["time_ns"] = 10_000_000
+        result = self.report(witness)
+        self.assertFalse(result["contacts"][0]["baseline_geometry_observed_before_contact"])
+        self.assertIsNone(result["contacts"][0]["first_proven_changed_pose_upper_bound_ms"])
+
+    def test_recording_edges_and_long_contact_stall_are_not_trimmed(self):
+        _, _, witness = self.fixture(); witness["contacts"][0]["full_contact_end_ns"] = 400_000_000
+        contact = self.report(witness)["contacts"][0]
+        self.assertAlmostEqual(contact["actual_presentations_per_s"], 3 / .391)
+        self.assertEqual(contact["longest_gap_including_contact_edges_ms"], 367)
+        witness["contacts"][0]["full_contact_end_ns"] = 11_000_000_000
+        self.assertIn("contact_outside_recording", self.report(witness)["errors"])
+
+    def test_no_actual_presentation_keeps_full_contact_gap_without_zero_latency(self):
+        _, events, _ = self.fixture()
+        result = self.report(events=[row for row in events if row[0] in (1, 15)])
+        self.assertEqual(result["availability"], "unavailable")
+        contact = result["contacts"][0]
+        self.assertEqual(contact["actual_presentations"], 0)
+        self.assertEqual(contact["longest_gap_including_contact_edges_ms"], 31)
+        self.assertIsNone(contact["first_any_canvas_present_ms"])
+        self.assertIsNone(contact["first_proven_changed_pose_upper_bound_ms"])
+
+    def test_precontact_frame_cannot_prove_new_input_onset(self):
+        _, events, witness = self.fixture()
+        events = [row for row in events if row[1] in (5_000_000, 20_000_000)]
+        for row in events:
+            if row[1] == 20_000_000:
+                row[1] = 7_000_000
+                if row[0] == 1: row[3] = 7_001_000
+        contact = self.report(witness, events)["contacts"][0]
+        self.assertEqual(contact["precontact_nonbaseline_frame_presentations"], 1)
+        self.assertIsNone(contact["first_proven_changed_pose_upper_bound_ms"])
+
+    def test_frozen_nonbaseline_camera_does_not_make_repeated_frames_motion(self):
+        _, _, witness = self.fixture()
+        for pose in witness["poses"][1:]: pose["camera"]["translation"] = [10, 0]
+        contact = self.report(witness)["contacts"][0]
+        self.assertEqual(contact["known_nonbaseline_pose_presentations"], 3)
+        self.assertEqual(contact["successive_geometry_changes"], 1)
+        self.assertEqual(contact["static_geometry_presentations"], 2)
+        self.assertEqual(contact["timely_witness_geometry_progress_presentations"], 1)
+        self.assertEqual(contact["geometry_progress_longest_gap_including_contact_edges_ms"], 27)
+
+    def test_late_geometry_witness_can_attribute_state_but_cannot_prove_onset(self):
+        _, _, witness = self.fixture()
+        for pose in witness["poses"][1:]: pose["time_ns"] += 30_000_000
+        contact = self.report(witness)["contacts"][0]
+        self.assertEqual(contact["known_nonbaseline_pose_presentations"], 2)
+        self.assertEqual(contact["late_geometry_observation_presentations"], 3)
+        self.assertEqual(contact["timely_witness_geometry_progress_presentations"], 0)
+        self.assertIsNone(contact["first_proven_changed_pose_upper_bound_ms"])
+        self.assertEqual(contact["geometry_progress_longest_gap_including_contact_edges_ms"], 31)
 
 
 class ConsumedPaintChecks(unittest.TestCase):

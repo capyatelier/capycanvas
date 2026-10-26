@@ -215,6 +215,34 @@ the Mac fixture's Apple policy selection does not establish UIKit delivery.
   latency; missing callbacks are counted separately. Continuous cadence excludes
   intervals across recorded idle pauses. `frame_admission_to_present_ms` is
   software scheduling delay, not input-to-pixel latency.
+  When `encoded_camera_revision` is true, `consumedPaint.d` records the camera
+  revision immediately after the native frame, before later publications or
+  startup actions. `consumedPaint.e` is zero without a valid frame result, one
+  for an idle or finished native frame and two when more work remains. Join the
+  frame ID to an actual drawable presentation; a valid result alone does not prove
+  presentation.
+  A revision identifies encoded camera state. Compare its geometry with a
+  timestamped camera witness to establish movement, since identity transforms
+  can also advance the revision. This does not measure SwiftUI overlay motion.
+  `apple_trace.py TRACE.jsonl --camera-witness WITNESS.json` adds full-contact
+  canvas counts, boundary gaps and the first proven changed-pose presentation
+  upper bound. The witness object must match the trace's `process_identifier`
+  and `clock` (`CACurrentMediaTime nanoseconds`). Its `poses` array contains
+  `time_ns`, `drawing_identity` and the actual published shared `camera` JSON;
+  retain these through a subscription to `store.camera.$value`. Its `contacts`
+  array contains a unique `id`, matching `drawing_identity`, `baseline_revision`,
+  `full_contact_begin_ns` and `full_contact_end_ns`. Observe baseline geometry
+  before contact; keep contacts complete and separate, with no document change
+  inside them. The geometry needs viewport, translation, zoom, rotation and
+  flipped axes. Missing or conflicting mappings remain unknown; later model
+  state cannot relabel a presented frame. These diagnostics do not establish a
+  moving-frame target or physical input latency. Older traces report encoded
+  camera data as unavailable; existing report metrics and CLI calls are unchanged.
+  Nonbaseline geometry includes frozen poses. Successive geometry progress,
+  static presentations, same-geometry revisions and full-contact progress gaps
+  are reported separately. Unknown mappings break adjacency. Late geometry
+  observations attribute immutable revision state but cannot establish causal
+  onset or timely progress; they remain explicit and make the witness partial.
 - **Input.** The first presentation after each real input batch is a receipt
   proxy; it does not prove those samples reached the pixels. Predicted and
   correction batches are reported separately. `engine_consumed_paint_progress`
@@ -269,7 +297,7 @@ the `CACurrentMediaTime` clock, and frame IDs are admission timestamps.
 | 10 activity | time, display-link awake flag |
 | 11 workload | time, phase, profile ID, phase-dependent counters |
 | 14 GPU clock | recorder time before, Metal CPU nanoseconds, Metal GPU ticks, recorder time after |
-| 15 consumed paint | frame ID, latest real Down/Move timestamp consumed by the shared engine, submitted nonempty canvas-update counter |
+| 15 consumed paint | frame ID, latest real Down/Move timestamp consumed by the shared engine, submitted nonempty canvas-update counter; optional camera revision and native frame result when `encoded_camera_revision` is true |
 
 The analyzer converts GPU ticks with the paired clock samples, following Apple's
 [GPU timestamp conversion](https://developer.apple.com/documentation/metal/converting-gpu-timestamps-into-cpu-time).

@@ -164,6 +164,202 @@ def consumed_paint_progress(grouped, begin=None, end=None):
             "scope": "Engine-consumed Down/Move timestamp progress associated with actual presented callbacks; not physical input-to-pixel latency or guaranteed fresh pixels"}
 
 
+def drawable_presentation(frame, acquired, callbacks):
+    if len(acquired) != 1:
+        return None, "ambiguous_drawable"
+    key = (frame[0], acquired[0][3])
+    if len(callbacks[key]) != 1:
+        return None, "missing_or_duplicate_callback"
+    presented = callbacks[key][0][1]
+    if not presented:
+        return None, "zero_presentation"
+    if presented <= frame[2]:
+        return None, "noncausal_presentation"
+    return (key[1], presented), None
+
+
+def encoded_camera_presentations(header, grouped):
+    if header.get("encoded_camera_revision") is not True:
+        return {"availability": "unavailable", "reason": "No encoded camera revision metadata", "presentations": []}
+    frames, metadata, acquired, callbacks = (collections.defaultdict(list) for _ in range(4))
+    for row in grouped[1]: frames[row[0]].append(row)
+    for row in grouped[15]: metadata[row[0]].append(row)
+    for row in grouped[3]:
+        if row[4]: acquired[row[0]].append(row)
+    for row in grouped[4]: callbacks[(row[0], row[3])].append(row)
+    errors, counts, presentations = collections.Counter(), collections.Counter(), []
+    for identity in sorted(frames.keys() | metadata.keys()):
+        if len(frames[identity]) != 1 or len(metadata[identity]) != 1:
+            errors["ambiguous_frame_or_camera_metadata"] += 1
+            continue
+        frame, camera = frames[identity][0], metadata[identity][0]
+        revision, outcome = camera[3:5]
+        if type(revision) is not int or revision < 0 or type(outcome) is not int or outcome not in (1, 2):
+            errors["invalid_camera_metadata"] += 1
+            continue
+        counts["valid_frame_metadata"] += 1
+        if not acquired[identity]:
+            counts["metadata_without_drawable"] += 1
+            continue
+        presentation, error = drawable_presentation(frame, acquired[identity], callbacks)
+        if error:
+            errors[error] += 1
+            continue
+        drawable, presented = presentation
+        callback = callbacks[(identity, drawable)][0]
+        if presented < acquired[identity][0][2] or callback[2] < presented:
+            errors["noncausal_presentation"] += 1
+            continue
+        presentations.append({"frame_id": identity, "owner_begin_ns": frame[2],
+            "drawable_id": drawable, "presented_ns": presented, "camera_revision": revision, "native_frame_result": outcome - 1})
+    times = collections.Counter(row["presented_ns"] for row in presentations)
+    duplicate_times = sum(count - 1 for count in times.values() if count > 1)
+    if duplicate_times: errors["nonunique_presentation_time"] = duplicate_times
+    presentations = [row for row in presentations if times[row["presented_ns"]] == 1]
+    joined = {(r["frame_id"], r["drawable_id"]) for r in presentations}
+    counts["callbacks_without_camera_join"] = sum(len(rows) for key, rows in callbacks.items() if key not in joined)
+    if counts["callbacks_without_camera_join"]:
+        errors["unjoined_presentation_callbacks"] = counts["callbacks_without_camera_join"]
+    availability = "invalid" if errors or header.get("dropped_records") else "observed" if presentations else "unavailable"
+    return {"availability": availability, "reason": None if presentations else "No actual encoded-camera presentations",
+            "errors": dict(errors), "counts": dict(counts), "dropped_records": header.get("dropped_records", 0),
+            "presentations": sorted(presentations, key=lambda row: row["presented_ns"]),
+            "scope": "Encoded canvas camera state identity joined to actual drawable presentation; revision changes alone do not establish visible motion"}
+
+
+def camera_contacts(header, camera_report, witness):
+    if header.get("encoded_camera_revision") is not True:
+        return {"availability": "unavailable", "reason": camera_report["reason"], "contacts": []}
+    def invalid(reason):
+        return {"availability": "invalid", "errors": {reason: 1}, "contacts": []}
+    if not isinstance(witness, dict):
+        return invalid("invalid_camera_witness")
+    if (type(witness.get("process_identifier")) is not int or witness["process_identifier"] <= 0
+            or witness["process_identifier"] != header.get("process_identifier")):
+        return invalid("witness_process_mismatch")
+    if witness.get("clock") != "CACurrentMediaTime nanoseconds" or witness["clock"] != header.get("clock"):
+        return invalid("witness_clock_mismatch")
+    if not isinstance(witness.get("poses"), list) or not isinstance(witness.get("contacts"), list) or not witness["contacts"]:
+        return invalid("missing_poses_or_contacts")
+    def integer(value):
+        return type(value) is int and value >= 0
+    def number(value):
+        return type(value) in (int, float) and math.isfinite(value)
+    def geometry(camera):
+        viewport, translation, flipped = (camera.get(key) for key in ("viewport", "translation", "flipped"))
+        if (not isinstance(viewport, list) or len(viewport) != 2 or not all(integer(v) and v > 0 for v in viewport)
+                or not isinstance(translation, list) or len(translation) != 2 or not all(map(number, translation))
+                or not isinstance(flipped, list) or len(flipped) != 2 or not all(type(v) is bool for v in flipped)
+                or not number(camera.get("zoom")) or camera["zoom"] <= 0 or not number(camera.get("rotation"))):
+            return None
+        return (tuple(viewport), tuple(translation), camera["zoom"], camera["rotation"], tuple(flipped))
+    poses, pose_times, conflicts = {}, collections.defaultdict(list), set()
+    errors, previous_time = collections.Counter(), 0
+    for pose in witness["poses"]:
+        if not isinstance(pose, dict) or not isinstance(pose.get("camera"), dict):
+            errors["invalid_pose"] += 1
+            continue
+        camera = pose.get("camera", {})
+        drawing, time, revision = pose.get("drawing_identity"), pose.get("time_ns"), camera.get("revision")
+        value = geometry(camera)
+        if not isinstance(drawing, str) or not drawing or not integer(time) or not integer(revision) or value is None:
+            errors["invalid_pose"] += 1
+            continue
+        if time < previous_time: errors["nonmonotonic_pose_time"] += 1
+        previous_time = time
+        key = drawing, revision
+        if key in poses and poses[key] != value:
+            conflicts.add(key)
+            errors["conflicting_revision_geometry"] += 1
+        poses[key] = value
+        pose_times[key].append(time)
+    results, previous_end, identifiers = [], 0, set()
+    for contact in witness["contacts"]:
+        if not isinstance(contact, dict):
+            errors["invalid_or_overlapping_contact"] += 1
+            continue
+        begin, end = contact.get("full_contact_begin_ns"), contact.get("full_contact_end_ns")
+        drawing, revision, identity = (contact.get(key) for key in ("drawing_identity", "baseline_revision", "id"))
+        if (not isinstance(identity, str) or not identity or identity in identifiers
+                or not isinstance(drawing, str) or not drawing or not integer(revision)
+                or not integer(begin) or not integer(end) or not 0 < begin < end or begin < previous_end):
+            errors["invalid_or_overlapping_contact"] += 1
+            continue
+        previous_end = end
+        identifiers.add(identity)
+        if begin < header["started_ns"] or end > header["started_ns"] + header["duration_seconds"] * 1e9:
+            errors["contact_outside_recording"] += 1
+        if any(pose.get("drawing_identity") != drawing and begin <= pose.get("time_ns", -1) <= end
+               for pose in witness["poses"] if isinstance(pose, dict) and integer(pose.get("time_ns"))):
+            errors["drawing_changed_during_contact"] += 1
+        baseline_key = drawing, revision
+        baseline = poses.get(baseline_key) if baseline_key not in conflicts else None
+        baseline_observed = baseline is not None and any(t <= begin for t in pose_times[baseline_key])
+        if not baseline_observed: errors["unknown_contact_baseline"] += 1
+        shown = [row for row in camera_report["presentations"] if begin <= row["presented_ns"] <= end]
+        times = [row["presented_ns"] for row in shown]
+        unknown, different, unchanged, prior_frames = collections.Counter(), [], 0, 0
+        progress, onset, successive_changes = [], [], 0
+        static, same_geometry_new_revision, late_geometry, unknown_comparisons = 0, 0, 0, 0
+        previous_geometry, previous_revision, previous_timely = baseline, revision, baseline_observed
+        for row in shown:
+            key = drawing, row["camera_revision"]
+            value = poses.get(key)
+            reason = ("conflicting_revision_geometry" if key in conflicts else "unmapped_revision" if value is None
+                      else "unknown_contact_baseline" if not baseline_observed else None)
+            if reason:
+                unknown[reason] += 1
+                previous_geometry, previous_timely = None, False
+                continue
+            timely = min(pose_times[key]) <= row["presented_ns"]
+            late_geometry += not timely
+            if value == baseline: unchanged += 1
+            else:
+                different.append(row)
+                if row["owner_begin_ns"] < begin: prior_frames += 1
+                elif timely: onset.append(row)
+            if previous_geometry is None: unknown_comparisons += 1
+            elif value == previous_geometry:
+                static += 1
+                same_geometry_new_revision += row["camera_revision"] != previous_revision
+            else:
+                successive_changes += 1
+                if timely and previous_timely and row["owner_begin_ns"] >= begin: progress.append(row)
+            previous_geometry, previous_revision, previous_timely = value, row["camera_revision"], timely
+        gaps = [b - a for a, b in zip([begin] + times, times + [end])]
+        progress_times = [row["presented_ns"] for row in progress]
+        progress_gaps = [b - a for a, b in zip([begin] + progress_times, progress_times + [end])]
+        results.append({"contact": contact, "actual_presentations": len(shown),
+            "full_contact_seconds": (end - begin) / 1e9,
+            "actual_presentations_per_s": len(shown) * 1e9 / (end - begin),
+            "first_any_canvas_present_ms": (times[0] - begin) / NS_PER_MS if times else None,
+            "leading_gap_ms": ((times[0] if times else end) - begin) / NS_PER_MS,
+            "trailing_gap_ms": (end - (times[-1] if times else begin)) / NS_PER_MS,
+            "longest_gap_including_contact_edges_ms": max(gaps) / NS_PER_MS,
+            "interior_interval_ms": distribution(b - a for a, b in zip(times, times[1:])),
+            "known_baseline_pose_presentations": unchanged, "known_nonbaseline_pose_presentations": len(different),
+            "precontact_nonbaseline_frame_presentations": prior_frames,
+            "successive_geometry_changes": successive_changes, "static_geometry_presentations": static,
+            "same_geometry_new_revision_presentations": same_geometry_new_revision,
+            "late_geometry_observation_presentations": late_geometry, "unknown_geometry_comparisons": unknown_comparisons,
+            "timely_witness_geometry_progress_presentations": len(progress),
+            "geometry_progress_per_s_lower_bound": len(progress) * 1e9 / (end - begin),
+            "geometry_progress_interval_ms": distribution(b - a for a, b in zip(progress_times, progress_times[1:])),
+            "geometry_progress_leading_gap_ms": ((progress_times[0] if progress_times else end) - begin) / NS_PER_MS,
+            "geometry_progress_trailing_gap_ms": (end - (progress_times[-1] if progress_times else begin)) / NS_PER_MS,
+            "geometry_progress_longest_gap_including_contact_edges_ms": max(progress_gaps) / NS_PER_MS,
+            "unknown_geometry_presentations": sum(unknown.values()), "unknown_geometry_reasons": dict(unknown),
+            "first_proven_changed_pose_upper_bound_ms": (onset[0]["presented_ns"] - begin) / NS_PER_MS if onset else None,
+            "baseline_geometry_observed_before_contact": baseline_observed})
+    partial = any(row["unknown_geometry_presentations"] or row["late_geometry_observation_presentations"]
+                  or row["unknown_geometry_comparisons"] for row in results)
+    availability = "invalid" if errors or camera_report["availability"] == "invalid" else camera_report["availability"]
+    if availability == "observed" and partial: availability = "partial"
+    return {"availability": availability, "camera_availability_reason": camera_report.get("reason"),
+            "errors": dict(errors), "camera_errors": camera_report.get("errors", {}), "contacts": results,
+            "scope": "Nonbaseline geometry is not motion. Progress requires distinct successive presented geometry with timely witnesses; unknowns break adjacency. Late revision mappings attribute immutable state only, never causal onset. Full-contact bounds retain static/snapping gaps. No moving-frame target, physical latency or native overlay qualification."}
+
+
 def canvas_update_progress(header, grouped, intervals):
     if not header.get("raster_update_counter"):
         return {"availability": "unavailable", "reason": "No renderer update counter"}
@@ -201,20 +397,11 @@ def canvas_update_progress(header, grouped, intervals):
         if stamp: consumed.add(stamp)
         if not acquired[identity]: continue
         errors = invalid if any(a <= frame[2] < b for a, b in intervals) else outside_errors
-        if len(acquired[identity]) != 1:
-            errors["ambiguous_drawable"] += 1
+        presentation, error = drawable_presentation(frame, acquired[identity], callbacks)
+        if error:
+            errors[error] += 1
             continue
-        key = (identity, acquired[identity][0][3])
-        if len(callbacks[key]) != 1:
-            errors["missing_or_duplicate_callback"] += 1
-            continue
-        presented = callbacks[key][0][1]
-        if not presented:
-            errors["zero_presentation"] += 1
-            continue
-        if presented <= frame[2]:
-            errors["noncausal_presentation"] += 1
-            continue
+        _, presented = presentation
         presentations.append([identity, frame[2], presented, raster, stamp])
         if advanced: completions.append(presentations[-1])
     if any(a[2] >= b[2] for a, b in zip(completions, completions[1:])):
@@ -408,6 +595,7 @@ def analyze(header, events, target_hz=120):
             "first_associated_present_per_correction_receipt_proxy_ms": distribution(correction_associations.values()),
         },
         "engine_consumed_paint_progress": consumed_paint_progress(grouped),
+        "encoded_camera": encoded_camera_presentations(header, grouped),
         "input_owner_queue_ms": distribution(r[1] - r[0] for r in inputs.values() if r[1] >= r[0]),
         "correction_owner_queue_ms": distribution(r[1] - r[0] for r in inputs.values() if r[6] == 2 and r[1] >= r[0]),
         "memory": {"samples": len(memory), "footprint_bytes": distribution([r[1] for r in memory], divisor=1),
@@ -540,6 +728,7 @@ def main():
     parser.add_argument("--target-hz", type=float, default=120,
                         help="Refresh rate to evaluate (default: 120; use 90 for the current Mac display)")
     parser.add_argument("--motion-windows", type=Path, help="Observed native-clock motion windows JSON; no synthetic markers")
+    parser.add_argument("--camera-witness", type=Path, help="Owned PID/clock, timestamped camera poses and complete native contact boundaries JSON")
     args = parser.parse_args()
     with args.trace.open() as source:
         header = json.loads(next(source))
@@ -548,6 +737,8 @@ def main():
         report = analyze(header, events, target_hz=args.target_hz)
         if args.motion_windows:
             report["observed_motion_windows"] = motion_windows(header, events, json.loads(args.motion_windows.read_text()), args.target_hz)
+        if args.camera_witness:
+            report["observed_camera_contacts"] = camera_contacts(header, report["encoded_camera"], json.loads(args.camera_witness.read_text()))
     except ValueError as error:
         parser.error(str(error))
     result = json.dumps(report, indent=2) + "\n"
